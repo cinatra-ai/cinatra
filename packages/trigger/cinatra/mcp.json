@@ -1,0 +1,11 @@
+{
+  "server": {
+    "transport": "http",
+    "baseUrl": "${CINATRA_BASE_URL:-http://localhost:3000}/api/mcp"
+  },
+  "primitives": [
+    "trigger_config_get",
+    "trigger_config_set",
+    "trigger_config_delete"
+  ]
+}

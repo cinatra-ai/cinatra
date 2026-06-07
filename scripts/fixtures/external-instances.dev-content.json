@@ -1,0 +1,140 @@
+{
+  "$comment": "Generic dev-mode content fixtures seeded INTO the external Drupal / WordPress / Twenty dev instances (NOT the cinatra-side `cinatra.devFixtures` contract — that targets ctx.settings/ctx.objects). Loaded at dev setup by the per-target seeders: docker/drupal/seed-content.php (drush) and docker/wordpress/seed-content.php (wp-cli) run from the container entrypoints, and scripts/fixtures/seed-twenty-content.mjs run from the Twenty bootstrap. All content is FICTIONAL and generic — fictional company names, RFC 2606 reserved `.example` domains, neutral copy — mirroring the ACME-Group style of scripts/seed.mjs. Never put real brands or OpenCloud content here. Each item carries a stable `fixtureId`; seeders are idempotent (create-if-absent, skip user-edited).",
+  "version": 1,
+  "drupal": {
+    "legacyCleanup": {
+      "sentinel": "opencloud_cleanup_v1",
+      "$comment": "One-shot migration: delete the specific legacy OpenCloud demo nodes that some local dev volumes still carry from earlier manual UAT testing. Runs once per volume, guarded by the Drupal state sentinel below. titlePrefixes are the EXACT known legacy node titles, matched as prefixes (case-insensitive) so UAT-created suffix variants are also caught — deliberately NOT a bare 'OpenCloud' prefix, so an unrelated user node merely starting with 'OpenCloud' is never deleted.",
+      "titlePrefixes": [
+        "OpenCloud auf der Rack & Stack 2026",
+        "OpenCloud und esatus zeigen EUDI-Wallet-Login für OpenCloud",
+        "Rolling Release Feature Highlight: Favoriten in OpenCloud",
+        "OpenCloud auf der CS3 Conference 2026 in Oslo"
+      ]
+    },
+    "nodes": [
+      {
+        "fixtureId": "drupal-article-welcome",
+        "type": "article",
+        "title": "Welcome to your demo site",
+        "status": true,
+        "body": "<p>This is a generic demo article seeded automatically into your local development Drupal so the connector has real content to operate on. Everything here is fictional and safe to edit or delete.</p><p>Use it to try the Cinatra content editor: open the assistant, ask it to refine this article, and watch a draft revision appear in Drupal.</p>",
+        "summary": "A generic demo article so your dev Drupal is never empty.",
+        "tags": ["demo", "getting-started"]
+      },
+      {
+        "fixtureId": "drupal-article-product-update",
+        "type": "article",
+        "title": "Product update: faster content workflows",
+        "status": true,
+        "body": "<p>Brightwater Logistics (a fictional demo company) today announced improvements to its content publishing workflow. Editors can now move a draft from idea to published article in a single review pass.</p><p>This placeholder article exists only in your local dev environment. Replace it with your own content at any time.</p>",
+        "summary": "A fictional product-update article for demoing the editorial flow.",
+        "tags": ["demo", "announcement"]
+      },
+      {
+        "fixtureId": "drupal-page-about",
+        "type": "page",
+        "title": "About this demo",
+        "status": true,
+        "body": "<p>This basic page is part of the generic dev fixtures. It demonstrates the <em>page</em> content type alongside the <em>article</em> nodes seeded into this site.</p><p>None of this content represents a real organisation — it is here purely to make local development and demos feel realistic.</p>"
+      }
+    ]
+  },
+  "wordpress": {
+    "posts": [
+      {
+        "fixtureId": "wp-post-welcome",
+        "postType": "post",
+        "title": "Welcome to your demo blog",
+        "status": "publish",
+        "content": "<p>This generic demo post is seeded into your local development WordPress so the connector has real content to work with. It is fictional and safe to edit or delete.</p><p>Try asking the Cinatra assistant to draft a follow-up post — a WordPress draft will appear in your admin area.</p>"
+      },
+      {
+        "fixtureId": "wp-post-product-update",
+        "postType": "post",
+        "title": "Brightwater Logistics streamlines publishing",
+        "status": "publish",
+        "content": "<p>Brightwater Logistics — a fictional demo company — has rolled out a simpler publishing workflow for its marketing team. This placeholder post exists only in your local dev environment.</p>"
+      },
+      {
+        "fixtureId": "wp-page-about",
+        "postType": "page",
+        "title": "About this demo",
+        "status": "publish",
+        "content": "<p>This page is part of the generic dev fixtures. It demonstrates the WordPress <em>page</em> post type alongside the seeded posts. None of this content represents a real organisation.</p>"
+      }
+    ]
+  },
+  "twenty": {
+    "$comment": "Generic companies/people/views layered ON TOP of Twenty's built-in (Apple/Google/Microsoft) dev seed, which is baked into the Twenty image and kept as-is. Idempotency: a gitignored provenance sidecar (data/twenty/dev-content-provenance.local.json) maps fixtureId -> {id,rev}; records/views are matched by stored id (rename-safe), user deletes are not recreated, and a `version` bump replaces fixture-owned rows via update_*. Companies/people also set the REQUIRED `cinatraObjectId` custom field to their fixtureId for first-run adoption. Seeded via the MCP catalog tools (create_company / create_person / create_view) on the bootstrap-minted API key.",
+    "companies": [
+      {
+        "fixtureId": "twenty-company-brightwater",
+        "name": "Brightwater Logistics",
+        "domainName": "brightwater-logistics.example",
+        "addressCity": "Portland",
+        "employees": 240
+      },
+      {
+        "fixtureId": "twenty-company-cedargrove",
+        "name": "Cedar Grove Analytics",
+        "domainName": "cedar-grove-analytics.example",
+        "addressCity": "Austin",
+        "employees": 85
+      },
+      {
+        "fixtureId": "twenty-company-harborpoint",
+        "name": "Harbor Point Media",
+        "domainName": "harbor-point-media.example",
+        "addressCity": "Boston",
+        "employees": 60
+      }
+    ],
+    "people": [
+      {
+        "fixtureId": "twenty-person-amelia-stone",
+        "firstName": "Amelia",
+        "lastName": "Stone",
+        "email": "amelia.stone@brightwater-logistics.example",
+        "jobTitle": "Head of Operations",
+        "companyDomainName": "brightwater-logistics.example"
+      },
+      {
+        "fixtureId": "twenty-person-rashid-okoro",
+        "firstName": "Rashid",
+        "lastName": "Okoro",
+        "email": "rashid.okoro@cedar-grove-analytics.example",
+        "jobTitle": "Data Lead",
+        "companyDomainName": "cedar-grove-analytics.example"
+      },
+      {
+        "fixtureId": "twenty-person-mara-lindqvist",
+        "firstName": "Mara",
+        "lastName": "Lindqvist",
+        "email": "mara.lindqvist@harbor-point-media.example",
+        "jobTitle": "Content Director",
+        "companyDomainName": "harbor-point-media.example"
+      }
+    ],
+    "views": [
+      {
+        "fixtureId": "twenty-view-companies-demo",
+        "name": "Demo companies",
+        "objectType": "company",
+        "type": "table"
+      },
+      {
+        "fixtureId": "twenty-view-people-demo",
+        "name": "Demo contacts",
+        "objectType": "person",
+        "type": "table"
+      },
+      {
+        "fixtureId": "twenty-view-opportunities-demo",
+        "name": "Demo opportunities",
+        "objectType": "opportunity",
+        "type": "table"
+      }
+    ]
+  }
+}

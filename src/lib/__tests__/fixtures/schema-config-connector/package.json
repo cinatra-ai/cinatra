@@ -1,0 +1,43 @@
+{
+  "name": "@cinatra-ai/schema-config-fixture-connector",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "In-repo schema-config connector FIXTURE. Not a published extension — used by unit tests + the prod-container hot-install proof. Never tag/release.",
+  "exports": {
+    ".": "./register.ts",
+    "./register": "./register.ts"
+  },
+  "cinatra": {
+    "apiVersion": "1.0",
+    "kind": "connector",
+    "displayName": "Schema-Config Fixture",
+    "serverEntry": "./register",
+    "uiSurface": "schema-config",
+    "requestedHostPorts": ["ui", "secrets"],
+    "sdkAbiRange": "^2",
+    "configSchema": {
+      "title": "Schema-Config Fixture",
+      "description": "A minimal API-key-only connector that ships no React.",
+      "fields": [
+        {
+          "kind": "secret",
+          "key": "apiKey",
+          "label": "API key",
+          "required": true,
+          "description": "The fixture connector's API key (write-only)."
+        },
+        {
+          "kind": "status-probe",
+          "label": "Connection",
+          "actionId": "probe"
+        },
+        {
+          "kind": "named-action",
+          "label": "Refresh",
+          "actionId": "refresh"
+        }
+      ]
+    }
+  }
+}

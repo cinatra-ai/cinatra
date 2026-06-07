@@ -1,0 +1,140 @@
+name: ci
+
+# Standalone CI for an extracted Cinatra extension repo.
+#
+# This is the baseline gate applied to EVERY extracted extension. Kind-specific
+# gates are appended to the `kind-gates` job per the extension's `cinatra.kind`:
+#   - workflow  -> package shape + cinatra/workflow.bpmn sanity
+#   - agent     -> cinatra/oas.json retired-primitive scan
+# Both run the self-contained, zero-dependency `extension-kind-gate.mjs` shipped
+# in this repo (plain `node`, no @cinatra-ai dependency) so CI passes even before
+# the @cinatra-ai registry is reachable. The extraction script appends those
+# steps when it materializes the repo; the placeholder step below documents the
+# contract for kinds with no extra gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Classify repo + validate first-party dep shape
+        # An extracted repo is a SOURCE MIRROR. Host-internal @cinatra-ai/* (and
+        # @cinatra/*) packages — sdk-extensions, sdk-ui, ... — live ONLY in the
+        # cinatra monorepo and are never published to a registry; here they are
+        # declared as OPTIONAL peerDependencies the monorepo provides when it
+        # clones this repo into its workspace. Such repos are NOT
+        # standalone-installable/-typecheckable/-testable (the monorepo owns
+        # that), so install/typecheck/test below are skipped. To keep that skip
+        # HONEST, FAIL (exit 2) if any first-party package leaked into
+        # dependencies/devDependencies/optionalDependencies, or if a first-party
+        # peer is missing peerDependenciesMeta.optional — either would hide a real
+        # direct-dependency regression behind the skip. Truly standalone repos
+        # (0 first-party deps) get the full install + typecheck + test.
+        run: |
+          code=0
+          node -e '
+            const p = require("./package.json");
+            const fp = (o) => Object.keys(o || {}).filter((k) => k.startsWith("@cinatra-ai/") || k.startsWith("@cinatra/"));
+            const leaked = [...fp(p.dependencies), ...fp(p.devDependencies), ...fp(p.optionalDependencies)];
+            if (leaked.length) { console.error("First-party packages must be OPTIONAL peerDependencies, not deps/devDeps: " + leaked.join(", ")); process.exit(2); }
+            const peers = fp(p.peerDependencies);
+            const meta = p.peerDependenciesMeta || {};
+            const notOptional = peers.filter((k) => !(meta[k] && meta[k].optional === true));
+            if (notOptional.length) { console.error("First-party peer(s) must be marked peerDependenciesMeta.optional: " + notOptional.join(", ")); process.exit(2); }
+            process.exit(peers.length ? 0 : 1);
+          ' || code=$?
+          if [ "$code" -eq 2 ]; then
+            echo "::error::First-party @cinatra-ai/* dependency-shape regression (see above)."
+            exit 1
+          elif [ "$code" -eq 0 ]; then
+            echo "first_party=1" >> "$GITHUB_ENV"
+            echo "Source mirror: declares host-internal @cinatra-ai/* optional peers — the cinatra monorepo provides/builds/typechecks/tests these. Skipping standalone install + typecheck + test."
+          else
+            echo "first_party=0" >> "$GITHUB_ENV"
+            echo "Standalone repo: no host-internal @cinatra-ai/* peers — running full install + typecheck + test."
+          fi
+
+      - name: Install dependencies
+        # Skipped for source mirrors: host-internal @cinatra-ai/* peers can't be
+        # resolved standalone (they're on no registry), and the monorepo installs
+        # them. Standalone repos resolve fresh — they ship no committed lockfile,
+        # so --no-frozen-lockfile rather than fail on a frozen lockfile.
+        run: |
+          if [ "$first_party" = "1" ]; then
+            echo "Skipping standalone install (host-internal @cinatra-ai/* peers — the cinatra monorepo resolves these)."
+            exit 0
+          fi
+          corepack pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        # Typecheck the repo's OWN TypeScript sources. Branch on what the repo
+        # declares (not on a command's exit code, which `pnpm run --if-present`
+        # makes 0 even when the script is absent). ORDER MATTERS:
+        #   - host-internal @cinatra-ai/* peers -> SKIP (not resolvable
+        #     standalone; the monorepo typechecks these).
+        #   - has a `typecheck` script      -> run it (never skipped)
+        #   - else NO tracked TS at all     -> nothing to typecheck. Content-only
+        #     extensions (pure cinatra/** oas.json / SKILL.md / workflow.bpmn) ship
+        #     no TypeScript; `tsc` would error TS18003 "No inputs were found".
+        #     The pathspec covers every TS extension (.ts/.tsx/.mts/.cts).
+        #   - else depends on `typescript`  -> local `tsc --noEmit`
+        #   - else                          -> ephemeral `tsc` via npx (NOT
+        #     `pnpm dlx`, which fails ERR_PNPM_DLX_MULTIPLE_BINS: the typescript
+        #     package ships two bins, tsc + tsserver, and dlx can't disambiguate).
+        # The repo always ships a standalone tsconfig.json, so tsc has config.
+        run: |
+          if [ "$first_party" = "1" ]; then
+            echo "Skipping standalone typecheck (host-internal @cinatra-ai/* peers — the cinatra monorepo typechecks these)."
+            exit 0
+          elif node -e "process.exit(((require('./package.json').scripts)||{}).typecheck?0:1)"; then
+            corepack pnpm run typecheck
+          elif [ -z "$(git ls-files '*.ts' '*.tsx' '*.mts' '*.cts')" ]; then
+            echo "No TypeScript sources tracked — nothing to typecheck (content-only extension)."
+            exit 0
+          elif node -e "p=require('./package.json');d={...p.dependencies,...p.devDependencies};process.exit(d.typescript?0:1)"; then
+            corepack pnpm exec tsc --noEmit
+          else
+            npx -y -p typescript tsc --noEmit
+          fi
+
+      - name: Test
+        # Host-internal-peer repos can't run their tests standalone (the tests
+        # import @cinatra-ai/* sources that resolve only in the monorepo); the
+        # monorepo runs them. Standalone repos run `test --if-present`.
+        run: |
+          if [ "$first_party" = "1" ]; then
+            echo "Skipping standalone tests (host-internal @cinatra-ai/* peers — the cinatra monorepo runs these)."
+            exit 0
+          fi
+          corepack pnpm test --if-present
+
+      - name: Pack (dry run)
+        # Validates package shape + publish payload without resolving peers.
+        run: npm pack --dry-run
+
+  kind-gates:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      # NOTE: kind-specific gates are appended here by the extraction script.
+      # For workflow/agent kinds the placeholder below is replaced with a step
+      # that runs the self-contained, zero-dependency `extension-kind-gate.mjs`
+      # shipped into the repo (plain `node`, no @cinatra-ai dependency).
+      # Other kinds (connector, artifact, skill) have no extra gate today.
+      - name: No kind-specific gate
+        run: echo "No kind-specific gate for this extension kind."

@@ -1,0 +1,13 @@
+{
+  "server": {
+    "transport": "http",
+    "baseUrl": "${CINATRA_BASE_URL:-http://localhost:3000}/api/mcp"
+  },
+  "primitives": [
+    "email_outreach_send_test_start",
+    "email_outreach_send_initial_start",
+    "email_outreach_send_initial_status",
+    "email_outreach_send_initial_cancel",
+    "email_outreach_system_process_due_follow_ups"
+  ]
+}

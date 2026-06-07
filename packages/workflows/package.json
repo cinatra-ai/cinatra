@@ -1,0 +1,48 @@
+{
+  "name": "@cinatra-ai/workflows",
+  "description": "Versioned, scoped, calendar-driven workflow engine over Postgres: DAG spec, DST-aware scheduling, gates, and run evidence.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./db": "./src/db.ts",
+    "./schema": "./src/schema.ts",
+    "./store": "./src/store.ts",
+    "./spec": "./src/spec/index.ts",
+    "./bpmn": "./src/bpmn/index.ts",
+    "./schedule": "./src/schedule/resolver.ts",
+    "./state": "./src/state/index.ts",
+    "./scope": "./src/scope/index.ts",
+    "./seed": "./src/seed/major-product-release.ts",
+    "./engine": "./src/engine/index.ts",
+    "./manifest": "./src/manifest.ts",
+    "./extension-ops": "./src/extension-ops.ts",
+    "./extension-handler": "./src/extension-handler.ts",
+    "./install-saga-hook": "./src/install-saga-hook.ts",
+    "./mcp-handlers": "./src/mcp/handlers.ts",
+    "./module": "./src/integration/module.ts",
+    "./integration/register-object-types": "./src/integration/register-object-types.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@cinatra-ai/dashboards": "workspace:*",
+    "@cinatra-ai/extension-types": "workspace:*",
+    "@cinatra-ai/mcp-server": "workspace:*",
+    "@cinatra-ai/objects": "workspace:*",
+    "@date-fns/tz": "^1.4.1",
+    "bpmn-moddle": "10.0.0",
+    "moddle-xml": "12.0.0",
+    "bullmq": "^5.76.9",
+    "date-fns": "^4.1.0",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^5.10.1",
+    "pg": "^8.20.0",
+    "server-only": "*",
+    "zod": "^4.3.6"
+  }
+}

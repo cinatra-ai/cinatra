@@ -1,0 +1,62 @@
+# Vendored-import regression guard.
+#
+# Runs `scripts/audit/marketplace-mcp-client-banned.mjs` on every PR + push
+# to main. Fails if any NEW import of @cinatra-ai/marketplace-mcp-client (or
+# a deep path into packages/marketplace-mcp-client/) is introduced outside
+# of the script's CURRENT_ALLOWLIST.
+#
+# The full swap to the published @cinatra-ai/marketplace-mcp-contract is
+# gated on the operator running the bootstrap publish per
+# docs/runbooks/verdaccio-package-publish-bootstrap.md. Until then, the
+# current vendored-import sites stay allowlisted; this gate prevents NEW
+# callers from being added (which would need a swap too).
+
+name: Marketplace MCP Client Banned
+
+on:
+  pull_request:
+    # Draft PRs skip this gate; it runs on push-to-main and non-draft PRs
+    # (ready_for_review re-runs it when a draft is marked ready).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so the touch-ratchet diff against the PR base
+          # works for PRs on long-running branches.
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: Compute diff base
+        id: base
+        # PRs → origin/<pr.base.ref>. Pushes → previous-tip
+        # (github.event.before) so a push to main still has a meaningful
+        # touch-ratchet anchor.
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+      - name: Run vendored-import regression guard
+        env:
+          MARKETPLACE_MCP_CLIENT_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/marketplace-mcp-client-banned.mjs

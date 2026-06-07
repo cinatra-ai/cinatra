@@ -1,0 +1,30 @@
+{
+  "name": "@cinatra-ai/dashboards",
+  "description": "Cinatra-specific dashboards glue: Postgres tables/migrations, the audit-emitting mutation service, and host wiring for the dashboards SDK.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cinatra-ai/sdk-dashboard": "workspace:*",
+    "@iconify/react": "^6.0.0",
+    "@nivo/heatmap": "^0.99.0",
+    "@radix-ui/react-focus-scope": "^1.1.8",
+    "@tanstack/react-query": "^5.100.10",
+    "@xyflow/react": "^12.10.2",
+    "d3": "^7.9.0",
+    "drizzle-cube": "0.5.6",
+    "elkjs": "^0.11.1",
+    "react-grid-layout": "^2.1.1",
+    "react-is": "^19.2.6",
+    "react-resizable": "^4.0.1",
+    "recharts": "^3.5.1"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "jsdom": "29.1.1",
+    "vitest": "^4.1.6"
+  }
+}

@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+// CI clone-back for the extension source-relocation cutover.
+//
+// After the cutover the bundled `extensions/<scope>/<name>/` source tree is no
+// longer committed to the monorepo — it lives in the extracted per-extension
+// repos (cinatra-ai/<slug>). The host build/typecheck and the IoC gates still
+// need that source on disk (tsconfig path aliases, next transpilePackages, and
+// the extension-import-ban inventory scan). This script clones it back BEFORE
+// `pnpm install` in CI.
+//
+// It is deliberately FOCUSED and pre-install-safe: pure git/fs (reuses
+// `syncCinatraDevExtensions`), no DB / Nango / dev-app work (that's `setup dev`),
+// and no workspace install required (relative .mjs + node builtins + `git`).
+//
+// FAIL-CLOSED, by design — the whole point is to keep the extension gates
+// HONEST. If the `cinatraDevExtensions` manifest is empty, or fewer than the
+// declared number of extension dirs materialize, it exits non-zero. Without this
+// the IoC gates would scan an empty tree and pass VACUOUSLY (a silent protection
+// regression).
+import path from "node:path";
+import { existsSync } from "node:fs";
+import process from "node:process";
+import {
+  syncCinatraDevExtensions,
+  readDevExtensionsConfig,
+} from "../../packages/cli/src/cinatra-dev-extensions.mjs";
+
+const repoRoot = process.cwd();
+
+const config = readDevExtensionsConfig(repoRoot);
+const expected = config ? Object.keys(config).length : 0;
+if (expected === 0) {
+  console.error(
+    "[ci sync-dev-extensions] FAIL: `cinatraDevExtensions` is empty/absent in package.json.\n" +
+      "  CI must clone the extracted extension repos so the build + IoC gates run against real\n" +
+      "  source — refusing to continue (an empty extensions/ tree would pass the gates vacuously).",
+  );
+  process.exit(1);
+}
+
+const res = await syncCinatraDevExtensions({
+  repoRoot,
+  targetRoot: repoRoot,
+  argv: process.argv.slice(2),
+  log: (m) => console.log(m),
+});
+
+if (res?.skipped) {
+  console.error(`[ci sync-dev-extensions] FAIL: sync skipped (${res.reason}).`);
+  process.exit(1);
+}
+
+// Verify every declared extension actually materialized with a package.json.
+const extRoot = path.join(repoRoot, "extensions");
+const missing = [];
+for (const name of Object.keys(config)) {
+  const m = String(name).match(/^@([^/]+)\/(.+)$/);
+  if (!m) {
+    missing.push(`${name} (unparseable scoped name)`);
+    continue;
+  }
+  const dir = path.join(extRoot, m[1], m[2]);
+  if (!existsSync(path.join(dir, "package.json"))) missing.push(name);
+}
+
+const present = expected - missing.length;
+if (missing.length > 0) {
+  console.error(
+    `[ci sync-dev-extensions] FAIL: ${present}/${expected} extension repos present after sync. Missing:\n  - ${missing.join("\n  - ")}`,
+  );
+  process.exit(1);
+}
+
+console.log(`[ci sync-dev-extensions] OK: ${present}/${expected} extension repos cloned into extensions/.`);

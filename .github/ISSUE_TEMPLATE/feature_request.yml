@@ -1,0 +1,51 @@
+name: Feature request
+description: Suggest an idea or improvement for Cinatra.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement! Please describe the problem you are
+        trying to solve and what you would like to see. The clearer the
+        motivation, the easier it is for us to evaluate and prioritize.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What problem are you trying to solve? What is the use case or pain point?
+      placeholder: "I'm always frustrated when..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: A clear and concise description of what you want to happen.
+      placeholder: Describe the feature or behavior you would like...
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any alternative solutions or workarounds you have considered.
+      placeholder: Describe any alternatives you have thought about...
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add any other context, screenshots, or references about the request here.
+      placeholder: Anything else that would help us understand the request...
+    validations:
+      required: false
+  - type: checkboxes
+    id: prior-search
+    attributes:
+      label: Before submitting
+      description: Please confirm the following before opening this request.
+      options:
+        - label: I have searched existing issues and this has not already been requested.
+          required: true

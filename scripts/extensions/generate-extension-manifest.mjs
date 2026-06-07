@@ -1,0 +1,587 @@
+#!/usr/bin/env node
+// Build-time 3-file extension manifest generator.
+//
+// Emits the StaticBundleLoader's input — the SAME normalized records the future
+// RuntimePackageLoader will consume — split into three files so server
+// registrars never drag `server-only`/DB across the React "use client" boundary:
+//   - src/lib/generated/extensions.server.ts        — server-side static manifest (data)
+//   - src/lib/generated/connector-setup-pages.ts     — literal dynamic-import map (Turbopack-safe)
+//   - src/lib/generated/extensions.client.tsx        — true client widgets (scaffold)
+//
+// POSTURE — ADDITIVE: the host KEEPS its current wiring (the
+// `extensions-dev-watcher` readdir boot scan + the hand-maintained
+// `src/lib/connector-setup-pages.ts`). These generated files are NOT yet
+// consumed; they are PARITY-CHECKED against the live scan + the hand-maintained
+// map so they cannot drift. Host consumption is the prototype slice + the
+// cutover. `--check` is non-failing for now.
+//
+// Usage:
+//   node scripts/extensions/generate-extension-manifest.mjs           # (re)write generated files
+//   node scripts/extensions/generate-extension-manifest.mjs --check   # drift + parity report (currently exit 0)
+//   node scripts/extensions/generate-extension-manifest.mjs --print   # print the manifest, write nothing
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { join, relative, dirname, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildInventory } from "./inventory.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, "..", "..");
+const GEN_DIR = join(REPO_ROOT, "src/lib/generated");
+
+// anthropic-connector stays in-tree (owner directive) but is still a real
+// loadable extension, so it remains in the manifest. The private vendor scope is in-tree.
+const fileExists = (p) => existsSync(join(REPO_ROOT, p));
+
+// Canonical host-port names — MUST mirror HOST_PORT_NAMES in
+// @cinatra-ai/sdk-extensions (host-context.ts). Kept as a literal here because
+// this is a plain .mjs build script that can't import the TS SDK; a manifest
+// declaring an unknown requestedHostPort is flagged by checkParity() so typos
+// are caught at generation, not silently treated as an ungranted (no-op) port.
+const VALID_HOST_PORTS = new Set([
+  "db",
+  "settings",
+  "secrets",
+  "nango",
+  "authSession",
+  "mcp",
+  "objects",
+  "jobs",
+  "notifications",
+  "ui",
+  "logger",
+  "runtime",
+  "capabilities",
+]);
+
+// Read the `cinatra` manifest block of an extension for the loader fields
+// (serverEntry / requestedHostPorts) the inventory doesn't surface.
+function readCinatraManifest(dir) {
+  try {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, dir, "package.json"), "utf8"));
+    return pkg.cinatra ?? {};
+  } catch {
+    return {};
+  }
+}
+
+// D10: resolve `cinatra.displayName` (trimmed, non-empty) or null.
+export function resolveDisplayName(cin) {
+  return typeof cin.displayName === "string" && cin.displayName.trim().length > 0
+    ? cin.displayName.trim()
+    : null;
+}
+
+// D10: PURE SVG sanitizer — given raw SVG text, return a bounded inline data URI
+// or null. Defends the host card surface from a hostile/marketplace logo asset.
+// A logo icon needs only a tiny shape/group/gradient vocabulary, so this FAILS
+// CLOSED via an ALLOWLIST of element + attribute names (rather than a fragile
+// denylist that namespace-prefixes / CSS-escapes can slip past): every tag and
+// attribute name must be in the safe set, no namespaced (`ns:tag`) elements, no
+// backslashes (CSS escapes), no entities (encoding bypass), no doctype/entity/
+// CDATA, and only INTERNAL `url(#id)` references (e.g. a gradient).
+export const MAX_LOGO_BYTES = 16 * 1024;
+const ALLOWED_SVG_TAGS = new Set([
+  "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+  "defs", "lineargradient", "radialgradient", "stop", "clippath", "mask",
+  "symbol", "title", "desc", "metadata", "text", "tspan",
+]);
+const ALLOWED_SVG_ATTRS = new Set([
+  "id", "class", "viewbox", "width", "height", "x", "y", "x1", "y1", "x2", "y2",
+  "cx", "cy", "r", "rx", "ry", "fx", "fy", "fr", "d", "points", "transform",
+  "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-linecap",
+  "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset",
+  "stroke-opacity", "opacity", "clip-path", "clip-rule", "mask", "offset",
+  "stop-color", "stop-opacity", "gradientunits", "gradienttransform", "spreadmethod",
+  "preserveaspectratio", "version", "color", "vector-effect", "shape-rendering",
+  "color-interpolation", "color-interpolation-filters", "role", "aria-hidden",
+  "aria-label", "focusable",
+]);
+export function sanitizeSvgToDataUri(svg) {
+  if (typeof svg !== "string") return null;
+  if (Buffer.byteLength(svg, "utf8") > MAX_LOGO_BYTES) return null;
+  const s = svg.trim();
+  // Bare SVG document (optional XML prolog) — nothing executable before the root.
+  if (!/^(?:<\?xml[^>]*\?>\s*)?<svg[\s>]/i.test(s)) return null;
+  // Reject numeric + non-XML-predefined named entities (entity-encoding bypass),
+  // backslashes (CSS hex escapes like `u\72l(`), and DTD/CDATA constructs.
+  if (/&#/.test(s) || /&(?!(?:amp|lt|gt|quot|apos);)[a-z0-9]+;/i.test(s)) return null;
+  if (/\\/.test(s)) return null;
+  if (/<!doctype|<!entity|<!\[cdata/i.test(s)) return null;
+  // Element allowlist — every (possibly-namespaced) tag name must be safe; a
+  // namespace prefix (`ns:script`) is rejected outright.
+  for (const m of s.matchAll(/<\s*\/?\s*([a-zA-Z_][\w.:-]*)/g)) {
+    const tag = m[1].toLowerCase();
+    if (tag.includes(":") || !ALLOWED_SVG_TAGS.has(tag)) return null;
+  }
+  // Attribute allowlist — every attribute name must be safe; xmlns / xmlns:* and
+  // the xml: namespace are the only permitted namespaced attrs (declarations
+  // only — no xlink:href / data refs).
+  for (const m of s.matchAll(/[\s"'\/]([a-zA-Z_][\w.:-]*)\s*=/g)) {
+    const attr = m[1].toLowerCase();
+    if (attr === "xmlns" || attr.startsWith("xmlns:") || attr === "xml:space") continue;
+    if (!ALLOWED_SVG_ATTRS.has(attr)) return null;
+  }
+  // Attribute VALUES must carry no external-reference vector. xmlns/xmlns:* alone
+  // legitimately hold the SVG namespace URI; every other quoted attribute value
+  // is rejected if it contains a scheme (`://`), an external `url()` (anything
+  // but an internal `url(#id)`), or any CSS function that can fetch a resource
+  // (image-set / cross-fade / image() / element() / paint() / src() / -webkit-*).
+  for (const m of s.matchAll(/([a-zA-Z_][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+    const name = m[1].toLowerCase();
+    if (name === "xmlns" || name.startsWith("xmlns:")) continue;
+    const value = m[2] ?? m[3] ?? "";
+    if (/:\/\//.test(value)) return null;
+    if (/url\(\s*['"]?\s*(?!#)/i.test(value)) return null;
+    if (/(?:image-set|cross-fade|\bimage|\belement|\bpaint|\bsrc)\s*\(/i.test(value)) return null;
+    if (/-webkit-/i.test(value)) return null;
+  }
+  // Belt-and-suspenders: no external url(...) anywhere (only internal url(#id)).
+  if (/url\(\s*['"]?\s*(?!#)/i.test(s)) return null;
+  return `data:image/svg+xml;base64,${Buffer.from(s, "utf8").toString("base64")}`;
+}
+
+// D10: read + sanitize `cinatra.logo` (a package-relative .svg) into a data URI,
+// or null. Path-contained to the package via realpath on BOTH ends (a package-
+// local symlink that escapes the package is rejected); any read failure or
+// rejected content → null so the host falls back to its static icon map.
+export function sanitizeLogoDataUri(dir, logoRel) {
+  if (typeof logoRel !== "string" || !logoRel.trim().toLowerCase().endsWith(".svg")) return null;
+  const pkgRoot = resolve(join(REPO_ROOT, dir));
+  const abs = resolve(pkgRoot, logoRel);
+  // Lexical containment first (cheap reject of `../` escapes).
+  if (abs !== pkgRoot && !abs.startsWith(pkgRoot + sep)) return null;
+  let realRoot;
+  let realAbs;
+  try {
+    realRoot = realpathSync(pkgRoot);
+    realAbs = realpathSync(abs); // follows symlinks — then re-check containment
+  } catch {
+    return null;
+  }
+  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + sep)) return null;
+  let svg;
+  try {
+    svg = readFileSync(realAbs, "utf8");
+  } catch {
+    return null;
+  }
+  return sanitizeSvgToDataUri(svg);
+}
+
+function entryFlags(rec) {
+  const d = rec.dir; // repo-relative
+  const has = (sub) => fileExists(join(d, sub));
+  return {
+    hasOas: has("cinatra/oas.json"),
+    hasMcpModule: has("src/mcp/module.ts"),
+    hasSetupPage: has("src/setup-page.tsx"),
+    hasSettingsPage: has("src/settings-page.tsx"),
+  };
+}
+
+function isObj(v) {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+// A plain-JS shape validator that MIRRORS the authoritative TS parser
+// `parseSchemaConfig` (src/lib/extension-schema-config.ts) closely enough to
+// FAIL the manifest generation when a connector declares
+// `cinatra.uiSurface:"schema-config"` with a malformed `cinatra.configSchema`.
+// This is a generation-time gate, not the runtime renderer's validation: the
+// dispatch route still calls the real `parseSchemaConfig` for the fail-closed
+// verdict it renders from. Returns an array of error strings ([] = valid).
+//
+// The .mjs build script cannot import the TS parser, so this duplicates its
+// CORE rules (non-empty fields, known kind, per-kind required keys, key/actionId
+// regex, duplicate-key detection, flat repeatable-list item fields). Kept
+// deliberately conservative — any divergence errs toward REJECTING at
+// generation, which is the safe direction (a connector with a malformed schema
+// never reaches the manifest).
+const SCHEMA_CONFIG_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+const SCHEMA_CONFIG_FIELD_KINDS = new Set([
+  "text",
+  "secret",
+  "nango-connect",
+  "repeatable-list",
+  "status-probe",
+  "copyable-credential",
+  "named-action",
+]);
+function nonEmptyStr(v) {
+  return typeof v === "string" && v.length > 0;
+}
+function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
+  if (!nonEmptyStr(raw.label)) {
+    errors.push(`${at}: missing "label"`);
+    return;
+  }
+  const needsKey =
+    kind === "text" || kind === "secret" || kind === "copyable-credential" || kind === "repeatable-list";
+  if (needsKey) {
+    if (!nonEmptyStr(raw.key) || !SCHEMA_CONFIG_KEY_RE.test(raw.key)) {
+      errors.push(`${at}: invalid or missing "key"`);
+      return;
+    }
+    if (seenKeys.has(raw.key)) {
+      errors.push(`${at}: duplicate key "${raw.key}"`);
+      return;
+    }
+    seenKeys.add(raw.key);
+  }
+  if (kind === "nango-connect" && !nonEmptyStr(raw.providerConfigKey)) {
+    errors.push(`${at}: nango-connect requires "providerConfigKey"`);
+  }
+  if ((kind === "status-probe" || kind === "named-action") && (!nonEmptyStr(raw.actionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.actionId))) {
+    errors.push(`${at}: ${kind} requires a valid "actionId"`);
+  }
+  if (kind === "repeatable-list") {
+    const items = raw.itemFields;
+    if (!Array.isArray(items) || items.length === 0) {
+      errors.push(`${at}: repeatable-list requires a non-empty "itemFields"`);
+      return;
+    }
+    const itemSeen = new Set();
+    items.forEach((item, j) => {
+      const itemAt = `${at}.itemFields[${j}]`;
+      if (!isObj(item) || (item.kind !== "text" && item.kind !== "secret")) {
+        errors.push(`${itemAt}: must be a flat text or secret field`);
+        return;
+      }
+      validateConfigSchemaField(item.kind, item, itemAt, errors, itemSeen);
+    });
+  }
+}
+export function validateConfigSchema(raw) {
+  if (!isObj(raw)) return ["configSchema must be an object"];
+  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
+    return ["configSchema.fields must be a non-empty array"];
+  }
+  const errors = [];
+  const seenKeys = new Set();
+  raw.fields.forEach((field, i) => {
+    const at = `fields[${i}]`;
+    if (!isObj(field)) {
+      errors.push(`${at}: must be an object`);
+      return;
+    }
+    if (typeof field.kind !== "string" || !SCHEMA_CONFIG_FIELD_KINDS.has(field.kind)) {
+      errors.push(`${at}: unknown field kind ${JSON.stringify(field.kind)}`);
+      return;
+    }
+    validateConfigSchemaField(field.kind, field, at, errors, seenKeys);
+  });
+  return errors;
+}
+
+// schema-config vs bundled-react classification. The classifier
+// PREFERS a manifest-declared `cinatra.uiSurface`:
+//   - `"schema-config"` → the connector ships NO React; the host renders its
+//     declared `cinatra.configSchema` (DATA). FAIL-CLOSED: an invalid configSchema
+//     is a generation error (see `classifyConnectorUiSurfaceErrors`), never a
+//     silent bundled-react fallback.
+//   - `"bundled-react"` → the connector's React setup page is base-image-only.
+// When no `uiSurface` is declared the legacy heuristic applies: a bespoke
+// setup/settings page → bundled-react; otherwise (facade/runtime connector) →
+// null. Agents/artifacts/skills/workflows are declarative → always null.
+export function classifyUiSurface(rec, flags, cin = {}) {
+  if (rec.kind !== "connector") return null;
+  if (cin.uiSurface === "schema-config") return "schema-config";
+  if (cin.uiSurface === "bundled-react") return "bundled-react";
+  if (flags.hasSetupPage || flags.hasSettingsPage) return "bundled-react";
+  return null;
+}
+
+// Returns the generation-time errors for a connector's declared UI surface (the
+// fail-closed verdict `checkParity` and `buildManifest` enforce). A connector
+// that declares `uiSurface:"schema-config"` MUST carry a valid `configSchema`.
+export function classifyConnectorUiSurfaceErrors(rec, cin = {}) {
+  if (rec.kind !== "connector") return [];
+  if (cin.uiSurface === "schema-config") {
+    if (!isObj(cin.configSchema)) {
+      return [`${rec.packageName ?? rec.name ?? "extension"} declares uiSurface:"schema-config" but no object cinatra.configSchema`];
+    }
+    return validateConfigSchema(cin.configSchema).map(
+      (e) => `${rec.packageName ?? rec.name ?? "extension"} cinatra.configSchema ${e}`,
+    );
+  }
+  return [];
+}
+
+export async function buildManifest() {
+  const inv = await buildInventory();
+  const records = inv.extensions.map((x) => {
+    const flags = entryFlags(x);
+    const cin = readCinatraManifest(x.dir);
+    // FAIL-CLOSED: a connector declaring uiSurface:"schema-config" with a
+    // malformed configSchema is a generation error, not a silent fallback. The
+    // record carries x.name as packageName so the error names the offender.
+    const uiErrors = classifyConnectorUiSurfaceErrors({ kind: x.kind, packageName: x.name }, cin);
+    if (uiErrors.length > 0) {
+      throw new Error(`[extension-manifest] invalid schema-config declaration:\n  - ${uiErrors.join("\n  - ")}`);
+    }
+    return {
+      packageName: x.name,
+      scope: x.scope,
+      kind: x.kind,
+      version: x.version,
+      sourceDir: x.dir,
+      // The compiled server entry the loader imports (the `./register` export),
+      // sourced from the manifest's `cinatra.serverEntry`. Most extensions don't
+      // declare one yet (null) — they expose `register(ctx)` as they're decoupled.
+      // The prototype slice (resend) declares "./register".
+      serverEntry: cin.serverEntry ?? null,
+      hasOas: flags.hasOas,
+      hasMcpModule: flags.hasMcpModule,
+      hasSetupPage: flags.hasSetupPage,
+      hasSettingsPage: flags.hasSettingsPage,
+      uiSurface: classifyUiSurface(x, flags, cin),
+      // The declared schema-config DATA the host renders the setup surface from
+      // (validated above). null for bundled-react / no-UI extensions.
+      configSchema: isObj(cin.configSchema) ? cin.configSchema : null,
+      // Least-privilege host ports the extension requests (manifest-declared;
+      // derived empirically per-extension during the decoupling sweep).
+      requestedHostPorts: Array.isArray(cin.requestedHostPorts) ? cin.requestedHostPorts : [],
+      // ABI range the extension was built against — the loader's ABI gate
+      // consults it (null = unpinned). MUST round-trip or the gate is decorative.
+      sdkAbiRange: typeof cin.sdkAbiRange === "string" ? cin.sdkAbiRange : null,
+      // Canonical cross-kind dependency edges. Legacy agent/connectorDependencies
+      // normalization is the inventory drift check's job; here we carry only the
+      // canonical field (empty for every extension today).
+      dependencies: Array.isArray(cin.dependencies) ? cin.dependencies : [],
+      // D10 self-describing card identity (null → host catalog/icon fallback).
+      displayName: resolveDisplayName(cin),
+      logo: sanitizeLogoDataUri(x.dir, cin.logo),
+    };
+  });
+  records.sort((a, b) => a.packageName.localeCompare(b.packageName));
+
+  const connectorSetupPages = records
+    .filter((r) => r.kind === "connector" && r.hasSetupPage)
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
+  const connectorSettingsPages = records
+    .filter((r) => r.kind === "connector" && r.hasSettingsPage)
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
+  return { records, connectorSetupPages, connectorSettingsPages };
+}
+
+// ---------------------------------------------------------------------------
+// Emitters
+// ---------------------------------------------------------------------------
+const HEADER = (script) =>
+  `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+  `// Regenerate: node ${script}\n` +
+  `// ADDITIVE: not yet consumed by the host\n` +
+  `// (the dev-watcher readdir scan + src/lib/connector-setup-pages.ts remain the\n` +
+  `// source of truth until the cutover); parity-checked against both.\n`;
+
+function emitServer(records) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = records
+    .map(
+      (r) =>
+        `  ${JSON.stringify(r.packageName)}: ${JSON.stringify(
+          {
+            packageName: r.packageName,
+            scope: r.scope,
+            kind: r.kind,
+            version: r.version,
+            sourceDir: r.sourceDir,
+            serverEntry: r.serverEntry,
+            hasOas: r.hasOas,
+            hasMcpModule: r.hasMcpModule,
+            hasSetupPage: r.hasSetupPage,
+            hasSettingsPage: r.hasSettingsPage,
+            uiSurface: r.uiSurface,
+            configSchema: r.configSchema,
+            requestedHostPorts: r.requestedHostPorts,
+            sdkAbiRange: r.sdkAbiRange,
+            dependencies: r.dependencies,
+            displayName: r.displayName,
+            logo: r.logo,
+          },
+        )},`,
+    )
+    .join("\n");
+  // Literal dynamic-import map for records that declare a serverEntry. MUST be
+  // literal `import("<pkg><subpath>")` strings (NOT computed) — Turbopack can
+  // only statically bundle literal dynamic imports (same rule as the connector
+  // setup-page map). The StaticBundleLoader consumes this to import + activate
+  // a register(ctx)-shaped extension.
+  const serverEntries = records
+    .filter((r) => typeof r.serverEntry === "string" && r.serverEntry.length > 0)
+    .map((r) => {
+      // serverEntry "./register" → import specifier "<pkg>/register"
+      const spec = r.packageName + r.serverEntry.replace(/^\./, "");
+      return `  ${JSON.stringify(r.packageName)}: () => import(${JSON.stringify(spec)}),`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `export const STATIC_EXTENSION_MANIFEST: Record<string, NormalizedExtensionRecord> = {\n` +
+    `${body}\n};\n\n` +
+    `export const STATIC_EXTENSION_RECORDS: NormalizedExtensionRecord[] =\n` +
+    `  Object.values(STATIC_EXTENSION_MANIFEST);\n\n` +
+    `// package → dynamic import of its server entry (register(ctx) module).\n` +
+    `// Literal specifiers only (Turbopack-safe). Empty until extensions declare\n` +
+    `// cinatra.serverEntry (prototype: resend-connector).\n` +
+    `export const GENERATED_EXTENSION_SERVER_ENTRIES: Record<string, () => Promise<unknown>> = {\n` +
+    `${serverEntries}\n};\n`
+  );
+}
+
+function emitConnectorSetupPages(setupPages, settingsPages) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const setupBody = setupPages
+    .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(`${p.packageName}/setup-page`)}),`)
+    .join("\n");
+  const settingsBody = settingsPages
+    .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(`${p.packageName}/settings-page`)}),`)
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n\n` +
+    `// Literal dynamic-import maps (Turbopack rejects computed import templates).\n` +
+    `// Mirrors src/lib/connector-setup-pages.ts; generated for the StaticBundleLoader.\n` +
+    `export type GeneratedPageLoader = () => Promise<unknown>;\n\n` +
+    `export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageLoader> = {\n` +
+    `${setupBody}\n};\n\n` +
+    `export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageLoader> = {\n` +
+    `${settingsBody}\n};\n`
+  );
+}
+
+function emitClient() {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  return (
+    `${HEADER(script)}"use client";\n\n` +
+    `import type { ComponentType } from "react";\n\n` +
+    `// TRUE client widgets only (no server-only). Connector setup/settings pages\n` +
+    `// are server components loaded via connector-setup-pages.ts, NOT here.\n` +
+    `// Populated as extensions expose genuine client widgets (currently none).\n` +
+    `export const GENERATED_CLIENT_WIDGETS: Record<string, ComponentType<unknown>> = {};\n`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Parity (the additive safety net)
+// ---------------------------------------------------------------------------
+function liveConnectorSetupSlugs() {
+  // Parse the hand-maintained map's keys without importing it (it's server-only).
+  const src = readFileSync(join(REPO_ROOT, "src/lib/connector-setup-pages.ts"), "utf8");
+  const start = src.indexOf("SETUP_PAGE_LOADERS");
+  const slugs = new Set();
+  const re = /^\s*"([a-z0-9-]+)":\s*\(\)\s*=>\s*import\(/gm;
+  let m;
+  const region = src.slice(start);
+  while ((m = re.exec(region))) slugs.add(m[1]);
+  return slugs;
+}
+
+export async function checkParity() {
+  const { records, connectorSetupPages } = await buildManifest();
+  const problems = [];
+
+  // 1) generated connector-setup slugs must equal the hand-maintained map
+  const generated = new Set(connectorSetupPages.map((p) => p.slug));
+  const live = liveConnectorSetupSlugs();
+  for (const s of generated) if (!live.has(s)) problems.push(`generated setup-page "${s}" missing from src/lib/connector-setup-pages.ts`);
+  for (const s of live) if (!generated.has(s)) problems.push(`hand-maintained setup-page "${s}" missing from generated manifest`);
+
+  // 2) manifest must cover every inventoried extension exactly once
+  const names = new Set(records.map((r) => r.packageName));
+  if (names.size !== records.length) problems.push("duplicate package in manifest");
+
+  // 3) every declared requestedHostPort must be a real host-port name (catch typos
+  //    at generation rather than silently granting nothing at runtime).
+  for (const r of records) {
+    for (const port of r.requestedHostPorts) {
+      if (!VALID_HOST_PORTS.has(port)) {
+        problems.push(`${r.packageName} declares unknown requestedHostPort "${port}" (not a HOST_PORT_NAMES value)`);
+      }
+    }
+  }
+
+  // 4) a schema-config record MUST carry a parseable configSchema (FAIL-CLOSED).
+  //    `buildManifest` already throws on a malformed declaration; this is the
+  //    belt-and-suspenders parity assertion (no schema-config record without
+  //    config data, and the config data must validate).
+  for (const r of records) {
+    if (r.uiSurface !== "schema-config") continue;
+    if (!isObj(r.configSchema)) {
+      problems.push(`${r.packageName} uiSurface:"schema-config" but configSchema is absent`);
+      continue;
+    }
+    for (const e of validateConfigSchema(r.configSchema)) {
+      problems.push(`${r.packageName} configSchema ${e}`);
+    }
+  }
+
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+// Generated output file names, under src/lib/generated/ (no collision with the
+// hand-maintained src/lib/connector-setup-pages.ts — different dir).
+const OUT_SERVER = join(GEN_DIR, "extensions.server.ts");
+const OUT_SETUP = join(GEN_DIR, "connector-setup-pages.ts");
+const OUT_CLIENT = join(GEN_DIR, "extensions.client.tsx");
+
+async function main() {
+  const args = process.argv.slice(2);
+  const { records, connectorSetupPages, connectorSettingsPages } = await buildManifest();
+  const files = [
+    [OUT_SERVER, emitServer(records)],
+    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
+    [OUT_CLIENT, emitClient()],
+  ];
+
+  if (args.includes("--print")) {
+    console.log(JSON.stringify({ count: records.length, connectorSetupPages: connectorSetupPages.length, connectorSettingsPages: connectorSettingsPages.length }, null, 2));
+    return;
+  }
+
+  if (args.includes("--check")) {
+    let drift = false;
+    for (const [path, content] of files) {
+      if (!existsSync(path)) {
+        console.log(`[extension-manifest] MISSING ${relative(REPO_ROOT, path)}`);
+        drift = true;
+        continue;
+      }
+      if (readFileSync(path, "utf8") !== content) {
+        console.log(`[extension-manifest] DRIFT ${relative(REPO_ROOT, path)}`);
+        drift = true;
+      }
+    }
+    const parity = await checkParity();
+    for (const p of parity) console.log(`[extension-manifest] PARITY ${p}`);
+    if (!drift && parity.length === 0) console.log("[extension-manifest] OK — generated files current + parity holds.");
+    else console.log("[extension-manifest] NOTE: --check is non-failing for now (the cutover gate enforces it later).");
+    return; // non-failing exit 0
+  }
+
+  if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });
+  for (const [path, content] of files) writeFileSync(path, content);
+  const parity = await checkParity();
+  console.log(`[extension-manifest] wrote 3 files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages)`);
+  if (parity.length) {
+    console.log("[extension-manifest] PARITY ISSUES:");
+    for (const p of parity) console.log("  - " + p);
+  } else {
+    console.log("[extension-manifest] parity OK (generated setup-pages == hand-maintained map)");
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

@@ -1,0 +1,4 @@
+{
+  "note": "host-peer VALUE-import no-new-rot baseline. Records the CURRENT reachable host-peer value-import surface (per extension, the host-peer VALUE imports reachable from `cinatra.serverEntry`'s static import graph — NOT files reachable only via the host action endpoint). The rule (model B): an extension's serverEntry graph must keep @cinatra-ai/sdk-extensions / sdk-ui / mcp-client type-only (erased at compile) or take the value via the injected `ctx`. Regenerate with `node scripts/audit/host-peer-value-import-ban.mjs --write-baseline` (the surface only ever SHRINKS). The honest baseline is EMPTY today — every declared serverEntry (blog/email/google-calendar/resend/social-media connectors) imports the host SDK type-only and routes values via `ctx`; the value-importing files (`actions.ts`, etc.) are NOT reachable from `register(ctx)`'s graph (the host action endpoint invokes them, not the serverEntry import graph).",
+  "surface": {}
+}

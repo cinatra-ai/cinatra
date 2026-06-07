@@ -1,0 +1,384 @@
+# Dashboard live-verify smoke.
+#
+# The smoke is the only gate that exercises the FULL stack — Postgres +
+# Better Auth session + Next.js + drizzle-cube/client bundle + DOM.
+# typecheck + unit tests don't reach the bundler / DB driver / DOM
+# render pipeline. It catches runtime bugs invisible to the offline
+# gates (chart peer deps loading eagerly, missing
+# <DashboardStoreProvider>, cube `from` parameter-bound, org-only WHERE
+# excluding user's own runs).
+#
+# REQUIRED-CHECK SHIM — why this is NOT a simple `paths:`-gated workflow:
+#
+# This check (`/agents Playwright smoke`) is a REQUIRED status check on
+# `main`. A path-gated workflow CANNOT be required: GitHub reports a
+# required check whose workflow did not trigger as "Expected — Waiting
+# for status to be reported" and blocks the merge forever, so every
+# non-dashboard PR would be un-mergeable.
+#
+# Instead the workflow triggers on EVERY PR and a `detect` job decides
+# (via dorny/paths-filter) whether the dashboard surface changed. The
+# `smoke` job ALWAYS runs (so the required check always reports) but its
+# heavy steps + its Postgres/Redis service containers are gated on the
+# detect output:
+#   - dashboard paths touched   → real smoke runs (can fail = red)
+#   - dashboard paths untouched → green stub in ~seconds, no services
+# Exactly one `/agents Playwright smoke` check reports per PR, so the
+# gate is required-safe AND correct for mixed PRs (a PR touching both a
+# dashboard file and unrelated files runs the real smoke).
+
+name: dashboard-live-verify
+
+on:
+  pull_request:
+    # Draft PRs green-stub the required smoke (see detect.run_real); ready_for_review
+    # runs it for real; converted_to_draft lets concurrency cancel an in-flight run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: dashboard-live-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # detect — decide whether the dashboard surface changed.
+  #
+  # On `pull_request`: dorny/paths-filter queries the PR's changed files via the
+  # REST API (needs `pull-requests: read`); no checkout, fast (~5s), no services.
+  #
+  # On `merge_group` (merge queue): dorny's detection is git-based and needs a
+  # checked-out repo, which this job intentionally does NOT do — so we DON'T run
+  # dorny there. Instead we force `dashboards=true` so the merge-queue run
+  # executes the REAL smoke (the safe choice — a merge-queue candidate has
+  # passed PR review and should get the full gate, not a stub). Without this,
+  # dorny would fail on merge_group → smoke's guard would exit 1 → every
+  # merge-queue run would go red.
+  # ---------------------------------------------------------------------------
+  detect:
+    runs-on: ubuntu-latest
+    # Fail fast if dorny/paths-filter or the GitHub API hangs — a stuck
+    # `detect` would leave the REQUIRED `/agents Playwright smoke` check
+    # pending (smoke's guard can only fire after detect resolves).
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # run_real = run the REAL smoke (vs green stub). True on merge_group, or on
+      # a non-draft PR that touches a dashboard surface. Draft PRs stub (they are
+      # unmergeable; the real smoke runs on ready_for_review).
+      run_real: ${{ steps.force_merge_group.outputs.dashboards == 'true' || (steps.filter.outputs.dashboards == 'true' && github.event.pull_request.draft != true) }}
+    steps:
+      - id: force_merge_group
+        if: ${{ github.event_name == 'merge_group' }}
+        run: echo "dashboards=true" >> "$GITHUB_OUTPUT"
+
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            dashboards:
+              - 'packages/dashboards/**'
+              - 'packages/sdk-dashboard/**'
+              - 'src/app/api/dashboards/**'
+              - 'src/app/agents/**'
+              - 'tests/e2e/dashboards/**'
+              - 'tests/e2e/config/dashboards.config.ts'
+              - 'tests/e2e/config/base.ts'
+              - '.github/workflows/dashboard-live-verify.yml'
+              # High-signal shared-runtime files whose breakage reaches the
+              # /agents DC render even though they sit outside the dashboard
+              # dirs. Kept deliberately narrow so the smoke does NOT become
+              # "run on every PR": the app shell (owns the setup-redirect +
+              # the chrome the smoke asserts), the setup-wizard gate (its
+              # bypass env-var is load-bearing for the smoke), the DC client
+              # SDK, and the Next.js + root-manifest build inputs. NOT
+              # pnpm-lock.yaml (dependency churn would swamp the gate).
+              - 'src/components/app-shell.tsx'
+              - 'src/lib/setup-wizard.ts'
+              - 'packages/sdk-ui/src/**'
+              - 'packages/sdk-ui/package.json'
+              - 'next.config.ts'
+              - 'package.json'
+
+  smoke:
+    name: /agents Playwright smoke
+    needs: detect
+    # ALWAYS run so the required check always reports a result (never a
+    # never-arriving "Expected"). The first step fails the job loudly if
+    # `detect` did not succeed — otherwise a broken detector would let the
+    # required check pass silently (false green).
+    if: ${{ always() }}
+    # Opt-in larger-runner lever — same mechanism build-image's build/e2e jobs
+    # use. Zero-risk no-op (stays ubuntu-latest) until the org/repo variable
+    # CI_BUILD_RUNNER is set to a larger label (e.g. ubuntu-latest-4-cores, 16GB).
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # Job cap 45 (prod build + standalone server boot + suite). The Playwright
+    # run is wrapped in a shell `timeout` (below) sized ABOVE the config's
+    # globalTimeout, so a hung suite SIGTERMs Playwright after it has written
+    # its report, the report uploads, and a final assert step fails the job RED
+    # — never a job-level cancel with no diagnostics (the old failure mode).
+    timeout-minutes: 45
+
+    services:
+      # Conditional service containers: an empty `image` string means the
+      # service is NOT started. On non-dashboard PRs (the common case) the
+      # stub path needs no Postgres/Redis, so they don't spin up.
+      postgres:
+        image: ${{ needs.detect.outputs.run_real == 'true' && 'postgres:16' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: ${{ needs.detect.outputs.run_real == 'true' && 'redis:7' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      SUPABASE_SCHEMA: cinatra_e2e_dashboard
+      REDIS_URL: redis://127.0.0.1:6379
+      BULLMQ_QUEUE_NAME: cinatra-bg-e2e-dashboard
+      BETTER_AUTH_URL: http://localhost:3100
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3100
+      NEXT_PUBLIC_APP_URL: http://localhost:3100
+      NEXT_PUBLIC_SITE_URL: http://localhost:3100
+      # Required by next.config.ts's REQUIRED_ENV presence check (the
+      # check is presence-only; the dashboard e2e never makes an actual
+      # OpenAI call — the cube layer + DOM render are exercised by the
+      # smoke). Mirrors the Dockerfile placeholder at Dockerfile:45.
+      OPENAI_API_KEY: ci-placeholder-not-used-at-runtime
+      # Bypass the setup-wizard redirect that fires from `AppShell`
+      # whenever isSetupWizardComplete() returns false. On a fresh CI
+      # instance the wizard is incomplete (no instance identity row, no
+      # Nango, no OpenAI connection), so the shell's `useEffect` fires
+      # `router.replace("/setup")` on every authenticated route after
+      # hydration. This env var is the documented browser-e2e affordance
+      # at `src/lib/setup-wizard.ts`; also set by `build-image.yml`'s
+      # RBAC + Workflows e2e jobs.
+      CINATRA_E2E_SETUP_BYPASS: "true"
+      E2E_PORT: "3100"
+      E2E_USER_EMAIL: option-a-test@local.test
+      E2E_USER_PASSWORD: OptionATest2026!
+
+    steps:
+      # Guard: if `detect` did not succeed (failure / cancellation), fail the
+      # required check loudly rather than letting it pass green by accident.
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing the required smoke check rather than passing it silently."
+          exit 1
+
+      # Stub path: dashboard surface untouched → report green in seconds.
+      - name: Skip stub (no dashboard-surface changes)
+        if: ${{ needs.detect.outputs.run_real != 'true' }}
+        run: echo "No dashboard-surface changes, or draft PR; reporting /agents Playwright smoke as a green stub (the real smoke runs on ready, non-draft PRs that touch dashboard paths, and on merge_group)."
+
+      # ----- real smoke path: everything below is gated on dashboards==true -----
+      - name: Checkout
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # The real smoke runs untrusted fork-PR code (a fork PR touching a
+          # dashboard path takes this branch). Don't leave the ephemeral
+          # GITHUB_TOKEN persisted in the git config for that code to reuse —
+          # the smoke does no git operations that need it.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Setup Node
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Clone extracted extension repos
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install deps
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      # Reuse Next.js's incremental build cache across runs to speed `pnpm build`
+      # (the smoke now runs against a prebuilt prod server, not `pnpm dev`).
+      # Keyed by lockfile + next.config.ts (a config bump invalidates) and primed
+      # by the most-recent matching restore-key. Mirrors build-image.yml's e2e jobs.
+      - name: Cache Next.js build cache
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .next/cache
+          key: nextjs-prod-dashboard-e2e-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-prod-dashboard-e2e-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
+            nextjs-prod-dashboard-e2e-
+
+      - name: Derive secrets
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        run: |
+          echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> $GITHUB_ENV
+          echo "CINATRA_ENCRYPTION_KEY=$(printf '0%.0s' {1..64})" >> $GITHUB_ENV
+
+      # Cache the Playwright browser download (~175 MiB chromium + ffmpeg +
+      # headless-shell). Pinned to the @playwright/test version via the
+      # lockfile hash so a version bump invalidates the cache. Saves 30-90s
+      # on warm runs (same pattern as the build-image.yml e2e jobs).
+      - name: Cache Playwright browsers
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright chromium
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        # Apply a committed, idempotent snapshot of Better Auth's public.* tables
+        # (user/session/member/organization/...). The cinatra app schema
+        # (cinatra_e2e_dashboard) is created by the instrumentation hook on first
+        # server query. We do NOT use the better-auth migrate CLI: it bundles
+        # auth.ts's import graph, which transitively imports `server-only` and is
+        # rejected outside a Next.js bundle (mirrors build-image.yml's RBAC job).
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Add CI build swap (default-runner only)
+        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
+        # job to a larger runner). A 4G swapfile absorbs `pnpm build` page-data
+        # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
+        # unresponsiveness ("runner received a shutdown signal" mid page-data
+        # collection). Subshell-guarded so a swap-setup failure NEVER fails the job.
+        # Mirrors the build-image build/e2e jobs.
+        if: ${{ needs.detect.outputs.run_real == 'true' && vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build app (production)
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        # Run the smoke against a production build, NOT `pnpm dev`. Turbopack dev
+        # compiles each route cold on first hit, exhausting the runner mid-suite
+        # and leaving a Playwright-owned dev process tree that could not be torn
+        # down — the job ran to the runner's hard kill with NO report. A prebuilt
+        # standalone server serves routes instantly with steady memory. The build
+        # does no real DB I/O (postgres-sync no-ops under
+        # NEXT_PHASE=phase-production-build); the job env supplies the placeholder
+        # OPENAI_API_KEY + SUPABASE_DB_URL the build needs.
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm build
+
+      - name: Start standalone server on port 3100
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        # next.config sets `output: "standalone"`, so run server.js exactly like
+        # the Dockerfile (static/public copied alongside it). Background it; the
+        # next step polls readiness.
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3100 HOSTNAME=0.0.0.0 node server.js > /tmp/dashboard-server.log 2>&1) &
+          echo "standalone server launched as PID $!"
+
+      - name: Wait for server ready (boot + DB schema provisioning)
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        # The instrumentation hook provisions the cinatra_e2e_dashboard schema on
+        # first query; poll /api/auth/get-session (light; proves the server +
+        # Better Auth public schema are alive).
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3100/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::server did not become ready in 5 min"
+          tail -200 /tmp/dashboard-server.log
+          exit 1
+
+      - name: Run dashboard live-verify smoke
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        id: e2e
+        # E2E_REUSE_SERVER=1 → tests/e2e/config/dashboards.config.ts disables its own
+        # webServer and reuses the standalone server above. Wrapped in `timeout`
+        # (SIGTERM at 20m — ABOVE the config's 18m globalTimeout so Playwright
+        # writes its report first; SIGKILL 60s later) and forced `exit 0` so the
+        # report-upload steps below always run; the assert step fails the job on
+        # a non-zero Playwright exit.
+        env:
+          E2E_REUSE_SERVER: "1"
+          E2E_BASE_URL: http://localhost:3100
+          E2E_PORT: "3100"
+        run: |
+          set +e
+          timeout --kill-after=60 1200 pnpm test:e2e:dashboards
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() && needs.detect.outputs.run_real == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload standalone server log
+        if: ${{ always() && needs.detect.outputs.run_real == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-server-log
+          path: /tmp/dashboard-server.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Assert smoke passed
+        # Fail the job on test failure / timeout, AFTER artifacts upload. Reads
+        # steps.e2e.outputs.code (set only on the real path) — gated on
+        # dashboards==true so the green stub never sees an empty code.
+        if: ${{ needs.detect.outputs.run_real == 'true' }}
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::dashboard live-verify smoke failed or timed out (exit ${code})"
+            exit 1
+          fi

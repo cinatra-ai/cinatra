@@ -1,0 +1,1131 @@
+{
+  "nativeTools": [
+    {
+      "description": "STEP 3: Execute a tool by name with arguments. You MUST call get_tool_catalog (step 1) and learn_tools (step 2) first to discover the tool name and its required input schema.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "arguments": {
+            "additionalProperties": {},
+            "description": "Arguments matching the schema returned by learn_tools.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "toolName": {
+            "description": "Exact tool name from get_tool_catalog. Do not guess.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolName",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "name": "execute_tool"
+    },
+    {
+      "description": "STEP 1: Start here. Browse available tools by category. Returns tool names and descriptions. You MUST call this before using learn_tools or execute_tool — do not guess tool names.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "categories": {
+            "description": "Filter by category. Available categories: DATABASE_CRUD, ACTION, WORKFLOW, METADATA, VIEW, VIEW_FIELD, DASHBOARD, LOGIC_FUNCTION. Omit to get all.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_tool_catalog"
+    },
+    {
+      "description": "STEP 2: Get input schemas for tools discovered via get_tool_catalog. Call this with exact tool names to learn the required arguments before calling execute_tool.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "aspects": {
+            "default": [
+              "description",
+              "schema"
+            ],
+            "description": "What to learn: description, schema, or both.",
+            "items": {
+              "enum": [
+                "description",
+                "schema"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "toolNames": {
+            "description": "Exact tool names from get_tool_catalog. Do not guess tool names.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "toolNames"
+        ],
+        "type": "object"
+      },
+      "name": "learn_tools"
+    },
+    {
+      "description": "Load specialized skills for complex tasks. Returns detailed step-by-step instructions for building workflows, dashboards, manipulating data, or managing metadata. Call this before attempting complex operations.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "additionalProperties": false,
+        "properties": {
+          "skillNames": {
+            "description": "Names of the skills to load (e.g., [\"workflow-building\", \"data-manipulation\"])",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "skillNames"
+        ],
+        "type": "object"
+      },
+      "name": "load_skills"
+    },
+    {
+      "description": "Search Twenty documentation and help center to find information about features, setup, usage, and troubleshooting.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "description": "The search query to find relevant help articles about Twenty",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "name": "search_help_center"
+    }
+  ],
+  "serverInfo": {
+    "capturedFrom": "http://localhost:3300",
+    "source": "twenty-bootstrap-proof"
+  },
+  "workspaceCatalog": {
+    "content": [
+      {
+        "parsed": {
+          "catalog": {
+            "ACTION": [
+              {
+                "description": "Create a draft email using a connected account. The email will be saved as a draft, not sent.",
+                "name": "draft_email"
+              },
+              {
+                "description": "Navigate the application.\n    Use navigateToRecord when the user wants to go to a specific record by name.\n    Default to navigateToObject for all other navigation requests.\n    Only use navigateToView when the user explicitly mentions the word \"view\" in their request.\n    If the user asks to wait, use the wait tool with the specified duration.",
+                "name": "navigate_app"
+              },
+              {
+                "description": "Search Twenty documentation and help center to find information about features, setup, usage, and troubleshooting.",
+                "name": "search_help_center"
+              },
+              {
+                "description": "Send an email using a connected account. Requires SEND_EMAIL_TOOL permission.",
+                "name": "send_email"
+              }
+            ],
+            "DASHBOARD": [
+              {
+                "description": "Add a new tab to an existing dashboard.\n\nUse get_dashboard first to get the pageLayoutId and see existing tabs.\nAfter creating a tab, use add_dashboard_widget with the returned tab ID to add widgets.",
+                "name": "add_dashboard_tab"
+              },
+              {
+                "description": "Add a widget to an existing dashboard tab.\n\nUse get_dashboard first to get pageLayoutTabId and existing widget positions.\nUse list_object_metadata_items to get objectMetadataId and field IDs for GRAPH widgets.\n\nFor RECORD_TABLE widgets: create a dedicated view first with create_view (type TABLE), then pass its viewId in configuration. Never reuse an existing record index view.\n\nSee create_complete_dashboard for full configuration examples.",
+                "name": "add_dashboard_widget"
+              },
+              {
+                "description": "Create a dashboard with layout, tab, and widgets.\n\nIMPORTANT: Before creating GRAPH widgets, you MUST use list_object_metadata_items to get valid objectMetadataId and field IDs.\n\nGRID SYSTEM:\n- 12 columns (0-11), rows start at 0\n- Full width: columnSpan: 12, Half: columnSpan: 6, Third: columnSpan: 4\n- Row spans: 2-4 (KPI), 6-8 (charts)\n\nWIDGET TYPES:\n\n1. GRAPH with configurationType \"AGGREGATE_CHART\" (KPI number):\n   - Requires: objectMetadataId, configuration.configurationType, configuration.aggregateFieldMetadataId, configuration.aggregateOperation\n   - Example: { type: \"GRAPH\", objectMetadataId: \"<opportunity-object-uuid>\", configuration: { configurationType: \"AGGREGATE_CHART\", aggregateFieldMetadataId: \"<amount-field-uuid>\", aggregateOperation: \"SUM\" } }\n\n2. GRAPH with configurationType \"BAR_CHART\":\n   - Additional required: configuration.primaryAxisGroupByFieldMetadataId, configuration.layout (\"VERTICAL\" or \"HORIZONTAL\")\n   - IMPORTANT: When grouping by a RELATION field (e.g. owner, company), you MUST provide primaryAxisGroupBySubFieldName (e.g. \"name\", \"email\") — otherwise it groups by raw UUID which is useless. Composite fields (e.g. address) also require a subfield (e.g. \"addressCity\").\n   - Example (simple field): { type: \"GRAPH\", objectMetadataId: \"<opportunity-object-uuid>\", configuration: { configurationType: \"BAR_CHART\", aggregateFieldMetadataId: \"<amount-field-uuid>\", aggregateOperation: \"COUNT\", primaryAxisGroupByFieldMetadataId: \"<stage-field-uuid>\", layout: \"VERTICAL\" } }\n   - Example (relation field): { type: \"GRAPH\", objectMetadataId: \"<opportunity-object-uuid>\", configuration: { configurationType: \"BAR_CHART\", aggregateFieldMetadataId: \"<amount-field-uuid>\", aggregateOperation: \"SUM\", primaryAxisGroupByFieldMetadataId: \"<company-field-uuid>\", primaryAxisGroupBySubFieldName: \"name\", layout: \"VERTICAL\" } }\n\n3. GRAPH with configurationType \"LINE_CHART\":\n   - Additional required: configuration.primaryAxisGroupByFieldMetadataId\n   - Example: { type: \"GRAPH\", objectMetadataId: \"<opportunity-object-uuid>\", configuration: { configurationType: \"LINE_CHART\", aggregateFieldMetadataId: \"<amount-field-uuid>\", aggregateOperation: \"SUM\", primaryAxisGroupByFieldMetadataId: \"<created-date-field-uuid>\" } }\n\n4. GRAPH with configurationType \"PIE_CHART\":\n   - Additional required: configuration.groupByFieldMetadataId (note: different field name!)\n   - Example: { type: \"GRAPH\", objectMetadataId: \"<opportunity-object-uuid>\", configuration: { configurationType: \"PIE_CHART\", aggregateFieldMetadataId: \"<id-field-uuid>\", aggregateOperation: \"COUNT\", groupByFieldMetadataId: \"<stage-field-uuid>\" } }\n\n5. IFRAME: { type: \"IFRAME\", configuration: { configurationType: \"IFRAME\", url: \"https://...\" } }\n\n6. STANDALONE_RICH_TEXT: { type: \"STANDALONE_RICH_TEXT\", configuration: { configurationType: \"STANDALONE_RICH_TEXT\", body: { ... } } }\n\n7. RECORD_TABLE: displays a live, filterable record list directly on the dashboard.\n   - IMPORTANT: you MUST create a dedicated view for the widget BEFORE creating the widget. Use create_view to create a new TABLE view for the object, then pass its ID as viewId. Never reuse an existing index-page view — widget views and record index views must not overlap.\n   - Requires: objectMetadataId (top-level, UUID of the object to display) AND configuration.viewId (UUID of the dedicated view you just created)\n   - configuration.configurationType must be \"RECORD_TABLE\"\n   - Recommended size: rowSpan 8-10, columnSpan 12 (full width)\n   - Workflow: (1) call create_view with type TABLE for the object → get the viewId, (2) call create_many_view_fields to add visible columns to that view, (3) create the widget with that viewId\n   - Example: { type: \"RECORD_TABLE\", objectMetadataId: \"<object-uuid>\", configuration: { configurationType: \"RECORD_TABLE\", viewId: \"<dedicated-view-uuid>\" } }\n\nAGGREGATION OPERATIONS: COUNT, SUM, AVG, MIN, MAX, COUNT_EMPTY, COUNT_NOT_EMPTY",
+                "name": "create_complete_dashboard"
+              },
+              {
+                "description": "Delete a widget from a dashboard. Use get_dashboard first to find the widgetId.",
+                "name": "delete_dashboard_widget"
+              },
+              {
+                "description": "Get a dashboard with its full layout structure including tabs and widgets.",
+                "name": "get_dashboard"
+              },
+              {
+                "description": "List all dashboards in the workspace. Use get_dashboard to retrieve full layout structure.",
+                "name": "list_dashboards"
+              },
+              {
+                "description": "Update an existing widget's properties, position, or configuration.\n\nUse get_dashboard first to find the widgetId.\n\nOnly provide fields you want to change - others remain unchanged.",
+                "name": "update_dashboard_widget"
+              }
+            ],
+            "DATABASE_CRUD": [
+              {
+                "description": "Create a new Attachment record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_attachment"
+              },
+              {
+                "description": "Create a new Blocklist record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_blocklist"
+              },
+              {
+                "description": "Create a new Calendar Channel record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_calendar_channel"
+              },
+              {
+                "description": "Create a new Calendar Channel Event Association record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_calendar_channel_event_association"
+              },
+              {
+                "description": "Create a new Calendar event record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_calendar_event"
+              },
+              {
+                "description": "Create a new Calendar event participant record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_calendar_event_participant"
+              },
+              {
+                "description": "Create a new Company record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_company"
+              },
+              {
+                "description": "Create a new Dashboard record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_dashboard"
+              },
+              {
+                "description": "Create multiple Attachments records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_attachments"
+              },
+              {
+                "description": "Create multiple Blocklists records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_blocklists"
+              },
+              {
+                "description": "Create multiple Calendar Channel Event Associations records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_calendar_channel_event_associations"
+              },
+              {
+                "description": "Create multiple Calendar Channels records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_calendar_channels"
+              },
+              {
+                "description": "Create multiple Calendar event participants records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_calendar_event_participants"
+              },
+              {
+                "description": "Create multiple Calendar events records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_calendar_events"
+              },
+              {
+                "description": "Create multiple Companies records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_companies"
+              },
+              {
+                "description": "Create multiple Dashboards records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_dashboards"
+              },
+              {
+                "description": "Create multiple Message Channel Message Association Message Folders records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_channel_message_association_message_folders"
+              },
+              {
+                "description": "Create multiple Message Channel Message Associations records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_channel_message_associations"
+              },
+              {
+                "description": "Create multiple Message Channels records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_channels"
+              },
+              {
+                "description": "Create multiple Message Folders records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_folders"
+              },
+              {
+                "description": "Create multiple Message Participants records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_participants"
+              },
+              {
+                "description": "Create multiple Message Threads records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_message_threads"
+              },
+              {
+                "description": "Create multiple Messages records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_messages"
+              },
+              {
+                "description": "Create multiple Note Targets records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_note_targets"
+              },
+              {
+                "description": "Create multiple Notes records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_notes"
+              },
+              {
+                "description": "Create multiple Opportunities records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_opportunities"
+              },
+              {
+                "description": "Create multiple People records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_people"
+              },
+              {
+                "description": "Create multiple Task Targets records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_task_targets"
+              },
+              {
+                "description": "Create multiple Tasks records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_tasks"
+              },
+              {
+                "description": "Create multiple Timeline Activities records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_timeline_activities"
+              },
+              {
+                "description": "Create multiple Workspace Members records in a single call. Provide an array of records, each containing the required fields. Maximum 20 records per call. Returns the created records.",
+                "name": "create_many_workspace_members"
+              },
+              {
+                "description": "Create a new Message record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message"
+              },
+              {
+                "description": "Create a new Message Channel record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_channel"
+              },
+              {
+                "description": "Create a new Message Channel Message Association record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_channel_message_association"
+              },
+              {
+                "description": "Create a new Message Channel Message Association Message Folder record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_channel_message_association_message_folder"
+              },
+              {
+                "description": "Create a new Message Folder record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_folder"
+              },
+              {
+                "description": "Create a new Message Participant record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_participant"
+              },
+              {
+                "description": "Create a new Message Thread record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_message_thread"
+              },
+              {
+                "description": "Create a new Note record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_note"
+              },
+              {
+                "description": "Create a new Note Target record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_note_target"
+              },
+              {
+                "description": "Create a new Opportunity record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_opportunity"
+              },
+              {
+                "description": "Create a new Person record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_person"
+              },
+              {
+                "description": "Create a new Task record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_task"
+              },
+              {
+                "description": "Create a new Task Target record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_task_target"
+              },
+              {
+                "description": "Create a new Timeline Activity record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_timeline_activity"
+              },
+              {
+                "description": "Create a new Workspace Member record. Provide all required fields and any optional fields you want to set. The system will automatically handle timestamps and IDs. Returns the created record with all its data.",
+                "name": "create_workspace_member"
+              },
+              {
+                "description": "Delete a Attachment record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_attachment"
+              },
+              {
+                "description": "Delete a Blocklist record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_blocklist"
+              },
+              {
+                "description": "Delete a Calendar Channel record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_calendar_channel"
+              },
+              {
+                "description": "Delete a Calendar Channel Event Association record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_calendar_channel_event_association"
+              },
+              {
+                "description": "Delete a Calendar event record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_calendar_event"
+              },
+              {
+                "description": "Delete a Calendar event participant record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_calendar_event_participant"
+              },
+              {
+                "description": "Delete a Company record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_company"
+              },
+              {
+                "description": "Delete a Dashboard record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_dashboard"
+              },
+              {
+                "description": "Delete a Message record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message"
+              },
+              {
+                "description": "Delete a Message Channel record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_channel"
+              },
+              {
+                "description": "Delete a Message Channel Message Association record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_channel_message_association"
+              },
+              {
+                "description": "Delete a Message Channel Message Association Message Folder record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_channel_message_association_message_folder"
+              },
+              {
+                "description": "Delete a Message Folder record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_folder"
+              },
+              {
+                "description": "Delete a Message Participant record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_participant"
+              },
+              {
+                "description": "Delete a Message Thread record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_message_thread"
+              },
+              {
+                "description": "Delete a Note record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_note"
+              },
+              {
+                "description": "Delete a Note Target record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_note_target"
+              },
+              {
+                "description": "Delete a Opportunity record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_opportunity"
+              },
+              {
+                "description": "Delete a Person record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_person"
+              },
+              {
+                "description": "Delete a Task record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_task"
+              },
+              {
+                "description": "Delete a Task Target record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_task_target"
+              },
+              {
+                "description": "Delete a Timeline Activity record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_timeline_activity"
+              },
+              {
+                "description": "Delete a Workspace Member record by marking it as deleted. The record is hidden from normal queries. This is reversible. Use this to remove records.",
+                "name": "delete_workspace_member"
+              },
+              {
+                "description": "Search for Attachments records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_attachments"
+              },
+              {
+                "description": "Search for Blocklists records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_blocklists"
+              },
+              {
+                "description": "Search for Calendar Channel Event Associations records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_calendar_channel_event_associations"
+              },
+              {
+                "description": "Search for Calendar Channels records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_calendar_channels"
+              },
+              {
+                "description": "Search for Calendar event participants records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_calendar_event_participants"
+              },
+              {
+                "description": "Search for Calendar events records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_calendar_events"
+              },
+              {
+                "description": "Search for Companies records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_companies"
+              },
+              {
+                "description": "Search for Dashboards records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_dashboards"
+              },
+              {
+                "description": "Search for Message Channel Message Association Message Folders records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_channel_message_association_message_folders"
+              },
+              {
+                "description": "Search for Message Channel Message Associations records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_channel_message_associations"
+              },
+              {
+                "description": "Search for Message Channels records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_channels"
+              },
+              {
+                "description": "Search for Message Folders records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_folders"
+              },
+              {
+                "description": "Search for Message Participants records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_participants"
+              },
+              {
+                "description": "Search for Message Threads records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_message_threads"
+              },
+              {
+                "description": "Search for Messages records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_messages"
+              },
+              {
+                "description": "Search for Note Targets records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_note_targets"
+              },
+              {
+                "description": "Search for Notes records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_notes"
+              },
+              {
+                "description": "Retrieve a single Attachment record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_attachment"
+              },
+              {
+                "description": "Retrieve a single Blocklist record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_blocklist"
+              },
+              {
+                "description": "Retrieve a single Calendar Channel record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_calendar_channel"
+              },
+              {
+                "description": "Retrieve a single Calendar Channel Event Association record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_calendar_channel_event_association"
+              },
+              {
+                "description": "Retrieve a single Calendar event record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_calendar_event"
+              },
+              {
+                "description": "Retrieve a single Calendar event participant record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_calendar_event_participant"
+              },
+              {
+                "description": "Retrieve a single Company record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_company"
+              },
+              {
+                "description": "Retrieve a single Dashboard record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_dashboard"
+              },
+              {
+                "description": "Retrieve a single Message record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message"
+              },
+              {
+                "description": "Retrieve a single Message Channel record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_channel"
+              },
+              {
+                "description": "Retrieve a single Message Channel Message Association record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_channel_message_association"
+              },
+              {
+                "description": "Retrieve a single Message Channel Message Association Message Folder record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_channel_message_association_message_folder"
+              },
+              {
+                "description": "Retrieve a single Message Folder record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_folder"
+              },
+              {
+                "description": "Retrieve a single Message Participant record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_participant"
+              },
+              {
+                "description": "Retrieve a single Message Thread record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_message_thread"
+              },
+              {
+                "description": "Retrieve a single Note record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_note"
+              },
+              {
+                "description": "Retrieve a single Note Target record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_note_target"
+              },
+              {
+                "description": "Retrieve a single Opportunity record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_opportunity"
+              },
+              {
+                "description": "Retrieve a single Person record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_person"
+              },
+              {
+                "description": "Retrieve a single Task record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_task"
+              },
+              {
+                "description": "Retrieve a single Task Target record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_task_target"
+              },
+              {
+                "description": "Retrieve a single Timeline Activity record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_timeline_activity"
+              },
+              {
+                "description": "Retrieve a single Workspace Member record by its unique ID. Use this when you know the exact record ID and need the complete record data. Returns the full record or an error if not found.",
+                "name": "find_one_workspace_member"
+              },
+              {
+                "description": "Search for Opportunities records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_opportunities"
+              },
+              {
+                "description": "Search for People records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_people"
+              },
+              {
+                "description": "Search for Task Targets records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_task_targets"
+              },
+              {
+                "description": "Search for Tasks records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_tasks"
+              },
+              {
+                "description": "Search for Timeline Activities records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_timeline_activities"
+              },
+              {
+                "description": "Search for Workspace Members records using flexible filtering criteria. Supports exact matches, pattern matching, ranges, and null checks. Use limit/offset for pagination and orderBy for sorting. To find by ID, use filter: { id: { eq: \"record-id\" } }. Returns an array of matching records with their full data.",
+                "name": "find_workspace_members"
+              },
+              {
+                "description": "Group Attachments records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_attachments"
+              },
+              {
+                "description": "Group Blocklists records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_blocklists"
+              },
+              {
+                "description": "Group Calendar Channel Event Associations records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_calendar_channel_event_associations"
+              },
+              {
+                "description": "Group Calendar Channels records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_calendar_channels"
+              },
+              {
+                "description": "Group Calendar event participants records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_calendar_event_participants"
+              },
+              {
+                "description": "Group Calendar events records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_calendar_events"
+              },
+              {
+                "description": "Group Companies records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_companies"
+              },
+              {
+                "description": "Group Dashboards records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_dashboards"
+              },
+              {
+                "description": "Group Message Channel Message Association Message Folders records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_channel_message_association_message_folders"
+              },
+              {
+                "description": "Group Message Channel Message Associations records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_channel_message_associations"
+              },
+              {
+                "description": "Group Message Channels records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_channels"
+              },
+              {
+                "description": "Group Message Folders records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_folders"
+              },
+              {
+                "description": "Group Message Participants records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_participants"
+              },
+              {
+                "description": "Group Message Threads records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_message_threads"
+              },
+              {
+                "description": "Group Messages records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_messages"
+              },
+              {
+                "description": "Group Note Targets records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_note_targets"
+              },
+              {
+                "description": "Group Notes records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_notes"
+              },
+              {
+                "description": "Group Opportunities records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_opportunities"
+              },
+              {
+                "description": "Group People records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_people"
+              },
+              {
+                "description": "Group Task Targets records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_task_targets"
+              },
+              {
+                "description": "Group Tasks records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_tasks"
+              },
+              {
+                "description": "Group Timeline Activities records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_timeline_activities"
+              },
+              {
+                "description": "Group Workspace Members records by one or two fields and compute an aggregate (COUNT, SUM, AVG, MIN, MAX, etc.). Use for questions like \"how many deals per stage?\" or \"total revenue by company\". Returns groups with dimension values and aggregate results, ordered by the aggregate value.",
+                "name": "group_by_workspace_members"
+              },
+              {
+                "description": "Update an existing Attachment record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_attachment"
+              },
+              {
+                "description": "Update an existing Blocklist record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_blocklist"
+              },
+              {
+                "description": "Update an existing Calendar Channel record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_calendar_channel"
+              },
+              {
+                "description": "Update an existing Calendar Channel Event Association record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_calendar_channel_event_association"
+              },
+              {
+                "description": "Update an existing Calendar event record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_calendar_event"
+              },
+              {
+                "description": "Update an existing Calendar event participant record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_calendar_event_participant"
+              },
+              {
+                "description": "Update an existing Company record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_company"
+              },
+              {
+                "description": "Update an existing Dashboard record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_dashboard"
+              },
+              {
+                "description": "Update multiple Attachments records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_attachments"
+              },
+              {
+                "description": "Update multiple Blocklists records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_blocklists"
+              },
+              {
+                "description": "Update multiple Calendar Channel Event Associations records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_calendar_channel_event_associations"
+              },
+              {
+                "description": "Update multiple Calendar Channels records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_calendar_channels"
+              },
+              {
+                "description": "Update multiple Calendar event participants records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_calendar_event_participants"
+              },
+              {
+                "description": "Update multiple Calendar events records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_calendar_events"
+              },
+              {
+                "description": "Update multiple Companies records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_companies"
+              },
+              {
+                "description": "Update multiple Dashboards records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_dashboards"
+              },
+              {
+                "description": "Update multiple Message Channel Message Association Message Folders records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_channel_message_association_message_folders"
+              },
+              {
+                "description": "Update multiple Message Channel Message Associations records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_channel_message_associations"
+              },
+              {
+                "description": "Update multiple Message Channels records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_channels"
+              },
+              {
+                "description": "Update multiple Message Folders records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_folders"
+              },
+              {
+                "description": "Update multiple Message Participants records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_participants"
+              },
+              {
+                "description": "Update multiple Message Threads records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_message_threads"
+              },
+              {
+                "description": "Update multiple Messages records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_messages"
+              },
+              {
+                "description": "Update multiple Note Targets records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_note_targets"
+              },
+              {
+                "description": "Update multiple Notes records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_notes"
+              },
+              {
+                "description": "Update multiple Opportunities records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_opportunities"
+              },
+              {
+                "description": "Update multiple People records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_people"
+              },
+              {
+                "description": "Update multiple Task Targets records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_task_targets"
+              },
+              {
+                "description": "Update multiple Tasks records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_tasks"
+              },
+              {
+                "description": "Update multiple Timeline Activities records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_timeline_activities"
+              },
+              {
+                "description": "Update multiple Workspace Members records matching a filter in a single operation. All matching records will receive the same field values. WARNING: Use specific filters to avoid unintended mass updates. Always verify the filter scope with a find query first. Returns the updated records.",
+                "name": "update_many_workspace_members"
+              },
+              {
+                "description": "Update an existing Message record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message"
+              },
+              {
+                "description": "Update an existing Message Channel record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_channel"
+              },
+              {
+                "description": "Update an existing Message Channel Message Association record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_channel_message_association"
+              },
+              {
+                "description": "Update an existing Message Channel Message Association Message Folder record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_channel_message_association_message_folder"
+              },
+              {
+                "description": "Update an existing Message Folder record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_folder"
+              },
+              {
+                "description": "Update an existing Message Participant record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_participant"
+              },
+              {
+                "description": "Update an existing Message Thread record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_message_thread"
+              },
+              {
+                "description": "Update an existing Note record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_note"
+              },
+              {
+                "description": "Update an existing Note Target record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_note_target"
+              },
+              {
+                "description": "Update an existing Opportunity record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_opportunity"
+              },
+              {
+                "description": "Update an existing Person record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_person"
+              },
+              {
+                "description": "Update an existing Task record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_task"
+              },
+              {
+                "description": "Update an existing Task Target record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_task_target"
+              },
+              {
+                "description": "Update an existing Timeline Activity record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_timeline_activity"
+              },
+              {
+                "description": "Update an existing Workspace Member record. Provide the record ID and only the fields you want to change. Unspecified fields will remain unchanged. Returns the updated record with all current data.",
+                "name": "update_workspace_member"
+              }
+            ],
+            "METADATA": [
+              {
+                "description": "Create a new field metadata on an object. Specify the objectMetadataId and field properties.",
+                "name": "create_field_metadata"
+              },
+              {
+                "description": "Create multiple field metadata at once on one or more objects. More efficient than calling create_field_metadata multiple times. Each item follows the same schema as create_field_metadata.",
+                "name": "create_many_field_metadata"
+              },
+              {
+                "description": "Create multiple object metadata at once in the workspace data model. More efficient than calling create_object_metadata multiple times. Each item follows the same schema as create_object_metadata.",
+                "name": "create_many_object_metadata"
+              },
+              {
+                "description": "Create multiple relation fields between objects at once. This is the recommended way to add relations after creating objects and non-relation fields. Each item specifies the source object, target object, relation type, and labels for both sides of the relation.",
+                "name": "create_many_relation_fields"
+              },
+              {
+                "description": "Create a new object metadata in the workspace data model.",
+                "name": "create_object_metadata"
+              },
+              {
+                "description": "Delete a field metadata by its ID.",
+                "name": "delete_field_metadata"
+              },
+              {
+                "description": "Delete an object metadata by its ID. This will also delete all associated fields.",
+                "name": "delete_object_metadata"
+              },
+              {
+                "description": "Find fields metadata. Retrieve information about the fields of objects in the workspace data model.",
+                "name": "get_field_metadata"
+              },
+              {
+                "description": "Find objects metadata. Retrieve information about the data model objects in the workspace.",
+                "name": "get_object_metadata"
+              },
+              {
+                "description": "Update an existing field metadata. Provide the field ID and the properties to update.",
+                "name": "update_field_metadata"
+              },
+              {
+                "description": "Update multiple field metadata at once. More efficient than calling update_field_metadata multiple times. Each item must include the field ID and the properties to update.",
+                "name": "update_many_field_metadata"
+              },
+              {
+                "description": "Update multiple object metadata at once. More efficient than calling update_object_metadata multiple times. Each item must include the object ID and the properties to update.",
+                "name": "update_many_object_metadata"
+              },
+              {
+                "description": "Update an existing object metadata. Provide the object ID and the fields to update.",
+                "name": "update_object_metadata"
+              }
+            ],
+            "VIEW": [
+              {
+                "description": "Add multiple filters to a view in one call. Use list_object_metadata_items to get fieldMetadataId values.",
+                "name": "create_many_view_filters"
+              },
+              {
+                "description": "Add multiple sorts to a view in one call. Use list_object_metadata_items to get fieldMetadataId values.",
+                "name": "create_many_view_sorts"
+              },
+              {
+                "description": "Create a new view for an object. Views define how records are displayed. For KANBAN views, mainGroupByFieldName is required and must be a SELECT field (e.g., \"stage\", \"status\"). For CALENDAR views, calendarFieldName and calendarLayout are required.",
+                "name": "create_view"
+              },
+              {
+                "description": "Add a filter to a view. Use list_object_metadata_items to get fieldMetadataId values.",
+                "name": "create_view_filter"
+              },
+              {
+                "description": "Add a sort to a view. Use list_object_metadata_items to get fieldMetadataId values.",
+                "name": "create_view_sort"
+              },
+              {
+                "description": "Delete a view by its ID.",
+                "name": "delete_view"
+              },
+              {
+                "description": "Remove a filter from a view. Use get_view_filters to find the filter ID.",
+                "name": "delete_view_filter"
+              },
+              {
+                "description": "Remove a sort from a view. Use get_view_sorts to find the sort ID.",
+                "name": "delete_view_sort"
+              },
+              {
+                "description": "List all filters applied to a view. Each filter defines a condition that records must match to appear in the view.",
+                "name": "get_view_filters"
+              },
+              {
+                "description": "Get filter and sort parameters from a view. Use these parameters with find_* tools to query records matching the view.",
+                "name": "get_view_query_parameters"
+              },
+              {
+                "description": "List all sorts applied to a view. Each sort defines a field and direction that determines the order records appear in the view.",
+                "name": "get_view_sorts"
+              },
+              {
+                "description": "List views in the workspace. Views define how records are displayed, filtered, and sorted.",
+                "name": "get_views"
+              },
+              {
+                "description": "Update an existing view. You can change the name and icon.",
+                "name": "update_view"
+              },
+              {
+                "description": "Update a filter on a view. Use get_view_filters to find the filter ID.",
+                "name": "update_view_filter"
+              },
+              {
+                "description": "Update a sort on a view. Use get_view_sorts to find the sort ID.",
+                "name": "update_view_sort"
+              }
+            ],
+            "VIEW_FIELD": [
+              {
+                "description": "Add multiple columns to a view at once. More efficient than calling create_view_field multiple times. Each item follows the same schema as create_view_field. All view fields can target the same or different views.",
+                "name": "create_many_view_fields"
+              },
+              {
+                "description": "Add a new column to a view. View fields define which columns are shown in table or kanban views. First call get_field_metadata to find the fieldMetadataId of the column to add, and get_views to find the target viewId.",
+                "name": "create_view_field"
+              },
+              {
+                "description": "Remove a column from a view. This removes the field from the view's displayed columns. Use get_view_fields to find the view field ID to delete.",
+                "name": "delete_view_field"
+              },
+              {
+                "description": "List the columns (fields) displayed in a specific view. A view field controls which columns appear in a table or kanban view, their visibility, width, position, and aggregate operation. Use get_views first to find the view ID, then call this to inspect its column configuration.",
+                "name": "get_view_fields"
+              },
+              {
+                "description": "Update multiple columns in a view at once. More efficient than calling update_view_field multiple times. Each item must include the view field ID and properties to update. Same constraints as update_view_field apply to each item.",
+                "name": "update_many_view_fields"
+              },
+              {
+                "description": "Update properties of a column in a view. You can change its visibility, width (size in pixels), display position, or aggregate operation. Use get_view_fields to find the view field ID. Constraints: position must not be -1, must not precede the label identifier field, and must not conflict with another field's position.",
+                "name": "update_view_field"
+              }
+            ],
+            "WORKFLOW": [
+              {
+                "description": "Activate a workflow version. This makes the workflow version active and available for execution.",
+                "name": "activate_workflow_version"
+              },
+              {
+                "description": "Compute the output schema for a workflow step. This determines what data the step produces. The step parameter must be a valid WorkflowTrigger or WorkflowAction with the correct settings structure for its type.",
+                "name": "compute_step_output_schema"
+              },
+              {
+                "description": "Create a complete workflow with trigger, steps, and connections in a single operation.\n\nCRITICAL SCHEMA REQUIREMENTS:\n- Trigger type MUST be one of: DATABASE_EVENT, MANUAL, CRON, WEBHOOK\n- NEVER use \"RECORD_CREATED\" - this is invalid. Use \"DATABASE_EVENT\" instead.\n- Each step MUST include: id (must be a valid UUID), name, type, valid, settings\n- CREATE_RECORD actions MUST have objectName and objectRecord in settings.input\n- objectRecord must contain actual field values, not just field names\n- Use \"trigger\" as stepId for trigger step in stepPositions and edges\n\nCommon mistakes to avoid:\n- Using \"RECORD_CREATED\" instead of \"DATABASE_EVENT\"\n- Missing the \"name\" and \"valid\" fields in steps\n- Missing the \"objectRecord\" field in CREATE_RECORD actions\n- Using \"fieldsToUpdate\" instead of \"objectRecord\" in CREATE_RECORD actions\n- Including CODE steps in this tool — this tool does NOT create the underlying logic function needed by CODE steps. Instead, create the workflow without CODE steps first, then add CODE steps individually using create_workflow_version_step (which properly creates the logic function), then call update_logic_function_source to define the code.\n\nIMPORTANT: The tool schema provides comprehensive field descriptions, examples, and validation rules. Always refer to the schema for:\n- Field requirements and data types\n- Common object patterns and field structures\n- Proper relationship field formats\n- Variable reference syntax: {{trigger.fieldName}} for trigger data, {{<step-id>.result.fieldName}} for step outputs (step-id is the step's UUID, not its name)\n- Error handling options\n\nThis is the most efficient way for AI to create workflows as it handles all the complexity in one call.",
+                "name": "create_complete_workflow"
+              },
+              {
+                "description": "Create a new draft workflow version from an existing one. This allows for iterative workflow development.",
+                "name": "create_draft_from_workflow_version"
+              },
+              {
+                "description": "Create a connection (edge) between two workflow steps. This defines the flow between steps.",
+                "name": "create_workflow_version_edge"
+              },
+              {
+                "description": "Create a new step in a workflow version. This adds a step to the specified workflow version with the given configuration. If parentStepId is not provided, the step will be appended at the end of the workflow.",
+                "name": "create_workflow_version_step"
+              },
+              {
+                "description": "Deactivate a workflow version. This makes the workflow version inactive and unavailable for execution.",
+                "name": "deactivate_workflow_version"
+              },
+              {
+                "description": "Delete a connection (edge) between workflow steps.",
+                "name": "delete_workflow_version_edge"
+              },
+              {
+                "description": "Delete a step from a workflow version. This removes the step and updates the workflow structure.",
+                "name": "delete_workflow_version_step"
+              },
+              {
+                "description": "Get the current version of a workflow. Returns the draft version if one exists, otherwise the last published version.",
+                "name": "get_workflow_current_version"
+              },
+              {
+                "description": "List all logic functions exposed as workflow actions, which can be added as LOGIC_FUNCTION steps in workflows. Returns their IDs, names, and descriptions.",
+                "name": "list_logic_function_tools"
+              },
+              {
+                "description": "Update the TypeScript source code of a logic function used in a workflow code step.\n\nUse this tool to modify the actual code that runs when a CODE step executes.\n\nThe code must:\n- Export a 'main' function as the entry point\n- Use TypeScript syntax\n- Return an object with the result\n- Use native APIs only (fetch, etc.) - external packages cannot be imported\n\nExample code using fetch for HTTP requests:\n```typescript\nexport const main = async (params: { url: string }) => {\n  const response = await fetch(params.url);\n  const data = await response.json();\n  return { data };\n};\n```\n\nTo find the logicFunctionId, look at the code step's settings.input.logicFunctionId field.",
+                "name": "update_logic_function_source"
+              },
+              {
+                "description": "Update the positions of multiple workflow steps. This is useful for reorganizing the workflow layout.",
+                "name": "update_workflow_version_positions"
+              },
+              {
+                "description": "Update an existing step in a workflow version. This modifies the step configuration.",
+                "name": "update_workflow_version_step"
+              },
+              {
+                "description": "Update the trigger of a workflow version. This modifies the trigger configuration (e.g., changing trigger type, settings, or conditions).",
+                "name": "update_workflow_version_trigger"
+              }
+            ]
+          },
+          "message": "Found 244 tool(s) across 7 category(ies)."
+        },
+        "type": "text"
+      }
+    ],
+    "isError": false
+  }
+}

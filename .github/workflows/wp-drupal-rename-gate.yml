@@ -1,0 +1,61 @@
+# WordPress/Drupal full-rename gate.
+#
+# The in-tree POC `cinatra-widget` / `cinatra_widget` was renamed to `cinatra`
+# and the plugin/module extracted to their own repos. This gate fails the PR if
+# any old-identity token is reintroduced into the cinatra tree.
+#
+# Allowlist (intentionally NOT matched / excluded):
+#   - the excluded glob below (the scanned-tree carve-out — see the rg --glob flag)
+#   - this workflow file       contains the pattern string by necessity
+#   - gitignored clone paths   dev/wordpress-plugin/ + dev/drupal-module/cinatra/ are
+#                              the extracted GPL repos (rg respects .gitignore); their
+#                              one-shot migration code legitimately references the
+#                              legacy option/config keys.
+#   - persisted Cinatra DB keys / skill IDs (drupal_widget_auth,
+#     wordpress_widget_auth, drupal-widget-chat) do NOT match the pattern below
+#     and are deferred to a separate post-launch migration.
+
+name: WP/Drupal Rename Gate
+
+on:
+  pull_request:
+    # Draft PRs skip this gate; it runs on push-to-main and non-draft PRs
+    # (ready_for_review re-runs it when a draft is marked ready).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rename-gate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: No old widget-identity tokens reintroduced
+        run: |
+          set -uo pipefail
+          PATTERN='Cinatra Widget|cinatra-widget|cinatra_widget|CINATRA_WIDGET|CinatraWidget|cinatraWidget|/api/(wordpress|drupal)-widget/bundle\.js'
+          # rg respects .gitignore, so the gitignored clone paths are skipped.
+          if rg -n --hidden \
+               --glob '!.git/**' \
+               --glob '!.github/workflows/wp-drupal-rename-gate.yml' \
+               "$PATTERN" ; then
+            echo ""
+            echo "❌ Old WordPress/Drupal widget-identity token(s) found above."
+            echo "   The rename is cinatra-widget / cinatra_widget -> cinatra."
+            echo "   If this is a deferred persisted DB key / skill ID, it must not"
+            echo "   match this pattern; otherwise rename it. See"
+            echo "   contracts/wp-drupal-assistant/README.md."
+            exit 1
+          fi
+          echo "✅ No old widget-identity tokens in the cinatra tree."

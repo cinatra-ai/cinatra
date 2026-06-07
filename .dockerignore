@@ -1,0 +1,40 @@
+# Build / cache output
+node_modules
+.next
+.turbo
+.pnpm-store
+
+# VCS / editor / agent dirs
+.git
+# Nested .git from the extracted extension repos cloned into the build context
+# (source-relocation cutover) — keep the source, drop their git metadata.
+**/.git
+.gitignore
+.vscode
+.claude
+
+# Local env / data — never bake into image
+.env
+.env.*
+!.env.example
+data
+backups
+downloads
+
+# Sub-projects that ship outside the cinatra app image
+docker/drupal
+dev/wordpress-plugin
+dev/drupal-module
+
+# Docs / tests / scratch
+docs
+tests
+test-*.ts
+*.log
+
+# Generated at build time inside the image (RUN pnpm build:auth-migrate-bundle);
+# keep any stale local copy out of the build context so it's always fresh.
+scripts/better-auth-migrate.bundle.mjs
+
+# OS
+.DS_Store

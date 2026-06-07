@@ -1,0 +1,213 @@
+/* Cinatra Design Tokens — semantic + brand CSS custom properties.
+ *
+ * Source of truth: https://docs.cinatra.ai/references/design/design-system.html.
+ * Operational rulebook: https://docs.cinatra.ai/references/design/.
+ *
+ * Three layers:
+ *   :root          — paper-cream defaults (matches `.cinatra` baseline)
+ *   .cinatra       — explicit themed activation (managed by next-themes)
+ *   .dark          — dark-mode overrides
+ *
+ * Consumer usage:
+ *   @import "@cinatra-ai/design/tokens.css";
+ *
+ * Pair with `theme.css` (Tailwind v4 @theme inline mapping) and `utilities.css`
+ * (canonical .soft-panel / .divider-etched / etc.).
+ */
+
+:root {
+  /* Brand palette */
+  --cinatra-red: #a6384f;
+  --background: #f1f1ed;
+  --foreground: #15213a;
+  --surface: #f7f7f3;
+  --surface-strong: #ffffff;
+  --surface-muted: #e8e8e3;
+  /* Toolbar ground — aliased to --surface-muted; isolated semantic so a
+     future toolbar tone can diverge without touching every surface-muted
+     call site. */
+  --toolbar: var(--surface-muted);
+  --muted: #5a6477;
+  /* Accent is canonical desaturated indigo. */
+  --accent: #364e81;
+  --accent-soft: #e6ede7;
+  /* Hairlines are navy at low alpha, never grey. */
+  --line: rgba(21, 33, 58, 0.14);
+  --line-strong: #15213a;
+  /* Fabric stripe tokens for the seersucker zebra treatment. */
+  --stripe-mid: #b8c4d4;
+  --stripe-light: #e3e8ee;
+  --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.07);
+  --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.08);
+
+  /* Sidebar tokens (shadcn compatibility) */
+  --sidebar: #eceeea;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--surface-muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--accent);
+
+  /* App radius scale */
+  --r-card: 1rem;
+  --r-panel: 0.875rem;
+  --r-control: 0.625rem;
+  --r-chip: 0.5rem;
+
+  /* shadcn/ui compatibility — mapped from cinatra design tokens */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-strong);
+  --popover-foreground: var(--foreground);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: #ffffff;
+  /* Status palette — sea-green, mustard, indigo */
+  --success: #3f6e6b;
+  --success-foreground: #ffffff;
+  --warning: #c79545;
+  --warning-foreground: #15213a;
+  --info: #364e81;
+  --info-foreground: #ffffff;
+  /* Dedicated brand mustard for page-title display and wordmark on light
+     surfaces. Shares the hex value of --warning but stays separate so status
+     semantics are not hijacked by brand chrome. */
+  --brand-mustard: #c79545;
+  --border: var(--line);
+  /* Input chrome carries the strong navy line, not the low-alpha hairline.
+     Cascades through every shadcn primitive that uses `border-input`. */
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --radius: 0.625rem;
+
+  /* Accent-foreground + chart tokens.
+     Chart palette uses indigo / sea-green / mustard / burgundy / red. */
+  --accent-foreground: var(--foreground);
+  --chart-1: #364e81;
+  --chart-2: #3f6e6b;
+  --chart-3: #c79545;
+  --chart-4: #7a2e3a;
+  --chart-5: #a6384f;
+}
+
+/* =====================================================================
+   .cinatra — explicit themed activation
+   ===================================================================== */
+.cinatra {
+  --cinatra-red: #a6384f;
+  --background: #f1f1ed;
+  --foreground: #15213a;
+  --surface: #f7f7f3;
+  --surface-strong: #ffffff;
+  --surface-muted: #e8e8e3;
+  --toolbar: var(--surface-muted);
+  --muted: #5a6477;
+  --accent: #364e81;
+  --accent-soft: #e6ede7;
+  /* Burgundy logo color — exclusive to themed mode. */
+  --logo-color: #7a2e3a;
+  --line: rgba(21, 33, 58, 0.14);
+  --line-strong: #15213a;
+  --stripe-mid: #b8c4d4;
+  --stripe-light: #e3e8ee;
+  --cinatra-shadow-soft: 0 1px 0 rgba(21, 23, 28, 0.04), 0 1px 2px rgba(21, 23, 28, 0.05);
+  --cinatra-shadow-strong: 0 2px 0 rgba(21, 23, 28, 0.04), 0 10px 24px -8px rgba(21, 23, 28, 0.12);
+
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-strong);
+  --popover-foreground: var(--foreground);
+  --primary: #364e81;
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: #ffffff;
+  --success: #3f6e6b;
+  --success-foreground: #ffffff;
+  --warning: #c79545;
+  --warning-foreground: #15213a;
+  --info: #364e81;
+  --info-foreground: #ffffff;
+  --brand-mustard: #c79545;
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --radius: 0.5rem;
+
+  --sidebar: #eceeea;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--line);
+  --sidebar-muted: var(--muted);
+  --sidebar-accent: rgba(54, 78, 129, 0.06);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: var(--accent);
+
+  --chart-1: #364e81;
+  --chart-2: #3f6e6b;
+  --chart-3: #c79545;
+  --chart-4: #7a2e3a;
+  --chart-5: #a6384f;
+}
+
+/* =====================================================================
+   .dark — dark-mode overrides
+   ===================================================================== */
+.dark {
+  --cinatra-red: #a6384f;
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --surface: oklch(0.165 0.04 259);
+  --surface-strong: oklch(0.21 0.04 259);
+  --surface-muted: oklch(0.279 0.041 260.031);
+  --toolbar: var(--surface-muted);
+  --muted: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.929 0.013 255.508);
+  --accent-soft: oklch(0.279 0.041 260.031);
+  --line: oklch(1 0 0 / 10%);
+  /* Dark-mode reverts --input to the subtle hairline. */
+  --input: var(--line);
+  --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
+
+  --sidebar: oklch(0.16 0.04 264);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-accent: oklch(0.22 0.04 260);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.929 0.013 255.508);
+  --sidebar-primary-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-ring: oklch(0.929 0.013 255.508);
+
+  --r-card: 1rem;
+  --r-panel: 0.875rem;
+  --r-control: 0.625rem;
+  --r-chip: 0.5rem;
+  --radius: 0.625rem;
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --success: oklch(0.65 0.20 145);
+  --success-foreground: oklch(0.984 0.003 247.858);
+  /* hue 75 (vs 55 in light): warmer amber reads better on dark surfaces */
+  --warning: oklch(0.72 0.16 75);
+  --warning-foreground: oklch(0.984 0.003 247.858);
+  --info: oklch(0.66 0.15 240);
+  --info-foreground: oklch(0.984 0.003 247.858);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+}

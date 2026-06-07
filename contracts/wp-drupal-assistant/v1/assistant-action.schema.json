@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinatra.ai/contracts/wp-drupal-assistant/v1/assistant-action.schema.json",
+  "title": "Cinatra WP/Drupal assistant — content-edit action round-trip (v1)",
+  "description": "Result of one assistant content-edit action tool call (drupal_content_editor_run / wordpress_content_editor_run). Either a STRUCTURED edit ({ nodeId|postId, changes: [{field, before, after}] }) or a TEXT fallback ({ result: <text> }) when the agent's reply was not structured. Cinatra maps a structured result's `changes` array to the `fields` key of the `changes` SSE frame (see sse-event.schema.json) before sending it to the bundle; identity ids are String()-coerced at that boundary.",
+  "oneOf": [
+    {
+      "title": "structured — a per-field content edit",
+      "type": "object",
+      "required": ["changes"],
+      "additionalProperties": false,
+      "properties": {
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["field", "before", "after"],
+            "additionalProperties": false,
+            "properties": {
+              "field": { "type": "string" },
+              "before": { "type": "string" },
+              "after": { "type": "string" }
+            }
+          }
+        },
+        "nodeId": {
+          "type": ["string", "number"],
+          "description": "Drupal node id the edit targets (Drupal tool only)."
+        },
+        "postId": {
+          "type": ["string", "number"],
+          "description": "WordPress post id the edit targets (WordPress tool only)."
+        }
+      }
+    },
+    {
+      "title": "text-fallback — unstructured agent reply",
+      "type": "object",
+      "required": ["result"],
+      "additionalProperties": false,
+      "properties": {
+        "result": { "type": "string" }
+      }
+    }
+  ]
+}

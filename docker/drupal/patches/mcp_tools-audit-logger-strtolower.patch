@@ -1,0 +1,5 @@
+--- a/modules/mcp_tools_content/src/Service/AuditLogger.php
++++ b/modules/mcp_tools_content/src/Service/AuditLogger.php
+@@ -134 +134 @@
+-      $lowerKey = strtolower($key);
++      $lowerKey = strtolower((string) $key); // PHP 8 fix: array keys can be int

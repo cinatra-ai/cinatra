@@ -1,0 +1,40 @@
+# connector_access_policy WRITE guard.
+#
+# Runs scripts/audit/connector-access-policy-write-gate.mjs on every PR + push
+# to main. Fails if any source file outside the allowlist writes to the legacy
+# connector_access_policy table (raw SQL or a blocked write helper). Connector
+# access now lives in the uniform polymorphic model; the legacy table is
+# read-only until a removal migration.
+#
+# A dedicated workflow (not only build-image.yml) is used because docs-only
+# changes are paths-ignored there — a docs-only regression would skip the gate.
+
+name: Connector Access Policy Gate
+
+on:
+  pull_request:
+    # Draft PRs skip this gate; it runs on push-to-main and non-draft PRs
+    # (ready_for_review re-runs it when a draft is marked ready).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  connector-access-policy-write-gate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: connector_access_policy write gate (strict)
+        run: node scripts/audit/connector-access-policy-write-gate.mjs

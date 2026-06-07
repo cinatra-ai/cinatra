@@ -1,0 +1,21 @@
+{
+  "name": "@cinatra-ai/agent-ui-protocol",
+  "description": "AG-UI event stream and A2UI surface message types plus Redis-backed adapters for streaming agent runs to a UI.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cinatra-ai/a2a": "workspace:*",
+    "@cinatra-ai/gmail-connector": "workspace:*",
+    "ioredis": "^5.10.1"
+  },
+  "devDependencies": {
+    "@a2ui/web_core": "0.10.0",
+    "@ag-ui/core": "0.0.53",
+    "vitest": "^4.1.6"
+  }
+}

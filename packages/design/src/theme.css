@@ -1,0 +1,111 @@
+/* Cinatra Design — Tailwind v4 @theme inline mapping.
+ *
+ * Binds the semantic CSS custom properties from `tokens.css` to Tailwind v4
+ * utility classes (`bg-foreground`, `text-primary`, `border-line`, etc.).
+ *
+ * Consumer usage (Next.js / Tailwind v4):
+ *   @import "@cinatra-ai/design/tokens.css";
+ *   @import "@cinatra-ai/design/theme.css";
+ *
+ * Or import both via `index.css` for the full bundle.
+ */
+
+@theme inline {
+  /* Cinatra design tokens */
+  --color-cinatra-red: var(--cinatra-red);
+  --color-red: var(--cinatra-red);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
+  --color-surface-muted: var(--surface-muted);
+  --color-toolbar: var(--toolbar);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent-soft: var(--accent-soft);
+  /* Fabric stripe utility tokens. */
+  --color-stripe-mid: var(--stripe-mid);
+  --color-stripe-light: var(--stripe-light);
+
+  /* shadcn/ui semantic tokens */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  /* bg-muted → light surface (shadcn semantics) */
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--muted-foreground);
+  /* bg-accent → soft hover tint (shadcn semantics) */
+  --color-accent: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  /* Brand mustard utility: text-brand-mustard / bg-brand-mustard /
+     border-brand-mustard. Separate from --warning so page-title display and
+     wordmark do not collide with status semantics. */
+  --color-brand-mustard: var(--brand-mustard);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Ink/primary shorthand for cinatra's dark action color */
+  --color-ink: var(--accent);
+  --color-ink-foreground: #ffffff;
+
+  /* Sidebar Tailwind utilities */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* App radius utilities — respond to theme overrides */
+  --radius-card: var(--r-card);
+  --radius-panel: var(--r-panel);
+  --radius-control: var(--r-control);
+  --radius-chip: var(--r-chip);
+
+  /* Shadow utilities — `shadow-soft` / `shadow-strong` for cards + popovers. */
+  --shadow-soft: var(--cinatra-shadow-soft);
+  --shadow-strong: var(--cinatra-shadow-strong);
+
+  /* Radius scale */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Typography lanes.
+     --font-sans: Inter for body text (D1 deviation — kept against spec).
+     --font-display: Archivo for headlines, wordmark, drop-caps, brand mark,
+       and italic 800 numeric accents. Applies via `font-display` utility class.
+     --font-mono: JetBrains Mono for microcopy, IDs, table headers,
+       timestamps. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "SFMono-Regular", "IBM Plex Mono", "Menlo", monospace;
+
+  /* Body text scale — change --text-sm to shift the entire app */
+  --text-sm: 0.875rem; /* 14px — body baseline (shadcn default) */
+  --text-base: 1rem;   /* 16px — card heading baseline, restores 2px gap over text-sm */
+
+  /* Chart color utilities */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}

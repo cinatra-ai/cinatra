@@ -1,0 +1,564 @@
+"use server";
+
+// This file contains compatibility server actions for campaign-adjacent settings
+// and provider connectors.
+//
+// The file intentionally stays at `src/app/campaigns/actions.ts` so existing
+// importers across src/ and packages/ continue to work without path churn.
+//
+// The OpenAI save/clear actions live inside @cinatra-ai/openai-connector/actions;
+// this file re-exports them so existing callers keep working.
+
+import { redirect } from "next/navigation";
+import { z } from "zod";
+import {
+  saveApolloLoggingSettings,
+} from "@cinatra-ai/apollo-connector";
+import {
+  saveGeminiLoggingSettings,
+} from "@cinatra-ai/gemini-connector";
+import {
+  clearAnthropicAPISettings,
+  saveAnthropicAPISettings,
+  saveDefaultClaudeModel,
+  CLAUDE_MODELS,
+  type ClaudeModel,
+} from "@cinatra-ai/anthropic-connector";
+import {
+  saveOpenAILoggingSettings,
+} from "@cinatra-ai/openai-connector";
+import { requireAuthSession, requireAdminSession } from "@/lib/auth-session";
+import {
+  upsertExternalMcpServer,
+  deleteExternalMcpServer,
+  getExternalMcpServerById,
+  type ExternalMcpServerScope,
+} from "@/lib/external-mcp-registry";
+import { randomUUID } from "node:crypto";
+import { saveEmailSystemDevelopmentSettings } from "@/lib/email-system";
+import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
+import { clearAllProviderLogEntries, saveAnthropicLoggingSettings } from "@/lib/logging";
+import { saveMcpLoggingSettings } from "@/lib/mcp-logging";
+import { createNotification } from "@/lib/notifications";
+import { syncCatalogSkillsToAnthropic } from "@/lib/anthropic-skill-sync-service";
+import { reclaimStaleAnthropicSkills } from "@/lib/anthropic-skill-gc-service";
+import {
+  isNangoConfigured,
+  deleteNangoConnection,
+  importNangoConnection,
+  ensureNangoIntegration,
+  saveNangoConnectionAction as _saveNangoConnectionAction,
+} from "@/lib/nango";
+import {
+  listWordPressInstances,
+  saveWordPressInstance,
+} from "@/lib/wordpress-api";
+import {
+  writeDefaultLlmProviderToDatabase,
+  writeDefaultImageProviderToDatabase,
+  writeObjectsClassificationModelToDatabase,
+  writeConnectorConfigToDatabase,
+  writeAgentCreationLlmProviderToDatabase,
+  writeAgentCreationModelToDatabase,
+  writeAnthropicSkillSyncEnabledToDatabase,
+} from "@/lib/database";
+import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
+
+// Forward to the OpenAI save/clear actions in @cinatra-ai/openai-connector/actions.
+// Re-exports are not allowed in "use server" files (Turbopack constraint) so we
+// use async wrapper functions instead.
+import {
+  saveOpenAIConnectionAction as _saveOpenAIConnectionAction,
+  clearOpenAIConnectionAction as _clearOpenAIConnectionAction,
+  // Owned by the connector; reached through the connector's
+  // `@cinatra-ai/openai-connector/actions` subpath (same base package as the
+  // connection actions → no new core→extension edge).
+  saveOpenAISkillsSettingsAction as _saveOpenAISkillsSettingsAction,
+} from "@cinatra-ai/openai-connector/actions";
+// Setup-wizard cache invalidation stays host-side; the connector's Nango action
+// is reached through the `@/lib/nango` shim (it re-exports the
+// connector index), so core never names the extension directly.
+import { invalidateSetupWizardCache } from "@/lib/setup-wizard";
+
+export async function saveOpenAIConnectionAction(formData: FormData) {
+  return _saveOpenAIConnectionAction(formData);
+}
+
+export async function clearOpenAIConnectionAction() {
+  return _clearOpenAIConnectionAction();
+}
+
+// ---------------------------------------------------------------------------
+// deleteCampaignAction (stub — legacy campaign pipeline removed)
+// ---------------------------------------------------------------------------
+
+/**
+ * The campaign delete action is intentionally a stub. Until @cinatra/campaigns
+ * grows a native delete endpoint, this action throws a descriptive error so
+ * callers get a clear signal instead of silent data loss.
+ */
+export async function deleteCampaignAction(_formData: FormData) {
+  await requireAuthSession();
+  throw new Error(
+    "Campaign delete is not yet implemented. The legacy campaign pipeline was removed; " +
+      "rewire to the @cinatra/campaigns MCP tools once a delete endpoint is added.",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI prompt-caching
+// ---------------------------------------------------------------------------
+
+export async function saveOpenAIPromptCachingAction(formData: FormData) {
+  const enabled = formData.get("enabled") === "on" || formData.get("enabled") === "true";
+  await updateOpenAIPromptCaching(enabled);
+  redirect("/configuration/llm");
+}
+
+// ---------------------------------------------------------------------------
+// Nango
+// ---------------------------------------------------------------------------
+
+export async function saveNangoConnectionAction(formData: FormData) {
+  // Host-owned setup-wizard cache invalidation stays here: the connector action
+  // is IoC-clean (no `@/lib` edge), and clearing before the save means the
+  // post-redirect onboarding re-read reflects the freshly-saved Nango config.
+  invalidateSetupWizardCache();
+  return _saveNangoConnectionAction(formData);
+}
+
+// ---------------------------------------------------------------------------
+// Anthropic
+// ---------------------------------------------------------------------------
+
+const anthropicConnectorSchema = z.object({
+  apiKey: z.string().optional(),
+});
+
+export async function saveAnthropicConnectionAction(formData: FormData) {
+  const parsed = anthropicConnectorSchema.parse({
+    apiKey: formData.get("apiKey") ?? undefined,
+  });
+  try {
+    await saveAnthropicAPISettings({ apiKey: parsed.apiKey });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to save the Anthropic API connection.";
+    throw new Error(message);
+  }
+}
+
+export async function clearAnthropicConnectionAction() {
+  await clearAnthropicAPISettings();
+  redirect("/configuration/llm/initial-setup");
+}
+
+// `saveAnthropicSettingsAction` lives in the connector
+// (extensions/cinatra-ai/anthropic-connector/src/actions.ts) and is gated with
+// `requireExtensionAction("@cinatra-ai/anthropic-connector", "manage")`. The
+// connector settings form binds the connector-owned action directly; no host
+// wrapper is needed.
+
+// saveAnthropicPromptCachingAction / setDefaultClaudeModelAction /
+// setAnthropicMcpModeAction referenced optional fields on
+// saveAnthropicAPISettings (defaultModel / promptCachingEnabled / mcpMode)
+// that are not exposed by the mcp-client-registry-connector API. Provide stubs
+// that preserve the public signature; the underlying persistence layer only
+// owns apiKey today.
+export async function saveAnthropicPromptCachingAction(_formData: FormData) {
+  redirect("/configuration/llm");
+}
+
+export async function setDefaultClaudeModelAction(_formData: FormData) {
+  redirect("/configuration/llm");
+}
+
+export async function setAnthropicMcpModeAction(_formData: FormData) {
+  redirect("/configuration/llm");
+}
+
+// ---------------------------------------------------------------------------
+// Default provider selection
+// ---------------------------------------------------------------------------
+
+export async function setDefaultLlmProviderAction(formData: FormData) {
+  const provider = z.string().min(1).parse(formData.get("provider"));
+  writeDefaultLlmProviderToDatabase(provider);
+  redirect("/configuration/llm");
+}
+
+export async function setDefaultImageProviderAction(formData: FormData) {
+  const provider = z.string().min(1).parse(formData.get("provider"));
+  writeDefaultImageProviderToDatabase(provider);
+  redirect("/configuration/llm");
+}
+
+// Explicit OpenAI allow-list for the agent-creation per-purpose override. Kept
+// aligned with the gpt-5 family that `packages/agents/src/agent-creation-review.ts`
+// actually runs. Anthropic uses the connector's `CLAUDE_MODELS` allow-list.
+const AGENT_CREATION_OPENAI_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5",
+  "gpt-5-mini",
+] as const;
+
+export async function setDefaultProvidersAction(formData: FormData) {
+  // This action writes workspace-wide LLM provider/model config and the Anthropic
+  // skill-upload governance opt-in (a non-ZDR data residency decision). Require
+  // an admin session before any write.
+  await requireAdminSession();
+  // The DefaultProvidersCard posts `defaultProvider`, while other callers may
+  // still post `llmProvider`. Accept both keys and prefer the card's
+  // `defaultProvider`. Anthropic can never become the global default regardless
+  // of input: `writeDefaultLlmProviderToDatabase` is the authoritative
+  // fail-closed chokepoint.
+  const llmProvider =
+    (formData.get("defaultProvider") as string | null)?.trim() ||
+    (formData.get("llmProvider") as string | null)?.trim();
+  const imageProvider = (formData.get("imageProvider") as string | null)?.trim();
+  const classificationModel = (formData.get("classificationModel") as string | null)?.trim();
+  const anthropicDefaultModel = (formData.get("anthropicDefaultModel") as string | null)?.trim();
+  const agentCreationProvider = (formData.get("agentCreationLlmProvider") as string | null)?.trim();
+  const agentCreationModel = (formData.get("agentCreationModel") as string | null)?.trim();
+
+  if (llmProvider) {
+    // Chokepoint refuses anything outside {openai,gemini}; explicit guard kept
+    // for reader clarity (the sink is still authoritative).
+    if (llmProvider === "openai" || llmProvider === "gemini") {
+      writeDefaultLlmProviderToDatabase(llmProvider);
+    }
+  }
+  if (imageProvider) {
+    writeDefaultImageProviderToDatabase(imageProvider);
+  }
+  if (classificationModel) {
+    writeObjectsClassificationModelToDatabase(classificationModel);
+  }
+  // Connector-default Claude model: distinct scope from the agent-creation
+  // per-purpose model below. Validated against the connector allow-list.
+  if (anthropicDefaultModel && (CLAUDE_MODELS as readonly string[]).includes(anthropicDefaultModel)) {
+    saveDefaultClaudeModel(anthropicDefaultModel as ClaudeModel);
+  }
+  // Explicit per-purpose agent-creation override. Validate the provider and
+  // that the model belongs to the chosen provider's family so we never persist
+  // poisoned cross-provider config. An invalid model is dropped while the
+  // provider is still saved.
+  const validAgentCreationProvider =
+    agentCreationProvider === "openai" || agentCreationProvider === "anthropic"
+      ? agentCreationProvider
+      : null;
+  if (validAgentCreationProvider) {
+    writeAgentCreationLlmProviderToDatabase(validAgentCreationProvider);
+    // Validate the model against an explicit per-provider allow-list, not
+    // "any non-Claude string", so a crafted POST cannot persist a bogus or
+    // cross-provider model id. The OpenAI list is the agent-creation-relevant
+    // gpt-5 family.
+    //
+    // Also: if the submitted model is absent/invalid for the chosen provider,
+    // CLEAR the stored model rather than leaving a stale value from a previous
+    // provider — otherwise switching provider could persist a mismatched
+    // (provider, model) pair.
+    const allowed: readonly string[] =
+      validAgentCreationProvider === "anthropic"
+        ? (CLAUDE_MODELS as readonly string[])
+        : AGENT_CREATION_OPENAI_MODELS;
+    if (agentCreationModel && allowed.includes(agentCreationModel)) {
+      writeAgentCreationModelToDatabase(agentCreationModel);
+    } else {
+      // Empty string = "use the provider's adapter default"; never a stale
+      // cross-provider id.
+      writeAgentCreationModelToDatabase("");
+    }
+  }
+  // The governance Switch always submits an explicit "true"/"false" string,
+  // never checkbox absence. Parse exactly: never coerce a missing or garbage
+  // value into a silent OFF that would erase an existing opt-in from an
+  // unrelated partial post.
+  const skillSyncRaw = formData.get("anthropicSkillSyncEnabled");
+  if (skillSyncRaw === "true") {
+    writeAnthropicSkillSyncEnabledToDatabase(true);
+  } else if (skillSyncRaw === "false") {
+    writeAnthropicSkillSyncEnabledToDatabase(false);
+  } else if (skillSyncRaw === null) {
+    // Legacy / partial caller never sent the field — leave the stored value
+    // unchanged (do NOT default it OFF here).
+  } else {
+    throw new Error("Invalid Anthropic skill sync value.");
+  }
+
+  // Pre-sync at admin-save time, not lazily on first agent run. The settings
+  // write above is already persisted; a sync failure must not roll the save
+  // back, but it must be visible through an admin notification rather than
+  // silent best-effort. Inert when the opt-in is OFF because the service returns
+  // immediately on a non-true global flag.
+  try {
+    const result = await syncCatalogSkillsToAnthropic();
+    if (!result.ok) {
+      const detail =
+        result.namespaceError ??
+        result.preflightError?.message ??
+        "Anthropic skill sync reported a configuration error.";
+      await createNotification({
+        title: "Anthropic skill sync configuration error",
+        body: detail,
+        kind: "error",
+      });
+    }
+  } catch (err) {
+    await createNotification({
+      title: "Anthropic skill sync failed",
+      body:
+        "Anthropic skill sync did not complete. The provider settings were " +
+        "saved. " +
+        (err instanceof Error ? err.message : String(err)),
+      kind: "error",
+    });
+  }
+
+  // Leased/refcounted remote GC is an explicit maintenance step, not the hot
+  // agent-run path. Runs after the pre-sync above: sync marks catalog-removed
+  // or excluded rows stale; GC then reclaims remote skills that have aged past
+  // the grace window with zero in-flight leases. The same governance opt-in
+  // controls it, so it is inert when OFF. A GC failure must not roll the settings
+  // save back, but it must be visible through an admin notification.
+  try {
+    const gc = await reclaimStaleAnthropicSkills();
+    if (!gc.ok) {
+      const detail =
+        gc.namespaceError ??
+        (gc.errors.length > 0
+          ? gc.errors
+              .map((e) => `${e.anthropicSkillId}: ${e.message}`)
+              .join("; ")
+          : "Anthropic skill GC reported an error.");
+      await createNotification({
+        title: "Anthropic skill GC error",
+        body: detail,
+        kind: "error",
+      });
+    }
+  } catch (err) {
+    await createNotification({
+      title: "Anthropic skill GC failed",
+      body:
+        "Anthropic skill garbage collection did not complete. The provider " +
+        "settings were saved and no skill was over-deleted. " +
+        (err instanceof Error ? err.message : String(err)),
+      kind: "error",
+    });
+  }
+
+  redirect("/configuration/llm");
+}
+
+// ---------------------------------------------------------------------------
+// YouTube
+// ---------------------------------------------------------------------------
+
+export async function clearYouTubeConnectionAction() {
+  if (isNangoConfigured()) {
+    await deleteNangoConnection("youtube", "cinatra-youtube").catch(() => null);
+  }
+  writeConnectorConfigToDatabase("youtube_connection", null);
+  redirect("/configuration/llm");
+}
+
+// ---------------------------------------------------------------------------
+// WordPress
+// ---------------------------------------------------------------------------
+
+const wordpressSchema = z.object({
+  id: z.string().optional(),
+  siteUrl: z.string().min(1),
+  username: z.string().min(1),
+  applicationPassword: z.string().min(1),
+  // Optional vendor-scoped blog-connector binding. When the form field is absent
+  // or empty, the save path inherits the existing instance's value (see
+  // `saveWordPressInstance`); pass an explicit value ("default" / a named site
+  // connector id) to switch the binding.
+  blogConnectorId: z.string().optional(),
+});
+
+export async function saveWordPressInstanceAction(formData: FormData) {
+  const parsed = wordpressSchema.parse({
+    id: (formData.get("id") as string | null) ?? undefined,
+    siteUrl: formData.get("siteUrl"),
+    username: formData.get("username"),
+    applicationPassword: formData.get("applicationPassword"),
+    blogConnectorId: (formData.get("blogConnectorId") as string | null) ?? undefined,
+  });
+  await saveWordPressInstance({
+    id: parsed.id?.trim() || randomUUID(),
+    siteUrl: parsed.siteUrl,
+    username: parsed.username,
+    applicationPassword: parsed.applicationPassword,
+    blogConnectorId: parsed.blogConnectorId,
+  });
+  redirect("/configuration/llm");
+}
+
+// `deleteWordPressInstanceAction` lives in the wordpress connector
+// (manage-gated) — the legacy host page imports it directly from
+// @cinatra-ai/wordpress-mcp-connector/setup-actions. There is no hub forwarder.
+
+// Focused server action for the WordPress connection-UI blog-connector selector.
+// Does not require the application password because a connector-only change must
+// not force a credential re-entry and network revalidation. Writes the JSON-blob
+// binding directly.
+const wordpressBlogConnectorSchema = z.object({
+  instanceId: z.string().min(1),
+  blogConnectorId: z.string().optional(),
+});
+
+export async function setWordPressBlogConnectorAction(formData: FormData) {
+  // WordPress connector_config is operator/workspace-level config, not per-user.
+  // Admin-gate the binding mutation, consistent with the other connector-config
+  // mutation actions in this file.
+  await requireAdminSession();
+  const parsed = wordpressBlogConnectorSchema.parse({
+    instanceId: formData.get("instanceId"),
+    blogConnectorId: (formData.get("blogConnectorId") as string | null) ?? undefined,
+  });
+  const { setWordPressInstanceBlogConnector } = await import("@/lib/wordpress-api");
+  setWordPressInstanceBlogConnector(parsed.instanceId, parsed.blogConnectorId ?? "");
+  redirect("/connectors/wordpress");
+}
+
+// ---------------------------------------------------------------------------
+// External MCP servers
+// ---------------------------------------------------------------------------
+
+const externalMcpSchema = z.object({
+  id: z.string().optional(),
+  label: z.string().min(1),
+  serverUrl: z.string().min(1),
+  scope: z.enum(["global", "user"]).optional(),
+});
+
+export async function createExternalMcpServerAction(formData: FormData) {
+  const parsed = externalMcpSchema.parse({
+    id: (formData.get("id") as string | null) ?? undefined,
+    label: formData.get("label") ?? formData.get("name"),
+    serverUrl: formData.get("serverUrl") ?? formData.get("url"),
+    scope: (formData.get("scope") as string | null) ?? "global",
+  });
+  const scope: ExternalMcpServerScope = parsed.scope === "user" ? "user" : "global";
+  const session = scope === "user" ? await requireAuthSession() : null;
+  upsertExternalMcpServer({
+    id: parsed.id?.trim() || randomUUID(),
+    label: parsed.label,
+    serverUrl: parsed.serverUrl,
+    scope,
+    nangoConnectionId: null,
+    orgId: null,
+    userId: session?.user.id ?? null,
+    enabled: true,
+  });
+  redirect("/configuration/llm");
+}
+
+export async function deleteExternalMcpServerAction(formData: FormData) {
+  const id = z.string().min(1).parse(formData.get("id"));
+  const server = getExternalMcpServerById(id);
+  if (!server) {
+    redirect("/configuration/llm");
+  }
+  deleteExternalMcpServer(id);
+  redirect("/configuration/llm");
+}
+
+// GitHub connection actions are connector-owned (@cinatra-ai/github-connector/actions),
+// imported relative by the connector's own settings-page. There are no host
+// forwarders here.
+
+// ---------------------------------------------------------------------------
+// Development logging
+// ---------------------------------------------------------------------------
+
+export async function saveDevelopmentLoggingAction(formData: FormData) {
+  const anthropicLoggingEnabled =
+    formData.get("anthropicLoggingEnabled") === "on" ||
+    formData.get("anthropicLoggingEnabled") === "true";
+  const openAiLoggingEnabled =
+    formData.get("openAiLoggingEnabled") === "on" ||
+    formData.get("openAiLoggingEnabled") === "true";
+  const mcpLoggingEnabled =
+    formData.get("mcpLoggingEnabled") === "on" ||
+    formData.get("mcpLoggingEnabled") === "true";
+  const geminiLoggingEnabled =
+    formData.get("geminiLoggingEnabled") === "on" ||
+    formData.get("geminiLoggingEnabled") === "true";
+  const apolloLoggingEnabled =
+    formData.get("apolloLoggingEnabled") === "on" ||
+    formData.get("apolloLoggingEnabled") === "true";
+
+  await Promise.all([
+    saveAnthropicLoggingSettings(anthropicLoggingEnabled),
+    saveOpenAILoggingSettings(openAiLoggingEnabled),
+    saveMcpLoggingSettings({ serverEnabled: mcpLoggingEnabled, clientEnabled: mcpLoggingEnabled }),
+    saveGeminiLoggingSettings(geminiLoggingEnabled),
+    saveApolloLoggingSettings(apolloLoggingEnabled),
+  ]);
+  redirect("/configuration/development");
+}
+
+export async function clearDevelopmentLogEntriesAction() {
+  await clearAllProviderLogEntries();
+  redirect("/configuration/development");
+}
+
+export async function saveEmailSystemDevelopmentSettingsAction(formData: FormData) {
+  // The form posts the field name `developmentModeEnabled`, matching the checkbox
+  // `name=` attribute in src/app/configuration/development/page.tsx. Read that
+  // exact field so the toggle round-trips.
+  const enabled =
+    formData.get("developmentModeEnabled") === "on" ||
+    formData.get("developmentModeEnabled") === "true";
+  const overrideRecipientEmail = (formData.get("overrideRecipientEmail") as string | null)?.trim() ?? undefined;
+  await saveEmailSystemDevelopmentSettings({
+    developmentModeEnabled: enabled,
+    overrideRecipientEmail,
+  });
+  redirect("/configuration/development");
+}
+
+// Vendor-delegation instance-side override. Server-side gate by admin and by
+// runtime mode; the client UI also disables the form when !isDevMode, but the
+// action never trusts the client. Throws (which the form wrapper surfaces as a
+// notification toast) on either gate failure.
+export async function saveDevExtensionsSettingsAction(formData: FormData) {
+  await requireAdminSession();
+  if (process.env.CINATRA_RUNTIME_MODE !== "development") {
+    throw new Error("Publish scope override can only be changed in development mode.");
+  }
+  const raw = (formData.get("publishScopeOverride") as string | null)?.trim() ?? null;
+  saveDevExtensionsSettings({
+    publishScopeOverride: raw && raw.length > 0 ? raw : null,
+  });
+  redirect("/configuration/development?tab=extensions");
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI Skills administration
+// ---------------------------------------------------------------------------
+
+export async function saveOpenAISkillsSettingsAction(formData: FormData) {
+  return _saveOpenAISkillsSettingsAction(formData);
+}
+
+// Gmail send-as refresh/clear + Google Calendar appointment-schedule mutations
+// are owned by the connectors: the manage-gated extension actions
+// (gmail-connector/src/actions.ts +
+// google-calendar-connector/src/setup-actions.ts, each
+// `requireExtensionAction(pkg,"manage")`-first) are the ONLY path. Likewise the
+// Google OAuth client-credential save lives in
+// google-oauth-connector/src/actions.ts behind the same manage gate. No
+// lower-privilege copies live here, so there is no reach-around to the same
+// mutations.
+
+// Silence unused-import warnings for helpers kept as safety shims.
+void listWordPressInstances;
+void createNotification;
+void importNangoConnection;
+void ensureNangoIntegration;

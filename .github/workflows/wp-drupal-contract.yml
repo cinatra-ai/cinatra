@@ -1,0 +1,58 @@
+# WordPress/Drupal assistant plugin↔core contract gate.
+#
+# The versioned contract under contracts/wp-drupal-assistant/** pins the wire
+# shape between Cinatra core and the external `cinatra` WordPress plugin /
+# Drupal module. This workflow runs the contract test suite (schema + fixture
+# conformance + the cinatra-side runtime validator) whenever the contract, its
+# runtime validator, or the widget stream route changes — a hard gate on those
+# paths.
+#
+# A dedicated workflow (rather than build-image.yml) keeps the gate independent
+# of the build job and fast when no contract paths are touched.
+
+name: WP/Drupal Contract Gate
+
+on:
+  pull_request:
+    paths:
+      # NOTE: `**` is used instead of the literal `[agentSlug]` route segment —
+      # GitHub path-filter globs treat `[...]` as a character class.
+      - "contracts/wp-drupal-assistant/**"
+      - "src/lib/wp-drupal-contract.ts"
+      - "src/app/api/agents/**/stream/**"
+      - "tests/contracts/wp-drupal/**"
+      - ".github/workflows/wp-drupal-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/wp-drupal-assistant/**"
+      - "src/lib/wp-drupal-contract.ts"
+      - "src/app/api/agents/**/stream/**"
+      - "tests/contracts/wp-drupal/**"
+      - ".github/workflows/wp-drupal-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wp-drupal-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Contract schema + validator + route-gate tests
+        # Two positional filters (vitest matches them as path substrings) so the
+        # bracketed [agentSlug] route segment need not be quoted/escaped.
+        run: pnpm exec vitest run --no-coverage contracts/wp-drupal "stream/__tests__/route.test"

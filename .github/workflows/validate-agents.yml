@@ -1,0 +1,127 @@
+name: Validate Agent Definitions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Agent definitions now live in the extracted per-repo sources and are
+      # cloned back at CI time (git-ignored in-tree), so a
+      # monorepo path filter on `agents/**` / `extensions/cinatra-ai/**` never
+      # matches. Trigger on the validator + the clone-back mechanism instead.
+      - 'scripts/ci-validate-agents.mjs'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'scripts/audit/lib/assert-extensions-cloned.mjs'
+      # Clone-back implementation closure imported by sync-dev-extensions.mjs:
+      - 'packages/cli/src/cinatra-dev-extensions.mjs'
+      - 'packages/cli/src/dev-repo-sync.mjs'
+      - '.github/actions/clone-extensions/**'
+      # Root package.json owns `cinatraDevExtensions` — the clone set AND the
+      # fail-closed assert floor — so a manifest-only repo add/remove/retarget
+      # must re-run validation (assert-extensions-cloned reads it).
+      - 'package.json'
+      - 'packages/agents/src/validate-agent-json.ts'
+      - 'packages/agents/src/validate-oas-runtime-invariants.ts'
+      - 'packages/agents/src/__tests__/oas-runtime-invariants.test.ts'
+      # The test imports KNOWN_BROKEN_AGENTS from this fixture; its allowlist can
+      # mask/unmask blocker findings (flip the job result), so changes must re-run.
+      - 'packages/agents/src/__tests__/__fixtures__/**'
+      # The runtime-invariants job runs vitest in @cinatra-ai/agents, so its
+      # package-local config governs the run (test include/exclude, aliases, deps):
+      - 'packages/agents/vitest.config.ts'
+      - 'packages/agents/package.json'
+      # Deliberate: repo-wide install inputs (pnpm-lock.yaml, pnpm-workspace.yaml,
+      # .pnpmfile.cjs) are NOT enumerated here. They change on most dependency PRs,
+      # so gating this non-required check on them would over-trigger it repo-wide —
+      # against repo convention (of 21 path-gated workflows only ~2 reference the
+      # lockfile, mostly in hashFiles cache keys; the closest install+e2e analog,
+      # dashboard-live-verify, uses no paths filter at all). A broken install or
+      # lockfile is caught by build-image's full install + vitest run.
+      - '.github/workflows/validate-agents.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      # Agent definitions now live in the extracted per-repo sources and are
+      # cloned back at CI time (git-ignored in-tree), so a
+      # monorepo path filter on `agents/**` / `extensions/cinatra-ai/**` never
+      # matches. Trigger on the validator + the clone-back mechanism instead.
+      - 'scripts/ci-validate-agents.mjs'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'scripts/audit/lib/assert-extensions-cloned.mjs'
+      # Clone-back implementation closure imported by sync-dev-extensions.mjs:
+      - 'packages/cli/src/cinatra-dev-extensions.mjs'
+      - 'packages/cli/src/dev-repo-sync.mjs'
+      - '.github/actions/clone-extensions/**'
+      # Root package.json owns `cinatraDevExtensions` — the clone set AND the
+      # fail-closed assert floor — so a manifest-only repo add/remove/retarget
+      # must re-run validation (assert-extensions-cloned reads it).
+      - 'package.json'
+      - 'packages/agents/src/validate-agent-json.ts'
+      - 'packages/agents/src/validate-oas-runtime-invariants.ts'
+      - 'packages/agents/src/__tests__/oas-runtime-invariants.test.ts'
+      # The test imports KNOWN_BROKEN_AGENTS from this fixture; its allowlist can
+      # mask/unmask blocker findings (flip the job result), so changes must re-run.
+      - 'packages/agents/src/__tests__/__fixtures__/**'
+      # The runtime-invariants job runs vitest in @cinatra-ai/agents, so its
+      # package-local config governs the run (test include/exclude, aliases, deps):
+      - 'packages/agents/vitest.config.ts'
+      - 'packages/agents/package.json'
+      # Deliberate: repo-wide install inputs (pnpm-lock.yaml, pnpm-workspace.yaml,
+      # .pnpmfile.cjs) are NOT enumerated here. They change on most dependency PRs,
+      # so gating this non-required check on them would over-trigger it repo-wide —
+      # against repo convention (of 21 path-gated workflows only ~2 reference the
+      # lockfile, mostly in hashFiles cache keys; the closest install+e2e analog,
+      # dashboard-live-verify, uses no paths filter at all). A broken install or
+      # lockfile is caught by build-image's full install + vitest run.
+      - '.github/workflows/validate-agents.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-shape:
+    name: Validate agent.json shape (legacy schema check)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Validate agent definitions
+        run: node scripts/ci-validate-agents.mjs
+
+  validate-runtime-invariants:
+    name: Validate OAS runtime invariants
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies (workspace root only)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run hermetic runtime-invariants vitest
+        run: pnpm --filter @cinatra-ai/agents exec vitest run __tests__/oas-runtime-invariants.test.ts

@@ -1,0 +1,125 @@
+{
+  "note": "No-new-rot baseline. Each entry is a CURRENT tolerated finding. Regenerate with `node scripts/audit/skill-canonicality-gate.mjs --write-baseline` (it should only ever SHRINK as legacy install / relocate / fallback paths migrate to the new content store).",
+  "findings": [
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 28,
+      "src": "await mkdir(path.dirname(markerPath), { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 29,
+      "src": "await writeFile(markerPath, JSON.stringify({ repository: repositoryFullName, syncedAt: new Date().toISOString() }, null, 2));"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 216,
+      "src": "await mkdir(targetDirectory, { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 224,
+      "src": "await mkdir(destinationPath, { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 236,
+      "src": "await mkdir(path.dirname(destinationPath), { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 237,
+      "src": "await writeFile(destinationPath, content);"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 404,
+      "src": "await writeFile("
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 525,
+      "src": "await mkdir(targetDirectory, { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 543,
+      "src": "await mkdir(destinationPath, { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 545,
+      "src": "await mkdir(path.dirname(destinationPath), { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/github.ts",
+      "rule": "data-skills-write",
+      "line": 546,
+      "src": "await writeFile(destinationPath, content);"
+    },
+    {
+      "file": "packages/skills/src/relocate-worker.ts",
+      "rule": "data-skills-write",
+      "line": 232,
+      "src": "await mkdir(path.dirname(newAbs), { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/relocate-worker.ts",
+      "rule": "data-skills-write",
+      "line": 235,
+      "src": "await writeFile("
+    },
+    {
+      "file": "packages/skills/src/relocate-worker.ts",
+      "rule": "data-skills-write",
+      "line": 250,
+      "src": "await rename(oldAbs, newAbs);"
+    },
+    {
+      "file": "packages/skills/src/relocate-worker.ts",
+      "rule": "data-skills-write",
+      "line": 255,
+      "src": "await cp(oldAbs, newAbs, { recursive: true, preserveTimestamps: true });"
+    },
+    {
+      "file": "packages/skills/src/skills-store.ts",
+      "rule": "data-skills-write",
+      "line": 1223,
+      "src": "await mkdir(skillDiskDir, { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/skills-store.ts",
+      "rule": "data-skills-write",
+      "line": 1224,
+      "src": "await writeFile(skillFilePath, skillRecord.content, \"utf8\");"
+    },
+    {
+      "file": "packages/skills/src/verdaccio.ts",
+      "rule": "data-skills-write",
+      "line": 116,
+      "src": "fs.mkdirSync(path.dirname(installDir), { recursive: true });"
+    },
+    {
+      "file": "packages/skills/src/verdaccio.ts",
+      "rule": "data-skills-write",
+      "line": 117,
+      "src": "fs.renameSync(extracted.tempDir, installDir);"
+    },
+    {
+      "file": "src/app/configuration/skills/actions.ts",
+      "rule": "data-skills-write",
+      "line": 401,
+      "src": "await mkdir(root, { recursive: true });"
+    }
+  ]
+}

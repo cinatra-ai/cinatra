@@ -1,0 +1,21 @@
+{
+  "name": "@cinatra-ai/metric-cost-api",
+  "description": "Prices LLM and connector usage events, persists cost/token data to PostgreSQL, and serves the cost-analytics dashboard.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cinatra-ai/nango-connector": "workspace:*",
+    "@cinatra-ai/metric-usage-api": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.20.0",
+    "recharts": "^3.8.1"
+  }
+}

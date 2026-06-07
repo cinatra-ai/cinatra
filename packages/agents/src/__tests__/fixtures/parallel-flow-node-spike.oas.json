@@ -1,0 +1,120 @@
+{
+  "agentspec_version": "26.1.0",
+  "component_type": "Flow",
+  "id": "parallel-flow-spike",
+  "name": "Parallel Flow Spike",
+  "metadata": { "cinatra": { "type": "flow" } },
+  "inputs": [],
+  "outputs": [
+    { "title": "lane_a_started_at", "type": "string" },
+    { "title": "lane_b_started_at", "type": "string" }
+  ],
+  "start_node": { "$component_ref": "start" },
+  "nodes": [
+    { "$component_ref": "start" },
+    { "$component_ref": "parallel" },
+    { "$component_ref": "end" }
+  ],
+  "control_flow_connections": [
+    { "component_type": "ControlFlowEdge", "name": "start_to_parallel", "from_node": { "$component_ref": "start" }, "to_node": { "$component_ref": "parallel" } },
+    { "component_type": "ControlFlowEdge", "name": "parallel_to_end", "from_node": { "$component_ref": "parallel" }, "to_node": { "$component_ref": "end" } }
+  ],
+  "data_flow_connections": [
+    { "component_type": "DataFlowEdge", "name": "a_out", "source_node": { "$component_ref": "parallel" }, "source_output": "lane_a_started_at", "destination_node": { "$component_ref": "end" }, "destination_input": "lane_a_started_at" },
+    { "component_type": "DataFlowEdge", "name": "b_out", "source_node": { "$component_ref": "parallel" }, "source_output": "lane_b_started_at", "destination_node": { "$component_ref": "end" }, "destination_input": "lane_b_started_at" }
+  ],
+  "$referenced_components": {
+    "start": {
+      "component_type": "StartNode",
+      "id": "start",
+      "name": "Start",
+      "inputs": []
+    },
+    "parallel": {
+      "component_type": "ParallelFlowNode",
+      "id": "parallel",
+      "name": "Parallel sleep lanes",
+      "subflows": [
+        { "$component_ref": "lane_a_flow" },
+        { "$component_ref": "lane_b_flow" }
+      ]
+    },
+    "end": {
+      "component_type": "EndNode",
+      "id": "end",
+      "name": "End",
+      "outputs": [
+        { "title": "lane_a_started_at", "type": "string" },
+        { "title": "lane_b_started_at", "type": "string" }
+      ]
+    },
+    "lane_a_flow": {
+      "component_type": "Flow",
+      "id": "lane_a_flow",
+      "name": "Lane A",
+      "metadata": { "cinatra": { "type": "flow" } },
+      "inputs": [],
+      "outputs": [{ "title": "lane_a_started_at", "type": "string" }],
+      "start_node": { "$component_ref": "lane_a_start" },
+      "nodes": [
+        { "$component_ref": "lane_a_start" },
+        { "$component_ref": "lane_a_sleep" },
+        { "$component_ref": "lane_a_end" }
+      ],
+      "control_flow_connections": [
+        { "component_type": "ControlFlowEdge", "name": "a_s_api", "from_node": { "$component_ref": "lane_a_start" }, "to_node": { "$component_ref": "lane_a_sleep" } },
+        { "component_type": "ControlFlowEdge", "name": "a_api_e", "from_node": { "$component_ref": "lane_a_sleep" }, "to_node": { "$component_ref": "lane_a_end" } }
+      ],
+      "data_flow_connections": [
+        { "component_type": "DataFlowEdge", "name": "a_started", "source_node": { "$component_ref": "lane_a_sleep" }, "source_output": "lane_a_started_at", "destination_node": { "$component_ref": "lane_a_end" }, "destination_input": "lane_a_started_at" }
+      ],
+      "$referenced_components": {
+        "lane_a_start": { "component_type": "StartNode", "id": "lane_a_start", "name": "Lane A Start", "inputs": [] },
+        "lane_a_sleep": {
+          "component_type": "ApiNode",
+          "id": "lane_a_sleep",
+          "name": "Lane A Sleep",
+          "url": "{{CINATRA_BASE_URL}}/api/_test/sleep",
+          "http_method": "POST",
+          "data": { "lane": "a", "ms": 2000 },
+          "outputs": [{ "title": "lane_a_started_at", "type": "string" }]
+        },
+        "lane_a_end": { "component_type": "EndNode", "id": "lane_a_end", "name": "Lane A End", "outputs": [{ "title": "lane_a_started_at", "type": "string" }] }
+      }
+    },
+    "lane_b_flow": {
+      "component_type": "Flow",
+      "id": "lane_b_flow",
+      "name": "Lane B",
+      "metadata": { "cinatra": { "type": "flow" } },
+      "inputs": [],
+      "outputs": [{ "title": "lane_b_started_at", "type": "string" }],
+      "start_node": { "$component_ref": "lane_b_start" },
+      "nodes": [
+        { "$component_ref": "lane_b_start" },
+        { "$component_ref": "lane_b_sleep" },
+        { "$component_ref": "lane_b_end" }
+      ],
+      "control_flow_connections": [
+        { "component_type": "ControlFlowEdge", "name": "b_s_api", "from_node": { "$component_ref": "lane_b_start" }, "to_node": { "$component_ref": "lane_b_sleep" } },
+        { "component_type": "ControlFlowEdge", "name": "b_api_e", "from_node": { "$component_ref": "lane_b_sleep" }, "to_node": { "$component_ref": "lane_b_end" } }
+      ],
+      "data_flow_connections": [
+        { "component_type": "DataFlowEdge", "name": "b_started", "source_node": { "$component_ref": "lane_b_sleep" }, "source_output": "lane_b_started_at", "destination_node": { "$component_ref": "lane_b_end" }, "destination_input": "lane_b_started_at" }
+      ],
+      "$referenced_components": {
+        "lane_b_start": { "component_type": "StartNode", "id": "lane_b_start", "name": "Lane B Start", "inputs": [] },
+        "lane_b_sleep": {
+          "component_type": "ApiNode",
+          "id": "lane_b_sleep",
+          "name": "Lane B Sleep",
+          "url": "{{CINATRA_BASE_URL}}/api/_test/sleep",
+          "http_method": "POST",
+          "data": { "lane": "b", "ms": 2000 },
+          "outputs": [{ "title": "lane_b_started_at", "type": "string" }]
+        },
+        "lane_b_end": { "component_type": "EndNode", "id": "lane_b_end", "name": "Lane B End", "outputs": [{ "title": "lane_b_started_at", "type": "string" }] }
+      }
+    }
+  }
+}

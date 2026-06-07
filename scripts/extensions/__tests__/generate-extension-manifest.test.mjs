@@ -1,0 +1,223 @@
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import {
+  buildManifest,
+  checkParity,
+  resolveDisplayName,
+  sanitizeSvgToDataUri,
+  sanitizeLogoDataUri,
+  MAX_LOGO_BYTES,
+} from "../generate-extension-manifest.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+describe("D10 logo path containment (symlink-safe)", () => {
+  // sanitizeLogoDataUri resolves against the generator's REPO_ROOT (../..), so
+  // the fixture lives under the repo in a temp dir that is cleaned up.
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const relDir = ".tmp-d10-symlink-test";
+  const absDir = path.join(REPO_ROOT, relDir);
+  let outsideFile;
+
+  beforeAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+    mkdirSync(absDir, { recursive: true });
+    const outsideDir = mkdtempSync(path.join(tmpdir(), "d10-outside-"));
+    outsideFile = path.join(outsideDir, "evil.svg");
+    writeFileSync(outsideFile, '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>');
+    // a real in-package clean logo
+    writeFileSync(path.join(absDir, "logo.svg"), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>');
+    // a symlink that escapes the package
+    symlinkSync(outsideFile, path.join(absDir, "escape.svg"));
+  });
+  afterAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+    if (outsideFile) rmSync(path.dirname(outsideFile), { recursive: true, force: true });
+  });
+
+  it("accepts an in-package logo and REJECTS a symlink escaping the package", () => {
+    expect(sanitizeLogoDataUri(relDir, "./logo.svg")).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(sanitizeLogoDataUri(relDir, "./escape.svg")).toBeNull();
+    expect(sanitizeLogoDataUri(relDir, "../../etc/hostname.svg")).toBeNull();
+    expect(sanitizeLogoDataUri(relDir, "logo.png")).toBeNull();
+  });
+});
+
+describe("D10 self-describing card identity", () => {
+  it("resolveDisplayName trims / nulls", () => {
+    expect(resolveDisplayName({ displayName: "OpenAI" })).toBe("OpenAI");
+    expect(resolveDisplayName({ displayName: "  Gmail  " })).toBe("Gmail");
+    expect(resolveDisplayName({ displayName: "" })).toBeNull();
+    expect(resolveDisplayName({ displayName: "   " })).toBeNull();
+    expect(resolveDisplayName({})).toBeNull();
+    expect(resolveDisplayName({ displayName: 42 })).toBeNull();
+  });
+
+  it("sanitizeSvgToDataUri inlines a clean SVG as a base64 data URI", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+    const uri = sanitizeSvgToDataUri(svg);
+    expect(uri).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(Buffer.from(uri.split(",")[1], "base64").toString("utf8")).toBe(svg);
+  });
+
+  it("allows a clean gradient logo with an INTERNAL url(#id) reference", () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+      '<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/></linearGradient></defs>' +
+      '<rect width="24" height="24" fill="url(#g)"/></svg>';
+    expect(sanitizeSvgToDataUri(svg)).toMatch(/^data:image\/svg\+xml;base64,/);
+  });
+
+  it("rejects non-SVG, oversized, and every hostile SVG vector", () => {
+    expect(sanitizeSvgToDataUri("not an svg")).toBeNull();
+    expect(sanitizeSvgToDataUri("<div>nope</div>")).toBeNull();
+    expect(sanitizeSvgToDataUri(`<svg>${"x".repeat(MAX_LOGO_BYTES + 1)}</svg>`)).toBeNull();
+    expect(sanitizeSvgToDataUri(null)).toBeNull();
+    // content before the <svg root
+    expect(sanitizeSvgToDataUri('<div></div><svg></svg>')).toBeNull();
+    // script / event handler
+    expect(sanitizeSvgToDataUri('<svg><script>alert(1)</script></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg onload="x()"></svg>')).toBeNull();
+    // external-reference elements + attrs
+    expect(sanitizeSvgToDataUri('<svg><a href="https://evil.example/x">e</a></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><image href="https://evil.example/x.png"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><use xlink:href="https://evil.example/x#i"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><feImage href="https://evil.example/x.png"/></svg>')).toBeNull();
+    // Bypasses to guard against: <style>@import, entity-encoded URL, file://, external url()
+    expect(sanitizeSvgToDataUri('<svg><style>@import "https://evil.example/x.css";</style></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><a href="&#x68;ttps://evil.example/x#i">e</a></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><image href="file:///etc/passwd"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect fill="url(https://evil.example/x)"/></svg>')).toBeNull();
+    // XXE / CDATA / data: embedding
+    expect(sanitizeSvgToDataUri('<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]><svg/>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><![CDATA[x]]></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><image href="data:image/png;base64,AAAA"/></svg>')).toBeNull();
+    // SMIL animation (can carry begin/href)
+    expect(sanitizeSvgToDataUri('<svg><animate attributeName="x"/></svg>')).toBeNull();
+    // namespace-prefixed element bypass (allowlist rejects any `ns:tag`)
+    expect(sanitizeSvgToDataUri('<svg xmlns:s="http://www.w3.org/2000/svg"><s:script>x</s:script></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg xmlns:s="http://www.w3.org/2000/svg"><s:style>@import "https://evil.example/x.css";</s:style></svg>')).toBeNull();
+    // CSS hex-escape bypass of url() (backslashes are rejected outright)
+    expect(sanitizeSvgToDataUri('<svg><rect fill="u\\72l(https://evil.example/x.svg#p)"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect style="fill:u\\72l(https://evil.example/x.svg#p)"/></svg>')).toBeNull();
+    // style attribute (not just <style> element) — not in the attr allowlist
+    expect(sanitizeSvgToDataUri('<svg><rect style="fill:red"/></svg>')).toBeNull();
+    // unknown element / attribute → fail closed
+    expect(sanitizeSvgToDataUri('<svg><bogus/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect data-x="1"/></svg>')).toBeNull();
+    // external-ref via a CSS image function in an allowed attribute value
+    expect(sanitizeSvgToDataUri('<svg xmlns="http://www.w3.org/2000/svg"><rect mask="image-set(\'https://evil.example/p.png\' 1x)"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect fill="image(\'https://evil.example/p.png\')"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect fill="cross-fade(url(https://evil.example/a.png), 50%)"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect fill="-webkit-image-set(\'https://evil.example/p.png\' 1x)"/></svg>')).toBeNull();
+    expect(sanitizeSvgToDataUri('<svg><rect mask="url(https://evil.example/m.svg#m)"/></svg>')).toBeNull();
+    // a scheme in a non-xmlns attribute value
+    expect(sanitizeSvgToDataUri('<svg><rect fill="foo://bar"/></svg>')).toBeNull();
+  });
+
+  it("allows internal url(#id) in mask/clip-path/fill (the legit logo case)", () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+      '<defs><clipPath id="c"><rect width="24" height="24"/></clipPath></defs>' +
+      '<rect width="24" height="24" fill="#123" clip-path="url(#c)" mask="url(#m)"/></svg>';
+    expect(sanitizeSvgToDataUri(svg)).toMatch(/^data:image\/svg\+xml;base64,/);
+  });
+
+  it("every record carries displayName + logo as string|null; card connectors have a real displayName", async () => {
+    const { records } = await buildManifest();
+    // Type contract: every record (all kinds) exposes the D10 fields as string|null.
+    for (const r of records) {
+      expect(r.displayName === null || typeof r.displayName === "string").toBe(true);
+      expect(r.logo === null || typeof r.logo === "string").toBe(true);
+    }
+    // Known card-visible connectors self-describe their name from the manifest.
+    for (const [pkg, name] of [
+      ["@cinatra-ai/openai-connector", "OpenAI"],
+      ["@cinatra-ai/gmail-connector", "Gmail"],
+      ["@cinatra-ai/github-connector", "GitHub"],
+      ["@cinatra-ai/twenty-connector", "Twenty CRM"],
+    ]) {
+      const rec = records.find((r) => r.packageName === pkg);
+      expect(rec?.displayName).toBe(name);
+    }
+  });
+});
+
+describe("manifest generator", () => {
+  it("emits one normalized record per inventoried extension", async () => {
+    const { records } = await buildManifest();
+    const names = new Set(records.map((r) => r.packageName));
+    expect(names.size).toBe(records.length); // no dupes
+    // every record has the required normalized fields
+    for (const r of records) {
+      expect(typeof r.packageName).toBe("string");
+      expect(["agent", "connector", "artifact", "skill", "workflow"]).toContain(r.kind);
+      expect(typeof r.sourceDir).toBe("string");
+      expect(Array.isArray(r.requestedHostPorts)).toBe(true);
+    }
+  });
+
+  it("every record carries configSchema as an object|null (present on the static normalized record)", async () => {
+    const { records } = await buildManifest();
+    for (const r of records) {
+      // The field must EXIST on every record (the static manifest type requires
+      // it). A schema-config connector carries its object; everything else null.
+      expect("configSchema" in r).toBe(true);
+      const ok =
+        r.configSchema === null ||
+        (typeof r.configSchema === "object" && !Array.isArray(r.configSchema));
+      expect(ok).toBe(true);
+      // A schema-config connector MUST carry an object configSchema (never null);
+      // a non-schema-config record MUST carry null.
+      if (r.uiSurface === "schema-config") {
+        expect(r.configSchema && typeof r.configSchema === "object").toBe(true);
+      } else {
+        expect(r.configSchema).toBeNull();
+      }
+    }
+  });
+
+  it("generated connector setup-pages match the hand-maintained map (parity)", async () => {
+    const problems = await checkParity();
+    expect(problems).toEqual([]);
+  });
+
+  it("classifies a connector with a UI page as bundled-react, facades as null", async () => {
+    // Derive from records (no hardcoded @cinatra-ai/* literals — those would
+    // register a new inventory reference site and drift extension-inventory.json).
+    const { records } = await buildManifest();
+    const withUi = records.find(
+      (r) => r.kind === "connector" && (r.hasSetupPage || r.hasSettingsPage),
+    );
+    expect(withUi).toBeDefined();
+    expect(withUi.uiSurface).toBe("bundled-react");
+    const facade = records.find(
+      (r) => r.kind === "connector" && !r.hasSetupPage && !r.hasSettingsPage,
+    );
+    expect(facade).toBeDefined();
+    expect(facade.uiSurface).toBe(null);
+    // a non-connector kind never has a uiSurface
+    const agent = records.find((r) => r.kind === "agent");
+    expect(agent.uiSurface).toBe(null);
+  });
+
+  it("setup-page entries only point at connectors that actually have one", async () => {
+    const { records, connectorSetupPages } = await buildManifest();
+    const haveSetup = new Set(
+      records.filter((r) => r.kind === "connector" && r.hasSetupPage).map((r) => r.packageName),
+    );
+    for (const p of connectorSetupPages) expect(haveSetup.has(p.packageName)).toBe(true);
+  });
+
+  // Settings-pages have no hand-maintained parity map (unlike setup-pages), so
+  // the structural invariant IS the parity check: every emitted settings-page
+  // slug must correspond to a record with hasSettingsPage=true.
+  it("settings-page entries only point at connectors that actually have one", async () => {
+    const { records, connectorSettingsPages } = await buildManifest();
+    const haveSettings = new Set(
+      records.filter((r) => r.kind === "connector" && r.hasSettingsPage).map((r) => r.packageName),
+    );
+    for (const p of connectorSettingsPages) expect(haveSettings.has(p.packageName)).toBe(true);
+  });
+});

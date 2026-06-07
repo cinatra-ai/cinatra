@@ -1,0 +1,18 @@
+{
+  "server": {
+    "transport": "http",
+    "baseUrl": "${CINATRA_BASE_URL:-http://localhost:3000}/api/mcp"
+  },
+  "primitives": [
+    "skills_catalog_list",
+    "skills_personal_list",
+    "skills_personal_list_for_agent",
+    "skills_personal_get",
+    "skills_personal_upsert",
+    "skills_personal_delete",
+    "skills_packages_list",
+    "skills_packages_install_from_github",
+    "skills_packages_uninstall",
+    "skills_library_list"
+  ]
+}

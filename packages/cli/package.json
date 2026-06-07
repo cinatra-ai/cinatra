@@ -1,0 +1,25 @@
+{
+  "name": "@cinatra-ai/cli",
+  "description": "The cinatra command-line tool for setting up, operating, and maintaining a Cinatra instance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cinatra": "./bin/cinatra.mjs"
+  },
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "@cinatra-ai/agents": "workspace:*",
+    "@cinatra-ai/connectors-catalog": "workspace:*",
+    "@cinatra-ai/skills": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "pacote": "^21.5.0",
+    "pg": "^8.20.0",
+    "semver": "^7.8.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.6"
+  }
+}

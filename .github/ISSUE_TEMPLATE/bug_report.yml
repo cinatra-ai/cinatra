@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a problem so we can fix it.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please fill out the
+        sections below so we can reproduce and resolve the issue quickly.
+
+        If your report involves a security vulnerability, please do **not** open
+        a public issue — see our [security policy](../../security/policy) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug, including any error messages.
+      placeholder: Tell us what you saw...
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. Run '...'
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+      placeholder: Tell us what you expected...
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Cinatra version / commit
+      description: The release version or git commit SHA you are running.
+      placeholder: "e.g. v0.1.0 or commit a1b2c3d"
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment (OS, Node version)
+      description: Your operating system and Node.js version.
+      placeholder: "e.g. macOS 15.3, Node 24.1.0"
+    validations:
+      required: false
+  - type: checkboxes
+    id: prior-search
+    attributes:
+      label: Before submitting
+      description: Please confirm the following before opening this issue.
+      options:
+        - label: I have searched existing issues and this has not already been reported.
+          required: true

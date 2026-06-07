@@ -1,0 +1,239 @@
+# Reusable release workflow for a published Cinatra extension.
+#
+# PLACEMENT ARTIFACT — this file is NOT active in the cinatra monorepo. It is the
+# drop-in body destined for the org-level repo:
+#     cinatra-ai/.github/.github/workflows/reusable-extension-release.yml
+# Each extracted extension repo carries only a thin `release: published` caller
+# (see scripts/extensions/templates/extension-repo/.github/workflows/release.yml, which
+# the extraction script ships into every repo) that calls THIS workflow.
+#
+# Owner-gated prerequisites before this can run (see README.md in this dir):
+#   - the cinatra-ai/.github repo exists and holds this file + release-submit.mjs
+#   - CINATRA_MARKETPLACE_VENDOR_TOKEN is set as a GitHub org secret (submit scope)
+#   - registry.cinatra.ai public-read is enabled (or CINATRA_REGISTRY_TOKEN is set)
+#
+# Flow: build the CI artifact from a clean checkout → npm pack → provenance
+# attestation → submit the EXACT bytes through the marketplace MCP proxy
+# (extension-submit-for-review), with the dependency-ordering gate enforced
+# locally first. NEVER a direct Verdaccio publish.
+
+name: reusable-extension-release
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "24"
+      github-repo-ref:
+        description: "Ref of cinatra-ai/.github to fetch release-submit.mjs from."
+        type: string
+        default: "main"
+    secrets:
+      CINATRA_MARKETPLACE_VENDOR_TOKEN:
+        description: "Submit-scope marketplace vendor token (the GitHub org secret)."
+        required: true
+      CINATRA_REGISTRY_TOKEN:
+        description: "Optional read-scope registry token (unneeded after the public-read flip)."
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # OIDC — provenance attestation AND source-identity token mint
+      attestations: write   # provenance attestation
+    steps:
+      # The extension repo at the release tag.
+      - name: Checkout extension repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Enable corepack
+        run: corepack enable
+
+      # Gate: a tag MUST be present and equal to v<package.json.version>. This
+      # holds for BOTH triggers — a published Release (event tag_name) and a
+      # manual backfill (workflow_dispatch MUST be run against a tag ref). There
+      # is NO ungated path: a dispatch on a branch fails closed, so a stable
+      # version can never publish from the default branch. Pre-releases skip.
+      - name: Resolve + gate version
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
+          else
+            # workflow_dispatch backfill: refuse anything that is not a tag ref so
+            # a branch HEAD can never be published.
+            if [ "$REF_TYPE" != "tag" ]; then
+              echo "::error::manual backfill must run on a tag ref (got ref_type='${REF_TYPE}', ref='${REF_NAME}')"; exit 1
+            fi
+            TAG="$REF_NAME"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::no release tag resolved — refusing to publish"; exit 1
+          fi
+          if [ "$TAG" != "v${VERSION}" ]; then
+            echo "::error::tag '${TAG}' does not match v${VERSION} (package.json)"; exit 1
+          fi
+          if printf '%s' "$VERSION" | grep -q '-'; then
+            echo "Pre-release version ${VERSION} — skipping marketplace publish."
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Install with the committed lockfile when present; extracted repos ship
+      # none today, so fall back to a fresh resolve. (Committing a per-repo
+      # lockfile is a deferred hardening — see README.md.)
+      # Host-coupled extensions (connectors) peer-depend on host-internal
+      # @cinatra-ai/* SDK packages (sdk-extensions, sdk-ui, mcp-client, …) that are
+      # NEVER on a public registry (model-B: the host provides them at runtime).
+      # They cannot be installed / typechecked / tested standalone (a pnpm install
+      # 404s on the optional peer; auto-install-peers=false is unreliable in CI) —
+      # the monorepo owns those gates. Detect a first-party peerDependency and skip
+      # install/typecheck/test; the kind gate + npm pack + submit need no node_modules.
+      - name: Classify extension
+        id: classify
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          if node -e "p=require('./package.json');pd=p.peerDependencies||{};process.exit(Object.keys(pd).some(k=>k.startsWith('@cinatra-ai/'))?0:1)"; then
+            echo "host_coupled=true" >> "$GITHUB_OUTPUT"
+            echo "host-coupled extension (first-party peer deps) — install/typecheck/test skipped; the host owns those gates."
+          else
+            echo "host_coupled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install
+        if: steps.gate.outputs.should_publish == 'true' && steps.classify.outputs.host_coupled != 'true'
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            corepack pnpm install --frozen-lockfile
+          else
+            corepack pnpm install --no-frozen-lockfile
+          fi
+
+      - name: Typecheck
+        if: steps.gate.outputs.should_publish == 'true' && steps.classify.outputs.host_coupled != 'true'
+        run: |
+          if node -e "process.exit(((require('./package.json').scripts)||{}).typecheck?0:1)"; then
+            corepack pnpm run typecheck
+          elif node -e "p=require('./package.json');d={...p.dependencies,...p.devDependencies};process.exit(d.typescript?0:1)"; then
+            corepack pnpm exec tsc --noEmit
+          else
+            echo "no typecheck script and no typescript dependency — nothing to typecheck (skipping)"
+          fi
+
+      - name: Test
+        if: steps.gate.outputs.should_publish == 'true' && steps.classify.outputs.host_coupled != 'true'
+        run: corepack pnpm test --if-present
+
+      # Self-contained per-kind gate shipped into agent/workflow repos.
+      - name: Kind gate
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          if [ -f extension-kind-gate.mjs ]; then
+            node extension-kind-gate.mjs --package-root .
+          else
+            echo "no extension-kind-gate.mjs (connector/artifact/skill) — skipping"
+          fi
+
+      - name: Pack
+        id: pack
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          set -euo pipefail
+          TARBALL="$(npm pack --silent | tail -n 1)"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "Packed ${TARBALL}"
+
+      # Build provenance for the exact published bytes. Marketplace-side
+      # verification of this attestation in trusted-vendor auto-approve is a
+      # later step; generating it now means the artifact is attestable on day one.
+      - name: Attest build provenance
+        if: steps.gate.outputs.should_publish == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      # Fetch the shared, self-contained submit tool from the org .github repo.
+      - name: Checkout submit tool
+        if: steps.gate.outputs.should_publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: cinatra-ai/.github
+          ref: ${{ inputs.github-repo-ref }}
+          path: .cinatra-release
+          sparse-checkout: |
+            scripts/extensions/templates/release/release-submit.mjs
+          sparse-checkout-cone-mode: false
+
+      # Install the two public runtime deps release-submit.mjs lazy-imports
+      # (pacote + the MCP SDK). The job grants `id-token: write` (for provenance
+      # AND the source-identity mint below), so the runner exposes
+      # ACTIONS_ID_TOKEN_REQUEST_* to EVERY step — a per-step `env:` cannot remove a
+      # job-level permission. So harden the install itself: `--ignore-scripts` runs
+      # NO lifecycle/postinstall code (pacote + the MCP SDK need none), so an
+      # untrusted transitive dependency cannot execute code to mint/exfiltrate an
+      # OIDC token here; blanking the request vars is belt-and-suspenders. The
+      # token is minted ONLY in the guarded submit step that immediately follows.
+      - name: Install submit-tool deps
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          set -euo pipefail
+          # Stage the submit tool + its two public deps in an ISOLATED temp dir
+          # OUTSIDE the extension repo tree, so npm never walks up to the extension's
+          # package.json / peer graph (a UI connector's react + @cinatra-ai/sdk-*
+          # peers crash npm's resolver: ERESOLVE → "Cannot read properties of null").
+          # The tool is run from here in the submit step; its ESM `import` resolves
+          # pacote/MCP from this dir's node_modules.
+          mkdir -p "$RUNNER_TEMP/cinatra-submit"
+          cp .cinatra-release/scripts/extensions/templates/release/release-submit.mjs "$RUNNER_TEMP/cinatra-submit/release-submit.mjs"
+          ( cd "$RUNNER_TEMP/cinatra-submit" && npm install --no-save --no-package-lock --ignore-scripts pacote@^21 @modelcontextprotocol/sdk@^1.29.0 )
+
+      - name: Submit through the marketplace proxy (dependency-gated, source-identity-signed)
+        if: steps.gate.outputs.should_publish == 'true'
+        env:
+          CINATRA_MARKETPLACE_VENDOR_TOKEN: ${{ secrets.CINATRA_MARKETPLACE_VENDOR_TOKEN }}
+          CINATRA_REGISTRY_TOKEN: ${{ secrets.CINATRA_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Mint a GitHub Actions OIDC token — GitHub-signed claims: repository,
+          # repository_owner, repository_visibility, and job_workflow_ref of THIS
+          # blessed reusable workflow — scoped to the marketplace audience, and hand
+          # it to the submit tool as CINATRA_SOURCE_IDENTITY_TOKEN. The marketplace
+          # public-repo predicate verifies it to auto-approve a first-party submit.
+          #
+          # BEST-EFFORT: a mint failure NEVER fails the publish — a missing token
+          # only routes the submission to manual moderation (it is never auto-
+          # rejected). The token is minted AND consumed inside THIS step: it is
+          # never written to GITHUB_OUTPUT / a file / a log, and is masked
+          # defensively before the submit tool runs.
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            OIDC_RESP="$(curl -sS \
+              -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://marketplace.cinatra.ai" || true)"
+            CINATRA_SOURCE_IDENTITY_TOKEN="$(printf '%s' "$OIDC_RESP" | node -e 'let s="";process.stdin.on("data",d=>{s+=d});process.stdin.on("end",()=>{try{process.stdout.write(String(JSON.parse(s).value||""))}catch{process.stdout.write("")}})' || true)"
+            OIDC_RESP=""
+            if [ -n "${CINATRA_SOURCE_IDENTITY_TOKEN:-}" ]; then
+              echo "::add-mask::${CINATRA_SOURCE_IDENTITY_TOKEN}"
+              export CINATRA_SOURCE_IDENTITY_TOKEN
+              echo "Minted source-identity OIDC token (aud=https://marketplace.cinatra.ai)."
+            else
+              echo "::warning::source-identity OIDC mint returned no token — submitting without it (manual moderation)."
+            fi
+          else
+            echo "::warning::OIDC token request env unavailable (id-token: write?) — submitting without a source-identity token."
+          fi
+          node "$RUNNER_TEMP/cinatra-submit/release-submit.mjs" "$PWD/${{ steps.pack.outputs.tarball }}"

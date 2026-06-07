@@ -1,0 +1,550 @@
+# Compose profile groupings
+# ----------------------------------------------------------------------------
+# `wayflow`       — Unified multi-tenant WayFlow runtime (hosts every installed
+#                   agent at /agents/<vendor>/<slug>/ on port 3010)
+# `drupal`        — Drupal CMS + drupal-db + the shared `wayflow` runtime
+# `wordpress`     — WordPress CMS + wordpress-db + the shared `wayflow` runtime
+# `a2a-peers`     — External A2A peer fixtures used by Cinatra integration tests
+# ----------------------------------------------------------------------------
+# Use `docker compose --profile drupal up -d` to bring up Drupal + the shared
+# wayflow runtime. Profiles can be combined: `--profile drupal --profile wordpress`.
+# See docker/drupal/README.md for Drupal widget post-install setup.
+# The `wayflow` service below serves every installed agent in one container.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
+    # a bare `docker compose up` no longer exposes 5434 on 0.0.0.0.
+    # Local dev + self-host install add `-f docker-compose.dev.yml` (loopback).
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - cinatra-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
+    # a bare `docker compose up` no longer exposes 6379 on 0.0.0.0.
+    volumes:
+      - cinatra-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  verdaccio:
+    image: verdaccio/verdaccio:6
+    ports:
+      - "4873:4873"
+    volumes:
+      - cinatra-verdaccio-storage:/verdaccio/storage
+      - ./docker/verdaccio/config.yaml:/verdaccio/conf/config.yaml:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:4873/').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  nango-db:
+    image: postgres:15-alpine
+    # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
+    # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
+    # (this is a Postgres with default nango/nango creds). Only the host-side CLI
+    # backup/restore tooling (NANGO_DATABASE_URL) reaches it, on 127.0.0.1.
+    environment:
+      POSTGRES_DB: nango
+      POSTGRES_USER: nango
+      POSTGRES_PASSWORD: nango
+    volumes:
+      - nango-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nango"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nango-server:
+    image: nangohq/nango-server:hosted
+    ports:
+      - "3003:3003"
+      - "3009:3009"
+    environment:
+      NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}
+      SERVER_PORT: "3003"
+      NANGO_SERVER_URL: http://localhost:3003
+      NANGO_PUBLIC_SERVER_URL: http://localhost:3003
+      NANGO_DASHBOARD_USERNAME: admin
+      NANGO_DASHBOARD_PASSWORD: cinatra-local
+      FLAG_AUTH_ENABLED: "false"
+      FLAG_SERVE_CONNECT_UI: "true"
+      NANGO_LOGS_ENABLED: "false"
+      CSP_REPORT_ONLY: "true"
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+      LOG_LEVEL: info
+      RECORDS_DATABASE_URL: postgresql://nango:nango@nango-db:5432/nango
+      NANGO_DB_HOST: nango-db
+      NANGO_DB_NAME: nango
+      NANGO_DB_USER: nango
+      NANGO_DB_PASSWORD: nango
+      NANGO_DB_SSL: "false"
+      NANGO_REDIS_URL: redis://redis:6379
+    depends_on:
+      nango-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  wordpress-db:
+    profiles: ["wordpress"]
+    image: mariadb:11.4
+    ports:
+      - "3307:3306"
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: wordpress
+      MARIADB_ROOT_PASSWORD: wordpress-root
+    volumes:
+      - cinatra-wordpress-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  wordpress:
+    profiles: ["wordpress"]
+    image: wordpress:6.8-php8.3-apache
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: wordpress-db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_CONFIG_EXTRA: |
+        define( 'WP_ENVIRONMENT_TYPE', 'local' );
+      MCP_ADAPTER_REF: v0.4.1
+      WP_DEV_URL: http://localhost:8080
+      WP_DEV_ADMIN_USER: admin
+      WP_DEV_ADMIN_PASS: admin
+      WP_DEV_ADMIN_EMAIL: dev@localhost
+    volumes:
+      - cinatra-wordpress:/var/www/html
+      - ./dev/wordpress-plugin:/var/www/html/wp-content/plugins/cinatra
+      - ./scripts/wordpress-entrypoint.sh:/usr/local/bin/cinatra-wp-entrypoint.sh:ro
+      # Generic dev-content seeder + manifest (mounted outside the web root).
+      - ./docker/wordpress/seed-content.php:/opt/cinatra-dev-content/seed-content.php:ro
+      - ./scripts/fixtures/external-instances.dev-content.json:/opt/cinatra-dev-content/external-instances.dev-content.json:ro
+    entrypoint: ["/usr/local/bin/cinatra-wp-entrypoint.sh"]
+    command: ["apache2-foreground"]
+    depends_on:
+      wordpress-db:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # A2A dev peer agents. OPT-IN via `--profile a2a-peers`.
+  # Cloned into `dev/a2a-peers/` (gitignored) by `cinatra setup` from
+  # cinatra-ai/a2a-servers-dev (package.json `cinatra.devApps`). Run
+  # `cinatra setup dev` first, then start with:
+  #   docker compose --profile a2a-peers up -d --build
+  # Most peers need no API key. Two are LLM-backed: dice_agent_rest needs
+  # GOOGLE_API_KEY (unless GOOGLE_GENAI_USE_VERTEXAI=TRUE) and adk_expense_reimbursement
+  # needs GEMINI_API_KEY (GOOGLE_API_KEY as fallback), both read from .env.local.
+  # Wire peer URLs via CINATRA_A2A_DEV_PEER_URLS (comma-separated).
+  # Peer connections auto-register in /connectors (A2A Servers) on dev boot.
+  # ---------------------------------------------------------------------------
+  # NOTE: For E2E external A2A dispatch testing (streaming), run a peer directly on
+  # the host instead of Docker — Docker Desktop macOS proxies cause ECONNRESET for
+  # Node.js SSE streaming clients. Peers ship run_host*.py launchers that bind
+  # 127.0.0.1 on the same host port (so CINATRA_A2A_DEV_PEER_URLS needs no change):
+  #   docker stop cinatra-a2a-peer-signing-1
+  #   cd dev/a2a-peers/signing_and_verifying && uv run run_host.py   # 10006
+  # (helloworld has no host launcher; `uv run .` binds :9999, or use the compose
+  # service for the :10001 mapping.)
+  a2a-peer-helloworld:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/helloworld
+      dockerfile: Dockerfile
+    ports:
+      - "10001:9999"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9999/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Host-run alternative (Docker Desktop ECONNRESET workaround):
+  #   docker stop cinatra-a2a-peer-number-alice-1
+  #   cd dev/a2a-peers/number_guessing_game && uv run run_host_alice.py
+  a2a-peer-number-alice:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/number_guessing_game
+      dockerfile: Dockerfile
+    command: ["python", "agent_Alice.py"]
+    ports:
+      - "10002:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # number-bob is a CLI client that connects to Alice and Carol as a player — it is NOT
+  # an A2A server and has no HTTP endpoint. Excluded from a2a-peers profile.
+  a2a-peer-number-bob:
+    profiles: ["a2a-peers-disabled"]
+    build:
+      context: ./dev/a2a-peers/number_guessing_game
+      dockerfile: Dockerfile
+    command: ["python", "agent_Bob.py"]
+
+  # Host-run alternative:
+  #   docker stop cinatra-a2a-peer-number-carol-1
+  #   cd dev/a2a-peers/number_guessing_game && uv run run_host_carol.py
+  a2a-peer-number-carol:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/number_guessing_game
+      dockerfile: Dockerfile
+    command: ["python", "agent_Carol.py"]
+    ports:
+      - "10004:8003"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Host-run alternative:
+  #   docker stop cinatra-a2a-peer-dice-rest-1
+  #   cd dev/a2a-peers/dice_agent_rest && uv run . --host 127.0.0.1 --port 10005
+  a2a-peer-dice-rest:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/dice_agent_rest
+      dockerfile: Dockerfile
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-}
+    ports:
+      - "10005:10101"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:10101/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Host-run alternative:
+  #   docker stop cinatra-a2a-peer-signing-1
+  #   cd dev/a2a-peers/signing_and_verifying && uv run run_host.py
+  a2a-peer-signing:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/signing_and_verifying
+      dockerfile: Dockerfile
+    ports:
+      - "10006:9999"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9999/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # Host-run alternative (also requires GEMINI_API_KEY in env):
+  #   docker stop cinatra-a2a-peer-adk-reimbursement-1
+  #   cd dev/a2a-peers/adk_expense_reimbursement && uv run . --host 127.0.0.1 --port 10007
+  a2a-peer-adk-reimbursement:
+    profiles: ["a2a-peers"]
+    build:
+      context: ./dev/a2a-peers/adk_expense_reimbursement
+      dockerfile: Dockerfile
+    environment:
+      # Upstream __main__.py reads GEMINI_API_KEY. Fallback to GOOGLE_API_KEY
+      # so devs who only have the latter set (used by langgraph-server) are not
+      # forced to duplicate the key. Empty default keeps compose happy when
+      # the peer is not opted-in.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}
+      GOOGLE_GENAI_USE_VERTEXAI: ${GOOGLE_GENAI_USE_VERTEXAI:-}
+    ports:
+      - "10007:10002"
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:10002/.well-known/agent-card.json')\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Neo4j + Graphiti. Required for the objects-layer Graphiti backend.
+  # Neo4j Community stores the knowledge graph; knowledge-graph-mcp fronts it via MCP.
+  # Dev credentials: NEO4J_PASSWORD defaults to "cinatra-local" (same convention as
+  # Nango dashboard password). Override for production — see SUMMARY.md prod notes.
+  # Production overlay MUST: (a) remove the graphiti host port binding (neo4j's
+  # is already base-OFF — see below), (b) set NEO4J_PASSWORD to a strong secret.
+  # neo4j host ports (7474/7687) moved to docker-compose.dev.yml
+  # (base-safe-by-default): a bare `docker compose up` no longer
+  # exposes them on 0.0.0.0. Local dev + self-host install add
+  # `-f docker-compose.dev.yml` (loopback). ops prod/demo overrides
+  # already `!reset []` neo4j regardless.
+  # ---------------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cinatra-local}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+    volumes:
+      - cinatra-neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_PASSWORD:-cinatra-local} 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  graphiti:
+    image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2
+    ports:
+      - "8000:8000"
+    environment:
+      # knowledge-graph-mcp uses pydantic-settings with __ as nested delimiter.
+      # DATABASE__PROVIDER=neo4j switches from the bundled FalkorDB to our Neo4j service.
+      DATABASE__PROVIDER: neo4j
+      DATABASE__PROVIDERS__NEO4J__URI: bolt://neo4j:7687
+      DATABASE__PROVIDERS__NEO4J__USERNAME: neo4j
+      DATABASE__PROVIDERS__NEO4J__PASSWORD: ${NEO4J_PASSWORD:-cinatra-local}
+      # OpenAI key required for entity extraction and embeddings.
+      # Pass both the nested pydantic-settings key AND the raw env var —
+      # graphiti_core's internal initialization reads OPENAI_API_KEY directly.
+      LLM__PROVIDERS__OPENAI__API_KEY: ${OPENAI_API_KEY:-}
+      EMBEDDER__PROVIDERS__OPENAI__API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SEMAPHORE_LIMIT: "10"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      # MCP server: check TCP port reachability (no fixed HTTP health endpoint).
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 8000)); s.close()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # WayFlow multi-tenant runtime.
+  # ONE container hosts every installed agent at /agents/<vendor>/<slug>/, mirroring
+  # the on-disk agents/<vendor>/<slug>/ tree. The loader (docker/wayflow/agent_loader.py)
+  # recursively scans agents/*/*/oas.json on startup and mounts each agent as an
+  # isolated A2AServer ASGI sub-application under a Starlette parent. No per-agent
+  # pinning env var; agent URL is derived from agent_templates.packageName.
+  #
+  # Profiles: [wayflow, drupal, wordpress] — the same shared runtime is brought up by
+  # any of the three operator commands; drupal/wordpress profiles still bring up their
+  # CMS containers (drupal/drupal-db, wordpress/wordpress-db) alongside.
+  #
+  # Start the runtime:    docker compose --profile wayflow up
+  # With Drupal CMS:      docker compose --profile drupal up
+  # With WordPress CMS:   docker compose --profile wordpress up
+  #
+  # Healthcheck probes GET /.health (returns {"status": "ok", "agents": <count>}).
+  # 12 retries × 10s gives the loader 2 minutes to mount all agents on cold start.
+  wayflow:
+    build:
+      context: ./docker/wayflow
+    ports:
+      - "3010:3010"
+    environment:
+      PORT: "3010"
+      CINATRA_AGENTS_DIR: "/agents"
+      CINATRA_BASE_URL: "http://host.docker.internal:3000"
+      CINATRA_BRIDGE_TOKEN: "${CINATRA_BRIDGE_TOKEN}"   # required for container-side bridge auth
+      WAYFLOW_BASE_URL: "${WAYFLOW_BASE_URL:-http://localhost:3010}"
+      # pyagentspec's `OpenAiConfig` resolves `api_key`
+      # from the wayflow container env. Agents that declare `llm_config:
+      # OpenAiConfig` (e.g. single-AgentNode agents and orchestrator summary
+      # composers) fail to mount when this isn't set. The key is sourced from
+      # the host shell or `.env.local` of the Cinatra app process.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      # Multi-tenant loader auto-discovers all agents/<vendor>/<slug>/cinatra/oas.json.
+      # No per-agent pinning env var is needed.
+    volumes:
+      - ./extensions:/agents:ro
+    profiles:
+      - wayflow
+      - drupal
+      - wordpress
+    healthcheck:
+      # Treat both `ok` and `degraded` as healthy. The
+      # loader explicitly tolerates per-agent load failures (Pitfall 6
+      # "never crash the runtime") and surfaces them via /.health as
+      # status="degraded" + failed_agents=[...]. If the healthcheck rejects
+      # `degraded`, a single broken agent (e.g. a publish-in-progress with
+      # malformed oas.json) restart-loops the entire runtime — discarding
+      # all healthy agents on each restart. Only a hard failure (status
+      # missing, HTTP non-200, JSON parse failure) is treated as unhealthy.
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request,json; r=urllib.request.urlopen('http://localhost:3010/.health'); j=json.loads(r.read()); exit(0 if j.get('status') in ('ok','degraded') else 1)\""
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ---------------------------------------------------------------------------
+  # Drupal 11 dev stack. OPT-IN via `--profile drupal`.
+  # Boots a Drupal 11 + MariaDB site with drupal/mcp_tools installed.
+  # The cinatra module is bind-mounted from dev/drupal-module/cinatra/.
+  # First boot runs composer require + drush site:install (takes ~60s).
+  # ---------------------------------------------------------------------------
+  drupal-db:
+    profiles: ["drupal"]
+    image: mariadb:11.4
+    ports: ["3308:3306"]
+    environment:
+      MARIADB_DATABASE: drupal
+      MARIADB_USER: drupal
+      MARIADB_PASSWORD: drupal
+      MARIADB_ROOT_PASSWORD: drupal-root
+    volumes:
+      - cinatra-drupal-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  drupal:
+    profiles: ["drupal"]
+    build:
+      context: .
+      dockerfile: docker/drupal/Dockerfile
+    ports: ["8082:80"]
+    environment:
+      MCP_TOOLS_API_KEY: dev-mcp-key
+      DRUPAL_ADMIN_USER: admin
+      DRUPAL_ADMIN_PASS: cinatra
+      DRUPAL_SITE_URL: http://localhost:8082
+      CINATRA_BASE_URL: http://host.docker.internal:3000
+    volumes:
+      - cinatra-drupal:/drupal/web/sites/default
+      - ./dev/drupal-module/cinatra:/drupal/web/modules/custom/cinatra
+      - ./scripts/drupal-entrypoint.sh:/usr/local/bin/cinatra-drupal-entrypoint.sh:ro
+      - ./docker/drupal/config/sync:/drupal/config/sync
+      # Generic dev-content seeder + manifest (mounted outside the web root).
+      - ./docker/drupal/seed-content.php:/opt/cinatra-dev-content/seed-content.php:ro
+      - ./scripts/fixtures/external-instances.dev-content.json:/opt/cinatra-dev-content/external-instances.dev-content.json:ro
+    entrypoint: ["/usr/local/bin/cinatra-drupal-entrypoint.sh"]
+    command: ["apache2-foreground"]
+    depends_on:
+      drupal-db:
+        condition: service_healthy
+
+  # ---- Twenty CRM stack (profile-gated; default `docker compose up` does NOT start this) ----
+  # ~2 GB image pull on first start; explicit opt-in: `docker compose --profile twenty up -d twenty-server twenty-worker twenty-db twenty-redis`
+  # Single Apple workspace via `workspace:seed:dev --light` — Twenty has no IS_MULTIWORKSPACE_ENABLED env var.
+  # Bootstrap (API key) via `workspace:generate-api-key` — Twenty OAuth supports only authorization_code/refresh_token, NOT client_credentials.
+  twenty-db:
+    image: postgres:16
+    container_name: cinatra-twenty-db-1
+    profiles: ["twenty"]
+    ports: ["5532:5432"]
+    environment:
+      POSTGRES_DB: default
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: cinatra-twenty-dev
+    volumes:
+      - cinatra-twenty-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  twenty-redis:
+    image: redis:7
+    container_name: cinatra-twenty-redis-1
+    profiles: ["twenty"]
+    ports: ["6479:6379"]
+    command: ["--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  twenty-server:
+    image: twentycrm/twenty:${TWENTY_TAG:-v2.7.3}
+    container_name: cinatra-twenty-1
+    profiles: ["twenty"]
+    ports: ["3300:3000"]
+    environment:
+      NODE_PORT: 3000
+      NODE_ENV: development
+      PG_DATABASE_URL: postgres://postgres:cinatra-twenty-dev@twenty-db:5432/default
+      SERVER_URL: http://localhost:3300
+      REDIS_URL: redis://twenty-redis:6379
+      STORAGE_TYPE: local
+      ENCRYPTION_KEY: ${TWENTY_ENCRYPTION_KEY:-cinatra-dev-twenty-encryption-key-replace-in-prod}
+      APP_SECRET: ${TWENTY_APP_SECRET:-cinatra-dev-twenty-app-secret-replace-in-prod}
+    volumes:
+      - cinatra-twenty-server:/app/packages/twenty-server/.local-storage
+    depends_on:
+      twenty-db:
+        condition: service_healthy
+      twenty-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:3000/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  twenty-worker:
+    image: twentycrm/twenty:${TWENTY_TAG:-v2.7.3}
+    container_name: cinatra-twenty-worker-1
+    profiles: ["twenty"]
+    command: ["yarn", "worker:prod"]
+    environment:
+      PG_DATABASE_URL: postgres://postgres:cinatra-twenty-dev@twenty-db:5432/default
+      SERVER_URL: http://localhost:3300
+      REDIS_URL: redis://twenty-redis:6379
+      DISABLE_DB_MIGRATIONS: "true"
+      DISABLE_CRON_JOBS_REGISTRATION: "true"
+      STORAGE_TYPE: local
+      ENCRYPTION_KEY: ${TWENTY_ENCRYPTION_KEY:-cinatra-dev-twenty-encryption-key-replace-in-prod}
+      APP_SECRET: ${TWENTY_APP_SECRET:-cinatra-dev-twenty-app-secret-replace-in-prod}
+    volumes:
+      - cinatra-twenty-server:/app/packages/twenty-server/.local-storage
+    depends_on:
+      twenty-db:
+        condition: service_healthy
+      twenty-server:
+        condition: service_healthy
+
+volumes:
+  cinatra-postgres:
+  cinatra-redis:
+  cinatra-verdaccio-storage:
+  nango-postgres:
+  cinatra-wordpress-db:
+  cinatra-wordpress:
+  cinatra-drupal-db:
+  cinatra-drupal:
+  cinatra-neo4j-data:
+  cinatra-twenty-db:
+  cinatra-twenty-server:

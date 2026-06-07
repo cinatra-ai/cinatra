@@ -1,0 +1,28 @@
+<!--
+  Cinatra favicon - design-system.html section I "Favicon":
+  "16-32px - fedora only. In browser tabs and bookmark bars the wordmark
+  would be illegible. Drop it and let the fedora carry the brand."
+
+  Per spec example: 32x32 surface with rx=6, 1px line border (line token =
+  rgba(21,33,58,0.14)), and the mustard fedora glyph (brand-mustard #c79545)
+  centred on a white surface-strong ground.
+
+  This is DISTINCT from the app icon (src/app/apple-icon.png, rasterized from docs/design/apple-icon.svg), which is the
+  mustard fedora on a navy ground with a larger 14px corner radius.
+
+  Geometry (scaled to 512 canvas for sharp downsampling to 16/32px):
+  - Container: 512x512, rx=96 (=6/32 * 512), 16-unit stroke (=1px at 32px),
+    inset by 8 so the half-outside-stroke lands exactly at the viewBox edge.
+  - Fedora: native viewBox 0 0 512 320; scale 0.625 -> 320 wide (62.5% of
+    container, matching the spec example's 20-of-32 glyph width), centred
+    via translate(96 156).
+
+  SOURCE OF TRUTH for the fedora paths: src/lib/cinatra-brand.ts (CINATRA_LOGO).
+-->
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Cinatra">
+  <rect x="8" y="8" width="496" height="496" rx="88" fill="#ffffff" stroke="rgba(21,33,58,0.14)" stroke-width="16" />
+  <g transform="translate(96 156) scale(0.625)" fill="#c79545">
+    <path d="M72 214 C 72 200 96 190 130 188 C 168 186 196 200 256 210 C 316 220 358 214 400 200 C 426 192 440 196 440 208 C 440 222 420 234 388 242 C 340 254 288 256 256 256 C 202 256 132 248 100 238 C 80 232 72 224 72 214 Z" />
+    <path d="M146 188 C 150 130 176 86 212 72 C 226 66 240 64 252 64 C 262 64 270 70 268 80 L 264 100 C 272 88 288 82 300 82 C 332 82 356 118 362 188 Z" />
+  </g>
+</svg>

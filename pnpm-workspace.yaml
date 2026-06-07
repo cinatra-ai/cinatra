@@ -1,0 +1,51 @@
+packages:
+  - "packages/*"
+  # Transport connectors are kind:"connector" extension packages living under
+  # extensions/cinatra-ai/<x>-connector/. Suffix-specific so the pattern does
+  # NOT pick up <x>-agent or *-skills siblings (those are filesystem-loaded,
+  # not workspace-compiled; see extensions-dev-watcher.ts).
+  - "extensions/cinatra-ai/*-connector"
+  # Generic-vendor connector glob. Any `extensions/<vendor>/<slug>-connector`
+  # package is workspace-compiled, subject to the stricter policy boundary
+  # (connector-handler regex + kind:"connector" + package-name/realpath +
+  # default admin visibility + static loader). The
+  # `extensions/cinatra-ai/*-connector` line above is a subset; both kept for
+  # clarity (pnpm dedups). NOT a permissive wildcard; the `-connector` suffix
+  # and boundary gate it. First non-cinatra-ai vendor:
+  # a private in-tree vendor connector.
+  - "extensions/*/*-connector"
+  # Built-in artifact-type extensions are kind:"artifact" packages at
+  # extensions/cinatra-ai/<x>-artifact/. Suffix-specific (mirrors the
+  # -connector rule); metadata-only descriptor packages consumed by the
+  # object-registry bridge.
+  - "extensions/cinatra-ai/*-artifact"
+  # Workflow templates are kind:"workflow" packages at
+  # extensions/cinatra-ai/<x>-workflow/ (+ generic-vendor variant). Suffix-
+  # specific (mirrors the -connector/-artifact rules); workspace-compiled,
+  # consumed by the WorkflowTemplateExtensionHandler.
+  - "extensions/cinatra-ai/*-workflow"
+  - "extensions/*/*-workflow"
+
+# pnpm config lives HERE, not in package.json#pnpm; pnpm 11 stopped reading the
+# package.json `pnpm` block. overrides / patchedDependencies / allowBuilds are
+# the canonical pnpm-workspace.yaml keys.
+overrides:
+  react-dom: 19.2.6 # kept in lockstep with `react`
+
+patchedDependencies:
+  "@a2a-js/sdk@0.3.13": patches/@a2a-js__sdk@0.3.13.patch
+
+# allowBuilds replaces the removed-in-pnpm-11 `ignoredBuiltDependencies`;
+# explicit `false` = build script NOT run for that dependency (intent
+# unchanged).
+allowBuilds:
+  '@google/genai': false
+  '@prisma/client': false
+  '@sentry/cli': false
+  better-sqlite3: false
+  core-js: false
+  esbuild: false
+  msgpackr-extract: false
+  protobufjs: false
+  sharp: false
+  unrs-resolver: false

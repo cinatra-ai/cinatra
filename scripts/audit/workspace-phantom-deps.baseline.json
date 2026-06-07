@@ -1,0 +1,108 @@
+{
+  "note": "Workspace phantom-dependency baseline (no-new-rot ratchet). Each entry = a source import of a first-party workspace package NOT declared in the importing package's package.json (resolves only via pnpm hoisting). These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate with `node scripts/audit/workspace-phantom-deps.mjs --write-baseline` — every entry should only ever be REMOVED (declare the dep), never added.",
+  "phantomDeps": {
+    "@cinatra-ai/agents": [
+      "@cinatra-ai/agent-ui-protocol",
+      "@cinatra-ai/crm-connector",
+      "@cinatra-ai/extensions",
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/google-calendar-connector",
+      "@cinatra-ai/notifications",
+      "@cinatra-ai/objects"
+    ],
+    "@cinatra-ai/chat": [
+      "@cinatra-ai/crm-connector",
+      "@cinatra-ai/mcp-server",
+      "@cinatra-ai/notifications",
+      "@cinatra-ai/skills"
+    ],
+    "@cinatra-ai/connectors": [
+      "@cinatra-ai/tailscale-connector"
+    ],
+    "@cinatra-ai/dashboards": [
+      "@cinatra-ai/agents",
+      "@cinatra-ai/mcp-client",
+      "@cinatra-ai/mcp-server"
+    ],
+    "@cinatra-ai/extensions": [
+      "@cinatra-ai/connectors-catalog",
+      "@cinatra-ai/objects",
+      "@cinatra-ai/skills"
+    ],
+    "@cinatra-ai/metric-cost-api": [
+      "@cinatra-ai/mcp-client",
+      "@cinatra-ai/mcp-server"
+    ],
+    "@cinatra-ai/metric-usage-api": [
+      "@cinatra-ai/mcp-client",
+      "@cinatra-ai/mcp-server"
+    ],
+    "@cinatra-ai/objects": [
+      "@cinatra-ai/agents"
+    ],
+    "@cinatra-ai/permissions": [
+      "@cinatra-ai/mcp-client",
+      "@cinatra-ai/mcp-server"
+    ],
+    "@cinatra-ai/skills": [
+      "@cinatra-ai/agents",
+      "@cinatra-ai/extensions",
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/workflows": [
+      "@cinatra-ai/mcp-client"
+    ],
+    "@cinatra-ai/github-connector": [
+      "@cinatra-ai/connectors"
+    ],
+    "@cinatra-ai/nango-connector": [
+      "@cinatra-ai/connectors"
+    ],
+    "@cinatra-ai/openai-connector": [
+      "@cinatra-ai/connectors",
+      "@cinatra-ai/sdk-ui"
+    ],
+    "@cinatra-ai/blog-idea-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/blog-image-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/blog-post-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/brand-voice-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/competitive-analysis-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/contract-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/default-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/email-body-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/marketing-icp-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/marketing-strategy-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/product-portfolio-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/sales-playbook-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/screenshot-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ],
+    "@cinatra-ai/slide-deck-artifact": [
+      "@cinatra-ai/sdk-extensions"
+    ]
+  }
+}

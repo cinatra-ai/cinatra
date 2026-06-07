@@ -1,0 +1,110 @@
+name: Release Prep — Vendored Bundles
+
+# CI packs the Verdaccio tarball for each entry in
+# `cinatra.vendoredSkillBundles[]` and uploads the .tgz + its SHA256 as
+# GitHub Actions artifacts. The release maintainer downloads the artifact,
+# SHA256-verifies, and publishes the EXACT bytes to Cinatra's Verdaccio.
+# The maintainer never runs the fetcher locally and never runs pnpm pack
+# locally — only the CI-built artifact is the source of truth.
+#
+# Trigger: tag candidate (a branch matching `release/*`) OR a manual
+# workflow_dispatch with a `target_version` input. The job sets the version
+# of the synthesized package.json BEFORE pnpm pack so the published artifact
+# carries the correct SemVer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: 'SemVer to write into the synthesized package.json (e.g. 1.0.0)'
+        required: true
+        type: string
+      bundle_package_name:
+        description: 'Bundle packageName as declared in cinatra.vendoredSkillBundles[]'
+        required: true
+        type: string
+        default: '@anthropics/skills'
+  push:
+    branches: ['release/*']
+
+jobs:
+  pack-bundle:
+    name: Pack vendored bundle tarball
+    runs-on: ubuntu-latest
+
+    env:
+      # The fetcher's dev-mode gate is hard — CI sets it explicitly because
+      # the release-prep run IS a fetch + pack step, by design.
+      CINATRA_RUNTIME_MODE: development
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Install dependencies (no postinstall; we run the fetcher manually below)
+        run: |
+          corepack enable
+          corepack pnpm install --no-frozen-lockfile --ignore-scripts
+
+      - name: Run vendor-anthropic-skills fetcher
+        run: node scripts/vendor-anthropic-skills.mjs
+
+      - name: Resolve bundle destination
+        id: resolve
+        run: |
+          PACKAGE_NAME="${{ github.event.inputs.bundle_package_name || '@anthropics/skills' }}"
+          TARGET_VERSION="${{ github.event.inputs.target_version || '1.0.0' }}"
+          DESTINATION=$(node -e "const p=require('./package.json');const b=p.cinatra.vendoredSkillBundles.find(b=>b.packageName==='$PACKAGE_NAME');if(!b){process.exit(1);}console.log(b.destination);")
+          if [ -z "$DESTINATION" ]; then
+            echo "Bundle $PACKAGE_NAME not found in cinatra.vendoredSkillBundles[]"
+            exit 1
+          fi
+          echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+          echo "target_version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          # Slug used for tarball + artifact naming (replace `/` with `-`,
+          # strip leading `@`).
+          SLUG=$(echo "$PACKAGE_NAME" | sed 's|^@||;s|/|-|g')
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+
+      - name: Write target version into synthesized package.json
+        run: |
+          DEST="${{ steps.resolve.outputs.destination }}"
+          VERSION="${{ steps.resolve.outputs.target_version }}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('$DEST/package.json','utf8'));p.version='$VERSION';fs.writeFileSync('$DEST/package.json',JSON.stringify(p,null,2)+'\\n');"
+          cat "$DEST/package.json"
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          DEST="${{ steps.resolve.outputs.destination }}"
+          cd "$DEST"
+          TARBALL=$(corepack pnpm pack | tail -1)
+          echo "Packed: $TARBALL"
+          cp "$TARBALL" /tmp/bundle.tgz
+          (cd /tmp && shasum -a 256 bundle.tgz | awk '{print $1}' > bundle.tgz.sha256)
+          echo "sha256=$(cat /tmp/bundle.tgz.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball + SHA256
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.resolve.outputs.slug }}-${{ steps.resolve.outputs.target_version }}
+          path: |
+            /tmp/bundle.tgz
+            /tmp/bundle.tgz.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Echo verification command for the maintainer
+        run: |
+          echo "Artifact uploaded as: ${{ steps.resolve.outputs.slug }}-${{ steps.resolve.outputs.target_version }}"
+          echo "SHA256: ${{ steps.pack.outputs.sha256 }}"
+          echo "Maintainer next steps:"
+          echo "  gh run download ${{ github.run_id }} --name ${{ steps.resolve.outputs.slug }}-${{ steps.resolve.outputs.target_version }}"
+          echo "  shasum -a 256 -c <(echo '${{ steps.pack.outputs.sha256 }}  bundle.tgz')"
+          echo "  pnpm publish bundle.tgz --registry <verdaccio-url> --no-git-checks"

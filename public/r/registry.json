@@ -1,0 +1,127 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "@cinatra-ai",
+  "homepage": "https://registry.cinatra.ai",
+  "items": [
+    {
+      "name": "utils",
+      "type": "registry:lib",
+      "title": "cn utility",
+      "description": "Tailwind class-merge helper (clsx + tailwind-merge).",
+      "files": [{ "path": "src/lib/utils.ts", "type": "registry:lib" }],
+      "dependencies": ["clsx", "tailwind-merge"]
+    },
+    {
+      "name": "button",
+      "type": "registry:ui",
+      "title": "Button",
+      "description": "Cinatra design-system button.",
+      "files": [{ "path": "src/components/ui/button.tsx", "type": "registry:ui" }],
+      "dependencies": ["radix-ui", "class-variance-authority"],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "alert",
+      "type": "registry:ui",
+      "title": "Alert",
+      "description": "Cinatra design-system alert / callout.",
+      "files": [{ "path": "src/components/ui/alert.tsx", "type": "registry:ui" }],
+      "dependencies": ["class-variance-authority"],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "label",
+      "type": "registry:ui",
+      "title": "Label",
+      "description": "Cinatra design-system label.",
+      "files": [{ "path": "src/components/ui/label.tsx", "type": "registry:ui" }],
+      "dependencies": ["radix-ui"],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "separator",
+      "type": "registry:ui",
+      "title": "Separator",
+      "description": "Cinatra design-system separator.",
+      "files": [{ "path": "src/components/ui/separator.tsx", "type": "registry:ui" }],
+      "dependencies": ["radix-ui"],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "input",
+      "type": "registry:ui",
+      "title": "Input",
+      "description": "Cinatra design-system input.",
+      "files": [{ "path": "src/components/ui/input.tsx", "type": "registry:ui" }],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "textarea",
+      "type": "registry:ui",
+      "title": "Textarea",
+      "description": "Cinatra design-system textarea.",
+      "files": [{ "path": "src/components/ui/textarea.tsx", "type": "registry:ui" }],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "field",
+      "type": "registry:ui",
+      "title": "Field",
+      "description": "Cinatra design-system form Field / FieldGroup / FieldLabel.",
+      "files": [{ "path": "src/components/ui/field.tsx", "type": "registry:ui" }],
+      "dependencies": ["class-variance-authority"],
+      "registryDependencies": ["utils", "label", "separator"]
+    },
+    {
+      "name": "input-group",
+      "type": "registry:ui",
+      "title": "Input Group",
+      "description": "Cinatra design-system InputGroup / InputGroupInput / InputGroupAddon.",
+      "files": [{ "path": "src/components/ui/input-group.tsx", "type": "registry:ui" }],
+      "dependencies": ["class-variance-authority"],
+      "registryDependencies": ["utils", "button", "input", "textarea"]
+    },
+    {
+      "name": "card",
+      "type": "registry:ui",
+      "title": "Card",
+      "description": "Cinatra design-system Card / CardHeader / CardContent / CardFooter.",
+      "files": [{ "path": "src/components/ui/card.tsx", "type": "registry:ui" }],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "badge",
+      "type": "registry:ui",
+      "title": "Badge",
+      "description": "Cinatra design-system badge.",
+      "files": [{ "path": "src/components/ui/badge.tsx", "type": "registry:ui" }],
+      "dependencies": ["class-variance-authority", "radix-ui"],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "table",
+      "type": "registry:ui",
+      "title": "Table",
+      "description": "Cinatra design-system Table primitives.",
+      "files": [{ "path": "src/components/ui/table.tsx", "type": "registry:ui" }],
+      "registryDependencies": ["utils"]
+    },
+    {
+      "name": "pagination",
+      "type": "registry:ui",
+      "title": "Pagination",
+      "description": "Cinatra design-system Pagination controls.",
+      "files": [{ "path": "src/components/ui/pagination.tsx", "type": "registry:ui" }],
+      "dependencies": ["lucide-react"],
+      "registryDependencies": ["utils", "button"]
+    },
+    {
+      "name": "paginated-table",
+      "type": "registry:ui",
+      "title": "Paginated Table",
+      "description": "Cinatra design-system table-with-pagination composite.",
+      "files": [{ "path": "src/components/ui/paginated-table.tsx", "type": "registry:ui" }],
+      "registryDependencies": ["utils", "pagination", "table"]
+    }
+  ]
+}

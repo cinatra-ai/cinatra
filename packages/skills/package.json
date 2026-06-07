@@ -1,0 +1,43 @@
+{
+  "name": "@cinatra-ai/skills",
+  "description": "Skills catalog for the Cinatra platform — create, persist, install, resolve, and match agent SKILL.md files.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.mjs",
+    "./extension-handler": "./src/extension-handler.ts",
+    "./llm-matching/constants": "./src/llm-matching/constants.ts",
+    "./llm-matching/types": "./src/llm-matching/types.ts"
+  },
+  "files": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.mjs",
+    "src/llm-matching/prompt.md"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.6"
+  },
+  "dependencies": {
+    "@cinatra-ai/extension-types": "workspace:*",
+    "@cinatra-ai/llm": "workspace:*",
+    "@cinatra-ai/mcp-client": "workspace:*",
+    "@cinatra-ai/mcp-server": "workspace:*",
+    "@cinatra-ai/openai-connector": "workspace:*",
+    "@cinatra-ai/registries": "workspace:*",
+    "fflate": "^0.8.3",
+    "gpt-tokenizer": "^3.4.0",
+    "next": "16.2.6",
+    "octokit": "^5.0.5",
+    "pg": "^8.20.0",
+    "react": "19.2.6",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  }
+}

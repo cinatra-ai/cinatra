@@ -1,0 +1,8 @@
+UNLICENSED — Proprietary
+
+Copyright (c) Cinatra. All rights reserved.
+
+This package is proprietary and is NOT licensed for redistribution, modification,
+or use outside the terms agreed with the copyright holder. No license, express or
+implied, is granted by publication of this package. The authoritative license
+declaration is the `license` field of this package's package.json ("UNLICENSED").

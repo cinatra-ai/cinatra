@@ -1,0 +1,21 @@
+{
+  "name": "@cinatra-ai/connectors",
+  "description": "The /connectors index grid: a scope-aware, filterable server-rendered surface aggregating installed connector cards.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cinatra-ai/anthropic-connector": "workspace:*",
+    "@cinatra-ai/apify-connector": "workspace:*",
+    "@cinatra-ai/apollo-connector": "workspace:*",
+    "@cinatra-ai/connectors-catalog": "workspace:*",
+    "@cinatra-ai/gemini-connector": "workspace:*",
+    "@cinatra-ai/gmail-connector": "workspace:*",
+    "@cinatra-ai/google-calendar-connector": "workspace:*",
+    "@cinatra-ai/google-oauth-connection": "workspace:*",
+    "@cinatra-ai/mcp-client-registry-connector": "workspace:*",
+    "@cinatra-ai/nango-connector": "workspace:*",
+    "@cinatra-ai/openai-connector": "workspace:*"
+  }
+}

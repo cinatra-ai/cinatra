@@ -1,0 +1,22 @@
+{
+  "name": "@cinatra-ai/marketplace-application-reconcile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reconcile worker that re-drives recovery for Cinatra Marketplace vendor applications stuck in the applied state.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/reconcile-worker.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cinatra-ai/marketplace-mcp-client": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0"
+  }
+}

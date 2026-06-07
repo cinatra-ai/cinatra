@@ -1,0 +1,20 @@
+/* Cinatra Design — combined entry.
+ *
+ * Imports tokens, theme, utilities, and fonts in the correct order for a
+ * Next.js + Tailwind v4 consumer.
+ *
+ * Consumer usage (in a single globals.css):
+ *   @import "tailwindcss";
+ *   @import "@cinatra-ai/design/index.css";
+ *
+ * The `index.css` is convenience — granular imports remain available:
+ *   @import "@cinatra-ai/design/tokens.css";
+ *   @import "@cinatra-ai/design/theme.css";
+ *   @import "@cinatra-ai/design/utilities.css";
+ *   @import "@cinatra-ai/design/fonts.css";
+ */
+
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./theme.css";
+@import "./utilities.css";

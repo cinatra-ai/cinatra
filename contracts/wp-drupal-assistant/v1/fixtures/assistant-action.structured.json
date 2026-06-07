@@ -1,0 +1,6 @@
+{
+  "changes": [
+    { "field": "title", "before": "My Post", "after": "My Refreshed Post" }
+  ],
+  "postId": "42"
+}

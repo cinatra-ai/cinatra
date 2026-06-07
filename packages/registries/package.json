@@ -1,0 +1,16 @@
+{
+  "name": "@cinatra-ai/registries",
+  "description": "Registry client and dependency-resolution toolkit for installing Cinatra extension packages with lockfiles and integrity checks.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "pacote": "^21.5.0",
+    "semver": "7.8.0",
+    "zod": "^4.4.3"
+  }
+}

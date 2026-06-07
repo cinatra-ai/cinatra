@@ -1,0 +1,127 @@
+# WordPress/Drupal assistant Playwright UAT gate.
+#
+# - Path-filtered HARD gate on PRs: when contract / plugin-integration paths are
+#   touched, the full UAT suite must pass; otherwise the gate passes quickly.
+#   The `uat-gate` job ALWAYS runs so it is a stable required status check.
+# - Nightly cron runs the full suite regardless of touched paths.
+# - The `override-wp-drupal-uat` label skips the hard run (planned migrations);
+#   it additionally requires both owners' review + an auditable PR-body rationale
+#   (enforced by review process / CONTRIBUTING; recorded here in the job log).
+#
+# RUNNER REQUIREMENT: the full UAT needs Docker (WP/Drupal + app services) + the
+# read-only deploy key (secret WP_DRUPAL_UAT_DEPLOY_KEY) to clone the private
+# extracted repos. Set the `WP_DRUPAL_UAT_RUNNER` repo variable to a provisioned
+# (self-hosted) runner label if ubuntu-latest cannot host the stack. When the
+# credential is absent on a contract-path PR the gate FAILS loud (not a silent
+# skip) unless the override label is present. After the public flip the clone is
+# anonymous (HTTPS) and the key requirement falls away.
+
+name: WP/Drupal UAT Gate
+
+on:
+  pull_request:
+    # Draft PRs skip the real UAT (green-stub via run_real); ready_for_review runs
+    # it for real; converted_to_draft lets concurrency cancel an in-flight run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  schedule:
+    - cron: "0 7 * * *" # nightly full suite (07:00 UTC)
+
+permissions:
+  contents: read
+  pull-requests: read # dorny/paths-filter queries the PR's changed files via the API
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changed-paths:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+      # run_real = run the real UAT: relevant paths touched AND not a draft PR.
+      # (changed-paths only runs on pull_request, so draft is defined here.)
+      run_real: ${{ steps.filter.outputs.relevant == 'true' && github.event.pull_request.draft != true }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'contracts/wp-drupal-assistant/**'
+              - 'src/app/api/wordpress/**'
+              - 'src/app/api/drupal/**'
+              - 'src/lib/wordpress-mcp-connection.ts'
+              - 'src/lib/dev-auto-setup.ts'
+              - 'packages/llm/src/scripted-test-provider.ts'
+              - 'tests/e2e/wp-drupal-uat/**'
+              - 'tests/e2e/config/wp-drupal-uat.config.ts'
+              - 'tests/e2e/config/base.ts'
+              - 'dev/wordpress-plugin/**'
+              - 'dev/drupal-module/**'
+
+  # Stable required status check — always runs on PRs, branches internally.
+  uat-gate:
+    if: github.event_name == 'pull_request'
+    needs: changed-paths
+    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    steps:
+      - name: Override label present → skip with audit note
+        if: contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        run: |
+          echo "::notice::override-wp-drupal-uat label present — UAT hard gate skipped."
+          echo "Requires both owners' review + a PR-body rationale (what breaks, follow-up PRs, rollback). See docs/developer/contributing.md."
+      - name: No contract paths touched (or draft) → gate passes quickly
+        if: >-
+          needs.changed-paths.outputs.run_real != 'true'
+          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        run: echo "No WP/Drupal contract paths touched, or draft PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
+      - name: Require the UAT clone credential
+        id: cred
+        if: >-
+          needs.changed-paths.outputs.run_real == 'true'
+          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        env:
+          WP_DRUPAL_UAT_DEPLOY_KEY: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
+        run: |
+          set -e
+          if [ -z "${WP_DRUPAL_UAT_DEPLOY_KEY}" ]; then
+            echo "::error::WP/Drupal UAT credential (secret WP_DRUPAL_UAT_DEPLOY_KEY) is not configured."
+            echo "Contract/plugin paths were touched, so the live UAT is required. Either:"
+            echo "  - configure the read-only deploy key + WP_DRUPAL_UAT_RUNNER (a Docker-capable runner), or"
+            echo "  - add the 'override-wp-drupal-uat' label (both-owners review + PR-body rationale)."
+            exit 1
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - name: Checkout
+        if: steps.cred.outputs.run == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Run full UAT suite
+        if: steps.cred.outputs.run == 'true'
+        uses: ./.github/actions/wp-drupal-uat-run
+        with:
+          deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
+
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 50
+    steps:
+      - name: Require the UAT clone credential
+        env:
+          WP_DRUPAL_UAT_DEPLOY_KEY: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
+        run: |
+          set -e
+          if [ -z "${WP_DRUPAL_UAT_DEPLOY_KEY}" ]; then
+            echo "::error::Nightly WP/Drupal UAT cannot run — WP_DRUPAL_UAT_DEPLOY_KEY not configured. Failures route to both owners."
+            exit 1
+          fi
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Run full UAT suite
+        uses: ./.github/actions/wp-drupal-uat-run
+        with:
+          deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}

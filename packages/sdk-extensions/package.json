@@ -1,0 +1,66 @@
+{
+  "name": "@cinatra-ai/sdk-extensions",
+  "version": "0.1.0",
+  "description": "Cinatra extension SDK — the frozen author-facing ABI: the register(ctx) host-port surface (ExtensionHostContext), the extension manifest + dependency contracts, and the loader/registry types. The only first-party code dependency a Cinatra extension may have (alongside @cinatra-ai/sdk-ui).",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./host-context": "./src/host-context.ts",
+    "./email-contract": "./src/email-connector-contract.ts",
+    "./register": "./src/register.ts",
+    "./registries": "./src/registries.ts",
+    "./manifest": "./src/manifest.ts",
+    "./dependencies": "./src/dependencies.ts",
+    "./social-contract": "./src/social-media-connector-contract.ts",
+    "./blog-contract": "./src/blog-connector-contract.ts",
+    "./mcp-contract": "./src/mcp-connector-contract.ts",
+    "./artifact-contract": "./src/artifact-contract.ts",
+    "./objects-contract": "./src/objects-contract.ts",
+    "./objects-provider": "./src/objects-provider-contract.ts"
+  },
+  "files": [
+    "src/**/*.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cinatra",
+    "extensions",
+    "sdk",
+    "abi",
+    "register-ctx"
+  ],
+  "scripts": {
+    "test": "vitest"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "next": "^16.0.0",
+    "zod": "^4.0.0",
+    "@cinatra-ai/sdk-ui": "workspace:*",
+    "@cinatra-ai/sdk-dashboard": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    },
+    "@cinatra-ai/sdk-ui": {
+      "optional": true
+    },
+    "@cinatra-ai/sdk-dashboard": {
+      "optional": true
+    }
+  },
+  "cinatra": {
+    "sdkAbiVersion": "2.2.0"
+  }
+}

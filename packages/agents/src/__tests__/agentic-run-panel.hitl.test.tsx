@@ -1,0 +1,216 @@
+// @vitest-environment jsdom
+/**
+ * AgenticRunPanel presentation-first HITL branch.
+ *
+ * Verifies:
+ *   (1) when interruptContext.values.presentation is a PresentationHint, the
+ *       HITL bubble renders via <DispatchRenderer hint={...} mode="edit" />
+ *       instead of the per-xRenderer fieldRendererRegistry path.
+ *   (2) the Approve/Reject button row is rendered EXACTLY ONCE in the
+ *       presentation branch — the shared approvalActionsRow fragment is not
+ *       duplicated between sub-branches.
+ *   (3) when presentation is absent, the registry-resolved renderer continues
+ *       to render (regression guard).
+ *
+ *    cd packages/agent-builder && pnpm vitest run src/__tests__/agentic-run-panel.hitl.test.tsx
+ */
+import React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+
+// ---------------------------------------------------------------------------
+// Dependency mocks — the real modules touch DB / server / sdk-ui that jsdom
+// does not resolve. Mirror the grouped-setup-form-renderer.test.tsx pattern.
+// ---------------------------------------------------------------------------
+
+vi.mock("@cinatra-ai/sdk-ui", () => ({
+  LoadingSpinner: () => null,
+}));
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+// lucide-react: stub the specific icons transitively imported by result
+// renderers (ExternalLink from CardListRenderer + TableRenderer). Returning
+// a module-namespace object (not a Proxy) avoids a vitest mock-hoist crash
+// ("Cannot create proxy with a non-object as target or handler").
+vi.mock("lucide-react", () => {
+  const StubIcon = () => null;
+  return {
+    ArrowRight: StubIcon,
+    ChevronDown: StubIcon,
+    ClipboardList: StubIcon,
+    ExternalLink: StubIcon,
+    Loader2: StubIcon,
+    // Fallback default — guards against the renderer expecting a default export.
+    default: StubIcon,
+  };
+});
+
+vi.mock("../hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => undefined),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
+vi.mock("../a2a-actions", () => ({
+  getAgentBuilderTask: vi.fn(async () => null),
+}));
+vi.mock("../server-actions", () => ({
+  getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({
+    connectedApps: [],
+    gmailAliases: [],
+    runId: "run-1",
+  })),
+  getAuditAvailabilityAction: vi.fn(async () => ({
+    visible: false,
+    promptCount: 0,
+    skillCount: 0,
+  })),
+  getSkillsForAgentAction: vi.fn(async () => []),
+}));
+vi.mock("../agent-ui-override-registry", () => ({
+  agentUIOverrideRegistry: { resolve: () => null },
+}));
+
+// Shape the hook returns — match AgUiRunStreamResult exactly.
+const hookResultWithPresentation = {
+  status: "pending_approval",
+  error: null,
+  presentationHint: null,
+  isLive: true,
+  interruptContext: {
+    schema: { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+    xRenderer: "@cinatra-ai/email-drafting-agent:output",
+    values: {
+      presentation: {
+        type: "card_list",
+        title: "Review drafts",
+        items: [{ title: "Draft A — Subject", description: "Body A..." }],
+      },
+    },
+    reviewTaskId: "lg-run-1",
+  },
+  streamedText: "",
+};
+
+const hookResultWithoutPresentation = {
+  status: "pending_approval",
+  error: null,
+  presentationHint: null,
+  isLive: true,
+  interruptContext: {
+    schema: { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
+    xRenderer: "@cinatra-ai/email-recipient-selection-agent:output",
+    values: { campaignId: "c1", recipients: [] },
+    reviewTaskId: "lg-run-2",
+  },
+  streamedText: "",
+};
+
+// The hook mock is re-exported per-test; vi.mocked lets us swap return values.
+vi.mock("../use-ag-ui-run-stream", () => ({
+  useAgUiRunStream: vi.fn(() => hookResultWithPresentation),
+}));
+
+// Polling path uses getAgentBuilderTask — return null (no taskSnapshot) so the
+// panel relies entirely on the SSE hook's interruptContext for rendering.
+
+beforeEach(() => {
+  cleanup();
+});
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("AgenticRunPanel HITL presentation branch", () => {
+  it("renders DispatchRenderer when interruptContext.values.presentation is set (card_list)", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      hookResultWithPresentation,
+    );
+
+    render(
+      <AgenticRunPanel
+        runId="run-1"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+      />,
+    );
+
+    // DispatchRenderer → CardListRenderer renders the card title as text.
+    // "Review drafts" is the hint.title; "Draft A — Subject" is items[0].title.
+    // The presentation branch must render before the registry fallback
+    // consumes the xRenderer.
+    // Use findAllByText (async) to accommodate any render-after-effect.
+    const titles = await screen.findAllByText(/Draft A — Subject|Review drafts/);
+    expect(titles.length).toBeGreaterThan(0);
+  });
+
+  it("renders EXACTLY ONE Approve button and ONE Reject button in the presentation branch", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      hookResultWithPresentation,
+    );
+
+    render(
+      <AgenticRunPanel
+        runId="run-1"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+      />,
+    );
+
+    // The shared approvalActionsRow fragment is rendered in the presentation
+    // branch. If the JSX is duplicated between the presentation and registry
+    // branches, both would render, producing multiple buttons. This test locks
+    // in "exactly one".
+    // The HITL presentation branch renders a single unified "Continue" button
+    // (idle: "Continue", pending: "Continuing…"). The "exactly one" invariant
+    // locks in one Continue button instead of separate approve/reject buttons.
+    const continues = await screen.findAllByText(/^Continue$|^Continuing…$/);
+    expect(continues.length).toBe(1);
+  });
+
+  it("falls back to registry path when presentation is absent (regression)", async () => {
+    // Registry fallback renders "Waiting for input — no renderer configured
+    // for this step." when no renderer is configured.
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      hookResultWithoutPresentation,
+    );
+
+    render(
+      <AgenticRunPanel
+        runId="run-1"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+      />,
+    );
+
+    // When presentation is absent, the registry-fallback renderer OR the
+    // "Waiting for input — no renderer configured for this step." fallback
+    // is displayed. Either outcome MUST be reached WITHOUT DispatchRenderer
+    // firing. Because the registry may or may not have a recipients renderer
+    // wired in the test environment, we assert on the HITL bubble header.
+    // jest-dom is not installed in this workspace, so `toBeInTheDocument` is
+    // unavailable — `findByText` throws when the node is absent, so a
+    // non-null assertion is sufficient to prove the element rendered.
+    // Registry-fallback branch copy.
+    const fallbackHeading = await screen.findByText(/Waiting for input/i);
+    expect(fallbackHeading).not.toBeNull();
+    // The DispatchRenderer card title "Review drafts" MUST NOT appear.
+    expect(screen.queryByText(/Review drafts/)).toBeNull();
+  });
+});

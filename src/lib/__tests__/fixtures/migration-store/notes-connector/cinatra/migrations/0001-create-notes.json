@@ -1,0 +1,21 @@
+{
+  "ops": [
+    {
+      "op": "createTable",
+      "table": "ext_cinatra_ai_notes_connector_notes",
+      "columns": [
+        { "name": "org_id", "type": "text", "notNull": true },
+        { "name": "id", "type": "text", "notNull": true },
+        { "name": "title", "type": "text" },
+        { "name": "done", "type": "boolean", "default": false }
+      ],
+      "primaryKey": ["id"]
+    },
+    {
+      "op": "addIndex",
+      "table": "ext_cinatra_ai_notes_connector_notes",
+      "name": "ext_cinatra_ai_notes_connector_notes_org_idx",
+      "columns": ["org_id"]
+    }
+  ]
+}

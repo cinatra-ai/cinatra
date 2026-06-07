@@ -1,0 +1,52 @@
+{
+  "note": "Extension import-ban no-new-rot baseline. `hostInternal`/`crossExtension` = CURRENT @/ or cross-extension coupling tolerated until the decoupling sweep removes it. `sdkOnly` = CURRENT non-SDK first-party/sibling-vendor code coupling (deps + source imports incl. `import type`) tolerated until the connector sweep migrates each onto `ctx`; the canonical rule is SDK-packages-only. Regenerate with `node scripts/audit/extension-import-ban.mjs --write-baseline` (every dimension should only ever SHRINK). The `--strict-sdk-only` flip makes `sdkOnly` zero-tolerance. anthropic-connector is un-exempt and scanned like every other connector.",
+  "hostInternal": {
+    "@cinatra-ai/crm-connector": [
+      "@/lib/auth-session",
+      "@/lib/background-jobs"
+    ],
+    "@cinatra-ai/drupal-assistant-connector": [
+      "@/lib/drupal-mcp-connection",
+      "@/lib/drupal-widget-auth"
+    ],
+    "@cinatra-ai/drupal-mcp-connector": [
+      "@/lib/drupal-api",
+      "@/lib/drupal-mcp-connection"
+    ],
+    "@cinatra-ai/github-connector": [
+      "@/lib/github-api"
+    ],
+    "@cinatra-ai/gmail-connector": [
+      "@/lib/database"
+    ],
+    "@cinatra-ai/linkedin-connector": [
+      "@/lib/linkedin-api"
+    ],
+    "@cinatra-ai/mcp-client-registry-connector": [
+      "@/lib/better-auth-db"
+    ],
+    "@cinatra-ai/media-feeds-connector": [
+      "@/lib/youtube-api"
+    ],
+    "@cinatra-ai/nango-connector": [
+      "@/lib/database",
+      "@/lib/github-api",
+      "@/lib/linkedin-api",
+      "@/lib/wordpress-api"
+    ],
+    "@cinatra-ai/twenty-connector": [
+      "@/lib/external-mcp-registry",
+      "@/lib/external-mcp/twenty-execute-tool-proxy"
+    ],
+    "@cinatra-ai/wordpress-assistant-connector": [
+      "@/lib/wordpress-api",
+      "@/lib/wordpress-mcp-connection",
+      "@/lib/wordpress-widget-auth"
+    ],
+    "@cinatra-ai/wordpress-mcp-connector": [
+      "@/lib/wordpress-api"
+    ]
+  },
+  "crossExtension": {},
+  "sdkOnly": {}
+}

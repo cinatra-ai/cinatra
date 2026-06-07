@@ -1,0 +1,1256 @@
+{
+  "generatedBy": "scripts/build-authz-inventory.mjs",
+  "note": "DO NOT EDIT BY HAND. Re-run `pnpm authz:inventory`. Classification lives in src/lib/authz/inventory-augment.ts.",
+  "primitives": [
+    {
+      "primitiveName": "agent_compile",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 10
+    },
+    {
+      "primitiveName": "agent_creation_request_decide",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 586
+    },
+    {
+      "primitiveName": "agent_creation_request_edit",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 556
+    },
+    {
+      "primitiveName": "agent_creation_request_get",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 582
+    },
+    {
+      "primitiveName": "agent_creation_request_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 570
+    },
+    {
+      "primitiveName": "agent_creation_request_propose",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 537
+    },
+    {
+      "primitiveName": "agent_creation_request_retry_publish",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 602
+    },
+    {
+      "primitiveName": "agent_delete",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 157
+    },
+    {
+      "primitiveName": "agent_export",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 187
+    },
+    {
+      "primitiveName": "agent_get",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 51
+    },
+    {
+      "primitiveName": "agent_import",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 193
+    },
+    {
+      "primitiveName": "agent_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 41
+    },
+    {
+      "primitiveName": "agent_registry_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 208
+    },
+    {
+      "primitiveName": "agent_registry_publish",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 200
+    },
+    {
+      "primitiveName": "agent_run",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 32
+    },
+    {
+      "primitiveName": "agent_run_get",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 57
+    },
+    {
+      "primitiveName": "agent_run_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 63
+    },
+    {
+      "primitiveName": "agent_run_messages_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 135
+    },
+    {
+      "primitiveName": "agent_run_move_with_outputs",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 108
+    },
+    {
+      "primitiveName": "agent_run_resume",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 127
+    },
+    {
+      "primitiveName": "agent_run_stop",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 142
+    },
+    {
+      "primitiveName": "agent_run_trigger_delete",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 530
+    },
+    {
+      "primitiveName": "agent_run_trigger_get",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 524
+    },
+    {
+      "primitiveName": "agent_run_trigger_set",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 492
+    },
+    {
+      "primitiveName": "agent_run_update",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 84
+    },
+    {
+      "primitiveName": "agent_runs_stop",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 148
+    },
+    {
+      "primitiveName": "agent_save",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 18
+    },
+    {
+      "primitiveName": "agent_source_compile",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 354
+    },
+    {
+      "primitiveName": "agent_source_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 251
+    },
+    {
+      "primitiveName": "agent_source_publish",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 365
+    },
+    {
+      "primitiveName": "agent_source_read",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 256
+    },
+    {
+      "primitiveName": "agent_source_review",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 457
+    },
+    {
+      "primitiveName": "agent_source_validate",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 336
+    },
+    {
+      "primitiveName": "agent_source_write",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 267
+    },
+    {
+      "primitiveName": "agent_source_write_files",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 299
+    },
+    {
+      "primitiveName": "agent_template_duplicate",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 163
+    },
+    {
+      "primitiveName": "agent_update",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 170
+    },
+    {
+      "primitiveName": "agent_version_diff",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 222
+    },
+    {
+      "primitiveName": "agent_version_get",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 230
+    },
+    {
+      "primitiveName": "agent_version_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 236
+    },
+    {
+      "primitiveName": "agent_version_rollback",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 244
+    },
+    {
+      "primitiveName": "agents_list",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 615
+    },
+    {
+      "primitiveName": "apollo_administration_get",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 10
+    },
+    {
+      "primitiveName": "apollo_administration_logging",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 14
+    },
+    {
+      "primitiveName": "apollo_jobs_execution_run",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 26
+    },
+    {
+      "primitiveName": "apollo_jobs_optimization_run",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 30
+    },
+    {
+      "primitiveName": "apollo_people_search",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "apollo_status",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 5
+    },
+    {
+      "primitiveName": "apollo_validate",
+      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
+      "line": 18
+    },
+    {
+      "primitiveName": "artifact_assertion_get",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 299
+    },
+    {
+      "primitiveName": "artifact_assertion_list",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 284
+    },
+    {
+      "primitiveName": "artifact_authoring_chain_get",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 479
+    },
+    {
+      "primitiveName": "artifact_authoring_emit",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 431
+    },
+    {
+      "primitiveName": "artifact_extension_get",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 412
+    },
+    {
+      "primitiveName": "artifact_extension_search",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 395
+    },
+    {
+      "primitiveName": "artifact_representation_get",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 340
+    },
+    {
+      "primitiveName": "artifact_representation_latest",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 370
+    },
+    {
+      "primitiveName": "artifact_representation_list",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 322
+    },
+    {
+      "primitiveName": "artifacts_get",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 245
+    },
+    {
+      "primitiveName": "artifacts_list",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 217
+    },
+    {
+      "primitiveName": "artifacts_tombstone",
+      "file": "src/lib/artifacts/mcp.ts",
+      "line": 257
+    },
+    {
+      "primitiveName": "blog_connector_list",
+      "file": "extensions/cinatra-ai/blog-connector/src/mcp/module.ts",
+      "line": 28
+    },
+    {
+      "primitiveName": "blog_image_generate_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 59
+    },
+    {
+      "primitiveName": "blog_image_generate_start",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 55
+    },
+    {
+      "primitiveName": "blog_media_image_save",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 100
+    },
+    {
+      "primitiveName": "blog_media_list",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 104
+    },
+    {
+      "primitiveName": "blog_personal_skill_create",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 108
+    },
+    {
+      "primitiveName": "blog_post_generate_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 46
+    },
+    {
+      "primitiveName": "blog_post_generate_start",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 42
+    },
+    {
+      "primitiveName": "blog_post_ideas_generate_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 38
+    },
+    {
+      "primitiveName": "blog_post_ideas_generate_start",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 34
+    },
+    {
+      "primitiveName": "blog_post_publish_linkedin_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 83
+    },
+    {
+      "primitiveName": "blog_post_publish_linkedin_publish",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 92
+    },
+    {
+      "primitiveName": "blog_post_publish_linkedin_publish_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 96
+    },
+    {
+      "primitiveName": "blog_post_publish_linkedin_start",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 79
+    },
+    {
+      "primitiveName": "blog_post_publish_linkedin_update",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 87
+    },
+    {
+      "primitiveName": "blog_post_publish_wordpress_cancel",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 67
+    },
+    {
+      "primitiveName": "blog_post_publish_wordpress_delete",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 71
+    },
+    {
+      "primitiveName": "blog_post_publish_wordpress_start",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 63
+    },
+    {
+      "primitiveName": "blog_post_publish_wordpress_status",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 75
+    },
+    {
+      "primitiveName": "blog_post_update",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 50
+    },
+    {
+      "primitiveName": "blog_project_create",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 30
+    },
+    {
+      "primitiveName": "blog_project_get",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 26
+    },
+    {
+      "primitiveName": "blog_project_list",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 21
+    },
+    {
+      "primitiveName": "blog_transcripts_list",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 112
+    },
+    {
+      "primitiveName": "blog_wordpress_content_convert",
+      "file": "src/lib/blog/mcp/registry.ts",
+      "line": 116
+    },
+    {
+      "primitiveName": "change_set_eligibility_get",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 70
+    },
+    {
+      "primitiveName": "change_set_get",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 55
+    },
+    {
+      "primitiveName": "change_set_list",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 60
+    },
+    {
+      "primitiveName": "change_set_undo",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 45
+    },
+    {
+      "primitiveName": "chat_mentions_poll",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 58
+    },
+    {
+      "primitiveName": "chat_thread_get",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 24
+    },
+    {
+      "primitiveName": "chat_thread_list",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 11
+    },
+    {
+      "primitiveName": "chat_thread_send",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 30
+    },
+    {
+      "primitiveName": "chat_thread_update",
+      "file": "packages/chat/src/mcp/registry.ts",
+      "line": 47
+    },
+    {
+      "primitiveName": "context_list_eligible_assertions",
+      "file": "src/lib/artifacts/context-mcp.ts",
+      "line": 264
+    },
+    {
+      "primitiveName": "context_resolve",
+      "file": "src/lib/artifacts/context-mcp.ts",
+      "line": 242
+    },
+    {
+      "primitiveName": "crm_account_create",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 417
+    },
+    {
+      "primitiveName": "crm_account_get",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 408
+    },
+    {
+      "primitiveName": "crm_account_search",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 399
+    },
+    {
+      "primitiveName": "crm_account_update",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 430
+    },
+    {
+      "primitiveName": "crm_contact_create",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 361
+    },
+    {
+      "primitiveName": "crm_contact_find_by_email",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 388
+    },
+    {
+      "primitiveName": "crm_contact_get",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 352
+    },
+    {
+      "primitiveName": "crm_contact_search",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 343
+    },
+    {
+      "primitiveName": "crm_contact_update",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 375
+    },
+    {
+      "primitiveName": "crm_list_create",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 463
+    },
+    {
+      "primitiveName": "crm_list_get",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 454
+    },
+    {
+      "primitiveName": "crm_list_member_add",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 481
+    },
+    {
+      "primitiveName": "crm_list_member_remove",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 493
+    },
+    {
+      "primitiveName": "crm_list_members_get",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 472
+    },
+    {
+      "primitiveName": "crm_list_search",
+      "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
+      "line": 445
+    },
+    {
+      "primitiveName": "dashboards_archive",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 49
+    },
+    {
+      "primitiveName": "dashboards_create",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 34
+    },
+    {
+      "primitiveName": "dashboards_cube_chart",
+      "file": "packages/dashboards/src/mcp-cubes/registry.ts",
+      "line": 48
+    },
+    {
+      "primitiveName": "dashboards_cube_discover",
+      "file": "packages/dashboards/src/mcp-cubes/registry.ts",
+      "line": 35
+    },
+    {
+      "primitiveName": "dashboards_cube_load",
+      "file": "packages/dashboards/src/mcp-cubes/registry.ts",
+      "line": 44
+    },
+    {
+      "primitiveName": "dashboards_cube_validate",
+      "file": "packages/dashboards/src/mcp-cubes/registry.ts",
+      "line": 40
+    },
+    {
+      "primitiveName": "dashboards_get",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 28
+    },
+    {
+      "primitiveName": "dashboards_list",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 23
+    },
+    {
+      "primitiveName": "dashboards_publish",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 44
+    },
+    {
+      "primitiveName": "dashboards_update",
+      "file": "packages/dashboards/src/mcp/registry.ts",
+      "line": 39
+    },
+    {
+      "primitiveName": "drupal_content_editor_run",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 53
+    },
+    {
+      "primitiveName": "drupal_instances_list",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 23
+    },
+    {
+      "primitiveName": "drupal_node_create_draft_revision",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 38
+    },
+    {
+      "primitiveName": "drupal_node_get",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 28
+    },
+    {
+      "primitiveName": "drupal_node_list",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 43
+    },
+    {
+      "primitiveName": "drupal_node_publish",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 48
+    },
+    {
+      "primitiveName": "drupal_node_update",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 33
+    },
+    {
+      "primitiveName": "drupal_status",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 17
+    },
+    {
+      "primitiveName": "email_send",
+      "file": "extensions/cinatra-ai/email-connector/src/mcp/module.ts",
+      "line": 59
+    },
+    {
+      "primitiveName": "extensions_archive",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 38
+    },
+    {
+      "primitiveName": "extensions_force_delete",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 48
+    },
+    {
+      "primitiveName": "extensions_install",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "extensions_purge",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 58
+    },
+    {
+      "primitiveName": "extensions_purge_execute",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 65
+    },
+    {
+      "primitiveName": "extensions_registry_delete",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 76
+    },
+    {
+      "primitiveName": "extensions_registry_unpublish",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 71
+    },
+    {
+      "primitiveName": "extensions_restore",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 43
+    },
+    {
+      "primitiveName": "extensions_search",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 16
+    },
+    {
+      "primitiveName": "extensions_uninstall",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 32
+    },
+    {
+      "primitiveName": "extensions_update",
+      "file": "packages/extensions/src/mcp/registry.ts",
+      "line": 27
+    },
+    {
+      "primitiveName": "freshness_check_for_change_set",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 80
+    },
+    {
+      "primitiveName": "gmail_aliases_list",
+      "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
+      "line": 10
+    },
+    {
+      "primitiveName": "gmail_aliases_refresh",
+      "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
+      "line": 14
+    },
+    {
+      "primitiveName": "gmail_email_find_reply",
+      "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "gmail_email_send",
+      "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
+      "line": 18
+    },
+    {
+      "primitiveName": "gmail_status",
+      "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
+      "line": 5
+    },
+    {
+      "primitiveName": "google_calendar_appointments_list",
+      "file": "extensions/cinatra-ai/google-calendar-connector/src/mcp/registry.ts",
+      "line": 5
+    },
+    {
+      "primitiveName": "linkedin_accounts_list",
+      "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
+      "line": 17
+    },
+    {
+      "primitiveName": "linkedin_destinations_list",
+      "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
+      "line": 21
+    },
+    {
+      "primitiveName": "linkedin_post_publish",
+      "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
+      "line": 25
+    },
+    {
+      "primitiveName": "linkedin_status",
+      "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
+      "line": 12
+    },
+    {
+      "primitiveName": "media_feed_podcast_list",
+      "file": "extensions/cinatra-ai/media-feeds-connector/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "media_feed_youtube_list",
+      "file": "extensions/cinatra-ai/media-feeds-connector/src/mcp/registry.ts",
+      "line": 16
+    },
+    {
+      "primitiveName": "metric_cost_budget_get",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "metric_cost_by_agent",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 14
+    },
+    {
+      "primitiveName": "metric_cost_by_provider",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 10
+    },
+    {
+      "primitiveName": "metric_cost_recent_events",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 18
+    },
+    {
+      "primitiveName": "metric_cost_summary",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 5
+    },
+    {
+      "primitiveName": "metric_cost_timeseries",
+      "file": "packages/metric-cost-api/src/mcp/registry.ts",
+      "line": 26
+    },
+    {
+      "primitiveName": "metric_usage_events",
+      "file": "packages/metric-usage-api/src/mcp/registry.ts",
+      "line": 5
+    },
+    {
+      "primitiveName": "metric_usage_summary",
+      "file": "packages/metric-usage-api/src/mcp/registry.ts",
+      "line": 10
+    },
+    {
+      "primitiveName": "object_history_list",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 65
+    },
+    {
+      "primitiveName": "object_version_restore",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 50
+    },
+    {
+      "primitiveName": "objects_classify",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 30
+    },
+    {
+      "primitiveName": "objects_delete",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 26
+    },
+    {
+      "primitiveName": "objects_get",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 18
+    },
+    {
+      "primitiveName": "objects_list",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 14
+    },
+    {
+      "primitiveName": "objects_save",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 8
+    },
+    {
+      "primitiveName": "objects_type_register",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 39
+    },
+    {
+      "primitiveName": "objects_types_list",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 35
+    },
+    {
+      "primitiveName": "objects_update",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "permissions_invitations_cancel",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 33
+    },
+    {
+      "primitiveName": "permissions_members_invite",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 16
+    },
+    {
+      "primitiveName": "permissions_members_remove",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 25
+    },
+    {
+      "primitiveName": "permissions_members_update_role",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 21
+    },
+    {
+      "primitiveName": "permissions_users_update_platform_role",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 29
+    },
+    {
+      "primitiveName": "project_access_check",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 120
+    },
+    {
+      "primitiveName": "project_access_grant",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 105
+    },
+    {
+      "primitiveName": "project_access_list",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 115
+    },
+    {
+      "primitiveName": "project_access_revoke",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 110
+    },
+    {
+      "primitiveName": "project_agent_template_bindings_create",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 127
+    },
+    {
+      "primitiveName": "project_agent_template_bindings_delete",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 137
+    },
+    {
+      "primitiveName": "project_agent_template_bindings_list",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 142
+    },
+    {
+      "primitiveName": "project_agent_template_bindings_update",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 132
+    },
+    {
+      "primitiveName": "projects_archive",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 93
+    },
+    {
+      "primitiveName": "projects_create",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 81
+    },
+    {
+      "primitiveName": "projects_get",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 71
+    },
+    {
+      "primitiveName": "projects_list",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 76
+    },
+    {
+      "primitiveName": "projects_unarchive",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 98
+    },
+    {
+      "primitiveName": "projects_update",
+      "file": "packages/projects/src/mcp/registry.ts",
+      "line": 85
+    },
+    {
+      "primitiveName": "remote_effect_attempt_retry",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 90
+    },
+    {
+      "primitiveName": "remote_effect_attempts_list_for_change_set",
+      "file": "packages/objects/src/mcp/registry.ts",
+      "line": 85
+    },
+    {
+      "primitiveName": "role_grant_grant",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 38
+    },
+    {
+      "primitiveName": "role_grant_list",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 46
+    },
+    {
+      "primitiveName": "role_grant_revoke",
+      "file": "packages/permissions/src/mcp/registry.ts",
+      "line": 42
+    },
+    {
+      "primitiveName": "skills_catalog_list",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 26
+    },
+    {
+      "primitiveName": "skills_installed_get",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 67
+    },
+    {
+      "primitiveName": "skills_installed_list",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 71
+    },
+    {
+      "primitiveName": "skills_installed_resolve_for_agent",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 79
+    },
+    {
+      "primitiveName": "skills_installed_upsert",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 87
+    },
+    {
+      "primitiveName": "skills_library_list",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 63
+    },
+    {
+      "primitiveName": "skills_match_batch_run_now",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 100
+    },
+    {
+      "primitiveName": "skills_match_evaluate_pair",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 104
+    },
+    {
+      "primitiveName": "skills_match_schedule_get",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 92
+    },
+    {
+      "primitiveName": "skills_match_schedule_set",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 96
+    },
+    {
+      "primitiveName": "skills_matches_refresh",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 75
+    },
+    {
+      "primitiveName": "skills_packages_install_from_github",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 55
+    },
+    {
+      "primitiveName": "skills_packages_list",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 51
+    },
+    {
+      "primitiveName": "skills_packages_uninstall",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 59
+    },
+    {
+      "primitiveName": "skills_personal_delete",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 47
+    },
+    {
+      "primitiveName": "skills_personal_get",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 39
+    },
+    {
+      "primitiveName": "skills_personal_list",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 31
+    },
+    {
+      "primitiveName": "skills_personal_list_for_agent",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 35
+    },
+    {
+      "primitiveName": "skills_personal_skill_create_or_update",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 83
+    },
+    {
+      "primitiveName": "skills_personal_upsert",
+      "file": "packages/skills/src/mcp/registry.ts",
+      "line": 43
+    },
+    {
+      "primitiveName": "social_media_publish",
+      "file": "extensions/cinatra-ai/social-media-connector/src/mcp/module.ts",
+      "line": 47
+    },
+    {
+      "primitiveName": "trigger_config_delete",
+      "file": "packages/trigger/src/mcp/registry.ts",
+      "line": 43
+    },
+    {
+      "primitiveName": "trigger_config_get",
+      "file": "packages/trigger/src/mcp/registry.ts",
+      "line": 31
+    },
+    {
+      "primitiveName": "trigger_config_set",
+      "file": "packages/trigger/src/mcp/registry.ts",
+      "line": 37
+    },
+    {
+      "primitiveName": "twenty_instances_list",
+      "file": "extensions/cinatra-ai/twenty-connector/src/mcp/module.ts",
+      "line": 33
+    },
+    {
+      "primitiveName": "twenty_status",
+      "file": "extensions/cinatra-ai/twenty-connector/src/mcp/module.ts",
+      "line": 22
+    },
+    {
+      "primitiveName": "wordpress_content_editor_run",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 63
+    },
+    {
+      "primitiveName": "wordpress_instances_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 19
+    },
+    {
+      "primitiveName": "wordpress_media_upload",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 35
+    },
+    {
+      "primitiveName": "wordpress_post_create_draft",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 23
+    },
+    {
+      "primitiveName": "wordpress_post_delete",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 31
+    },
+    {
+      "primitiveName": "wordpress_post_get",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 49
+    },
+    {
+      "primitiveName": "wordpress_post_get_latest",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 44
+    },
+    {
+      "primitiveName": "wordpress_post_status",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 27
+    },
+    {
+      "primitiveName": "wordpress_post_update",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 58
+    },
+    {
+      "primitiveName": "wordpress_post_update_meta",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 53
+    },
+    {
+      "primitiveName": "wordpress_posts_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 39
+    },
+    {
+      "primitiveName": "wordpress_status",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 14
+    },
+    {
+      "primitiveName": "workflow_artifacts_list",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 80
+    },
+    {
+      "primitiveName": "workflow_cascade_preview",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 85
+    },
+    {
+      "primitiveName": "workflow_copy",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 90
+    },
+    {
+      "primitiveName": "workflow_draft_create",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 38
+    },
+    {
+      "primitiveName": "workflow_draft_get",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 53
+    },
+    {
+      "primitiveName": "workflow_draft_list",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 57
+    },
+    {
+      "primitiveName": "workflow_draft_update",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 43
+    },
+    {
+      "primitiveName": "workflow_preview",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 66
+    },
+    {
+      "primitiveName": "workflow_save_as_template",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 99
+    },
+    {
+      "primitiveName": "workflow_status_get",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 71
+    },
+    {
+      "primitiveName": "workflow_status_list",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 76
+    },
+    {
+      "primitiveName": "workflow_template_get",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 19
+    },
+    {
+      "primitiveName": "workflow_template_instantiate",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 24
+    },
+    {
+      "primitiveName": "workflow_template_list",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 13
+    },
+    {
+      "primitiveName": "workflow_validate",
+      "file": "packages/workflows/src/mcp/schemas.ts",
+      "line": 61
+    }
+  ]
+}

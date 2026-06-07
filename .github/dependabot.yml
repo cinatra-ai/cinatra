@@ -1,0 +1,25 @@
+# Dependabot — keep SHA-pinned GitHub Actions fresh.
+#
+# Every remote `uses:` in .github/workflows/** is pinned to an immutable 40-char
+# commit SHA with a `# vX.Y.Z` comment (supply-chain hardening). Dependabot's
+# `github-actions` ecosystem understands that SHA+comment shape and bumps BOTH
+# the SHA and the version comment together — so pins stay current without manual
+# SHA chasing, and the actions-pinned-gate keeps them from rotting back to tags.
+#
+# Scope is the `github-actions` ecosystem ONLY (no npm/docker co-mingling), and
+# all action bumps land in ONE grouped weekly PR rather than one-PR-per-action.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"

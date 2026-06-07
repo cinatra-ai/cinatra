@@ -1,0 +1,30 @@
+# Publish this extension to the Cinatra Marketplace on a GitHub Release.
+#
+# Thin caller: a published GitHub Release whose tag is `v<package.json
+# .version>` builds + submits this extension through the marketplace MCP proxy
+# (extension-submit-for-review → approve → promotion saga → registry.cinatra.ai),
+# NEVER a direct Verdaccio publish. All build/pack/gate/submit logic lives in the
+# central reusable workflow; this file just wires the trigger + grants the
+# provenance permissions + inherits the org submit secret.
+#
+# Dormant until the org infra exists (the cinatra-ai/.github reusable workflow +
+# the CINATRA_MARKETPLACE_VENDOR_TOKEN org secret). Pre-release tags are skipped
+# by the reusable workflow; the tag==version check is enforced there too.
+name: release
+
+on:
+  release:
+    types: [published]
+  # Manual backfill: the reusable workflow REFUSES a dispatch unless it is run
+  # against a TAG ref equal to v<package.json.version> (a branch HEAD can never
+  # publish). Run it from the tag, e.g. `gh workflow run release.yml --ref v1.2.3`.
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    permissions:
+      contents: read
+      id-token: write       # build-provenance attestation
+      attestations: write
+    uses: cinatra-ai/.github/.github/workflows/reusable-extension-release.yml@main
+    secrets: inherit

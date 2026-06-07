@@ -1,0 +1,764 @@
+@import "@daveyplate/better-auth-ui/css";
+@import "../../node_modules/katex/dist/katex.min.css";
+@import "../../node_modules/tailwindcss/theme.css" layer(theme);
+@import "../../node_modules/tailwindcss/preflight.css" layer(base);
+@import "../../node_modules/tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --cinatra-red: #a6384f;
+  --background: #f1f1ed;
+  --foreground: #15213a;
+  --surface: #f7f7f3;
+  --surface-strong: #ffffff;
+  --surface-muted: #e8e8e3;
+  /* Toolbar ground (design-system.html §Toolbar) — aliased to
+     --surface-muted; isolated semantic so a future toolbar tone can
+     diverge without touching every surface-muted call site. */
+  --toolbar: var(--surface-muted);
+  --muted: #5a6477;
+  /* Accent is canonical desaturated indigo. */
+  --accent: #364e81;
+  --accent-soft: #e6ede7;
+  /* Hairlines are navy at low alpha, never grey. */
+  --line: rgba(21, 33, 58, 0.14);
+  --line-strong: #15213a;
+  /* Fabric stripe tokens for the seersucker zebra treatment. */
+  --stripe-mid: #b8c4d4;
+  --stripe-light: #e3e8ee;
+  --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.07);
+  --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.08);
+
+  /* shadcn/ui sidebar tokens */
+  --sidebar: #eceeea;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--surface-muted);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--accent);
+
+  /* App radius scale */
+  --r-card: 1rem;
+  --r-panel: 0.875rem;
+  --r-control: 0.625rem;
+  --r-chip: 0.5rem;
+
+  /* shadcn/ui compatibility tokens — mapped from cinatra design tokens */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-strong);
+  --popover-foreground: var(--foreground);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: #ffffff;
+  /* Status palette uses restrained accent colors: sea-green, mustard, and indigo. */
+  --success: #3f6e6b;
+  --success-foreground: #ffffff;
+  --warning: #c79545;
+  --warning-foreground: #15213a;
+  --info: #364e81;
+  --info-foreground: #ffffff;
+  /* Dedicated brand mustard for page-title display and wordmark on light
+     surfaces. Shares the hex value of --warning but stays separate so status
+     semantics are not hijacked by brand chrome. Consumed through the @theme
+     inline binding below as `text-brand-mustard`. */
+  --brand-mustard: #c79545;
+  --border: var(--line);
+  /* Input chrome carries the strong navy line, not the low-alpha hairline.
+     Cascades through every shadcn primitive that uses `border-input`
+     (Input / Textarea / Select trigger / InputGroup). */
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --radius: 0.625rem;
+
+  /* shadcn/ui accent-foreground + chart tokens.
+     Chart palette uses the spec accent palette in this order, mapped from
+     --chart-1..5 to indigo, sea-green, mustard, burgundy, and red. */
+  --accent-foreground: var(--foreground);
+  --chart-1: #364e81;
+  --chart-2: #3f6e6b;
+  --chart-3: #c79545;
+  --chart-4: #7a2e3a;
+  --chart-5: #a6384f;
+}
+
+/* =====================================================================
+   CINATRA THEME — warm paper + muted indigo + Geist / Archivo
+   Activates when <html class="cinatra"> (managed by next-themes)
+   ===================================================================== */
+.cinatra {
+  /* Core surfaces */
+  --cinatra-red: #a6384f;
+  --background: #f1f1ed;
+  --foreground: #15213a;
+  --surface: #f7f7f3;
+  --surface-strong: #ffffff;
+  --surface-muted: #e8e8e3;
+  /* Toolbar ground (design-system.html §Toolbar) — aliased to
+     --surface-muted. */
+  --toolbar: var(--surface-muted);
+  --muted: #5a6477;
+  /* Accent is canonical desaturated indigo. */
+  --accent: #364e81;
+  --accent-soft: #e6ede7;
+  --logo-color: #7a2e3a;
+  /* Hairlines are navy at low alpha; line-strong is full navy. */
+  --line: rgba(21, 33, 58, 0.14);
+  --line-strong: #15213a;
+  /* Fabric stripe for the seersucker zebra treatment. */
+  --stripe-mid: #b8c4d4;
+  --stripe-light: #e3e8ee;
+  --cinatra-shadow-soft: 0 1px 0 rgba(21, 23, 28, 0.04), 0 1px 2px rgba(21, 23, 28, 0.05);
+  --cinatra-shadow-strong: 0 2px 0 rgba(21, 23, 28, 0.04), 0 10px 24px -8px rgba(21, 23, 28, 0.12);
+
+  /* shadcn/ui compatibility */
+  --card: var(--surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--surface-strong);
+  --popover-foreground: var(--foreground);
+  /* Primary tracks the spec indigo. */
+  --primary: #364e81;
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-muted);
+  --secondary-foreground: var(--foreground);
+  --muted-foreground: var(--muted);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: #ffffff;
+  /* Status palette uses the spec accent colors. */
+  --success: #3f6e6b;
+  --success-foreground: #ffffff;
+  --warning: #c79545;
+  --warning-foreground: #15213a;
+  --info: #364e81;
+  --info-foreground: #ffffff;
+  /* Dedicated brand mustard token for page-title display and wordmark on light
+     surfaces; same hex as --warning but separate so brand chrome does not
+     hijack status semantics. Bound to text-brand-mustard via @theme inline
+     below. */
+  --brand-mustard: #c79545;
+  --border: var(--line);
+  /* Input chrome carries the strong navy line, not the low-alpha hairline.
+     Cascades through every shadcn primitive that uses `border-input`
+     (Input / Textarea / Select trigger / InputGroup). */
+  --input: var(--line-strong);
+  --ring: var(--accent);
+  --radius: 0.5rem;
+
+  /* Sidebar */
+  --sidebar: #eceeea;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--line);
+  --sidebar-muted: var(--muted);
+  --sidebar-accent: rgba(54, 78, 129, 0.06);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-ring: var(--accent);
+
+  /* Chart palette tracks the spec accents. */
+  --chart-1: #364e81;
+  --chart-2: #3f6e6b;
+  --chart-3: #c79545;
+  --chart-4: #7a2e3a;
+  --chart-5: #a6384f;
+}
+
+/* Body font */
+.cinatra body {
+  font-family: var(--font-sans);
+}
+
+/* Heading font.
+   h1 is intentionally excluded: PageHeader's h1 className owns page-title
+   typography end-to-end (Archivo italic 800 38px), and the global font-family
+   rule would otherwise win on specificity (0,1,1) over the utility class
+   chain. h2 and h3 continue to inherit Archivo via this rule. */
+.cinatra h2,
+.cinatra h3 {
+  font-family: var(--font-archivo), var(--font-geist), ui-sans-serif, sans-serif;
+}
+
+/* Section kicker — flat terminal label, no pill */
+.cinatra .section-kicker {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Soft panel */
+.cinatra .soft-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+/* Ink button — canonical desaturated indigo (--primary). */
+.cinatra .ink-button {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--cinatra-shadow-soft);
+}
+.cinatra .ink-button:hover {
+  /* 10% darker indigo on hover — derived from --primary via color-mix so a
+     future palette change cascades without touching this rule. */
+  background: color-mix(in srgb, var(--primary) 88%, black);
+  color: var(--primary-foreground);
+}
+
+/* Etched paired-line section divider.
+   Used for major page-section dividers and dialog headers. Apply via
+   `.divider-etched` (utility) or `<Separator data-major>` (component).
+   The `.divider-etched-after` variant paints the same paired-line as an
+   `::after` pseudo-element for Dialog / AlertDialog headers where a child
+   Separator would force API changes across call sites. */
+.divider-etched-after::after {
+  content: "";
+  display: block;
+  height: 7px;
+  margin-top: 1rem;
+  background:
+    linear-gradient(to bottom,
+      var(--line-strong) 0,
+      var(--line-strong) 1px,
+      transparent 1px,
+      transparent 6px,
+      var(--line-strong) 6px,
+      var(--line-strong) 7px);
+}
+.divider-etched {
+  border: 0;
+  height: 7px;
+  background:
+    linear-gradient(to bottom,
+      var(--line-strong) 0,
+      var(--line-strong) 1px,
+      transparent 1px,
+      transparent 6px,
+      var(--line-strong) 6px,
+      var(--line-strong) 7px);
+  background-repeat: no-repeat;
+}
+
+/* Liner-notes utility.
+   Liner-notes prose uses 2-column flow, a burgundy italic-800 drop-cap,
+   and JetBrains Mono first-line small-caps. Use for run summaries and
+   campaign retrospective prose; never for body chrome. Falls back gracefully
+   when the container is too narrow for 2 columns. */
+.liner-notes {
+  column-count: 2;
+  column-gap: 2rem;
+  column-rule: 1px solid var(--line-strong);
+  font-size: 0.78125rem; /* 12.5px */
+  line-height: 1.55;
+  color: var(--foreground);
+}
+.liner-notes > p {
+  break-inside: avoid;
+  margin: 0 0 0.85em 0;
+}
+.liner-notes > p:first-of-type::first-letter {
+  /* Burgundy italic-800 drop-cap, 34px */
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-style: italic;
+  color: var(--logo-color);
+  float: left;
+  font-size: 2.125rem; /* 34px per spec */
+  line-height: 0.85;
+  padding: 0.05em 0.12em 0 0;
+  margin: 0.02em 0.04em 0 0;
+}
+.liner-notes > p:first-of-type::first-line {
+  /* JetBrains Mono first-line small-caps */
+  font-family: var(--font-mono);
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 0.9em;
+}
+@media (max-width: 480px) {
+  .liner-notes {
+    column-count: 1;
+  }
+}
+
+/* Outline buttons (button or asChild link) — white instead of page background */
+.cinatra .bg-background[data-slot="button"],
+.cinatra [data-slot="button"].bg-background {
+  background: var(--surface-strong);
+}
+.cinatra .bg-background[data-slot="button"]:hover,
+.cinatra [data-slot="button"].bg-background:hover {
+  background: var(--surface-muted);
+}
+
+/* Badge */
+.cinatra .badge {
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  color: var(--foreground);
+  box-shadow: none;
+}
+
+/* Inputs — white surface, remove inner highlight.
+   Inputs/textareas inside an InputGroup are excluded; the InputGroup wrapper
+   owns one continuous surface across the addon and the input instead. */
+.cinatra input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([data-slot="input-group-control"]),
+.cinatra select,
+.cinatra textarea:not([data-slot="input-group-control"]),
+.cinatra [data-slot="input-group"],
+.cinatra [data-slot="select-trigger"] {
+  background: var(--surface-strong);
+  box-shadow: none;
+}
+
+/* Sidebar header logo + wordmark — burgundy brand mark */
+.cinatra [data-slot="sidebar-header"] a {
+  color: var(--logo-color);
+}
+
+/* Sidebar brand wordmark */
+.cinatra .sidebar-brand {
+  font-family: var(--font-archivo), sans-serif;
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.dark {
+  --cinatra-red: #a6384f;
+  --background: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.984 0.003 247.858);
+  --surface: oklch(0.165 0.04 259);
+  --surface-strong: oklch(0.21 0.04 259);
+  --surface-muted: oklch(0.279 0.041 260.031);
+  --toolbar: var(--surface-muted);
+  --muted: oklch(0.704 0.04 256.788);
+  --accent: oklch(0.929 0.013 255.508);
+  --accent-soft: oklch(0.279 0.041 260.031);
+  --line: oklch(1 0 0 / 10%);
+  /* Dark mode overrides --input back to the subtle hairline. The full navy
+     line used for light-mode input chrome is invisible against dark
+     surfaces, so dark controls keep the softer border. */
+  --input: var(--line);
+  --cinatra-shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --cinatra-shadow-strong: 0 4px 8px rgba(0, 0, 0, 0.5);
+
+  /* Sidebar dark mode — must override :root values which are light (#eceeea) */
+  --sidebar: oklch(0.16 0.04 264);
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-accent: oklch(0.22 0.04 260);
+  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: oklch(0.929 0.013 255.508);
+  --sidebar-primary-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-ring: oklch(0.929 0.013 255.508);
+
+  /* shadcn/ui dark overrides */
+  --r-card: 1rem;
+  --r-panel: 0.875rem;
+  --r-control: 0.625rem;
+  --r-chip: 0.5rem;
+  --radius: 0.625rem;
+  --primary-foreground: oklch(0.208 0.042 265.755);
+  --secondary-foreground: var(--foreground);
+  --accent-foreground: var(--foreground);
+  --destructive: var(--cinatra-red);
+  --destructive-foreground: oklch(0.984 0.003 247.858);
+  --success: oklch(0.65 0.20 145);
+  --success-foreground: oklch(0.984 0.003 247.858);
+  --warning: oklch(0.72 0.16 75); /* hue 75 (vs 55 in light): warmer amber reads better on dark surfaces */
+  --warning-foreground: oklch(0.984 0.003 247.858);
+  --info: oklch(0.66 0.15 240);
+  --info-foreground: oklch(0.984 0.003 247.858);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+}
+
+@theme inline {
+  /* Cinatra design tokens */
+  --color-cinatra-red: var(--cinatra-red);
+  --color-red: var(--cinatra-red);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-strong: var(--surface-strong);
+  --color-surface-muted: var(--surface-muted);
+  --color-toolbar: var(--toolbar);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent-soft: var(--accent-soft);
+  /* Fabric stripe utility tokens. */
+  --color-stripe-mid: var(--stripe-mid);
+  --color-stripe-light: var(--stripe-light);
+
+  /* shadcn/ui semantic tokens — use these in new components */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  /* bg-muted → light surface (shadcn semantics; no existing code used this) */
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--muted-foreground);
+  /* bg-accent → soft hover tint (shadcn semantics; no existing code used this) */
+  --color-accent: var(--accent-soft);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  /* Brand mustard utility: text-brand-mustard / bg-brand-mustard /
+     border-brand-mustard. Separate from --warning so page-title display and
+     wordmark do not collide with status semantics. */
+  --color-brand-mustard: var(--brand-mustard);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* ink/primary shorthand for cinatra's dark action color */
+  --color-ink: var(--accent);
+  --color-ink-foreground: #ffffff;
+
+  /* shadcn/ui sidebar Tailwind utilities */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* App radius utilities — respond to theme overrides */
+  --radius-card: var(--r-card);
+  --radius-panel: var(--r-panel);
+  --radius-control: var(--r-control);
+  --radius-chip: var(--r-chip);
+
+  /* Tailwind shadow utilities exposed via the `shadow-soft` / `shadow-strong`
+     classes for ExtensionCard hover states and popovers. The runtime cascade
+     value lives in `--cinatra-shadow-*`; @theme inline resolves the var()
+     reference at compile time so the utility tracks the surrounding cascade
+     at runtime. */
+  --shadow-soft: var(--cinatra-shadow-soft);
+  --shadow-strong: var(--cinatra-shadow-strong);
+
+  /* Radius scale */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Typography lanes.
+     --font-sans: Inter for body text.
+     --font-display: Archivo for headlines, wordmark, drop-caps, brand mark,
+       and italic 800 numeric accents. Applies via `font-display` utility class.
+     --font-mono: JetBrains Mono for microcopy, IDs, table headers, and
+       timestamps. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "SFMono-Regular", "IBM Plex Mono", "Menlo", monospace;
+
+  /* Body text scale — change --text-sm to shift the entire app */
+  --text-sm: 0.875rem; /* 14px — body baseline (shadcn default) */
+  --text-base: 1rem; /* 16px — card heading baseline, restores 2px gap over text-sm */
+
+  /* Chart color utilities */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+  background-image: none;
+}
+
+/* Collapsible slide animation — required by shadcn-admin's NavGroup */
+.CollapsibleContent {
+  overflow: hidden;
+}
+.CollapsibleContent[data-state='open'] {
+  animation: slideDown 300ms ease-out;
+}
+.CollapsibleContent[data-state='closed'] {
+  animation: slideUp 300ms ease-out;
+}
+@keyframes slideDown {
+  from { height: 0; }
+  to { height: var(--radix-collapsible-content-height); }
+}
+@keyframes slideUp {
+  from { height: var(--radix-collapsible-content-height); }
+  to { height: 0; }
+}
+
+/* Slack mode transition — activates once when isSlackMode becomes true for the first time in the current session. */
+@keyframes slackModeSlideLeft {
+  from { transform: translateX(48px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes slackModeAvatarFadeIn {
+  from { opacity: 0; transform: scale(0.7); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes slackModeNameFadeIn {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Pausing-in-progress echo ring — single outgoing pulse around the leading-slot Pause glyph
+   in SpinnerCard while a pause request is in flight or settling. */
+@keyframes pauseEcho {
+  0%   { transform: scale(0.9); opacity: 0.7; }
+  80%  { transform: scale(2.0); opacity: 0;   }
+  100% { transform: scale(2.0); opacity: 0;   }
+}
+
+/* BrandMark sparkle rhythm. Single canonical definition; component instances
+   do not need a per-instance <style> block. 4s cycle, 10% duty (≈400ms
+   visible per spark), nine sparkles staggered with irregular delays so peak
+   overlap stays at 1–2 sparkles and reads as a quiet flicker. */
+@keyframes bm-spark {
+  0%, 85%, 100% { opacity: 0; transform: scale(0.6); }
+  5%            { opacity: 1; transform: scale(1.2); }
+  15%           { opacity: 0; transform: scale(0.6); }
+}
+.bm-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: bm-spark 4s ease-in-out infinite;
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bm-spark {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+@layer utilities {
+  .animate-slack-slide-left     { animation: slackModeSlideLeft 700ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .animate-slack-avatar-fade-in { animation: slackModeAvatarFadeIn 500ms cubic-bezier(0.22, 1, 0.36, 1) 100ms both; }
+  .animate-slack-name-fade-in   { animation: slackModeNameFadeIn 500ms cubic-bezier(0.22, 1, 0.36, 1) 150ms both; }
+  .animate-pause-echo           { animation: pauseEcho 1200ms ease-out infinite; }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  html {
+    overflow-x: hidden;
+  }
+
+  /* Override Radix scroll locking for sticky headers.
+     react-remove-scroll also injects margin-right/padding-right to compensate
+     for the scrollbar it thinks it removed — null those out too. */
+  body[data-scroll-locked] {
+    overflow: unset !important;
+    margin-right: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /* Cursor pointer for buttons */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* Prevent focus zoom on mobile devices */
+  @media screen and (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+/* Utility classes from shadcn-admin */
+@utility no-scrollbar {
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  &::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@utility faded-bottom {
+  @apply after:pointer-events-none after:absolute after:start-0 after:bottom-0 after:hidden after:h-32 after:w-full after:rounded-b-2xl after:bg-[linear-gradient(180deg,transparent_10%,var(--background)_70%)] md:after:block;
+}
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 2rem;
+}
+
+::selection {
+  background: rgba(15, 23, 42, 0.14);
+}
+
+.dark ::selection {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.grid-glow {
+  position: relative;
+}
+
+.badge {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.84);
+  color: #4a5567;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.dark .badge {
+  border: 1px solid oklch(1 0 0 / 10%);
+  background: oklch(0.22 0.04 260);
+  color: oklch(0.84 0.03 255);
+  box-shadow: none;
+}
+
+.section-kicker {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 9999px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.84);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #556070;
+}
+
+.soft-panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.app-main {
+  max-width: 1400px;
+}
+
+.ink-button {
+  background: #17191f;
+  color: white;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16);
+}
+
+.ink-button:hover {
+  background: #232833;
+  color: white;
+}
+
+input:not([data-slot="input-group-control"]),
+select,
+textarea:not([data-slot="input-group-control"]) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* InputGroup wrapper owns the Nova top-highlight so the addon + input read as
+   one cell. Without this, the inner <input>'s inset highlight would land on
+   top of the wrapper's gray border and visually "eat" the top edge. */
+[data-slot="input-group"] {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+/* Dark mode: drop the Nova glass highlight — a bright white line at the top
+   of a dark control reads as a defect rather than a gloss. Mirrors the .badge
+   light/dark pattern. */
+.dark input:not([data-slot="input-group-control"]),
+.dark select,
+.dark textarea:not([data-slot="input-group-control"]),
+.dark [data-slot="input-group"] {
+  box-shadow: none;
+}
+
+/* Hide the placeholder while the field is focused so it doesn't fight with
+   the user's cursor. It returns on blur when the field is empty (native
+   placeholder behavior). Fade for a calmer transition. */
+input::placeholder,
+textarea::placeholder {
+  transition: color 120ms ease-out, opacity 120ms ease-out;
+}
+input:focus::placeholder,
+textarea:focus::placeholder {
+  color: transparent;
+}
+
+/* Chat fenced code blocks — shiki injects its own <pre> without layout classes;
+   this rule normalises both the sync cache-hit and the async-hydrated paths. */
+.chat-code-block pre {
+  padding: 1rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* All dialog overlays (including better-auth-ui) start below the sticky navbar */
+[data-slot="dialog-overlay"] {
+  top: 4rem;
+}
+
+/* When the impersonation banner is active, push the fixed sidebar container
+   below it. The fixed element is data-slot="sidebar-container". */
+[data-slot="sidebar-container"] {
+  top: var(--banner-height, 0px) !important;
+  height: calc(100svh - var(--banner-height, 0px)) !important;
+}
+
+
+/* SVAR Gantt — all SVAR-scoped override rules now live in the single home
+   `src/components/workflows/gantt-overrides.css`, imported by
+   `workflow-gantt-section.tsx`. The token-consistency gate
+   (`scripts/audit/gantt-css-tokens.mjs`) keys off that file being the single
+   home — do NOT reintroduce SVAR-scoped overrides into this file. */

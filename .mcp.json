@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cinatra": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://localhost:3000/api/mcp"
+      ]
+    }
+  }
+}

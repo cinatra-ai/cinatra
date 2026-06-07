@@ -1,0 +1,47 @@
+storage: /verdaccio/storage
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+
+# Operational minimum for the extension lifecycle contract:
+#   - immutable-on-publish: no caller (authenticated or otherwise) can yank
+#     or delete a published version. Both `unpublish` and `proxy` actions
+#     require a permission no real user holds (the literal 'nobody' group).
+#   - no-yank-through-lifecycle: the canonical lifecycle primitive
+#     (transitionExtensionLifecycle) NEVER calls the Verdaccio yank/delete
+#     endpoints; this config provides defense-in-depth.
+#   - default retention: keep forever.
+#   - single-instance: mirror/replica/multi-site explicitly out of scope.
+#
+# Owner override path (intentional escape hatch — emergency only): edit this
+# file in-place AND record an audit event before redeploying the registry.
+packages:
+  '@cinatra/*-agent':
+    access: $all
+    publish: $authenticated
+    unpublish: nobody
+    proxy: npmjs
+  '@*/*':
+    access: $all
+    publish: $authenticated
+    unpublish: nobody
+    proxy: npmjs
+  '**':
+    access: $all
+    publish: $authenticated
+    unpublish: nobody
+    proxy: npmjs
+
+middlewares:
+  audit:
+    enabled: true
+
+log:
+  type: stdout
+  format: pretty
+  level: http

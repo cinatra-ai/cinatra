@@ -1,0 +1,12 @@
+{
+  "name": "@cinatra-ai/google-oauth-connection",
+  "description": "Server-only Google OAuth runtime facade: settings, status, Nango token refresh, and authenticated Google API fetch.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@cinatra-ai/sdk-extensions": "workspace:*"
+  }
+}

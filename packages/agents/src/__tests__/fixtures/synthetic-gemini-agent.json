@@ -1,0 +1,145 @@
+{
+  "agentspec_version": "26.1.0",
+  "component_type": "Flow",
+  "id": "synthetic-gemini-agent-flow",
+  "name": "Synthetic Gemini Agent",
+  "description": "Hermetic OAS fixture. Declares metadata.cinatra.llm with preferredProvider=gemini + preferredModel=gemini-2.5-flash + capabilityRequired=media_input, one ApiNode targeting /api/llm-bridge, one EndNode. Used by telemetry assertions without coupling to media-transcript-agent readiness.",
+  "metadata": {
+    "cinatra": {
+      "type": "node",
+      "hitlScreens": [],
+      "llm": {
+        "preferredProvider": "gemini",
+        "preferredModel": "gemini-2.5-flash",
+        "capabilityRequired": "media_input"
+      }
+    }
+  },
+  "inputs": [
+    {
+      "title": "user",
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "title": "text",
+      "type": "string"
+    }
+  ],
+  "start_node": {
+    "$component_ref": "start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "start"
+    },
+    {
+      "$component_ref": "call_llm_bridge"
+    },
+    {
+      "$component_ref": "end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "start_to_call_llm_bridge",
+      "from_node": {
+        "$component_ref": "start"
+      },
+      "to_node": {
+        "$component_ref": "call_llm_bridge"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "name": "call_llm_bridge_to_end",
+      "from_node": {
+        "$component_ref": "call_llm_bridge"
+      },
+      "to_node": {
+        "$component_ref": "end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "name": "start_user_to_call_user",
+      "source_node": {
+        "$component_ref": "start"
+      },
+      "source_output": "user",
+      "destination_node": {
+        "$component_ref": "call_llm_bridge"
+      },
+      "destination_input": "user"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "name": "call_text_to_end_text",
+      "source_node": {
+        "$component_ref": "call_llm_bridge"
+      },
+      "source_output": "text",
+      "destination_node": {
+        "$component_ref": "end"
+      },
+      "destination_input": "text"
+    }
+  ],
+  "$referenced_components": {
+    "start": {
+      "component_type": "StartNode",
+      "id": "start",
+      "name": "Start",
+      "inputs": [
+        {
+          "title": "user",
+          "type": "string"
+        }
+      ]
+    },
+    "call_llm_bridge": {
+      "component_type": "ApiNode",
+      "id": "call_llm_bridge",
+      "name": "Call /api/llm-bridge",
+      "url": "{{CINATRA_BASE_URL}}/api/llm-bridge",
+      "http_method": "POST",
+      "data": {
+        "system": "You are a synthetic Gemini agent used for telemetry tests.",
+        "user": "{{ user }}",
+        "agent_id": "synthetic-gemini-agent",
+        "cinatra_llm": {
+          "preferredProvider": "gemini",
+          "preferredModel": "gemini-2.5-flash",
+          "capabilityRequired": "media_input"
+        }
+      },
+      "inputs": [
+        {
+          "title": "user",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "title": "text",
+          "type": "string"
+        }
+      ]
+    },
+    "end": {
+      "component_type": "EndNode",
+      "id": "end",
+      "name": "End",
+      "outputs": [
+        {
+          "title": "text",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "note": "True-IoC discovery-dispatcher bypass baseline. Each file directly references a native discovery reader (GATED_SYMBOLS) instead of routing through discoverActiveExtensionCapabilities. Tolerated until migrated; the set may only ever SHRINK. Regenerate with `node scripts/audit/discovery-dispatcher-bypass-ban.mjs --write-baseline`. The reader definition/barrel + the per-kind handler facet are allowlisted (sanctioned), not baseline.",
+  "gatedSymbols": [
+    "readActiveExtensionTemplates"
+  ],
+  "files": [
+    "packages/extensions/src/screens/extensions-marketplace-screen.tsx"
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "name": "@cinatra-ai/agents",
+  "description": "Core Cinatra agent package: template/version/run lifecycle, workflow compilation, triggers, orchestration, registry publish/install, and UI.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent-install-path": "./src/agent-install-path.ts",
+    "./extension-handler": "./src/extension-handler.ts",
+    "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
+    "./package-contract": "./src/verdaccio/package-contract.ts",
+    "./auth-policy": "./src/auth-policy.ts",
+    "./store": "./src/store.ts",
+    "./module": "./src/integration/module.ts",
+    "./mcp-handlers": "./src/mcp/handlers.ts",
+    "./screens": "./src/screens.tsx",
+    "./pages": "./src/pages.tsx",
+    "./client-entry": "./src/client-entry.ts",
+    "./cli": "./src/cli/index.ts",
+    "./wayflow-url": "./src/wayflow-url.ts",
+    "./schema": "./src/schema.ts",
+    "./auditor-apply": "./src/auditor-apply.ts",
+    "./db": "./src/db.ts",
+    "./integration/register-object-types": "./src/integration/register-object-types.ts",
+    "./verdaccio/client": "./src/verdaccio/client.ts",
+    "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@cinatra-ai/a2a": "workspace:*",
+    "@cinatra-ai/mcp-client-registry-connector": "workspace:*",
+    "@cinatra-ai/gemini-connector": "workspace:*",
+    "@cinatra-ai/nango-connector": "workspace:*",
+    "@cinatra-ai/extension-types": "workspace:*",
+    "@cinatra-ai/llm": "workspace:*",
+    "@cinatra-ai/metric-usage-api": "workspace:*",
+    "@cinatra-ai/mcp-client": "workspace:*",
+    "@cinatra-ai/mcp-server": "workspace:*",
+    "@cinatra-ai/registries": "workspace:*",
+    "@cinatra-ai/sdk-ui": "workspace:*",
+    "@cinatra-ai/skills": "workspace:*",
+    "cron-parser": "^4.9.0",
+    "cronstrue": "^3.14.0",
+    "diff": "9.0.0",
+    "libnpmpublish": "^11.1.3",
+    "marked": "^18.0.3",
+    "pacote": "^21.5.0",
+    "semver": "7.8.0",
+    "tar": "^7.5.15",
+    "undici": "^8.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "jsdom": "^29.1.1"
+  }
+}

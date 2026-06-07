@@ -1,0 +1,220 @@
+{
+  "edges": {
+    "src/app/api/agents/[agentSlug]/stream/route.ts": [
+      "@cinatra-ai/drupal-mcp-connector",
+      "@cinatra-ai/wordpress-mcp-connector"
+    ],
+    "src/app/api/app/setup-status/route.ts": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/api/chat/runner.ts": [
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/google-calendar-connector"
+    ],
+    "src/app/api/nango/connect/session/route.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/app/api/nango/connections/save/route.ts": [
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/app/api/nango/webhook/route.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/app/api/openai/connection-status/route.ts": [
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/campaigns/actions.ts": [
+      "@cinatra-ai/anthropic-connector",
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/configuration/development/page.tsx": [
+      "@cinatra-ai/tailscale-connector"
+    ],
+    "src/app/configuration/llm/apis-page.tsx": [
+      "@cinatra-ai/anthropic-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/configuration/mcp/llm-access/test/route.ts": [
+      "@cinatra-ai/anthropic-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/configuration/skills/page.tsx": [
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/configuration/telemetry/page.tsx": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/connectors/resend/actions.ts": [
+      "@cinatra-ai/resend-connector"
+    ],
+    "src/app/connectors/resend/page.tsx": [
+      "@cinatra-ai/resend-connector"
+    ],
+    "src/app/connectors/wordpress/page.tsx": [
+      "@cinatra-ai/blog-connector",
+      "@cinatra-ai/nango-connector",
+      "@cinatra-ai/wordpress-mcp-connector"
+    ],
+    "src/app/plugins-registry.tsx": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/openai-connector",
+      "@cinatra-ai/youtube-connector"
+    ],
+    "src/app/setup/ai/page.tsx": [
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/app/setup/connections/page.tsx": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/a2a-dev-auto-connect.ts": [
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/apify-mcp-connection.ts": [
+      "@cinatra-ai/apify-connector",
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/background-jobs.ts": [
+      "@cinatra-ai/crm-connector",
+      "@cinatra-ai/twenty-connector"
+    ],
+    "src/lib/blog-project-store.ts": [
+      "@cinatra-ai/blog-connector"
+    ],
+    "src/lib/blog/generation.ts": [
+      "@cinatra-ai/blog-connector",
+      "@cinatra-ai/social-media-connector"
+    ],
+    "src/lib/blog/index.ts": [
+      "@cinatra-ai/blog-connector"
+    ],
+    "src/lib/blog/mcp/handlers.ts": [
+      "@cinatra-ai/blog-connector"
+    ],
+    "src/lib/blog/wordpress.ts": [
+      "@cinatra-ai/blog-connector"
+    ],
+    "src/lib/connector-setup-pages.ts": [
+      "@cinatra-ai/a2a-server-connector",
+      "@cinatra-ai/anthropic-connector",
+      "@cinatra-ai/apify-connector",
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/drupal-assistant-connector",
+      "@cinatra-ai/drupal-mcp-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/github-connector",
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/google-calendar-connector",
+      "@cinatra-ai/google-oauth-connector",
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/mcp-client-registry-connector",
+      "@cinatra-ai/openai-connector",
+      "@cinatra-ai/tailscale-connector",
+      "@cinatra-ai/twenty-connector",
+      "@cinatra-ai/wordpress-assistant-connector",
+      "@cinatra-ai/wordpress-mcp-connector",
+      "@cinatra-ai/youtube-connector"
+    ],
+    "src/lib/dev-auto-setup.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/drupal-api.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/drupal-mcp-connection.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/email-system.ts": [
+      "@cinatra-ai/email-connector",
+      "@cinatra-ai/gmail-connector"
+    ],
+    "src/lib/host-required-packages.ts": [
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/lib/logging.ts": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/gemini-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/lib/mcp-server.ts": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/blog-connector",
+      "@cinatra-ai/crm-connector",
+      "@cinatra-ai/drupal-mcp-connector",
+      "@cinatra-ai/email-connector",
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/google-calendar-connector",
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/media-feeds-connector",
+      "@cinatra-ai/social-media-connector",
+      "@cinatra-ai/twenty-connector",
+      "@cinatra-ai/wordpress-mcp-connector"
+    ],
+    "src/lib/nango-connect-ui.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/nango-connectors.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/nango-settings-section.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/nango.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/primitive-handlers.ts": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/drupal-mcp-connector",
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/google-calendar-connector",
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/wordpress-mcp-connector"
+    ],
+    "src/lib/register-all-object-types.ts": [
+      "@cinatra-ai/crm-connector"
+    ],
+    "src/lib/register-blog-providers.ts": [
+      "@cinatra-ai/blog-connector"
+    ],
+    "src/lib/register-crm-providers.ts": [
+      "@cinatra-ai/twenty-connector"
+    ],
+    "src/lib/register-email-providers.ts": [
+      "@cinatra-ai/email-connector",
+      "@cinatra-ai/gmail-connector",
+      "@cinatra-ai/resend-connector"
+    ],
+    "src/lib/register-social-providers.ts": [
+      "@cinatra-ai/linkedin-connector",
+      "@cinatra-ai/social-media-connector"
+    ],
+    "src/lib/registry-credentials.ts": [
+      "@cinatra-ai/nango-connector"
+    ],
+    "src/lib/setup-wizard.ts": [
+      "@cinatra-ai/nango-connector",
+      "@cinatra-ai/openai-connector"
+    ],
+    "src/lib/trigger-email-send-use-cases.ts": [
+      "@cinatra-ai/email-connector"
+    ],
+    "src/lib/types.ts": [
+      "@cinatra-ai/email-connector"
+    ],
+    "src/lib/wizard-manifest-registry.ts": [
+      "@cinatra-ai/apollo-connector",
+      "@cinatra-ai/crm-connector"
+    ]
+  },
+  "note": "True-IoC HOST->EXTENSION no-new-rot baseline. Each entry is a CURRENT core(src/)->extension import edge tolerated until the IoC cutover removes it via the runtime-discovery dispatcher. Regenerate with `node scripts/audit/core-extension-import-ban.mjs --write-baseline` (it should only ever SHRINK, except a one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition). src/lib/generated/** is exempt; anthropic-connector is un-exempt and its host->ext edges are seeded here."
+}

@@ -1,0 +1,95 @@
+/* Cinatra Design — canonical utility classes.
+ *
+ * The minimum set of project-specific utility classes that the Cinatra design
+ * system promises to every consumer. NOT a kitchen sink — only the utilities
+ * documented as canonical in the design-system reference at
+ * https://docs.cinatra.ai/references/design/.
+ *
+ * Consumer usage:
+ *   @import "@cinatra-ai/design/tokens.css";
+ *   @import "@cinatra-ai/design/theme.css";
+ *   @import "@cinatra-ai/design/utilities.css";
+ */
+
+/* Soft panel — canonical inner-section card chrome inside <PageContent>.
+   Solid surface, semantic border, semantic radius. The corner radius is
+   `--r-panel` so it nests inside a `--r-card` outer Card. */
+.soft-panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--r-panel);
+}
+
+/* Soft panel — flush variant (no inner padding). Use when the panel hosts a
+   full-bleed children layout (table rows, image grids). */
+.soft-panel-flush {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--r-panel);
+  padding: 0;
+}
+
+/* Section kicker — flat terminal label, no pill. */
+.section-kicker {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Ink button — canonical desaturated indigo (--primary). */
+.ink-button {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--cinatra-shadow-soft);
+}
+.ink-button:hover {
+  /* 10% darker indigo on hover. */
+  background: color-mix(in srgb, var(--primary) 88%, black);
+  color: var(--primary-foreground);
+}
+
+/* Etched paired-line section divider — major page-section divider.
+   Apply via `.divider-etched` (utility) or `<Separator data-major>`
+   (component). The `.divider-etched-after` variant paints the same paired
+   line as an `::after` pseudo-element for Dialog headers where a child
+   Separator would force API changes across call sites. */
+.divider-etched-after::after {
+  content: "";
+  display: block;
+  height: 7px;
+  margin-top: 1rem;
+  background:
+    linear-gradient(to bottom,
+      var(--line-strong) 0,
+      var(--line-strong) 1px,
+      transparent 1px,
+      transparent 6px,
+      var(--line-strong) 6px,
+      var(--line-strong) 7px);
+}
+.divider-etched {
+  border: 0;
+  height: 7px;
+  background:
+    linear-gradient(to bottom,
+      var(--line-strong) 0,
+      var(--line-strong) 1px,
+      transparent 1px,
+      transparent 6px,
+      var(--line-strong) 6px,
+      var(--line-strong) 7px);
+  background-repeat: no-repeat;
+}
+
+/* Radius utilities — semantic shorthands for the radius scale. */
+.rounded-card    { border-radius: var(--r-card); }
+.rounded-panel   { border-radius: var(--r-panel); }
+.rounded-control { border-radius: var(--r-control); }
+.rounded-chip    { border-radius: var(--r-chip); }

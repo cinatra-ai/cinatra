@@ -1,0 +1,20 @@
+{
+  "name": "@cinatra-ai/marketplace-mcp-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed MCP client for calling the Cinatra Marketplace primitives from cinatra-side code (sync worker, integration UI, deep-link consumer). Vendors the TS types from marketplace/packages/marketplace-mcp-contract until that package is publishable to Verdaccio; the swap is a one-line import change at the call sites.",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./http-client": "./src/http-client.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "peerDependencies": {}
+}

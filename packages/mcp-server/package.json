@@ -1,0 +1,24 @@
+{
+  "name": "@cinatra-ai/mcp-server",
+  "description": "Mountable MCP server for the Cinatra app: Streamable HTTP transport, OAuth 2.0 authorization, and admin UI",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.tsx",
+  "types": "./src/index.tsx",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./auth-plugins": "./src/auth-plugins.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@better-auth/oauth-provider": "^1.6.11",
+    "@daveyplate/better-auth-ui": "^3.4.0",
+    "@modelcontextprotocol/server": "file:./vendor/modelcontextprotocol-server",
+    "better-auth": "^1.6.11",
+    "lucide-react": "^1.16.0",
+    "react": "19.2.6",
+    "zod": "^4.4.3"
+  }
+}

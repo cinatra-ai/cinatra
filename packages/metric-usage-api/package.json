@@ -1,0 +1,12 @@
+{
+  "name": "@cinatra-ai/metric-usage-api",
+  "description": "Captures LLM and connector token/usage events at call time and exposes them as read-only MCP usage primitives.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@cinatra-ai/metric-cost-api": "workspace:*",
+    "recharts": "^3.8.1"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Target `main` branch-protection policy for this repository. Apply with:",
+    "  gh api -X PUT repos/cinatra-ai/cinatra/branches/main/protection \\",
+    "    --input .github/branch-protections.json",
+    "Requires PR review + Code Owner review + the listed status checks, and",
+    "forbids force-pushes and branch deletion. Root CODEOWNERS maps",
+    "`* @cinatra-ai/maintainers`, so the Code Owner requirement binds. Review and",
+    "adjust the required-check contexts if those workflows are renamed.",
+    "NOTE: a `v*` tag triggers a production deploy (build-image.yml -> ops), so",
+    "tag/release creation must be restricted to maintainers SEPARATELY (Settings ->",
+    "Tags, or a `v*` tag protection rule) \u2014 branch protection does not cover tags."
+  ],
+  "required_status_checks": {
+    "strict": false,
+    "contexts": [
+      "RBAC browser e2e",
+      "Workflows browser e2e",
+      "Release workflows tests",
+      "RBAC authz unit tests",
+      "CRM migration gates",
+      "/agents Playwright smoke"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "require_code_owner_reviews": true,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_linear_history": false,
+  "required_conversation_resolution": true
+}

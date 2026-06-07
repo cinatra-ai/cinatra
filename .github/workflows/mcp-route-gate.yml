@@ -1,0 +1,51 @@
+# MCP machine-flow route guard + advertised-URL route-shape test.
+#
+# The MCP OAuth handshake pages (auth / account / consent) live under
+# src/app/api/mcp/* adjacent to the JSON-RPC server endpoint; the human-facing
+# admin config pages stay under src/app/admin/mcp/*. This workflow runs two
+# guards on every PR + push to main:
+#
+#   1. administration-mcp-machine-flow-banned.mjs — prevents machine-flow
+#      routes from drifting back into the admin namespace.
+#   2. advertised-url-routes.test.ts — asserts every OAuth handshake URL the
+#      server advertises resolves to a real route file under src/app/api/mcp/*.
+#
+# A dedicated workflow (rather than build-image.yml) keeps the guards independent
+# of the build job and runs them even on docs-only changes.
+
+name: MCP Route Gate
+
+on:
+  pull_request:
+    # Draft PRs skip this gate; it runs on push-to-main and non-draft PRs
+    # (ready_for_review re-runs it when a draft is marked ready).
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mcp-route-gate:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: MCP machine-flow route banned gate
+        run: node scripts/audit/administration-mcp-machine-flow-banned.mjs
+      - name: MCP advertised-URL route shape test
+        run: cd packages/mcp-server && pnpm exec vitest run src/__tests__/advertised-url-routes.test.ts --no-coverage

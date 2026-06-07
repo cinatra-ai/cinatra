@@ -1,0 +1,45 @@
+{
+  "key": "major-release",
+  "version": 1,
+  "name": "Major Release",
+  "description": "AI-assisted multi-week product launch: content drafts, legal sign-off, announce.",
+  "definition": {
+    "name": "{{product}} — Major Release",
+    "product": "{{product}}",
+    "placeholders": { "product": { "type": "string", "required": true } },
+    "tasks": [
+      {
+        "key": "kickoff",
+        "type": "checkpoint",
+        "title": "Release kickoff",
+        "schedule": { "mode": "relative", "anchor": "target", "offsetIso8601": "P14D", "direction": "before" }
+      },
+      {
+        "key": "blog",
+        "type": "agent_task",
+        "title": "Draft launch blog for {{product}}",
+        "agentRef": { "package": "@cinatra-ai/blog-pipeline-agent" },
+        "input": { "brief": "{{product}} launch" },
+        "dependsOn": [{ "taskKey": "kickoff" }],
+        "schedule": { "mode": "relative", "anchor": "target", "offsetIso8601": "P7D", "direction": "before", "localTime": "09:00" }
+      },
+      {
+        "key": "legal",
+        "type": "approval",
+        "title": "Legal sign-off",
+        "requiredScope": { "level": "organization" },
+        "rejectionPolicy": "needs_revision",
+        "dependsOn": [{ "taskKey": "blog", "outcome": "success" }],
+        "schedule": { "mode": "relative", "anchor": "target", "offsetIso8601": "P3D", "direction": "before" }
+      },
+      {
+        "key": "announce",
+        "type": "notification",
+        "title": "Announce {{product}} is live",
+        "message": "{{product}} has shipped.",
+        "dependsOn": [{ "taskKey": "legal", "outcome": "success" }],
+        "schedule": { "mode": "relative", "anchor": "target", "offsetIso8601": "PT1H", "direction": "after" }
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+name: Clone dev extensions
+description: >-
+  Clone the extracted per-extension repos (cinatra-ai/<slug>) back into
+  extensions/<scope>/<name> before pnpm install. After the extension source-relocation cutover the
+  bundled extension source is no longer committed to the monorepo, but the host
+  build/typecheck and the IoC gates still need it on disk. Pure git/fs (no pnpm
+  install, no DB/dev-app work) and fail-closed (errors if the manifest is empty
+  or fewer dirs than declared materialize, so the gates can't pass vacuously).
+  Assumes a prior actions/setup-node step (uses plain `node` + `git`); the
+  extracted repos are PUBLIC, so no token is required.
+runs:
+  using: composite
+  steps:
+    - name: Clone extracted extension repos into extensions/
+      shell: bash
+      run: node scripts/ci/sync-dev-extensions.mjs

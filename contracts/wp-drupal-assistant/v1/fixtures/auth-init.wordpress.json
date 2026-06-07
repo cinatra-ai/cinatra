@@ -1,0 +1,13 @@
+{
+  "contractVersion": "v1",
+  "messages": [
+    { "role": "user", "content": "Tighten the intro paragraph of this post." }
+  ],
+  "context": {
+    "href": "https://example.test/wp-admin/post.php?post=42&action=edit",
+    "instanceId": "wp-prod",
+    "postId": "42",
+    "postType": "post",
+    "postStatus": "draft"
+  }
+}

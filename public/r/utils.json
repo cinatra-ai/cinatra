@@ -1,0 +1,18 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "utils",
+  "title": "cn utility",
+  "description": "Tailwind class-merge helper (clsx + tailwind-merge).",
+  "dependencies": [
+    "clsx",
+    "tailwind-merge"
+  ],
+  "files": [
+    {
+      "path": "src/lib/utils.ts",
+      "content": "import { clsx, type ClassValue } from \"clsx\";\nimport { twMerge } from \"tailwind-merge\";\n\nexport function cn(...inputs: ClassValue[]) {\n  return twMerge(clsx(inputs));\n}\n\nexport function slugify(value: string) {\n  return value\n    .toLowerCase()\n    .normalize(\"NFKD\")\n    .replace(/[^\\w\\s-]/g, \"\")\n    .trim()\n    .replace(/[\\s_-]+/g, \"-\")\n    .replace(/^-+|-+$/g, \"\");\n}\n\nexport function formatCurrencyMillions(value?: number | null) {\n  if (value === undefined || value === null || Number.isNaN(value)) {\n    return \"Undisclosed\";\n  }\n\n  return `$${value.toFixed(2)}M`;\n}\n\nexport function firstName(fullName?: string) {\n  if (!fullName) {\n    return undefined;\n  }\n\n  return fullName.split(/\\s+/)[0];\n}\n\nexport function quarterLabel(quarterId: string) {\n  return quarterId.replace(\"-\", \" \");\n}\n\nexport function asArray(value: string | string[] | undefined) {\n  if (value === undefined) {\n    return [];\n  }\n\n  return Array.isArray(value) ? value : [value];\n}\n\nexport function compareValues(a: string | number | null | undefined, b: string | number | null | undefined) {\n  if (typeof a === \"number\" && typeof b === \"number\") {\n    return a - b;\n  }\n\n  return String(a ?? \"\").localeCompare(String(b ?? \"\"), undefined, { sensitivity: \"base\" });\n}\n\nexport function getPageNumbers(\n  currentPage: number,\n  totalPages: number\n): (number | '...')[] {\n  if (totalPages <= 7) {\n    return Array.from({ length: totalPages }, (_, i) => i + 1);\n  }\n  if (currentPage <= 4) {\n    return [1, 2, 3, 4, 5, '...', totalPages];\n  }\n  if (currentPage >= totalPages - 3) {\n    return [1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];\n  }\n  return [1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages];\n}\n",
+      "type": "registry:lib"
+    }
+  ],
+  "type": "registry:lib"
+}

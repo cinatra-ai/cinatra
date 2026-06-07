@@ -1,0 +1,34 @@
+# Cinatra code owners.
+# Listed owners are requested for review on pull requests that touch matching paths.
+# Reference: https://docs.github.com/articles/about-code-owners
+#
+# Order matters: the last matching pattern takes precedence, so the more
+# specific, security-relevant rules are listed after the broad ones.
+
+# Default owner for everything in the repository.
+*                   @cinatra-ai/maintainers
+
+# Documentation.
+/docs/              @cinatra-ai/maintainers
+
+# Application source.
+/src/               @cinatra-ai/maintainers
+
+# Workspace packages.
+/packages/          @cinatra-ai/maintainers
+
+# Repository automation and scripts.
+/.github/           @cinatra-ai/maintainers
+/scripts/           @cinatra-ai/maintainers
+
+# Security-relevant surfaces.
+# CI/CD definitions and dependency manifests gate the supply chain, so changes
+# here always require Code Owner review.
+/SECURITY.md        @cinatra-ai/maintainers
+/.github/workflows/ @cinatra-ai/maintainers
+/package.json       @cinatra-ai/maintainers
+/pnpm-lock.yaml     @cinatra-ai/maintainers
+
+# Public project metadata (licensing).
+/LICENSE            @cinatra-ai/maintainers
+/NOTICE             @cinatra-ai/maintainers

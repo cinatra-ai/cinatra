@@ -1,0 +1,235 @@
+# Design-system pixel-diff + axe-core verify.
+#
+# Path-gated: only runs when a change touches a design-system surface that
+# could affect `/design-fixtures` pixels or accessibility.
+#
+# The `/design-fixtures` route is STATIC (no DB queries), so this
+# workflow does NOT spin up Postgres or run `cinatra setup branch`;
+# `pnpm dev` is enough.
+#
+# Threshold: maxDiffPixelRatio 0.005 + maxDiffPixels 800 (configured
+# in tests/e2e/config/design.config.ts). axe-core gate: zero serious/critical
+# violations on `/design-fixtures` only, not site-wide.
+#
+# Baselines live under `tests/e2e/design/__screenshots__/` and are
+# committed. To refresh after an intentional visual change, run
+# `pnpm test:e2e:design:update` locally and commit the updated PNGs.
+
+name: design-visual-verify
+
+on:
+  pull_request:
+    paths:
+      - "src/components/ui/**"
+      - "src/components/extension-card.tsx"
+      - "src/components/brand-mark.tsx"
+      - "src/components/status-pill.tsx"
+      - "src/components/page-header.tsx"
+      - "src/components/page-content.tsx"
+      - "src/components/layout/**"
+      - "src/lib/cinatra-toast.ts"
+      - "src/lib/extension-accent.ts"
+      - "src/lib/status-adapter.ts"
+      - "src/app/globals.css"
+      - "src/app/design-fixtures/**"
+      - "scripts/design/**"
+      - "tests/e2e/config/design.config.ts"
+      - "tests/e2e/config/base.ts"
+      - "tests/e2e/design/**"
+      - ".github/workflows/design-visual-verify.yml"
+
+concurrency:
+  group: design-visual-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pixel-diff:
+    name: /design-fixtures pixel-diff + axe
+    # Opt-in larger-runner lever (mirrors build-image's build/e2e jobs). Zero-risk
+    # no-op (stays ubuntu-latest) until the org/repo variable CI_BUILD_RUNNER is set.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # Post-cutover the build compiles the app + 79 cloned extensions, so the
+    # prod build + standalone boot + suite needs more than the old 15 min.
+    timeout-minutes: 45
+
+    # The standalone PRODUCTION server runs instrumentation.node.ts register()
+    # at boot, which (in any runtime mode) enqueues a few system BullMQ jobs
+    # (LiteLLM pricing sync, audit retention, marketplace catalog sync). Those
+    # calls await queue.waitUntilReady(), and the IORedis client is configured
+    # to retry FOREVER — so with no Redis, register() never resolves and the
+    # standalone server accepts TCP connections but never responds (the
+    # /design-fixtures readiness curl then times out at 5s/poll). A throwaway
+    # Redis is enough; nothing reads the queue here. (Postgres is NOT needed:
+    # the boot's DB calls are all try/catch-wrapped and fail fast against the
+    # placeholder, and production runtime mode skips the dev-only on-disk
+    # extension fs-scans.)
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      E2E_DESIGN_PORT: "3101"
+      # /design-fixtures renders through AppShell, which redirects any non-setup
+      # route to /setup when connectionReady=false. The CI env has no
+      # encryption key / identity / Nango / OpenAI setup, so the documented
+      # bypass (src/lib/setup-wizard.ts) is required — otherwise the readiness
+      # curl gets HTTP 200 from the redirect/loading shell and Playwright
+      # snapshots /setup instead of the fixtures. Matches dashboard-live-verify.
+      CINATRA_E2E_SETUP_BYPASS: "true"
+      # The route does not query a DB, but Next.js boots a session helper
+      # against Better Auth env vars. Provide harmless placeholders so the
+      # server starts cleanly under CI's stricter env-check.
+      SUPABASE_DB_URL: postgresql://placeholder:placeholder@127.0.0.1:65535/placeholder
+      BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
+      BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
+      NEXT_PUBLIC_APP_URL: http://localhost:3101
+      NEXT_PUBLIC_SITE_URL: http://localhost:3101
+      # next.config.ts asserts OPENAI_API_KEY at server boot
+      # (REQUIRED_ENV list). The /design-fixtures route never invokes
+      # OpenAI; the env is read only by the startup guard. Placeholder
+      # value is fine and matches the BETTER_AUTH_SECRET pattern above.
+      OPENAI_API_KEY: design-visual-verify-placeholder-not-used-by-static-route
+      # Point background-jobs at the throwaway Redis service above so
+      # register()'s enqueue waitUntilReady() resolves (the default is also
+      # 127.0.0.1:6379 — set explicitly for clarity).
+      REDIS_URL: redis://127.0.0.1:6379
+      # Run the standalone server in PRODUCTION runtime mode: this is a prod
+      # build, and production mode skips the dev-only on-disk fs-scans of the 79
+      # cloned extensions (StaticBundleLoader / skill-loader / a2a auto-connect),
+      # which would otherwise run an awaited scan against the placeholder DB. The
+      # /design-fixtures route is static + runtime-mode-independent, and the
+      # setup-bypass (setup-wizard.ts) is not gated on runtime mode.
+      CINATRA_RUNTIME_MODE: production
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: derive playwright version
+        id: playwright-version
+        run: |
+          v=$(pnpm list @playwright/test --json --depth=0 | node -e 'const d=JSON.parse(require("fs").readFileSync(0,"utf8")); const e=Array.isArray(d)?d[0]:d; const ver=(e.devDependencies?.["@playwright/test"]?.version)||(e.dependencies?.["@playwright/test"]?.version); console.log(ver);')
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: cache playwright browsers
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: install playwright chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Add CI build swap (default-runner only)
+        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
+        # job to a larger runner). A 4G swapfile absorbs `pnpm build` page-data
+        # memory SPIKES so the 2-vCPU/~8GB runner is not RECLAIMED for
+        # unresponsiveness mid page-data collection. Subshell-guarded so a
+        # swap-setup failure NEVER fails the job. Mirrors the build-image jobs.
+        if: ${{ vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build (standalone production server)
+        # Prod build (next.config output:"standalone"). Compiles the app + the
+        # 79 cloned extensions ONCE here (under the job timeout), so the server
+        # then boots instantly — vs `pnpm dev` cold-compiling on first request,
+        # which exceeded any practical webServer timeout post-cutover.
+        run: pnpm build
+
+      - name: Start standalone server
+        # /design-fixtures is static (no DB); the placeholder SUPABASE_DB_URL is
+        # enough. Run server.js directly (instant boot from the prebuilt bundle).
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT="$E2E_DESIGN_PORT" HOSTNAME=0.0.0.0 node server.js > /tmp/design-server.log 2>&1) &
+          echo "standalone server launched as PID $!"
+
+      - name: Wait for /design-fixtures readiness
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures" --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "ready after ${i} polls"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::standalone server did not serve /design-fixtures in time"; tail -80 /tmp/design-server.log; exit 1
+
+      - name: run /design-fixtures pixel-diff + axe
+        # E2E_REUSE_SERVER=1 → tests/e2e/config/design.config.ts disables its own
+        # webServer and reuses the standalone server above. Wrapped in `timeout`
+        # (above the Playwright budget) so a hung run is killed, not left to the
+        # job cap.
+        env:
+          E2E_REUSE_SERVER: "1"
+        run: timeout --kill-after=60 900 pnpm test:e2e:design
+
+      - name: Dump standalone server log on failure
+        # Next.js omits server-component error messages from the CLIENT response
+        # in production builds (digest only), but the standalone server logs the
+        # FULL error + stack server-side. Surface it so a render failure during
+        # the pixel-diff is diagnosable without a local prod build.
+        if: failure()
+        run: |
+          echo "==== Server Components render error (context around the FIRST Next.js digest) ===="
+          # The render throw is logged as a block: <error message + stack> then
+          # `{ digest: '...' }`. Print the ~30 lines preceding the first digest
+          # to surface the actual message+stack (the metric-cost-api span-exporter
+          # 'Failed query' errors have NO digest, so this isolates the real throw).
+          LINE=$(grep -nE "digest: '" /tmp/design-server.log 2>/dev/null | head -1 | cut -d: -f1)
+          if [ -n "$LINE" ]; then
+            START=$((LINE-30)); [ "$START" -lt 1 ] && START=1
+            echo "(first digest at server-log line $LINE; printing $START..$((LINE+6)))"
+            sed -n "${START},$((LINE+6))p" /tmp/design-server.log
+          else
+            echo "(no Next.js digest in server log)"
+          fi
+          echo "==== HEAD of server log (boot) ===="
+          head -60 /tmp/design-server.log || echo "(no server log)"
+
+      - name: upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report-design
+          path: playwright-report-design
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: design-fixtures-screenshot-diffs
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore

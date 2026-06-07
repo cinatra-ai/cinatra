@@ -1,0 +1,25 @@
+{
+  "name": "@cinatra-ai/notifications",
+  "description": "Postgres-backed notifications: write-time recipient resolution, per-user persistence, SSE streaming, and flyout UI.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/server.ts",
+  "types": "./src/server.ts",
+  "exports": {
+    ".": "./src/server.ts",
+    "./server": "./src/server.ts",
+    "./client": "./src/client.ts",
+    "./types": "./src/types.ts",
+    "./host-adapters": "./src/host-adapters.ts",
+    "./perf-log": "./src/perf-log.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cinatra-ai/agents": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.6"
+  }
+}

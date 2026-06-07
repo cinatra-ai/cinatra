@@ -1,0 +1,22 @@
+{
+  "name": "@cinatra-ai/a2a",
+  "description": "Agent-to-Agent (A2A) protocol layer wrapping @a2a-js/sdk to host, call, and stream Cinatra agents in-process and remotely.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "^0.3.13",
+    "@cinatra-ai/agents": "workspace:*",
+    "@cinatra-ai/llm": "workspace:*",
+    "@cinatra-ai/mcp-client": "workspace:*",
+    "ioredis": "^5.10.1"
+  },
+  "devDependencies": {
+    "bullmq": "^5.76.9"
+  }
+}

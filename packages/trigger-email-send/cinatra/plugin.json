@@ -1,0 +1,9 @@
+{
+  "id": "@cinatra-ai/trigger-email-send",
+  "name": "Email Send",
+  "description": "Skills for test-sending and batch-sending outreach campaigns via Gmail.",
+  "skills": {
+    "type": "system",
+    "path": "../skills"
+  }
+}

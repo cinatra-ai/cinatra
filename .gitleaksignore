@@ -1,0 +1,13 @@
+# gitleaks allowlist — SYNTHETIC SECRET TEST FIXTURES ONLY.
+# Each entry is an exact file:rule:line fingerprint of a deliberately-planted FAKE credential
+# used as a positive-case input for cinatra's OWN secret-scanner tests. These fixtures must ship
+# (they prove the scanner works). NO real or live secret is allowlisted here.
+packages/agents/src/__tests__/scan-oas-literal-secrets.test.ts:generic-api-key:179
+packages/agents/src/__tests__/scan-oas-literal-secrets.test.ts:github-pat:179
+packages/agents/src/__tests__/scan-package-siblings.test.ts:jwt:219
+packages/agents/src/__tests__/scan-package-siblings.test.ts:generic-api-key:140
+packages/agents/src/__tests__/scan-package-siblings.test.ts:generic-api-key:168
+src/lib/__tests__/ensure-instance-id.test.ts:generic-api-key:408
+src/lib/__tests__/instance-secrets.test.ts:generic-api-key:9
+src/lib/__tests__/instance-secrets.test.ts:generic-api-key:12
+src/lib/__tests__/marketplace-credentials.test.ts:generic-api-key:153

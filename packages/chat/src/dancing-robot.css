@@ -1,0 +1,924 @@
+/* --fedora tracks the brand mustard so the hat matches the logo + wordmark. */
+.dancing-robot { --ink: #0a0a0a; --paper: #ffffff; --fedora: var(--brand-mustard, #c79545); }
+/* In dark mode, defer to the project's semantic tokens so the robot
+   adapts automatically if those tokens ever change. */
+.dark .dancing-robot { --ink: var(--foreground); --paper: var(--background); }
+.dancing-robot * { transform-box: fill-box; }
+.dancing-robot .g-needle, .dancing-robot .g-needle line { transform-box: view-box; transform-origin: 0 0; }
+
+.dancing-robot .g-hips     { transform-origin: 50% 100%; animation: dr-hips 6.4s cubic-bezier(.45,.05,.55,.95) infinite; }
+.dancing-robot .g-torso    { transform-origin: 50% 90%;  animation: dr-torso 6.4s cubic-bezier(.45,.05,.55,.95) infinite; }
+.dancing-robot .g-head     { transform-origin: 50% 95%;  animation: dr-head 3.2s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot .g-hat      { transform-origin: 50% 100%; animation: dr-hatTip 12.8s ease-in-out infinite; }
+.dancing-robot .g-hand-wave  { transform-origin: 50% 100%;  animation: dr-handWave 0.7s ease-in-out infinite; }
+.dancing-robot .g-arm-l    { transform-origin: 100% 0%; animation: dr-armL 8s ease-in-out infinite; }
+.dancing-robot .g-arm-r    { transform-origin: 0% 0%;   animation: dr-armR 8s ease-in-out infinite; }
+.dancing-robot .g-leg-r    { transform-origin: 50% 0%;   animation: dr-legR 6.4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot .g-leg-l    { transform-origin: 50% 0%;   animation: dr-legL 6.4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot .g-foot-r   { transform-origin: 0% 100%;  animation: dr-footTap 1.6s ease-out infinite; }
+.dancing-robot .mouth      { transform-origin: 50% 50%;  animation: dr-sing 1.6s steps(1, end) infinite; }
+.dancing-robot .eye        { transform-origin: 50% 50%;  animation: dr-blink 5.2s steps(1, end) infinite; }
+
+/* WAAPI drives transforms during tweening — CSS animations suppressed for this window */
+.dancing-robot.tweening .g-rig,
+.dancing-robot.tweening .g-hips,
+.dancing-robot.tweening .g-torso,
+.dancing-robot.tweening .g-head,
+.dancing-robot.tweening .g-hat,
+.dancing-robot.tweening .g-arm-l,
+.dancing-robot.tweening .g-arm-r,
+.dancing-robot.tweening .g-leg-l,
+.dancing-robot.tweening .g-leg-r,
+.dancing-robot.tweening .g-foot-r,
+.dancing-robot.tweening .g-hand-wave {
+  animation: none !important;
+  transition: transform 800ms cubic-bezier(.4, 0, .2, 1);
+}
+
+/* BREAKDANCE */
+.dancing-robot.breakdance .g-hips     { animation: dr-bdHips 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-torso    { animation: dr-bdTorso 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-head     { animation: dr-bdHead 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-arm-l    { animation: dr-bdArmL 6.4s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.breakdance .g-arm-r    { animation: dr-bdArmR 6.4s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.breakdance .g-leg-l    { animation: dr-bdLegL 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-leg-r    { animation: dr-bdLegR 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-foot-r   { animation: none; }
+.dancing-robot.breakdance .g-hat      { animation: dr-bdHat 6.4s ease-in-out infinite; }
+.dancing-robot.breakdance .g-hand-wave{ animation: none; }
+
+/* DISCO */
+.dancing-robot.disco .g-hips    { animation: dr-dHips 1.6s ease-in-out infinite; }
+.dancing-robot.disco .g-torso   { animation: dr-dTorso 1.6s ease-in-out infinite; }
+.dancing-robot.disco .g-head    { animation: dr-dHead 1.6s ease-in-out infinite; }
+.dancing-robot.disco .g-arm-l   { animation: dr-dArmL 1.6s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.disco .g-arm-r   { animation: dr-dArmR 1.6s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.disco .g-leg-l   { animation: dr-dLegL 1.6s ease-in-out infinite; }
+.dancing-robot.disco .g-leg-r   { animation: dr-dLegR 1.6s ease-in-out infinite; }
+.dancing-robot.disco .g-foot-r  { animation: none; }
+.dancing-robot.disco .g-hat     { animation: dr-dHat 3.2s ease-in-out infinite; }
+.dancing-robot.disco .g-hand-wave { animation: none; }
+
+/* ROBOT */
+.dancing-robot.robot .g-hips    { animation: dr-rHips 3.2s steps(4, end) infinite; }
+.dancing-robot.robot .g-torso   { animation: dr-rTorso 3.2s steps(4, end) infinite; }
+.dancing-robot.robot .g-head    { animation: dr-rHead 1.6s steps(4, end) infinite; }
+.dancing-robot.robot .g-arm-l   { animation: dr-rArmL 3.2s steps(4, end) infinite; transform-origin: 100% 0%; }
+.dancing-robot.robot .g-arm-r   { animation: dr-rArmR 3.2s steps(4, end) infinite; transform-origin: 0% 0%; }
+.dancing-robot.robot .g-leg-l   { animation: none; }
+.dancing-robot.robot .g-leg-r   { animation: none; }
+.dancing-robot.robot .g-foot-r  { animation: none; }
+.dancing-robot.robot .g-hat     { animation: none; }
+.dancing-robot.robot .g-hand-wave { animation: none; }
+
+/* MOONWALK */
+.dancing-robot.moonwalk .g-hips    { animation: dr-mHips 3.2s ease-in-out infinite; }
+.dancing-robot.moonwalk .g-torso   { animation: dr-mTorso 3.2s ease-in-out infinite; }
+.dancing-robot.moonwalk .g-head    { animation: dr-mHead 3.2s ease-in-out infinite; }
+.dancing-robot.moonwalk .g-arm-l   { animation: dr-mArmL 3.2s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.moonwalk .g-arm-r   { animation: dr-mArmR 3.2s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.moonwalk .g-leg-l   { animation: dr-mLegL 1.6s ease-in-out infinite; }
+.dancing-robot.moonwalk .g-leg-r   { animation: dr-mLegR 1.6s ease-in-out infinite 0.8s; }
+.dancing-robot.moonwalk .g-foot-r  { animation: none; }
+.dancing-robot.moonwalk .g-hat     { animation: dr-mHat 3.2s ease-in-out infinite; }
+.dancing-robot.moonwalk .g-hand-wave { animation: none; }
+
+/* FLOSS */
+.dancing-robot.floss .g-hips    { animation: dr-fHips 0.6s ease-in-out infinite; }
+.dancing-robot.floss .g-torso   { animation: dr-fTorso 0.6s ease-in-out infinite; }
+.dancing-robot.floss .g-head    { animation: dr-fHead 1.2s ease-in-out infinite; }
+.dancing-robot.floss .g-arm-l   { animation: dr-fArmL 0.6s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.floss .g-arm-r   { animation: dr-fArmR 0.6s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.floss .g-leg-l   { animation: none; }
+.dancing-robot.floss .g-leg-r   { animation: none; }
+.dancing-robot.floss .g-foot-r  { animation: none; }
+.dancing-robot.floss .g-hat     { animation: dr-fHat 1.2s ease-in-out infinite; }
+.dancing-robot.floss .g-hand-wave { animation: none; }
+
+/* SALSA */
+.dancing-robot.salsa .g-hips    { animation: dr-sHips 0.8s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.salsa .g-torso   { animation: dr-sTorso 0.8s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.salsa .g-head    { animation: dr-sHead 1.6s ease-in-out infinite; }
+.dancing-robot.salsa .g-arm-l   { animation: dr-sArmL 0.8s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.salsa .g-arm-r   { animation: dr-sArmR 0.8s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.salsa .g-leg-l   { animation: dr-sLegL 0.8s ease-in-out infinite; }
+.dancing-robot.salsa .g-leg-r   { animation: dr-sLegR 0.8s ease-in-out infinite; }
+.dancing-robot.salsa .g-foot-r  { animation: none; }
+.dancing-robot.salsa .g-hat     { animation: none; }
+.dancing-robot.salsa .g-hand-wave { animation: none; }
+
+/* TWIST */
+.dancing-robot.twist .g-hips    { animation: dr-tHips 1.0s ease-in-out infinite; }
+.dancing-robot.twist .g-torso   { animation: dr-tTorso 1.0s ease-in-out infinite; }
+.dancing-robot.twist .g-head    { animation: dr-tHead 2.0s ease-in-out infinite; }
+.dancing-robot.twist .g-arm-l   { animation: dr-tArmL 1.0s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.twist .g-arm-r   { animation: dr-tArmR 1.0s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.twist .g-leg-l   { animation: dr-tLegL 1.0s ease-in-out infinite; }
+.dancing-robot.twist .g-leg-r   { animation: dr-tLegR 1.0s ease-in-out infinite; }
+.dancing-robot.twist .g-foot-r  { animation: none; }
+.dancing-robot.twist .g-hat     { animation: none; }
+.dancing-robot.twist .g-hand-wave { animation: none; }
+
+/* YMCA */
+.dancing-robot.ymca .g-hips    { animation: dr-yHips 6.4s steps(4,end) infinite; }
+.dancing-robot.ymca .g-torso   { animation: dr-yTorso 6.4s steps(4,end) infinite; }
+.dancing-robot.ymca .g-head    { animation: dr-yHead 6.4s steps(4,end) infinite; }
+.dancing-robot.ymca .g-arm-l   { animation: dr-yArmL 6.4s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.ymca .g-arm-r   { animation: dr-yArmR 6.4s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.ymca .g-leg-l   { animation: none; }
+.dancing-robot.ymca .g-leg-r   { animation: none; }
+.dancing-robot.ymca .g-foot-r  { animation: none; }
+.dancing-robot.ymca .g-hat     { animation: none; }
+.dancing-robot.ymca .g-hand-wave { animation: none; }
+
+/* VOGUE */
+.dancing-robot.vogue .g-hips    { animation: dr-vHips 4s ease-in-out infinite; }
+.dancing-robot.vogue .g-torso   { animation: dr-vTorso 4s ease-in-out infinite; }
+.dancing-robot.vogue .g-head    { animation: dr-vHead 4s ease-in-out infinite; }
+.dancing-robot.vogue .g-arm-l   { animation: dr-vArmL 4s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.vogue .g-arm-r   { animation: dr-vArmR 4s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.vogue .g-leg-l   { animation: none; }
+.dancing-robot.vogue .g-leg-r   { animation: none; }
+.dancing-robot.vogue .g-foot-r  { animation: none; }
+.dancing-robot.vogue .g-hat     { animation: none; }
+.dancing-robot.vogue .g-hand-wave { animation: none; }
+
+/* TANGO */
+.dancing-robot.tango .g-hips    { animation: dr-gHips 2s ease-in-out infinite; }
+.dancing-robot.tango .g-torso   { animation: dr-gTorso 2s ease-in-out infinite; }
+.dancing-robot.tango .g-head    { animation: dr-gHead 2s cubic-bezier(.7,0,.3,1) infinite; }
+.dancing-robot.tango .g-arm-l   { animation: dr-gArmL 2s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.tango .g-arm-r   { animation: dr-gArmR 2s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.tango .g-leg-l   { animation: dr-gLegL 2s ease-in-out infinite; }
+.dancing-robot.tango .g-leg-r   { animation: dr-gLegR 2s ease-in-out infinite; }
+.dancing-robot.tango .g-foot-r  { animation: none; }
+.dancing-robot.tango .g-hat     { animation: none; }
+.dancing-robot.tango .g-hand-wave { animation: none; }
+
+/* CHARLESTON */
+.dancing-robot.charleston .g-hips    { animation: dr-cHips 0.8s ease-in-out infinite; }
+.dancing-robot.charleston .g-torso   { animation: dr-cTorso 0.8s ease-in-out infinite; }
+.dancing-robot.charleston .g-head    { animation: dr-cHead 0.8s ease-in-out infinite; }
+.dancing-robot.charleston .g-arm-l   { animation: dr-cArmL 0.8s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.charleston .g-arm-r   { animation: dr-cArmR 0.8s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.charleston .g-leg-l   { animation: dr-cLegL 0.8s ease-in-out infinite; }
+.dancing-robot.charleston .g-leg-r   { animation: dr-cLegR 0.8s ease-in-out infinite; }
+.dancing-robot.charleston .g-foot-r  { animation: none; }
+.dancing-robot.charleston .g-hat     { animation: none; }
+.dancing-robot.charleston .g-hand-wave { animation: none; }
+
+/* HAT TIP */
+.dancing-robot.hattip .g-hips    { animation: dr-htHips 4s ease-in-out infinite; }
+.dancing-robot.hattip .g-torso   { animation: dr-htTorso 4s ease-in-out infinite; }
+.dancing-robot.hattip .g-head    { animation: dr-htHead 4s ease-in-out infinite; }
+.dancing-robot.hattip .g-hat     { animation: dr-htHat 4s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 30% 100%; }
+.dancing-robot.hattip .g-arm-l   { animation: dr-htArmL 4s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.hattip .g-arm-r   { animation: dr-htArmR 4s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 0% 0%; }
+.dancing-robot.hattip .g-leg-l, .dancing-robot.hattip .g-leg-r, .dancing-robot.hattip .g-foot-r, .dancing-robot.hattip .g-hand-wave { animation: none; }
+
+/* FLOAT */
+.dancing-robot.float .g-rig    { animation: dr-ftRig 16s cubic-bezier(.42,0,.58,1) infinite; transform-origin: 0 0; }
+.dancing-robot.float .g-hips   { animation: dr-ftHips 4s ease-in-out infinite; }
+.dancing-robot.float .g-torso  { animation: dr-ftTorso 4s ease-in-out infinite; }
+.dancing-robot.float .g-head   { animation: dr-ftHead 4s ease-in-out infinite; }
+.dancing-robot.float .g-arm-l  { animation: dr-ftArmL 4s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.float .g-arm-r  { animation: dr-ftArmR 4s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.float .g-leg-l  { animation: dr-ftLegL 4s ease-in-out infinite; }
+.dancing-robot.float .g-leg-r  { animation: dr-ftLegR 4s ease-in-out infinite; }
+.dancing-robot.float .g-foot-r, .dancing-robot.float .g-hat, .dancing-robot.float .g-hand-wave { animation: none; }
+
+/* JUMP */
+.dancing-robot.jump .g-hips    { animation: dr-jpHips 0.9s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.jump .g-torso   { animation: dr-jpTorso 0.9s ease-in-out infinite; }
+.dancing-robot.jump .g-head    { animation: dr-jpHead 0.9s ease-in-out infinite; }
+.dancing-robot.jump .g-arm-l   { animation: dr-jpArmL 0.9s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 100% 0%; }
+.dancing-robot.jump .g-arm-r   { animation: dr-jpArmR 0.9s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 0% 0%; }
+.dancing-robot.jump .g-leg-l   { animation: dr-jpLegL 0.9s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.jump .g-leg-r   { animation: dr-jpLegR 0.9s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.jump .g-hat     { animation: dr-jpHat 0.9s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.jump .g-foot-r, .dancing-robot.jump .g-hand-wave { animation: none; }
+
+/* LASSO */
+.dancing-robot.lasso .g-hips    { animation: dr-laHips 1.6s ease-in-out infinite; }
+.dancing-robot.lasso .g-torso   { animation: dr-laTorso 1.6s ease-in-out infinite; }
+.dancing-robot.lasso .g-head    { animation: dr-laHead 1.6s ease-in-out infinite; }
+.dancing-robot.lasso .g-arm-l   { animation: dr-laArmL 1.6s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.lasso .g-arm-r   { animation: dr-laArmR 0.8s linear infinite; transform-origin: 0% 0%; }
+.dancing-robot.lasso .g-leg-l   { animation: dr-laLegL 1.6s ease-in-out infinite; }
+.dancing-robot.lasso .g-leg-r   { animation: dr-laLegR 1.6s ease-in-out infinite; }
+.dancing-robot.lasso .g-foot-r, .dancing-robot.lasso .g-hat, .dancing-robot.lasso .g-hand-wave { animation: none; }
+
+/* KICKLINE */
+.dancing-robot.kickline .g-hips    { animation: dr-klHips 1.6s ease-in-out infinite; }
+.dancing-robot.kickline .g-torso   { animation: dr-klTorso 1.6s ease-in-out infinite; }
+.dancing-robot.kickline .g-head    { animation: dr-klHead 1.6s ease-in-out infinite; }
+.dancing-robot.kickline .g-arm-l   { animation: dr-klArmL 1.6s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.kickline .g-arm-r   { animation: dr-klArmR 1.6s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.kickline .g-leg-l   { animation: dr-klLegL 1.6s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.kickline .g-leg-r   { animation: dr-klLegR 1.6s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.kickline .g-foot-r, .dancing-robot.kickline .g-hat, .dancing-robot.kickline .g-hand-wave { animation: none; }
+
+/* HANDJIVE */
+.dancing-robot.handjive .g-hips    { animation: dr-hjHips 1.6s ease-in-out infinite; }
+.dancing-robot.handjive .g-torso   { animation: dr-hjTorso 1.6s ease-in-out infinite; }
+.dancing-robot.handjive .g-head    { animation: dr-hjHead 1.6s ease-in-out infinite; }
+.dancing-robot.handjive .g-arm-l   { animation: dr-hjArmL 1.6s steps(4,end) infinite; transform-origin: 100% 0%; }
+.dancing-robot.handjive .g-arm-r   { animation: dr-hjArmR 1.6s steps(4,end) infinite; transform-origin: 0% 0%; }
+.dancing-robot.handjive .g-leg-l, .dancing-robot.handjive .g-leg-r, .dancing-robot.handjive .g-foot-r, .dancing-robot.handjive .g-hat, .dancing-robot.handjive .g-hand-wave { animation: none; }
+
+/* SWAY */
+.dancing-robot.sway .g-hips    { animation: dr-swHips 3.2s ease-in-out infinite; }
+.dancing-robot.sway .g-torso   { animation: dr-swTorso 3.2s ease-in-out infinite; }
+.dancing-robot.sway .g-head    { animation: dr-swHead 3.2s ease-in-out infinite; }
+.dancing-robot.sway .g-arm-l   { animation: dr-swArmL 3.2s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.sway .g-arm-r   { animation: dr-swArmR 3.2s ease-in-out infinite; transform-origin: 0% 0%; }
+.dancing-robot.sway .g-leg-l   { animation: dr-swLegL 3.2s ease-in-out infinite; }
+.dancing-robot.sway .g-leg-r   { animation: dr-swLegR 3.2s ease-in-out infinite; }
+.dancing-robot.sway .g-foot-r, .dancing-robot.sway .g-hat, .dancing-robot.sway .g-hand-wave { animation: none; }
+
+/* MONSTER */
+.dancing-robot.monster .g-hips    { animation: dr-msHips 1.4s steps(4,end) infinite; }
+.dancing-robot.monster .g-torso   { animation: dr-msTorso 1.4s steps(4,end) infinite; }
+.dancing-robot.monster .g-head    { animation: dr-msHead 1.4s steps(4,end) infinite; }
+.dancing-robot.monster .g-arm-l   { animation: dr-msArmL 1.4s steps(4,end) infinite; transform-origin: 100% 0%; }
+.dancing-robot.monster .g-arm-r   { animation: dr-msArmR 1.4s steps(4,end) infinite; transform-origin: 0% 0%; }
+.dancing-robot.monster .g-leg-l   { animation: dr-msLegL 1.4s cubic-bezier(.6,0,.4,1) infinite; }
+.dancing-robot.monster .g-leg-r   { animation: dr-msLegR 1.4s cubic-bezier(.6,0,.4,1) infinite; }
+.dancing-robot.monster .g-foot-r, .dancing-robot.monster .g-hat, .dancing-robot.monster .g-hand-wave { animation: none; }
+
+/* CONDUCT */
+.dancing-robot.conduct .g-hips    { animation: dr-cdHips 2s ease-in-out infinite; }
+.dancing-robot.conduct .g-torso   { animation: dr-cdTorso 2s ease-in-out infinite; }
+.dancing-robot.conduct .g-head    { animation: dr-cdHead 2s ease-in-out infinite; }
+.dancing-robot.conduct .g-arm-l   { animation: dr-cdArmL 2s ease-in-out infinite; transform-origin: 100% 0%; }
+.dancing-robot.conduct .g-arm-r   { animation: dr-cdArmR 2s cubic-bezier(.7,0,.3,1) infinite; transform-origin: 0% 0%; }
+.dancing-robot.conduct .g-leg-l, .dancing-robot.conduct .g-leg-r, .dancing-robot.conduct .g-foot-r, .dancing-robot.conduct .g-hat, .dancing-robot.conduct .g-hand-wave { animation: none; }
+
+/* ----- Default (idle) keyframes ----- */
+@keyframes dr-hips {
+  0%   { transform: translateX(-6px) rotate(-1.5deg); }
+  25%  { transform: translateX(-2px) rotate(0deg); }
+  50%  { transform: translateX(6px)  rotate(1.5deg); }
+  75%  { transform: translateX(2px)  rotate(0deg); }
+  100% { transform: translateX(-6px) rotate(-1.5deg); }
+}
+@keyframes dr-torso {
+  0%   { transform: rotate(2deg)  translateY(0); }
+  12%  { transform: rotate(2deg)  translateY(2px); }
+  25%  { transform: rotate(0deg)  translateY(0); }
+  37%  { transform: rotate(-1deg) translateY(2px); }
+  50%  { transform: rotate(-2deg) translateY(0); }
+  62%  { transform: rotate(-2deg) translateY(2px); }
+  75%  { transform: rotate(0deg)  translateY(0); }
+  87%  { transform: rotate(1deg)  translateY(2px); }
+  100% { transform: rotate(2deg)  translateY(0); }
+}
+@keyframes dr-head {
+  0%, 60%, 100% { transform: rotate(-3deg) translateY(0); }
+  70% { transform: rotate(2deg)  translateY(3px); }
+  85% { transform: rotate(-1deg) translateY(0); }
+}
+@keyframes dr-hatTip {
+  0%, 86%, 100% { transform: rotate(-4deg); }
+  90% { transform: rotate(-12deg) translateY(-2px); }
+  94% { transform: rotate(-4deg); }
+}
+@keyframes dr-handWave {
+  0%, 100% { transform: rotate(-18deg); }
+  50%      { transform: rotate(18deg); }
+}
+@keyframes dr-armL {
+  0%, 100% { transform: rotate(8deg); }
+  30% { transform: rotate(20deg) translateY(-3px); }
+  50% { transform: rotate(12deg); }
+  70% { transform: rotate(28deg) translateY(-5px); }
+  90% { transform: rotate(10deg); }
+}
+@keyframes dr-armR {
+  0%, 100% { transform: rotate(-8deg); }
+  20% { transform: rotate(-22deg) translateY(-4px); }
+  45% { transform: rotate(-10deg); }
+  65% { transform: rotate(-18deg) translateY(-3px); }
+  85% { transform: rotate(-12deg); }
+}
+@keyframes dr-legL {
+  0%   { transform: rotate(0deg)  translateX(0); }
+  25%  { transform: rotate(-2deg) translateX(-1px); }
+  50%  { transform: rotate(-4deg) translateX(-2px); }
+  75%  { transform: rotate(-2deg) translateX(-1px); }
+  100% { transform: rotate(0deg)  translateX(0); }
+}
+@keyframes dr-legR {
+  0%   { transform: rotate(0deg) translateX(0); }
+  25%  { transform: rotate(2deg) translateX(1px); }
+  50%  { transform: rotate(4deg) translateX(2px); }
+  75%  { transform: rotate(2deg) translateX(1px); }
+  100% { transform: rotate(0deg) translateX(0); }
+}
+@keyframes dr-footTap {
+  0%, 70%, 100% { transform: rotate(0deg) translateY(0); }
+  78% { transform: rotate(-12deg) translateY(-3px); }
+  90% { transform: rotate(0deg)   translateY(0); }
+}
+@keyframes dr-sing {
+  0%   { transform: scaleY(0.2); }
+  12%  { transform: scaleY(1);   }
+  24%  { transform: scaleY(0.4); }
+  32%  { transform: scaleY(1);   }
+  50%  { transform: scaleY(0.2); }
+  62%  { transform: scaleY(1);   }
+  78%  { transform: scaleY(0.6); }
+  90%  { transform: scaleY(0.3); }
+  100% { transform: scaleY(0.2); }
+}
+@keyframes dr-blink {
+  0%, 96%, 100% { transform: scaleY(1); }
+  97%, 99%      { transform: scaleY(0.05); }
+}
+
+/* ----- Breakdance keyframes ----- */
+@keyframes dr-bdHips {
+  0%   { transform: translateX(-8px) rotate(-4deg); }
+  12%  { transform: translateX(8px)  rotate(4deg); }
+  25%  { transform: translateX(0)    rotate(0deg); }
+  35%  { transform: translateX(-20px) translateY(40px) rotate(-25deg); }
+  45%  { transform: translateX(0)    translateY(50px) rotate(-180deg); }
+  55%  { transform: translateX(20px) translateY(40px) rotate(-340deg); }
+  65%  { transform: translateX(28px) translateY(20px) rotate(-360deg) rotate(35deg); }
+  78%  { transform: translateX(28px) translateY(20px) rotate(-360deg) rotate(35deg); }
+  88%  { transform: translateX(0)    translateY(-8px) rotate(-360deg); }
+  100% { transform: translateX(-8px) translateY(0)   rotate(-364deg); }
+}
+@keyframes dr-bdTorso {
+  0%, 25% { transform: rotate(0deg); }
+  35% { transform: rotate(15deg); }
+  45% { transform: rotate(0deg); }
+  55% { transform: rotate(-15deg); }
+  65%, 78% { transform: rotate(-8deg); }
+  88%, 100% { transform: rotate(0deg); }
+}
+@keyframes dr-bdHead {
+  0%, 25% { transform: rotate(-2deg) translateY(0); }
+  35% { transform: rotate(20deg) translateY(2px); }
+  45% { transform: rotate(0deg) translateY(0); }
+  55% { transform: rotate(-20deg) translateY(2px); }
+  65%, 78% { transform: rotate(-15deg) translateY(0); }
+  88%, 100% { transform: rotate(-2deg) translateY(0); }
+}
+@keyframes dr-bdArmL {
+  0%   { transform: rotate(40deg); }
+  12%  { transform: rotate(-30deg) translate(4px, -6px); }
+  25%  { transform: rotate(20deg); }
+  35%  { transform: rotate(-90deg) translateY(-10px); }
+  50%  { transform: rotate(90deg)  translate(8px, -8px); }
+  65%  { transform: rotate(140deg) translateY(20px); }
+  78%  { transform: rotate(140deg) translateY(20px); }
+  88%  { transform: rotate(20deg); }
+  100% { transform: rotate(40deg); }
+}
+@keyframes dr-bdArmR {
+  0%   { transform: rotate(-40deg); }
+  12%  { transform: rotate(30deg) translate(-4px, -6px); }
+  25%  { transform: rotate(-20deg); }
+  35%  { transform: rotate(90deg) translateY(-10px); }
+  50%  { transform: rotate(-90deg) translate(-8px, -8px); }
+  65%  { transform: rotate(-100deg) translateY(-20px); }
+  78%  { transform: rotate(-100deg) translateY(-20px); }
+  88%  { transform: rotate(-20deg); }
+  100% { transform: rotate(-40deg); }
+}
+@keyframes dr-bdLegL {
+  0%, 12% { transform: rotate(0deg) translateX(0); }
+  20% { transform: rotate(-15deg) translateX(-3px); }
+  35% { transform: rotate(45deg) translate(-6px, -8px); }
+  50% { transform: rotate(-45deg) translate(8px, -6px); }
+  65%, 78% { transform: rotate(60deg) translate(-12px, -4px); }
+  88%, 100% { transform: rotate(0deg) translateX(0); }
+}
+@keyframes dr-bdLegR {
+  0%, 12% { transform: rotate(0deg) translateX(0); }
+  20% { transform: rotate(15deg) translateX(3px); }
+  35% { transform: rotate(-45deg) translate(6px, -8px); }
+  50% { transform: rotate(45deg) translate(-8px, -6px); }
+  65%, 78% { transform: rotate(-30deg) translate(8px, -8px); }
+  88%, 100% { transform: rotate(0deg) translateX(0); }
+}
+@keyframes dr-bdHat {
+  0%, 100% { transform: rotate(0deg); }
+  35% { transform: rotate(-25deg) translate(-4px, -2px); }
+  50% { transform: rotate(20deg) translate(4px, 2px); }
+  65%, 78% { transform: rotate(-12deg); }
+}
+
+/* ----- Disco keyframes ----- */
+@keyframes dr-dHips {
+  0%, 100% { transform: translateX(-4px) translateY(-2px) rotate(-3deg); }
+  50%      { transform: translateX(4px)  translateY(-2px) rotate(3deg); }
+}
+@keyframes dr-dTorso {
+  0%, 100% { transform: rotate(-3deg) translateY(-1px); }
+  50%      { transform: rotate(3deg)  translateY(-1px); }
+}
+@keyframes dr-dHead {
+  0%, 100% { transform: rotate(8deg); }
+  50%      { transform: rotate(-8deg); }
+}
+@keyframes dr-dArmL {
+  0%, 100% { transform: rotate(-130deg) translate(2px,-8px); }
+  50%      { transform: rotate(45deg) translate(-2px,4px); }
+}
+@keyframes dr-dArmR {
+  0%, 100% { transform: rotate(-45deg) translate(2px,4px); }
+  50%      { transform: rotate(130deg) translate(-2px,-8px); }
+}
+@keyframes dr-dLegL {
+  0%, 100% { transform: rotate(-6deg) translate(-2px,0); }
+  50%      { transform: rotate(8deg)  translate(2px,-2px); }
+}
+@keyframes dr-dLegR {
+  0%, 100% { transform: rotate(8deg)  translate(2px,-2px); }
+  50%      { transform: rotate(-6deg) translate(-2px,0); }
+}
+@keyframes dr-dHat {
+  0%, 100% { transform: rotate(-6deg); }
+  50%      { transform: rotate(6deg); }
+}
+
+/* ----- Robot keyframes (steps make these tick visibly) ----- */
+@keyframes dr-rHips {
+  0%   { transform: translateX(0); }
+  25%  { transform: translateX(-4px); }
+  50%  { transform: translateX(0); }
+  75%  { transform: translateX(4px); }
+  100% { transform: translateX(0); }
+}
+@keyframes dr-rTorso {
+  0%   { transform: rotate(0deg); }
+  25%  { transform: rotate(-4deg); }
+  50%  { transform: rotate(0deg); }
+  75%  { transform: rotate(4deg); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes dr-rHead {
+  0%   { transform: rotate(-12deg); }
+  25%  { transform: rotate(0deg); }
+  50%  { transform: rotate(12deg); }
+  75%  { transform: rotate(0deg); }
+  100% { transform: rotate(-12deg); }
+}
+@keyframes dr-rArmL {
+  0%   { transform: rotate(-90deg); }
+  25%  { transform: rotate(0deg); }
+  50%  { transform: rotate(-90deg) translateX(8px); }
+  75%  { transform: rotate(20deg); }
+  100% { transform: rotate(-90deg); }
+}
+@keyframes dr-rArmR {
+  0%   { transform: rotate(0deg); }
+  25%  { transform: rotate(90deg); }
+  50%  { transform: rotate(0deg); }
+  75%  { transform: rotate(90deg) translateX(-8px); }
+  100% { transform: rotate(0deg); }
+}
+
+/* ----- Moonwalk keyframes ----- */
+@keyframes dr-mHips {
+  0%, 100% { transform: translateX(0) rotate(-6deg); }
+  50%      { transform: translateX(2px) rotate(-6deg); }
+}
+@keyframes dr-mTorso {
+  0%, 100% { transform: rotate(8deg); }
+  50%      { transform: rotate(8deg) translateY(-1px); }
+}
+@keyframes dr-mHead {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(-2deg); }
+}
+@keyframes dr-mArmL {
+  0%, 100% { transform: rotate(20deg); }
+  50%      { transform: rotate(35deg); }
+}
+@keyframes dr-mArmR {
+  0%, 100% { transform: rotate(-35deg) translate(-2px,-2px); }
+  50%      { transform: rotate(-20deg); }
+}
+@keyframes dr-mLegL {
+  0%   { transform: translateX(8px)  rotate(0deg); }
+  50%  { transform: translateX(-12px) rotate(-10deg); }
+  100% { transform: translateX(8px)  rotate(0deg); }
+}
+@keyframes dr-mLegR {
+  0%   { transform: translateX(8px)  rotate(0deg); }
+  50%  { transform: translateX(-12px) rotate(-10deg); }
+  100% { transform: translateX(8px)  rotate(0deg); }
+}
+@keyframes dr-mHat {
+  0%, 100% { transform: rotate(-10deg); }
+  50%      { transform: rotate(-8deg); }
+}
+
+/* ----- Floss keyframes ----- */
+@keyframes dr-fHips {
+  0%, 100% { transform: translateX(-6px) rotate(-3deg); }
+  50%      { transform: translateX(6px)  rotate(3deg); }
+}
+@keyframes dr-fTorso {
+  0%, 100% { transform: rotate(3deg); }
+  50%      { transform: rotate(-3deg); }
+}
+@keyframes dr-fHead {
+  0%, 100% { transform: rotate(-2deg); }
+  50%      { transform: rotate(2deg); }
+}
+@keyframes dr-fArmL {
+  0%   { transform: rotate(-30deg) translate(8px,0); }
+  50%  { transform: rotate(40deg)  translate(-8px,0); }
+  100% { transform: rotate(-30deg) translate(8px,0); }
+}
+@keyframes dr-fArmR {
+  0%   { transform: rotate(-40deg) translate(8px,0); }
+  50%  { transform: rotate(30deg)  translate(-8px,0); }
+  100% { transform: rotate(-40deg) translate(8px,0); }
+}
+@keyframes dr-fHat {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(4deg); }
+}
+
+/* ----- Salsa keyframes ----- */
+@keyframes dr-sHips {
+  0%, 100% { transform: translateX(-8px) rotate(-6deg); }
+  50%      { transform: translateX(8px)  rotate(6deg); }
+}
+@keyframes dr-sTorso {
+  0%, 100% { transform: rotate(4deg) translateY(-1px); }
+  50%      { transform: rotate(-4deg) translateY(-1px); }
+}
+@keyframes dr-sHead {
+  0%, 100% { transform: rotate(-4deg); }
+  50%      { transform: rotate(4deg); }
+}
+@keyframes dr-sArmL {
+  0%, 100% { transform: rotate(-30deg) translate(2px,-4px); }
+  50%      { transform: rotate(30deg)  translate(-2px,2px); }
+}
+@keyframes dr-sArmR {
+  0%, 100% { transform: rotate(30deg)  translate(-2px,2px); }
+  50%      { transform: rotate(-30deg) translate(2px,-4px); }
+}
+@keyframes dr-sLegL {
+  0%, 100% { transform: rotate(-3deg) translateX(-2px); }
+  50%      { transform: rotate(6deg)  translateX(2px); }
+}
+@keyframes dr-sLegR {
+  0%, 100% { transform: rotate(6deg)  translateX(2px); }
+  50%      { transform: rotate(-3deg) translateX(-2px); }
+}
+
+/* ----- Twist keyframes ----- */
+@keyframes dr-tHips {
+  0%, 100% { transform: rotate(-8deg) translateY(2px); }
+  50%      { transform: rotate(8deg)  translateY(2px); }
+}
+@keyframes dr-tTorso {
+  0%, 100% { transform: rotate(6deg); }
+  50%      { transform: rotate(-6deg); }
+}
+@keyframes dr-tHead {
+  0%, 100% { transform: rotate(-3deg); }
+  50%      { transform: rotate(3deg); }
+}
+@keyframes dr-tArmL {
+  0%, 100% { transform: rotate(-50deg) translate(4px,-2px); }
+  50%      { transform: rotate(40deg)  translate(-4px,2px); }
+}
+@keyframes dr-tArmR {
+  0%, 100% { transform: rotate(50deg)  translate(-4px,-2px); }
+  50%      { transform: rotate(-40deg) translate(4px,2px); }
+}
+@keyframes dr-tLegL {
+  0%, 100% { transform: rotate(-10deg); }
+  50%      { transform: rotate(10deg); }
+}
+@keyframes dr-tLegR {
+  0%, 100% { transform: rotate(10deg); }
+  50%      { transform: rotate(-10deg); }
+}
+
+/* ----- YMCA keyframes ----- */
+@keyframes dr-yArmL {
+  0%   { transform: rotate(0deg); }
+  8%   { transform: rotate(-150deg) translate(-4px,-12px); }
+  25%  { transform: rotate(-150deg) translate(-4px,-12px); }
+  33%  { transform: rotate(-60deg)  translate(-4px,-2px); }
+  50%  { transform: rotate(-60deg)  translate(-4px,-2px); }
+  58%  { transform: rotate(-100deg) translate(20px,-8px); }
+  75%  { transform: rotate(-100deg) translate(20px,-8px); }
+  83%  { transform: rotate(-130deg) translate(8px,-10px); }
+  92%  { transform: rotate(-130deg) translate(8px,-10px); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes dr-yArmR {
+  0%   { transform: rotate(0deg); }
+  8%   { transform: rotate(150deg)  translate(4px,-12px); }
+  25%  { transform: rotate(150deg)  translate(4px,-12px); }
+  33%  { transform: rotate(60deg)   translate(4px,-2px); }
+  50%  { transform: rotate(60deg)   translate(4px,-2px); }
+  58%  { transform: rotate(40deg)   translate(8px,-4px); }
+  75%  { transform: rotate(40deg)   translate(8px,-4px); }
+  83%  { transform: rotate(130deg)  translate(-8px,-10px); }
+  92%  { transform: rotate(130deg)  translate(-8px,-10px); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes dr-yHips  { 0%, 100% { transform: translateY(0); } }
+@keyframes dr-yTorso {
+  0%, 75%, 100% { transform: rotate(0); }
+  50% { transform: rotate(8deg) translateX(4px); }
+}
+@keyframes dr-yHead  {
+  0%, 25%, 75%, 100% { transform: rotate(0); }
+  50% { transform: rotate(6deg); }
+}
+
+/* ----- Vogue keyframes ----- */
+@keyframes dr-vHips {
+  0%, 100% { transform: translateX(-4px) rotate(-3deg); }
+  50%      { transform: translateX(4px)  rotate(3deg); }
+}
+@keyframes dr-vTorso {
+  0%, 100% { transform: rotate(-2deg); }
+  50%      { transform: rotate(2deg); }
+}
+@keyframes dr-vHead {
+  0%, 100% { transform: rotate(8deg); }
+  50%      { transform: rotate(-8deg); }
+}
+@keyframes dr-vArmL {
+  0%        { transform: rotate(0deg); }
+  25%, 75%  { transform: rotate(-160deg) translate(20px,-8px); }
+  50%       { transform: rotate(-30deg) translate(0,-4px); }
+  100%      { transform: rotate(0deg); }
+}
+@keyframes dr-vArmR {
+  0%        { transform: rotate(0deg); }
+  25%       { transform: rotate(30deg) translate(0,-4px); }
+  50%, 75%  { transform: rotate(160deg) translate(-20px,-8px); }
+  100%      { transform: rotate(0deg); }
+}
+
+/* ----- Tango keyframes ----- */
+@keyframes dr-gHips {
+  0%, 40%   { transform: translateX(-4px) rotate(-2deg); }
+  50%, 90%  { transform: translateX(8px)  rotate(4deg); }
+  100%      { transform: translateX(-4px) rotate(-2deg); }
+}
+@keyframes dr-gTorso {
+  0%, 40%   { transform: rotate(2deg); }
+  50%, 90%  { transform: rotate(-6deg); }
+  100%      { transform: rotate(2deg); }
+}
+@keyframes dr-gHead {
+  0%, 45%   { transform: rotate(-12deg); }
+  50%, 95%  { transform: rotate(12deg); }
+  100%      { transform: rotate(-12deg); }
+}
+@keyframes dr-gArmL {
+  0%, 40%   { transform: rotate(-110deg) translate(8px,-12px); }
+  50%, 90%  { transform: rotate(-160deg) translate(20px,-16px); }
+  100%      { transform: rotate(-110deg) translate(8px,-12px); }
+}
+@keyframes dr-gArmR {
+  0%, 40%   { transform: rotate(110deg)  translate(-8px,-12px); }
+  50%, 90%  { transform: rotate(60deg)   translate(-4px,-4px); }
+  100%      { transform: rotate(110deg)  translate(-8px,-12px); }
+}
+@keyframes dr-gLegL {
+  0%, 40%   { transform: rotate(-3deg); }
+  50%, 90%  { transform: rotate(-12deg) translateX(-4px); }
+  100%      { transform: rotate(-3deg); }
+}
+@keyframes dr-gLegR {
+  0%, 40%   { transform: rotate(3deg); }
+  50%, 90%  { transform: rotate(12deg)  translateX(4px); }
+  100%      { transform: rotate(3deg); }
+}
+
+/* ----- Charleston keyframes ----- */
+@keyframes dr-cHips {
+  0%, 100% { transform: translateY(-2px) rotate(-2deg); }
+  50%      { transform: translateY(2px)  rotate(2deg); }
+}
+@keyframes dr-cTorso {
+  0%, 100% { transform: rotate(2deg); }
+  50%      { transform: rotate(-2deg); }
+}
+@keyframes dr-cHead {
+  0%, 100% { transform: rotate(-4deg) translateY(-1px); }
+  50%      { transform: rotate(4deg)  translateY(1px); }
+}
+@keyframes dr-cArmL {
+  0%, 100% { transform: rotate(-50deg) translate(0,-4px); }
+  50%      { transform: rotate(20deg)  translate(0,2px); }
+}
+@keyframes dr-cArmR {
+  0%, 100% { transform: rotate(50deg)  translate(0,-4px); }
+  50%      { transform: rotate(-20deg) translate(0,2px); }
+}
+@keyframes dr-cLegL {
+  0%, 100% { transform: rotate(-12deg) translateX(6px); }
+  50%      { transform: rotate(12deg)  translateX(-2px); }
+}
+@keyframes dr-cLegR {
+  0%, 100% { transform: rotate(12deg)  translateX(-6px); }
+  50%      { transform: rotate(-12deg) translateX(2px); }
+}
+
+/* ----- Hat tip keyframes ----- */
+@keyframes dr-htHips  { 0%,100%{transform:translateY(0) rotate(0);} 50%{transform:translateY(-1px) rotate(1deg);} }
+@keyframes dr-htTorso { 0%,100%{transform:rotate(0);} 50%{transform:rotate(-2deg);} }
+@keyframes dr-htHead  { 0%,30%{transform:rotate(0);} 50%,70%{transform:rotate(-6deg);} 100%{transform:rotate(0);} }
+@keyframes dr-htHat   {
+  0%,25%   { transform: rotate(0) translate(0,0); }
+  45%,65%  { transform: rotate(-18deg) translate(-6px,-22px); }
+  85%,100% { transform: rotate(0) translate(0,0); }
+}
+@keyframes dr-htArmL  { 0%,100%{transform:rotate(8deg);} 50%{transform:rotate(4deg);} }
+@keyframes dr-htArmR  {
+  0%,15%   { transform: rotate(0deg) translate(0,0); }
+  35%,65%  { transform: rotate(-160deg) translate(-22px,-46px); }
+  85%,100% { transform: rotate(0deg) translate(0,0); }
+}
+
+/* ----- Float keyframes ----- */
+@keyframes dr-ftRig {
+  0%   { transform: translate(0,0) rotate(0deg); }
+  12%  { transform: translate(15px,170px) rotate(45deg); }
+  25%  { transform: translate(40px,240px) rotate(90deg); }
+  38%  { transform: translate(60px,140px) rotate(135deg); }
+  50%  { transform: translate(70px,0) rotate(180deg); }
+  62%  { transform: translate(60px,-95px) rotate(225deg); }
+  75%  { transform: translate(0,-120px) rotate(270deg); }
+  88%  { transform: translate(-50px,-55px) rotate(315deg); }
+  100% { transform: translate(0,0) rotate(360deg); }
+}
+@keyframes dr-ftHips  { 0%,100%{transform:translateY(0) rotate(0);} 50%{transform:translateY(-4px) rotate(-1deg);} }
+@keyframes dr-ftTorso { 0%,100%{transform:rotate(0);} 50%{transform:rotate(2deg);} }
+@keyframes dr-ftHead  { 0%,100%{transform:rotate(-2deg);} 50%{transform:rotate(3deg);} }
+@keyframes dr-ftArmL  { 0%,100%{transform:rotate(-80deg);} 50%{transform:rotate(-86deg);} }
+@keyframes dr-ftArmR  { 0%,100%{transform:rotate(80deg);}  50%{transform:rotate(86deg);} }
+@keyframes dr-ftLegL  { 0%,100%{transform:rotate(-4deg) translateY(0);} 50%{transform:rotate(-8deg) translateY(-2px);} }
+@keyframes dr-ftLegR  { 0%,100%{transform:rotate(4deg)  translateY(0);} 50%{transform:rotate(8deg)  translateY(-2px);} }
+
+/* ----- Jump keyframes ----- */
+@keyframes dr-jpHips  { 0%,100%{transform:translateY(0);} 45%{transform:translateY(-26px);} 70%{transform:translateY(2px);} }
+@keyframes dr-jpTorso { 0%,100%{transform:rotate(0);} 50%{transform:rotate(0);} }
+@keyframes dr-jpHead  { 0%,100%{transform:rotate(0);} 45%{transform:rotate(0) translateY(-1px);} }
+@keyframes dr-jpArmL  { 0%,100%{transform:rotate(0deg);} 45%{transform:rotate(-170deg);} }
+@keyframes dr-jpArmR  { 0%,100%{transform:rotate(0deg);} 45%{transform:rotate(170deg);} }
+@keyframes dr-jpLegL  { 0%,100%{transform:rotate(0) translateX(0);} 45%{transform:rotate(-12deg) translateX(-8px);} }
+@keyframes dr-jpLegR  { 0%,100%{transform:rotate(0) translateX(0);} 45%{transform:rotate(12deg)  translateX(8px);} }
+@keyframes dr-jpHat   {
+  0%, 100% { transform: translate(0,0) rotate(0); }
+  35%      { transform: translate(0,-30px) rotate(-10deg); }
+  60%      { transform: translate(0,4px) rotate(4deg); }
+}
+
+/* ----- Lasso keyframes ----- */
+@keyframes dr-laHips  { 0%,100%{transform:translateX(-4px) rotate(-2deg);} 50%{transform:translateX(4px) rotate(2deg);} }
+@keyframes dr-laTorso { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(-2deg);} }
+@keyframes dr-laHead  { 0%,100%{transform:rotate(-6deg);} 50%{transform:rotate(6deg);} }
+@keyframes dr-laArmL  { 0%,100%{transform:rotate(20deg);} 50%{transform:rotate(28deg);} }
+@keyframes dr-laArmR  {
+  0%   { transform: rotate(-180deg) translate(-12px,-30px); }
+  25%  { transform: rotate(-90deg)  translate(-30px,-18px); }
+  50%  { transform: rotate(0deg)    translate(-12px,-6px); }
+  75%  { transform: rotate(90deg)   translate(6px,-18px); }
+  100% { transform: rotate(180deg)  translate(-12px,-30px); }
+}
+@keyframes dr-laLegL  { 0%,100%{transform:rotate(0);} 50%{transform:rotate(-2deg);} }
+@keyframes dr-laLegR  { 0%,100%{transform:rotate(0);} 50%{transform:rotate(2deg);} }
+
+/* ----- Kickline keyframes ----- */
+@keyframes dr-klHips  { 0%,100%{transform:rotate(0);} 25%{transform:rotate(-3deg);} 75%{transform:rotate(3deg);} }
+@keyframes dr-klTorso { 0%,100%{transform:rotate(0);} 50%{transform:rotate(2deg);} }
+@keyframes dr-klHead  { 0%,100%{transform:rotate(0);} 50%{transform:rotate(-2deg);} }
+@keyframes dr-klArmL  { 0%,100%{transform:rotate(-95deg);} 50%{transform:rotate(-100deg);} }
+@keyframes dr-klArmR  { 0%,100%{transform:rotate(95deg);}  50%{transform:rotate(100deg);} }
+@keyframes dr-klLegL  { 0%,40%{transform:rotate(0) translateY(0);} 60%,80%{transform:rotate(-95deg) translateY(-8px);} 100%{transform:rotate(0) translateY(0);} }
+@keyframes dr-klLegR  { 0%,10%{transform:rotate(0) translateY(0);} 25%,40%{transform:rotate(95deg) translateY(-8px);} 60%,100%{transform:rotate(0) translateY(0);} }
+
+/* ----- Handjive keyframes ----- */
+@keyframes dr-hjHips  { 0%,100%{transform:translateX(-2px) rotate(-1deg);} 50%{transform:translateX(2px) rotate(1deg);} }
+@keyframes dr-hjTorso { 0%,100%{transform:rotate(2deg);} 50%{transform:rotate(-2deg);} }
+@keyframes dr-hjHead  { 0%,100%{transform:rotate(-3deg);} 50%{transform:rotate(3deg);} }
+@keyframes dr-hjArmL  {
+  0%,25%   { transform: rotate(-40deg) translate(20px,-2px); }
+  25%,50%  { transform: rotate(-40deg) translate(20px,8px); }
+  50%,75%  { transform: rotate(-30deg) translate(14px,4px); }
+  75%,100% { transform: rotate(-70deg) translate(8px,-6px); }
+}
+@keyframes dr-hjArmR  {
+  0%,25%   { transform: rotate(40deg) translate(-20px,8px); }
+  25%,50%  { transform: rotate(40deg) translate(-20px,-2px); }
+  50%,75%  { transform: rotate(30deg) translate(-14px,-4px); }
+  75%,100% { transform: rotate(70deg) translate(-8px,-6px); }
+}
+
+/* ----- Sway keyframes ----- */
+@keyframes dr-swHips  { 0%,100%{transform:translateX(-10px) rotate(-4deg);} 50%{transform:translateX(10px) rotate(4deg);} }
+@keyframes dr-swTorso { 0%,100%{transform:rotate(3deg);} 50%{transform:rotate(-3deg);} }
+@keyframes dr-swHead  { 0%,100%{transform:rotate(-4deg);} 50%{transform:rotate(4deg);} }
+@keyframes dr-swArmL  { 0%,100%{transform:rotate(-12deg);} 50%{transform:rotate(18deg);} }
+@keyframes dr-swArmR  { 0%,100%{transform:rotate(12deg);}  50%{transform:rotate(-18deg);} }
+@keyframes dr-swLegL  { 0%,100%{transform:rotate(-4deg) translateX(-2px);} 50%{transform:rotate(4deg) translateX(2px);} }
+@keyframes dr-swLegR  { 0%,100%{transform:rotate(4deg) translateX(2px);} 50%{transform:rotate(-4deg) translateX(-2px);} }
+
+/* ----- Monster keyframes ----- */
+@keyframes dr-msHips  { 0%,100%{transform:translateY(0);} 25%{transform:translateY(-3px);} 75%{transform:translateY(-3px);} }
+@keyframes dr-msTorso { 0%,100%{transform:rotate(0);} 50%{transform:rotate(0);} }
+@keyframes dr-msHead  { 0%,100%{transform:rotate(0);} 50%{transform:rotate(0);} }
+@keyframes dr-msArmL  { 0%,100%{transform:rotate(-92deg) translate(20px,0);} 50%{transform:rotate(-88deg) translate(20px,0);} }
+@keyframes dr-msArmR  { 0%,100%{transform:rotate(92deg) translate(-20px,0);} 50%{transform:rotate(88deg) translate(-20px,0);} }
+@keyframes dr-msLegL  { 0%,100%{transform:rotate(-12deg) translateX(-2px);} 50%{transform:rotate(12deg) translateX(2px);} }
+@keyframes dr-msLegR  { 0%,100%{transform:rotate(12deg) translateX(2px);} 50%{transform:rotate(-12deg) translateX(-2px);} }
+
+/* DISASSEMBLE */
+.dancing-robot.disassemble .g-hips    { animation: dr-daHips 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-torso   { animation: dr-daTorso 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-head    { animation: dr-daHead 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-hat     { animation: dr-daHat 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-arm-l   { animation: dr-daArmL 4s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 100% 0%; }
+.dancing-robot.disassemble .g-arm-r   { animation: dr-daArmR 4s cubic-bezier(.4,0,.2,1) infinite; transform-origin: 0% 0%; }
+.dancing-robot.disassemble .g-leg-l   { animation: dr-daLegL 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-leg-r   { animation: dr-daLegR 4s cubic-bezier(.4,0,.2,1) infinite; }
+.dancing-robot.disassemble .g-foot-r, .dancing-robot.disassemble .g-hand-wave { animation: none; }
+
+/* ----- Conduct keyframes ----- */
+@keyframes dr-cdHips  { 0%,100%{transform:rotate(0);} 50%{transform:rotate(-1deg);} }
+@keyframes dr-cdTorso { 0%,100%{transform:rotate(-1deg);} 50%{transform:rotate(1deg);} }
+@keyframes dr-cdHead  { 0%,100%{transform:rotate(-3deg);} 25%{transform:rotate(3deg);} 75%{transform:rotate(-2deg);} }
+@keyframes dr-cdArmL  { 0%,100%{transform:rotate(-50deg) translate(8px,4px);} 50%{transform:rotate(-44deg) translate(6px,2px);} }
+@keyframes dr-cdArmR  {
+  0%,100% { transform: rotate(20deg) translate(-4px,8px); }
+  25%     { transform: rotate(-30deg) translate(8px,-4px); }
+  50%     { transform: rotate(60deg) translate(-12px,-4px); }
+  75%     { transform: rotate(-110deg) translate(8px,-30px); }
+}
+
+/* ----- Disassemble keyframes ----- */
+@keyframes dr-daHips {
+  0%, 20%  { transform: translateY(0) rotate(0); }
+  35%, 65% { transform: translateY(60px) rotate(0); }
+  80%, 100% { transform: translateY(0) rotate(0); }
+}
+@keyframes dr-daTorso {
+  0%, 20%  { transform: rotate(0); }
+  35%, 65% { transform: rotate(0) translateY(-50px); }
+  80%, 100% { transform: rotate(0); }
+}
+@keyframes dr-daHead {
+  0%, 20%  { transform: translate(0,0) rotate(0); }
+  35%, 65% { transform: translate(0,-60px) rotate(0); }
+  80%, 100% { transform: translate(0,0) rotate(0); }
+}
+@keyframes dr-daHat {
+  0%, 20%  { transform: translate(0,0) rotate(0); }
+  35%, 65% { transform: translate(0,-100px) rotate(-20deg); }
+  80%, 100% { transform: translate(0,0) rotate(0); }
+}
+@keyframes dr-daArmL {
+  0%, 20%  { transform: rotate(0deg) translate(0,0); }
+  35%, 65% { transform: rotate(-90deg) translate(-50px,-10px); }
+  80%, 100% { transform: rotate(0deg) translate(0,0); }
+}
+@keyframes dr-daArmR {
+  0%, 20%  { transform: rotate(0deg) translate(0,0); }
+  35%, 65% { transform: rotate(90deg) translate(50px,-10px); }
+  80%, 100% { transform: rotate(0deg) translate(0,0); }
+}
+@keyframes dr-daLegL {
+  0%, 20%  { transform: rotate(0deg) translate(0,0); }
+  35%, 65% { transform: rotate(-30deg) translateX(-50px); }
+  80%, 100% { transform: rotate(0deg) translate(0,0); }
+}
+@keyframes dr-daLegR {
+  0%, 20%  { transform: rotate(0deg) translate(0,0); }
+  35%, 65% { transform: rotate(30deg) translateX(50px); }
+  80%, 100% { transform: rotate(0deg) translate(0,0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dancing-robot .g-rig,
+  .dancing-robot .g-hips,
+  .dancing-robot .g-torso,
+  .dancing-robot .g-head,
+  .dancing-robot .g-hat,
+  .dancing-robot .g-hand-wave,
+  .dancing-robot .g-arm-l,
+  .dancing-robot .g-arm-r,
+  .dancing-robot .g-leg-r,
+  .dancing-robot .g-leg-l,
+  .dancing-robot .g-foot-r,
+  .dancing-robot .mouth,
+  .dancing-robot .eye { animation: none; }
+}

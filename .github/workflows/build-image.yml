@@ -1,0 +1,1735 @@
+name: Build and publish image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    # Skip rebuilds for doc-only commits — these never affect the runtime image.
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - '.claude/**'
+  # NO PR-side path filter (intentionally). This workflow owns four REQUIRED
+  # status checks on `main`. A `paths-ignore`-gated workflow does not trigger on
+  # a docs-only PR, so its required checks never report and GitHub blocks the
+  # merge forever as "Expected — Waiting for status". The workflow now triggers
+  # on EVERY pull request; a `detect` job decides whether the PR is docs-only
+  # and the four required jobs report a green stub when it is (see `detect` and
+  # the required jobs below). The push-side `paths-ignore` above is deliberately
+  # KEPT so a docs-only push to `main` still never rebuilds/republishes the
+  # runtime image (image economics, orthogonal to required-check reporting).
+  pull_request:
+    branches: [main]
+    # Draft PRs green-stub the heavy/required jobs (see `detect.skip`); marking a
+    # PR ready (ready_for_review) runs them for real, and converting back to
+    # draft (converted_to_draft) lets concurrency cancel an in-flight real run.
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  # Run the real required checks on merge-queue candidates too (forward-safe: if
+  # a merge queue is enabled later these required checks must still report). The
+  # build job never logs in or publishes from a merge-queue run — see its
+  # publish allowlist.
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # detect — compute whether this PR needs heavy validation (`skip`).
+  #
+  # The four required status checks live in THIS workflow. It used to be
+  # `paths-ignore`-gated and was therefore absent on docs-only PRs, leaving each
+  # required check stuck at "Expected — Waiting" and blocking the merge. The
+  # workflow now triggers on every PR; this job emits a single `skip` boolean so
+  # the required jobs green-stub when the PR needs no heavy validation and run
+  # for real otherwise.
+  #
+  # skip = docs-only OR draft:
+  #  - docs-only: EVERY changed file is a docs path. dorny's
+  #    `predicate-quantifier: every` makes the inverse `code` filter match a file
+  #    iff it is a NON-docs file; `code == 'true'` ⇔ ≥1 code file ⇔ {code OR
+  #    mixed} (real checks). A pure-docs PR matches no code file → `code` is
+  #    'false' → docs-only.
+  #  - draft: a draft PR is unmergeable by GitHub, so green-stubbing its required
+  #    checks is safe; marking it ready (ready_for_review) re-runs them for real.
+  #    This keeps noisy draft iteration off the expensive e2e/build path — the
+  #    dominant CI cost on this repo.
+  # On push/tag/dispatch/merge_group the dorny step is skipped, draft is N/A, and
+  # `skip` defaults to false (real run).
+  #
+  # No checkout: dorny reads the PR's changed files from the REST API (needs
+  # `pull-requests: read`). Fast (~5s), no services.
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect skip — docs-only or draft (build-image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # skip the heavy/required jobs when the PR is docs-only OR a draft. Draft
+      # is N/A on push/merge_group (github.event.pull_request is null -> false).
+      skip: ${{ github.event_name == 'pull_request' && (github.event.pull_request.draft == true || steps.filter.outputs.code != 'true') }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!AGENTS.md'
+              - '!CLAUDE.md'
+              - '!.claude/**'
+
+  # ---------------------------------------------------------------------------
+  # actions-pin-gate — supply-chain recurrence guard (FORMAT ONLY).
+  #
+  # Fails CI if any remote `uses:` ref in `.github/workflows/**` is not pinned
+  # to a 40-char commit SHA carrying a `# vX.Y.Z` comment. It does NOT assert
+  # SHA<->tag correctness (a local static parser can't resolve a SHA to its
+  # upstream tag) — that is verified at authoring time against each upstream
+  # repo, and Dependabot's grouped `github-actions` updater keeps the pins
+  # fresh. Pure-node + `node:test`, so it needs NO `pnpm install` — a minimal,
+  # lean surface, which is the point for a supply-chain job.
+  #
+  # Non-required, docs-only-skip (mirrors the other non-required jobs). Declares
+  # its OWN `contents: read` permissions so it never inherits the workflow's
+  # top-level `packages: write`: a write token has no business in a read-only
+  # static audit during a supply-chain-hardening change.
+  # ---------------------------------------------------------------------------
+  actions-pin-gate:
+    name: Actions SHA-pin gate
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Pin-format gate
+        run: node scripts/audit/actions-pinned-gate.mjs
+
+      - name: Parser tests
+        run: node --test scripts/audit/__tests__/actions-pinned-gate.test.mjs
+
+  # PR gate for typecheck + unit tests.
+  # `pnpm test` excludes integration tests via vitest.config.ts; they run in
+  # the integration test step below when CINATRA_TEST_DB_URL is provided.
+  # Without that secret/service the integration step is skipped.
+  test:
+    name: Typecheck and unit tests
+    # This job is the SOLE full TypeScript gate now that the CI `next build`s skip
+    # their in-build tsc (next.config `ignoreBuildErrors` is CI-only; the
+    # `next typegen` step below regenerates .next/types so the typecheck covers
+    # generated route/validator types — tsconfig includes .next/types). Enforced
+    # STRUCTURALLY, not via branch protection: the `build` job (image build +
+    # publish) declares `needs: [detect, test]` AND runs a "Guard prerequisite
+    # gates" step that HARD-FAILS (exit 1) the build if `test` did not succeed.
+    # (We can't rely on a bare skip — GitHub can count a skipped required check as
+    # successful — so the build runs `if: always()` and the guard turns a failed
+    # `test` into a definitive RED build, never a passing skip.) A green
+    # "Build and publish image" result therefore provably implies a green `test`.
+    # The two e2e jobs intentionally run independently (`if: always()`, decoupled
+    # from publish cadence); they validate RUNTIME, so a type error there either
+    # breaks runtime (e2e fails) or is caught here (and the build guard fails).
+    # The merge gate is the build result. `needs: detect` is mandatory — without it
+    # the `skip` expression has no value and the gate silently no-ops.
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Generate Next's route types (.next/types/routes.d.ts) so the typecheck
+      # below covers them. next.config skips the in-build tsc in CI
+      # (ignoreBuildErrors), so this REQUIRED job is now the sole gate for
+      # generated route types (tsconfig includes .next/types). typegen loads
+      # next.config, which requires these placeholder env vars at module-eval.
+      - name: Generate route types (next typegen)
+        env:
+          SUPABASE_DB_URL: postgresql://build:build@127.0.0.1:5432/build
+          OPENAI_API_KEY: build-only-placeholder-not-used-at-runtime
+        run: pnpm exec next typegen
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Default vitest run; vitest.config.ts excludes *.integration.test.ts
+      # from this run.
+      - name: Unit tests (packages/agents)
+        run: cd packages/agents && pnpm test
+
+      # Integration tests are gated on a CI-provided test DB URL. When the
+      # secret is empty the step is skipped; provide CINATRA_TEST_DB_URL or
+      # a Postgres service container to enable this step.
+      - name: Integration tests (packages/agents)
+        if: env.CINATRA_TEST_DB_URL != ''
+        env:
+          CINATRA_TEST_DB_URL: ${{ secrets.CINATRA_TEST_DB_URL }}
+        run: cd packages/agents && pnpm test:integration
+
+      # The release-workflows unit + integration tests live in the dedicated
+      # `release-workflows-tests` job below with its own Postgres service
+      # container. That topology lets the suite gate independently of the
+      # agents-suite baseline.
+
+  # RBAC authz unit tests — runs the whole `src/lib/authz` suite (20 files /
+  # 160 tests), including the resolver matrix used by the e2e job as the
+  # primary CI proof of resolver correctness. Lives in its own job (not
+  # appended to `test`) because that job fails on the current packages/agents
+  # baseline, which would skip any step added after it.
+  #
+  # The root `src/` vitest suite is otherwise not run by `test`, so this is
+  # the only CI gate enforcing authz unit correctness today.
+  #
+  # Excludes `build-actor-context-from-run.test.ts`: it holds 5 placeholder
+  # tests deliberately RED until run.orgId is wired to actor.organizationId.
+  # Drop the --exclude once those tests should gate CI.
+  #
+  # REQUIRED status check on `main`. Always runs (`if: always()`) so the check
+  # always reports; the `detect` guard fails it RED if detection broke; a
+  # docs-only PR green-stubs in seconds.
+  rbac-authz-unit:
+    name: RBAC authz unit tests
+    needs: detect
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting RBAC authz unit tests as a green stub (the real suite runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: RBAC authz unit tests (incl. resolver matrix)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm exec vitest run src/lib/authz --exclude '**/build-actor-context-from-run.test.ts'
+
+  # Hotfix recurrence guard. The `context-selection-agent` OAS declares
+  # `resolve_context.outputs = {candidates, slotMeta, selectedRefs,
+  # selectionMode, resolutionMode}`; the select_mode BranchingNode routes on
+  # top-level `selectionMode` and finalize_* DFE-bind both fields. A
+  # route-vs-OAS contract drift (the route was returning only the
+  # first three) was not caught by the main `test` job because root `src/`
+  # vitest is otherwise not gated. This dedicated job pins the route's
+  # response contract going forward.
+  context-resolve-route-shape:
+    name: context-resolve route response shape
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: /api/context-resolve response-shape regression
+        run: pnpm exec vitest run src/app/api/context-resolve/__tests__/response-shape.test.ts --no-coverage
+
+  # Better Auth schema drift guard. Both `src/lib/auth.ts` (runtime)
+  # and `scripts/better-auth-migrate.mts` (bootstrap migration `make setup`
+  # runs) consume the same shared plugin factory at
+  # `src/lib/better-auth-plugins.ts`. This job gates PRs on:
+  #   1. `pnpm typecheck` — pins the precise mutable-tuple annotation on
+  #      `authPlugins` inside src/lib/auth.ts so any plugin pushed outside
+  #      the shared factory fails typecheck.
+  #   2. The root vitest drift test — deep-equals the Better Auth schema
+  #      both sides produce (runtime ↔ migration parity).
+  #   3. The packages/mcp-server pure builder test — covers the pure
+  #      `buildMcpAuthPlugins` module (not gated by any other job).
+  #   4. A native Node smoke that imports `scripts/better-auth-migrate.mts`
+  #      via plain Node strip-types — catches the resolution failure modes
+  #      Vitest's bundler hides (package-exports `.ts` resolution, missing
+  #      explicit `.ts` extension on relative imports).
+  # Lives in its own top-level job (not appended to `test`) so the gate
+  # actually runs on every PR — the shared `test` job has a well-known
+  # baseline failure that would skip any subsequent step.
+  auth-schema-drift:
+    name: Better Auth schema parity
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (pins runtime plugin-tuple shape)
+        run: pnpm typecheck
+
+      - name: Schema parity test (runtime ↔ migration)
+        run: pnpm exec vitest run src/lib/__tests__/better-auth-schema.test.ts
+
+      - name: MCP auth-plugins pure builder test
+        run: cd packages/mcp-server && pnpm exec vitest run src/__tests__/auth-plugins.test.ts
+
+      # The generic, install/uninstall-aware skill resolver that
+      # replaces the per-consumer hardcoded skill self-heals. packages/skills is
+      # not in the root vitest include, so pin this contract test explicitly.
+      - name: Extension skill resolver test
+        run: cd packages/skills && pnpm exec vitest run --no-coverage src/extension-skill-resolver.test.ts
+
+      # Skills delete-race fix: deletePersonalSkillAction must REDIRECT on success
+      # (not return a MutationResult) so the /skills/<id>/edit page never re-renders
+      # to notFound() under the deleted row and 404s before the toast. packages/skills
+      # is not in the root vitest include, so pin this regression test explicitly.
+      - name: Skills delete-redirect action test (delete-race fix)
+        run: cd packages/skills && pnpm exec vitest run --no-coverage src/__tests__/delete-personal-skill-action.test.ts
+
+      - name: Native Node smoke (migration loads via plain Node strip-types)
+        run: |
+          node -e "import('./scripts/better-auth-migrate.mts').then(m => { const opts = m.buildMigrationAuthOptions(); const ids = opts.plugins.map(p => p.id); const expected = ['username','two-factor','admin','organization','jwt','oauth-provider']; if (JSON.stringify(ids) !== JSON.stringify(expected)) { console.error('migration plugin ids mismatch:', ids, '!=', expected); process.exit(1); } console.log('migration plugins OK:', ids.join(',')); }).catch(e => { console.error('FAIL:', e); process.exit(1); })"
+
+  # Release Workflows package gate — unit (102) + integration (73) tests.
+  # Dedicated job (mirrors `rbac-resolver-unit` + the e2e jobs' service-
+  # container pattern) so the suite gates independently of the well-known
+  # packages/agents baseline failure (`package_version_oas_pkg_drift`) that
+  # otherwise short-circuits the shared `test` job before these run. The
+  # integration tests use a real Postgres provided by a service container —
+  # no `CINATRA_TEST_DB_URL` secret needed.
+  #
+  # REQUIRED status check on `main`. Always runs; the Postgres service image is
+  # only started on a real (non-docs) run so a docs-only PR green-stubs with no
+  # container.
+  release-workflows-tests:
+    name: Release workflows tests
+    needs: detect
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting Release workflows tests as a green stub (the real suite runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests (102 specs)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: cd packages/workflows && pnpm test
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The cinatra schema's DDL contains cross-schema FKs to `public.user`
+        # (Better-Auth-owned), e.g. skill_package_co_owners.user_id. The
+        # integration tests apply the cinatra DDL in beforeAll, but that DDL
+        # fails on a fresh CI Postgres ("relation public.user does not exist")
+        # unless the Better Auth public schema is provisioned first — same
+        # pattern as the e2e jobs.
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Integration tests (73 specs)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The release-workflows integration suite applies the cinatra schema's
+        # DDL in beforeAll against the service-container Postgres (public.* is
+        # already provisioned by the step above).
+        run: cd packages/workflows && pnpm test:integration
+
+  # Gate the canonical-extension invariants as an independent job so the gate
+  # is visible regardless of the agents-suite baseline. Runs the
+  # `pnpm test:invariants` script from packages/extensions (dispatcher +
+  # lifecycle primitive + lifecycle UI + dep closure + system inventory +
+  # add-from-chat + required-in-prod + verdaccio immutability + publish
+  # authority + naming-conformance + mcp-tools), plus the repaired drift suites
+  # (promotion-action, install-adapter topology A/B, visibility-filter,
+  # publish-destination-picker, and the clone-back-dependent blog-agent
+  # produces-plumbing) — previously excluded as "known failures", now gated so
+  # they cannot silently re-drift. Closes the CI coverage gap for
+  # resolver-bypass-regression.
+  v64-invariants:
+    name: Canonical extension invariants
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Extension invariants (packages/extensions)
+        run: cd packages/extensions && pnpm test:invariants
+
+  # Dev-mode build performance invariants — gates the locked measurement
+  # contract + the chokepoint-narrowing invariants. Runs the 4 test files under
+  # scripts/__tests__/ that are the structural gates: (1) route-graph
+  # determinism + type-only erasure + tryFile() containment guard, (2) bench
+  # compile-path floor-scoping, (3) the vitest alias-order trap (subpath alias
+  # before bare in every config that maps the bare alias to a FILE/stub),
+  # (4) dev-stop PORT-3000 refusal + ownership verification.
+  devperf-invariants:
+    name: devperf invariants
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: devperf invariants (scripts/__tests__/)
+        run: npx vitest run scripts/__tests__/route-graph.test.mjs scripts/__tests__/bench-cold-start.test.mjs scripts/__tests__/devperf-invariants.test.mjs scripts/__tests__/dev-stop.test.mjs --no-coverage
+
+      - name: Docker host-port drift guard (scripts/lib/)
+        run: node --test scripts/lib/__tests__/docker-port-drift.test.mjs
+
+  # Perpetual system loops invariants — static-analysis gate that enforces the
+  # canonical "BullMQ perpetual system loops" pattern documented in root
+  # AGENTS.md. The same antipattern (handler self-rescheduling via
+  # `enqueueBackgroundJob` with the same job name) has recurred four times in
+  # production (graphiti-projection-repair / artifact-provider-cache-evict /
+  # audit-retention-enforce / litellm-pricing-sync); this gate fails the build
+  # before a fifth recurrence lands. Runs the gate script PLUS its companion
+  # parser tests so a regression in either the source pattern or the gate
+  # itself is caught.
+  perpetual-loops-invariants:
+    name: Perpetual system loops invariants
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so the touch-ratchet diff in admin-route + other
+          # gates run from this job can resolve origin/<pr.base.ref>.
+          fetch-depth: 0
+
+      - name: Compute diff base
+        id: base
+        # PRs → origin/<pr.base.ref>. Pushes → previous-tip
+        # (github.event.before) so a push to main still has a meaningful
+        # touch-ratchet anchor.
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Perpetual system loops gate (static analysis)
+        run: node scripts/audit/perpetual-system-loops-gate.mjs
+
+      - name: Perpetual system loops gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/perpetual-system-loops-gate.test.mjs
+
+      - name: Identity copy gate (no GTM-only platform framing)
+        run: node scripts/audit/identity-copy-gate.mjs
+
+      # Every extension manifest must carry the policy license field (Apache-2.0
+      # for cinatra-ai extensions; GPL-2.0-or-later for any GPL-derived
+      # extension). Fixed by `node scripts/extensions/apply-license-cleanup.mjs`.
+      - name: Extension license-field gate
+        run: node scripts/audit/extension-license-gate.mjs
+
+      - name: Extension license-field gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/license-cleanup.test.mjs
+
+      - name: Extraction tooling tests (LICENSE bodies, dedup preflight, planner)
+        run: pnpm exec vitest run scripts/extensions/__tests__/extract-extension-repos.test.mjs
+
+      # Self-contained per-kind CI gate shipped INTO extracted agent/workflow
+      # repos (extension-kind-gate.mjs) — guards the zero-dependency contract so
+      # a public repo's CI never regresses to `pnpm dlx @cinatra-ai/extension-tools`.
+      # Plus the portable submit tool's dependency-ordering gate.
+      - name: Extracted-repo kind-gate + release-submit + wave-runner gate tests
+        run: >-
+          pnpm exec vitest run
+          scripts/extensions/__tests__/extension-kind-gate.test.mjs
+          scripts/extensions/__tests__/release-submit.test.mjs
+          scripts/marketplace/__tests__/extension-wave-runner.test.mjs
+
+      # Every extension must declare its cross-kind dependency edges in
+      # cinatra.dependencies, kept in sync with the confident graph re-derived
+      # from source (so the marketplace can dependency-order extraction). STRICT
+      # (not a ratchet) — undeclared structural edge / malformed entry fails CI.
+      - name: Extension dependency-manifest drift gate
+        run: node scripts/audit/extension-deps-gate.mjs
+
+      # No-new-rot `@/` import-ban for extensions. The baseline records the
+      # CURRENT coupling, decoupled incrementally in the decoupling sweep; CI
+      # fails only on NEW `@/`/cross-extension coupling. anthropic exempt.
+      - name: Extension @/ import-ban + SDK-only gate (strict sdkOnly)
+        env:
+          # Monotonic ratchet: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the
+          # administration-route gate uses.
+          IMPORT_BAN_BASE: ${{ steps.base.outputs.base }}
+        # --strict-sdk-only makes the sdkOnly dimension ZERO-TOLERANCE
+        # (baseline ignored — every extension must import only the SDK packages),
+        # except the documented STRICT_SDK_ONLY_ALLOWLIST carve-out (crm->objects,
+        # tracked as the objects-ctx follow-up). The @/ + cross-extension ratchets
+        # are UNCHANGED (still no-new-rot against the base baseline).
+        run: node scripts/audit/extension-import-ban.mjs --strict-sdk-only
+
+      - name: Extension import-ban gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/extension-import-ban.test.mjs
+
+      # Host-peer VALUE-import ban. A runtime-loaded
+      # extension's cinatra.serverEntry import graph must keep the host-internal
+      # SDK peers (@cinatra-ai/sdk-extensions / sdk-ui / mcp-client) type-only
+      # (erased at compile) or take the value via the injected ctx; a runtime
+      # VALUE import is the model-B hazard the prod file:// loader cannot resolve.
+      # No-new-rot ratchet (the committed baseline is EMPTY today).
+      - name: Host-peer value-import ban gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the
+          # extension-import-ban + administration-route gates use.
+          HOST_PEER_BAN_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/host-peer-value-import-ban.mjs
+
+      - name: Host-peer value-import ban gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/host-peer-value-import-ban.test.mjs
+
+      # The MIRROR gate: core(src/) -> extension import ban.
+      # No NEW hand-coded core->extension coupling (core knowing a specific
+      # extension by name). The IoC cutover drives the baseline
+      # to 0 via the runtime-discovery dispatcher. Same no-new-rot + monotonic
+      # ratchet shape as extension-import-ban (reverse direction).
+      - name: Core -> extension import-ban gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the
+          # extension-import-ban + administration-route gates use.
+          CORE_EXT_BAN_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/core-extension-import-ban.mjs
+
+      - name: Core -> extension import-ban gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/core-extension-import-ban.test.mjs
+
+      # Discovery-dispatcher bypass gate. The runtime-discovery
+      # dispatcher (discoverActiveExtensionCapabilities) is the ONE sanctioned way
+      # a surface discovers active extension capabilities. This freezes the
+      # CURRENT direct native-reader callers as a baseline and fails CI on any NEW
+      # one, so discovery coupling can only SHRINK as surfaces migrate. Same
+      # no-new-rot + monotonic ratchet shape as the import-ban gates.
+      - name: Discovery-dispatcher bypass gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the other
+          # no-new-rot gates use.
+          DISCOVERY_BYPASS_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/discovery-dispatcher-bypass-ban.mjs
+
+      - name: Discovery-dispatcher bypass gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/discovery-dispatcher-bypass-ban.test.mjs
+
+      # Hardcoded extension-INSTANCE coupling gate. Catches the
+      # OTHER way core hardcodes a specific extension (the way blog/openai.ts
+      # slipped past the import-ban): string-literal / path references to an exact
+      # extension package name or `extensions/<scope>/<name>/` path. Occurrence-
+      # counted, shrink-only; the IoC cutover drives the baseline to 0.
+      - name: Core -> extension instance-coupling gate (no-new-rot)
+        env:
+          # Monotonic ratchet: committed baseline counts must not exceed the base
+          # ref's. Same base ref the other no-new-rot gates use.
+          CORE_EXT_INSTANCE_BAN_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/core-extension-instance-coupling-ban.mjs
+
+      - name: Core -> extension instance-coupling gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs
+
+      # Skill-store canonicality gate. No NEW canonical writes
+      # to the legacy `data/skills` tree (now compat-only),
+      # no NEW direct reads of `skill.sourcePath` bypassing the resolver.
+      # Same no-new-rot ratchet shape as extension-import-ban: a committed
+      # baseline records the current legacy carve-outs (github clone path,
+      # verdaccio install dir, relocate worker); CI fails on any new finding.
+      - name: Skill-store canonicality gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the
+          # extension-import-ban + administration-route gates use.
+          SKILL_CANONICALITY_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/skill-canonicality-gate.mjs
+
+      - name: Skill-store canonicality gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/skill-canonicality-gate.test.mjs
+
+      # Extension dev-fixtures: every extension declaring `cinatra.devFixtures`
+      # must ship a well-formed, declarative fixture file. The dev seeder is
+      # fire-and-forget, so this static gate is the hard fail on a malformed file.
+      - name: Extension dev-fixtures gate
+        run: node scripts/audit/dev-fixtures-gate.mjs
+
+      - name: Extension dev-fixtures gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/dev-fixtures-gate.test.mjs
+
+      # Verdaccio / registry.cinatra publish-EXECUTION ban gate.
+      # Extensions publish ONLY through the marketplace proxy; the registry is
+      # the install-backend behind a listing, never a publish target a workflow
+      # drives. This standing gate fails CI if ANY workflow `run:` step EXECUTES
+      # `npm/pnpm/yarn publish` (an ECHOED instruction string is allowed). The
+      # one canary that violated it (verdaccio-publish-proof.yml) is RETIRED —
+      # no filename exemptions. Companion tests guard the content-aware parser.
+      - name: Verdaccio publish-execution ban gate
+        run: node scripts/audit/verdaccio-publish-ban.mjs
+
+      - name: Verdaccio publish-execution ban gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/verdaccio-publish-ban.test.mjs
+
+      # Workspace phantom-dependency gate (no-new-rot ratchet). Flags a source
+      # import of a first-party workspace package that the importing package's
+      # package.json does not declare in any dependency bucket — it resolves only
+      # via pnpm's hoisted node_modules + tsconfig paths, so tsgo/next build pass
+      # while a clean `pnpm install --frozen-lockfile` (CI default) or extraction
+      # to a standalone repo breaks. Baseline records current debt; fails on NEW.
+      - name: Workspace phantom-dependency gate
+        env:
+          # Also fail if the committed baseline GREW vs the base branch (blocks
+          # the regenerate-to-pass bypass). Same base ref the other no-new-rot
+          # gates use.
+          WORKSPACE_PHANTOM_DEPS_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/workspace-phantom-deps.mjs
+
+      - name: Workspace phantom-dependency gate tests
+        run: node --test scripts/audit/__tests__/workspace-phantom-deps.test.mjs
+
+      # Pinned-test existence gate. `vitest run a b c` treats positionals as
+      # FILTERS — a positional that matches zero files is SILENTLY ignored as
+      # long as the others match, so a renamed/lost test leaves its pin behind
+      # and CI stays green while advertising coverage it no longer has (this is
+      # exactly how `extension-install-e2e.test.ts` went missing yet green). This
+      # gate fails CI when a workflow pins a test file whose basename exists
+      # nowhere in the tree.
+      - name: Pinned-test existence gate
+        run: node scripts/audit/ci-pinned-tests-exist.mjs
+
+      - name: Pinned-test existence gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/ci-pinned-tests-exist.test.mjs --no-coverage
+
+      # Cinatra design-system shadcn registry (`@cinatra-ai`),
+      # generated from src/components/ui + cn (the single source of truth).
+      # These gates keep the committed public/r and the vendored extension
+      # primitives from drifting from that source, and prove a clean standalone
+      # consumer can resolve + copy + import-rewrite + install registry items.
+      # PINNED shadcn CLI (never @latest).
+      - name: Design-system registry drift gate (public/r == fresh build)
+        run: node scripts/extensions/build-design-registry.mjs --check
+
+      - name: Vendored extension-primitive provenance gate
+        run: node scripts/extensions/vendor-extension-primitives.mjs --check
+
+      # --full also installs the copied source's declared deps + `tsc --noEmit`s
+      # it (proves "the copied source typechecks", not merely "files copied"), and
+      # asserts the explicit-add constraint negatively (`add field` alone must NOT
+      # pull radix-ui). Needs python3 (present on ubuntu-latest) + npm egress.
+      - name: Design-system registry clean-consumer smoke (explicit items + install + tsc)
+        run: node scripts/extensions/registry-consumer-smoke.mjs --full
+
+      # SDK ABI + tooling unit suites. These live in vitest.config.ts's
+      # include globs but were NOT invoked by any CI step (the packages/agents
+      # unit job only runs that package; the root src/ suite is otherwise ungated),
+      # so these cases ran locally but never in CI. Run them explicitly here.
+      # (license-cleanup + import-ban have their own gate-adjacent steps above.)
+      - name: SDK ABI + CLI + inventory/manifest unit tests
+        run: >-
+          pnpm exec vitest run
+          packages/sdk-extensions/src
+          scripts/extensions/__tests__/inventory.test.mjs
+          scripts/extensions/__tests__/generate-extension-manifest.test.mjs
+          scripts/extensions/__tests__/strip-comments.test.mjs
+          scripts/extensions/__tests__/vendor-extension-primitives.test.mjs
+          packages/cli/src/__tests__
+          src/lib/__tests__/extension-host-context.test.ts
+          src/lib/__tests__/extension-mcp-registry.test.ts
+          src/app/campaigns/__tests__/linkedin-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/apollo-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/gmail-gcal-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/wordpress-delete-action-extension-gate.test.ts
+          src/app/campaigns/__tests__/nango-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/github-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/openai-skills-action-extension-gate.test.ts
+          src/app/campaigns/__tests__/a2a-actions-extension-gate.test.ts
+          src/app/campaigns/__tests__/google-oauth-action-extension-gate.test.ts
+          src/app/campaigns/__tests__/anthropic-actions-extension-gate.test.ts
+          src/lib/__tests__/connector-policy-infra-action.test.ts
+          src/lib/__tests__/register-objects-provider.test.ts
+          --no-coverage
+
+      # Wholesale root Vitest suite — the gate of record for the root
+      # `vitest.config.ts` include (src/**/__tests__, scripts/**/__tests__,
+      # tests/contracts, packages/cli, packages/sdk-extensions). Runs the
+      # STABILIZED set: every file is fixed or carved out in vitest.config.ts
+      # `test.exclude` (node:test files, the DB-integration tier, and the
+      # documented quarantines). This closes the
+      # ungated-root-suite gap below: a NEW src/**/__tests__ file is now
+      # exercised by default — no per-file pin needed — and a new failure
+      # turns this job red.
+      - name: Root Vitest suite (wholesale — gate of record)
+        run: pnpm test:root
+
+      # Live Runtime Extension Installer. The per-file pins below are now
+      # REDUNDANT belt-and-suspenders: the wholesale `test:root` step above runs
+      # the full root include, so new src/lib tests are gated by default. The
+      # explicit pins are retained as a defense-in-depth signal
+      # (and to keep a fast, named failure surface for these critical files).
+      - name: Runtime installer unit tests
+        run: >-
+          pnpm exec vitest run
+          src/lib/__tests__/extension-package-store-core.test.ts
+          src/lib/__tests__/extension-trust.test.ts
+          src/lib/__tests__/extension-trust-config.test.ts
+          src/lib/__tests__/extension-trust-caller-parity.test.ts
+          src/lib/__tests__/runtime-package-loader-parity.test.ts
+          src/lib/__tests__/extension-lifecycle-teardown-invariant.test.ts
+          src/lib/__tests__/extension-migration.test.ts
+          src/lib/__tests__/extension-host-port-grants.test.ts
+          src/lib/__tests__/extension-action-dispatch.test.ts
+          src/lib/__tests__/extension-install-pipeline.test.ts
+          src/lib/__tests__/extension-install-pipeline-gatekept.test.ts
+          src/lib/__tests__/extension-hot-install-activate.test.ts
+          src/lib/__tests__/extension-dispatch-public-path.test.ts
+          src/lib/__tests__/extension-store-gc.test.ts
+          src/lib/__tests__/extension-snapshot-lease.test.ts
+          src/lib/__tests__/extension-activation-routing.test.ts
+          src/lib/__tests__/extension-schema-config.test.ts
+          src/components/__tests__/schema-config-connector-form.test.tsx
+          src/lib/__tests__/extension-install-ops.test.ts
+          src/lib/__tests__/extension-install-resolution.test.ts
+          src/lib/__tests__/extension-workflow-install-saga.test.ts
+          src/lib/__tests__/connector-runtime-ui-resolve.test.ts
+          src/lib/__tests__/connector-setup-pages-parity.test.ts
+          src/lib/__tests__/connector-ui-render.test.ts
+          src/lib/__tests__/connectors-registry-schema-config.test.ts
+          src/lib/__tests__/schema-config-fixture.test.ts
+          src/lib/__tests__/extension-migration-activation.test.ts
+          src/lib/__tests__/extension-signature-backfill.test.ts
+          src/lib/__tests__/cli-rich-schema-drift.test.ts
+          src/lib/__tests__/extension-install-e2e.test.ts
+          src/lib/__tests__/extension-signature.test.ts
+          src/lib/__tests__/extension-install-signed-e2e.test.ts
+          scripts/extensions/__tests__/schema-config-validator-parity.test.ts
+          scripts/signing/__tests__/bulk-sign-core.test.mjs
+          --no-coverage
+
+      - name: Runtime installer package-scoped unit tests
+        run: |
+          cd packages/objects && pnpm exec vitest run src/__tests__/registry-package-provenance.test.ts --no-coverage && cd ../..
+          cd packages/workflows && pnpm exec vitest run src/__tests__/workflow-archive-in-use-guard.test.ts --no-coverage && cd ../..
+          cd packages/dashboards && pnpm exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage && cd ../..
+          cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts --no-coverage && cd ../..
+          cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
+
+      # Apollo connector verified write-then-read-back security
+      # behavior (import WITHOUT connectorKey → forceRefresh readback → compare
+      # to the submitted key → saveConnectionRecord only after verify). Lives in
+      # the connector tree (not covered by the root vitest include), so it is run
+      # explicitly here from the package dir, like the mcp-server auth step above.
+      - name: Apollo connector verified-write test
+        run: cd extensions/cinatra-ai/apollo-connector && pnpm exec vitest run src/__tests__/sync-and-readback.test.ts --no-coverage
+
+      # Nango connector lives in the extension tree (not covered by the root
+      # vitest include), so its suite is run explicitly here from the package
+      # dir — covers the one-shot DELETE-only sanitization of the dead
+      # `nango_connection` key (incl. the exfiltration/MITM no-promote guards)
+      # plus the pre-existing nango cases. (The relocated-action manage-gate test
+      # lives under src/app/campaigns/__tests__ and is pinned in the block above.)
+      - name: Nango connector tests
+        run: cd extensions/cinatra-ai/nango-connector && pnpm exec vitest run --no-coverage
+
+      # CRM + Twenty connectors live in the extension tree (not covered by the
+      # root vitest include). The CRM contract/registry + the
+      # request-actor identity moved into @cinatra-ai/sdk-extensions; pin the pointer-
+      # write-repair suite (which exercises the host-bound CRM request-actor DI
+      # resolver path) + the Twenty provider suite so the decouple is gated.
+      # NOTE: the crm-connector suite is pinned by FILE, not whole-dir — the
+      # pre-existing crm-contact-finder.test.ts red (a UI @/components/ui import
+      # drift, unrelated to this work) is out of scope here. The objects-ctx
+      # follow-up routes the object-type registry + sync-adapter +
+      # objects_save + graphiti episode client through the SDK
+      # requireObjectsProvider() DI slot; both the pointer-write-repair and the
+      # retargeted twenty-to-graphiti-adapter suites are pinned so the decouple is
+      # gated (the host-side graphiti/no-uuid behavior is pinned via
+      # src/lib/__tests__/register-objects-provider.test.ts in the block above).
+      - name: CRM connector objects-ctx tests
+        run: cd extensions/cinatra-ai/crm-connector && pnpm exec vitest run src/__tests__/pointer-write-repair.test.ts src/__tests__/twenty-to-graphiti-adapter.test.ts --no-coverage
+
+      - name: Twenty connector tests
+        run: cd extensions/cinatra-ai/twenty-connector && pnpm exec vitest run --no-coverage
+
+      # Admin-namespace route reference gate. Hardens the admin route rename.
+      # Permanent 308 redirects preserve external bookmarks via next.config.ts;
+      # this gate prevents new in-tree references from silently routing
+      # through the redirect. Touch-ratchet via `ADMIN_ROUTE_DIFF_BASE`
+      # so pre-existing main violations don't block follow-on PRs (a
+      # finding on a line a PR DID NOT add is tolerated; a finding on a
+      # line a PR ADDED blocks).
+      - name: Administration route banned gate
+        env:
+          ADMIN_ROUTE_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/administration-route-banned.mjs
+
+      # Skill-read default-root containment guard. Bans regrowth of the
+      # `allowedRoots` / `allowedReadRoots` plumbing that was removed when
+      # the bridge moved to a catalog-only skill resolution path.
+      - name: Skill-read default-root-only gate
+        run: node scripts/audit/skill-read-default-root-only.mjs
+
+      # `read_skill` function-tool retirement guard. The legacy fallback was
+      # retired; reintroducing `createReadSkillTool` or any
+      # `name: "read_skill"` function-tool shape reopens the catalog-bypass
+      # surface and trips this gate.
+      - name: read_skill function-tool banned gate
+        run: node scripts/audit/read-skill-function-tool-banned.mjs
+
+      # WordPress / Drupal connector package-name rename guard.
+      # Bans new in-tree imports of the legacy `@cinatra-ai/wordpress-connector`
+      # / `@cinatra-ai/drupal-connector` names. The packages live as
+      # compatibility shims; this gate prevents new code from regrowing the
+      # deprecated dependency surface.
+      - name: WordPress/Drupal connector rename banned gate
+        run: node scripts/audit/wordpress-drupal-connector-rename-banned.mjs
+
+      # `/skills/packages` route-retirement guard. The package list +
+      # detail routes were folded into the unified `/skills` list; this gate
+      # bans the route string, the page mounts, the catch-all package branch,
+      # and the literal route directory from reappearing.
+      - name: Skills packages route banned gate
+        run: node scripts/audit/skills-packages-route-banned.mjs
+
+      # `/entity/skills` + `/profile/skills` route-retirement guard. Personal
+      # skill CRUD moved into the unified `/skills` list (list via
+      # ?scope=personal, new via /skills/new, edit via /skills/<id>/edit).
+      # The gate bans the legacy route strings, the page mounts, the
+      # EntityNavigation component, and the literal src/app/entity directory.
+      - name: Entity skills route banned gate
+        run: node scripts/audit/entity-skills-route-banned.mjs
+
+      # Agents-status route-retirement guard. The standalone
+      # agent-list table was retired; /agents is the single installed-agents
+      # surface. Touch-ratchet via
+      # `AGENTS_STATUS_ROUTE_DIFF_BASE` so pre-existing legacy refs don't
+      # block follow-on PRs (a finding on a line a PR ADDED blocks).
+      - name: Agents status route banned gate
+        env:
+          AGENTS_STATUS_ROUTE_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/agents-status-route-banned.mjs
+
+      # Data-new route-retirement guard. The standalone "New data
+      # item" type-chooser was retired; /data/types is
+      # the type browse + creation entry point. Touch-ratchet via
+      # `DATA_NEW_ROUTE_DIFF_BASE`.
+      - name: Data new route banned gate
+        env:
+          DATA_NEW_ROUTE_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/data-new-route-banned.mjs
+
+      # OAuth-application stale-table-name guard. The installed
+      # @better-auth/oauth-provider plugin uses `public."oauthClient"`
+      # (camelCase) — the legacy `oauth_application` reference was never
+      # created by the migration. Any code referencing it at runtime would
+      # silently fail on every boot. Strict gate (no allowlist) since
+      # the existing references were scrubbed; the shared helper at
+      # `src/lib/better-auth-oauth-client.ts` is the single source of
+      # truth for new INSERT/DELETE call sites.
+      - name: OAuth application stale-table banned gate
+        run: node scripts/audit/oauth-application-banned.mjs
+
+      # Analytics route-rename guard. The cost/usage/traces app routes
+      # were renamed to /analytics/{llm,llm-usage,api}.
+      # Package specifiers (@cinatra-ai/metric-cost-api,
+      # @cinatra-ai/metric-usage-api) and MCP primitives (metric_cost_*,
+      # metric_usage_*) are intentionally stable. Touch-ratchet via
+      # `ANALYTICS_ROUTES_DIFF_BASE`.
+      - name: Analytics routes banned gate
+        env:
+          ANALYTICS_ROUTES_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/analytics-routes-banned.mjs
+
+      # Configuration jobs-dashboard retirement guard. The Environment
+      # "jobs" tab + QueueDash route were retired. Touch-ratchet via
+      # `JOBS_DASHBOARD_DIFF_BASE`.
+      - name: Configuration jobs-dashboard banned gate
+        env:
+          JOBS_DASHBOARD_DIFF_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/configuration-jobs-dashboard-banned.mjs
+
+      # Cinatra BPMN Profile 1.0 install gate. Every kind:"workflow" extension
+      # must ship exactly one canonical cinatra/workflow.bpmn (no inline JSON
+      # definition), declare an integer cinatra.workflowVersion, and that
+      # sidecar must parse + validate against Profile 1.0 + compile to a
+      # lossless WorkflowSpec. Run under tsx so the gate can import the
+      # TypeScript BPMN substrate source directly.
+      - name: Workflow BPMN Profile 1.0 gate
+        run: node --import tsx scripts/audit/workflow-bpmn-gate.mjs
+
+      # Design packages pack smoke.
+      # Runs `pnpm pack` on @cinatra-ai/design + @cinatra-ai/sdk-ui and
+      # verifies the produced tarballs contain the expected files and no
+      # forbidden entries (node_modules/, .env*). This is the local smoke
+      # that ships in CI without requiring a reachable production Verdaccio;
+      # the actual publish-to-registry step is gated by registry-publish
+      # credentials availability and ships at launch readiness.
+      - name: Design packages pack smoke
+        run: node scripts/audit/design-packages-pack-smoke.mjs
+
+      # Canonical history-aware writer drift gate. Blocks any new DML against
+      # cinatra.objects that bypasses @/lib/object-history/canonical-writer.ts.
+      - name: Object-history writer drift gate
+        run: node scripts/audit/objects-writer-drift-gate.mjs
+
+      - name: Object-history writer drift gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/objects-writer-drift-gate.test.mjs
+
+      # Retention-policy completeness gate. Every versioned object type
+      # must have a retention_policy declaration.
+      - name: Retention policy completeness gate
+        run: node scripts/audit/retention-policy-gate.mjs
+
+      # Recurrence guard for the retention-policy gate: verifies the discovery
+      # walk EXCLUDES test files (the bug class that flagged 22 test-fixture
+      # types on main as "missing") + asserts the namespaced declarations are
+      # present.
+      - name: Retention policy gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/retention-policy-gate.test.mjs
+
+      # MutationResult rollout gate. Fails when a NEW object-write server action
+      # is unclassified, when the write-surface inventory is stale, or when a
+      # MIGRATED surface drops the MutationResult contract. PENDING redirect-form
+      # CRUD is tracked via per-area follow-up PRs with browser UAT.
+      - name: MutationResult rollout gate
+        run: node scripts/audit/mutation-result-rollout-gate.mjs
+
+      - name: MutationResult rollout gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/mutation-result-rollout-gate.test.mjs
+
+      # Unit tests for the object-history substrate + restore engine
+      # eligibility logic. Runs in the same job since it's small + shares the
+      # install above. Covers freshness probe, CMS retry, and
+      # change_set_list filters.
+      - name: Object-history unit tests
+        run: pnpm exec vitest run src/lib/object-history
+
+      # Data-safety UI server-action + helper unit tests
+      # (undo lookup, restore action, MutationResult/UndoToast, freshness/
+      # attempts actions, retention badge, URL params). Also pins the
+      # SearchParamToast flash-message island (the skills delete-race fix's
+      # redirect→toast handoff), which lives under src/components/__tests__ and
+      # is otherwise not in any pinned CI step.
+      - name: Data-safety UI unit tests
+        run: pnpm exec vitest run src/components/data-safety src/components/__tests__/search-param-toast.test.tsx
+
+      # Authz inventory/classification drift gate (the new
+      # data-safety MCP primitives must stay classified).
+      - name: Authz inventory drift gate
+        run: pnpm exec vitest run src/lib/authz/__tests__/drift-gate.test.ts
+
+  # RBAC browser e2e — builds the app and boots the production (standalone)
+  # server against a Postgres + Redis service container, runs Playwright. The
+  # unit-level resolver matrix (src/lib/authz/__tests__/resolver-matrix.test.ts)
+  # is the primary CI proof of resolver correctness and runs in the
+  # `rbac-authz-unit` job above; this is the representative end-to-end arm
+  # covering permissions, role, and extension authorization surfaces in a real
+  # hydrated browser.
+  # Intentionally NOT a `needs:` of `build` — image publish stays decoupled from
+  # browser-test cadence. This is a REQUIRED status check on `main`: it always
+  # runs (`if: always()`) so the check reports on every PR, the `detect` guard
+  # fails it RED if detection broke, and a docs-only PR green-stubs in seconds
+  # with no service containers started.
+  e2e-rbac:
+    name: RBAC browser e2e
+    needs: detect
+    if: ${{ always() }}
+    # Opt-in larger-runner lever — same mechanism the `build` job already uses.
+    # Unset keeps `ubuntu-latest` (zero-risk default). Set the org/repo variable
+    # CI_BUILD_RUNNER (e.g. `ubuntu-latest-4-cores`, 16GB) AFTER confirming
+    # availability with `runner-probe.yml` to move this memory-heavy production
+    # build off the 2-vCPU/7GB runner — where `pnpm build` (3GB heap) + the
+    # job-level postgres/redis sidecars OOM/swap-thrash and the runner gets
+    # RECLAIMED mid-build. Rollback is a variable flip, not a code revert.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # Dev-mode (Turbopack) compiles each route segment cold on first hit (the
+    # permissions page alone took ~60s). With route pre-warming below the suite
+    # fits comfortably, but keep generous headroom over the default.
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:7' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      BETTER_AUTH_SECRET: rbac-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      OPENAI_API_KEY: sk-test-placeholder
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      # A fresh CI instance has no instance-identity / Nango / OpenAI setup
+      # rows, which would redirect every authenticated route to /setup.
+      # The suite tests app surfaces, not the wizard — skip the setup gate.
+      CINATRA_E2E_SETUP_BYPASS: "true"
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting RBAC browser e2e as a green stub (the real suite runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      # Cache the Playwright browser download (~175 MiB chromium + ffmpeg +
+      # headless-shell). Pinned to the @playwright/test version via the
+      # lockfile hash so a version bump invalidates the cache. Saves
+      # 30-90s per e2e job when warm.
+      - name: Cache Playwright browsers
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Reuse Next.js's incremental build cache across runs. Keyed by
+      # lockfile + next.config.ts (so a config bump invalidates) and primed
+      # by the most-recent matching restore-key. Saves 1-3 min on `pnpm build`
+      # when warm.
+      - name: Cache Next.js build cache
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .next/cache
+          key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
+            nextjs-prod-${{ runner.os }}-
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The cinatra schema DDL is owned by ensurePostgresSchema (runs on
+        # first server query), but Better Auth's tables in `public.*`
+        # (user/session/member/organization/...) are managed separately. On a
+        # fresh CI Postgres, the dev server's instrumentation hook fails with
+        # `relation "public.user" does not exist` until we provision them.
+        #
+        # We apply a committed, idempotent snapshot of the public schema
+        # (tests/e2e/rbac/fixtures/public-schema.sql, generated by
+        # scripts/dump-public-schema.mjs) rather than the better-auth migrate
+        # CLI: the CLI bundles auth.ts + its whole import graph and statically
+        # refuses any `import "server-only"` in the tree (it lives in a
+        # transitive dep — better-auth/next-js — not auth.ts itself), so it is
+        # unusable in CI without mutating node_modules.
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Add CI build swap (default-runner only)
+        # Best-effort, default-runner ONLY (skipped when CI_BUILD_RUNNER moves this
+        # job to a larger runner). A 4G swapfile absorbs `pnpm build` memory SPIKES
+        # so the 2-vCPU/7GB runner is not RECLAIMED for unresponsiveness (Mode B).
+        # Subshell-guarded so a swap-setup failure NEVER fails the build — it falls
+        # back to today's behavior. 4G (not 8G+): the runner SSD is small + huge
+        # swap turns an OOM into a long I/O stall; the 20-min build cap still bounds
+        # a true thrash.
+        if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
+          # if/else makes it best-effort — any failure exits the step 0 with a warning.
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build app (production)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Run the suite against a production build, not `pnpm dev`. Turbopack
+        # dev compiles each route cold on first hit, which made the suite
+        # exhaust runner resources mid-run (the heaviest authorization test
+        # repeatedly killed the job). A prebuilt server serves routes instantly
+        # with low, steady memory — fast and stable. The build does no real DB
+        # I/O (postgres-sync no-ops under NEXT_PHASE=phase-production-build); the
+        # job env supplies the placeholder OPENAI_API_KEY + SUPABASE_DB_URL the
+        # build needs.
+        #
+        # Step-level cap: catch a memory-thrash HANG fast instead of eating the
+        # 45-min job cap. Bumped 15 -> 20: a healthy cold-CI build now runs
+        # ~10-15 min (the app grew past the old ~8-min assumption, so a 15-min cap
+        # FALSE-cancelled legitimately-slow-but-healthy builds on contended runners
+        # — observed here as a flaky e2e). 20 keeps headroom under the 45-min job
+        # cap for server-wait + the ~13-min Playwright budget while still failing a
+        # true hang well before the job cap.
+        timeout-minutes: 20
+        env:
+          # ~3GB worker heap. 4096 over-committed on this 7GB runner alongside the
+          # postgres sidecar (swap-thrash → hang); the default ~2GB OOMs. 3072 is
+          # the stable middle that GCs cleanly instead of thrashing.
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: pnpm build
+
+      - name: Start production server on port 3000
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # next.config sets `output: "standalone"`, so `next start` won't serve;
+        # run the standalone server exactly like the Dockerfile (server.js +
+        # static/public copied alongside it).
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js > /tmp/dev.log 2>&1) &
+          echo "prod server launched as PID $!"
+
+      - name: Wait for server ready (prod boot + DB schema provisioning)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # The instrumentation hook provisions the cinatra schema on first query;
+        # poll /api/auth/get-session which is light + cached after first hit.
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::server did not become ready in 5 min"
+          tail -200 /tmp/dev.log
+          exit 1
+
+      - name: Run RBAC Playwright e2e
+        # E2E_REUSE_SERVER=1 tells the rbac config to reuse our already-booted
+        # dev server even in CI (keeps the github reporter + retries enabled).
+        #
+        # Wrapped in `timeout` (SIGTERM at 13m, SIGKILL 60s later) so a hung
+        # suite can't burn the whole job AND — crucially — the step always
+        # exits 0 so the artifact-upload steps below run as ordinary steps. A
+        # job-level cancellation/timeout skips even `always()` cleanup, which
+        # left earlier runs with no diagnostics. The captured exit code is
+        # asserted at the end so the job still fails on test failure.
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        id: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_PORT: "3000"
+          E2E_REUSE_SERVER: "1"
+        run: |
+          set +e
+          timeout --kill-after=60 780 pnpm test:e2e:rbac
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        # always() so a signal-killed ("cancelled") Playwright step still uploads
+        # — failure()/cancelled() are both false when a step is killed inside an
+        # otherwise-successful workflow, which skipped these before. Also gated on
+        # a real (non-docs) run so the stub path uploads nothing.
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rbac-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      - name: Upload dev server log
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rbac-dev-server-log
+          path: /tmp/dev.log
+          retention-days: 7
+
+      - name: Assert RBAC e2e passed
+        # Fail the job on test failure / timeout, after artifacts are uploaded.
+        # A heavy step (reads steps.e2e.outputs.code): gated on a real run so the
+        # docs-only stub path does not see an empty code and go falsely RED.
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::RBAC e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "RBAC e2e passed"
+
+  workflows-e2e:
+    name: Workflows browser e2e
+    needs: detect
+    if: ${{ always() }}
+    # Opt-in larger-runner lever (see `e2e-rbac` above for the full rationale):
+    # CI_BUILD_RUNNER || ubuntu-latest. Zero-risk no-op until the variable is set.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # Mirrors `e2e-rbac` above. The release-workflows browser suite seeds a
+    # paused, attempt-bearing workflow via pg (no LLM/connector keys) and walks
+    # the index + detail pages. Always-on package gates remain the 100+ unit and
+    # 73 integration tests run in `test`; this is the representative end-to-end
+    # arm. The architectural reasons for the shape of this job (prod build,
+    # standalone server, public-schema seed, setup-bypass) are documented on
+    # the RBAC job — kept identical here so the two stay in sync.
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'postgres:17' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: ${{ needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' && 'redis:7' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+      SUPABASE_SCHEMA: cinatra
+      REDIS_URL: redis://127.0.0.1:6379
+      BETTER_AUTH_SECRET: workflows-e2e-secret-do-not-use-in-prod-xxxxxxxxxxxxxxxxxxxx
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      OPENAI_API_KEY: sk-test-placeholder
+      CINATRA_RUNTIME_MODE: development
+      A2A_DEV_BYPASS: "true"
+      CINATRA_E2E_SETUP_BYPASS: "true"
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Docs-only stub
+        if: ${{ needs.detect.outputs.skip == 'true' }}
+        run: echo "Docs-only or draft PR — reporting Workflows browser e2e as a green stub (the real suite runs on code/mixed PRs)."
+
+      - if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone extracted extension repos
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      # Cache the Playwright browser download (~175 MiB chromium + ffmpeg +
+      # headless-shell). Pinned to the @playwright/test version via the
+      # lockfile hash so a version bump invalidates the cache. Saves
+      # 30-90s per e2e job when warm.
+      - name: Cache Playwright browsers
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Reuse Next.js's incremental build cache across runs. Keyed by
+      # lockfile + next.config.ts (so a config bump invalidates) and primed
+      # by the most-recent matching restore-key. Saves 1-3 min on `pnpm build`
+      # when warm.
+      - name: Cache Next.js build cache
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .next/cache
+          key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
+          restore-keys: |
+            nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-
+            nextjs-prod-${{ runner.os }}-
+
+      - name: Provision Better Auth tables (public schema)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: node scripts/apply-public-schema.mjs
+
+      - name: Add CI build swap (default-runner only)
+        # Best-effort 4G swap on the default ubuntu-latest path only (see the
+        # RBAC e2e job above for the full rationale). Skipped on a larger
+        # CI_BUILD_RUNNER; a swap-setup failure never fails the build.
+        if: ${{ needs.detect.outputs.skip != 'true' && vars.CI_BUILD_RUNNER == '' }}
+        run: |
+          set -uxo pipefail
+          SWAPFILE=/swapfile-ci-build
+          # Genuinely fail-fast via && (set -e is a no-op in an `if` condition); the
+          # if/else makes it best-effort — any failure exits the step 0 with a warning.
+          if { sudo fallocate -l 4G "$SWAPFILE" || { sudo rm -f "$SWAPFILE"; sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=4096; }; } \
+            && sudo chmod 600 "$SWAPFILE" \
+            && sudo mkswap "$SWAPFILE" \
+            && sudo swapon "$SWAPFILE"; then
+            swapon --show; free -h
+          else
+            echo "::warning::CI build swap setup failed — proceeding without extra swap (today's behavior)"
+          fi
+
+      - name: Build app (production)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        # Step-level cap (see the RBAC e2e build step above): catch a memory-thrash
+        # HANG instead of eating the 45-min job cap. Bumped 15 -> 20 (a healthy
+        # cold-CI build now runs ~10-15 min; the 15-min cap FALSE-cancelled
+        # legitimately-slow builds on contended runners — the observed e2e flake).
+        timeout-minutes: 20
+        env:
+          # ~3GB worker heap — 4096 over-committed this 7GB runner with sidecars
+          # (swap-thrash → hang); see the RBAC e2e build step for the rationale.
+          NODE_OPTIONS: --max-old-space-size=3072
+        run: pnpm build
+
+      - name: Start production server on port 3000
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          cp -r .next/static .next/standalone/.next/static
+          [ -d public ] && cp -r public .next/standalone/public || true
+          (cd .next/standalone && PORT=3000 HOSTNAME=0.0.0.0 node server.js > /tmp/dev.log 2>&1) &
+          echo "prod server launched as PID $!"
+
+      - name: Wait for server ready (prod boot + DB schema provisioning)
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/auth/get-session --max-time 5 2>/dev/null || echo 000)
+            if [ "$code" = "200" ]; then echo "server ready after ${i} × 5s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::server did not become ready in 5 min"
+          tail -200 /tmp/dev.log
+          exit 1
+
+      - name: Run Workflows Playwright e2e
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        id: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_PORT: "3000"
+          E2E_REUSE_SERVER: "1"
+        run: |
+          set +e
+          timeout --kill-after=60 780 pnpm test:e2e:workflows
+          code=$?
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "playwright exited with ${code}"
+          exit 0
+
+      - name: Upload Playwright report
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workflows-playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 7
+
+      - name: Upload dev server log
+        if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workflows-dev-server-log
+          path: /tmp/dev.log
+          retention-days: 7
+
+      - name: Assert Workflows e2e passed
+        if: ${{ needs.detect.outputs.skip != 'true' }}
+        run: |
+          code="${{ steps.e2e.outputs.code }}"
+          if [ "$code" != "0" ]; then
+            echo "::error::Workflows e2e failed or timed out (exit ${code})"
+            exit 1
+          fi
+          echo "Workflows e2e passed"
+
+  build:
+    # Gate the image build on the test job so a failing typecheck or unit-test
+    # run blocks publishing the image, including the `latest` tag on main.
+    # Without `needs: test`, a regression would still produce a published image.
+    # `needs: detect` is added so a docs-only PR skips the build entirely (the
+    # `skip` gate below has no value without that edge); the publish-after-
+    # test dependency is preserved.
+    needs: [detect, test]
+    # Run even when a prerequisite (`detect`/`test`) FAILED, so the guard step
+    # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
+    # skipped required check as successful, so a failed `test` merely *skipping*
+    # `build` would NOT block a merge gated on the build status. The guard closes
+    # that hole with zero success-path latency (it no-ops when prerequisites
+    # pass). Docs-only and draft PRs (detect succeeded + skip) still skip the build.
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
+    # The `build` job (docker buildx build + next build) is the workflow's long
+    # pole (~10-11 min, mostly `next build` on a 2-vCPU runner). To accelerate it,
+    # set the org/repo variable CI_BUILD_RUNNER to a larger label (e.g.
+    # `ubuntu-latest-4-cores`) AFTER confirming availability with the manual
+    # `runner-probe.yml` workflow. Unset (the default) keeps `ubuntu-latest`, so
+    # this is a zero-risk no-op until the variable is set, and rollback is a
+    # variable flip — not a code revert. There is no in-job fallback for an
+    # unavailable runner label (runner selection precedes all steps), hence the
+    # probe-first discipline.
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
+    # (next build is the dominant pole); we've seen occasional 25-30 min hangs
+    # on contended runners. 20 min is generous over normal and surfaces a real
+    # stall as a job failure (artifacts/logs preserved) instead of letting it
+    # eat the workflow budget invisibly. Same defensive class as the RBAC
+    # globalTimeout.
+    timeout-minutes: 20
+    steps:
+      # Hard-fail the build (definitive RED, never a non-failing "skip") when a
+      # prerequisite gate did not pass — the type-safety enforcement for the
+      # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
+      - name: Guard prerequisite gates (detect + test)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' }}
+        run: |
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }}. Refusing to build the image."
+          exit 1
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Clone the extracted extension repos into the docker build context so the
+      # in-image `pnpm install` + `pnpm build` see the extension source (tsconfig
+      # paths + transpilePackages). Needs node; this job has no other node setup.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Clone extracted extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR
+        # Publish allowlist: only `push` (main branch + `v*` tags) and a manual
+        # `workflow_dispatch` log in / publish. PR and merge_group never do, and
+        # any future event type is denied by default (no exclusion list to
+        # maintain).
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          # Publish allowlist (mirrors the GHCR login gate above): build always
+          # runs on a real PR/merge_group as a build-only validation, but only
+          # `push` + `workflow_dispatch` actually push the image to GHCR.
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Forward CI=true so the Dockerfile's `next build` skips the redundant
+          # in-build tsc (types are gated by the required Typecheck job). Only set
+          # here, in CI — a local `docker build` (no build-arg) keeps the check.
+          build-args: |
+            CI=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Release-gating (Model A): on a v* tag, after the image is pushed AND the
+      # v-prefixed tag is confirmed resolvable in GHCR, tell ops to
+      # deploy it to prod immediately. Triggering from HERE (not release:published)
+      # closes the release-before-image race — the image provably exists first.
+      # GITHUB_TOKEN can't do cross-repo repository_dispatch, so this uses a
+      # scoped fine-grained PAT (resource owner cinatra-ai, repo cinatra-ai/ops,
+      # Contents: write). Prefer the release-specific CINATRA_RELEASE_DISPATCH_TOKEN;
+      # fall back to the legacy CINATRA_OPS_DISPATCH_TOKEN so the rename is
+      # non-breaking until the new secret is provisioned. The release dispatch
+      # token MUST be distinct from the cinatra-ai/docs dispatch PAT (also named
+      # CINATRA_OPS_DISPATCH_TOKEN in ops rotation-matrix.json) — reusing one name
+      # across the docs / marketplace / cinatra-app release sources is a
+      # rotation/revocation footgun. See .github/secrets-required.txt.
+      - name: Trigger prod deploy in ops
+        # Repo-name guard: only the canonical repo dispatches a deploy. A fork or
+        # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
+        # lands there.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
+        env:
+          GH_TOKEN: ${{ secrets.CINATRA_RELEASE_DISPATCH_TOKEN || secrets.CINATRA_OPS_DISPATCH_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SHA: ${{ github.sha }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Only SEMVER release tags (vMAJOR.MINOR(.PATCH)) dispatch a deploy.
+          # The `on.push.tags: ['v*']` filter + the step `if:` above admit ANY
+          # v-prefixed tag, so a marker/checkpoint tag (e.g.
+          # 'v-pre-extension-system') reaches here. Such tags still BUILD + push
+          # a GHCR checkpoint image (above), but must NOT trigger a deploy.
+          # Regex mirrors ops scripts/deploy-instance.sh — keep in sync.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a semver release tag — skipping prod deploy dispatch (the checkpoint image was still built + pushed to GHCR)."
+            exit 0
+          fi
+          # Confirm the v-prefixed image tag actually resolves before deploying.
+          docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null
+          curl -fsSL --retry 5 --retry-all-errors -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/cinatra-ai/ops/dispatches \
+            -d "$(jq -nc --arg tag "$TAG" --arg digest "$DIGEST" --arg sha "$SHA" \
+                  '{event_type:"cinatra-release-published",client_payload:{tag:$tag,digest:$digest,sha:$sha}}')"

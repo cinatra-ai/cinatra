@@ -1,0 +1,79 @@
+# ---------------------------------------------------------------------------
+# Per-clone WayFlow + Tailscale compose template.
+#
+# Rendered by `cinatra clone start` into `~/.cinatra/clones/<slug>/compose.yml`
+# with the following placeholders substituted:
+#
+#   @@NEXTJS_PORT@@          host port for the clone's Next.js (3100-3119)
+#   @@WAYFLOW_PORT@@         host port for the clone's WayFlow (3200-3219)
+#   @@WORKTREE_PATH@@        absolute path to the worktree (for ./extensions mount)
+#   @@TS_HOSTNAME@@          Tailscale device hostname (cinatra-<slug>-<idx>)
+#   @@CLONE_STATE_DIR@@      ~/.cinatra/clones/<slug>/ (host-side state dir)
+#   @@TAILSCALE_NETWORK_MODE@@   "host" (Linux only) or "bridge" (default)
+#
+# IMPORTANT:
+#   - TS_AUTHKEY is rendered as the LITERAL string "${TS_AUTHKEY}" below —
+#     docker compose substitutes from the spawned-process env at exec time.
+#     The raw secret never lands in this file on disk.
+# ---------------------------------------------------------------------------
+
+services:
+  wayflow:
+    image: cinatra-wayflow:local
+    ports:
+      - "@@WAYFLOW_PORT@@:3010"
+    environment:
+      PORT: "3010"
+      CINATRA_AGENTS_DIR: "/agents"
+      CINATRA_BASE_URL: "http://host.docker.internal:@@NEXTJS_PORT@@"
+      CINATRA_BRIDGE_TOKEN: "${CINATRA_BRIDGE_TOKEN}"
+      WAYFLOW_BASE_URL: "http://localhost:@@WAYFLOW_PORT@@"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+    volumes:
+      - "@@WORKTREE_PATH@@/extensions:/agents:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "node -e \"fetch('http://127.0.0.1:3010/.health').then(r => process.exit(r.ok || r.status === 503 ? 0 : 1)).catch(() => process.exit(1))\""
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Per-clone Tailscale Funnel sidecar.
+  # Brought up only when the operator's TS_AUTHKEY is set (the CLI passes it
+  # via the spawn env). The sidecar joins the per-clone compose network and
+  # proxies Funnel-terminated TLS traffic to the host's Next.js via
+  # host.docker.internal.
+  tailscale:
+    # v1.78.1 had a containerboot SIGSEGV (nil-deref in
+    # kubeClient.storeHTTPSEndpoint) that crashes on start whenever
+    # TS_SERVE_CONFIG has HTTPS/Funnel enabled in a non-Kubernetes Docker
+    # context — exactly our Funnel sidecar config. The pinned image below carries the
+    # upstream nil-guard fix.
+    # TODO: upstream issue filed at https://github.com/tailscale/tailscale/issues/14354
+    image: tailscale/tailscale:v1.78.3
+    hostname: "@@TS_HOSTNAME@@"
+    network_mode: "@@TAILSCALE_NETWORK_MODE@@"
+    environment:
+      # NB: ${TS_AUTHKEY} is rendered LITERALLY into compose.yml on disk;
+      # docker compose substitutes from the spawned-process env at exec time.
+      # The raw secret never lands on disk.
+      TS_AUTHKEY: "${TS_AUTHKEY}"
+      TS_HOSTNAME: "@@TS_HOSTNAME@@"
+      TS_SERVE_CONFIG: "/config/serve.json"
+      TS_STATE_DIR: "/var/lib/tailscale"
+      TS_USERSPACE: "false"
+    volumes:
+      - "@@CLONE_STATE_DIR@@/tailscale-state:/var/lib/tailscale"
+      - "@@CLONE_STATE_DIR@@/tailscale-serve.json:/config/serve.json:ro"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped

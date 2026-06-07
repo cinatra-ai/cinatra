@@ -1,0 +1,25 @@
+/* Cinatra Design — fonts.
+ *
+ * Loads Inter (body), Archivo (display), and JetBrains Mono (microcopy) from
+ * Google Fonts. Sets the `--font-inter` / `--font-archivo` /
+ * `--font-jetbrains-mono` CSS variables that `theme.css` references.
+ *
+ * Pragmatic v1: uses Google Fonts CDN with display=swap. Consumers that need
+ * self-hosted fonts (e.g. for offline deployment or stricter perf budgets)
+ * should NOT import this file and instead self-host the same font families
+ * via `next/font` or `@fontsource/*`. The `theme.css` mapping reads the
+ * `--font-*` variables either way.
+ *
+ * Consumer usage:
+ *   @import "@cinatra-ai/design/fonts.css";
+ *
+ * Or import via `index.css` for the full bundle.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo:ital,wght@0,400;0,500;0,600;0,700;0,800;1,800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --font-inter: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-archivo: 'Archivo', ui-sans-serif, system-ui, sans-serif;
+  --font-jetbrains-mono: 'JetBrains Mono', 'SFMono-Regular', 'IBM Plex Mono', 'Menlo', monospace;
+}

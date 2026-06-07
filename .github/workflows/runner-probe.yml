@@ -1,0 +1,36 @@
+name: Runner availability probe
+
+# Throwaway, MANUAL-ONLY (workflow_dispatch), NON-required probe to confirm the
+# org has a given GitHub larger-runner label enabled BEFORE pointing the required
+# CI_BUILD_RUNNER jobs (build-image.yml) at it. CI_BUILD_RUNNER now gates THREE
+# memory-heavy production-build jobs together: `build`, `RBAC browser e2e`, and
+# `Workflows browser e2e`. Runner selection happens before any step runs, so there
+# is no in-job fallback for an unavailable label — an unavailable `runs-on` on a
+# required job would queue forever and block all merges. Probe here first.
+#
+# Run:  gh workflow run runner-probe.yml --ref <branch> -f runner=ubuntu-latest-4-cores
+# If the job SCHEDULES + runs (and prints nproc), the label is available — then
+# set the org/repo variable CI_BUILD_RUNNER to that label. If it stays queued,
+# the label is NOT available; leave CI_BUILD_RUNNER unset (build + both e2e jobs
+# stay on ubuntu-latest).
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "runs-on label to probe (e.g. ubuntu-latest-4-cores)"
+        required: true
+        default: "ubuntu-latest-4-cores"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Report
+        run: |
+          echo "Runner label '${{ inputs.runner }}' scheduled + running."
+          echo "vCPUs: $(nproc)"
+          echo "If you can read this, the label is AVAILABLE — set CI_BUILD_RUNNER to it."

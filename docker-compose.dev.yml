@@ -1,0 +1,39 @@
+# Dev-only port publication for the platform databases (v1.0.4 P1a).
+#
+# The base docker-compose.yml is SAFE BY DEFAULT: it does NOT publish the
+# platform DB ports, so a bare `docker compose up` — or a stale checkout on a
+# public host — can never expose postgres/redis/neo4j on 0.0.0.0. That binding
+# (Docker inserts iptables rules ahead of ufw) paired with trust-auth Postgres
+# was the 2026-05-05 Akira breach vector; keeping it OUT of the base makes the
+# hardened posture the default instead of an override the operator must remember.
+#
+# This override re-publishes those ports on the LOOPBACK interface only, for a
+# host-run app (`pnpm dev`) or local tooling to reach 127.0.0.1:<port>.
+#
+# It is deliberately named docker-compose.dev.yml (NOT docker-compose.override.yml)
+# so it is NOT auto-merged by a bare `docker compose up`. Opt in explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# `make dev` and scripts/setup.sh pass it for you.
+#
+# Production / shared-host deploys do NOT use this file — they apply the
+# ops environments/{prod,demo}/docker-compose.override.yml, which pins
+# these to 127.0.0.1 (demo) or unpublishes them entirely with `!reset []` (prod).
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5434:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  # nango-db: only the host-side CLI backup/restore tooling (NANGO_DATABASE_URL)
+  # reaches it; nango-server itself uses Docker DNS (nango-db:5432) internally.
+  nango-db:
+    ports:
+      - "127.0.0.1:5435:5432"
+
+  neo4j:
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"

@@ -1,0 +1,9 @@
+{
+  "id": "@cinatra-ai/trigger",
+  "name": "Trigger",
+  "description": "Reads and writes per-run trigger configurations (immediate / scheduled / recurring).",
+  "skills": {
+    "type": "system",
+    "path": "../skills"
+  }
+}

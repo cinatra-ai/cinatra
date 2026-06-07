@@ -1,0 +1,63 @@
+# WordPress + Drupal assistant UATs
+
+Proves the Cinatra assistant round-trips end-to-end inside the live docker
+WordPress (`:8080`) + Drupal (`:8082`) stacks against a **real cinatra dev
+backend**, with only the LLM provider swapped for the deterministic scripted
+provider (`CINATRA_TEST_LLM_PROVIDER=scripted` — offline, key-free).
+
+Scope: this proves the widget → stream → SSE-frame integration (button → mount →
+prompt → `text`/`changes` frames). It does **not** exercise a real CMS mutation
+via WayFlow — the scripted provider stands in for the content-editor agent.
+
+## Scenarios (12)
+
+Per CMS (`wordpress/` + `drupal/`): (1) admin config page renders, (2) assistant
+button renders on seeded content, (3) click → `#cinatra-root` mounts + panel
+opens, (4) prompt → SSE reply (asserts the `CINATRA_UAT_OK` sentinel), (5) edit
+prompt → `changes` diff card round-trips against the seeded page/node,
+(6) invalid API key → graceful non-500 admin-facing error.
+
+## Operator runbook (live green)
+
+> **Status: VERIFICATION-PENDING.** A live 12-green run requires the full dev
+> stack below and is an operator/CI step (the private extracted repos must be
+> cloneable).
+
+1. Provision the DB + clone the plugin/module (no dev server needed):
+   ```bash
+   cinatra setup dev          # clones dev/wordpress-plugin/ + dev/drupal-module/cinatra/ + DB setup
+   docker compose --profile wordpress --profile drupal up -d
+   ```
+2. Confirm the plugin/module are active:
+   ```bash
+   docker exec cinatra-wordpress-1 wp plugin list --allow-root | grep cinatra
+   docker exec cinatra-drupal-1 drush pml --status=enabled | grep cinatra
+   ```
+3. Run the UATs. The config boots its OWN dev server carrying the scripted
+   provider + the non-prod actor-gate bypass (`reuseExistingServer: false`), so
+   stop any dev server already on `E2E_WP_DRUPAL_PORT` (default 3000) first. That
+   boot also runs dev-auto-setup, which mints + pushes the widget auth keys to
+   the WP/Drupal side:
+   ```bash
+   pnpm dev:stop   # free the port if a main dev server is running
+   pnpm test:e2e:wp-drupal
+   ```
+   The CMS admin creds default to the docker stack's values (WP `admin`/`admin`,
+   Drupal `admin`/`cinatra`); override via `UAT_WP_ADMIN_PASS` /
+   `UAT_DRUPAL_ADMIN_PASS` if your stack differs.
+
+`global-setup.ts` seeds one WP page + one Drupal node (idempotent, by title
+marker) and writes their IDs to `.uat/seed.json` (gitignored).
+
+## Tunables (env)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `E2E_WP_DRUPAL_PORT` | `3000` | cinatra dev server port the suite boots |
+| `UAT_WP_BASE_URL` | `http://localhost:8080` | docker WordPress |
+| `UAT_DRUPAL_BASE_URL` | `http://localhost:8082` | docker Drupal |
+| `UAT_WP_ADMIN_USER` / `_PASS` | `admin` / `admin` | WP admin login (matches compose `WP_DEV_ADMIN_PASS`) |
+| `UAT_DRUPAL_ADMIN_USER` / `_PASS` | `admin` / `cinatra` | Drupal admin login |
+
+If the widget DOM selectors drift, refine them in `helpers.ts` (`SEL`) — they
+mirror the bundle's frozen `#cinatra-root` + `.cw-*` contract.
