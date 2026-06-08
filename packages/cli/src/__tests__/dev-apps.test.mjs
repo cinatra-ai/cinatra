@@ -95,8 +95,8 @@ describe("cinatra.devApps — a2a-servers-dev entry (real root package.json)", (
     );
   });
 
-  it("keeps dev/a2a-peers/ gitignored (clone target, never committed to the monorepo)", () => {
+  it("keeps the dev/ clone target gitignored (never committed to the monorepo)", () => {
     const gitignore = readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
-    expect(gitignore).toMatch(/^dev\/a2a-peers\/$/m);
+    expect(gitignore).toMatch(/^\/dev\/$/m);
   });
 });

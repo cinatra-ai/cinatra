@@ -15,15 +15,11 @@
 // Verdaccio — never re-fetched from GitHub. The CI postinstall path (no
 // env vars) must exit 0 with no side effects.
 //
-// Sentinel-bounded `.gitignore` section: the fetcher writes an idempotent
-// managed section listing each bundle's destination path. The block is
-// bounded by:
-//
-//   # BEGIN cinatra-vendored-bundles (managed by scripts/vendor-anthropic-skills.mjs — do not edit by hand)
-//   # END cinatra-vendored-bundles
+// Vendored bundle destinations under extensions/ are ignored by the root
+// `/extensions/` rule in .gitignore — this fetcher no longer manages .gitignore.
 //
 // Modes:
-//   (default)  fetch + extract + patch + write package.json + update .gitignore
+//   (default)  fetch + extract + patch + write package.json
 //   --check    read-only; reports state, exits 0 always; harmless in any env
 //   --quiet    suppress info logs; still respects dev-only gate; used by postinstall
 
@@ -38,9 +34,6 @@ import * as tar from "tar";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const PKG_JSON_PATH = path.join(REPO_ROOT, "package.json");
-const GITIGNORE_PATH = path.join(REPO_ROOT, ".gitignore");
-const SENTINEL_BEGIN = "# BEGIN cinatra-vendored-bundles (managed by scripts/vendor-anthropic-skills.mjs — do not edit by hand)";
-const SENTINEL_END = "# END cinatra-vendored-bundles";
 
 const args = new Set(process.argv.slice(2));
 const isCheck = args.has("--check");
@@ -55,35 +48,6 @@ function readBundles() {
   if (!existsSync(PKG_JSON_PATH)) return [];
   const pkg = JSON.parse(readFileSync(PKG_JSON_PATH, "utf8"));
   return Array.isArray(pkg?.cinatra?.vendoredSkillBundles) ? pkg.cinatra.vendoredSkillBundles : [];
-}
-
-function readSentinelBlock(content) {
-  const beginIdx = content.indexOf(SENTINEL_BEGIN);
-  const endIdx = content.indexOf(SENTINEL_END, beginIdx);
-  if (beginIdx === -1 || endIdx === -1) return null;
-  return { beginIdx, endIdx: endIdx + SENTINEL_END.length };
-}
-
-function buildSentinelBlock(bundles) {
-  const lines = [SENTINEL_BEGIN, ...bundles.map((b) => `${b.destination.replace(/^\/+/, "")}/`), SENTINEL_END];
-  return lines.join("\n");
-}
-
-function syncGitignore(bundles) {
-  if (!isDev) return; // dev-mode-only concern (see header)
-  const current = existsSync(GITIGNORE_PATH) ? readFileSync(GITIGNORE_PATH, "utf8") : "";
-  const block = buildSentinelBlock(bundles);
-  const range = readSentinelBlock(current);
-  let next;
-  if (range) {
-    next = current.slice(0, range.beginIdx) + block + current.slice(range.endIdx);
-  } else {
-    next = (current.endsWith("\n") || current === "" ? current : current + "\n") + "\n" + block + "\n";
-  }
-  if (next !== current) {
-    writeFileSync(GITIGNORE_PATH, next);
-    log("updated .gitignore sentinel block");
-  }
 }
 
 function readShaMarker(destAbs) {
@@ -263,7 +227,6 @@ async function main() {
 
   if (bundles.length === 0) {
     log("no vendoredSkillBundles declared — nothing to do");
-    syncGitignore([]);
     return;
   }
 
@@ -275,7 +238,6 @@ async function main() {
     }
   }
 
-  syncGitignore(bundles);
   log("done");
 }
 
