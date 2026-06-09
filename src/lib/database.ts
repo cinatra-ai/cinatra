@@ -21,6 +21,7 @@ import {
   buildWriteMetadataQuery,
 } from "@/lib/drizzle-store";
 import type { ExtensionLifecycleAuditRow, SkillPackageIdentity } from "@/lib/drizzle-store";
+import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import type { SkillLevel } from "@cinatra-ai/skills";
 import type {
   Campaign,
@@ -589,7 +590,7 @@ export function readOpenAIConnectionFromDatabase() {
     availableModels: string[];
   }> | null>("openai_connection", null);
   return {
-    defaultModel: stored?.defaultModel ?? "gpt-5",
+    defaultModel: stored?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     apiKey: stored?.apiKey,
     projectId: stored?.projectId,
     organizationId: stored?.organizationId,
