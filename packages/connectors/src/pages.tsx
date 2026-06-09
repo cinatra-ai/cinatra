@@ -13,13 +13,13 @@ import {
   readOrgsWithTeamsForUser,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
+import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";
 import { getWordPressAPISettings } from "@/lib/wordpress-api";
 import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
 import { getApolloAPIStatus } from "@cinatra-ai/apollo-connector";
 import { getApifyStatus } from "@cinatra-ai/apify-connector";
 import { getTailscaleConnectionStatus } from "@cinatra-ai/tailscale-connector";
-import { countClaudeDesktopClients } from "@cinatra-ai/mcp-client-registry-connector";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { Main } from "@/components/layout/main";
 import {
@@ -89,7 +89,9 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const a2aConnectedCount = listSavedNangoConnections("a2aServer").length;
   const wordpressConnectedCount = getWordPressAPISettings().instances.length;
   const drupalConnectedCount = getDrupalAPISettings().instances.length;
-  const claudeConnectedCount = await countClaudeDesktopClients();
+  // Inbound MCP-client readiness is a host-owned signal (the Better Auth
+  // oauthClient table), so the card needs no import from the extension.
+  const mcpClientConnectedCount = await countExternalMcpOAuthClients();
   const tailscaleStatus = getTailscaleConnectionStatus();
   const anthropicStatus = getAnthropicAPIStatus();
   const geminiStatus = getGeminiAPIStatus();
@@ -101,10 +103,10 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     ["anthropic-connector", { connected: anthropicStatus.status === "connected" }],
     ["gemini-connector", { connected: geminiStatus.status === "connected" }],
     [
-      "mcp-client-registry-connector",
+      "mcp-client-connector",
       {
-        connected: claudeConnectedCount > 0,
-        connectedLabel: claudeConnectedCount > 0 ? `${claudeConnectedCount}` : undefined,
+        connected: mcpClientConnectedCount > 0,
+        connectedLabel: mcpClientConnectedCount > 0 ? `${mcpClientConnectedCount}` : undefined,
       },
     ],
     ["gmail-connector", { connected: Boolean(userConnections.gmail) }],

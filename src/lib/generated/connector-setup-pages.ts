@@ -22,7 +22,7 @@ export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageLoader
   "google-calendar-connector": () => import("@cinatra-ai/google-calendar-connector/setup-page"),
   "google-oauth-connector": () => import("@cinatra-ai/google-oauth-connector/setup-page"),
   "linkedin-connector": () => import("@cinatra-ai/linkedin-connector/setup-page"),
-  "mcp-client-registry-connector": () => import("@cinatra-ai/mcp-client-registry-connector/setup-page"),
+  "mcp-client-connector": () => import("@cinatra-ai/mcp-client-connector/setup-page"),
   "openai-connector": () => import("@cinatra-ai/openai-connector/setup-page"),
   "tailscale-connector": () => import("@cinatra-ai/tailscale-connector/setup-page"),
   "twenty-connector": () => import("@cinatra-ai/twenty-connector/setup-page"),
