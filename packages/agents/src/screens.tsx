@@ -741,12 +741,13 @@ export async function RegistryEntryDetailSections({
         </section>
       ) : null}
 
-      {/* PRIMARY BODY — the README occupies the first slot, mirroring the
-          public marketplace's Description tab. Today the content is the
-          Verdaccio package README rendered by the existing sanitizing
-          helper; switching the source to the marketplace `readmeMarkdown`
-          (plus heading demotion + typography parity) is the README-parity
-          follow-up that fills this slot. */}
+      {/* PRIMARY BODY — the README occupies the first content slot
+          (only the deprecation status notice above may precede it),
+          mirroring the public marketplace's Description tab. Today the
+          content is the Verdaccio package README rendered by the existing
+          sanitizing helper; switching the source to the marketplace
+          `readmeMarkdown` (plus heading demotion + typography parity) is
+          the README-parity follow-up that fills this slot. */}
       {entry.readme ? (
         <MarketplaceReadmeSection>
           <div

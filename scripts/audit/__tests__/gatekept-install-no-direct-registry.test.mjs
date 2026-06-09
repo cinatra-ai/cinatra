@@ -61,7 +61,7 @@ test("ALLOWLIST names the sanctioned seams", () => {
 
 test("TARGET_PATHS includes the real install/detail consumers (agent-detail + actions)", () => {
   // The gate must scan the transitive install/detail consumers — the
-  // agent-detail reader (RegistryEntryDetailScreen) and the registry actions —
+  // agent-detail reader (RegistryEntryDetailSections) and the registry actions —
   // not just the handler + pipeline.
   assert.ok(TARGET_PATHS.includes("packages/agents/src/screens.tsx"));
   assert.ok(TARGET_PATHS.includes("packages/agents/src/actions.ts"));
