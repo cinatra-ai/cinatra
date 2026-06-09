@@ -168,7 +168,7 @@ export async function clearAnthropicConnectionAction() {
 // saveAnthropicPromptCachingAction / setDefaultClaudeModelAction /
 // setAnthropicMcpModeAction referenced optional fields on
 // saveAnthropicAPISettings (defaultModel / promptCachingEnabled / mcpMode)
-// that are not exposed by the mcp-client-registry-connector API. Provide stubs
+// that are not exposed by the mcp-client-connector API. Provide stubs
 // that preserve the public signature; the underlying persistence layer only
 // owns apiKey today.
 export async function saveAnthropicPromptCachingAction(_formData: FormData) {

@@ -37,7 +37,7 @@ git pull
 make refresh
 ```
 
-`make refresh` is **dev-only** and **never touches git** — you manage branches, and it brings dependencies and the dev database in sync with the code on disk. It runs `pnpm install` and the idempotent dev setup (additive schema migrations and settings checks). It does **not** run transformational one-shot migrations (renames and backfills); those are applied by hand only when a release's notes call for them. Restart with `make dev` afterward.
+`make refresh` is **dev-only** and **never touches git** — you manage branches, and it brings dependencies and the dev database in sync with the code on disk. It runs `pnpm install` and the idempotent dev setup (additive schema migrations and settings checks). It does **not** run transformational one-shot migrations (renames and backfills); those live in [`migrations/`](migrations/README.md) and are applied by hand only when a release's notes call for them. If your change drops, renames, retypes, or otherwise destructively touches an existing core-store table, ship a migration artifact per [`migrations/README.md`](migrations/README.md). Restart with `make dev` afterward.
 
 Other useful targets: `make check` (verify supporting services are reachable), `make down` (stop infrastructure, keep data), `make reset` (soft reset of app data), and `make logs` (tail infrastructure logs).
 
