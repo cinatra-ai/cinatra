@@ -14,7 +14,7 @@
     "@cinatra-ai/gmail-connector": "workspace:*",
     "@cinatra-ai/google-calendar-connector": "workspace:*",
     "@cinatra-ai/google-oauth-connection": "workspace:*",
-    "@cinatra-ai/mcp-client-registry-connector": "workspace:*",
+    "@cinatra-ai/mcp-client-connector": "workspace:*",
     "@cinatra-ai/nango-connector": "workspace:*",
     "@cinatra-ai/openai-connector": "workspace:*"
   }
