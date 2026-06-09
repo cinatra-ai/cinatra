@@ -19,7 +19,8 @@
       "Release workflows tests",
       "RBAC authz unit tests",
       "CRM migration gates",
-      "/agents Playwright smoke"
+      "/agents Playwright smoke",
+      "source-leak-gate / source-leak-gate"
     ]
   },
   "enforce_admins": false,
