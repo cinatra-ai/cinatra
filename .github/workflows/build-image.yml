@@ -702,7 +702,9 @@ jobs:
       # OTHER way core hardcodes a specific extension (the way blog/openai.ts
       # slipped past the import-ban): string-literal / path references to an exact
       # extension package name or `extensions/<scope>/<name>/` path. Occurrence-
-      # counted, shrink-only; the IoC cutover drives the baseline to 0.
+      # counted, shrink-only (one-time scanner-correctness recomputes are
+      # sanctioned via SCANNER_EPOCH); the IoC cutover drives the baseline to 0.
+      # Counts + targets: scripts/audit/extension-coupling-gates.md.
       - name: Core -> extension instance-coupling gate (no-new-rot)
         env:
           # Monotonic ratchet: committed baseline counts must not exceed the base
@@ -711,7 +713,7 @@ jobs:
         run: node scripts/audit/core-extension-instance-coupling-ban.mjs
 
       - name: Core -> extension instance-coupling gate tests
-        run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs
+        run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
 
       # Skill-store canonicality gate. No NEW canonical writes
       # to the legacy `data/skills` tree (now compat-only),

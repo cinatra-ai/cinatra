@@ -26,8 +26,8 @@
 // exempts ONLY the manifest and counts the generated derivatives as
 // mechanical). Narrowing it here would grow this baseline, which this gate
 // forbids — the instance-coupling gate already counts those same files'
-// references, so nothing is unmeasured; convergence happens when this
-// baseline is next legitimately recomputed toward 0.
+// references, so nothing is unmeasured; the exempt sets are unified when
+// this baseline is next legitimately recomputed toward 0.
 //
 // Usage:
 //   node scripts/audit/core-extension-import-ban.mjs            # --check (default)
