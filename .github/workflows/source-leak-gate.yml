@@ -10,8 +10,8 @@ permissions:
 
 jobs:
   source-leak-gate:
-    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@2c733a63dd8f6a1e28764283ed2152e4bfcfcebc # v1.0.0
+    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@de84e6ef7740ca3c52be3194d225fe4322a02b1c # v0.1.0
     with:
       profile: ts-monorepo
       ratchet_mode: line
-      ref: 2c733a63dd8f6a1e28764283ed2152e4bfcfcebc
+      ref: de84e6ef7740ca3c52be3194d225fe4322a02b1c
