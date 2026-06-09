@@ -12,6 +12,7 @@
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
     "./package-contract": "./src/verdaccio/package-contract.ts",
     "./auth-policy": "./src/auth-policy.ts",
+    "./llm-provider-policy": "./src/llm-provider-policy.ts",
     "./store": "./src/store.ts",
     "./module": "./src/integration/module.ts",
     "./mcp-handlers": "./src/mcp/handlers.ts",
