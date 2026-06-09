@@ -178,7 +178,7 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/apollo-connector",
     "@cinatra-ai/apify-connector",
     "@cinatra-ai/dashboards",
-    "@cinatra-ai/mcp-client-registry-connector",
+    "@cinatra-ai/mcp-client-connector",
     "@cinatra-ai/design",
     "@cinatra-ai/marketplace-mcp-client",
     "@cinatra-ai/marketplace-sync",

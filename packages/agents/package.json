@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@cinatra-ai/a2a": "workspace:*",
-    "@cinatra-ai/mcp-client-registry-connector": "workspace:*",
+    "@cinatra-ai/mcp-client-connector": "workspace:*",
     "@cinatra-ai/gemini-connector": "workspace:*",
     "@cinatra-ai/nango-connector": "workspace:*",
     "@cinatra-ai/extension-types": "workspace:*",

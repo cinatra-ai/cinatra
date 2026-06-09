@@ -472,13 +472,21 @@ function emitClient() {
 // ---------------------------------------------------------------------------
 function liveConnectorSetupSlugs() {
   // Parse the hand-maintained map's keys without importing it (it's server-only).
+  // Two entry shapes count as "live": a literal dynamic import, and a
+  // delegation to the GENERATED loader map (an entry already cut over to the
+  // data-driven manifest path — the mcp-client connector pilots this).
   const src = readFileSync(join(REPO_ROOT, "src/lib/connector-setup-pages.ts"), "utf8");
   const start = src.indexOf("SETUP_PAGE_LOADERS");
   const slugs = new Set();
-  const re = /^\s*"([a-z0-9-]+)":\s*\(\)\s*=>\s*import\(/gm;
-  let m;
+  const res = [
+    /^\s*"([a-z0-9-]+)":\s*\(\)\s*=>\s*import\(/gm,
+    /^\s*"([a-z0-9-]+)":\s*GENERATED_CONNECTOR_SETUP_PAGES\[/gm,
+  ];
   const region = src.slice(start);
-  while ((m = re.exec(region))) slugs.add(m[1]);
+  for (const re of res) {
+    let m;
+    while ((m = re.exec(region))) slugs.add(m[1]);
+  }
   return slugs;
 }
 
