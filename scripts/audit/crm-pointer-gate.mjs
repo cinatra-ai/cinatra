@@ -155,6 +155,11 @@ const SKIP_DIRS = new Set([
   "test-results",
   ".pnpm-store",
   "docs",
+  // GSD planning docs (cloned back with companion extension repos). Pure
+  // documentation — they describe the retired primitives (often quoting this
+  // very gate's banned-token list), so they are false positives, same class
+  // as the docs/ + README.md skips above.
+  ".planning",
 ]);
 
 /** File extensions the scanner skips. Generated agent OAS JSON is excluded
