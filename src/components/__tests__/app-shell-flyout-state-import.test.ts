@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 // Import-guard regression test for the SSE dedupe contract.
 //
 // The dedupe-prepend contract lives in
-// `src/lib/notifications/flyout-state.ts` as `applySseNotification`. The
+// `packages/notifications/src/flyout-state.ts` as `applySseNotification`. The
 // flyout consumer must route its SSE `notification` event through that
 // helper — NOT re-derive the predicate inline. The failure mode this test
 // guards against is a future refactor (most likely a flyout rewrite, but

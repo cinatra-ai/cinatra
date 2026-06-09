@@ -759,7 +759,7 @@ END $$` },
     //     `notifications` table predates it as a generic
     //     (id, payload) JSON-row store. Pre-existing rows have no user_id
     //     and a destructive backfill is out of scope here.
-    //   - The notifications service (src/lib/notifications/service.ts)
+    //   - The notifications service (packages/notifications/src/service.ts)
     //     *always* writes a non-null user_id; the partial indexes below
     //     (notifications_user_unread_idx, notifications_dedupe_job_kind_idx)
     //     scope to WHERE user_id IS NOT NULL so reads never return legacy
@@ -796,7 +796,7 @@ END $$` },
     //   { "userId": "...", "id": "..." }
     // sidesteps the 63-byte/identifier-quoting concerns of per-user channels.
     // A single process-level pg.Client subscribes once and fans out by
-    // userId in-process to per-tab SSE handlers — see src/lib/notifications/realtime.ts.
+    // userId in-process to per-tab SSE handlers — see packages/notifications/src/realtime.ts.
 
     // The function is `CREATE OR REPLACE FUNCTION` (idempotent) and the
     // trigger uses `DROP TRIGGER IF EXISTS ... CASCADE` then `CREATE TRIGGER`

@@ -1585,7 +1585,7 @@ export function unregisterBackgroundJobChildProcess(jobId: string) {
 // Notify on job lifecycle.
 //
 // Called from the BullMQ worker.on('completed' | 'failed') hooks. Resolves a
-// recipient via the policy in src/lib/notifications/recipient-policy.ts and
+// recipient via the policy in packages/notifications/src/recipient-policy.ts and
 // fans out to per-user rows. Defensive in every direction: any thrown error
 // is swallowed; helper failures must never kill the worker.
 // ---------------------------------------------------------------------------

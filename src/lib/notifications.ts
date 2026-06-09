@@ -2,7 +2,7 @@
 // Notifications — compat surface for the Postgres-backed service layer.
 //
 // The 5 public functions below preserve their original signatures. All work
-// delegates to src/lib/notifications/service.ts.
+// delegates through @cinatra-ai/notifications/server; implementation lives in packages/notifications/src/service.ts.
 //
 // User resolution:
 //   - Browser/API/page callers: better-auth session via getAuthSession()

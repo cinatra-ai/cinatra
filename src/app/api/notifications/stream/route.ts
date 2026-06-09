@@ -1,7 +1,7 @@
 // SSE endpoint for real-time notifications flyout updates.
 //
 // Connects the per-tab EventSource to the process-level pg LISTEN client
-// in src/lib/notifications/realtime.ts. Per-user fanout happens in process
+// in packages/notifications/src/realtime.ts. Per-user fanout happens in process
 // (NOT via per-user LISTEN channels) — see the long-form comment in
 // realtime.ts for rationale.
 //

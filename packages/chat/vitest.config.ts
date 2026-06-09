@@ -30,13 +30,13 @@ export default defineConfig({
         root,
         "packages/agents/src/index.ts",
       ),
-      // The useAgentCreationProgress hook imports the app
-      // `@/lib/notifications*` modules. vite import-analysis must resolve the
-      // bare specifier before a test's vi.mock() can replace it — map the two
-      // `@/` paths the hook touches to their app source files.
+      // The chat tests vi.mock the app `@/lib/notifications*` specifiers; vite
+      // import-analysis must resolve a bare specifier before a test's vi.mock()
+      // can replace it — so map those `@/` paths to their source files.
+      // (The useAgentCreationProgress hook itself now imports `@cinatra-ai/notifications/*`.)
       "@/lib/notifications/flyout-state": path.join(
         root,
-        "src/lib/notifications/flyout-state.ts",
+        "packages/notifications/src/flyout-state.ts",
       ),
       "@/lib/notifications": path.join(root, "src/lib/notifications.ts"),
       // Pin React to the root workspace copy so react-dom and react match

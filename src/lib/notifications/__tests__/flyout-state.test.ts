@@ -31,7 +31,7 @@ import {
 //     immutability rules out any future bug where a shared module-level
 //     array could leak across.
 //
-// The test targets the pure helper extracted in src/lib/notifications/
+// The test targets the pure helper extracted to packages/notifications/src/
 // flyout-state.ts. The flyout rebuild must continue to reuse this helper
 // (see app-shell.tsx); the test stays as a regression gate against any
 // future re-derivation of the dedupe semantic.
