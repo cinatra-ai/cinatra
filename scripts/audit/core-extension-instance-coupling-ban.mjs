@@ -157,6 +157,36 @@ function countOccurrences(haystack, needle) {
   return n;
 }
 
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Printable masking sentinel — deliberately not name-shaped (no `@scope/...`,
+// no `extensions/x/y`), space-padded so adjacent tokens cannot fuse.
+const ALLOWLIST_SENTINEL = " ALLOWLISTED_DATA_CONTRACT_ID ";
+
+/**
+ * Mask EXACT occurrences of the documented data-contract IDs so they are not
+ * attributed to their embedded package names. Boundary-anchored on both
+ * sides: allowlisting `@scope/x:thing` must NOT also mask the prefix of
+ * `@scope/x:thing-v2` (that would hide the longer ID's package name — a
+ * ratchet bypass). Returns the masked code; per-ID hit counts are accumulated
+ * into `allowlistHits` (a Map) when provided. Exported for unit testing.
+ */
+export function maskAllowlistedIds(code, allowlist, allowlistHits) {
+  let masked = code;
+  for (const id of allowlist.keys()) {
+    if (!id) continue;
+    const re = new RegExp(`(?<![A-Za-z0-9_.:/@-])${escapeRegExp(id)}(?![A-Za-z0-9_.:/@-])`, "g");
+    const hits = (masked.match(re) ?? []).length;
+    if (hits > 0) {
+      if (allowlistHits) allowlistHits.set(id, (allowlistHits.get(id) ?? 0) + hits);
+      masked = masked.replace(re, ALLOWLIST_SENTINEL);
+    }
+  }
+  return masked;
+}
+
 /**
  * Scan core for hardcoded extension-instance coupling.
  * Returns { [`<file> :: package :: <name>` | `<file> :: path :: <prefix>`]: count }.
@@ -187,17 +217,11 @@ export function scanInstanceCoupling(
       // Count ALL non-comment references — INCLUDING imports. (The src-only
       // import-ban gate doesn't scan packages/, so import lines must be counted
       // here too or a package-side `import "@scope/ext"` would escape both gates.)
-      let code = stripComments(readFileSync(file, "utf8"));
-      // Mask sanctioned data-contract IDs BEFORE counting names, so an exact
+      // Mask sanctioned data-contract IDs BEFORE counting names, so an EXACT
       // allowlisted ID is never attributed to its embedded package name. Bare
-      // (non-ID) occurrences of the same name still count.
-      for (const id of allowlist.keys()) {
-        const hits = countOccurrences(code, id);
-        if (hits > 0) {
-          if (allowlistHits) allowlistHits.set(id, (allowlistHits.get(id) ?? 0) + hits);
-          code = code.split(id).join(" ALLOWLISTED ");
-        }
-      }
+      // (non-ID) occurrences of the same name — and longer IDs that merely
+      // share an allowlisted prefix — still count.
+      const code = maskAllowlistedIds(stripComments(readFileSync(file, "utf8")), allowlist, allowlistHits);
       for (const name of extensionNames) {
         const c = countOccurrences(code, name);
         if (c > 0) occ[`${rel} :: package :: ${name}`] = c;

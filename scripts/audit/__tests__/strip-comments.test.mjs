@@ -69,6 +69,18 @@ describe("strip-comments (shared audit-gate lexer)", () => {
     expect(out).not.toContain("docs.test");
   });
 
+  it("preserves protocol URLs in un-modeled JSX TEXT (the `:` guard) so adjacent references survive", () => {
+    const out = stripComments("<div>see https://docs.test and @scope/jsx-connector</div>\n");
+    expect(out).toContain("https://docs.test");
+    expect(out).toContain("@scope/jsx-connector");
+  });
+
+  it("still strips a comment that follows a colon with whitespace", () => {
+    const out = stripComments("const x = cond ? a : // pick @scope/pkg\n  b;\n");
+    expect(out).not.toContain("pick");
+    expect(out).toContain("b;");
+  });
+
   it("handles template-literal interpolation with nested braces and a nested template", () => {
     const src = "const t = `a ${obj({ k: `inner ${x}` })} b`; // tail comment\nconst keep = 1;\n";
     const out = stripComments(src);

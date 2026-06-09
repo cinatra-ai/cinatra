@@ -10,6 +10,7 @@ import {
   diffShrunk,
   baselineGrowth,
   growthAllowance,
+  maskAllowlistedIds,
   discoverExtensionNames,
   SCANNER_EPOCH,
 } from "../core-extension-instance-coupling-ban.mjs";
@@ -94,6 +95,7 @@ describe("core-extension-instance-coupling-ban gate", () => {
         [
           '// comment naming @scope/alpha-skills should never count',
           'const contract = "@scope/alpha-skills:make-things";', // exact allowlisted ID
+          'const longer = "@scope/alpha-skills:make-things-v2";', // NOT allowlisted — shares a prefix only
           'const runtime = "@scope/alpha-skills";', // bare name — still counted
           'const other = "@scope/beta-connector";',
           "",
@@ -106,16 +108,38 @@ describe("core-extension-instance-coupling-ban gate", () => {
       const allowlist = new Map([["@scope/alpha-skills:make-things", "stable persisted capability key, not runtime selection"]]);
       const allowlistHits = new Map();
       const occ = scanInstanceCoupling(root, extensions, { allowlist, allowlistHits });
-      // The allowlisted contract ID is masked — only the bare runtime reference counts.
-      expect(occ["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(1);
+      // The EXACT allowlisted contract ID is masked — the bare runtime
+      // reference AND the longer prefix-sharing ID still count (2), or the
+      // allowlist would be a ratchet bypass for suffixed IDs.
+      expect(occ["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(2);
       expect(occ["src/lib/sample.ts :: package :: @scope/beta-connector"]).toBe(1);
       expect(allowlistHits.get("@scope/alpha-skills:make-things")).toBe(1);
       // Without the allowlist, the contract ID's embedded name is counted too.
       const occNoAllow = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
-      expect(occNoAllow["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(2);
+      expect(occNoAllow["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(3);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("maskAllowlistedIds is boundary-exact: never masks a longer ID sharing an allowlisted prefix, or a prefixed/suffixed token", () => {
+    const allowlist = new Map([["@scope/x:thing", "stable contract"]]);
+    const hits = new Map();
+    const masked = maskAllowlistedIds(
+      'a("@scope/x:thing"); b("@scope/x:thing-v2"); c("pre@scope/x:thing"); d("@scope/x:thing.ext");',
+      allowlist,
+      hits,
+    );
+    expect(masked).not.toContain('"@scope/x:thing"');
+    expect(masked).toContain("@scope/x:thing-v2");
+    expect(masked).toContain("pre@scope/x:thing");
+    expect(masked).toContain("@scope/x:thing.ext");
+    expect(hits.get("@scope/x:thing")).toBe(1);
+    // The sentinel is printable and not name-shaped.
+    expect(masked).toMatch(/ALLOWLISTED_DATA_CONTRACT_ID/);
+    // Regex metacharacters in an ID are escaped, not interpreted.
+    const m2 = maskAllowlistedIds('x("@scope/y:a.b(c)")', new Map([["@scope/y:a.b(c)", "j"]]), new Map());
+    expect(m2).not.toContain("@scope/y:a.b(c)");
   });
 
   it("growthAllowance permits a rise ONLY for a one-step epoch advance carried by the scanner itself", () => {

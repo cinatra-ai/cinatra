@@ -27,12 +27,20 @@
 // comments are preserved so line structure (and any future line attribution)
 // survives.
 //
-// Known, accepted limitation: regex-literal detection is heuristic (a `/` is
-// treated as opening a regex only after an operator/keyword position). A
-// regex literal in an ambiguous position containing `//` or `/*` could still
-// confuse the lexer; this is vanishingly rare in practice and strictly less
-// wrong than the old behavior, which mis-lexed every file containing `/*`
-// inside a comment or `//` inside a string.
+// Known, accepted limitations (all fail toward OVER-counting or are
+// vanishingly rare — never a silent reference-hiding class like the old
+// regexes):
+//   - regex-literal detection is heuristic (a `/` opens a regex only after an
+//     operator/keyword position); an ambiguous regex containing `//` or `/*`
+//     could still confuse the lexer;
+//   - JSX TEXT is not modeled (that needs a real JSX parser). To keep the
+//     dominant case — URLs in JSX text / doc strings — intact, a `//` that
+//     immediately follows `:` is NOT treated as a comment opener (`https://x`
+//     survives; a real comment after a colon always has whitespace before
+//     `//`, so it still strips). A bare non-URL `//` inside JSX text would
+//     still be dropped to end-of-line; if that ever hides a reference it can
+//     only UNDER-count that one line, and no such case exists in the tree
+//     today (the recomputed baseline shows zero decreases).
 
 // Characters after which a `/` starts a REGEX literal (not division).
 const REGEX_PRECEDERS = new Set([
@@ -82,8 +90,10 @@ export function stripComments(src) {
     const d = i + 1 < n ? src[i + 1] : "";
 
     if (top === "code") {
-      if (c === "/" && d === "/") {
-        // Line comment — drop to (but keep) the newline.
+      if (c === "/" && d === "/" && (i === 0 || src[i - 1] !== ":")) {
+        // Line comment — drop to (but keep) the newline. The `:` guard keeps
+        // protocol URLs in un-modeled JSX text intact (`https://...`); a real
+        // comment after a colon always has whitespace before the slashes.
         while (i < n && src[i] !== "\n") i++;
         continue;
       }
