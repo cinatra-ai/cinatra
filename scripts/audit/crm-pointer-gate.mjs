@@ -155,7 +155,7 @@ const SKIP_DIRS = new Set([
   "test-results",
   ".pnpm-store",
   "docs",
-  // GSD planning docs (cloned back with companion extension repos). Pure
+  // Planning docs cloned back with the companion extension repos. Pure
   // documentation — they describe the retired primitives (often quoting this
   // very gate's banned-token list), so they are false positives, same class
   // as the docs/ + README.md skips above.
