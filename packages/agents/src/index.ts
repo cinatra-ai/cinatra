@@ -280,7 +280,7 @@ export { RollbackButton } from "./rollback-button";
 
 export { RegistryPermissionsScreen } from "./screens";
 
-export { RegistryEntryDetailScreen } from "./screens";
+export { RegistryEntryDetailSections } from "./screens";
 export { PublishModal } from "./publish-modal";
 
 export {
