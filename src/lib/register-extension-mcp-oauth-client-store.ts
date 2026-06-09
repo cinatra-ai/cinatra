@@ -16,10 +16,13 @@ import "server-only";
 import { setExtensionMcpOAuthClientStore } from "@cinatra-ai/sdk-extensions";
 import {
   listExternalMcpOAuthClients,
-  deleteOAuthClientByClientId,
+  deleteExternalMcpOAuthClient,
 } from "@/lib/better-auth-oauth-client";
 
 setExtensionMcpOAuthClientStore({
   listExternalClients: () => listExternalMcpOAuthClients(),
-  deleteClient: (clientId: string) => deleteOAuthClientByClientId(clientId),
+  // The external-scoped delete: internal clients (self-client, LLM clients,
+  // assistants, service accounts) stay out of reach even with a forged
+  // clientId — same boundary predicate as the list.
+  deleteClient: (clientId: string) => deleteExternalMcpOAuthClient(clientId),
 });
