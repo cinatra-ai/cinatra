@@ -1,0 +1,49 @@
+{
+  "_doc": [
+    "Labelled sample PR diffs encoding the core-store schema migration",
+    "convention (migrations/README.md). Each fixture is a real unified diff",
+    "against this repo's current src DDL — they apply cleanly with",
+    "`git apply --check` from the repo root — and `expect` is the verdict the",
+    "schema-migration audit gate (landing separately) must produce for a PR",
+    "with that diff:",
+    "  pass — the gate exits 0 (additive change, artifact shipped, or the",
+    "         touched DDL is out of scope: Better Auth / extension-owned)",
+    "  fail — the gate exits non-zero (destructive in-scope change with no",
+    "         migrations/NNNN_*.sql + manifest entry in the same diff)",
+    "The gate's classifier test must run every fixture and assert its label.",
+    "When the convention gains a new destructive/additive case, add a fixture",
+    "here in the same PR that documents it."
+  ],
+  "fixtures": [
+    {
+      "file": "destructive-drop-column-no-artifact.diff",
+      "expect": "fail",
+      "category": "destructive, no artifact",
+      "description": "Drops usage_events.agent_label (CREATE-DDL text, legacy DO-block adds, and an inline DROP COLUMN) without shipping a migrations/ artifact."
+    },
+    {
+      "file": "destructive-retype-with-artifact.diff",
+      "expect": "pass",
+      "category": "destructive, has artifact",
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships migrations/0001_narrow-usage-events-cost-usd.sql plus its manifest entry in the same diff."
+    },
+    {
+      "file": "additive-nullable-column-no-artifact.diff",
+      "expect": "pass",
+      "category": "additive, no artifact",
+      "description": "Adds a nullable agent_templates.icon column (ADD COLUMN IF NOT EXISTS) and a partial index — no data impact, no artifact required."
+    },
+    {
+      "file": "out-of-scope-auth-ddl.diff",
+      "expect": "pass",
+      "category": "out of scope (Better Auth)",
+      "description": "Removes a Better Auth additional user field (destructive-shaped, but auth schema is owned by getMigrations and guarded by auth-schema-drift); the gate must ignore it."
+    },
+    {
+      "file": "out-of-scope-extension-ddl-bundled-additive.diff",
+      "expect": "pass",
+      "category": "out of scope (extension DDL), bundled with in-scope additive",
+      "description": "Adds a dropColumn op to the extension migration JSON-DSL (emits DROP COLUMN, but extension-owned) bundled with an in-scope additive index; the out-of-scope hunks must not trip the gate."
+    }
+  ]
+}
