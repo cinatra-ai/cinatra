@@ -143,7 +143,7 @@ const ALLOWLIST_PREFIXES = [
 ];
 
 /** Whole directories the scanner skips entirely (perf + accuracy). */
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   ".git",
   ".next",
   ".turbo",
@@ -155,11 +155,12 @@ const SKIP_DIRS = new Set([
   "test-results",
   ".pnpm-store",
   "docs",
-  // Planning docs cloned back with the companion extension repos. Pure
-  // documentation — they describe the retired primitives (often quoting this
-  // very gate's banned-token list), so they are false positives, same class
-  // as the docs/ + README.md skips above.
+  // Internal working areas, here and in the cloned companion extension repos.
+  // Pure documentation — they describe the retired primitives (often quoting
+  // this very gate's banned-token list), so they are false positives, same
+  // class as the docs/ + README.md skips above.
   ".planning",
+  ".claude",
 ]);
 
 /** File extensions the scanner skips. Generated agent OAS JSON is excluded
@@ -247,7 +248,7 @@ function shouldSkipFile(relPath) {
   return false;
 }
 
-async function* walk(dir) {
+export async function* walk(dir) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
