@@ -36,7 +36,8 @@ export const RESERVED_WORKSPACE_PACKAGE_SLUGS: ReadonlySet<string> = new Set([
   "connector-apify",
   "connector-apollo",
   "connector-claude", // reserved connector alias — see "claude-connector" below
-  "connector-mcp-client-registry",
+  "connector-mcp-client",
+  "connector-mcp-client-registry", // reserved pre-rename alias — see "mcp-client-registry-connector" below
   "connector-drupal",
   "connector-gemini",
   "connector-github",
@@ -71,7 +72,8 @@ export const RESERVED_WORKSPACE_PACKAGE_SLUGS: ReadonlySet<string> = new Set([
   "openai-connector",
   "gemini-connector",
   "claude-connector", // reserved connector alias for collision prevention
-  "mcp-client-registry-connector", // mcp client registry connector package
+  "mcp-client-connector", // mcp client connector package
+  "mcp-client-registry-connector", // reserved pre-rename alias for collision prevention
   "connectors",
   "copilotkit",
   "dashboards",

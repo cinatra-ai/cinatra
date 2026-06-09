@@ -232,11 +232,11 @@ export default defineConfig({
       "@/components": path.join(root, "src/components"),
       // Host-app context tree used by @cinatra-ai/google-oauth-connection's settings-form.tsx.
       "@/context": path.join(root, "src/context"),
-      // The MCP-client registry connector and anthropic-connector are
+      // The mcp-client connector and anthropic-connector are
       // required by llm's registry imports.
-      "@cinatra-ai/mcp-client-registry-connector": path.join(
+      "@cinatra-ai/mcp-client-connector": path.join(
         root,
-        "extensions/cinatra-ai/mcp-client-registry-connector/src/index.ts",
+        "extensions/cinatra-ai/mcp-client-connector/src/index.ts",
       ),
       "@cinatra-ai/anthropic-connector": path.join(
         root,

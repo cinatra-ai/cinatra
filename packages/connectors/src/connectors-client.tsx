@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownAZ, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
-import SiClaude from "@icons-pack/react-simple-icons/icons/SiClaude.mjs";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -30,6 +29,7 @@ import {
   ToolbarGroup,
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
+import { McpIcon } from "@/components/domain-icons";
 import { TailscaleLogo } from "@/components/tailscale-logo";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
 import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
@@ -133,7 +133,7 @@ const ICON_BY_SLUG = new Map<string, ReactNode>([
   ["openai-connector", <OpenAIIcon key="openai" />],
   ["anthropic-connector", <SiAnthropic key="anthropic" size={20} color="default" aria-hidden="true" />],
   ["gemini-connector", <SiGooglegemini key="gemini" size={20} color="default" aria-hidden="true" />],
-  ["mcp-client-registry-connector", <SiClaude key="mcp-client-registry" size={20} color="default" aria-hidden="true" />],
+  ["mcp-client-connector", <McpIcon key="mcp-client" className="h-5 w-5" aria-hidden="true" />],
   ["gmail-connector", <SiGmail key="gmail" size={20} color="default" aria-hidden="true" />],
   ["google-calendar-connector", <SiGooglecalendar key="google-calendar" size={20} color="default" aria-hidden="true" />],
   ["apollo-connector", <ApolloIcon key="apollo" />],
