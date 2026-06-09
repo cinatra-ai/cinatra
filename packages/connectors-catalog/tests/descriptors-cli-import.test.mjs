@@ -21,7 +21,7 @@ import {
 // registry (it registers external clients, it does not call out) and the
 // embeddable assistant chat-widget connectors (no server-side primitives).
 const MCP_LESS_CONNECTOR_SLUGS = new Set([
-  "mcp-client-registry-connector",
+  "mcp-client-connector",
   "wordpress-assistant-connector",
   "drupal-assistant-connector",
 ]);

@@ -82,9 +82,9 @@ importers:
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:packages/llm
-      '@cinatra-ai/mcp-client-registry-connector':
+      '@cinatra-ai/mcp-client-connector':
         specifier: workspace:*
-        version: link:extensions/cinatra-ai/mcp-client-registry-connector
+        version: link:extensions/cinatra-ai/mcp-client-connector
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
@@ -850,7 +850,7 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
 
-  extensions/cinatra-ai/mcp-client-registry-connector:
+  extensions/cinatra-ai/mcp-client-connector:
     dependencies:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
@@ -864,9 +864,6 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
-      drizzle-orm:
-        specifier: ^0.45.2
-        version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0)
       radix-ui:
         specifier: ^1.4.3
         version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -1195,9 +1192,9 @@ importers:
       '@cinatra-ai/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
-      '@cinatra-ai/mcp-client-registry-connector':
+      '@cinatra-ai/mcp-client-connector':
         specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/mcp-client-registry-connector
+        version: link:../../extensions/cinatra-ai/mcp-client-connector
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -1367,9 +1364,9 @@ importers:
       '@cinatra-ai/google-oauth-connection':
         specifier: workspace:*
         version: link:../google-oauth-connection
-      '@cinatra-ai/mcp-client-registry-connector':
+      '@cinatra-ai/mcp-client-connector':
         specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/mcp-client-registry-connector
+        version: link:../../extensions/cinatra-ai/mcp-client-connector
       '@cinatra-ai/nango-connector':
         specifier: workspace:*
         version: link:../../extensions/cinatra-ai/nango-connector
