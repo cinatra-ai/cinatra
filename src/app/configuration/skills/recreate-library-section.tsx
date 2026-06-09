@@ -58,9 +58,8 @@ export function RecreateLibrarySection() {
         setOpen(false);
         setConfirm("");
         setForcePush(false);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast.error(`Recreate failed: ${msg}`);
+      } catch {
+        toast.error("Could not recreate the skills library.");
       }
     });
   };

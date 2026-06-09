@@ -20,10 +20,10 @@ export function SaveSkillsGitHubPatForm({
         body: "Your personal access token has been updated.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save the GitHub token.",
+        title: "GitHub token save failed",
+        body: "Unable to save the GitHub token.",
         kind: "error",
       });
     }

@@ -620,7 +620,7 @@ function HitlApprovalCard({
       } else {
         justSubmittedXRendererRef.current = null;
         onApproveRejected?.();
-        toast.error(`Could not continue: ${msg}`);
+        toast.error("Could not continue this run.");
       }
     } finally {
       setIsApproving(false);

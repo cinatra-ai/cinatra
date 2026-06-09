@@ -57,10 +57,10 @@ export function AddMatchSkillSelector({
         });
         setSkillId("");
         router.refresh();
-      } catch (error) {
+      } catch {
         addNotification({
           title: "Unable to save assignment",
-          body: error instanceof Error ? error.message : "The assignment could not be saved.",
+          body: "The assignment could not be saved.",
           kind: "error",
         });
       }
@@ -105,10 +105,10 @@ export function AddMatchForm({
         body: "The agent-skill match has been added.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
         title: "Unable to save assignment",
-        body: error instanceof Error ? error.message : "The assignment could not be saved.",
+        body: "The assignment could not be saved.",
         kind: "error",
       });
     }
@@ -138,10 +138,10 @@ export function RemoveMatchForm({
         body: "The agent-skill match has been removed.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
         title: "Unable to remove assignment",
-        body: error instanceof Error ? error.message : "The assignment could not be removed.",
+        body: "The assignment could not be removed.",
         kind: "error",
       });
     }

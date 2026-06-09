@@ -20,10 +20,10 @@ export function SaveSkillAutosaveForm({
         body: "Autosave configuration has been updated.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save autosave settings.",
+        title: "Autosave settings save failed",
+        body: "Unable to save autosave settings.",
         kind: "error",
       });
     }

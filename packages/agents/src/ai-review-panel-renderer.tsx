@@ -84,8 +84,8 @@ export function AiReviewPanelRenderer({
       await runReviewCheck({ serviceId, campaignId });
       toast.success("Review check started");
       await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to run review");
+    } catch {
+      toast.error("Could not run the review check.");
     } finally {
       setRunning(false);
     }
@@ -101,8 +101,8 @@ export function AiReviewPanelRenderer({
       await dismissReviewRecommendation({ serviceId, campaignId, ids: [id] });
       toast.success("Recommendation dismissed");
       await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Dismiss failed");
+    } catch {
+      toast.error("Could not dismiss the recommendation.");
     } finally {
       setWorking((prev) => {
         const next = new Set(prev);
@@ -122,8 +122,8 @@ export function AiReviewPanelRenderer({
       await applyReviewRecommendation({ serviceId, campaignId, ids: [id] });
       toast.success("Recommendation applied");
       await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Apply failed");
+    } catch {
+      toast.error("Could not apply the recommendation.");
     } finally {
       setWorking((prev) => {
         const next = new Set(prev);

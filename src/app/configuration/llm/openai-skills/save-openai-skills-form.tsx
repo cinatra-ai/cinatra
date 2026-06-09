@@ -20,10 +20,10 @@ export function SaveOpenAiSkillsForm({
         body: "Skill configuration has been updated.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save OpenAI skills.",
+        title: "OpenAI skills save failed",
+        body: "Unable to save OpenAI skills.",
         kind: "error",
       });
     }
