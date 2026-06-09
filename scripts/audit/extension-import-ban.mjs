@@ -36,6 +36,15 @@
 // legitimate connector coupling does not break the build; the `--strict-sdk-only`
 // flag makes it ZERO-TOLERANCE.
 //
+// CLASSIFICATION (shared taxonomy — scripts/audit/lib/
+// extension-reference-classification.mjs, counts published in
+// scripts/audit/extension-coupling-gates.md): all three dimensions here
+// (`hostInternal`, `crossExtension`, `sdkOnly`) are EXTENSION-side import
+// coupling and classify as `runtime-coupling` — none of them are facades/
+// inventories/dev-lists (`mechanical`) and NOTHING on the extension side is
+// permanently exempt (the strict exempt set — generated manifest + documented
+// data-contract-ID allowlist — is host-side only).
+//
 // Usage:
 //   node scripts/audit/extension-import-ban.mjs                  # check (exit 1 on NEW coupling)
 //   node scripts/audit/extension-import-ban.mjs --write-baseline # regenerate the baseline (shrink-only in CI)
@@ -224,7 +233,8 @@ async function main() {
   if (args.includes("--write-baseline")) {
     const doc = {
       note:
-        "Extension import-ban no-new-rot baseline. `hostInternal`/`crossExtension` = CURRENT @/ or cross-extension coupling tolerated until the decoupling sweep removes it. `sdkOnly` = CURRENT non-SDK first-party/sibling-vendor code coupling (deps + source imports incl. `import type`) tolerated until the connector sweep migrates each onto `ctx`; the canonical rule is SDK-packages-only. Regenerate with `node scripts/audit/extension-import-ban.mjs --write-baseline` (every dimension should only ever SHRINK). The `--strict-sdk-only` flip makes `sdkOnly` zero-tolerance. anthropic-connector is un-exempt and scanned like every other connector.",
+        "Extension import-ban no-new-rot baseline. `hostInternal`/`crossExtension` = CURRENT @/ or cross-extension coupling tolerated until the decoupling sweep removes it. `sdkOnly` = CURRENT non-SDK first-party/sibling-vendor code coupling (deps + source imports incl. `import type`) tolerated until the connector sweep migrates each onto `ctx`; the canonical rule is SDK-packages-only. Under the shared extension-reference taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md) ALL entries in every dimension classify as runtime-coupling; nothing extension-side is mechanical or permanently exempt. Regenerate with `node scripts/audit/extension-import-ban.mjs --write-baseline` (every dimension should only ever SHRINK). The `--strict-sdk-only` flip makes `sdkOnly` zero-tolerance. anthropic-connector is un-exempt and scanned like every other connector.",
+      classification: "runtime-coupling",
       hostInternal: current.hostInternal,
       crossExtension: current.crossExtension,
       sdkOnly: current.sdkOnly,
@@ -372,7 +382,7 @@ async function main() {
       baseXextCount +
       " cross-extension + " +
       baseSdkCount +
-      " non-SDK @cinatra-ai (no whole-extension exemptions). sdkOnly is now FLIPPED to --strict-sdk-only " +
+      " non-SDK @cinatra-ai (all runtime-coupling class; no whole-extension exemptions). sdkOnly is now FLIPPED to --strict-sdk-only " +
       "(zero-tolerance) in CI; the STRICT_SDK_ONLY_ALLOWLIST is EMPTY (the objects-ctx " +
       "follow-up closed the last carve-out). Drive @/ + cross-extension to 0 next.",
   );

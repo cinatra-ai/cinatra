@@ -1,0 +1,167 @@
+// Shared classification taxonomy for named-extension references in core.
+//
+// Every reference core makes to a specific extension package NAME (or
+// `extensions/<scope>/<name>/` path) falls into exactly one class. The three
+// extension-coupling gates (`core-extension-instance-coupling-ban`,
+// `core-extension-import-ban`, `extension-import-ban`) report against this one
+// taxonomy so "how much coupling is left, and of what kind?" has a single
+// auditable answer. See `scripts/audit/extension-coupling-gates.md` for the
+// per-gate counts and the strict end-state target.
+//
+// Classes:
+//
+//   - "runtime-coupling"  — core selects/loads/branches on a specific
+//     extension at runtime (named imports, loader maps, provider registration,
+//     prompt/dispatch literals). This is the architecture debt the runtime
+//     cutover removes; the DEFAULT class for any counted reference.
+//
+//   - "mechanical"        — re-export facades, hand-written inventories/
+//     catalogs, dev-name lists, and generated DERIVATIVES of the manifest.
+//     Not runtime selection, but still named-instance coupling; removed or
+//     consolidated by the mechanical-cleanup pass. Counted and ratcheted
+//     exactly like runtime-coupling — NEVER exempt.
+//
+//   - "permanent-exempt"  — never counted. STRICT, owner-ruled set:
+//     the generated extension manifest (`src/lib/generated/extensions.server.ts`)
+//     plus the documented data-contract-ID allowlist below. Nothing else: no
+//     facades, no inventories, no dev-lists.
+
+export const CLASSIFICATIONS = Object.freeze([
+  "runtime-coupling",
+  "mechanical",
+  "permanent-exempt",
+]);
+
+// ---------------------------------------------------------------------------
+// The STRICT permanent-exempt FILE set.
+//
+// ONLY the generated extension manifest. It is the legitimate data-driven
+// install list — names there are data produced by
+// `scripts/extensions/generate-extension-manifest.mjs`, not hand-coupling.
+// NOTE the deliberate narrowness: the OTHER generated files
+// (`src/lib/generated/connector-setup-pages.ts`, `extensions.client.tsx`) are
+// derivatives, NOT the manifest — they are counted and classified
+// "mechanical" below. Growing this set requires an owner ruling.
+// ---------------------------------------------------------------------------
+export const PERMANENT_EXEMPT_FILES = new Set([
+  "src/lib/generated/extensions.server.ts",
+]);
+
+// ---------------------------------------------------------------------------
+// The documented data-contract-ID allowlist.
+//
+// A data-contract ID is a STABLE string identifier whose value happens to
+// embed an extension package name (e.g. a persisted artifact-kind or skill
+// contract key like "@scope/some-skills:some-capability"). When such an ID is
+// a frozen serialization/compatibility contract — NOT runtime selection of an
+// extension — it may be permanently exempted HERE, and only here.
+//
+// RULES (enforced by the gate + tests):
+//   - every entry MUST carry a non-empty written justification explaining why
+//     the ID is a stable contract rather than runtime selection;
+//   - entries are added ONLY with an owner ruling;
+//   - the set is self-policing: an entry whose ID no longer occurs anywhere in
+//     scanned core source is STALE and hard-fails the gate until removed;
+//   - the gate reports allowlisted occurrences SEPARATELY from counted ones,
+//     so they are always distinguishable from baseline coupling.
+//
+// Shape: Map<contractId, justification>. Currently EMPTY — no contract ID has
+// been ruled exempt yet; the mechanism ships ahead of its first entry.
+// ---------------------------------------------------------------------------
+export const DATA_CONTRACT_ID_ALLOWLIST = new Map([]);
+
+// ---------------------------------------------------------------------------
+// Mechanical reference sites (repo-relative path -> rationale).
+//
+// Facades / inventories / catalogs / dev-lists and generated derivatives of
+// the manifest. These are COUNTED in the baselines (never exempt); the class
+// only tells the cleanup work apart from runtime-coupling work. Default for
+// any file NOT listed here is "runtime-coupling".
+// ---------------------------------------------------------------------------
+export const MECHANICAL_FILES = new Map([
+  [
+    "src/lib/generated/connector-setup-pages.ts",
+    "generated DERIVATIVE of the manifest (literal setup-page loader map for the bundler) — not the manifest itself, so counted; consolidated by the mechanical-cleanup pass",
+  ],
+  [
+    "src/lib/generated/extensions.client.tsx",
+    "generated DERIVATIVE of the manifest (client widget map) — not the manifest itself, so counted",
+  ],
+  [
+    "packages/extensions/src/system-extension-inventory.ts",
+    "hand-written inventory of locked system packages",
+  ],
+  [
+    "src/lib/objects/surface-inventory.ts",
+    "hand-authored objects-surface inventory (test/coverage bookkeeping, not runtime selection)",
+  ],
+  [
+    "packages/connectors-catalog/src/descriptors.mjs",
+    "hand-written connector descriptor catalog (pure data consumed by CLI + server registry)",
+  ],
+]);
+
+/**
+ * Classify a repo-relative file for the extension-coupling taxonomy.
+ * `permanent-exempt` files are never counted by the gates; everything else is
+ * counted and ratcheted regardless of class.
+ */
+export function classifyFile(rel) {
+  if (PERMANENT_EXEMPT_FILES.has(rel)) return "permanent-exempt";
+  if (MECHANICAL_FILES.has(rel)) return "mechanical";
+  return "runtime-coupling";
+}
+
+/**
+ * Structural defects in a data-contract-ID allowlist: every entry must carry a
+ * non-empty written justification. Returns offending IDs (empty = OK).
+ */
+export function allowlistDefects(allowlist = DATA_CONTRACT_ID_ALLOWLIST) {
+  const bad = [];
+  for (const [id, justification] of allowlist) {
+    if (typeof justification !== "string" || justification.trim().length === 0) bad.push(id);
+  }
+  return bad.sort();
+}
+
+/**
+ * Self-policing staleness check: allowlist entries whose contract ID no longer
+ * occurs anywhere in the scanned source must be REMOVED (a stale entry could
+ * silently re-bless a later reintroduction). `allowlistHits` is the
+ * Map<contractId, occurrenceCount> the scanner accumulated; entries with zero
+ * hits are stale. Returns the stale IDs (empty = OK).
+ */
+export function staleAllowlistEntries(allowlistHits, allowlist = DATA_CONTRACT_ID_ALLOWLIST) {
+  const stale = [];
+  for (const id of allowlist.keys()) {
+    if (!allowlistHits || !(allowlistHits.get(id) > 0)) stale.push(id);
+  }
+  return stale.sort();
+}
+
+/**
+ * Per-class summary of a flat occurrence map whose keys start with the
+ * repo-relative file path (`<file> :: ...`). Returns
+ * `{ [class]: { files, keys, occurrences } }` for the countable classes.
+ */
+export function summarizeByClassification(occurrences) {
+  const summary = {
+    "runtime-coupling": { files: new Set(), keys: 0, occurrences: 0 },
+    mechanical: { files: new Set(), keys: 0, occurrences: 0 },
+  };
+  for (const [key, count] of Object.entries(occurrences)) {
+    const file = key.split(" :: ")[0];
+    const cls = classifyFile(file);
+    const bucket = summary[cls];
+    if (!bucket) continue; // permanent-exempt files never appear in occurrence maps
+    bucket.files.add(file);
+    bucket.keys += 1;
+    bucket.occurrences += count;
+  }
+  return Object.fromEntries(
+    Object.entries(summary).map(([cls, { files, keys, occurrences }]) => [
+      cls,
+      { files: files.size, keys, occurrences },
+    ]),
+  );
+}

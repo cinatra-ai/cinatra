@@ -16,6 +16,19 @@
 //   - `@cinatra-ai/anthropic-connector` — stays in-tree (charter: not extracted).
 //   - test/spec files.
 //
+// CLASSIFICATION (shared taxonomy — scripts/audit/lib/
+// extension-reference-classification.mjs, counts published in
+// scripts/audit/extension-coupling-gates.md): every baselined edge is
+// classified `runtime-coupling` (default) or `mechanical` (facade/inventory/
+// dev-list files); both are counted and ratcheted identically. NOTE a known,
+// documented divergence from the strict exempt set: this gate still
+// file-exempts ALL of `src/lib/generated/**` (the instance-coupling gate
+// exempts ONLY the manifest and counts the generated derivatives as
+// mechanical). Narrowing it here would grow this baseline, which this gate
+// forbids — the instance-coupling gate already counts those same files'
+// references, so nothing is unmeasured; convergence happens when this
+// baseline is next legitimately recomputed toward 0.
+//
 // Usage:
 //   node scripts/audit/core-extension-import-ban.mjs            # --check (default)
 //   node scripts/audit/core-extension-import-ban.mjs --write-baseline
@@ -26,6 +39,7 @@ import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertExtensionsPresent } from "./lib/assert-extensions-cloned.mjs";
+import { classifyFile } from "./lib/extension-reference-classification.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -131,6 +145,25 @@ function flatten(map) {
   return set;
 }
 
+/**
+ * Per-class summary of an edge map (`{ [srcFile]: [extNames] }`) under the
+ * shared extension-reference taxonomy. Keys here are already repo-relative
+ * (`src/...`). Returns `{ [class]: { files, edges } }`.
+ */
+export function summarizeEdgeClassification(map) {
+  const summary = {
+    "runtime-coupling": { files: 0, edges: 0 },
+    mechanical: { files: 0, edges: 0 },
+  };
+  for (const [file, exts] of Object.entries(map)) {
+    const cls = classifyFile(file);
+    const bucket = summary[cls] ?? summary["runtime-coupling"];
+    bucket.files += 1;
+    bucket.edges += exts.length;
+  }
+  return summary;
+}
+
 function sortKeysDeep(o) {
   if (Array.isArray(o)) return o.map(sortKeysDeep);
   if (o && typeof o === "object") {
@@ -199,11 +232,16 @@ function main() {
   if (args.includes("--write-baseline")) {
     const doc = {
       note:
-        "True-IoC HOST->EXTENSION no-new-rot baseline. Each entry is a CURRENT core(src/)->extension import edge tolerated until the IoC cutover removes it via the runtime-discovery dispatcher. Regenerate with `node scripts/audit/core-extension-import-ban.mjs --write-baseline` (it should only ever SHRINK, except a one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition). src/lib/generated/** is exempt; anthropic-connector is un-exempt and its host->ext edges are seeded here.",
+        "True-IoC HOST->EXTENSION no-new-rot baseline. Each entry is a CURRENT core(src/)->extension import edge tolerated until the IoC cutover removes it via the runtime-discovery dispatcher; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). Regenerate with `node scripts/audit/core-extension-import-ban.mjs --write-baseline` (it should only ever SHRINK, except a one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition). src/lib/generated/** is exempt; anthropic-connector is un-exempt and its host->ext edges are seeded here.",
+      classificationSummary: summarizeEdgeClassification(current),
       edges: current,
     };
     writeFileSync(BASELINE_PATH, stable(doc));
-    console.log(`[core-extension-import-ban] baseline written — ${count} edges across ${Object.keys(current).length} core files.`);
+    const sum = doc.classificationSummary;
+    console.log(
+      `[core-extension-import-ban] baseline written — ${count} edges across ${Object.keys(current).length} core files ` +
+        `(runtime-coupling: ${sum["runtime-coupling"].edges}, mechanical: ${sum.mechanical.edges}).`,
+    );
     return;
   }
 
@@ -286,7 +324,12 @@ function main() {
     added.forEach((e) => console.error("  + " + e));
     process.exit(1);
   }
-  console.log(`[core-extension-import-ban] OK — no NEW core->extension coupling. Baseline: ${count} edges (drive to 0 via the IoC cutover).`);
+  const sum = summarizeEdgeClassification(current);
+  console.log(
+    `[core-extension-import-ban] OK — no NEW core->extension coupling. Baseline: ${count} edges ` +
+      `[runtime-coupling: ${sum["runtime-coupling"].edges} edge(s) / ${sum["runtime-coupling"].files} file(s); ` +
+      `mechanical: ${sum.mechanical.edges} edge(s) / ${sum.mechanical.files} file(s)] (drive to 0 via the IoC cutover).`,
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) main();

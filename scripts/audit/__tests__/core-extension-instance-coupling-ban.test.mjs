@@ -2,12 +2,16 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   scanInstanceCoupling,
   diffGrown,
   diffShrunk,
   baselineGrowth,
+  growthAllowance,
   discoverExtensionNames,
+  SCANNER_EPOCH,
 } from "../core-extension-instance-coupling-ban.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -56,14 +60,74 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(fp).toEqual([]);
   });
 
-  it("does NOT scan the extensions/ tree, src/lib/generated/**, or tests", () => {
+  it("does NOT scan the extensions/ tree, the generated MANIFEST, or tests — but DOES count the generated derivatives (strict exempt set)", () => {
     const occ = scanInstanceCoupling();
     const files = new Set(Object.keys(occ).map((k) => k.split(" :: ")[0]));
     for (const f of files) {
       expect(f.startsWith("extensions/")).toBe(false);
-      expect(f.startsWith("src/lib/generated/")).toBe(false);
+      expect(f).not.toBe("src/lib/generated/extensions.server.ts");
       expect(/\.(test|spec)\.|\/__tests__\/|\/__mocks__\//.test(f)).toBe(false);
     }
+    // The generated loader map is a DERIVATIVE of the manifest, not the
+    // manifest — it is counted (classified mechanical), never exempt.
+    expect(files.has("src/lib/generated/connector-setup-pages.ts")).toBe(true);
+  });
+
+  it("scanner-correctness regression: real imports adjacent to comments are counted (both previously-hidden sites)", () => {
+    const occ = scanInstanceCoupling();
+    // A line comment containing `@/lib/*` sits above the static import cluster —
+    // the old regex stripper swallowed the whole cluster as a bogus block comment.
+    const transport = Object.keys(occ).filter((k) => k.startsWith("src/lib/register-transport-connectors.ts :: package ::"));
+    expect(transport.some((k) => k.endsWith("@cinatra-ai/gmail-connector"))).toBe(true);
+    expect(transport.some((k) => k.endsWith("@cinatra-ai/tailscale-connector"))).toBe(true);
+    // A placeholder-import comment sits directly above the live loader map.
+    const loaders = Object.keys(occ).filter((k) => k.startsWith("src/lib/connector-setup-pages.ts :: package ::"));
+    expect(loaders.some((k) => k.endsWith("@cinatra-ai/openai-connector"))).toBe(true);
+  });
+
+  it("masks documented data-contract IDs before counting and reports them separately (exempt-set logic)", () => {
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-"));
+    try {
+      mkdirSync(join(root, "src/lib"), { recursive: true });
+      writeFileSync(
+        join(root, "src/lib/sample.ts"),
+        [
+          '// comment naming @scope/alpha-skills should never count',
+          'const contract = "@scope/alpha-skills:make-things";', // exact allowlisted ID
+          'const runtime = "@scope/alpha-skills";', // bare name — still counted
+          'const other = "@scope/beta-connector";',
+          "",
+        ].join("\n"),
+      );
+      const extensions = {
+        names: new Set(["@scope/alpha-skills", "@scope/beta-connector"]),
+        dirPaths: new Set(),
+      };
+      const allowlist = new Map([["@scope/alpha-skills:make-things", "stable persisted capability key, not runtime selection"]]);
+      const allowlistHits = new Map();
+      const occ = scanInstanceCoupling(root, extensions, { allowlist, allowlistHits });
+      // The allowlisted contract ID is masked — only the bare runtime reference counts.
+      expect(occ["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(1);
+      expect(occ["src/lib/sample.ts :: package :: @scope/beta-connector"]).toBe(1);
+      expect(allowlistHits.get("@scope/alpha-skills:make-things")).toBe(1);
+      // Without the allowlist, the contract ID's embedded name is counted too.
+      const occNoAllow = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      expect(occNoAllow["src/lib/sample.ts :: package :: @scope/alpha-skills"]).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("growthAllowance permits a rise ONLY for a one-step epoch advance carried by the scanner itself", () => {
+    // The sanctioned recompute: base epoch N, committed epoch N+1 == script epoch.
+    expect(growthAllowance(SCANNER_EPOCH - 1, SCANNER_EPOCH)).toEqual({ allowGrowth: true, error: null });
+    // Steady state: no allowance.
+    expect(growthAllowance(SCANNER_EPOCH, SCANNER_EPOCH)).toEqual({ allowGrowth: false, error: null });
+    // A committed baseline whose epoch does not match the script must fail.
+    expect(growthAllowance(SCANNER_EPOCH, SCANNER_EPOCH - 1).error).toMatch(/does not match/);
+    // Skipping epochs / regressing vs base must fail.
+    expect(growthAllowance(SCANNER_EPOCH - 2, SCANNER_EPOCH).error).toMatch(/advance by 1/);
+    expect(growthAllowance(SCANNER_EPOCH + 1, SCANNER_EPOCH).error).toMatch(/advance by 1|never regress/);
   });
 
   it("diffGrown flags a NEW occurrence and a GROWN count; diffShrunk flags a reduced count", () => {

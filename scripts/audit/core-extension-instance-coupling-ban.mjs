@@ -6,7 +6,7 @@
 // the OTHER way core hardcodes a specific extension INSTANCE: a string literal /
 // JSX text / schema description / prompt / package-metadata reference to an exact
 // extension package NAME, or an `extensions/<scope>/<name>/` PATH literal — e.g.
-// `src/lib/blog/openai.ts`'s `"@cinatra-ai/blog-skills:generate-blog-ideas"` +
+// `src/lib/blog/generation.ts`'s `"@cinatra-ai/blog-skills:generate-blog-ideas"` +
 // `extensions/cinatra-ai/blog-skills/skills/${slug}/SKILL.md`. That is core
 // knowing a specific extension by name, which a true IoC system must not do —
 // capabilities come from the manifest/registry, not hardcoded references.
@@ -15,7 +15,9 @@
 // occurrence is recorded in the baseline as `file :: kind :: value -> count`;
 // CI fails if any count GROWS or a NEW occurrence appears, and (with a base ref)
 // if the committed baseline grew vs the base branch. The baseline can only
-// SHRINK — the IoC cutover drives it to 0 (de-couple core from named instances).
+// SHRINK — the IoC cutover drives it to the strict end-state (manifest +
+// documented data-contract-ID allowlist ONLY) — EXCEPT a sanctioned scanner
+// recompute (see SCANNER_EPOCH below).
 //
 // Counts ALL non-comment occurrences INCLUDING imports — the src-only
 // import-ban gate does not scan `packages/`, so a package-side
@@ -23,11 +25,21 @@
 // validated against REAL `extensions/<scope>/<name>` dirs, so a core
 // `@cinatra-ai/extensions/...` package subpath is not a false positive.
 //
-// EXEMPT (never scanned/counted):
-//   - the `extensions/` tree itself (an extension naming ITSELF is fine);
-//   - `src/lib/generated/**` (the generated manifest IS the legit data-driven
-//     install list — names there are data, not hand-coupling);
-//   - test / spec / __tests__ / tests / __mocks__ files.
+// CLASSIFICATION + STRICT EXEMPT SET (shared taxonomy — see
+// scripts/audit/lib/extension-reference-classification.mjs and the published
+// counts in scripts/audit/extension-coupling-gates.md):
+//   - every counted reference is classified `runtime-coupling` (default) or
+//     `mechanical` (facades/inventories/dev-lists/generated derivatives) —
+//     BOTH are counted and ratcheted identically;
+//   - permanently exempt (never scanned/counted) are ONLY:
+//       * the generated manifest `src/lib/generated/extensions.server.ts`
+//         (PERMANENT_EXEMPT_FILES — strict: the OTHER generated files are
+//         counted as `mechanical`),
+//       * occurrences inside a documented DATA_CONTRACT_ID_ALLOWLIST entry —
+//         each entry carries a written justification and is reported
+//         separately + self-policed for staleness,
+//       * test / spec / __tests__ / tests / __mocks__ files, and the
+//         `extensions/` tree itself (an extension naming ITSELF is fine).
 //
 // Usage:
 //   node scripts/audit/core-extension-instance-coupling-ban.mjs            # --check (default)
@@ -39,11 +51,33 @@ import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertExtensionsPresent } from "./lib/assert-extensions-cloned.mjs";
+import { stripComments } from "./lib/strip-comments.mjs";
+import {
+  PERMANENT_EXEMPT_FILES,
+  DATA_CONTRACT_ID_ALLOWLIST,
+  classifyFile,
+  allowlistDefects,
+  staleAllowlistEntries,
+  summarizeByClassification,
+} from "./lib/extension-reference-classification.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
 const BASELINE_PATH = join(__dirname, "core-extension-instance-coupling-ban.baseline.json");
+
+// Scanner-correctness epoch. Bump ONLY when a scanner fix legitimately changes
+// what is counted (owner sign-off required — a bump is the documented one-time
+// recompute path that permits the committed baseline to RISE vs the base ref
+// in exactly the PR that carries the fix). History:
+//   1 — original regex-based comment stripping (mis-lexed `/*` inside line
+//       comments / `//` inside strings; HID real references — e.g. the whole
+//       static import cluster of src/lib/register-transport-connectors.ts and
+//       the live loader map of src/lib/connector-setup-pages.ts).
+//   2 — lexical stripper (lib/strip-comments.mjs) + strict exempt set: only
+//       the generated manifest file is exempt; other generated files are
+//       counted as `mechanical`. One-time corrected-baseline recompute.
+export const SCANNER_EPOCH = 2;
 
 const SCAN_ROOTS = ["src", "packages"];
 const EXTENSION_PATH_RE = /extensions\/[a-z0-9._-]+\/[a-z0-9._-]+/g;
@@ -84,10 +118,13 @@ export function discoverExtensions(extRoot = EXTENSIONS_ROOT) {
   return { names, dirPaths };
 }
 
+// STRICT file exemption: tests + the permanent-exempt set ONLY. The broad
+// `src/lib/generated/**` carve-out is gone — of the generated files, only the
+// manifest itself (`extensions.server.ts`) is exempt; the generated
+// DERIVATIVES (loader map, client widget map) are counted as `mechanical`.
 function isExemptFile(rel) {
   return (
-    rel.startsWith("lib/generated/") ||
-    rel.startsWith("src/lib/generated/") ||
+    PERMANENT_EXEMPT_FILES.has(rel) ||
     /\.(test|spec)\.m?[tj]sx?$/.test(rel) ||
     /\/__tests__\//.test(rel) ||
     /\/tests?\//.test(rel) ||
@@ -109,12 +146,6 @@ function walk(dir, acc) {
   return acc;
 }
 
-// Strip line + block comments — a comment naming an extension is documentation,
-// not runtime coupling.
-function stripComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-}
-
 function countOccurrences(haystack, needle) {
   if (!needle) return 0;
   let n = 0;
@@ -134,8 +165,17 @@ function countOccurrences(haystack, needle) {
  * extension package would otherwise escape both gates. Path matches are
  * validated against real `extensions/<scope>/<name>` dirs (so a core
  * `@cinatra-ai/extensions/...` package subpath is not a false positive).
+ *
+ * Occurrences inside a documented data-contract-ID allowlist entry are MASKED
+ * before counting (they are sanctioned, not baseline); pass `allowlistHits`
+ * (a Map) to receive the per-ID hit counts for separate reporting + the
+ * staleness self-check.
  */
-export function scanInstanceCoupling(repoRoot = REPO_ROOT, extensions = discoverExtensions(join(repoRoot, "extensions"))) {
+export function scanInstanceCoupling(
+  repoRoot = REPO_ROOT,
+  extensions = discoverExtensions(join(repoRoot, "extensions")),
+  { allowlist = DATA_CONTRACT_ID_ALLOWLIST, allowlistHits } = {},
+) {
   const { names: extensionNames, dirPaths } = extensions;
   const occ = {};
   for (const root of SCAN_ROOTS) {
@@ -147,7 +187,17 @@ export function scanInstanceCoupling(repoRoot = REPO_ROOT, extensions = discover
       // Count ALL non-comment references — INCLUDING imports. (The src-only
       // import-ban gate doesn't scan packages/, so import lines must be counted
       // here too or a package-side `import "@scope/ext"` would escape both gates.)
-      const code = stripComments(readFileSync(file, "utf8"));
+      let code = stripComments(readFileSync(file, "utf8"));
+      // Mask sanctioned data-contract IDs BEFORE counting names, so an exact
+      // allowlisted ID is never attributed to its embedded package name. Bare
+      // (non-ID) occurrences of the same name still count.
+      for (const id of allowlist.keys()) {
+        const hits = countOccurrences(code, id);
+        if (hits > 0) {
+          if (allowlistHits) allowlistHits.set(id, (allowlistHits.get(id) ?? 0) + hits);
+          code = code.split(id).join(" ALLOWLISTED ");
+        }
+      }
       for (const name of extensionNames) {
         const c = countOccurrences(code, name);
         if (c > 0) occ[`${rel} :: package :: ${name}`] = c;
@@ -200,25 +250,82 @@ export function baselineGrowth(baseBaseline, committed) {
   return grew.sort();
 }
 
+/**
+ * Decide whether baseline growth vs the base ref is sanctioned. Growth is
+ * allowed ONLY in the single PR that carries a scanner-correctness recompute:
+ * the committed baseline's epoch must be EXACTLY base+1 AND equal to the
+ * script's SCANNER_EPOCH (so the allowance self-expires the moment the
+ * recompute merges — afterwards base epoch == script epoch, and a future
+ * allowance requires a reviewed SCANNER_EPOCH bump in code). Pure + exported
+ * for unit testing. Returns { allowGrowth, error }.
+ */
+export function growthAllowance(baseEpoch, committedEpoch, scannerEpoch = SCANNER_EPOCH) {
+  if (committedEpoch !== scannerEpoch) {
+    return {
+      allowGrowth: false,
+      error: `committed baseline scannerEpoch=${committedEpoch} does not match the scanner's SCANNER_EPOCH=${scannerEpoch} — regenerate with --write-baseline`,
+    };
+  }
+  if (committedEpoch === baseEpoch) return { allowGrowth: false, error: null };
+  if (committedEpoch === baseEpoch + 1) return { allowGrowth: true, error: null };
+  return {
+    allowGrowth: false,
+    error: `committed baseline scannerEpoch=${committedEpoch} vs base scannerEpoch=${baseEpoch} — an epoch may only advance by 1 (one sanctioned recompute per epoch) and never regress`,
+  };
+}
+
 function main() {
   const args = process.argv.slice(2);
   // Fail-closed: without the cloned-back extension tree the
   // instance-coupling scan is empty and this gate passes vacuously.
   assertExtensionsPresent(REPO_ROOT, "core-extension-instance-coupling-ban");
-  const current = scanInstanceCoupling();
+
+  // Structural allowlist policy: every data-contract-ID entry must carry a
+  // written justification. Fail before scanning — an unjustified entry is a
+  // policy violation regardless of the tree's state.
+  const defects = allowlistDefects();
+  if (defects.length) {
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — DATA_CONTRACT_ID_ALLOWLIST entr${defects.length === 1 ? "y" : "ies"} without a written justification:`,
+    );
+    defects.forEach((id) => console.error("  + " + id));
+    process.exit(1);
+  }
+
+  const allowlistHits = new Map();
+  const current = scanInstanceCoupling(REPO_ROOT, undefined, { allowlistHits });
   const totalFiles = new Set(Object.keys(current).map((k) => k.split(" :: ")[0])).size;
   const totalOcc = Object.values(current).reduce((a, b) => a + b, 0);
+  const summary = summarizeByClassification(current);
+  const allowlistedOcc = [...allowlistHits.values()].reduce((a, b) => a + b, 0);
+
+  // Self-policing: an allowlist entry whose contract ID no longer occurs
+  // anywhere must be removed, or a later reintroduction would silently ride it.
+  const stale = staleAllowlistEntries(allowlistHits);
+  if (stale.length) {
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — STALE data-contract-ID allowlist entr${stale.length === 1 ? "y" : "ies"} (ID no longer occurs in scanned source — remove from DATA_CONTRACT_ID_ALLOWLIST):`,
+    );
+    stale.forEach((id) => console.error("  + " + id));
+    process.exit(1);
+  }
 
   if (args.includes("--write-baseline")) {
     writeFileSync(
       BASELINE_PATH,
       stable({
         note:
-          "true-IoC hardcoded-extension-INSTANCE coupling baseline. Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Tolerated until the IoC cutover de-couples it; the count may only ever SHRINK. extensions/ + src/lib/generated/** + tests are exempt. Regenerate with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
+          "true-IoC hardcoded-extension-INSTANCE coupling baseline. Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md); BOTH classes are tolerated only until the IoC cutover de-couples them, and the count may only ever SHRINK (a rise requires a sanctioned SCANNER_EPOCH recompute). Permanently exempt: ONLY the generated manifest (src/lib/generated/extensions.server.ts), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
+        scannerEpoch: SCANNER_EPOCH,
+        classificationSummary: summary,
         occurrences: current,
       }),
     );
-    console.log(`[core-extension-instance-coupling-ban] baseline written — ${totalOcc} occurrence(s) across ${totalFiles} core file(s).`);
+    console.log(
+      `[core-extension-instance-coupling-ban] baseline written — ${totalOcc} occurrence(s) across ${totalFiles} core file(s) ` +
+        `(runtime-coupling: ${summary["runtime-coupling"].occurrences}, mechanical: ${summary.mechanical.occurrences}; ` +
+        `allowlisted data-contract IDs reported separately: ${allowlistedOcc}).`,
+    );
     return;
   }
 
@@ -226,7 +333,17 @@ function main() {
     console.error("[core-extension-instance-coupling-ban] FAIL — no baseline. Run with --write-baseline first.");
     process.exit(1);
   }
-  const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).occurrences ?? {};
+  const baselineDoc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+  const baseline = baselineDoc.occurrences ?? {};
+  const committedEpoch = baselineDoc.scannerEpoch ?? 1;
+
+  if (committedEpoch !== SCANNER_EPOCH) {
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — committed baseline scannerEpoch=${committedEpoch} does not match SCANNER_EPOCH=${SCANNER_EPOCH}. ` +
+        `The scanner changed what it counts; regenerate the baseline with --write-baseline (and land it WITH the scanner change).`,
+    );
+    process.exit(1);
+  }
 
   const baseRef = process.env.CORE_EXT_INSTANCE_BAN_BASE;
   if (baseRef) {
@@ -262,8 +379,20 @@ function main() {
       baseText = null; // ref resolves but file absent → introducing PR, no constraint
     }
     if (baseText) {
-      const grew = baselineGrowth(JSON.parse(baseText).occurrences ?? {}, baseline);
-      if (grew.length) {
+      const baseDoc = JSON.parse(baseText);
+      const baseEpoch = baseDoc.scannerEpoch ?? 1;
+      const { allowGrowth, error } = growthAllowance(baseEpoch, committedEpoch);
+      if (error) {
+        console.error(`[core-extension-instance-coupling-ban] FAIL — ${error}.`);
+        process.exit(1);
+      }
+      const grew = baselineGrowth(baseDoc.occurrences ?? {}, baseline);
+      if (grew.length && allowGrowth) {
+        console.log(
+          `[core-extension-instance-coupling-ban] NOTE — committed baseline grew vs ${baseRef} (${grew.length} entr${grew.length === 1 ? "y" : "ies"}) ` +
+            `under the SANCTIONED scanner recompute (epoch ${baseEpoch} -> ${committedEpoch}). This allowance self-expires on merge.`,
+        );
+      } else if (grew.length) {
         console.error(`[core-extension-instance-coupling-ban] FAIL — committed baseline GREW vs ${baseRef} (regenerate-to-pass bypass):`);
         grew.forEach((e) => console.error("  + " + e));
         process.exit(1);
@@ -282,7 +411,13 @@ function main() {
     grown.forEach((e) => console.error("  + " + e));
     process.exit(1);
   }
-  console.log(`[core-extension-instance-coupling-ban] OK — no NEW instance coupling. Baseline: ${totalOcc} occurrence(s) across ${totalFiles} file(s) (drive to 0 via the IoC cutover).`);
+  console.log(
+    `[core-extension-instance-coupling-ban] OK — no NEW instance coupling. Baseline: ${totalOcc} occurrence(s) across ${totalFiles} file(s) ` +
+      `[runtime-coupling: ${summary["runtime-coupling"].occurrences} occ / ${summary["runtime-coupling"].files} file(s); ` +
+      `mechanical: ${summary.mechanical.occurrences} occ / ${summary.mechanical.files} file(s); ` +
+      `data-contract allowlisted (sanctioned, not counted): ${allowlistedOcc}] ` +
+      `(strict end-state: manifest + documented data-contract-ID allowlist ONLY — drive both classes to 0).`,
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
