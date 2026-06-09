@@ -129,6 +129,17 @@ export {
 } from "./connector-config";
 export type { ExtensionConnectorConfigStore } from "./connector-config";
 
+export {
+  setExtensionMcpOAuthClientStore,
+  listExternalMcpOAuthClients,
+  deleteExternalMcpOAuthClient,
+  _resetExtensionMcpOAuthClientStoreForTests,
+} from "./mcp-oauth-clients";
+export type {
+  ExternalMcpOAuthClient,
+  ExtensionMcpOAuthClientStore,
+} from "./mcp-oauth-clients";
+
 export { UI_SURFACE_KINDS, isUiSurfaceKind } from "./manifest";
 export type { UiSurfaceKind, ExtensionMigration, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
 export { parseDevFixtures, DevFixtureValidationError, DEV_FIXTURE_SURFACES } from "./dev-fixtures";

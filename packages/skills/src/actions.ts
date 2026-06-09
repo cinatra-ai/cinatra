@@ -7,7 +7,7 @@ import { z } from "zod";
 import { readAgentsForSkillMatching } from "@/lib/agents-store";
 // Auth-session is resolved via dynamic import so unit tests can vi.doMock it
 // without dragging in the full app-server module graph (e.g.
-// mcp-client-registry-connector, nango, google-oauth-connection).
+// mcp-client-connector, nango, google-oauth-connection).
 import { createSkillFromTemplate, deleteCustomSkill, upsertCustomSkill, resolveCustomSkillOwner, getAgentOwnership } from "./skills-store";
 import type { MutationResult } from "@/lib/object-history";
 

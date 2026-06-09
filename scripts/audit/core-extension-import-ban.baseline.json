@@ -104,27 +104,6 @@
     "src/lib/blog/wordpress.ts": [
       "@cinatra-ai/blog-connector"
     ],
-    "src/lib/connector-setup-pages.ts": [
-      "@cinatra-ai/a2a-server-connector",
-      "@cinatra-ai/anthropic-connector",
-      "@cinatra-ai/apify-connector",
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/drupal-assistant-connector",
-      "@cinatra-ai/drupal-mcp-connector",
-      "@cinatra-ai/gemini-connector",
-      "@cinatra-ai/github-connector",
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/google-calendar-connector",
-      "@cinatra-ai/google-oauth-connector",
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/mcp-client-registry-connector",
-      "@cinatra-ai/openai-connector",
-      "@cinatra-ai/tailscale-connector",
-      "@cinatra-ai/twenty-connector",
-      "@cinatra-ai/wordpress-assistant-connector",
-      "@cinatra-ai/wordpress-mcp-connector",
-      "@cinatra-ai/youtube-connector"
-    ],
     "src/lib/dev-auto-setup.ts": [
       "@cinatra-ai/nango-connector"
     ],
