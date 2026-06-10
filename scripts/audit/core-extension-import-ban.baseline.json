@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 44,
-      "files": 31
+      "edges": 41,
+      "files": 28
     }
   },
   "edges": {
@@ -87,15 +87,6 @@
       "@cinatra-ai/apollo-connector",
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/openai-connector"
-    ],
-    "src/lib/nango-connect-ui.ts": [
-      "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/nango-connectors.ts": [
-      "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/nango-settings-section.ts": [
-      "@cinatra-ai/nango-connector"
     ],
     "src/lib/nango.ts": [
       "@cinatra-ai/nango-connector"

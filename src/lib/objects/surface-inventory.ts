@@ -113,6 +113,16 @@ export const RAW_OBJECT_ACCESS_ALLOWLIST: readonly RawObjectAccessEntry[] = [
 // ---------------------------------------------------------------------------
 // SKILL.md / OAS / invalid-call-shape references.
 // Inventoried references that need canonical objects call shapes.
+//
+// EMPTY since cinatra#35: the seven inventoried agent-extension
+// defects (objects_get({ type, id }) / objects_get({ id }) shapes and the
+// accounts_list/contacts_list legacy primitives in the company-discovery,
+// contact-discovery, email-outreach and email-recipient-selection agents)
+// were fixed in their own extension repos by the agent-prompt call-shape
+// work — the bad shapes no longer exist in the cloned-back trees, so the
+// stale rows were deleted (they also hand-pinned extension paths in core,
+// which the instance-coupling gate drives to zero). The type + list stay so
+// any future defect is inventoried here again.
 // ---------------------------------------------------------------------------
 export type SkillOasRefEntry = {
   file: string;
@@ -121,15 +131,7 @@ export type SkillOasRefEntry = {
   note: string;
 };
 
-export const SKILL_OAS_REFS: readonly SkillOasRefEntry[] = [
-  { file: "extensions/cinatra-ai/email-outreach-agent/cinatra/oas.json",            line: 1160, issue: "invalid-type-id-shape", note: 'objects_get({ type: "contact", id }) -> objects_get({ objectId })' },
-  { file: "extensions/cinatra-ai/email-recipient-selection-agent/cinatra/oas.json", line: 277,  issue: "invalid-type-id-shape", note: "objects_get({ type, id }) -> objects_get({ objectId })" },
-  { file: "extensions/cinatra-ai/email-recipient-selection-agent/skills/email-recipient-selection/SKILL.md", line: 42, issue: "invalid-type-id-shape", note: "objects_get({ type, id }) -> objects_get({ objectId })" },
-  { file: "extensions/cinatra-ai/contact-discovery-agent/skills/contact-discovery-agent/SKILL.md", line: 36,  issue: "invalid-id-shape", note: "objects_get({ id }) -> objects_get({ objectId })" },
-  { file: "extensions/cinatra-ai/contact-discovery-agent/skills/contact-discovery-agent/SKILL.md", line: 216, issue: "invalid-id-shape", note: "objects_get({ id }) -> objects_get({ objectId })" },
-  { file: "extensions/cinatra-ai/company-discovery-agent/skills/company-discovery-agent/SKILL.md", line: 20,  issue: "legacy-primitive", note: "accounts_list -> objects_list" },
-  { file: "extensions/cinatra-ai/email-recipient-selection-agent/skills/email-recipient-selection/SKILL.md", line: 40, issue: "legacy-primitive", note: "contacts_list -> objects_list" },
-];
+export const SKILL_OAS_REFS: readonly SkillOasRefEntry[] = [];
 
 // ---------------------------------------------------------------------------
 // Dynamic type inventory + disposition.

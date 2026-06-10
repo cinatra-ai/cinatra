@@ -110,7 +110,6 @@
       "@cinatra-ai/marketplace-application-reconcile": ["./packages/marketplace-application-reconcile/src/index.ts"],
       "@cinatra-ai/marketplace-application-reconcile/worker": ["./packages/marketplace-application-reconcile/src/reconcile-worker.ts"],
       "@cinatra-ai/nango-connector": ["./extensions/cinatra-ai/nango-connector/src/index.ts"],
-      "@cinatra-ai/nango-connector/nango-settings-page": ["./extensions/cinatra-ai/nango-connector/src/pages/nango-settings-page.tsx"],
       "@cinatra-ai/tailscale-connector": ["./extensions/cinatra-ai/tailscale-connector/src/index.ts"],
       "@cinatra-ai/tailscale-connector/setup-page": ["./extensions/cinatra-ai/tailscale-connector/src/setup-page.tsx"],
       "@cinatra-ai/github-connector": ["./extensions/cinatra-ai/github-connector/src/index.ts"],
