@@ -76,7 +76,7 @@ const VENDOR_MANIFEST = [
     uiItems: ["alert", "button", "field", "input"],
   },
   {
-    extensionDir: "extensions/cinatra-ai/mcp-client-registry-connector",
+    extensionDir: "extensions/cinatra-ai/mcp-client-connector",
     uiItems: ["alert", "button"],
   },
   {

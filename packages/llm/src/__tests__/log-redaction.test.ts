@@ -9,7 +9,7 @@
 // NOTE: writeAnthropicLogFile itself cannot be imported here because telemetry.ts
 // imports `writeOpenAILogFile` from @cinatra-ai/connector-openai, whose
 // chain pulls @cinatra-ai/skills -> google-oauth-connection ->
-// mcp-client-registry-connector, which is not resolvable in this package's
+// mcp-client-connector, which is not resolvable in this package's
 // vitest sandbox. Testing the pure helper the writer calls IS the direct test
 // of the redaction logic, and is symmetric with the connector-openai copy's test.
 

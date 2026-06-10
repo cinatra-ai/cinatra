@@ -159,3 +159,96 @@ describe("better-auth-oauth-client.ts source shape", () => {
     expect(SOURCE).toMatch(/export async function insertOAuthClientWithTx\b/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// External MCP OAuth-client surface — the /connectors readiness probe + the
+// SDK store the mcp-client connector consumes. The list and the delete must
+// share ONE external-boundary predicate (internal clients are never listable
+// AND never deletable through this surface).
+// ---------------------------------------------------------------------------
+
+// Recursive renderer: the external helpers compose a shared predicate
+// fragment into their queries, so the SQL text lives in NESTED queryChunks.
+function renderSqlDeep(q: unknown): string {
+  if (typeof q === "string") return q;
+  if (Array.isArray(q)) return q.map(renderSqlDeep).join("");
+  if (q && typeof q === "object") {
+    const o = q as { queryChunks?: unknown[]; value?: unknown };
+    if (Array.isArray(o.queryChunks)) return o.queryChunks.map(renderSqlDeep).join("");
+    if (typeof o.value === "string" || Array.isArray(o.value)) return renderSqlDeep(o.value);
+  }
+  return "";
+}
+
+const EXTERNAL_BOUNDARY_MARKERS = [
+  `"clientId" <> 'cinatra-app-mcp-client'`,
+  `"clientId" NOT LIKE 'cinatra-llm-%'`,
+  `NOT LIKE 'assistant-%'`,
+  `NOT LIKE 'service-account-%'`,
+  `u."userType" = 'assistant'`,
+];
+
+describe("listExternalMcpOAuthClients", () => {
+  it("selects with the full external-boundary predicate and maps rows", async () => {
+    const { listExternalMcpOAuthClients } = await import(
+      "@/lib/better-auth-oauth-client"
+    );
+    const { betterAuthDb } = await import("@/lib/better-auth-db");
+    (betterAuthDb.execute as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (query: unknown) => {
+        executeCalls.push({ query });
+        return {
+          rows: [
+            {
+              id: "row-1",
+              clientId: "client-1",
+              name: "Claude",
+              redirectUris: JSON.stringify(["http://localhost:33418/cb"]),
+              createdAt: "2026-01-02T03:04:05.000Z",
+              updatedAt: null,
+            },
+          ],
+        };
+      },
+    );
+
+    const clients = await listExternalMcpOAuthClients();
+    expect(clients).toEqual([
+      {
+        id: "row-1",
+        clientId: "client-1",
+        name: "Claude",
+        redirectURLs: ["http://localhost:33418/cb"],
+        createdAt: new Date("2026-01-02T03:04:05.000Z"),
+        updatedAt: null,
+      },
+    ]);
+
+    expect(executeCalls.length).toBe(1);
+    const renderedSql = renderSqlDeep(executeCalls[0].query);
+    expect(renderedSql).toContain(`public."oauthClient"`);
+    for (const marker of EXTERNAL_BOUNDARY_MARKERS) {
+      expect(renderedSql).toContain(marker);
+    }
+  });
+});
+
+describe("deleteExternalMcpOAuthClient", () => {
+  it("scopes the DELETE with the SAME external-boundary predicate as the list", async () => {
+    const { deleteExternalMcpOAuthClient } = await import(
+      "@/lib/better-auth-oauth-client"
+    );
+
+    await deleteExternalMcpOAuthClient("client-1");
+
+    expect(executeCalls.length).toBe(1);
+    const renderedSql = renderSqlDeep(executeCalls[0].query);
+    expect(renderedSql).toContain(`DELETE FROM public."oauthClient"`);
+    // The boundary predicate rides along, so an internal clientId (LLM
+    // client, assistant, service account, app self-client) is a no-op even
+    // if forged into the connector's disconnect form.
+    for (const marker of EXTERNAL_BOUNDARY_MARKERS) {
+      expect(renderedSql).toContain(marker);
+    }
+  });
+});

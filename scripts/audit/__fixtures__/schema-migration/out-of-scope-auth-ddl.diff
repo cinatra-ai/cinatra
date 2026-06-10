@@ -1,0 +1,17 @@
+diff --git a/src/lib/better-auth-schema.ts b/src/lib/better-auth-schema.ts
+index 8143b25..67820dd 100644
+--- a/src/lib/better-auth-schema.ts
++++ b/src/lib/better-auth-schema.ts
+@@ -30,12 +30,6 @@ export const cinatraAuthAdditionalUserFields = {
+     defaultValue: "human",
+     input: false,
+   },
+-  clientId: {
+-    type: "string",
+-    required: false,
+-    defaultValue: null,
+-    input: false,
+-  },
+ } as const;
+ 
+ // Schema-relevant options for the `organization` plugin: `teams` enablement
