@@ -36,7 +36,7 @@
 //   2 — unexpected internal error (token file missing, etc.)
 
 import { readFile } from "node:fs/promises";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { resolve } from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -190,7 +190,9 @@ export function scanGroundHexes(source, fileRel) {
 // CLI
 
 function listTrackedFiles(repoRoot, patterns) {
-  const out = execSync(`git ls-files -z -- ${patterns.join(" ")}`, {
+  // execFileSync (argv, no shell) so pathspecs can never be re-interpreted
+  // if this list ever becomes dynamic.
+  const out = execFileSync("git", ["ls-files", "-z", "--", ...patterns], {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
