@@ -135,6 +135,28 @@ describe("createLocalDiskBlobStore", () => {
     expect(await sniffOf(ftypHead)).toBe("video/mp4");
   });
 
+  it("pins ftyp qt-brand (QuickTime) to video/quicktime — never promoted to the allowlisted video/mp4", async () => {
+    // `....ftypqt  ` — the QuickTime major brand. Deliberately excluded
+    // from PREVIEW_INLINE_MIME_ALLOWLIST; a generic/missing declared MIME
+    // must NOT let it ride the inline preview path as video/mp4.
+    const ftypQtHead = [
+      0x18, 0x18, 0x18, 0x18, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
+      0x18, 0x18, 0x18, 0x18,
+    ];
+    expect(await sniffOf(ftypQtHead)).toBe("video/quicktime");
+    expect(await sniffOf(ftypQtHead, "application/octet-stream")).toBe("video/quicktime");
+    expect(await sniffOf(ftypQtHead, "video/mp4")).toBe("video/quicktime");
+  });
+
+  it("sniffs declared-confirmed ADTS AAC as audio/aac (not text/plain)", async () => {
+    // ADTS sync 0xFFF / layer 00 with a NUL-free head — the text-heuristic
+    // trap. Declared-confirmed only (same weak-signature rule as MP3).
+    const adtsHead = [0xff, 0xf1, 0x4c, 0x80, 0x20, 0x20, 0x20, 0x20];
+    expect(await sniffOf(adtsHead, "audio/aac")).toBe("audio/aac");
+    // Without the declared confirmation the weak sync stays heuristic text.
+    expect(await sniffOf(adtsHead)).toBe("text/plain");
+  });
+
   it("sniffs EBML as webm (not text/plain) and honours audio/webm", async () => {
     expect(await sniffOf(ebmlHead, "video/webm")).toBe("video/webm");
     expect(await sniffOf(ebmlHead, "audio/webm")).toBe("audio/webm");
