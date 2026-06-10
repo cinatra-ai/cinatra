@@ -8,11 +8,12 @@
  * Only the setup-* path and the real-UUID throw remain.
  *
  * Test structure:
- *  1. "setup-{runId}" synthetic path — validates run, merges inputParams,
- *     transitions to "queued", enqueues AGENT_BUILDER_EXECUTION.
+ *  1. "setup-{runId}" synthetic path — validates run, then merges inputParams
+ *     AND transitions to "queued" in ONE atomic UPDATE (#76 regression),
+ *     enqueues AGENT_BUILDER_EXECUTION only after the write resolves.
  *  2. Real UUID path — throws with clear error message.
  *
- *   pnpm --filter @cinatra/agent-builder exec vitest run \
+ *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/approve-setup-field.test.ts
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -22,10 +23,19 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 const dbWrites: Array<{ op: string; table: string; set: any }> = [];
 
+// Failure injection for the #76 regression test: when set, the next
+// UPDATE ... WHERE execution rejects BEFORE recording the write — modeling a
+// statement that never committed (Postgres single-statement atomicity).
+const dbFail = vi.hoisted(() => ({ rejectNextUpdate: false }));
+
 const dbMock = vi.hoisted(() => {
   const update = vi.fn((_table: any) => ({
     set: vi.fn((payload: any) => ({
       where: vi.fn(async () => {
+        if (dbFail.rejectNextUpdate) {
+          dbFail.rejectNextUpdate = false;
+          throw new Error("__db_write_failed__");
+        }
         dbWrites.push({ op: "update", table: "agent_runs", set: payload });
       }),
     })),
@@ -74,6 +84,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     dbWrites.length = 0;
+    dbFail.rejectNextUpdate = false;
   });
 
   it("merges single-field value into inputParams and re-enqueues AGENT_BUILDER_EXECUTION", async () => {
@@ -142,6 +153,79 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     );
     expect(stringChunks).toContain('"https://example.com"');
     expect(stringChunks).not.toContain('{"url":"https://example.com"}');
+  });
+
+  // ---------------------------------------------------------------------------
+  // #76 regression: the inputParams merge and the pending_approval -> queued
+  // status flip used to be two sequential UPDATE statements; a crash between
+  // them left the run with merged inputParams but a stale pending_approval
+  // status. The fix combines both into ONE UPDATE on the agent_runs row —
+  // Postgres single-statement atomicity means there is no partial-state
+  // window at all. These tests pin (a) the single-statement shape and (b)
+  // that a failed write commits nothing and never enqueues the resume job.
+  // ---------------------------------------------------------------------------
+  it("REGRESSION (#76): single-field approval issues exactly ONE UPDATE carrying both inputParams merge and status flip", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a1",
+      templateId: "tpl-a1",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-a1", "actor-1", { name: "Alice" }, "name");
+
+    // Exactly one statement hit the DB...
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbWrites).toHaveLength(1);
+    // ...and it carries BOTH effects in the same .set payload.
+    expect(dbWrites[0].set.inputParams).toBeDefined();
+    expect(dbWrites[0].set.status).toBe("queued");
+  });
+
+  it("REGRESSION (#76): grouped-form approval issues exactly ONE UPDATE carrying both inputParams merge and status flip", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a2",
+      templateId: "tpl-a2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-a2",
+      inputSchema: { properties: { website: {}, senderEmail: {} } },
+    });
+
+    await approveReviewTaskInternal("setup-run-a2", "actor-1", {
+      website: "https://ex.com",
+      senderEmail: "a@b.com",
+    });
+
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbWrites).toHaveLength(1);
+    expect(dbWrites[0].set.inputParams).toBeDefined();
+    expect(dbWrites[0].set.status).toBe("queued");
+  });
+
+  it("REGRESSION (#76): a mid-write failure commits nothing — no partial state, no resume job enqueued", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a3",
+      templateId: "tpl-a3",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    dbFail.rejectNextUpdate = true;
+    await expect(
+      approveReviewTaskInternal("setup-run-a3", "actor-1", { name: "Alice" }, "name"),
+    ).rejects.toThrow(/__db_write_failed__/);
+
+    // The single statement failed atomically: neither the inputParams merge
+    // nor the status flip was committed...
+    expect(dbWrites).toHaveLength(0);
+    // ...and only one statement was ever attempted (nothing committed before
+    // the failing write either).
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    // Redis enqueue must only fire after the DB commit succeeds.
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 
   it("merges grouped-form values (no fieldName) via JSONB object spread", async () => {

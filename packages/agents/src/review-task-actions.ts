@@ -1,6 +1,6 @@
 import "server-only";
 
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import { db } from "./db";
@@ -31,10 +31,11 @@ import {
 // The caller is ALWAYS responsible for verifying that the actor is authorized
 // to approve the task before invoking this function.
 //
-// The three DB writes (audit event + two status updates) are wrapped in a
-// single Drizzle transaction so a mid-write crash cannot leave the DB in a
-// partially-committed state.
-// enqueueBackgroundJob (Redis) runs OUTSIDE the transaction — it is a
+// On the setup-* path, the inputParams merge and the status transition back
+// to "queued" are combined into a SINGLE UPDATE statement on the agent_runs
+// row, so both effects commit atomically — a mid-write crash cannot leave the
+// run with merged inputParams but a stale pending_approval status (#76).
+// enqueueBackgroundJob (Redis) runs AFTER that write resolves — it is a
 // separate system and must only fire after the DB commit succeeds.
 // ---------------------------------------------------------------------------
 
@@ -90,6 +91,10 @@ export async function approveReviewTaskInternal(
       );
     }
 
+    // Build the inputParams JSONB-merge fragment (single-field or grouped
+    // variant) up front, so the DB write below stays ONE statement. All
+    // validation and the template-allowlist read happen BEFORE the write.
+    let inputParamsMerge: SQL | null = null;
     if (values !== undefined) {
       // Guard: single-field path requires fieldName to be present in values.
       if (typeof fieldName === "string" && (values === null || !(fieldName in (values as object)))) {
@@ -113,12 +118,7 @@ export async function approveReviewTaskInternal(
             `[approveReviewTaskInternal] values payload too large (${serializedValue.length} bytes)`,
           );
         }
-        await db
-          .update(agentRuns)
-          .set({
-            inputParams: sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedValue}::jsonb)`,
-          })
-          .where(eq(agentRuns.id, runId));
+        inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedValue}::jsonb)`;
       } else if (values !== null && typeof values === "object" && !Array.isArray(values)) {
         // Grouped-form path: merge all keys from values object.
         // Validate submitted keys against inputSchema.properties allowlist.
@@ -140,19 +140,24 @@ export async function approveReviewTaskInternal(
             );
           }
         }
-        await db
-          .update(agentRuns)
-          .set({
-            inputParams: sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`,
-          })
-          .where(eq(agentRuns.id, runId));
+        inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
       }
     }
 
-    // Transition back to "queued" so runAgentBuilderExecutionJob won't skip.
+    // Single atomic UPDATE (#76): merge the approved value(s) into inputParams
+    // (when present) AND transition the run back to "queued" — so
+    // runAgentBuilderExecutionJob won't skip — in ONE statement. Both writes
+    // target the same agent_runs row; combining them removes the partial-state
+    // window entirely (a crash can no longer land between the merge and the
+    // status flip). Postgres evaluates the self-referential JSONB merge
+    // against the pre-update row, so mixing it with the plain status
+    // assignment is safe.
     await db
       .update(agentRuns)
-      .set({ status: "queued" })
+      .set({
+        ...(inputParamsMerge !== null ? { inputParams: inputParamsMerge } : {}),
+        status: "queued",
+      })
       .where(eq(agentRuns.id, runId));
 
     await enqueueBackgroundJob(
