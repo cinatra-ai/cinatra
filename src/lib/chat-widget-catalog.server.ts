@@ -24,20 +24,23 @@ import "server-only";
 // one matching export per module; zero or several FAIL LOUDLY (owner decision:
 // no benign fallback), mirroring the generator's one-factory ambiguity rule.
 //
-// LIFECYCLE HONEST SCOPE (inherited from gateRetiredStaticRecords): this is an
-// ARCHIVED-row gate — an explicitly archived extension's widgets disappear on
-// the next resolution; a HARD-uninstalled package (rows deleted) is
-// indistinguishable from "never lifecycle-tracked" and is kept, exactly like
-// its serverEntry activation. Closing that gap is the loader-wide follow-up
-// documented in static-bundle-loader.ts, not a chat-surface special case.
+// LIFECYCLE SCOPE (mirrors gateStaticRecordsToLiveRows, the #99 strict
+// allow-list): a widget package WITH a serverEntry is live only when its
+// effective canonical status is "active" (boot seeds a lifecycle anchor row
+// for every bundled serverEntry package, so "no row" reads as retired —
+// archive and hard uninstall converge on the widgets disappearing at the
+// next resolution). A widget package WITHOUT a serverEntry is not
+// lifecycle-seeded and passes through ungated, exactly like the loader —
+// the chat surface and serverEntry activation can never disagree.
 
 import type { WidgetDefinition, WidgetManifest } from "@cinatra-ai/sdk-ui";
 import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions";
 import {
   GENERATED_CHAT_WIDGET_MODULES,
   GENERATED_CHAT_WIDGET_MANIFEST_MODULES,
+  STATIC_EXTENSION_MANIFEST,
 } from "@/lib/generated/extensions.server";
-import { gateRetiredStaticRecords } from "@/lib/static-bundle-loader";
+import { gateStaticRecordsToLiveRows } from "@/lib/static-bundle-loader";
 
 export type ChatWidgetCatalog = {
   widgets: WidgetDefinition[];
@@ -188,15 +191,22 @@ export function assertChatWidgetCatalogInvariants(
 async function liveChatWidgetPackages(): Promise<string[]> {
   const all = Object.keys(GENERATED_CHAT_WIDGET_MODULES)
     .sort()
-    .map((packageName) => ({ packageName }));
+    .map((packageName) => ({
+      packageName,
+      // The package's REAL serverEntry (from the generated manifest) selects
+      // the gate branch: serverEntry packages get the strict active|locked
+      // allow-list (their anchor rows are boot-seeded); entry-less packages
+      // are not lifecycle-seeded and pass through, mirroring the loader.
+      serverEntry: STATIC_EXTENSION_MANIFEST[packageName]?.serverEntry ?? null,
+    }));
   try {
     const statusByPackage = await readEffectiveStatusByPackageNames(
       all.map((r) => r.packageName),
     );
-    const gated = gateRetiredStaticRecords(all, statusByPackage);
+    const gated = gateStaticRecordsToLiveRows(all, statusByPackage);
     if (gated.skipped.length > 0) {
       console.info(
-        `[chat-widget-catalog] skipping ${gated.skipped.length} archived (tombstoned) ` +
+        `[chat-widget-catalog] skipping ${gated.skipped.length} non-live (archived or row-less) ` +
           `widget package(s): ${gated.skipped.join(", ")}`,
       );
     }
