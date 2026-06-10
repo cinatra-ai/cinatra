@@ -65,3 +65,6 @@ tests/e2e/**/.auth/*
 !tests/e2e/**/.auth/.gitignore
 # WP/Drupal UAT seed IDs (regenerated each run)
 tests/e2e/wp-drupal-uat/.uat/
+
+# Internal planning notes (local only)
+.planning/
