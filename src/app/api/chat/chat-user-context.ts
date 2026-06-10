@@ -2,11 +2,11 @@ import "server-only";
 
 // Chat user-context sections, resolved REGISTRATION-DRIVEN from the generic
 // capability registry instead of the chat runner importing connector packages
-// by name. Connectors register a `chat-user-context` provider (today bridged
-// at host boot in `register-transport-connectors.ts`; the serverEntry cutover
-// moves the registration into each connector's own `register(ctx)`), and this
-// consumer appends whatever the live providers contribute. Adding or removing
-// a contributing connector requires NO edit here or in runner.ts.
+// by name. Connectors register a `chat-user-context` provider in their own
+// `register(ctx)` (activated through the serverEntry loader; the pre-#75
+// transitional host-boot bridge is gone), and this consumer appends whatever
+// the live providers contribute. Adding or removing a contributing connector
+// requires NO edit here or in runner.ts.
 //
 // Consumer-side hardening (see the trust-boundary note in the SDK contract):
 //   - deterministic order: providers sorted by packageName;

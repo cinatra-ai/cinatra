@@ -7,8 +7,9 @@ import "server-only";
 // connector package without the registration side-effect — the connector's
 // deps resolution then throws "host runtime deps not registered" mid-chat.
 // Importing the registrar here side-effects into the chat bundle's module
-// graph too, so every transport connector (and the chat-user-context
-// provider bridge it registers) is wired before the chat turn runs. This is
+// graph too, so the host DI deps every transport connector needs are wired
+// before the chat turn runs (chat-user-context providers register through
+// each connector's own `register(ctx)` via the serverEntry loader). This is
 // a core->core edge: the registrar is host code, no extension is named here.
 import "@/lib/register-transport-connectors";
 
