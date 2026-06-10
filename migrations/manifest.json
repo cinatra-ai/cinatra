@@ -16,5 +16,13 @@
     "Never renumber or rewrite an entry once its migration has shipped;",
     "supersede it with a new sequence number."
   ],
-  "migrations": []
+  "migrations": [
+    {
+      "seq": "0001",
+      "file": "0001_notifications-dedupe-key.sql",
+      "summary": "Add notifications.dedupe_key + partial unique index (user_id, dedupe_key) for the general per-user notification dedupe (issue #50). Required by the unique-index-on-existing-table rule; cannot collide in practice — the column is new, so every pre-existing row is outside the partial-index predicate.",
+      "destructive": true,
+      "tables": ["notifications"]
+    }
+  ]
 }
