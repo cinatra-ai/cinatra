@@ -108,14 +108,14 @@
       }
     },
     "requiredExtensions": [
-      "@cinatra-ai/nango-connector",
-      "@cinatra-ai/code-reviewer-agent",
-      "@cinatra-ai/planner-agent",
-      "@cinatra-ai/author-agent",
-      "@cinatra-ai/lint-policy-agent",
-      "@cinatra-ai/security-reviewer-agent",
-      "@cinatra-ai/assistant-skills",
-      "@cinatra-ai/default-artifact"
+      "@cinatra-ai/nango-connector@^0.1.0",
+      "@cinatra-ai/code-reviewer-agent@^0.1.0",
+      "@cinatra-ai/planner-agent@^0.1.0",
+      "@cinatra-ai/author-agent@^0.1.0",
+      "@cinatra-ai/lint-policy-agent@^0.1.0",
+      "@cinatra-ai/security-reviewer-agent@^0.1.0",
+      "@cinatra-ai/assistant-skills@^0.1.0",
+      "@cinatra-ai/default-artifact@^0.1.0"
     ],
     "vendoredSkillBundles": [
       {

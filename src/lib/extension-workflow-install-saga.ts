@@ -43,6 +43,10 @@ import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
+import {
+  evaluateHostSdkCompat,
+  formatHostSdkCompatRefusal,
+} from "@/lib/extension-host-compat";
 
 // ---------------------------------------------------------------------------
 // Errors that map a preflight verdict to a distinct surfaced state.
@@ -137,6 +141,15 @@ export type WorkflowInstallSagaDeps = {
   // -- provenance + grant (LATE) -----------------------------------------
   /** Read the materialized package's declared `cinatra.requestedHostPorts`. */
   readRequestedPorts: (storeDir: string) => Promise<string[]>;
+  /** Read the materialized package's declared host/SDK compatibility range
+   *  (`cinatra.sdkAbiRange`) — the HOST-COMPAT GATE's basis. Optional so existing
+   *  unit tests can omit it (then no install-time compat gate runs); the default
+   *  factory always wires it. */
+  readDeclaredCompat?: (storeDir: string) => Promise<{ sdkAbiRange: string | null }>;
+  /** GC a just-materialized store dir (+ its sibling `.tgz`) after a HOST-COMPAT
+   *  refusal, so an incompatible digest never lingers to trip the boot
+   *  duplicate-name gate. Best-effort. Optional; the default factory wires `rm`. */
+  gcStoreDir?: (storeDir: string) => Promise<void>;
   recordRequestedGrant: (input: { packageName: string; orgId: string | null; requestedPorts: string[] }) => Promise<void>;
   approveGrant: (input: { packageName: string; orgId: string | null; approvedPorts: string[]; requestedPorts: string[]; approvedBy: string }) => Promise<void>;
   /** Persist the REAL provenance (sha512 integrity + content hash + the additive
@@ -219,11 +232,55 @@ export async function installWorkflowExtensionSaga(
     let createdTemplateId: string | null = null;
     let enteredDashboardWrites = false;
 
+    // 1. MATERIALIZE — SRI-verify + unpack into the store (identity resolved
+    // above). Runs BEFORE `beginInstallOp`: materialize writes only the package
+    // store (no shared durable state — the same ordering the registry install
+    // pipeline uses), which lets the HOST-COMPAT GATE below refuse an
+    // incompatible package while the journal is still untouched. Without this
+    // ordering, `beginInstallOp` would have already overwritten the single
+    // (package, org) journal row, so a refused UPDATE would destroy the
+    // previous install's `finalized` op (the trust anchor's requirement) even
+    // though its template/dashboards/provenance were never touched.
+    const mat = await deps.materialize({ packageName, version, expectedIntegrity: integrity, registryUrl });
+
+    // 1.5 HOST-COMPAT GATE — the extension → host/SDK half of the
+    // compatibility contract, at the EARLIEST point the verified manifest
+    // exists (the same verdict both loaders gate activation on). A workflow
+    // package whose declared `cinatra.sdkAbiRange` this host's frozen SDK ABI
+    // does not satisfy is REFUSED here — BEFORE the journal begin, the grant
+    // request, preflight, and any workflow_template/dashboard writes — so the
+    // refusal is fully inert: a prior install's `finalized` journal op, grant,
+    // provenance, template and dashboards are all untouched. The
+    // just-materialized dir is GC'd (best-effort). It can never be the LIVE
+    // install's dir: a finalized op at the SAME resolved version already
+    // short-circuited above, so a refusal here is always a DIFFERENT version →
+    // a different digest dir. Undeclared/"*" is unpinned → allowed;
+    // malformed/unsatisfied fails closed.
+    if (deps.readDeclaredCompat) {
+      const declared = await deps.readDeclaredCompat(mat.storeDir);
+      if (!evaluateHostSdkCompat(declared.sdkAbiRange).compatible) {
+        if (deps.gcStoreDir) {
+          try {
+            await deps.gcStoreDir(mat.storeDir);
+          } catch {
+            /* best-effort GC — a leftover dir is recovered by a later retry. */
+          }
+        }
+        throw new WorkflowInstallPreflightError(
+          "HOST_SDK_INCOMPATIBLE",
+          formatHostSdkCompatRefusal({
+            op: existing?.phase === "finalized" ? "update" : "install",
+            packageName,
+            version,
+            sdkAbiRange: declared.sdkAbiRange,
+          }),
+        );
+      }
+    }
+
     await deps.beginInstallOp({ installOpId, packageName, orgId });
 
     try {
-      // 1. MATERIALIZE — SRI-verify + unpack into the store (identity resolved above).
-      const mat = await deps.materialize({ packageName, version, expectedIntegrity: integrity, registryUrl });
       await deps.advanceInstallOpPhase({ installOpId, phase: "materialized", digest: mat.digest });
 
       // 2. TRUST GATE (incl signature) — classify ONCE. A workflow install
@@ -588,6 +645,16 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
     },
 
     readRequestedPorts: (storeDir) => readRequestedHostPortsFromStore(storeDir),
+    // HOST-COMPAT GATE basis: the materialized manifest's `cinatra.sdkAbiRange`.
+    readDeclaredCompat: async (storeDir) => {
+      const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
+      return readDeclaredHostCompatFromStore(storeDir);
+    },
+    gcStoreDir: async (storeDir) => {
+      const { rm } = await import("node:fs/promises");
+      await rm(storeDir, { recursive: true, force: true });
+      await rm(`${storeDir}.tgz`, { force: true }).catch(() => undefined);
+    },
     recordRequestedGrant: (g) =>
       recordRequestedGrant({ packageName: g.packageName, orgId: g.orgId, requestedPorts: g.requestedPorts as readonly HostPortName[] }).then(() => undefined),
     approveGrant: (g) =>

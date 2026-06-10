@@ -1,12 +1,12 @@
 "use client";
 /**
  * `DashboardGridContainer` — generic client-side wrapper around
- * drizzle-cube's `<DashboardGrid>` used by the
+ * `<ComposedDashboard>` used by the
  * /projects, /teams, /organizations, and /artifacts dashboards. Identical
  * state-management shape to `AgentsDashboardGrid` — debounced auto-save
  * through an `AutoSaveCoordinator` plus a local `config` mirror so the
- * visible grid doesn't snap back to the seed when DC's inner Dr re-derives
- * layout from `props.config`. Kept as a separate component (not a refactor
+ * visible grid doesn't snap back to the seed when DC re-derives layout
+ * from `props.config`. Kept as a separate component (not a refactor
  * of agents) so the agents surface stays untouched.
  *
  * Belt-and-suspenders save handling matches agents:
@@ -15,10 +15,12 @@
  *   - Pending changes flush on unmount via a no-op `mountedRef` guard.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as React from "react";
-import { DashboardGrid } from "drizzle-cube/client";
 
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
+import {
+  ComposedDashboard,
+  type ComposedDashboardProps,
+} from "./composed-dashboard";
 import {
   createAutoSaveCoordinator,
   type AutoSaveCoordinator,
@@ -112,21 +114,21 @@ export function DashboardGridContainer({
   // edit affordances and no save wiring.
   if (!editable || !onSave) {
     return (
-      <DashboardGrid
-        config={config as unknown as React.ComponentProps<typeof DashboardGrid>["config"]}
+      <ComposedDashboard
+        config={config as unknown as ComposedDashboardProps["config"]}
         editable={false}
       />
     );
   }
 
   return (
-    <DashboardGrid
-      config={config as unknown as React.ComponentProps<typeof DashboardGrid>["config"]}
+    <ComposedDashboard
+      config={config as unknown as ComposedDashboardProps["config"]}
       editable={editable}
       onConfigChange={
         ((next: unknown) => {
           schedule(next as DashboardConfigV1_1);
-        }) as React.ComponentProps<typeof DashboardGrid>["onConfigChange"]
+        }) as ComposedDashboardProps["onConfigChange"]
       }
       onSave={async (next) => {
         const coord = coordinatorRef.current;

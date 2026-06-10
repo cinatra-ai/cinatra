@@ -4,12 +4,15 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { requireAdminSession } from "@/lib/auth-session";
-import {
-  saveResendConfig,
-  getResendConfig,
-  buildResendFrom,
-  sendViaResend,
-} from "@cinatra-ai/resend-connector";
+// The connector's server module resolves through the generated extension
+// manifest — these actions name no connector package; the consumed export
+// shape is the data contract in ./resend-connector-module.
+import { requireConnectorModule } from "@/lib/connector-modules.server";
+import type { ResendConnectorModule } from "./resend-connector-module";
+
+function loadResendModule(): Promise<ResendConnectorModule> {
+  return requireConnectorModule<ResendConnectorModule>("resend-connector");
+}
 
 function redirectBack(params: Record<string, string>): never {
   const qs = new URLSearchParams(params).toString();
@@ -49,6 +52,7 @@ export async function saveResendConfigAction(formData: FormData): Promise<void> 
     redirectBack({ error: "Sender display name contains invalid characters." });
   }
 
+  const { saveResendConfig } = await loadResendModule();
   saveResendConfig({
     enabled,
     fromEmail: fromEmail || undefined,
@@ -70,6 +74,7 @@ export async function sendResendTestEmailAction(): Promise<void> {
     redirectBack({ error: "Your account has no email address to send a test to." });
   }
 
+  const { getResendConfig, buildResendFrom, sendViaResend } = await loadResendModule();
   const config = getResendConfig();
   if (!config.fromEmail) {
     redirectBack({ error: "Set a sender (From) address before sending a test." });

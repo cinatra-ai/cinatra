@@ -43,7 +43,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    // `.tsx` covers the React component tests (per-file `@vitest-environment
+    // jsdom` pragmas opt those into the DOM environment).
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     testTimeout: 60_000,
   },
 });

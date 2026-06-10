@@ -223,9 +223,11 @@ export type DcModalA11yScopeProps = {
  * chain — so background page chrome AND background dashboard grid
  * controls become uninteractive in tandem.
  *
- * Mount this INSIDE `<DashboardStoreProvider>` (so `useDashboardStore`
- * has a context) and OUTSIDE `<DashboardGrid>` (so it can capture the
- * grid's portal-rendered modal subtree).
+ * Mount this INSIDE `<DashboardProvider>` (drizzle-cube `0.5.7` creates
+ * a per-instance store there, so `useDashboardStore` must resolve THAT
+ * store to see the modal flags) and AROUND the composable pieces (so the
+ * FocusScope contains the inline-rendered modal subtree). See
+ * `composed-dashboard.tsx`.
  */
 export function DcModalA11yScope({ children }: DcModalA11yScopeProps) {
   const isAnyModalOpen = useDashboardStore(selectIsAnyModalOpen);

@@ -155,9 +155,9 @@ test.describe("/agents live-verify", () => {
     // brand-logo SVG in the sidebar — that SVG IS technically visible,
     // but its inner <path> elements are visibility:hidden (clipped/
     // masked), so the geometry assertion failed against a non-chart
-    // SVG. Even within `[data-cinatra-dashboard-shell]` the DC toolbar
-    // contains button SVG icons (Run agent / Create agent / Edit
-    // dashboard); the `.recharts-wrapper` class is recharts' canonical
+    // SVG. Even within `[data-cinatra-dashboard-shell]` the dashboard
+    // toolbar contains button SVG icons (Run agent / Create agent /
+    // Edit dashboard); the `.recharts-wrapper` class is recharts' canonical
     // top-level chart container and reliably scopes to the actual
     // chart visualization.
     const shell = page.locator('[data-cinatra-dashboard-shell="true"]');
