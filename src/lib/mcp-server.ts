@@ -42,13 +42,19 @@ const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 
 // Host/platform capability modules. Connector modules are NOT listed here —
 // they resolve from the generated extension manifest (loadConnectorMcpModules)
-// so no specific connector package is named on this registration path.
-const modules = [
+// so no specific connector package is named on this registration path. The
+// split preserves the long-standing registration order: the connector block
+// registers between the blog-content module and the permissions module,
+// exactly where the hand-curated list used to sit.
+const preConnectorPlatformModules = [
   createArtifactsModule(),
   createContextModule(),
   createObjectsModule(),
   createProjectsModule(),
   createBlogContentModule(),
+];
+
+const postConnectorPlatformModules = [
   createPermissionsModule(),
   createSkillsModule(),
   createMetricsCostModule(),
@@ -124,15 +130,20 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
     },
   }) as McpRuntimeToolServer;
 
-  for (const mod of modules) {
+  for (const mod of preConnectorPlatformModules) {
     await mod.registerCapabilities(recordingServer);
   }
 
-  // Manifest-discovered connector MCP modules. Registered through the SAME
-  // recording pass as the platform modules so the replay below dedupes against
-  // them — no connector package is named on this path (the generated manifest
-  // is the only place a connector is identified).
+  // Manifest-discovered connector MCP modules — same slot the hand-curated
+  // connector list occupied. Registered through the SAME recording pass as the
+  // platform modules so the replay below dedupes against them — no connector
+  // package is named on this path (the generated manifest is the only place a
+  // connector is identified).
   for (const mod of await loadConnectorMcpModules(connectorModuleHostOptions)) {
+    await mod.registerCapabilities(recordingServer);
+  }
+
+  for (const mod of postConnectorPlatformModules) {
     await mod.registerCapabilities(recordingServer);
   }
 
@@ -140,12 +151,14 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
   // tools (register(ctx) → ctx.mcp.registerTool). An extension that registers
   // its tools at activation needs no module entry at all — this replay is how
   // extension tools reach the server. Runs AFTER the platform + discovered
-  // modules so a name they already claimed is SKIPPED; wrap the extension's
-  // plain handler result into the MCP content/structuredContent envelope
-  // (mirrors the connector modules). Track which tools were ACTUALLY
-  // registered (not skipped) → the authz boundary keys its shadow-allow on
-  // this EFFECTIVE set, so a skipped (host-colliding) registration can never
-  // unlock a host tool.
+  // modules so a name they already claimed is SKIPPED — deliberate precedence:
+  // a runtime registration must never displace (or shadow-allow over) a tool
+  // the host/bundled surface already serves. Wrap the extension's plain
+  // handler result into the MCP content/structuredContent envelope (mirrors
+  // the connector modules). Track which tools were ACTUALLY registered (not
+  // skipped) → the authz boundary keys its shadow-allow on this EFFECTIVE
+  // set, so a skipped (host-colliding) registration can never unlock a host
+  // tool.
   const effectiveExtensionTools: { name: string; packageName: string }[] = [];
   for (const tool of listExtensionMcpTools()) {
     if (registeredNames.has(tool.name)) {
@@ -212,6 +225,14 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   const handlers = new Map<string, CapturedMcpToolHandler>();
   const recordingServer = {
     registerTool: (name: string, _config: unknown, handler: CapturedMcpToolHandler) => {
+      // Mirror the live server: the MCP SDK rejects a duplicate tool name, so a
+      // silent overwrite here would let the self-call surface diverge from the
+      // live transport. Fail loudly instead.
+      if (handlers.has(name)) {
+        throw new Error(
+          `[mcp] duplicate tool registration "${name}" during self-primitive capture (the live server would reject it)`,
+        );
+      }
       handlers.set(name, handler);
       return undefined as never;
     },
@@ -220,14 +241,20 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
     registerScreen: () => undefined,
   } as unknown as McpRuntimeToolServer;
 
-  // Platform capability modules (the same array the live server registers).
-  for (const mod of modules) {
+  // Platform + manifest-discovered connector modules in the SAME order the
+  // live server registers them (pre-connector platform block, connector block,
+  // post-connector platform block).
+  for (const mod of preConnectorPlatformModules) {
     await mod.registerCapabilities(recordingServer);
   }
 
-  // Manifest-discovered connector modules (same discovery + options the live
-  // server uses, so the captured map mirrors the live tool surface).
+  // Same discovery + options the live server uses, so the captured map mirrors
+  // the live tool surface.
   for (const mod of await loadConnectorMcpModules(connectorModuleHostOptions)) {
+    await mod.registerCapabilities(recordingServer);
+  }
+
+  for (const mod of postConnectorPlatformModules) {
     await mod.registerCapabilities(recordingServer);
   }
 

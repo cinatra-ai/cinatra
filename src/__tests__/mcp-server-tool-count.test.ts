@@ -103,9 +103,28 @@ const FALSE_POSITIVE_KEYS = new Set([
 ]);
 
 function extractRegisteredModuleNames(src: string): string[] {
-  const match = src.match(/const\s+modules\s*=\s*\[([\s\S]*?)\];/);
-  if (!match) throw new Error("Could not locate `modules` array in src/lib/mcp-server.ts");
-  return Array.from(match[1].matchAll(/(\w+)\(\)/g)).map((m) => m[1]);
+  const arrays = Array.from(
+    src.matchAll(/const\s+(?:pre|post)ConnectorPlatformModules\s*=\s*\[([\s\S]*?)\];/g),
+  );
+  if (arrays.length !== 2) {
+    throw new Error(
+      "Could not locate the pre/postConnectorPlatformModules arrays in src/lib/mcp-server.ts",
+    );
+  }
+  return arrays.flatMap((m) => Array.from(m[1].matchAll(/(\w+)\(\)/g)).map((mm) => mm[1]));
+}
+
+/**
+ * Tool names a connector source registers DIRECTLY via
+ * `server.registerTool("name", ...)` (facade-style modules / registry files) —
+ * invisible to the key:async() scan above, so counted separately.
+ */
+function directRegisterToolNames(filePath: string): string[] {
+  if (!existsSync(filePath)) return [];
+  const text = readFileSync(filePath, "utf8");
+  return Array.from(text.matchAll(/\bserver\.registerTool\(\s*["']([a-z0-9_]+)["']/g)).map(
+    (m) => m[1],
+  );
 }
 
 function countToolNamesInHandlers(filePath: string): { count: number; toolNames: string[] } {
@@ -144,30 +163,42 @@ describe("MCP tool registry — function-tool cap headroom", () => {
       for (const n of toolNames) all.add(n);
     }
     // Manifest-discovered connector MCP modules (the registration path that
-    // replaced the static connector imports) — count their tool surfaces too.
+    // replaced the static connector imports) — count their tool surfaces too:
+    // the key:async() handler maps PLUS the names facade-style modules and
+    // registry files register directly via server.registerTool("name", ...)
+    // (email/social/blog/crm/twenty surfaces the old scan was blind to).
     const slugs = extractGeneratedConnectorModuleSlugs();
     expect(slugs.length).toBeGreaterThan(0);
     for (const slug of slugs) {
       const { count, toolNames } = countToolNamesInHandlers(connectorMcpSourcePath(slug));
-      perModule.push({ name: slug, count });
-      for (const n of toolNames) all.add(n);
+      const names = new Set(toolNames);
+      for (const f of ["module.ts", "registry.ts"]) {
+        for (const n of directRegisterToolNames(
+          path.join(ROOT, `extensions/cinatra-ai/${slug}/src/mcp/${f}`),
+        )) {
+          names.add(n);
+        }
+      }
+      perModule.push({ name: slug, count: Math.max(count, names.size) });
+      for (const n of names) all.add(n);
     }
     const total = all.size;
-    // Soft ceiling: with the current static-scan approach we count ~180
-    // tools (including some inter-module duplicates between metric-cost
-    // sub-modules). The 200 ceiling gives ~10% room for normal additions
-    // and forces a code review when growth is unusual. The TRUE OpenAI
-    // function-tool cap is 128 per `declaredToolboxIds` injection
-    // window, so chat-callable tools must still be curated separately —
-    // this test is a coarse early-warning, not the hard guarantee.
-    if (total >= 200) {
+    // Soft ceiling: with the static scan now ALSO counting direct
+    // server.registerTool registrations we count ~206 tools (including some
+    // inter-module duplicates between metric-cost sub-modules). The 225
+    // ceiling gives ~10% room for normal additions and forces a code review
+    // when growth is unusual. The TRUE OpenAI function-tool cap is 128 per
+    // `declaredToolboxIds` injection window, so chat-callable tools must
+    // still be curated separately — this test is a coarse early-warning, not
+    // the hard guarantee.
+    if (total >= 225) {
       const summary = perModule.map((m) => `  ${m.name}: ${m.count}`).join("\n");
       // eslint-disable-next-line no-console
       console.error(
-        `Static MCP tool count = ${total} (soft ceiling 200). Per-module:\n${summary}`,
+        `Static MCP tool count = ${total} (soft ceiling 225). Per-module:\n${summary}`,
       );
     }
-    expect(total).toBeLessThan(200);
+    expect(total).toBeLessThan(225);
   });
 
   it("media-feeds primitives are present in the registry", () => {
