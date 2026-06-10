@@ -240,4 +240,50 @@ describe("a2aActorContext → actor bridging (registry.ts)", () => {
     // tokenScopes must not be present (not coerced to [])
     expect(Object.prototype.hasOwnProperty.call(actor, "tokenScopes")).toBe(false);
   });
+
+  it("Test 5: model branch carries the transport-resolved orgRole (issue #83)", async () => {
+    const actor = await runInContext({
+      userId: "u-mcp",
+      orgId: "o-mcp",
+      orgRole: "org_admin",
+    });
+
+    expect(actor).toMatchObject({
+      actorType: "model",
+      source: "agent",
+      userId: "u-mcp",
+      orgId: "o-mcp",
+      orgRole: "org_admin",
+    });
+  });
+
+  it("Test 6: a2a branch does NOT inherit the transport orgRole (identity-crossing guard)", async () => {
+    // The transport resolved orgRole for ITS identity (ctx.userId/ctx.orgId);
+    // the a2a branch identity comes from a2aActorContext (potentially a
+    // different user/org) — the role must never cross.
+    const actor = await runInContext({
+      userId: "u-mcp",
+      orgId: "o-mcp",
+      orgRole: "org_owner",
+      a2aActorContext: {
+        userId: "u-ext",
+        teamIds: ["t1"],
+        projectIds: ["p1"],
+        orgId: "o-ext",
+      },
+    });
+
+    expect((actor as Record<string, unknown>).actorType).toBe("a2a");
+    expect(Object.prototype.hasOwnProperty.call(actor, "orgRole")).toBe(false);
+  });
+
+  it("Test 7: model branch omits orgRole when the store carries none (no synthesis)", async () => {
+    const actor = await runInContext({
+      userId: "u-mcp",
+      orgId: "o-mcp",
+    });
+
+    expect((actor as Record<string, unknown>).actorType).toBe("model");
+    expect(Object.prototype.hasOwnProperty.call(actor, "orgRole")).toBe(false);
+  });
 });

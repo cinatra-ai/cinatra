@@ -179,4 +179,48 @@ describe("enforceMcpBoundary", () => {
       expect(d).toMatchObject({ allowed: false, reason: "unclassified_primitive" });
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Carried orgRole (issue #83): the boundary's synthetic actor uses the
+  // transport-resolved ctx.orgRole instead of the coarse "member" default.
+  // metric_cost_summary is metric_cost::read → metric.read, which the kernel
+  // grants to org_admin (and above) but NOT to member.
+  // ---------------------------------------------------------------------------
+  describe("carried orgRole on the boundary synthetic actor", () => {
+    it("denies an admin-tier read to the default member actor (regression baseline)", async () => {
+      const d = await enforceMcpBoundary({
+        primitiveName: "metric_cost_summary",
+        ctx: memberCtx(),
+        delegatedRestricted: false,
+      });
+      expect(d).toMatchObject({ allowed: false, reason: "denied:metric.read", shouldBlock: true });
+    });
+
+    it("allows an admin-tier read when ctx carries orgRole org_admin", async () => {
+      const d = await enforceMcpBoundary({
+        primitiveName: "metric_cost_summary",
+        ctx: { ...memberCtx(), orgRole: "org_admin" as const },
+        delegatedRestricted: false,
+      });
+      expect(d.allowed).toBe(true);
+    });
+
+    it("carried orgRole member behaves exactly like the default (no widening)", async () => {
+      const d = await enforceMcpBoundary({
+        primitiveName: "metric_cost_summary",
+        ctx: { ...memberCtx(), orgRole: "member" as const },
+        delegatedRestricted: false,
+      });
+      expect(d).toMatchObject({ allowed: false, reason: "denied:metric.read" });
+    });
+
+    it("member-tier read still allowed regardless of carried role (sanity)", async () => {
+      const d = await enforceMcpBoundary({
+        primitiveName: "accounts_get",
+        ctx: { ...memberCtx(), orgRole: "member" as const },
+        delegatedRestricted: false,
+      });
+      expect(d.allowed).toBe(true);
+    });
+  });
 });

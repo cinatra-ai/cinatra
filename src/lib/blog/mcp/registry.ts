@@ -15,6 +15,9 @@ function buildActorFromRequestCtx(): Record<string, unknown> {
   if (ctx?.userId) actor.userId = ctx.userId;
   if (ctx?.orgId) actor.orgId = ctx.orgId;
   if (platformRole) actor.platformRole = platformRole;
+  // Transport-resolved org-membership role — coherent with the
+  // userId/orgId stamped from the same request-context frame above.
+  if (ctx?.orgRole) actor.orgRole = ctx.orgRole;
   return actor;
 }
 

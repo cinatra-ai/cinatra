@@ -190,6 +190,11 @@ function resolveScope(): {
   } as Parameters<typeof buildActorContextFromPrimitive>[0];
   const actor = buildActorContextFromPrimitive(primitive, orgId, {
     platformRole,
+    // Transport-resolved org-membership role, carried natively on the MCP
+    // request context. NON-A2A ONLY: it was resolved for the transport
+    // identity (ctx.userId/ctx.orgId); the A2A branch's identity comes from
+    // a2aActorContext (potentially a different user/org).
+    orgRole: a2a ? undefined : ctx?.orgRole,
     actorOrganizationId: orgId,
     teamIds: a2a?.teamIds,
     projectIds: a2a?.projectIds,

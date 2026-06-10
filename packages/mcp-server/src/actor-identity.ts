@@ -85,3 +85,56 @@ export async function resolveActorIdentity(
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// resolveOrgRoleFromMembership
+//
+// Resolves the caller's role in the active organization ONCE at transport
+// context-build time so `mcpRequestContextStorage.orgRole` carries it natively
+// to MCP handlers (issue: gates previously re-resolved it on demand per gate).
+//
+// Mapping mirrors `cachedResolveOrgRole` in src/lib/auth-session.ts exactly:
+// better-auth membership `owner` → "org_owner", `admin` → "org_admin",
+// `member` → "member", anything else / no row → undefined. Non-fatal on DB
+// error → undefined; downstream gates keep their on-demand
+// `resolveOrgRoleForUser` fallback, so a failed lookup never widens access.
+// ---------------------------------------------------------------------------
+
+export type McpOrgRole = "org_owner" | "org_admin" | "member";
+
+/** Pure better-auth membership-role → kernel orgRole mapping. */
+export function mapMembershipRoleToOrgRole(
+  raw: string | null | undefined,
+): McpOrgRole | undefined {
+  if (raw === "owner") return "org_owner";
+  if (raw === "admin") return "org_admin";
+  if (raw === "member") return "member";
+  return undefined;
+}
+
+/**
+ * Read the membership row for (orgId, userId) and map its role. Callers must
+ * pass the SAME (orgId, userId) pair that is stamped on the request store —
+ * the resulting orgRole is only meaningful for that identity pair.
+ */
+export async function resolveOrgRoleFromMembership(input: {
+  orgId: string | null | undefined;
+  userId: string | null | undefined;
+  pool: ActorIdentityPool;
+}): Promise<McpOrgRole | undefined> {
+  const { orgId, userId, pool } = input;
+  if (!orgId || !userId) return undefined;
+  try {
+    const result = await pool.query<{ role: string | null }>(
+      'SELECT role FROM public."member" WHERE "organizationId" = $1 AND "userId" = $2 LIMIT 1',
+      [orgId, userId],
+    );
+    return mapMembershipRoleToOrgRole(result.rows[0]?.role);
+  } catch (error) {
+    // non-fatal — undefined keeps existing per-gate fallback behavior.
+    console.warn("[actor-identity] org-role membership lookup failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
