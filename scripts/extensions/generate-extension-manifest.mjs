@@ -221,6 +221,39 @@ export function extractFactoryExport(source, re, context) {
   return matches[0];
 }
 
+// ---------------------------------------------------------------------------
+// Chat-widget manifest/widgets pairing check (source-level, pure + exported).
+//
+// The pure-data manifest module (src/widgets/manifest.ts) declares wizard
+// steps by `widgetId:` string literal; the component module
+// (src/widgets/index.ts) defines the widgets (`id:` string literals inside the
+// WidgetDefinition[]). The route-handler catalog path loads ONLY the manifest
+// module, so a wizard step naming a widget the package does not define cannot
+// be detected at runtime there — it MUST fail generation. Over-collection of
+// `id:` literals from the widgets source (e.g. other object literals) can only
+// weaken this check, never false-fail it; a widgetId built dynamically (no
+// string literal) is rejected as undeclared — declare ids as literals.
+// ---------------------------------------------------------------------------
+const MANIFEST_WIZARD_STEP_ID_RE = /\bwidgetId:\s*"([^"]+)"/g;
+const WIDGETS_DEFINED_ID_RE = /\bid:\s*"([^"]+)"/g;
+
+export function assertManifestWidgetIdsCovered(manifestSource, widgetsSource, context) {
+  const defined = new Set(
+    Array.from(widgetsSource.matchAll(WIDGETS_DEFINED_ID_RE), (m) => m[1]),
+  );
+  const missing = Array.from(
+    manifestSource.matchAll(MANIFEST_WIZARD_STEP_ID_RE),
+    (m) => m[1],
+  ).filter((id) => !defined.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `[extension-manifest] ${context}: manifest wizard step(s) reference widget id(s) ` +
+        `not defined in src/widgets/index.ts: ${[...new Set(missing)].join(", ")} ` +
+        `(declare every step's widgetId as an id: "..." literal in the widgets module)`,
+    );
+  }
+}
+
 function isObj(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -662,7 +695,12 @@ export async function buildManifest() {
   // wizard-manifest registry) load the manifest module and must never import
   // the component graph, while the RSC chat mount loads the component module.
   // FAIL CLOSED at generation: a component module without the manifest split
-  // would silently fall off the server-side wizard surface.
+  // would silently fall off the server-side wizard surface, and a manifest
+  // wizard step naming a widget the package does not define would advertise a
+  // wizard the chat surface cannot render. The route-handler path loads ONLY
+  // the manifest module (never the component graph), so this pairing defect
+  // must be caught HERE — generation is where the pair is frozen into the
+  // build by the literal import maps.
   const chatWidgetModules = records
     .filter((r) => fileExists(join(r.sourceDir, "src/widgets/index.ts")))
     .map((r) => {
@@ -673,6 +711,11 @@ export async function buildManifest() {
             `(route-handler bundles must not import the widget component graph)`,
         );
       }
+      assertManifestWidgetIdsCovered(
+        readFileSync(join(REPO_ROOT, r.sourceDir, "src/widgets/manifest.ts"), "utf8"),
+        readFileSync(join(REPO_ROOT, r.sourceDir, "src/widgets/index.ts"), "utf8"),
+        `${r.packageName} src/widgets`,
+      );
       return { packageName: r.packageName };
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
