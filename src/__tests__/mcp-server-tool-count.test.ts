@@ -116,8 +116,8 @@ function extractRegisteredModuleNames(src: string): string[] {
 
 /**
  * Tool names a connector source registers DIRECTLY via
- * `server.registerTool("name", ...)` (facade-style modules / registry files) —
- * invisible to the key:async() scan above, so counted separately.
+ * `server.registerTool(<literal name>, ...)` (facade-style modules / registry
+ * files) — invisible to the key:async() scan above, so counted separately.
  */
 function directRegisterToolNames(filePath: string): string[] {
   if (!existsSync(filePath)) return [];
@@ -165,7 +165,7 @@ describe("MCP tool registry — function-tool cap headroom", () => {
     // Manifest-discovered connector MCP modules (the registration path that
     // replaced the static connector imports) — count their tool surfaces too:
     // the key:async() handler maps PLUS the names facade-style modules and
-    // registry files register directly via server.registerTool("name", ...)
+    // registry files register directly via server.registerTool(<literal name>)
     // (email/social/blog/crm/twenty surfaces the old scan was blind to).
     const slugs = extractGeneratedConnectorModuleSlugs();
     expect(slugs.length).toBeGreaterThan(0);
