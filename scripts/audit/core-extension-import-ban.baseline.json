@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 46,
-      "files": 32
+      "edges": 44,
+      "files": 31
     }
   },
   "edges": {
@@ -115,10 +115,6 @@
     ],
     "src/lib/types.ts": [
       "@cinatra-ai/email-connector"
-    ],
-    "src/lib/wizard-manifest-registry.ts": [
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/crm-connector"
     ]
   },
   "note": "True-IoC HOST->EXTENSION no-new-rot baseline. Each entry is a CURRENT core(src/)->extension import edge tolerated until the IoC cutover removes it via the runtime-discovery dispatcher; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). Regenerate with `node scripts/audit/core-extension-import-ban.mjs --write-baseline` (it should only ever SHRINK, except a one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition). src/lib/generated/** is exempt; anthropic-connector is un-exempt and its host->ext edges are seeded here."

@@ -1272,9 +1272,6 @@ importers:
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:../agents
-      '@cinatra-ai/apollo-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/apollo-connector
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:../llm
@@ -13450,7 +13447,7 @@ snapshots:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)
-      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
+      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
       '@trpc/server': 11.15.1(typescript@6.0.3)
       clsx: 2.1.1
       cronstrue: 3.14.0
@@ -16314,7 +16311,7 @@ snapshots:
       '@trpc/server': 11.15.1(typescript@6.0.3)
       typescript: 6.0.3
 
-  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
+  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
     dependencies:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)

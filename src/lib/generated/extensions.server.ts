@@ -208,3 +208,21 @@ export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStrea
   "drupal-content-editor": { load: () => import("@cinatra-ai/drupal-mcp-connector/widget-chat-tool"), "packageName":"@cinatra-ai/drupal-mcp-connector","factory":"createDrupalWidgetChatTool","label":"Drupal","subjectNoun":"node","skillCapability":"widget-chat.drupal-content-editor","contextFields":[{"key":"instanceId","maxLength":64},{"key":"nodeId","maxLength":32},{"key":"nodeBundle","maxLength":32},{"key":"nodeStatus","maxLength":32},{"key":"href","maxLength":500}],"auth":{"tokenConfigKey":"drupal_widget_auth","instancesConfigKey":"drupal","requiredInstanceFields":["id","name","nangoConnectionId"]} },
   "wordpress-content-editor": { load: () => import("@cinatra-ai/wordpress-mcp-connector/widget-chat-tool"), "packageName":"@cinatra-ai/wordpress-mcp-connector","factory":"createWordPressWidgetChatTool","label":"WordPress","subjectNoun":"post","skillCapability":"widget-chat.wordpress-content-editor","contextFields":[{"key":"instanceId","maxLength":64},{"key":"postId","maxLength":32},{"key":"postType","maxLength":32},{"key":"postStatus","maxLength":32},{"key":"href","maxLength":500}],"auth":{"tokenConfigKey":"wordpress_widget_auth","instancesConfigKey":"wordpress","requiredInstanceFields":["id","name","username","applicationPassword"]} },
 };
+
+// packageName → dynamic import of the chat-widget COMPONENT module
+// (src/widgets/index.ts). Literal specifiers only (Turbopack-safe). RSC
+// consumers only (the chat mount) — the module graph includes "use client"
+// components. Consumed by src/lib/chat-widget-catalog.server.ts.
+export const GENERATED_CHAT_WIDGET_MODULES: Record<string, () => Promise<unknown>> = {
+  "@cinatra-ai/apollo-connector": () => import("@cinatra-ai/apollo-connector/widgets"),
+  "@cinatra-ai/crm-connector": () => import("@cinatra-ai/crm-connector/widgets"),
+};
+
+// packageName → dynamic import of the chat-widget MANIFEST module
+// (src/widgets/manifest.ts — pure data, no React). Safe in ANY server
+// bundle, including route handlers (the chat runner's wizard-manifest
+// registry). Consumed by src/lib/chat-widget-catalog.server.ts.
+export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, () => Promise<unknown>> = {
+  "@cinatra-ai/apollo-connector": () => import("@cinatra-ai/apollo-connector/widgets/manifest"),
+  "@cinatra-ai/crm-connector": () => import("@cinatra-ai/crm-connector/widgets/manifest"),
+};

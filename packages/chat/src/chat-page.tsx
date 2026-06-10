@@ -15,11 +15,18 @@ import { Marked, type Tokens } from "marked";
 import { useTheme } from "next-themes";
 import { highlightCodeAsync, getHighlightedSync, type ThemeName } from "./syntax-highlight";
 import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefinition, type WidgetManifest, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
-// The chat page keeps the widget merge pattern; archived widget sources
-// (such as campaign-email-outreach and agent-ross-index) are not included.
-import { contentBlogWidgets, contentBlogManifest } from "@/components/widgets/blog";
-import { crmConnectorWidgets, crmContactFinderManifest } from "@cinatra-ai/crm-connector/widgets";
-import { connectorApolloWidgets, connectorApolloManifest } from "@cinatra-ai/apollo-connector/widgets";
+// The widget set is NOT imported from extension packages here. It arrives as
+// props from the server chat mount, which resolves it from the generated
+// extension manifest + extension lifecycle (src/lib/chat-widget-catalog.server.ts);
+// this file derives all detection/wizard/refresh behavior via the pure
+// widget-runtime factory. Adding/removing a widget-bearing extension requires
+// no edit to this file (#34 / IOC-39, IOC-41).
+import {
+  createChatWidgetRuntime,
+  EMPTY_WIDGETS,
+  EMPTY_WIDGET_MANIFESTS,
+  type DetectedWidget,
+} from "./widget-runtime";
 import {
   deleteChatThread,
   deleteAllChatThreads,
@@ -441,7 +448,14 @@ function createMarkedInstance(theme: ThemeName = "github-light") {
   return { md, appLinks, appLinkPlaceholder };
 }
 
-function renderMarkdown(text: string, theme: ThemeName = "github-light") {
+// `detectWidgets` is REQUIRED (no default): every caller must pass the live
+// runtime's detector so a missing widget catalog is a compile error here, not
+// a silently-dead widget surface.
+function renderMarkdown(
+  text: string,
+  theme: ThemeName,
+  detectWidgets: (content: string) => DetectedWidget[],
+) {
   const { md, appLinks, appLinkPlaceholder } = createMarkedInstance(theme);
 
   // Strip mermaid fenced blocks so marked never sees them — they are rendered
@@ -657,12 +671,16 @@ function OrderedPartsSection({
   parts,
   trimContent,
   theme,
+  detectWidgets,
   onMarkdownClick,
   onActiveGateChange,
 }: {
   parts: AssistantMessagePart[];
   trimContent?: (content: string) => string;
   theme: ThemeName;
+  /** Live widget detector from the chat widget runtime (renderMarkdown needs
+   *  it to strip URL lines already rendered as widget embeds). */
+  detectWidgets: (content: string) => DetectedWidget[];
   // Delegated click handler so the same code-copy / table-action behaviour
   // that the legacy `message.content` div provides also works for text
   // parts rendered here. Bound at the parent level so the `closest`
@@ -688,7 +706,7 @@ function OrderedPartsSection({
             <div
               key={`text-${idx}`}
               className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme) }}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
             />
           );
         }
@@ -918,93 +936,10 @@ function ErrorCard({ error, errorRaw }: { error: string; errorRaw?: string }) {
 // ---------------------------------------------------------------------------
 // Widget system
 // ---------------------------------------------------------------------------
-
-// All registered widgets and manifests across packages.
-const WIDGET_REGISTRY: WidgetDefinition[] = [
-  ...contentBlogWidgets,
-  ...crmConnectorWidgets,
-  ...connectorApolloWidgets,
-];
-
-const ALL_MANIFESTS: WidgetManifest[] = [
-  contentBlogManifest,
-  crmContactFinderManifest,
-  connectorApolloManifest,
-];
-
-type DetectedWidget = {
-  widgetId: string;
-  resourceId: string;
-  label: string;
-  href: string;
-};
-
-// Derived from manifests — no hardcoded constants.
-const WIZARD_SEQUENCES: string[][] = ALL_MANIFESTS
-  .filter((m) => m.wizard)
-  .map((m) => m.wizard!.steps.map((s) => s.widgetId));
-
-const WIZARD_STEP_LABELS: Record<string, string> = Object.assign(
-  {},
-  ...ALL_MANIFESTS.filter((m) => m.wizard).map((m) => m.wizard!.stepLabels),
-);
-
-const WIDGET_REFRESH_TOOL_PATTERNS: string[] = ALL_MANIFESTS.flatMap(
-  (m) => m.refreshToolPatterns ?? [],
-);
-
-function isWidgetRefreshTool(toolName: string): boolean {
-  const lower = toolName.toLowerCase();
-  return WIDGET_REFRESH_TOOL_PATTERNS.some((p) => lower.includes(p));
-}
-
-function getNextWizardStep(currentWidgetId: string): string | null {
-  for (const seq of WIZARD_SEQUENCES) {
-    const idx = seq.indexOf(currentWidgetId);
-    if (idx >= 0 && idx < seq.length - 1) {
-      return seq[idx + 1];
-    }
-  }
-  return null;
-}
-
-function getWizardManifest(widgetId: string): WidgetManifest | undefined {
-  return ALL_MANIFESTS.find(
-    (m) => m.wizard?.steps.some((s) => s.widgetId === widgetId),
-  );
-}
-
-// Compile detector patterns from manifests into usable RegExp objects.
-type CompiledDetector = {
-  pattern: RegExp;
-  widgetId: string | ((m: RegExpExecArray) => string | null);
-  resourceId: (m: RegExpExecArray) => string;
-  href: (m: RegExpExecArray) => string;
-};
-
-const WIDGET_DETECTORS: CompiledDetector[] = ALL_MANIFESTS.flatMap((manifest) =>
-  (manifest.detectors ?? []).map((d): CompiledDetector => {
-    const pattern = new RegExp(d.pattern, d.patternFlags ?? "gi");
-    const widgetIdValue = d.widgetId;
-
-    return {
-      pattern,
-      widgetId: typeof widgetIdValue === "string"
-        ? widgetIdValue
-        : (m: RegExpExecArray) => {
-            // Record<string, string> — look up captured group as key.
-            const lastGroup = m[m.length - 1];
-            return (widgetIdValue as Record<string, string>)[lastGroup] ?? null;
-          },
-      resourceId: (m: RegExpExecArray) => {
-        if (typeof d.resourceIdGroups === "number") return m[d.resourceIdGroups];
-        // "$1:$2" format — join groups.
-        return d.resourceIdGroups.replace(/\$(\d+)/g, (_, n) => m[Number(n)] ?? "");
-      },
-      href: (m: RegExpExecArray) => m[0].replace(/^#/, ""),
-    };
-  }),
-);
+// The registries, detector compilation, and wizard/refresh helpers live in
+// ./widget-runtime (pure factory). ChatPage builds the runtime from its
+// `widgets` / `widgetManifests` props via useMemo and threads it to the render
+// helpers below — no module-level widget state, no extension imports.
 
 // ---------------------------------------------------------------------------
 // Mermaid block detection
@@ -1178,57 +1113,20 @@ function stripChartEmbeds(text: string): string {
   return result;
 }
 
-function detectWidgets(content: string): DetectedWidget[] {
-  const widgets: DetectedWidget[] = [];
-  const seen = new Set<string>();
-
-  // Detect inline widget embeds: [widget:widgetId:resourceId]
-  const embedPattern = /\[widget:([a-z0-9.-]+):([a-f0-9-]{36})\]/gi;
-  let em: RegExpExecArray | null;
-  while ((em = embedPattern.exec(content)) !== null) {
-    const widgetId = em[1];
-    const resourceId = em[2];
-    const key = widgetId + resourceId;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const def = WIDGET_REGISTRY.find((w) => w.id === widgetId);
-    if (def) {
-      widgets.push({ widgetId, resourceId, label: def.label, href: "#" });
-    }
-  }
-
-  for (const detector of WIDGET_DETECTORS) {
-    detector.pattern.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = detector.pattern.exec(content)) !== null) {
-      const widgetId = typeof detector.widgetId === "function" ? detector.widgetId(m) : detector.widgetId;
-      if (!widgetId) continue;
-      const resourceId = detector.resourceId(m);
-      const key = widgetId + resourceId;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const def = WIDGET_REGISTRY.find((w) => w.id === widgetId);
-      if (def) {
-        widgets.push({ widgetId, resourceId, label: def.label, href: detector.href(m) });
-      }
-    }
-  }
-
-  return widgets;
-}
-
 function ChatWidget({
   widget,
+  def,
   submitRef,
   isOlderWidget,
   refreshKey,
 }: {
   widget: DetectedWidget;
+  /** Resolved by the caller from the live widget runtime (findWidget). */
+  def: WidgetDefinition | undefined;
   submitRef: React.RefObject<WidgetSubmitHandle | null>;
   isOlderWidget?: boolean;
   refreshKey?: number;
 }) {
-  const def = WIDGET_REGISTRY.find((w) => w.id === widget.widgetId);
   const ownRef = useRef<WidgetSubmitHandle | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
   if (!def) return null;
@@ -1513,6 +1411,13 @@ type ChatPageProps = {
   /** Pre-fills the prompt field on mount (e.g. workflow-task handoff from the
    *  Gantt "Open in chat" context action). Ignored if `initialMention` is set. */
   initialPrompt?: string;
+  /** Live chat-widget catalog, resolved server-side by the chat mount from the
+   *  generated extension manifest + extension lifecycle
+   *  (src/lib/chat-widget-catalog.server.ts). Component values are RSC client
+   *  references. Defaults to empty — widget embeds then simply don't render
+   *  (a legitimate state when no widget-bearing extension is live). */
+  widgets?: WidgetDefinition[];
+  widgetManifests?: WidgetManifest[];
 };
 
 function updateChatTablePage(frame: Element, requestedPage: number) {
@@ -1553,9 +1458,15 @@ function updateChatTablePage(frame: Element, requestedPage: number) {
   });
 }
 
-export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
+  // Manifest-driven widget runtime — registries/detectors/wizard helpers
+  // derived from the props-resolved catalog (see ./widget-runtime).
+  const widgetRuntime = useMemo(
+    () => createChatWidgetRuntime(widgets, widgetManifests),
+    [widgets, widgetManifests],
+  );
   // Shared click handler for assistant markdown content: handles
   // copy-code buttons (inside fenced code blocks) and table copy/CSV
   // download actions. Both the legacy `message.content` div and the new
@@ -1764,7 +1675,7 @@ const skipNextThreadLoadRef = useRef(false);
 
   // Check if the last assistant message has an embedded widget.
   const lastAssistantMessage = [...messages].reverse().find((m) => m.role === "assistant");
-  const activeWidgets = lastAssistantMessage ? detectWidgets(lastAssistantMessage.content) : [];
+  const activeWidgets = lastAssistantMessage ? widgetRuntime.detectWidgets(lastAssistantMessage.content) : [];
   const hasActiveEmbed = activeWidgets.length > 0;
   const widgetSubmitRef = useRef<WidgetSubmitHandle | null>(null);
 
@@ -2423,7 +2334,7 @@ const skipNextThreadLoadRef = useRef(false);
             }
           } else if (evt === "tool_result") {
             const toolName = String(d.name ?? "");
-            if (isWidgetRefreshTool(toolName)) {
+            if (widgetRuntime.isWidgetRefreshTool(toolName)) {
               setWidgetRefreshKey((k) => k + 1);
             }
             const trServerLabel = typeof d.serverLabel === "string" ? d.serverLabel : undefined;
@@ -2624,17 +2535,17 @@ const skipNextThreadLoadRef = useRef(false);
     const currentWidget = activeWidgets[0];
     const currentWidgetId = currentWidget?.widgetId ?? "";
     const resourceId = currentWidget?.resourceId ?? "";
-    const label = WIZARD_STEP_LABELS[currentWidgetId] ?? "Configuration saved.";
-    const nextWidgetId = getNextWizardStep(currentWidgetId);
+    const label = widgetRuntime.wizardStepLabel(currentWidgetId) ?? "Configuration saved.";
+    const nextWidgetId = widgetRuntime.getNextWizardStep(currentWidgetId);
 
     if (nextWidgetId && resourceId) {
       // Advance to next wizard step — embed the next widget directly, no API call.
       const embedTag = `[widget:${nextWidgetId}:${resourceId}]`;
       const confirmMsg: Message = { id: generateId(), role: "assistant", content: `${label}\n\n${embedTag}` };
       setMessages((prev) => [...prev, confirmMsg]);
-    } else if (resourceId && WIZARD_SEQUENCES.some((seq) => seq.includes(currentWidgetId))) {
+    } else if (resourceId && widgetRuntime.isWizardStep(currentWidgetId)) {
       // Last wizard step — show confirmation prompt using manifest config.
-      const manifest = getWizardManifest(currentWidgetId);
+      const manifest = widgetRuntime.getWizardManifest(currentWidgetId);
       const confirmType = manifest?.wizard?.confirmation.resourceType ?? "resource";
       const confirmTag = `[confirm-${confirmType}:${resourceId}]`;
       const confirmMsg: Message = { id: generateId(), role: "assistant", content: `${label}\n\n${confirmTag}` };
@@ -2649,9 +2560,7 @@ const skipNextThreadLoadRef = useRef(false);
   }
 
   async function activateResource(resourceType: string, resourceId: string) {
-    const manifest = ALL_MANIFESTS.find(
-      (m) => m.wizard?.confirmation.resourceType === resourceType,
-    );
+    const manifest = widgetRuntime.findManifestByConfirmationResourceType(resourceType);
     if (!manifest?.wizard) return;
 
     const endpoint = manifest.wizard.confirmation.activateEndpoint.replace("{resourceId}", resourceId);
@@ -3242,6 +3151,7 @@ const skipNextThreadLoadRef = useRef(false);
                               parts={message.parts}
                               trimContent={streamingAbortControllersRef.current.has(message.id) ? trimIncompleteEmbeds : undefined}
                               theme={theme}
+                              detectWidgets={widgetRuntime.detectWidgets}
                               onMarkdownClick={handleAssistantMarkdownClick}
                               onActiveGateChange={handleActiveGateChange}
                             />
@@ -3270,13 +3180,14 @@ const skipNextThreadLoadRef = useRef(false);
                             // the legacy path.
                             <>
                               {(() => {
-                                const widgets = detectWidgets(message.content);
+                                const widgets = widgetRuntime.detectWidgets(message.content);
                                 if (widgets.length === 0) return null;
                                 const isLastMessage = message === messages[messages.length - 1];
                                 return widgets.map((widget) => (
                                   <ChatWidget
                                     key={widget.widgetId + widget.resourceId}
                                     widget={widget}
+                                    def={widgetRuntime.findWidget(widget.widgetId)}
                                     submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
                                     isOlderWidget={!isLastMessage}
                                     refreshKey={widgetRefreshKey}
@@ -3337,17 +3248,19 @@ const skipNextThreadLoadRef = useRef(false);
                                     ? trimIncompleteEmbeds(message.content)
                                     : message.content,
                                   theme,
+                                  widgetRuntime.detectWidgets,
                                 ) }}
                                 onClick={handleAssistantMarkdownClick}
                               />
                               {(() => {
-                                const widgets = detectWidgets(message.content);
+                                const widgets = widgetRuntime.detectWidgets(message.content);
                                 if (widgets.length === 0) return null;
                                 const isLastMessage = message === messages[messages.length - 1];
                                 return widgets.map((widget) => (
                                   <ChatWidget
                                     key={widget.widgetId + widget.resourceId}
                                     widget={widget}
+                                    def={widgetRuntime.findWidget(widget.widgetId)}
                                     submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
                                     isOlderWidget={!isLastMessage}
                                     refreshKey={widgetRefreshKey}
@@ -3462,6 +3375,7 @@ const skipNextThreadLoadRef = useRef(false);
                           parts={message.parts}
                           trimContent={streamingAbortControllersRef.current.has(message.id) ? trimIncompleteEmbeds : undefined}
                           theme={theme}
+                          detectWidgets={widgetRuntime.detectWidgets}
                           onMarkdownClick={handleAssistantMarkdownClick}
                           onActiveGateChange={handleActiveGateChange}
                         />
@@ -3487,13 +3401,14 @@ const skipNextThreadLoadRef = useRef(false);
                         // ChatGPT-mode render site above.
                         <>
                           {(() => {
-                            const widgets = detectWidgets(message.content);
+                            const widgets = widgetRuntime.detectWidgets(message.content);
                             if (widgets.length === 0) return null;
                             const isLastMessage = message === messages[messages.length - 1];
                             return widgets.map((widget) => (
                               <ChatWidget
                                 key={widget.widgetId + widget.resourceId}
                                 widget={widget}
+                                def={widgetRuntime.findWidget(widget.widgetId)}
                                 submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
                                 isOlderWidget={!isLastMessage}
                                 refreshKey={widgetRefreshKey}
@@ -3556,18 +3471,20 @@ const skipNextThreadLoadRef = useRef(false);
                                 ? trimIncompleteEmbeds(message.content)
                                 : message.content,
                               theme,
+                              widgetRuntime.detectWidgets,
                             ) }}
                             /* renderMarkdown strips mermaid blocks; they are rendered separately below */
                             onClick={handleAssistantMarkdownClick}
                           />
                           {(() => {
-                            const widgets = detectWidgets(message.content);
+                            const widgets = widgetRuntime.detectWidgets(message.content);
                             if (widgets.length === 0) return null;
                             const isLastMessage = message === messages[messages.length - 1];
                             return widgets.map((widget) => (
                               <ChatWidget
                                 key={widget.widgetId + widget.resourceId}
                                 widget={widget}
+                                def={widgetRuntime.findWidget(widget.widgetId)}
                                 submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
                                 isOlderWidget={!isLastMessage}
                                 refreshKey={widgetRefreshKey}
@@ -3622,9 +3539,7 @@ const skipNextThreadLoadRef = useRef(false);
                             const confirmMatch = message.content.match(/\[confirm-([a-z_-]+):([a-f0-9-]{36})\]/i);
                             if (!confirmMatch) return null;
                             const [, resourceType, resourceId] = confirmMatch;
-                            const manifest = ALL_MANIFESTS.find(
-                              (m) => m.wizard?.confirmation.resourceType === resourceType,
-                            );
+                            const manifest = widgetRuntime.findManifestByConfirmationResourceType(resourceType);
                             if (!manifest?.wizard) return null;
                             const isLastMessage = message === messages[messages.length - 1];
                             if (!isLastMessage) return null;

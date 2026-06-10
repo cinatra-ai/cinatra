@@ -7,6 +7,7 @@ import {
   sanitizeLogoDataUri,
   extractFactoryExport,
   validateWidgetStreamDeclaration,
+  assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
@@ -428,5 +429,102 @@ describe("widget-stream agent map (cinatra.widgetStream)", () => {
         "ctx",
       ),
     ).toThrow(/ambiguous/);
+  });
+});
+
+describe("chat-widget module discovery", () => {
+  it("emits one chat-widget entry per extension shipping src/widgets/index.ts (manifest split enforced)", async () => {
+    const { chatWidgetModules } = await buildManifest();
+    // buildManifest THROWS for a widgets/index.ts without widgets/manifest.ts
+    // (lockstep rule), so every surviving entry has BOTH modules — the emitter
+    // derives the component map and the manifest map from the same list.
+    expect(chatWidgetModules.length).toBeGreaterThan(0);
+    // deterministic packageName order (the catalog resolves in map order)
+    const names = chatWidgetModules.map((e) => e.packageName);
+    expect(names).toEqual([...names].sort());
+    // The two widget-bearing extensions are covered.
+    expect(names).toEqual(
+      expect.arrayContaining(["@cinatra-ai/apollo-connector", "@cinatra-ai/crm-connector"]),
+    );  });
+});
+
+describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
+  const widgetsSrc = `
+    export const acmeWidgets: WidgetDefinition[] = [
+      { id: "acme.finder", label: "Find", component: Finder },
+      { id: "acme.editor", label: "Edit", component: Editor },
+    ];
+  `;
+
+  it("passes when every wizard step widgetId is a defined widget id", () => {
+    const manifestSrc = `
+      export const acmeManifest: WidgetManifest = {
+        id: "acme",
+        description: "d",
+        wizard: { steps: [ { widgetId: "acme.finder", description: "f" }, { widgetId: "acme.editor", description: "e" } ] },
+      };
+    `;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).not.toThrow();
+  });
+
+  it("passes for a manifest without wizard steps (nothing to cover)", () => {
+    const manifestSrc = `export const acmeManifest = { id: "acme", description: "d" };`;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).not.toThrow();
+  });
+
+  it("accepts single-quoted and template (no-interpolation) literals", () => {
+    const widgetsSingle = `export const w = [ { id: 'acme.finder', label: "F", component: F } ];`;
+    const manifestSingle = `export const m = { wizard: { steps: [ { widgetId: 'acme.finder' } ] } };`;
+    expect(() => assertManifestWidgetIdsCovered(manifestSingle, widgetsSingle, "q src/widgets")).not.toThrow();
+    const manifestTpl = "export const m = { wizard: { steps: [ { widgetId: `acme.finder` } ] } };";
+    expect(() => assertManifestWidgetIdsCovered(manifestTpl, widgetsSingle, "q src/widgets")).not.toThrow();
+  });
+
+  it("REJECTS a non-literal widgetId (identifier / computed / interpolated)", () => {
+    const cases = [
+      `export const m = { wizard: { steps: [ { widgetId: STEP_ONE } ] } };`,
+      `export const m = { wizard: { steps: [ { widgetId: prefix + ".finder" } ] } };`,
+      `export const m = { wizard: { steps: [ { widgetId: "acme.finder" + suffix } ] } };`,
+      "export const m = { wizard: { steps: [ { widgetId: `${p}.finder` } ] } };",
+    ];
+    for (const manifestSrc of cases) {
+      expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "dyn src/widgets")).toThrow(
+        /non-literal widgetId/,
+      );
+    }
+  });
+
+  it("validates detector record-map VALUES as widget ids (and rejects non-literal values)", () => {
+    const ok = `export const m = { detectors: [ { widgetId: { a: "acme.finder", b: 'acme.editor' } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(ok, widgetsSrc, "rec src/widgets")).not.toThrow();
+    const missing = `export const m = { detectors: [ { widgetId: { a: "acme.ghost" } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(missing, widgetsSrc, "rec src/widgets")).toThrow(
+      /not defined in src\/widgets\/index\.ts: acme\.ghost/,
+    );
+    const dynamic = `export const m = { detectors: [ { widgetId: { a: SOME_CONST } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(dynamic, widgetsSrc, "rec src/widgets")).toThrow(
+      /non-literal widgetId record value/,
+    );
+    const prefixed = `export const m = { detectors: [ { widgetId: { a: "acme.finder" + suffix } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(prefixed, widgetsSrc, "rec src/widgets")).toThrow(
+      /non-literal widgetId record value/,
+    );
+  });
+
+  it("FAILS generation when a wizard step names an undefined widget id", () => {
+    const manifestSrc = `
+      export const acmeManifest = {
+        id: "acme",
+        description: "d",
+        wizard: { steps: [ { widgetId: "acme.ghost", description: "g" } ] },
+      };
+    `;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).toThrow(
+      /acme src\/widgets: manifest wizard step\(s\)\/detector\(s\) reference widget id\(s\) not defined in src\/widgets\/index\.ts: acme\.ghost/,
+    );
+  });
+
+  it("the real widget-bearing extensions pass the pairing check (buildManifest does not throw)", async () => {
+    await expect(buildManifest()).resolves.toBeTruthy();
   });
 });

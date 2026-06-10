@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 86,
-      "keys": 135,
-      "occurrences": 173
+      "files": 84,
+      "keys": 131,
+      "occurrences": 169
     },
     "mechanical": {
       "files": 4,
@@ -73,8 +73,6 @@
     "packages/agents/vitest.config.ts :: path :: extensions/cinatra-ai/anthropic-connector": 1,
     "packages/agents/vitest.config.ts :: path :: extensions/cinatra-ai/mcp-client-connector": 1,
     "packages/agents/vitest.config.ts :: path :: extensions/cinatra-ai/openai-connector": 2,
-    "packages/chat/src/chat-page.tsx :: package :: @cinatra-ai/apollo-connector": 1,
-    "packages/chat/src/chat-page.tsx :: package :: @cinatra-ai/crm-connector": 1,
     "packages/cli/src/index.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 2,
     "packages/cli/src/tailscale-provision.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 1,
     "packages/connectors-catalog/src/descriptors.mjs :: package :: @cinatra-ai/a2a-server-connector": 1,
@@ -195,8 +193,6 @@
     "src/lib/setup-wizard.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/setup-wizard.ts :: package :: @cinatra-ai/openai-connector": 1,
     "src/lib/trigger-email-send-use-cases.ts :: package :: @cinatra-ai/email-connector": 1,
-    "src/lib/types.ts :: package :: @cinatra-ai/email-connector": 1,
-    "src/lib/wizard-manifest-registry.ts :: package :: @cinatra-ai/apollo-connector": 1,
-    "src/lib/wizard-manifest-registry.ts :: package :: @cinatra-ai/crm-connector": 1
+    "src/lib/types.ts :: package :: @cinatra-ai/email-connector": 1
   }
 }

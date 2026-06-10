@@ -221,6 +221,100 @@ export function extractFactoryExport(source, re, context) {
   return matches[0];
 }
 
+// ---------------------------------------------------------------------------
+// Chat-widget manifest/widgets pairing check (source-level, pure + exported).
+//
+// The pure-data manifest module (src/widgets/manifest.ts) references widgets
+// by `widgetId:` (wizard steps: a string literal; detectors: a string literal
+// OR a Record whose string VALUES are widget ids); the component module
+// (src/widgets/index.ts) defines the widgets (`id:` string literals inside the
+// WidgetDefinition[]). The route-handler catalog path loads ONLY the manifest
+// module, so a manifest naming a widget the package does not define cannot be
+// detected at runtime there — it MUST fail generation:
+//   - every collected widgetId must be a DEFINED widget id;
+//   - a `widgetId:` whose value is not a plain string literal ('/"/` without
+//     ${}) or an inline record of plain string values is NON-LITERAL
+//     (identifier, computed, template interpolation) and is rejected outright
+//     — the check cannot see through it, so it fails closed.
+// Over-collection of `id:` literals from the widgets source (e.g. other
+// object literals) can only weaken the coverage check, never false-fail it.
+// ---------------------------------------------------------------------------
+// A plain string literal: '...' | "..." | `...` with no ${} interpolation —
+// and NOTHING after it but the value terminator (`,` `}` `]` `)` `;` or end of
+// line), so a computed expression with a literal PREFIX ("x" + suffix) never
+// passes as a literal (it falls through to the non-literal rejection).
+const STRING_LITERAL_RE = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)(?=\s*(?:[,}\]);]|$|\r|\n))/;
+const WIDGETS_DEFINED_ID_RE = /\bid:\s*(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)/g;
+
+function literalValue(m) {
+  return m[1] ?? m[2] ?? m[3];
+}
+
+export function assertManifestWidgetIdsCovered(manifestSource, widgetsSource, context) {
+  const defined = new Set(
+    Array.from(widgetsSource.matchAll(WIDGETS_DEFINED_ID_RE), literalValue),
+  );
+  const referenced = [];
+  const WIDGET_ID_KEY_RE = /\bwidgetId:\s*/g;
+  let key;
+  while ((key = WIDGET_ID_KEY_RE.exec(manifestSource)) !== null) {
+    const rest = manifestSource.slice(key.index + key[0].length);
+    const lit = STRING_LITERAL_RE.exec(rest);
+    if (lit) {
+      referenced.push(literalValue(lit));
+      continue;
+    }
+    if (rest.startsWith("{")) {
+      // Detector record form: { group: "widget.id", ... } — validate the
+      // string VALUES inside the balanced braces; any non-literal value
+      // (depth-1 `:` not followed by a plain string literal) fails closed.
+      let depth = 0;
+      let end = 0;
+      for (; end < rest.length; end++) {
+        if (rest[end] === "{") depth++;
+        else if (rest[end] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (depth !== 0) {
+        throw new Error(
+          `[extension-manifest] ${context}: unbalanced widgetId record in src/widgets/manifest.ts`,
+        );
+      }
+      const record = rest.slice(0, end + 1);
+      // Literal values must be IMMEDIATELY terminated (`,` or `}`) — a value
+      // with a literal prefix and a trailing expression ("x" + y) fails the
+      // lookahead and is captured by the catch-all → non-literal rejection.
+      const VALUE_RE = /:\s*(?:"([^"\\]*)"(?=\s*[,}])|'([^'\\]*)'(?=\s*[,}])|`([^`\\$]*)`(?=\s*[,}])|([^,}\s][^,}]*))/g;
+      let v;
+      while ((v = VALUE_RE.exec(record)) !== null) {
+        if (v[4] !== undefined) {
+          throw new Error(
+            `[extension-manifest] ${context}: non-literal widgetId record value ` +
+              `(${v[4].trim()}) in src/widgets/manifest.ts — widget ids must be plain string literals`,
+          );
+        }
+        referenced.push(v[1] ?? v[2] ?? v[3]);
+      }
+      continue;
+    }
+    throw new Error(
+      `[extension-manifest] ${context}: non-literal widgetId value in src/widgets/manifest.ts ` +
+        `(${rest.slice(0, 40).trim()}…) — widget ids must be plain string literals ` +
+        `(no identifiers, no computed values, no \${} interpolation)`,
+    );
+  }
+  const missing = referenced.filter((id) => !defined.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `[extension-manifest] ${context}: manifest wizard step(s)/detector(s) reference widget id(s) ` +
+        `not defined in src/widgets/index.ts: ${[...new Set(missing)].join(", ")} ` +
+        `(declare every referenced widget id as an id: "..." literal in the widgets module)`,
+    );
+  }
+}
+
 function isObj(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -655,6 +749,37 @@ export async function buildManifest() {
     widgetSlugOwners.set(w.agentSlug, w.packageName);
   }
 
+  // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
+  // by shipping src/widgets/index.ts (WidgetDefinition[] + components). It MUST
+  // then also ship src/widgets/manifest.ts (the pure-data WidgetManifest, no
+  // React) — server surfaces that only need metadata (the chat API route's
+  // wizard-manifest registry) load the manifest module and must never import
+  // the component graph, while the RSC chat mount loads the component module.
+  // FAIL CLOSED at generation: a component module without the manifest split
+  // would silently fall off the server-side wizard surface, and a manifest
+  // wizard step naming a widget the package does not define would advertise a
+  // wizard the chat surface cannot render. The route-handler path loads ONLY
+  // the manifest module (never the component graph), so this pairing defect
+  // must be caught HERE — generation is where the pair is frozen into the
+  // build by the literal import maps.
+  const chatWidgetModules = records
+    .filter((r) => fileExists(join(r.sourceDir, "src/widgets/index.ts")))
+    .map((r) => {
+      if (!fileExists(join(r.sourceDir, "src/widgets/manifest.ts"))) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} ships src/widgets/index.ts (chat widgets) ` +
+            `without src/widgets/manifest.ts — the pure-data manifest split is required ` +
+            `(route-handler bundles must not import the widget component graph)`,
+        );
+      }
+      assertManifestWidgetIdsCovered(
+        readFileSync(join(REPO_ROOT, r.sourceDir, "src/widgets/manifest.ts"), "utf8"),
+        readFileSync(join(REPO_ROOT, r.sourceDir, "src/widgets/index.ts"), "utf8"),
+        `${r.packageName} src/widgets`,
+      );
+      return { packageName: r.packageName };
+    })
+    .sort((a, b) => a.packageName.localeCompare(b.packageName));
   return {
     records,
     connectorSetupPages,
@@ -664,7 +789,7 @@ export async function buildManifest() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
-  };
+    chatWidgetModules,  };
 }
 
 // ---------------------------------------------------------------------------
@@ -679,8 +804,7 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
-function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents) {
-  const script = "scripts/extensions/generate-extension-manifest.mjs";
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules) {  const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
       (r) =>
@@ -779,6 +903,18 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
       return `  ${JSON.stringify(w.agentSlug)}: { load: () => import(${JSON.stringify(`${w.packageName}/widget-chat-tool`)}), ${metaJson} },`;
     })
     .join("\n");
+  // Chat-widget loader maps: packageName → literal dynamic import of the
+  // component module (src/widgets/index.ts — RSC chat mount only) and of the
+  // pure-data manifest module (src/widgets/manifest.ts — safe in any server
+  // bundle, including route handlers). Same literal-specifier rule as the other
+  // maps. Presence in these maps IS the widget-bearing flag; both are consumed
+  // by src/lib/chat-widget-catalog.server.ts, keyed by packageName so the
+  // extension lifecycle (archived-tombstone gate) applies directly.
+  const chatWidgets = chatWidgetModules
+    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets`)}),`)
+    .join("\n");
+  const chatWidgetManifests = chatWidgetModules
+    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets/manifest`)}),`)    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
     `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
@@ -831,7 +967,20 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  auth: GeneratedWidgetStreamAuth;\n` +
     `};\n\n` +
     `export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStreamAgentEntry> = {\n` +
-    `${widgetAgents}\n};\n`
+    `${widgetAgents}\n};\n` +
+    `\n` +
+    `// packageName → dynamic import of the chat-widget COMPONENT module\n` +
+    `// (src/widgets/index.ts). Literal specifiers only (Turbopack-safe). RSC\n` +
+    `// consumers only (the chat mount) — the module graph includes "use client"\n` +
+    `// components. Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
+    `export const GENERATED_CHAT_WIDGET_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `${chatWidgets}\n};\n\n` +
+    `// packageName → dynamic import of the chat-widget MANIFEST module\n` +
+    `// (src/widgets/manifest.ts — pure data, no React). Safe in ANY server\n` +
+    `// bundle, including route handlers (the chat runner's wizard-manifest\n` +
+    `// registry). Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
+    `export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `${chatWidgetManifests}\n};\n`
   );
 }
 
@@ -853,8 +1002,7 @@ function emitWidgetStreamPublicPaths(widgetStreamAgents) {
     `// Consumed by src/lib/auth-route-guard.ts: these paths skip the sign-in\n` +
     `// redirect; the route itself enforces Origin allowlist + Bearer token.\n` +
     `export const GENERATED_WIDGET_STREAM_PUBLIC_PATHS: readonly string[] = [\n` +
-    `${body}\n];\n`
-  );
+    `${body}\n];\n`  );
 }
 
 function emitConnectorSetupPages(setupPages, settingsPages) {
@@ -968,10 +1116,10 @@ async function main() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    chatWidgetModules,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents)],
-    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
   ];
@@ -1004,8 +1152,7 @@ async function main() {
   if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });
   for (const [path, content] of files) writeFileSync(path, content);
   const parity = await checkParity();
-  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents)`);
-  if (parity.length) {
+  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");
     for (const p of parity) console.log("  - " + p);
   } else {
