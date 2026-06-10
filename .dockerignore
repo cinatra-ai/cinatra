@@ -38,6 +38,16 @@ docs
 tests
 test-*.ts
 *.log
+# Unit-test files never ship in the image. The in-image type-safety net
+# (next build's tsc on a LOCAL docker build; CI=true skips it) must check the
+# image's REAL compile surface: the acquired bootable extension set has no
+# business resolving test-only relative imports of extensions outside that
+# set (e.g. seed-pack manifest tests). The full-tree typecheck with every
+# extension cloned back remains the CI merge gate for tests.
+**/__tests__
+**/__mocks__
+**/*.test.*
+**/*.spec.*
 
 # Generated at build time inside the image (RUN pnpm build:auth-migrate-bundle);
 # keep any stale local copy out of the build context so it's always fresh.
