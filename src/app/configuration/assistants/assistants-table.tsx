@@ -71,8 +71,8 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
           },
         ]);
         createFormRef.current?.reset();
-      } catch (err) {
-        toast.error(`Failed to create assistant: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        toast.error("Could not create the assistant.");
       }
     });
   }
@@ -89,8 +89,8 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
       try {
         await deleteAssistantAction(fd);
         setAssistants((prev) => prev.filter((a) => a.id !== id));
-      } catch (err) {
-        toast.error(`Failed to delete assistant: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        toast.error("Could not delete the assistant.");
       }
     });
   }
@@ -112,8 +112,8 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
         setAssistants((prev) =>
           prev.map((a) => (a.id === id ? { ...a, clientId: result.clientId } : a)),
         );
-      } catch (err) {
-        toast.error(`Failed to rotate client: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        toast.error("Could not rotate the OAuth client.");
       }
     });
   }
@@ -126,8 +126,8 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
     startTransition(async () => {
       try {
         await setAssistantWebhookAction(formData);
-      } catch (err) {
-        toast.error(`Failed to save webhook: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        toast.error("Could not save the webhook URL.");
       }
     });
   }

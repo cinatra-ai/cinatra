@@ -106,11 +106,10 @@ export function ListPickerRenderer({
           setLoading(false);
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (!cancelled) {
           setLoading(false);
-          const msg = err instanceof Error ? err.message : "unknown";
-          toast.error(`Could not load lists: ${msg}`);
+          toast.error("Could not load lists.");
         }
       });
     return () => {

@@ -479,9 +479,7 @@ export function CampaignRecipientsReviewRenderer({
         // - DO NOT clear history — the user may retry Save.
         // - Surface the failure immediately so the user knows Save did not complete.
         // - Re-throw so SetupWorkspace's flush loop aborts before calling onSaveStep.
-        const message =
-          err instanceof Error ? err.message : "Failed to remove recipients";
-        toast.error(`Could not save recipient changes: ${message}`);
+        toast.error("Could not save recipient changes.");
         throw err;
       }
       // Success path: clear history so stale ops don't re-flush on a later Save.

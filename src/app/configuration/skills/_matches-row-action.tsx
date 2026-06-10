@@ -35,8 +35,8 @@ export function MatchesRowAction({ agentId, skillId }: { agentId: string; skillI
           try {
             await evaluatePairAction(fd);
             router.refresh();
-          } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Re-evaluation failed");
+          } catch {
+            toast.error("Could not re-evaluate the skill match.");
           }
         })
       }

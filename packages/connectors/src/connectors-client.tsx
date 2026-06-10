@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/toolbar";
 import { McpIcon } from "@/components/domain-icons";
 import { TailscaleLogo } from "@/components/tailscale-logo";
+import { CinatraLogo } from "@/app/cinatra-logo";
 import { ScopeFilterCombobox } from "@/components/scope-filter-combobox";
 import type { AvailableScopes } from "@/components/access-combobox-hierarchical";
 
@@ -160,6 +161,31 @@ function iconForSlug(slug: string): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
+// Paired logos — the bidirectional assistant connectors render
+// `[brand] ⇄ [Cinatra]` in the card's logo area instead of the single brand
+// mark. (The plain MCP connectors keep their single mark via ICON_BY_SLUG.)
+// ---------------------------------------------------------------------------
+
+const PAIRED_BRAND_BY_SLUG = new Map<string, { brand: string; icon: ReactNode }>([
+  ["drupal-assistant-connector", { brand: "Drupal", icon: <SiDrupal size={20} color="default" aria-hidden="true" /> }],
+  ["wordpress-assistant-connector", { brand: "WordPress", icon: <SiWordpress size={20} color="default" aria-hidden="true" /> }],
+]);
+
+function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }) {
+  return (
+    <div
+      role="img"
+      aria-label={`${brand} connects to Cinatra`}
+      className="inline-flex h-10 items-center gap-1.5 rounded-control border border-line bg-white px-2.5 text-foreground"
+    >
+      {icon}
+      <ArrowLeftRight className="size-4 text-muted-foreground" aria-hidden="true" />
+      <CinatraLogo className="size-5" />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Badge
 // ---------------------------------------------------------------------------
 
@@ -247,31 +273,38 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
       </Toolbar>
 
       <ul className="faded-bottom no-scrollbar grid gap-4 overflow-auto pt-4 pb-16 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {filteredConnectors.map((connector) => (
-          <li
-            key={connector.slug}
-            className="group flex flex-col gap-4 rounded-card border border-line bg-surface p-5 shadow-sm transition hover:border-foreground/30 hover:bg-surface-muted cursor-pointer"
-            onClick={() => router.push(connector.href)}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-control border border-line bg-white text-foreground">
-                {connector.logo ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- bounded, sanitized inline-SVG data URI (no remote fetch); Next <Image> is unnecessary
-                  <img src={connector.logo} alt="" aria-hidden="true" className="size-5" />
+        {filteredConnectors.map((connector) => {
+          const paired = PAIRED_BRAND_BY_SLUG.get(connector.slug);
+          return (
+            <li
+              key={connector.slug}
+              className="group flex flex-col gap-4 rounded-card border border-line bg-surface p-5 shadow-sm transition hover:border-foreground/30 hover:bg-surface-muted cursor-pointer"
+              onClick={() => router.push(connector.href)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                {paired ? (
+                  <PairedConnectorLogo brand={paired.brand} icon={paired.icon} />
                 ) : (
-                  iconForSlug(connector.slug)
+                  <div className="flex h-10 w-10 items-center justify-center rounded-control border border-line bg-white text-foreground">
+                    {connector.logo ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- bounded, sanitized inline-SVG data URI (no remote fetch); Next <Image> is unnecessary
+                      <img src={connector.logo} alt="" aria-hidden="true" className="size-5" />
+                    ) : (
+                      iconForSlug(connector.slug)
+                    )}
+                  </div>
                 )}
+                <ConnectorBadge
+                  connected={connector.connected}
+                  label={connector.connectedLabel}
+                />
               </div>
-              <ConnectorBadge
-                connected={connector.connected}
-                label={connector.connectedLabel}
-              />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-foreground">{connector.name}</h3>
-            </div>
-          </li>
-        ))}
+              <div>
+                <h3 className="text-base font-semibold text-foreground">{connector.name}</h3>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </>
   );

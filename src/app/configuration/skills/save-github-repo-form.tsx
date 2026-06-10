@@ -20,10 +20,10 @@ export function SaveGitHubRepoForm({
         body: "Skill repository selection has been updated.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
         title: "Repository save failed",
-        body: error instanceof Error ? error.message : "Unable to save the GitHub repository.",
+        body: "Unable to save the GitHub repository.",
         kind: "error",
       });
     }

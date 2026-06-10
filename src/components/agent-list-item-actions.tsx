@@ -55,8 +55,8 @@ export function AgentListItemActions({ agentId, agentName, editHref, dataCounts 
 
       setConfirmOpen(false);
       router.refresh();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to delete the source data.");
+    } catch {
+      toast.error("Unable to delete the source data.");
     } finally {
       setPending(false);
     }

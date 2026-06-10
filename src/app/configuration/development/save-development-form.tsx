@@ -29,8 +29,8 @@ export function SaveDevelopmentLoggingForm({
         throw error;
       }
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save development logging settings.",
+        title: "Development logging save failed",
+        body: "Unable to save development logging settings.",
         kind: "error",
       });
     }
@@ -61,8 +61,8 @@ export function SaveEmailSafetyForm({
         throw error;
       }
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save email safety settings.",
+        title: "Email safety save failed",
+        body: "Unable to save email safety settings.",
         kind: "error",
       });
     }
@@ -93,8 +93,8 @@ export function SaveDevExtensionsForm({
         throw error;
       }
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save publish scope override.",
+        title: "Publish scope save failed",
+        body: "Unable to save publish scope override.",
         kind: "error",
       });
     }

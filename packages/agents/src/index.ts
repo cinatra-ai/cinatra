@@ -487,6 +487,7 @@ export {
   LLM_PROVIDERS,
   LLM_CAPABILITIES,
   ALLOWED_MODEL_IDS,
+  DEFAULT_OPENAI_MODEL_ID,
   OasCinatraLlmSchema,
 } from "./llm-provider-policy";
 export type {

@@ -823,7 +823,7 @@ export function AgenticRunPanel({
             const msg = err instanceof Error ? err.message : "unknown";
             if (!msg.toLowerCase().includes("already resolved")) {
               justSubmittedXRendererRef.current = null;
-              toast.error(`Continue failed: ${msg}`);
+              toast.error("Could not continue this run.");
             }
           } finally {
             setIsApproving(false);
@@ -929,7 +929,7 @@ export function AgenticRunPanel({
                             const msg = err instanceof Error ? err.message : "unknown";
                             if (!msg.toLowerCase().includes("already resolved")) {
                               justSubmittedXRendererRef.current = null;
-                              toast.error(`Continue failed: ${msg}`);
+                              toast.error("Could not continue this run.");
                             }
                           } finally {
                             setIsApproving(false);

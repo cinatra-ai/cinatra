@@ -135,8 +135,8 @@ export function WorkflowTargetDateControl({
         } else {
           toast.error(`Target date rejected${r.reason ? `: ${r.reason}` : ""}`);
         }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to update target date");
+      } catch {
+        toast.error("Could not update the target date.");
       }
     });
   }

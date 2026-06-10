@@ -140,10 +140,8 @@ export function AuditorReviewRenderer(props: FieldRendererProps) {
       // approveReviewTask reads `userResponse`, not `reviewResult`.
       onChange({ userResponse: JSON.stringify({ acceptedIds, dismissedIds }) });
       return true;
-    } catch (err) {
-      toast.error(
-        `Could not submit review: ${err instanceof Error ? err.message : String(err)}`,
-      );
+    } catch {
+      toast.error("Could not submit your review.");
       return false;
     }
   }

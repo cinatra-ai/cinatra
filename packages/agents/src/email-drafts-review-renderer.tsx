@@ -418,8 +418,8 @@ export function EmailDraftsReviewRenderer({
         body: e.body,
       });
       toast.success("Draft saved");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Save failed");
+    } catch {
+      toast.error("Could not save the draft.");
     } finally {
       setSaving((prev) => {
         const next = new Set(prev);

@@ -20,10 +20,10 @@ export function SaveWordPressForm({
         body: "WordPress instance has been saved.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
         title: "WordPress save failed",
-        body: error instanceof Error ? error.message : "Unable to save WordPress connection.",
+        body: "Unable to save WordPress connection.",
         kind: "error",
       });
     }

@@ -74,8 +74,8 @@ function ApprovalRow({
         const r = await decide(approval.approvalId, decision, reasonValue);
         if (r.ok) toast.success(successMsg);
         else toast.error(`Decision rejected${r.reason ? `: ${r.reason}` : ""}`);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Decision failed");
+      } catch {
+        toast.error("Could not record your approval decision.");
       } finally {
         setRejectOpen(false);
         setReason("");
