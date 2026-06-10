@@ -130,6 +130,24 @@ function wpRequest(body: unknown, headers: Record<string, string> = {}): Request
 const params = (agentSlug: string) => ({ params: Promise.resolve({ agentSlug }) });
 const wpParams = params("wordpress-content-editor");
 
+// Realistic buildSkillTools result: since the read_skill function-tool was
+// retired (skills CATALOG-registry-only + shell-tool delivery rule, enforced
+// by scripts/audit/read-skill-function-tool-banned.mjs), skills are delivered
+// as a single shell tool — `{ type: "shell", skills, execute }`. The route
+// only requires a non-empty array here; the SSE `changes` mapping keys off
+// the WIDGET function tool's name, never the skill tool.
+const mountedSkillShellTool = {
+  type: "shell",
+  skills: [
+    {
+      name: "widget-content-editor",
+      description: "Widget content-editing skill",
+      path: "/skills/widget-content-editor/SKILL.md",
+    },
+  ],
+  execute: async () => [],
+};
+
 beforeEach(() => {
   buildSkillTools.mockReset();
   streamMock.mockReset();
@@ -268,7 +286,7 @@ describe("widget stream route — contract gate wiring", () => {
 
 describe("widget stream route — SSE tool-result mapping (frozen wire format)", () => {
   it("a text-fallback tool result ({ result }) does NOT emit a `changes` SSE frame", async () => {
-    buildSkillTools.mockResolvedValueOnce([{ type: "function", name: "read_skill" }]);
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
     streamMock.mockImplementationOnce(async (opts: { onToolResult?: (r: { name: string; result: string }) => void }) => {
       opts.onToolResult?.({
         name: "wordpress_content_editor_run",
@@ -287,7 +305,7 @@ describe("widget stream route — SSE tool-result mapping (frozen wire format)",
   });
 
   it("a structured tool result ({ changes }) emits a `changes` SSE frame mapped to `fields`", async () => {
-    buildSkillTools.mockResolvedValueOnce([{ type: "function", name: "read_skill" }]);
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
     streamMock.mockImplementationOnce(async (opts: { onToolResult?: (r: { name: string; result: string }) => void }) => {
       opts.onToolResult?.({
         name: "wordpress_content_editor_run",
@@ -305,7 +323,7 @@ describe("widget stream route — SSE tool-result mapping (frozen wire format)",
   });
 
   it("a foreign tool result (name ≠ the built widget tool's name) is ignored", async () => {
-    buildSkillTools.mockResolvedValueOnce([{ type: "function", name: "read_skill" }]);
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
     streamMock.mockImplementationOnce(async (opts: { onToolResult?: (r: { name: string; result: string }) => void }) => {
       opts.onToolResult?.({
         name: "some_other_tool",
@@ -326,7 +344,7 @@ describe("widget stream route — host extensibility (synthetic third agent)", (
   // data alone (no host edit). Scope: host plumbing only — the widget wire
   // protocol itself remains the frozen WP/Drupal v1 contract.
   it("serves a manifest-declared third agent end-to-end with its own tool name + auth keys", async () => {
-    buildSkillTools.mockResolvedValueOnce([{ type: "function", name: "read_skill" }]);
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
     streamMock.mockImplementationOnce(async (opts: { onToolResult?: (r: { name: string; result: string }) => void }) => {
       opts.onToolResult?.({
         name: "acme_content_editor_run",
