@@ -881,7 +881,8 @@ export async function register() {
     }
 
     // Dev required-in-prod advisory: ONLY in development, verify the
-    // required-in-prod packages are installed/locked. If any are not, log a
+    // required-in-prod packages are installed/locked AND that pinned entries'
+    // installed versions satisfy their declared ranges. If any are not, log a
     // warning noting that production would fail closed (the prod throw is
     // deferred to the prod installer — NOT wired here).
     if (process.env.CINATRA_RUNTIME_MODE === "development") {
@@ -892,8 +893,8 @@ export async function register() {
         const result = await verifyRequiredInProdInstalled();
         if (!result.ok) {
           console.warn(
-            `[extensions] DEV ADVISORY: required-in-prod package(s) not installed/locked: ` +
-              `${result.missing.join(", ")} (in production this would fail closed — ` +
+            `[extensions] DEV ADVISORY: required-in-prod contract not satisfied — ` +
+              `${result.reason} (in production this would fail closed — ` +
               `deferred to the prod installer)`,
           );
         }

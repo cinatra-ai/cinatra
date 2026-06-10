@@ -636,6 +636,27 @@ class ExtensionRegistryImpl {
   ): Promise<void> {
     const handler = this.resolve(typeId);
 
+    // 0. REQUIRED-PIN GATE (the host → extension half of the compatibility
+    //    contract). A package PINNED in the host's `cinatra.requiredExtensions`
+    //    may only be installed/updated at a CONCRETE version satisfying the
+    //    pinned range — so an update can never silently move a required
+    //    extension outside the host's declared compatibility intent, on ANY
+    //    kind's path (connector pipeline, workflow saga, agent/skill/artifact
+    //    handlers — they all dispatch through here). Pure read of the host's
+    //    own package.json, BEFORE the row-ensure/handler/pipeline mutations, so
+    //    a refused op leaves nothing to roll back. The MCP install/update
+    //    handlers already dispatch the registry-RESOLVED concrete version, so a
+    //    dist-tag input never reaches a pinned package's gate unresolved.
+    {
+      const { checkRequiredExtensionVersionPin } = await import("./required-in-prod");
+      const pin = checkRequiredExtensionVersionPin({
+        packageName: ref.packageName,
+        version: ref.version,
+        op,
+      });
+      if (!pin.ok) throw new Error(pin.reason);
+    }
+
     // 1. Ensure exactly one canonical row BEFORE the native handler (so the
     //    workflow saga's recordProvenance + the pipeline both resolve it — the
     //    Finding-4 ordering fix). Scoped to the actor's org so the saga (org-
