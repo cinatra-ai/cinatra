@@ -622,10 +622,25 @@ export async function acquireProdRequiredExtensions({
         ) + "\n",
       );
       mkdirSync(path.dirname(dest), { recursive: true });
-      // The previously verified (now stale-pinned) tree is removed only at
-      // this point — after the replacement is fully verified on disk.
-      rmSync(dest, { recursive: true, force: true });
-      renameSync(tmpDir, dest);
+      // Swap. The previously verified (now stale-pinned) tree is renamed
+      // ASIDE — not deleted — so a failed rename into place restores it: a
+      // failed replacement can never leave the slot empty. The aside dir is
+      // dot-prefixed (like the tmp dir) so workspace globs never see it as a
+      // package; it is removed once the new tree is in place.
+      const asideDir = path.join(repoRoot, "extensions", `.acquire-old-${process.pid}-${downloaded}`);
+      rmSync(asideDir, { recursive: true, force: true });
+      let movedOldAside = false;
+      if (existsSync(dest)) {
+        renameSync(dest, asideDir);
+        movedOldAside = true;
+      }
+      try {
+        renameSync(tmpDir, dest);
+      } catch (renameErr) {
+        if (movedOldAside) renameSync(asideDir, dest); // restore the old verified tree
+        throw renameErr;
+      }
+      if (movedOldAside) rmSync(asideDir, { recursive: true, force: true });
     } catch (err) {
       rmSync(tmpDir, { recursive: true, force: true });
       throw err;

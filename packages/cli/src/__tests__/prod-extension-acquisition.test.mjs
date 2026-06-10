@@ -1,9 +1,26 @@
 import path from "node:path";
 import os from "node:os";
 import { gzipSync } from "node:zlib";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, chmodSync } from "node:fs";
-import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync, chmodSync } from "node:fs";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as tar from "tar";
+
+// Targeted fs fault injection: everything passes through to the real node:fs
+// except renameSync, which throws ONCE when renaming onto the path armed via
+// `renameControl.failTo` — used to prove the acquisition swap restores the
+// previously verified tree when the final rename into place fails.
+const renameControl = vi.hoisted(() => ({ failTo: null }));
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal();
+  const renameSync = (from, to) => {
+    if (renameControl.failTo !== null && to === renameControl.failTo) {
+      renameControl.failTo = null;
+      throw new Error("injected rename failure");
+    }
+    return real.renameSync(from, to);
+  };
+  return { ...real, renameSync, default: { ...real, renameSync } };
+});
 
 import {
   ACQUISITION_MARKER_FILENAME,
@@ -429,6 +446,31 @@ describe("acquireProdRequiredExtensions", () => {
     ).rejects.toThrow(/HTTP 404/);
     // The old verified tree must still be in place (no empty slot).
     expect(existsSync(path.join(root, "extensions/scope/sample-connector/package.json"))).toBe(true);
+  });
+
+  it("restores the old verified tree when the final rename into place fails (slot never left empty)", async () => {
+    const gz = await goodArchive();
+    const root = await workspaceWithLock(gz);
+    await acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} });
+
+    // Move the pin so a real re-acquisition runs, then fail the final swap
+    // (the rename of the fully verified replacement onto the slot).
+    const lock = JSON.parse(readFileSync(path.join(root, LOCK_FILENAME), "utf8"));
+    lock.packages[0].resolvedSha = "c".repeat(40);
+    writeFileSync(path.join(root, LOCK_FILENAME), JSON.stringify(lock));
+    const dest = path.join(root, "extensions/scope/sample-connector");
+    renameControl.failTo = dest;
+    await expect(
+      acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} }),
+    ).rejects.toThrow(/injected rename failure/);
+
+    // The old verified tree is restored — original content AND marker — and
+    // no .acquire-* working dirs are left behind.
+    expect(existsSync(path.join(dest, "package.json"))).toBe(true);
+    const marker = JSON.parse(readFileSync(path.join(dest, ACQUISITION_MARKER_FILENAME), "utf8"));
+    expect(marker.resolvedSha).toBe(SHA_A);
+    const debris = readdirSync(path.join(root, "extensions")).filter((n) => n.startsWith(".acquire-"));
+    expect(debris).toEqual([]);
   });
 
   it("fails loud when the lock and the declared requiredExtensions drift apart", async () => {
