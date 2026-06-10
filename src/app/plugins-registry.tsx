@@ -8,36 +8,51 @@ export type APIPluginPageProps = {
 type APIPluginPageComponent = (props: APIPluginPageProps) => ReactNode | Promise<ReactNode>;
 
 export async function getAPIPluginPage(slug: string): Promise<APIPluginPageComponent | null> {
+  // Connector settings/setup surfaces resolve through the server registry +
+  // the generated extension manifest: settings components load via the
+  // generated settings-page loader map, and redirect targets come from the
+  // manifest-resolved dispatch href — this module names no connector package
+  // and no hardcoded dispatch-route path.
+  //
+  // NOTE: slugs listed in `modalSlugs` (renderAPIPluginPage) and the
+  // `[apiSlug]` route's own redirects (initial-setup / drupal / openai-skills)
+  // short-circuit before this switch, so only the cases below are reachable.
+  const redirectToConnectorSetup = async (connectorSlug: string) => {
+    const { getConnectorSetupHref } = await import("@/lib/connectors-registry.server");
+    const href = getConnectorSetupHref(connectorSlug);
+    return async () => {
+      if (!href) notFound();
+      redirect(href);
+    };
+  };
+  const loadSettingsModule = async <T,>(connectorSlug: string): Promise<T | null> => {
+    const { getConnectorSettingsPageLoader } = await import("@/lib/connector-setup-pages");
+    const loader = getConnectorSettingsPageLoader(connectorSlug);
+    if (!loader) return null;
+    return (await loader()) as T;
+  };
+
   switch (slug) {
     // /configuration/llm/apify has no standalone route; the canonical Apify
     // settings UI is the full-page route at /connectors/apify. Without a modal
     // slug, the dispatcher falls through to notFound() instead of redirecting
     // to a ?modal=apify query that nothing renders.
-    case "apollo":
-      return (await import("@cinatra-ai/apollo-connector/settings-page")).ApolloSettingsPage;
-    case "claude":
-      // anthropic-connector is un-exempt: its settings-page consumes the
-      // host-injected deps slot + sdk-ui, and the canonical setup UI is the GENERIC
-      // connector dispatch route. This legacy /configuration/llm mount redirects
-      // there so core no longer statically imports the connector (IoC — same pattern
-      // as github/wordpress/drupal). The target is a public route URL, not an import.
-      return async () => {
-        redirect("/connectors/cinatra-ai/anthropic-connector/setup");
-      };
-    // Gemini settings are rendered as an in-page modal on /configuration/llm.
-    // The standalone connector settings page is not part of this registry.
+    case "apollo": {
+      const mod = await loadSettingsModule<{ ApolloSettingsPage: APIPluginPageComponent }>(
+        "apollo-connector",
+      );
+      return mod?.ApolloSettingsPage ?? null;
+    }
     case "github":
       // GitHub's settings-page consumes a host-injected `ctx` (ctx.nango,
       // SDK-only decouple). It renders through the GENERIC connector
       // dispatch route (`/connectors/[vendor]/[slug]/[subroute]`), which builds
       // the grant-aware host ctx + applies the connector-policy gate without core
       // naming the connector. This legacy /configuration/llm mount redirects there
-      // so core no longer statically imports the connector (IoC — core-extension
-      // import/instance-coupling gates). The redirect target is a public route URL
-      // (slug), not a package import. (Same pattern as wordpress/drupal below.)
-      return async () => {
-        redirect("/connectors/cinatra-ai/github-connector/setup");
-      };
+      // so core no longer statically imports the connector. The redirect target is
+      // the manifest-resolved public route URL, not a package import. (Same
+      // pattern as gmail/drupal below.)
+      return redirectToConnectorSetup("github-connector");
     case "gmail":
       // The Google OAuth client credentials (shared by Gmail + Google Calendar)
       // are OWNED by the google-oauth-connector, whose setup-page renders
@@ -49,32 +64,14 @@ export async function getAPIPluginPage(slug: string): Promise<APIPluginPageCompo
       // to the browser). This legacy /configuration/llm mount rendered the host
       // package's ungated settings form (saveGmailConnectionAction had no authz
       // gate at all); redirecting here retires that lower-privilege reach-around.
-      // (Same pattern as github/wordpress/drupal.) The target is a public route
-      // URL (slug), not a package import.
-      return async () => {
-        redirect("/connectors/cinatra-ai/google-oauth-connector/setup");
-      };
-    case "linkedin":
-      return (await import("@cinatra-ai/linkedin-connector/settings-page")).LinkedInSettingsPage;
-    case "openai":
-      return (await import("@cinatra-ai/openai-connector/settings-page")).OpenAISettingsPage;
-    case "openai-skills":
-      return (await import("@cinatra-ai/openai-connector/openai-skills-settings-page")).OpenAIAPISkillsSettingsPage;
-    case "wordpress":
-      // The WordPress + Drupal connector settings now render through the GENERIC
-      // connector dispatch route (`/connectors/[vendor]/[slug]/[subroute]`),
-      // which builds the grant-aware host ctx + applies the connector-policy gate
-      // without core naming the connector. These legacy /configuration/llm mounts
-      // redirect there so cinatra core no longer statically imports/names the
-      // connector (IoC — core-extension instance-coupling gate). The redirect
-      // target is a public route URL (slug), not a package import.
-      return async () => {
-        redirect("/connectors/cinatra-ai/wordpress-mcp-connector/setup");
-      };
+      // (Same pattern as github/drupal.) The target is the manifest-resolved
+      // public route URL, not a package import.
+      return redirectToConnectorSetup("google-oauth-connector");
     case "drupal":
-      return async () => {
-        redirect("/connectors/cinatra-ai/drupal-mcp-connector/setup");
-      };
+      // The Drupal connector settings render through the GENERIC connector
+      // dispatch route, which builds the grant-aware host ctx + applies the
+      // connector-policy gate without core naming the connector.
+      return redirectToConnectorSetup("drupal-mcp-connector");
     case "youtube": {
       // YouTube's settings-page consumes a host-injected `ctx` (the
       // host-port mechanism); this legacy /configuration/llm/youtube path
@@ -82,23 +79,33 @@ export async function getAPIPluginPage(slug: string): Promise<APIPluginPageCompo
       // mounts behave identically — AND applies the same connector-policy
       // gate so non-admins can't reach the page if YouTube's policy ever
       // becomes admin-only.
-      const { YouTubeSettingsPage } = await import("@cinatra-ai/youtube-connector/settings-page");
+      const mod = await loadSettingsModule<{
+        YouTubeSettingsPage: (props: {
+          searchParams?: APIPluginPageProps["searchParams"];
+          ctx: unknown;
+        }) => ReactNode | Promise<ReactNode>;
+      }>("youtube-connector");
+      if (!mod) return null;
       const { createExtensionHostContext } = await import("@/lib/extension-host-context");
       const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
       const { getActorContext } = await import("@/lib/auth-session");
       const { enforceConnectorPolicy } = await import("@/lib/connector-policy");
-      const PACKAGE_ID = "@cinatra-ai/youtube-connector";
+      const { getConnectorRegistryEntryBySlug } = await import(
+        "@/lib/connectors-registry.server"
+      );
+      const packageId = getConnectorRegistryEntryBySlug("youtube-connector")?.packageId;
+      if (!packageId) return null;
       return async (props: APIPluginPageProps) => {
         const actor = await getActorContext();
-        const decision = enforceConnectorPolicy(PACKAGE_ID, actor, "read");
+        const decision = enforceConnectorPolicy(packageId, actor, "read");
         if (!decision.allowed) {
           notFound();
         }
         const ctx = createExtensionHostContext(
-          PACKAGE_ID,
-          STATIC_EXTENSION_MANIFEST[PACKAGE_ID]?.requestedHostPorts ?? [],
+          packageId,
+          STATIC_EXTENSION_MANIFEST[packageId]?.requestedHostPorts ?? [],
         );
-        return YouTubeSettingsPage({ searchParams: props.searchParams, ctx });
+        return mod.YouTubeSettingsPage({ searchParams: props.searchParams, ctx });
       };
     }
     default:

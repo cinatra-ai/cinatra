@@ -16,11 +16,17 @@ import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 export type ConnectorDescriptor = (typeof CONNECTOR_DESCRIPTORS)[number];
 
 export type ConnectorReadiness = {
-  configured: boolean;
-  connectedCount: number;
+  connected: boolean;
+  connectedLabel?: string;
 };
 
-export type ConnectorReadinessProbe = () => Promise<ConnectorReadiness>;
+export type ConnectorReadinessContext = {
+  userId: string | null;
+};
+
+export type ConnectorReadinessProbe = (
+  ctx: ConnectorReadinessContext,
+) => Promise<ConnectorReadiness>;
 
 export type ConnectorRegistryEntry = ConnectorDescriptor & {
   /**
@@ -31,6 +37,14 @@ export type ConnectorRegistryEntry = ConnectorDescriptor & {
    */
   loadSetupPage: ConnectorSetupPageLoader | null;
   readinessProbe: ConnectorReadinessProbe;
+  /**
+   * The connector's vendor scope, resolved from the installed-extension
+   * identity in the generated manifest (falling back to the packageId's scope
+   * segment for a connector the static manifest does not cover).
+   */
+  vendor: string;
+  /** Manifest-resolved dispatch-route href for the connector's setup surface. */
+  setupHref: string;
 };
 
 /**
@@ -82,8 +96,7 @@ export function registerConnectorReadinessProbe(
 }
 
 const DEFAULT_PROBE: ConnectorReadinessProbe = async () => ({
-  configured: false,
-  connectedCount: 0,
+  connected: false,
 });
 
 export function getConnectorReadinessProbe(
@@ -92,12 +105,46 @@ export function getConnectorReadinessProbe(
   return READINESS_PROBES[packageId] ?? DEFAULT_PROBE;
 }
 
-export function listConnectorRegistryEntries(): ConnectorRegistryEntry[] {
-  return listConnectorDescriptors().map((descriptor) => ({
+/**
+ * The connector's vendor scope. The generated manifest (installed-extension
+ * identity) is authoritative; a connector the manifest does not cover derives
+ * its vendor from the packageId's scope segment.
+ */
+export function connectorVendor(packageId: string): string {
+  const manifestScope = STATIC_EXTENSION_MANIFEST[packageId]?.scope;
+  if (manifestScope) return manifestScope;
+  const match = /^@([^/]+)\//.exec(packageId);
+  return match ? match[1] : "";
+}
+
+function setupHrefFor(descriptor: ConnectorDescriptor): string {
+  return `/connectors/${connectorVendor(descriptor.packageId)}/${descriptor.slug}/${descriptor.setupSubroute}`;
+}
+
+/**
+ * Manifest-resolved setup href for a connector slug, or `null` for an unknown
+ * slug. Redirect/link sites use this instead of hardcoding dispatch-route
+ * paths.
+ */
+export function getConnectorSetupHref(slug: string): string | null {
+  const descriptor = getConnectorDescriptorBySlug(slug);
+  return descriptor ? setupHrefFor(descriptor) : null;
+}
+
+function toRegistryEntry(descriptor: ConnectorDescriptor): ConnectorRegistryEntry {
+  return {
     ...descriptor,
     loadSetupPage: resolveSetupPageLoader(descriptor.packageId, descriptor.slug),
-    readinessProbe: getConnectorReadinessProbe(descriptor.packageId),
-  }));
+    // Resolved lazily so probes registered after this entry was built (e.g. a
+    // late side-effect import of the built-in probe module) still apply.
+    readinessProbe: (ctx) => getConnectorReadinessProbe(descriptor.packageId)(ctx),
+    vendor: connectorVendor(descriptor.packageId),
+    setupHref: setupHrefFor(descriptor),
+  };
+}
+
+export function listConnectorRegistryEntries(): ConnectorRegistryEntry[] {
+  return listConnectorDescriptors().map(toRegistryEntry);
 }
 
 export function getConnectorRegistryEntryBySlug(
@@ -105,11 +152,7 @@ export function getConnectorRegistryEntryBySlug(
 ): ConnectorRegistryEntry | undefined {
   const descriptor = getConnectorDescriptorBySlug(slug);
   if (!descriptor) return undefined;
-  return {
-    ...descriptor,
-    loadSetupPage: resolveSetupPageLoader(descriptor.packageId, descriptor.slug),
-    readinessProbe: getConnectorReadinessProbe(descriptor.packageId),
-  };
+  return toRegistryEntry(descriptor);
 }
 
 export function getConnectorRegistryEntryByPackageId(
@@ -117,11 +160,7 @@ export function getConnectorRegistryEntryByPackageId(
 ): ConnectorRegistryEntry | undefined {
   const descriptor = getConnectorDescriptorByPackageId(packageId);
   if (!descriptor) return undefined;
-  return {
-    ...descriptor,
-    loadSetupPage: resolveSetupPageLoader(descriptor.packageId, descriptor.slug),
-    readinessProbe: getConnectorReadinessProbe(descriptor.packageId),
-  };
+  return toRegistryEntry(descriptor);
 }
 
 export { PRIMITIVE_TO_CONNECTOR_OVERRIDES };

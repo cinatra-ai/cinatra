@@ -21,6 +21,10 @@ import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
+import {
+  evaluateHostSdkCompat,
+  formatHostSdkCompatRefusal,
+} from "@/lib/extension-host-compat";
 
 export type InstallPipelineInput = {
   packageName: string;
@@ -47,6 +51,17 @@ export type InstallPipelineDeps = {
   materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; storeRoot?: string }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
   /** Read the materialized package's declared requestedHostPorts. */
   readRequestedPorts: (storeDir: string) => Promise<string[]>;
+  /**
+   * Read the materialized package's declared host/SDK compatibility range
+   * (`cinatra.sdkAbiRange`) — the basis of the HOST-COMPAT GATE that refuses an
+   * install/update whose declared range this host's frozen SDK ABI does not
+   * satisfy, BEFORE any durable state mutates. Same trust basis as
+   * `readRequestedPorts` (the SRI-verified materialized bytes). Optional so
+   * existing unit tests can omit it (then no install-time compat gate runs —
+   * the loaders' activation-time ABI gate remains the backstop); the default
+   * factory always wires it.
+   */
+  readDeclaredCompat?: (storeDir: string) => Promise<{ sdkAbiRange: string | null }>;
   /**
    * Persist the REAL provenance on the canonical install row — the sha512
    * integrity + content hash (+ the additive sha256 attestation). The default
@@ -299,6 +314,50 @@ export async function installExtensionFromRegistry(
 
   const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
 
+  // Read the CURRENT (package, org) journal op EARLY — read-only. Two consumers:
+  // (1) the HOST-COMPAT GATE's GC guard just below (a same-version re-install
+  // materializes to the SAME digest/dir as the LIVE install — GC'ing it on
+  // refusal would destroy the working install's store dir), and (2) the
+  // journal-compensation capture before `beginInstallOp` overwrites the single
+  // (package, org) row (see the capture comment further down).
+  const priorOp = await deps.readInstallOp?.(input.packageName, input.orgId);
+
+  // HOST-COMPAT GATE — the extension → host/SDK half of the compatibility
+  // contract. The materialized (SRI-verified) manifest's `cinatra.sdkAbiRange`
+  // must admit this host's frozen SDK ABI — the SAME verdict both loaders gate
+  // activation on (`evaluateHostSdkCompat` wraps the SDK's own checker, so the
+  // install gate can never drift from the activation gate). Runs BEFORE the
+  // update probe / journal / grant / provenance — the FIRST durable mutation is
+  // `beginInstallOp` below — so a refused install OR update is fully inert: a
+  // prior install's journal row stays `finalized`, its grant + provenance are
+  // untouched, and a fresh install leaves nothing behind. The just-materialized
+  // dir is GC'd (best-effort) UNLESS it IS the live install's dir (the
+  // same-digest re-install case above). An undeclared/"*" range is unpinned →
+  // allowed (parity with the loaders; refusing would brick every published
+  // unpinned extension); a declared-but-malformed or unsatisfied range fails
+  // closed with an actionable error (declared range vs. this host's ABI).
+  if (deps.readDeclaredCompat) {
+    const declared = await deps.readDeclaredCompat(mat.storeDir);
+    if (!evaluateHostSdkCompat(declared.sdkAbiRange).compatible) {
+      const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+      if (deps.gcStoreDir && !isLiveDigest) {
+        try {
+          await deps.gcStoreDir(mat.storeDir);
+        } catch {
+          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+        }
+      }
+      throw new Error(
+        formatHostSdkCompatRefusal({
+          op: priorOp?.phase === "finalized" ? "update" : "install",
+          packageName: input.packageName,
+          version: resolvedVersion,
+          sdkAbiRange: declared.sdkAbiRange,
+        }),
+      );
+    }
+  }
+
   // Classify the in-process import trust tier (vendor-agnostic). The host
   // allowlist + bootstrap lever come from the trust-config seam (publicRegistryUrl
   // only — never the instance's own publish target). Computed PURELY (no mutation)
@@ -430,15 +489,15 @@ export async function installExtensionFromRegistry(
     }
   }
 
-  // Capture the CURRENT (package, org) journal op BEFORE `beginInstallOp` below
-  // overwrites the single (package, org) row. On a hot-UPDATE this is the OLD
-  // install's `finalized` op (its id + digest); on a FRESH install it is null (or
-  // a non-finalized leftover). The single-row UPSERT means `beginInstallOp` for
-  // the NEW attempt DESTROYS the old `finalized` op — so if any post-begin step
-  // throws on an update, we re-create this prior op (the catch below) to keep the
+  // `priorOp` (read EARLY, above the host-compat gate) captures the CURRENT
+  // (package, org) journal op BEFORE `beginInstallOp` below overwrites the single
+  // (package, org) row. On a hot-UPDATE this is the OLD install's `finalized` op
+  // (its id + digest); on a FRESH install it is null (or a non-finalized
+  // leftover). The single-row UPSERT means `beginInstallOp` for the NEW attempt
+  // DESTROYS the old `finalized` op — so if any post-begin step throws on an
+  // update, we re-create this prior op (the catch below) to keep the
   // previously-working install boot-anchorable (`resolveInstallAnchor` requires
   // `phase === 'finalized'`).
-  const priorOp = await deps.readInstallOp?.(input.packageName, input.orgId);
 
   // CAPTURE (UPDATE only): before the mutations below overwrite durable
   // state, snapshot what a post-commit DURABLE ROLLBACK needs to re-pin the OLD
@@ -799,6 +858,8 @@ async function getFinalRegistryIdentityUrl(): Promise<string> {
  *    identity (not the broker URL) for trust classification;
  *  - `materialize` → `materializePackageToStore` (the SRI-checked materializer);
  *  - `readRequestedPorts` → the manifest's `cinatra.requestedHostPorts`;
+ *  - `readDeclaredCompat` → the manifest's `cinatra.sdkAbiRange` (the
+ *    HOST-COMPAT GATE's basis);
  *  - `recordProvenance` → `sourceSwitchExtension` (the ONLY sanctioned provenance
  *    writer; persists the REAL integrity + content hash + the new attestedSha256);
  *  - `recordRequestedGrant` / `approveGrant` → the host-port grant store;
@@ -901,6 +962,12 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       return { storeDir: mat.storeDir, digest: mat.digest, integrity: mat.integrity, contentHash: mat.contentHash };
     },
     readRequestedPorts: (storeDir) => readRequestedHostPortsFromStore(storeDir),
+    // HOST-COMPAT GATE basis: the materialized manifest's `cinatra.sdkAbiRange`
+    // (verified bytes — same basis as readRequestedPorts above).
+    readDeclaredCompat: async (storeDir) => {
+      const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
+      return readDeclaredHostCompatFromStore(storeDir);
+    },
     recordProvenance: async (p) => {
       // The ONLY sanctioned provenance writer is sourceSwitchExtension (it
       // re-validates the source then writes via the lifecycle path). Resolve the

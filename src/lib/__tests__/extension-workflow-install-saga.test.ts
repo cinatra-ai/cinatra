@@ -506,3 +506,85 @@ describe("listUnfinalizedInstallOps", () => {
     expect(op).toMatchObject({ installOpId: "a", packageName: "@cinatra-ai/a", orgId: null, phase: "materialized" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// HOST-COMPAT GATE — a workflow package whose declared `cinatra.sdkAbiRange`
+// this host's SDK ABI does not satisfy is refused right after materialize,
+// BEFORE the grant request, preflight, and any template/dashboard writes.
+// ---------------------------------------------------------------------------
+describe("installWorkflowExtensionSaga — HOST-COMPAT GATE (cinatra.sdkAbiRange)", () => {
+  it("REFUSES an incompatible package PRE-MUTATION (no journal begin, no grant, no preflight, no writes) with an actionable HOST_SDK_INCOMPATIBLE error; the bad dir is GC'd", async () => {
+    const gcd: string[] = [];
+    const h = makeHarness({
+      readDeclaredCompat: async () => ({ sdkAbiRange: "^99" }),
+      gcStoreDir: async (dir) => {
+        gcd.push(dir);
+      },
+    });
+    let caught: unknown;
+    try {
+      await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WorkflowInstallPreflightError);
+    expect((caught as WorkflowInstallPreflightError).code).toBe("HOST_SDK_INCOMPATIBLE");
+    expect((caught as Error).message).toMatch(/install of @cinatra-ai\/wf-ext@1\.0\.0 refused[^]*sdkAbiRange "\^99"/);
+    expect((caught as Error).message).toContain("@cinatra-ai/sdk-extensions ABI");
+
+    // Refused BEFORE the journal begin, the grant request, the preflight, and
+    // every write — the refusal mutates NOTHING durable.
+    expect(h.events).toContain("materialize");
+    expect(h.events).not.toContain("begin");
+    expect(h.events.some((e) => e.startsWith("phase:"))).toBe(false);
+    expect(h.events).not.toContain("grant:request");
+    expect(h.events).not.toContain("preflight");
+    expect(h.events.some((e) => e.startsWith("write:"))).toBe(false);
+    expect(h.events).not.toContain("finalize");
+    expect(h.events).not.toContain("fail");
+    // The incompatible materialized dir was GC'd.
+    expect(gcd).toEqual(["/store/dir"]);
+  });
+
+  it("a refused UPDATE preserves the PREVIOUS install's finalized journal op (and reports op:update)", async () => {
+    const h = makeHarness({
+      readDeclaredCompat: async () => ({ sdkAbiRange: "^99" }),
+    });
+    // Seed a PRIOR finalized op for this (package, org) at a DIFFERENT version —
+    // the update target (2.0.0) must not destroy it on refusal.
+    const priorOpId = `${TRUSTED_PKG}@1.0.0:wf:${actor.orgId}`;
+    h.journal.set(`${TRUSTED_PKG}::${actor.orgId}`, { installOpId: priorOpId, phase: "finalized" });
+
+    let caught: unknown;
+    try {
+      await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "2.0.0", actor }, h.deps);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(WorkflowInstallPreflightError);
+    expect((caught as Error).message).toContain("update of @cinatra-ai/wf-ext@2.0.0 refused");
+
+    // The prior finalized op is untouched — the previous install stays
+    // boot-anchorable (begin never ran, so the single-row journal was never reset).
+    expect(h.journal.get(`${TRUSTED_PKG}::${actor.orgId}`)).toEqual({
+      installOpId: priorOpId,
+      phase: "finalized",
+    });
+    expect(h.events).not.toContain("begin");
+  });
+
+  it("PASSES a compatible / unpinned range (install proceeds to finalize)", async () => {
+    for (const range of ["*", null] as const) {
+      const h = makeHarness({ readDeclaredCompat: async () => ({ sdkAbiRange: range }) });
+      const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+      expect(res.status).toBe("installed");
+      expect(h.events).toContain("finalize");
+    }
+  });
+
+  it("no readDeclaredCompat wired (legacy/unit deps) → no install-time gate", async () => {
+    const h = makeHarness();
+    const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    expect(res.status).toBe("installed");
+  });
+});

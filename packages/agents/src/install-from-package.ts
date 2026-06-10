@@ -137,6 +137,31 @@ async function _installAgentFromPackageImpl(
       throw new Error(`Unsupported manifest version: ${manifest.cinatra.manifestVersion}`);
     }
 
+    // REQUIRED-PIN GATE (the host → extension half of the compatibility
+    // contract) on the agent-package path: the registry-package server actions
+    // and the dependency-tree installer dispatch HERE directly (not through the
+    // extension-registry installer that gates the other kinds), so the pin must
+    // be enforced at this single per-package writer too. `extracted.packageVersion`
+    // is the CONCRETE version from the verified package's own package.json on
+    // every route (direct install, update, transitive dependency node). Runs
+    // with the other manifest validations, BEFORE the disk materialize and any
+    // agent_templates/skill write — a refusal mutates nothing. Dynamic import:
+    // @cinatra-ai/agents → @cinatra-ai/extensions is a static cycle.
+    {
+      const { checkRequiredExtensionVersionPin } = await import(
+        "@cinatra-ai/extensions/required-in-prod"
+      );
+      const pin = checkRequiredExtensionVersionPin({
+        packageName: extracted.packageName,
+        version: extracted.packageVersion,
+        // Accurate op label for the refusal copy: an existing template row
+        // means this is the upsert/update route. Read-only; the upsert branch
+        // below re-reads its own snapshot after materialize as before.
+        op: (await readAgentTemplateByPackageName(extracted.packageName)) ? "update" : "install",
+      });
+      if (!pin.ok) throw new Error(pin.reason);
+    }
+
     const rawDeps = (manifest.cinatra as { agentDependencies?: Record<string, string> })
       .agentDependencies;
     const agentDependencies: Record<string, string> = rawDeps ?? {};

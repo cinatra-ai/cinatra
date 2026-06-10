@@ -918,3 +918,105 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
     expect(restoreRan, "the pipeline ran the durable restore as a last resort").toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// HOST-COMPAT GATE — the extension → host/SDK half of the compatibility
+// contract: the materialized manifest's `cinatra.sdkAbiRange` must admit this
+// host's frozen SDK ABI BEFORE anything durable mutates, on BOTH the fresh
+// install and the update path.
+// ---------------------------------------------------------------------------
+describe("installExtensionFromRegistry — HOST-COMPAT GATE (cinatra.sdkAbiRange)", () => {
+  const HOST_INCOMPATIBLE_RANGE = "^99"; // no host ABI satisfies this
+  const HOST_COMPATIBLE_RANGE = "*";
+
+  function compatDeps(
+    sdkAbiRange: string | null,
+    overrides: Partial<InstallPipelineDeps> = {},
+  ) {
+    const calls = { begin: 0, requested: 0, approved: 0, provenance: 0, gc: [] as string[] };
+    const deps: InstallPipelineDeps = {
+      resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
+      materialize: async () => ({ storeDir: "/store/foo/new-digest", digest: "new-digest", integrity: "sha512-abc", contentHash: "ch" }),
+      readRequestedPorts: async () => [],
+      readDeclaredCompat: async () => ({ sdkAbiRange }),
+      recordProvenance: async () => { calls.provenance++; },
+      recordRequestedGrant: async () => { calls.requested++; },
+      approveGrant: async () => { calls.approved++; },
+      beginInstallOp: async () => { calls.begin++; },
+      advanceInstallOpPhase: async () => {},
+      gcStoreDir: async (dir) => { calls.gc.push(dir); },
+      ...overrides,
+    };
+    return { deps, calls };
+  }
+
+  it("REFUSES a FRESH install whose declared range excludes the host ABI — pre-mutation, actionable, GC'd", async () => {
+    const { deps, calls } = compatDeps(HOST_INCOMPATIBLE_RANGE);
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/install of @cinatra-ai\/foo@1\.0\.0 refused[^]*sdkAbiRange "\^99"[^]*sdk-extensions ABI/);
+    // Fully inert: NO journal begin, NO grant request/approve, NO provenance.
+    expect(calls).toMatchObject({ begin: 0, requested: 0, approved: 0, provenance: 0 });
+    // The failed materialized dir was GC'd (nothing references it).
+    expect(calls.gc).toEqual(["/store/foo/new-digest"]);
+  });
+
+  it("REFUSES an UPDATE the same way and leaves the previous install durably intact (no journal/grant/provenance writes)", async () => {
+    const { deps, calls } = compatDeps(HOST_INCOMPATIBLE_RANGE, {
+      // A prior FINALIZED install at a DIFFERENT digest exists → this is an update.
+      readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "old-digest" }),
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/update of @cinatra-ai\/foo@2\.0\.0 refused/);
+    expect(calls).toMatchObject({ begin: 0, requested: 0, approved: 0, provenance: 0 });
+    // The NEW digest's dir was GC'd; the old digest is untouched by the gate.
+    expect(calls.gc).toEqual(["/store/foo/new-digest"]);
+  });
+
+  it("SAME-DIGEST guard: a refused re-install of the LIVE digest does NOT GC the live store dir", async () => {
+    const { deps, calls } = compatDeps(HOST_INCOMPATIBLE_RANGE, {
+      // The prior finalized op IS the just-materialized digest (same-version
+      // re-install) — GC'ing would destroy the working install's store dir.
+      readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "new-digest" }),
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/refused/);
+    expect(calls.gc).toEqual([]);
+  });
+
+  it("binds the RESOLVED version (not a dist-tag) into the refusal message", async () => {
+    const { deps } = compatDeps(HOST_INCOMPATIBLE_RANGE, {
+      resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY, resolvedVersion: "3.1.4" }),
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "latest", orgId: null }, deps),
+    ).rejects.toThrow(/@cinatra-ai\/foo@3\.1\.4 refused/);
+  });
+
+  it("PASSES a compatible / unpinned range (install proceeds to finalize)", async () => {
+    for (const range of [HOST_COMPATIBLE_RANGE, null]) {
+      const { deps, calls } = compatDeps(range);
+      const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
+      expect(r.installed).toBe(true);
+      expect(calls.provenance).toBe(1);
+      expect(calls.gc).toEqual([]);
+    }
+  });
+
+  it("FAILS CLOSED on a malformed declared range", async () => {
+    const { deps } = compatDeps("not-a-range");
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/refused/);
+  });
+
+  it("no readDeclaredCompat wired (legacy/unit deps) → no install-time gate (loaders' activation gate remains)", async () => {
+    const { deps, calls } = compatDeps(HOST_INCOMPATIBLE_RANGE);
+    delete (deps as { readDeclaredCompat?: unknown }).readDeclaredCompat;
+    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
+    expect(r.installed).toBe(true);
+    expect(calls.provenance).toBe(1);
+  });
+});

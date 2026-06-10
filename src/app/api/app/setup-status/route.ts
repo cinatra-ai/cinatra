@@ -1,32 +1,47 @@
 import { NextResponse } from "next/server";
-import { getApolloAPIStatus } from "@cinatra-ai/apollo-connector";
 import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
-import { isOpenAIConnectionReady } from "@cinatra-ai/openai-connector";
 import { getLinkedInAPIStatus } from "@/lib/linkedin-api";
-import { readOpenAIConnection } from "@/lib/openai-connection-store";
+import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connection-store";
 import { getWordPressAPIStatus } from "@/lib/wordpress-api";
 import { getYouTubeAPIStatus } from "@/lib/youtube-api";
 import { isSetupWizardComplete } from "@/lib/setup-wizard";
+// Connector status reads resolve through the generated extension manifest —
+// this route names no connector package. The structural types below are the
+// export shapes it consumes; a connector absent from the image reports
+// not_connected/not ready instead of breaking the route.
+import { loadConnectorModule } from "@/lib/connector-modules.server";
+
+type ApolloConnectorModule = {
+  getApolloAPIStatus: () => { status: string };
+};
+
+type OpenAIConnectorModule = {
+  isOpenAIConnectionReady: (connection?: OpenAIConnection) => boolean;
+};
 
 export async function GET() {
   const [
     googleStatus,
-    apolloStatus,
+    apolloModule,
+    openAIModule,
     youtubeStatus,
     wordpressStatus,
     linkedinStatus,
     wizardComplete,
   ] = await Promise.all([
     getGoogleOAuthStatus(),
-    Promise.resolve(getApolloAPIStatus()),
+    loadConnectorModule<ApolloConnectorModule>("apollo-connector"),
+    loadConnectorModule<OpenAIConnectorModule>("openai-connector"),
     Promise.resolve(getYouTubeAPIStatus()),
     Promise.resolve(getWordPressAPIStatus()),
     getLinkedInAPIStatus(),
     isSetupWizardComplete(),
   ]);
+  const apolloStatus = apolloModule?.getApolloAPIStatus() ?? { status: "not_connected" };
 
   const openAIConnection = readOpenAIConnection();
-  const openAIReady = isOpenAIConnectionReady(openAIConnection ?? undefined);
+  const openAIReady =
+    openAIModule?.isOpenAIConnectionReady(openAIConnection ?? undefined) ?? false;
   // allApisReady does not include gemini; statuses payload omits the gemini key.
   const allApisReady =
     openAIReady &&
