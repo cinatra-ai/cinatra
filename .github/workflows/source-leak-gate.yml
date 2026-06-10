@@ -14,4 +14,8 @@ jobs:
     with:
       profile: ts-monorepo
       ratchet_mode: line
+      # Exempts the repo-local actions-pinned-gate engine source + test by
+      # basename: they necessarily contain the version-comment markers they
+      # enforce (same exemption cinatra-ai/ci applies to its own copy).
+      config: .github/source-leak-gate.config.json
       ref: 4c903fe9ca71ad47752a2bc92b72893e5f7c9814
