@@ -5,8 +5,14 @@ export type PluginType = "agent" | "skill";
 
 export type PluginTypeConfig = {
   type: PluginType;
-  /** Scope prefix for dependency-confusion mitigation. E.g. "@cinatra/" */
-  scopePrefix: string;
+  /**
+   * Allowed scope prefixes for dependency-confusion mitigation, e.g.
+   * ["@acme/", "@cinatra-ai/"]. Every node in the resolved tree (root AND
+   * transitive deps) must be under one of these prefixes. Keyed on the ROOT
+   * package's own vendor scope + the first-party base scope — never on the
+   * installing instance's namespace (see dependencyScopePrefixesFor).
+   */
+  scopePrefixes: readonly string[];
   /** Packument key holding the dependency map. E.g. "agentDependencies" */
   packumentDepKey: string;
 };

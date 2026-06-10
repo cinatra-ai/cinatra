@@ -5,6 +5,15 @@
 
 export { resolveDependencyTree } from "./dep-resolver/resolver";
 
+// Vendor-scope helpers for the install-time dependency-confusion gate:
+// the allowlist is keyed on the ROOT package's own vendor scope + the
+// first-party base scope, never on the installing instance's namespace.
+export {
+  FIRST_PARTY_PACKAGE_SCOPE,
+  vendorScopeOfPackage,
+  dependencyScopePrefixesFor,
+} from "./scope";
+
 export {
   PluginDependencyCycleError,
   PluginDependencyConflictError,

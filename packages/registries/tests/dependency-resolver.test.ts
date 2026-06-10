@@ -17,13 +17,13 @@ import {
 // Tests that exercise the @cinatra/ scope pass their own typeConfig.
 const TYPE_CONFIG_CINATRA: PluginTypeConfig = {
   type: "agent",
-  scopePrefix: "@cinatra/",
+  scopePrefixes: ["@cinatra/"],
   packumentDepKey: "agentDependencies",
 };
 
 const TYPE_CONFIG_AGENTS: PluginTypeConfig = {
   type: "agent",
-  scopePrefix: "@cinatra/",
+  scopePrefixes: ["@cinatra/"],
   packumentDepKey: "agentDependencies",
 };
 
@@ -237,6 +237,116 @@ describe("resolveDependencyTree", () => {
       }),
     ).rejects.toThrow(/pre-release/i);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-prefix scope allowlist — regression coverage for issue #103.
+// The allowlist is keyed on the root package's own vendor scope + the
+// first-party base scope, so a vendor root may pull first-party deps and a
+// first-party root resolves on ANY instance regardless of its namespace.
+// ---------------------------------------------------------------------------
+
+describe("scope-prefix allowlist (multi-prefix)", () => {
+  const VENDOR_PLUS_FIRST_PARTY: PluginTypeConfig = {
+    type: "agent",
+    scopePrefixes: ["@acme/", "@cinatra-ai/"],
+    packumentDepKey: "agentDependencies",
+  };
+
+  it("resolves a vendor root with first-party and own-scope deps", async () => {
+    const packs = makePackuments([
+      {
+        name: "@acme/root",
+        version: "1.0.0",
+        dependencies: { "@cinatra-ai/base": "^1.0.0", "@acme/util": "^1.0.0" },
+      },
+      { name: "@cinatra-ai/base", version: "1.0.0" },
+      { name: "@acme/util", version: "1.0.0" },
+    ]);
+    const tree = await resolveDependencyTree({
+      rootPackageName: "@acme/root",
+      rootRange: "^1.0.0",
+      fetchPackument: makeFetch(packs),
+      typeConfig: VENDOR_PLUS_FIRST_PARTY,
+    });
+    expect(tree.all.size).toBe(3);
+    expect(tree.all.get("@cinatra-ai/base")?.resolvedVersion).toBe("1.0.0");
+  });
+
+  it("rejects a dep under a third vendor scope with PluginDependencyScopeError listing the allowlist", async () => {
+    const packs = makePackuments([
+      { name: "@acme/root", version: "1.0.0", dependencies: { "@evil/x": "^1.0.0" } },
+      { name: "@evil/x", version: "1.0.0" },
+    ]);
+    await expect(
+      resolveDependencyTree({
+        rootPackageName: "@acme/root",
+        rootRange: "^1.0.0",
+        fetchPackument: makeFetch(packs),
+        typeConfig: VENDOR_PLUS_FIRST_PARTY,
+      }),
+    ).rejects.toThrow(
+      "Only @acme/*, @cinatra-ai/* packages may appear in dependencies; received: @evil/x",
+    );
+  });
+
+  it("rejects an unscoped root even with a multi-prefix allowlist", async () => {
+    const packs = makePackuments([{ name: "lodash", version: "4.17.0" }]);
+    await expect(
+      resolveDependencyTree({
+        rootPackageName: "lodash",
+        rootRange: "^4.0.0",
+        fetchPackument: makeFetch(packs),
+        typeConfig: VENDOR_PLUS_FIRST_PARTY,
+      }),
+    ).rejects.toBeInstanceOf(PluginDependencyScopeError);
+  });
+
+  it("does not let a prefix-shaped scope admit a lookalike scope (@acme/ vs @acme-evil/)", async () => {
+    const packs = makePackuments([
+      { name: "@acme/root", version: "1.0.0", dependencies: { "@acme-evil/x": "^1.0.0" } },
+      { name: "@acme-evil/x", version: "1.0.0" },
+    ]);
+    await expect(
+      resolveDependencyTree({
+        rootPackageName: "@acme/root",
+        rootRange: "^1.0.0",
+        fetchPackument: makeFetch(packs),
+        typeConfig: VENDOR_PLUS_FIRST_PARTY,
+      }),
+    ).rejects.toBeInstanceOf(PluginDependencyScopeError);
+  });
+
+  it("fails closed on an empty scopePrefixes allowlist", async () => {
+    const packs = makePackuments([{ name: "@cinatra/a", version: "1.0.0" }]);
+    await expect(
+      resolveDependencyTree({
+        rootPackageName: "@cinatra/a",
+        rootRange: "^1.0.0",
+        fetchPackument: makeFetch(packs),
+        typeConfig: { type: "agent", scopePrefixes: [], packumentDepKey: "agentDependencies" },
+      }),
+    ).rejects.toThrow(/scopePrefixes must not be empty/);
+  });
+
+  it.each(["@cinatra-ai", "cinatra-ai/", "@/", "@a/b/"])(
+    "fails closed on a malformed scope prefix: %s",
+    async (badPrefix) => {
+      const packs = makePackuments([{ name: "@cinatra/a", version: "1.0.0" }]);
+      await expect(
+        resolveDependencyTree({
+          rootPackageName: "@cinatra/a",
+          rootRange: "^1.0.0",
+          fetchPackument: makeFetch(packs),
+          typeConfig: {
+            type: "agent",
+            scopePrefixes: [badPrefix],
+            packumentDepKey: "agentDependencies",
+          },
+        }),
+      ).rejects.toThrow(/Malformed scope prefix/);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

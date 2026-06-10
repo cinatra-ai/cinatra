@@ -9,7 +9,7 @@
 //   - resolver-bypass regression test asserts no caller bypasses these helpers
 
 import "server-only";
-import type { VerdaccioConfig } from "@cinatra-ai/registries";
+import { vendorScopeOfPackage, type VerdaccioConfig } from "@cinatra-ai/registries";
 import {
   loadDeploymentRegistryConfig,
   DeploymentRegistryConfigNotAvailableError,
@@ -156,16 +156,10 @@ async function resolveDevLocalVerdaccioInstallEnvironment(
   const host = new URL(url).host;
   // Route by the package's OWN scope (e.g. "@cinatra-ai") — the published
   // tarball lives under that scope in the local Verdaccio. VerdaccioConfig
-  // .packageScope already carries the leading "@".
-  // Guard the no-slash / empty-scope edge cases: a bare "@foo" (no "/") would
-  // make indexOf("/") === -1 and slice(0, -1) drop the last char ("@fo"); a
-  // leading "@/foo" would yield an empty "@" scope. Require at least one char
-  // between "@" and "/" (slashIndex > 1); otherwise fall back to the config scope.
-  const slashIndex = extensionId.indexOf("/");
-  const scope =
-    extensionId.startsWith("@") && slashIndex > 1
-      ? extensionId.slice(0, slashIndex)
-      : fallback.packageScope;
+  // .packageScope already carries the leading "@". The shared registries
+  // parser handles the no-slash / empty-scope edge cases ("@foo", "@/foo")
+  // by returning null; fall back to the config scope in that case.
+  const scope = vendorScopeOfPackage(extensionId) ?? fallback.packageScope;
   return {
     registryUrl: url,
     routingMode,

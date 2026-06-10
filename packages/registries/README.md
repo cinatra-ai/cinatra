@@ -7,6 +7,7 @@ Registry and package-installation toolkit for Cinatra extension packages (agents
 Dependency resolution
 - `resolveDependencyTree` — resolve a scoped dependency tree from packuments
 - `PluginDependencyCycleError`, `PluginDependencyConflictError`, `PluginDependencyResolutionError`, `PluginDependencyLimitError`, `PluginDependencyScopeError` — typed resolution failures
+- `FIRST_PARTY_PACKAGE_SCOPE`, `vendorScopeOfPackage`, `dependencyScopePrefixesFor` — vendor-scope helpers: the dependency-scope allowlist is keyed on the root package's own scope plus the first-party scope, never on the installing instance's namespace
 
 Install
 - `installResolvedTree` — run an install side-effect per resolved node
@@ -43,9 +44,15 @@ Types
 import { installPackageWithDependencies } from "@cinatra-ai/registries";
 
 const { tree, installedCount } = await installPackageWithDependencies({
-  packageName: "@cinatra/example-agent",
+  packageName: "@acme/example-agent",
   packageRange: "^1.0.0",
-  typeConfig: { type: "agent", scopePrefix: "@cinatra/", packumentDepKey: "agentDependencies" },
+  typeConfig: {
+    type: "agent",
+    // Root's own vendor scope + the first-party base scope — see
+    // dependencyScopePrefixesFor(packageName).
+    scopePrefixes: ["@acme/", "@cinatra-ai/"],
+    packumentDepKey: "agentDependencies",
+  },
   config,
   install: async (node) => materialize(node),
 });

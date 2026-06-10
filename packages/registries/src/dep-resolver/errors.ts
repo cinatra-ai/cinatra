@@ -39,10 +39,15 @@ export class PluginDependencyLimitError extends Error {
 }
 
 export class PluginDependencyScopeError extends Error {
-  constructor(public packageName: string, scopePrefix?: string) {
+  public allowedScopePrefixes: readonly string[];
+
+  constructor(public packageName: string, scopePrefixes?: readonly string[]) {
+    const allowed =
+      scopePrefixes && scopePrefixes.length > 0 ? scopePrefixes : ["@cinatra-ai/"];
     super(
-      `Only ${scopePrefix ?? "@cinatra/"}* packages may appear in dependencies; received: ${packageName}`,
+      `Only ${allowed.map((prefix) => `${prefix}*`).join(", ")} packages may appear in dependencies; received: ${packageName}`,
     );
     this.name = "PluginDependencyScopeError";
+    this.allowedScopePrefixes = allowed;
   }
 }
