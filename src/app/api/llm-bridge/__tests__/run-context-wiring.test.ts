@@ -59,6 +59,8 @@ vi.mock("@cinatra-ai/llm", () => ({
     deterministic: false,
   })),
   createLocalSkillShellTool: vi.fn(() => null),
+  // Real predicate shape: only base gpt-5 / gpt-5-mini lack hosted shell.
+  openAiModelSupportsShell: (modelId: string) => modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   // The bridge route imports these for cinatra_llm dispatch. These tests do not
   // exercise the cinatra_llm path; default to "every provider available" so the
   // dispatch helper's adapter-availability probe doesn't 503 spuriously when a

@@ -113,6 +113,8 @@ vi.mock("@cinatra-ai/llm", () => ({
   resolveConfiguredLlmRuntime: resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentials: getLlmMcpCredentialsMock,
   createLocalSkillShellTool: vi.fn(() => null),
+  // Real predicate shape: only base gpt-5 / gpt-5-mini lack hosted shell.
+  openAiModelSupportsShell: (modelId: string) => modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   PreferredProviderUnavailableError: class PreferredProviderUnavailableError extends Error {
     requestedProvider: string;
     reason: string;
