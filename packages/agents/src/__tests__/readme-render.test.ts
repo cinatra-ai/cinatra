@@ -11,6 +11,9 @@
 //   - Unsafe image schemes drop the <img> and surface a placeholder
 //   - Safe links gain rel="noopener noreferrer nofollow" + target="_blank"
 //   - The `cinatra:` install deep-link scheme is allowed
+//   - `demoteHeadings` demotes every heading one level (h1→h2 … h5→h6, h6
+//     capped at h6) without weakening sanitization; default keeps author
+//     levels (the artifact markdown preview relies on that)
 
 import { describe, expect, it } from "vitest";
 import { renderReadmeMarkdown } from "../readme-render";
@@ -170,6 +173,67 @@ describe("renderReadmeMarkdown — URL strictness", () => {
     const html = renderReadmeMarkdown("![rel](/assets/img.png)");
     expect(html).not.toContain('src="/assets/img.png"');
     expect(html).toContain("[image]");
+  });
+});
+
+describe("renderReadmeMarkdown — heading demotion (demoteHeadings)", () => {
+  const demote = { demoteHeadings: true } as const;
+
+  it("demotes h1 to h2 so a README title never collides with the page <h1>", () => {
+    const html = renderReadmeMarkdown("# Title", demote);
+    expect(html).toContain("<h2>Title</h2>");
+    expect(html).not.toContain("<h1");
+  });
+
+  it("demotes every level by exactly one (h1→h2 … h5→h6)", () => {
+    const html = renderReadmeMarkdown(
+      "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five",
+      demote,
+    );
+    expect(html).toContain("<h2>One</h2>");
+    expect(html).toContain("<h3>Two</h3>");
+    expect(html).toContain("<h4>Three</h4>");
+    expect(html).toContain("<h5>Four</h5>");
+    expect(html).toContain("<h6>Five</h6>");
+    expect(html).not.toContain("<h1");
+  });
+
+  it("caps demotion at h6 (h6 stays h6)", () => {
+    const html = renderReadmeMarkdown("###### Deep", demote);
+    expect(html).toContain("<h6>Deep</h6>");
+    expect(html).not.toContain("<h7");
+  });
+
+  it("preserves inline markdown inside demoted headings", () => {
+    const html = renderReadmeMarkdown("# Hello **world** `code`", demote);
+    expect(html).toContain("<h2>");
+    expect(html).toContain("<strong>world</strong>");
+    expect(html).toContain("<code>code</code>");
+  });
+
+  it("keeps stripping raw HTML inside demoted heading text (sanitization not weakened)", () => {
+    const html = renderReadmeMarkdown("# Title <script>alert(1)</script>", demote);
+    expect(html).toContain("<h2>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("</script>");
+  });
+
+  it("keeps dropping unsafe link hrefs inside demoted heading text", () => {
+    const html = renderReadmeMarkdown("## [click](javascript:alert(1))", demote);
+    expect(html).toContain("<h3>");
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain("click");
+  });
+
+  it("does not demote by default (artifact markdown preview keeps author levels)", () => {
+    const html = renderReadmeMarkdown("# Title\n\n## Subhead");
+    expect(html).toContain("<h1>Title</h1>");
+    expect(html).toContain("<h2>Subhead</h2>");
+  });
+
+  it("still returns empty string for empty input when demotion is requested", () => {
+    expect(renderReadmeMarkdown("", demote)).toBe("");
+    expect(renderReadmeMarkdown(null, demote)).toBe("");
   });
 });
 
