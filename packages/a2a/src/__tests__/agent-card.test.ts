@@ -29,7 +29,6 @@ function makeTemplate(overrides: Partial<AgentTemplateRecord> & { hitlScreens?: 
     createdAt: new Date("2026-01-01T00:00:00Z"),
     updatedAt: new Date("2026-01-01T00:00:00Z"),
     hitlScreens: null,
-    durable: false,
     hitlRequired: false,
     executionProvider: "default",
     lgGraphCode: null,

@@ -174,7 +174,6 @@ export {
 // Auth-neutral approval helper for external /api/a2a/resume callers.
 export { approveReviewTaskInternal } from "./review-task-actions";
 export {
-  exportAgentTemplate,
   importAgentTemplate,
   createLocalAgentTemplateVersion,
   type LocalAgentTemplateSeed,
@@ -361,6 +360,9 @@ export {
   type TaskSnapshot,
   type HitlContext as A2ATaskHitlContext,
 } from "./a2a-actions";
+// Shared pending_approval HITL-context derivation — used by the REST run
+// polling route AND the A2A snapshot path above (single source of truth).
+export { deriveRunHitlContext, type HitlContext } from "./hitl-context";
 // Run name lives on agent_runs.title; field validation happens at the
 // dispatcher's setup loop using the inputSchema directly.
 

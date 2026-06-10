@@ -1,6 +1,6 @@
 /**
- * Unit tests for AgentTemplateRecord deserialization of the durable,
- * hitl_required, and execution_provider flag columns.
+ * Unit tests for AgentTemplateRecord deserialization of the
+ * hitl_required and execution_provider flag columns.
  *
  * These tests are pure-logic (no DB); they synthesize row objects and exercise
  * the deserializeTemplate normalization contract directly.
@@ -35,7 +35,6 @@ function makeRow(overrides: Record<string, unknown> = {}): any {
     hitlScreens: null,
     agentDependencies: null,
     ioSpec: null,
-    durable: null,
     hitlRequired: null,
     executionProvider: null,
     createdAt: new Date("2026-01-01"),
@@ -47,16 +46,14 @@ function makeRow(overrides: Record<string, unknown> = {}): any {
 describe("deserializeTemplate — flag normalization", () => {
   it("null flag columns → runtime defaults", () => {
     const rec = deserializeTemplate(makeRow());
-    expect(rec.durable).toBe(false);
     expect(rec.hitlRequired).toBe(false);
     expect(rec.executionProvider).toBe("default");
   });
 
-  it("true/true/openai round-trip", () => {
+  it("true/openai round-trip", () => {
     const rec = deserializeTemplate(
-      makeRow({ durable: true, hitlRequired: true, executionProvider: "openai" }),
+      makeRow({ hitlRequired: true, executionProvider: "openai" }),
     );
-    expect(rec.durable).toBe(true);
     expect(rec.hitlRequired).toBe(true);
     expect(rec.executionProvider).toBe("openai");
   });

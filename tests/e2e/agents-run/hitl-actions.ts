@@ -8,7 +8,8 @@
  * conveyed via stepper indicator icons, not a stable grep target.
  *
  * Renderer identity is asserted indirectly (the runs API's
- * `hitlContext.xRenderer` field is null for WayFlow runs; see
+ * `hitlContext.xRenderer` is only best-effort for WayFlow runs — empty
+ * when no persisted AG-UI INTERRUPT is readable; see
  * `awaitPendingApproval` doc comment for the full picture):
  *  1. `expectedTitle` text-match on the panel before any UI action,
  *  2. renderer-specific advancement DOM in each `advance*` helper
@@ -30,7 +31,7 @@ type RunStatusResponse = {
   error: string | null;
   hitlContext: {
     xRenderer: string;
-    childRunId: string;
+    childRunId: string | null;
     reviewTaskId: string;
     inputSchema: Record<string, unknown>;
     currentValues: Record<string, unknown>;
@@ -105,19 +106,17 @@ export async function startAgentRun(page: Page, fixture: AgentFixture): Promise<
  * `status: "pending_approval"` — that's the API-side signal that the
  * orchestrator has paused at a HITL gate.
  *
- * The API's `hitlContext.xRenderer` field is null for WayFlow-driven
- * runs (the route only fills it for the no-a2aTaskId setup-loop
- * fallback; `deriveHitlContext()` for the A2A path currently returns
- * null). The renderer identity is
- * therefore asserted indirectly:
+ * The API's `hitlContext.xRenderer` is best-effort for WayFlow-driven
+ * runs: deriveRunHitlContext (shared by the REST route and the A2A
+ * snapshot path) surfaces it from the persisted AG-UI INTERRUPT event,
+ * but falls back to an empty string when no interrupt is readable
+ * (Redis miss/expiry). The renderer identity is therefore still
+ * asserted indirectly:
  *   1. `expectedTitle` text-match on the panel — exercised in
  *      `driveHitlScreen` before any UI action,
  *   2. renderer-specific selectors in `advance*` helpers (each
  *      `xRenderer` has bespoke DOM advancement that wouldn't succeed
  *      against a different renderer's surface).
- *
- * If/when the runs API is extended to surface the WayFlow xRenderer,
- * re-enable the API-level assertion here.
  */
 export async function awaitPendingApproval(
   request: APIRequestContext,

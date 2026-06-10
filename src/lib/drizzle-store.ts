@@ -1583,8 +1583,11 @@ END $$` },
     // Null for legacy runs (no backfill). True for new AG-UI-capable runs.
     // Used by AgenticRunPanel to route: SSE path (ag_ui_enabled=true) vs. legacy polling.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS ag_ui_enabled boolean` },
-    // durable: distributed tier flag (BullMQ); default false
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS durable boolean NOT NULL DEFAULT false` },
+    // durable (distributed-tier flag) was added here, never consulted by any
+    // routing/execution code, and dropped again — see migrations/0002. The
+    // DROP keeps existing deployments in lockstep with fresh bootstraps,
+    // which no longer create the column.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" DROP COLUMN IF EXISTS durable` },
     // hitl_required: HITL gate flag; default false
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS hitl_required boolean NOT NULL DEFAULT false` },
     // execution_provider: "openai"|"anthropic"|"gemini"|"default"; default "default"

@@ -1056,7 +1056,7 @@ async function runAgentBuilderExecutionJobInner(
   // resolveWayflowUrl, which only routes internal @<vendor>/<slug> agents
   // against WAYFLOW_BASE_URL).
   // Mirrors the external branch in a2a-actions.ts sendAgentBuilderMessage but
-  // operates on an already-created run row (queued by createAndTriggerRunWithParams
+  // operates on an already-created run row (queued by a run-actions.ts producer
   // or the BullMQ job handler). Awaits the SSE proxy so the BullMQ job stays
   // active until the stream ends and the DB status is set to completed/failed.
   // AG-UI / A2UI events flow through startExternalSseProxyFromStream → Redis.

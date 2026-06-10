@@ -1,8 +1,8 @@
-diff --git a/migrations/0002_narrow-usage-events-cost-usd.sql b/migrations/0002_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0003_narrow-usage-events-cost-usd.sql b/migrations/0003_narrow-usage-events-cost-usd.sql
 new file mode 100644
 index 0000000..6e5f1ca
 --- /dev/null
-+++ b/migrations/0002_narrow-usage-events-cost-usd.sql
++++ b/migrations/0003_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -14,14 +14,14 @@ diff --git a/migrations/manifest.json b/migrations/manifest.json
 index 87b87d2..4caa14f 100644
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -23,6 +23,13 @@
-       "summary": "Add notifications.dedupe_key + partial unique index (user_id, dedupe_key) for the general per-user notification dedupe (issue #50). Required by the unique-index-on-existing-table rule; cannot collide in practice — the column is new, so every pre-existing row is outside the partial-index predicate.",
+@@ -30,6 +30,13 @@
+       "summary": "Drop the dead agent_templates.durable column (issue #84). No routing/execution code ever read it and every writer only persisted the default false, so no user-land data is lost; required by the drop-column-on-existing-table rule.",
        "destructive": true,
-       "tables": ["notifications"]
+       "tables": ["agent_templates"]
 +    },
 +    {
-+      "seq": "0002",
-+      "file": "0002_narrow-usage-events-cost-usd.sql",
++      "seq": "0003",
++      "file": "0003_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

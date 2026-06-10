@@ -550,10 +550,10 @@ async function installAgentFromPackage({ packageName, packageVersion, registryUr
             output_schema, approval_policy, type, task_spec,
             package_name, package_version, agent_dependencies,
             lg_graph_code, lg_graph_id, execution_provider,
-            durable, hitl_required, status, created_at, updated_at
+            hitl_required, status, created_at, updated_at
           ) VALUES (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
-            false, false, 'draft', NOW(), NOW()
+            false, 'draft', NOW(), NOW()
           )`,
           [
             templateId,

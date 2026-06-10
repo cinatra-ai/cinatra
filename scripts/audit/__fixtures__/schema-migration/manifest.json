@@ -25,7 +25,7 @@
       "file": "destructive-retype-with-artifact.diff",
       "expect": "pass",
       "category": "destructive, has artifact",
-      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships migrations/0002_narrow-usage-events-cost-usd.sql plus its manifest entry in the same diff (refreshed against the shipped 0001 notifications dedupe-key ledger entry)."
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships migrations/0003_narrow-usage-events-cost-usd.sql plus its manifest entry in the same diff (refreshed against the shipped 0002 agent_templates.durable drop ledger entry)."
     },
     {
       "file": "additive-nullable-column-no-artifact.diff",

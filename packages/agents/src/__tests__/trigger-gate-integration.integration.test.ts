@@ -153,7 +153,6 @@ function makeTemplate(overrides: Partial<Record<string, unknown>> = {}): Record<
     hitlScreens: null,
     agentDependencies: {},
     ioSpec: null,
-    durable: false,
     hitlRequired: false,
     executionProvider: "wayflow",
     lgGraphCode: null,

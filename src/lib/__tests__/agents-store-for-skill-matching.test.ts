@@ -67,7 +67,6 @@ const baseTemplate = {
   hitlScreens: null,
   agentDependencies: {},
   ioSpec: null,
-  durable: false,
   hitlRequired: false,
   executionProvider: "openai" as const,
   lgGraphCode: null,

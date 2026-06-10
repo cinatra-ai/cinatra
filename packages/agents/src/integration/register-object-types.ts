@@ -29,7 +29,6 @@ export function registerAgentBuilderObjectTypes() {
       type: z.enum(["leaf", "proxy", "orchestrator", "parallel", "supervisor", "iterative", "flow", "node"]),
       // Execution-provider routing values include the WayFlow provider.
       executionProvider: z.enum(["openai", "anthropic", "gemini", "langgraph", "wayflow", "default"]),
-      durable: z.boolean(),
       hitlRequired: z.boolean(),
       // LangGraph Python graph module + identifier. Nullable for templates
       // that do not use the LangGraph execution provider.

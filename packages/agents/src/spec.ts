@@ -47,7 +47,6 @@ export type CinatraAgentSpec<
   tools: CinatraTool[];
   handoffs?: Array<CinatraHandoff<z.infer<TOutput>>>;
   provider?: CinatraAgentProvider;
-  durable?: boolean;       // true → distributed tier (BullMQ); default false
   hitlRequired?: boolean;  // true → distributed tier; default false
 };
 

@@ -29,7 +29,6 @@ describe("CinatraAgentSpec", () => {
       outputSchema,
       tools: [],
       provider: "openai",
-      durable: false,
       hitlRequired: false,
     };
 

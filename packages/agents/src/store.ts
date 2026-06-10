@@ -138,7 +138,6 @@ export type AgentTemplateRecord = {
   agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; optional ({} or absent when none)
   connectorDependencies?: Record<string, string>; // @cinatra-ai/<x>-connector dep ranges; optional
   ioSpec?: AgentIOSpec | null; // declared I/O contract; null when not yet set
-  durable: boolean;
   hitlRequired: boolean;
   executionProvider: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";
   lgGraphCode: string | null;                                         // Python StateGraph module; null for non-LangGraph templates
@@ -252,7 +251,6 @@ export type CreateAgentTemplateInput = {
   agentDependencies?: Record<string, string>;  // @cinatra/* dep ranges; omit or {} to write SQL NULL
   connectorDependencies?: Record<string, string>; // @cinatra-ai/<x>-connector dep ranges; omit or {} to write SQL NULL
   ioSpec?: AgentIOSpec | null; // pass null to clear; omit to leave unchanged
-  durable?: boolean;                                                    // defaults to false
   hitlRequired?: boolean;                                               // defaults to false
   executionProvider?: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";  // defaults to "wayflow"
   lgGraphCode?: string | null;                                        // Python StateGraph module; null for non-LangGraph templates
@@ -411,7 +409,6 @@ function serializeTemplate(input: CreateAgentTemplateInput) {
         ? JSON.stringify(input.connectorDependencies)
         : null,
     ioSpec: input.ioSpec ? JSON.stringify(input.ioSpec) : null,
-    durable: input.durable ?? false,
     hitlRequired: input.hitlRequired ?? false,
     executionProvider: input.executionProvider ?? "wayflow",
     lgGraphCode: input.lgGraphCode ?? null,
@@ -462,7 +459,6 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
       ? (JSON.parse(row.connectorDependencies) as Record<string, string>)
       : {},
     ioSpec: row.ioSpec ? (JSON.parse(row.ioSpec) as AgentIOSpec) : null,
-    durable: row.durable ?? false,        // null from pre-migration rows → false
     hitlRequired: row.hitlRequired ?? false, // null from pre-migration rows → false
     executionProvider: (row.executionProvider === "openai" ? "openai"
       : row.executionProvider === "anthropic" ? "anthropic"
@@ -772,10 +768,9 @@ async function _updateAgentTemplateImpl(
   // lgGraphCode / lgGraphId patchable. Use `null` to clear; omit to leave unchanged.
   if (patch.lgGraphCode !== undefined) updates.lgGraphCode = patch.lgGraphCode ?? null;
   if (patch.lgGraphId !== undefined) updates.lgGraphId = patch.lgGraphId ?? null;
-  // These three fields were originally create-only.
+  // These two fields were originally create-only.
   // Without these branches, updateAgentTemplate silently dropped patches, so
   // administrators could not flip an existing template to execution_provider='langgraph'.
-  if (patch.durable !== undefined) updates.durable = patch.durable ?? false;
   if (patch.hitlRequired !== undefined) updates.hitlRequired = patch.hitlRequired ?? false;
   if (patch.executionProvider !== undefined) updates.executionProvider = patch.executionProvider ?? "default";
   if (patch.hitlScreens !== undefined)
@@ -1184,7 +1179,6 @@ export async function upsertExternalAgentTemplate(input: {
     connectorSlug: input.connectorSlug,
     remoteAgentId: input.remoteAgentId,
     executionProvider: "default",
-    durable: false,
     hitlRequired: false,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -1517,8 +1511,8 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 // and <non-terminal>→failed edges so user-cancel works from any live state).
 const LEGAL_TRANSITIONS = new Set<`${AgentRunStatus}->${AgentRunStatus}`>([
   // Setup / dispatch
-  "pending_input->queued",        // run-actions.ts: triggerAgentRun, createAndTriggerRun(x2), scheduleAgentRun
-  "queued->pending_input",        // run-actions.ts: compensation reverts (x4)
+  "pending_input->queued",        // run-actions.ts: triggerAgentRun, createAndTriggerRunCore, startDevChildPreviewRun
+  "queued->pending_input",        // run-actions.ts: compensation reverts (x2)
   "queued->pending_approval",     // execution.ts: setup-interrupt loop (per-field + grouped)
   "queued->running",              // execution.ts: dispatch CAS (langgraph + external branches)
   "pending_approval->running",    // langgraph-execution.ts:89 (resume CAS)
