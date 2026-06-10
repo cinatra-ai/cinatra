@@ -28,6 +28,7 @@ import {
 } from "./store";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import { publishAgUiEvent } from "@cinatra-ai/agent-ui-protocol/server";
+import { deriveRunHitlContext, type HitlContext } from "./hitl-context";
 
 // ---------------------------------------------------------------------------
 // Nango-to-external-A2A credential adapter.
@@ -53,15 +54,7 @@ function mapNangoCredentialsToExternalA2A(
 // Public types
 // ---------------------------------------------------------------------------
 
-export type HitlContext = {
-  xRenderer: string;
-  // Setup-field interrupts have no child run; only child-HITL cascades populate
-  // a non-null childRunId.
-  childRunId: string | null;
-  reviewTaskId: string;
-  inputSchema: Record<string, unknown>;
-  currentValues: Record<string, unknown>;
-};
+export type { HitlContext } from "./hitl-context";
 
 export type TaskSnapshot = {
   taskId: string;
@@ -121,21 +114,13 @@ async function deriveA2AStateForTaskId(
   return "unknown";
 }
 
-async function deriveHitlContext(_runId: string): Promise<HitlContext | null> {
-  // ---------------------------------------------------------------------------
-  // No active HITL probe path reads interrupt payloads from a checkpointer.
-  // WayFlow HITL context derivation is handled separately.
-  // ---------------------------------------------------------------------------
-  return null;
-}
-
 async function buildSnapshot(run: AgentRunRecord): Promise<TaskSnapshot> {
+  // deriveRunHitlContext internally short-circuits (no Redis read) for runs
+  // that are not pending_approval.
   const [state, messages, hitlContext] = await Promise.all([
     deriveA2AStateForTaskId(run.a2aTaskId),
     readAgentRunMessages(run.id),
-    run.status === "pending_approval"
-      ? deriveHitlContext(run.id)
-      : Promise.resolve(null),
+    deriveRunHitlContext(run),
   ]);
   return {
     taskId: run.a2aTaskId ?? run.id,
