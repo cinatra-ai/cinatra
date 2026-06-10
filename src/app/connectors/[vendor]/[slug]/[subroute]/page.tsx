@@ -37,17 +37,14 @@ type DispatchPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const SUPPORTED_VENDOR = "cinatra-ai";
-
 export async function generateMetadata(props: {
   params: Promise<RouteParams>;
 }): Promise<Metadata> {
   const { vendor, slug } = await props.params;
-  if (vendor !== SUPPORTED_VENDOR) {
-    return { title: "Not found" };
-  }
+  // The vendor segment is validated against the connector's manifest-resolved
+  // identity (installed-extension scope), not a hardcoded vendor literal.
   const entry = getConnectorRegistryEntryBySlug(slug);
-  if (!entry) {
+  if (!entry || entry.vendor !== vendor) {
     return { title: "Not found" };
   }
   return { title: `${entry.displayName} | Connectors` };
@@ -59,11 +56,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     props.searchParams ?? Promise.resolve({}),
   ]);
 
-  if (vendor !== SUPPORTED_VENDOR) {
-    notFound();
-  }
+  // Resolve the connector by slug, then require the vendor segment to match
+  // its manifest-resolved identity (installed-extension scope) — no hardcoded
+  // vendor handling.
   const entry = getConnectorRegistryEntryBySlug(slug);
-  if (!entry) {
+  if (!entry || entry.vendor !== vendor) {
     notFound();
   }
   if (subroute !== entry.setupSubroute) {
