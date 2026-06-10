@@ -51,7 +51,10 @@ Permanently exempt are ONLY:
    runtime selection. Every entry must carry a written justification (the gate
    hard-fails on an unjustified entry), entries are added only with an owner
    ruling, stale entries hard-fail until removed, and allowlisted occurrences
-   are reported separately from counted ones. Currently EMPTY.
+   are reported separately from counted ones. IDs may contain ONLY the
+   boundary alphabet `[A-Za-z0-9_.:/@-]` (`DATA_CONTRACT_ID_ALPHABET_RE`) —
+   enforced as a structural defect — so the exact-ID masking can never
+   prefix-mask a longer ID past a non-alphabet character. Currently EMPTY.
 3. Test files (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `tests/`)
    and the `extensions/` tree itself (an extension naming itself is fine).
 
@@ -66,6 +69,14 @@ scanners' older comment-stripping (see next section): correcting them would
 also grow their baselines, so their correction lands with a later legitimate
 recompute, while the fixed instance-coupling scanner already counts every
 reference (imports included) across both `src/` and `packages/`.
+
+Known, documented residual lexer limitation: JSX TEXT is not modeled by
+`lib/strip-comments.mjs` (that needs a JSX-aware parser), so a named-extension
+reference appearing in JSX text AFTER a bare non-URL `//` on the same line
+would be under-counted. No such case exists in the tree (the recomputed
+baseline shows zero decreases vs the old scanner); the class is an explicit,
+non-silent deferral tracked on cinatra-ai/cinatra#26 and closes with a
+JSX-aware lexer in a later scanner epoch.
 
 ## Scanner correctness + the corrected baseline
 

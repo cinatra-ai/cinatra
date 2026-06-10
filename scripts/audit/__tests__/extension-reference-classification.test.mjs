@@ -8,6 +8,7 @@ import {
   allowlistDefects,
   staleAllowlistEntries,
   summarizeByClassification,
+  DATA_CONTRACT_ID_ALPHABET_RE,
 } from "../lib/extension-reference-classification.mjs";
 
 describe("extension-reference classification taxonomy", () => {
@@ -49,6 +50,23 @@ describe("extension-reference classification taxonomy", () => {
 
   it("the committed allowlist itself has no defects (every entry justified)", () => {
     expect(allowlistDefects(DATA_CONTRACT_ID_ALLOWLIST)).toEqual([]);
+  });
+
+  it("allowlistDefects rejects IDs containing characters outside the boundary alphabet (prefix-mask hardening)", () => {
+    // The ID alphabet must equal maskAllowlistedIds' boundary class
+    // [A-Za-z0-9_.:/@-]: an ID with a char outside it (e.g. `+`, `#`, `~`,
+    // `?`) could be prefix-masked past that char, hiding the longer ID's
+    // embedded package name. Such IDs are structural defects.
+    const j = "stable persisted contract key";
+    expect(allowlistDefects(new Map([["@scope/x:contract", j]]))).toEqual([]);
+    expect(allowlistDefects(new Map([["@scope/x:contract+v2", j]]))).toEqual(["@scope/x:contract+v2"]);
+    expect(allowlistDefects(new Map([["@scope/x:contract#frag", j]]))).toEqual(["@scope/x:contract#frag"]);
+    expect(allowlistDefects(new Map([["@scope/x:contract~1", j]]))).toEqual(["@scope/x:contract~1"]);
+    expect(allowlistDefects(new Map([["@scope/x?q", j]]))).toEqual(["@scope/x?q"]);
+    expect(allowlistDefects(new Map([["@scope/x contract", j]]))).toEqual(["@scope/x contract"]);
+    expect(allowlistDefects(new Map([["", j]]))).toEqual([""]);
+    // Sanity: the exported alphabet matches the masking boundary class.
+    expect(DATA_CONTRACT_ID_ALPHABET_RE.source).toBe("^[A-Za-z0-9_.:/@-]+$");
   });
 
   it("staleAllowlistEntries flags entries with zero scan hits (self-policing shrink)", () => {

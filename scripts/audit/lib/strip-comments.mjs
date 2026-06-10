@@ -12,9 +12,9 @@
 //      opened a bogus "block comment" that swallowed every real line — imports
 //      included — until the next `*/` anywhere in the file. This hid the whole
 //      static import cluster of `src/lib/register-transport-connectors.ts`
-//      (25 extension references) and the live setup-page loader map of
-//      `src/lib/connector-setup-pages.ts` (19 extension references) from the
-//      extension-coupling scanners.
+//      (12 gate-counted occurrences) and the live setup-page loader map of
+//      `src/lib/connector-setup-pages.ts` (18 gate-counted occurrences) from
+//      the extension-coupling scanners.
 //   2. A `//` inside a STRING literal (protocol-relative URL, `a//b` path)
 //      swallowed the rest of that line, including real references after it.
 //
@@ -27,20 +27,21 @@
 // comments are preserved so line structure (and any future line attribution)
 // survives.
 //
-// Known, accepted limitations (all fail toward OVER-counting or are
-// vanishingly rare — never a silent reference-hiding class like the old
-// regexes):
+// Known, accepted limitations:
 //   - regex-literal detection is heuristic (a `/` opens a regex only after an
 //     operator/keyword position); an ambiguous regex containing `//` or `/*`
-//     could still confuse the lexer;
+//     could still confuse the lexer (fails toward OVER-counting);
 //   - JSX TEXT is not modeled (that needs a real JSX parser). To keep the
 //     dominant case — URLs in JSX text / doc strings — intact, a `//` that
 //     immediately follows `:` is NOT treated as a comment opener (`https://x`
 //     survives; a real comment after a colon always has whitespace before
-//     `//`, so it still strips). A bare non-URL `//` inside JSX text would
-//     still be dropped to end-of-line; if that ever hides a reference it can
-//     only UNDER-count that one line, and no such case exists in the tree
-//     today (the recomputed baseline shows zero decreases).
+//     `//`, so it still strips). KNOWN RESIDUAL HIDING CLASS: a bare non-URL
+//     `//` inside JSX text still drops the rest of that line, so a
+//     named-extension reference appearing in JSX text AFTER a bare `//`
+//     would be UNDER-counted. No such case exists in the tree today (the
+//     recomputed baseline shows zero decreases vs the old scanner), and the
+//     class is deliberately deferred to a JSX-aware lexer — tracked on
+//     cinatra-ai/cinatra#26 as an explicit non-silent deferral.
 
 // Characters after which a `/` starts a REGEX literal (not division).
 const REGEX_PRECEDERS = new Set([

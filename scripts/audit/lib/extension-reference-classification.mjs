@@ -113,13 +113,32 @@ export function classifyFile(rel) {
 }
 
 /**
+ * The ONLY characters a data-contract ID may contain. This alphabet is
+ * deliberately identical to the boundary character class used by
+ * `maskAllowlistedIds` in core-extension-instance-coupling-ban.mjs
+ * (`[A-Za-z0-9_.:/@-]`): because every valid ID consists solely of boundary
+ * characters, any longer ID that shares an allowlisted prefix must continue
+ * with a boundary character — which the masking lookahead rejects — so
+ * prefix-masking is impossible BY CONSTRUCTION. An ID containing a character
+ * outside this alphabet (e.g. `#`, `+`, `~`, `?`) could be prefix-masked past
+ * that character and is therefore rejected as a structural defect.
+ */
+export const DATA_CONTRACT_ID_ALPHABET_RE = /^[A-Za-z0-9_.:/@-]+$/;
+
+/**
  * Structural defects in a data-contract-ID allowlist: every entry must carry a
- * non-empty written justification. Returns offending IDs (empty = OK).
+ * non-empty written justification AND consist solely of the documented ID
+ * alphabet (see DATA_CONTRACT_ID_ALPHABET_RE — required for boundary-exact
+ * masking). Returns offending IDs (empty = OK).
  */
 export function allowlistDefects(allowlist = DATA_CONTRACT_ID_ALLOWLIST) {
   const bad = [];
   for (const [id, justification] of allowlist) {
-    if (typeof justification !== "string" || justification.trim().length === 0) bad.push(id);
+    if (typeof justification !== "string" || justification.trim().length === 0) {
+      bad.push(id);
+      continue;
+    }
+    if (typeof id !== "string" || !DATA_CONTRACT_ID_ALPHABET_RE.test(id)) bad.push(id);
   }
   return bad.sort();
 }
