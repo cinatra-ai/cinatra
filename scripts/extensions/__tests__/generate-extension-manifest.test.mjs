@@ -484,6 +484,7 @@ describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
     const cases = [
       `export const m = { wizard: { steps: [ { widgetId: STEP_ONE } ] } };`,
       `export const m = { wizard: { steps: [ { widgetId: prefix + ".finder" } ] } };`,
+      `export const m = { wizard: { steps: [ { widgetId: "acme.finder" + suffix } ] } };`,
       "export const m = { wizard: { steps: [ { widgetId: `${p}.finder` } ] } };",
     ];
     for (const manifestSrc of cases) {
@@ -502,6 +503,10 @@ describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
     );
     const dynamic = `export const m = { detectors: [ { widgetId: { a: SOME_CONST } } ] };`;
     expect(() => assertManifestWidgetIdsCovered(dynamic, widgetsSrc, "rec src/widgets")).toThrow(
+      /non-literal widgetId record value/,
+    );
+    const prefixed = `export const m = { detectors: [ { widgetId: { a: "acme.finder" + suffix } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(prefixed, widgetsSrc, "rec src/widgets")).toThrow(
       /non-literal widgetId record value/,
     );
   });

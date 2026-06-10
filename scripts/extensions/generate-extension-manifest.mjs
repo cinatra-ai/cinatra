@@ -239,8 +239,11 @@ export function extractFactoryExport(source, re, context) {
 // Over-collection of `id:` literals from the widgets source (e.g. other
 // object literals) can only weaken the coverage check, never false-fail it.
 // ---------------------------------------------------------------------------
-// A plain string literal: '...' | "..." | `...` with no ${} interpolation.
-const STRING_LITERAL_RE = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)/;
+// A plain string literal: '...' | "..." | `...` with no ${} interpolation —
+// and NOTHING after it but the value terminator (`,` `}` `]` `)` `;` or end of
+// line), so a computed expression with a literal PREFIX ("x" + suffix) never
+// passes as a literal (it falls through to the non-literal rejection).
+const STRING_LITERAL_RE = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)(?=\s*(?:[,}\]);]|$|\r|\n))/;
 const WIDGETS_DEFINED_ID_RE = /\bid:\s*(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)/g;
 
 function literalValue(m) {
@@ -280,7 +283,10 @@ export function assertManifestWidgetIdsCovered(manifestSource, widgetsSource, co
         );
       }
       const record = rest.slice(0, end + 1);
-      const VALUE_RE = /:\s*(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`|([^,}\s][^,}]*))/g;
+      // Literal values must be IMMEDIATELY terminated (`,` or `}`) — a value
+      // with a literal prefix and a trailing expression ("x" + y) fails the
+      // lookahead and is captured by the catch-all → non-literal rejection.
+      const VALUE_RE = /:\s*(?:"([^"\\]*)"(?=\s*[,}])|'([^'\\]*)'(?=\s*[,}])|`([^`\\$]*)`(?=\s*[,}])|([^,}\s][^,}]*))/g;
       let v;
       while ((v = VALUE_RE.exec(record)) !== null) {
         if (v[4] !== undefined) {
