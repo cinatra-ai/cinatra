@@ -1,6 +1,6 @@
 // Chat widget runtime — the manifest-driven replacement for the module-level
 // WIDGET_REGISTRY / ALL_MANIFESTS constants that chat-page.tsx used to build
-// from STATIC named-extension imports (P709 / IOC-39..41). The widget set now
+// from STATIC named-extension imports (#34 / IOC-39..41). The widget set now
 // arrives as ChatPage props (resolved server-side from the generated extension
 // manifest + extension lifecycle by src/lib/chat-widget-catalog.server.ts),
 // and this pure factory derives every detection/wizard/refresh structure from
