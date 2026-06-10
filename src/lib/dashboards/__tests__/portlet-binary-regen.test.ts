@@ -347,6 +347,15 @@ describe("loadBinaryGenerationStatusPortlet — minimal post-scoped DTO", () => 
     expect(res).toEqual({ status: "idle", message: "", updatedAt: null, busyWithOtherPost: true });
   });
 
+  it("does NOT report busy for a STALE foreign running row (job gone — start self-heals)", async () => {
+    h.readProjectSpy.mockImplementation(async () =>
+      h.project({ status: "running", postId: "post-2", jobId: "job-9", message: "", updatedAt: "t3" }),
+    );
+    h.jobActiveSpy.mockImplementation(async () => false);
+    const res = await loadBinaryGenerationStatusPortlet({ objectId: "obj1", generationPrimitive: "blog_image_generate_start" });
+    expect(res).toEqual({ status: "idle", message: "", updatedAt: null, busyWithOtherPost: false });
+  });
+
   it("suppresses a foreign post's terminal state entirely", async () => {
     h.readProjectSpy.mockImplementation(async () =>
       h.project({ status: "failed", postId: "post-2", message: RAW_PIPELINE_MESSAGE, updatedAt: "t4" }),
