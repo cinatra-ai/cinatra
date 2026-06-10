@@ -5,233 +5,233 @@
     {
       "packageName": "@cinatra-ai/a2a-server-connector",
       "repo": "cinatra-ai/a2a-server-connector",
-      "resolvedSha": "84a055086ea707678301a3355844adaba961cd48",
+      "resolvedSha": "aea8c6538edc035674cf0a1fe19dd582f20986c5",
       "packageVersion": "0.1.0",
-      "treeSha256": "aa8f169e93f13e3e2a7b70ab0935d45818d625a01895835e449cbb10161c0015"
+      "treeSha256": "741dd0ca713e9269702349284cd8523151e71b143f03cdffb4e58b1bb0d5b912"
     },
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "e06f0c980f7b3efb5e6e94a75cfd23ad6a7ccd13",
+      "resolvedSha": "3e00861c43e75a2a3cdf7a7de51d48699c3891d2",
       "packageVersion": "0.1.0",
-      "treeSha256": "cd40ec20bce685ccaa5dbdbe9c1ac1e4a0e835825ceadbf485da8676f32e6cc9"
+      "treeSha256": "b20b9cb8d5c4b7fd8a286f282789d63923ac62c43c7ff353cc735d14c5e906a9"
     },
     {
       "packageName": "@cinatra-ai/apify-connector",
       "repo": "cinatra-ai/apify-connector",
-      "resolvedSha": "647a604cccc91cdffa4674e9a2a5dd5297c9e311",
+      "resolvedSha": "be61145d7538bdb810a9289cd455e153ca76bd60",
       "packageVersion": "0.1.0",
-      "treeSha256": "90e338321ec47e62a16d4c4727160cc014deeecce12b4be008c7f0fd1b4d7dd6"
+      "treeSha256": "02e80a5fe7e5b5f94111f524d36dd0f1d59ebe5972a0f2545216686e2b35f972"
     },
     {
       "packageName": "@cinatra-ai/apollo-connector",
       "repo": "cinatra-ai/apollo-connector",
-      "resolvedSha": "f9de2fd553e2a97daa976c250f1b5bdde90dccc5",
+      "resolvedSha": "f512f78156c955c1f58435915e91684fda935b0a",
       "packageVersion": "0.1.0",
-      "treeSha256": "33d513c891c7d66481ceca498d96adc8fd66b0a48be9523573343c797ab466a9"
+      "treeSha256": "68306089beb2a31ae6d32713b47bfa65228fd10657a0cacfd3676a48e52df415"
     },
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "da3ebcbd1fe9a4df55fa84643642c4ab5df98b31",
+      "resolvedSha": "c930293c1e42ddc34a253d993e08cb8537ac6a38",
       "packageVersion": "0.1.0",
-      "treeSha256": "0b5a9b4c4437b2e4aa28fe8b164ad6af15f123a6eedf4522b92229764974cc3e"
+      "treeSha256": "1a0ea44799ce76b6c7b176d6cc2edff1010bf51d8b43bef9e1e87d1d65358d23"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "602921fd9cc19595057f55a9d7b7b7ba3e0e640a",
+      "resolvedSha": "c137c59af97a684b0f6a35c4e0ed635544dff0d8",
       "packageVersion": "0.1.0",
-      "treeSha256": "06189ed5ead8250df857d18dbb2ce679a6a6bc0475f225bfa20e0c8bc9878d11"
+      "treeSha256": "402b71c4a1266a1c8875bfb3122202c2f23a44c043a29c7a0de269c30208a1f2"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
       "repo": "cinatra-ai/blog-connector",
-      "resolvedSha": "b4882ef2ed695a28841856588b85a91b51a6c093",
+      "resolvedSha": "3f1ae01e65f21a2a87b0248c6f1a6ef27fb74929",
       "packageVersion": "0.1.0",
-      "treeSha256": "5331d6fc456b620f0f9d52f9d89fe70dc90b05e2d3a69b5a656a40624ce8e54f"
+      "treeSha256": "4de401d8a81038e2441f77a326577d86bcec24adff4e3cbac9dfe9073cc5ad44"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
-      "resolvedSha": "421dc2945171783ca447d43de7e0a0f27887880d",
+      "resolvedSha": "d6fafd8f943d823cb30fac6c50736f52b57f03a5",
       "packageVersion": "0.1.0",
-      "treeSha256": "55622696ddaa8f20b9c401833f2557d0af9b454913216f321fd71872fe22a033"
+      "treeSha256": "93deab0521ba362698356e637d4811ad4163fccf08b8a59fb387ac88dd07e670"
     },
     {
       "packageName": "@cinatra-ai/crm-connector",
       "repo": "cinatra-ai/crm-connector",
-      "resolvedSha": "a7ee2fd59f4b805747f4a29a974eae5d2e72d826",
+      "resolvedSha": "ed7e53bad2091f741f156a11453ce6d50f29f0e8",
       "packageVersion": "0.1.0",
-      "treeSha256": "dee1a1825f9eaa62dfe2fe900506693bd623c57c08fd6aa7a77691ac64e09811"
+      "treeSha256": "adc73dcf474c5ef3e1eb5e510f93597c7f183f0b207ec80a8180f761cb89c748"
     },
     {
       "packageName": "@cinatra-ai/default-artifact",
       "repo": "cinatra-ai/default-artifact",
-      "resolvedSha": "211da934def0c2ab9c4930f49561a46f36a005e7",
+      "resolvedSha": "bdd1924071975dfddf96d5bd3ab2388475d1c802",
       "packageVersion": "0.1.0",
-      "treeSha256": "d3033678e1c97674390151284a90e2ba9a4eaca43709c67c7cb585532ddf375a"
+      "treeSha256": "9bc215324b81ea2e4f36241e276afb532403d5057c7cd126105057b15f5b0525"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
       "repo": "cinatra-ai/drupal-assistant-connector",
-      "resolvedSha": "b6aff52f5f36d18aec91db6536973c9a40bb4f2c",
+      "resolvedSha": "dc55f587f771f5d47c86af89880c62a6932334b9",
       "packageVersion": "0.1.0",
-      "treeSha256": "981c46f9d88465186a758438e6f1afb7cc1776c2803d48960538687e100dfda4"
+      "treeSha256": "2c8ae92ae3f1e55bf0586e37516261a5dba2909b308c22b3c78e46cee2854780"
     },
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "29366859d78ff974bdff98b9e14cfbf94f1e1c72",
+      "resolvedSha": "dd9d846bbef4e2b23ddbd49a60f15a5b4eaf2a2c",
       "packageVersion": "0.1.0",
-      "treeSha256": "892dedc041f51bf91197cee37e29b2a49a7da675f848e98693efdc9ee6c40851"
+      "treeSha256": "033f94fbf17e1c8f57f95441c4aa3d19a2016484b3c62f6fe981a66befb052e9"
     },
     {
       "packageName": "@cinatra-ai/email-connector",
       "repo": "cinatra-ai/email-connector",
-      "resolvedSha": "a2f8ab9a5a9c2300469e21b303e90bcb2e273e7b",
+      "resolvedSha": "b3ac71bd295b2f7df7b4a9133ea89fdde252df5e",
       "packageVersion": "0.1.0",
-      "treeSha256": "c8c45d35002270a4349d1d2f67319c4904f905101690fe27418fb75e5cf43c10"
+      "treeSha256": "580327eb4aba7583726fcde0cb27c54f37864ed3862ee00f06305bb59817bc1a"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "305b4efa40d312e8ae2ba86ce919072bcccbb6b2",
+      "resolvedSha": "3c130cbc1a932af3f2d70c3369301d830e2b136f",
       "packageVersion": "0.1.0",
-      "treeSha256": "02f2df17429e75409d3b0c647cb53d88c54dd35daf3d09e53ae4570f3123bb0d"
+      "treeSha256": "a347927e8e2100569f4a664d0eb6d51c9cf01d45a09f147023ec171692449b23"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
-      "resolvedSha": "479175ac998486ddf410ecab5d91e8676a26df5a",
+      "resolvedSha": "dccff0c562a0dbb4d00bd0008ac42659e3920b90",
       "packageVersion": "0.1.0",
-      "treeSha256": "117c93b1904a4ab1f7bc2119e40716662d74462f2687702419c903cda0875235"
+      "treeSha256": "b1cc3f76e1c1f17e4c8db9660885bd4a4ce79f5fcc96f1ad94df68e9757a2f29"
     },
     {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "4011e159387048ec4341194066f6603257ac01ca",
+      "resolvedSha": "82b33419998a4913008b89a9b4260749e81d93b5",
       "packageVersion": "0.1.0",
-      "treeSha256": "8236b4be3486ca0759070fe8aaacba9f90d56d9178301274996b74842bad4ed9"
+      "treeSha256": "5f67a5d35345ce5c6b30453c998590273ae02478cdca369b11220af2dfb37591"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
       "repo": "cinatra-ai/google-calendar-connector",
-      "resolvedSha": "6b2a70cdf83da1d9a5f692d6a16e6c3bb351730d",
+      "resolvedSha": "d81ab5c0e3cb61bd91be49b130e7f314de05e6cb",
       "packageVersion": "0.1.0",
-      "treeSha256": "0d6dcdbade99987a7721d2fbcc77db129769912efbdda0c6732f290ca6c89359"
+      "treeSha256": "fd59684e5dff48d579c1f547880a0c6b2b068f9cbd4ba88a8211ce310e065587"
     },
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
       "repo": "cinatra-ai/google-oauth-connector",
-      "resolvedSha": "98b30594694506148670da71f5362fde5116e707",
+      "resolvedSha": "b3e0e5b9a1b50cfa1190424774ca123b37feffb4",
       "packageVersion": "0.1.0",
-      "treeSha256": "1a16f9a81466b7bf9e179db85bf49f45c93b99628183ca191941ecce9dcf80f7"
+      "treeSha256": "e4ebe5ec37ae22b90ef50d3fc51ee521d018763dc0e5c886c3455250988f41f3"
     },
     {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
-      "resolvedSha": "aff193d7ebc0007adbd815987a96c1ee11469d87",
+      "resolvedSha": "8cdeb2309a159210cac8046be15c7ec5afb21aed",
       "packageVersion": "0.1.0",
-      "treeSha256": "e4d1492041f99ab50222a9c5f9ab57246ce0956c69a84628badd22421e21c21d"
+      "treeSha256": "3cd125929c5a17f785a83cd88c0363ab5215eb18b86627ba4a4c9ea2f968e72b"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
       "repo": "cinatra-ai/lint-policy-agent",
-      "resolvedSha": "8b41e40e34d8ee8e07371a2ba1891617ec286903",
+      "resolvedSha": "a035755a8dda6c845e79b87c7a9428ea201c5079",
       "packageVersion": "0.1.0",
-      "treeSha256": "db6c970b8f80ce46e7e33e8c898a1d63d9bdb73da62256676e3051a057291816"
+      "treeSha256": "0cf1e32b7357efac51bbc33bfcc8d3049a10e32e2d220e1a5eb7bda410d02422"
     },
     {
       "packageName": "@cinatra-ai/mcp-client-connector",
       "repo": "cinatra-ai/mcp-client-registry-connector",
-      "resolvedSha": "46ea25a02f0cacc245629327d73e1495b6405d0a",
+      "resolvedSha": "ce16c74cdd50cdb164ed7efb5a03901acb5389df",
       "packageVersion": "0.2.0",
-      "treeSha256": "e74acd369b101e1c70afa3610a24d0a440ffa8bdc273a9ecea87d356911bd450"
+      "treeSha256": "250fc58a9ef324d0513859235bb767d7a510531e2c2a9a93314078cabd603db5"
     },
     {
       "packageName": "@cinatra-ai/media-feeds-connector",
       "repo": "cinatra-ai/media-feeds-connector",
-      "resolvedSha": "800f6e9c4ff7074c2f03fea2455721672d687996",
+      "resolvedSha": "13c273257a1b90ec1be8ff3c206e3cca03f57af4",
       "packageVersion": "0.1.0",
-      "treeSha256": "2803eb11ba584492de526e5aa634cb0f1b76fd1e6d497676876d247645500230"
+      "treeSha256": "a8519c23a4f3a13aab3587fb4f3111adf091da2993b15b98a4e3b32df12b18e4"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "61580c084df132b3898ec743317cb9d98c6eaa7e",
+      "resolvedSha": "ed0b82b58a50e8ea4e5efb305803faba69457898",
       "packageVersion": "0.1.0",
-      "treeSha256": "af0c6fa768886aec9b1d54b8d33ba9107f8d525a6ffeabef12e9a4908c1c8258"
+      "treeSha256": "4c571a8e221d4368d68b0a3c3d1c0e5d5740fd2dbf819f1db27d40d151f2e859"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "a3d734d59f9a1a82f3a1fc3c3da88619c6de0a15",
+      "resolvedSha": "70992a4e211ef5da45f4005494f2fdfa3426581f",
       "packageVersion": "0.1.0",
-      "treeSha256": "16b6801eadf7172a2fc41b1b80b23c4f3c4455efa981471cf4dae4c23298082b"
+      "treeSha256": "72249025b0d784041caf04994af710f1e0931d769ec474836bd52cf5fcf9fabb"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
-      "resolvedSha": "9c614df53db2157ac0dfebfe26439bb6264158d1",
+      "resolvedSha": "32940ee6885a9af944d29b1dcfdd815a69b4e0ea",
       "packageVersion": "0.1.0",
-      "treeSha256": "ee878cf9b42a4ae5f3ec2c5be9821b248ed99238640f6d13526cbbd3035e0b8e"
+      "treeSha256": "d3d5998808d49ee7c2736603a9a497cc26828c8ef76ee88c0229f420813397c6"
     },
     {
       "packageName": "@cinatra-ai/resend-connector",
       "repo": "cinatra-ai/resend-connector",
-      "resolvedSha": "373476c3443b94575d1a750f302cfb62100219ed",
+      "resolvedSha": "b53ed2c8af81b828211cc51a372fc6a1db7a96f2",
       "packageVersion": "0.1.0",
-      "treeSha256": "c6888732eff001b16dd88ff9765ddc3a32e5b105d87eee4eb455e5a597f0b7a8"
+      "treeSha256": "3b8ff29411a7a2962b33398cd3814101506f99ef77b8058517f4e854e9f47b5d"
     },
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "ed9210d90f2600e777b3c0ee681bca76a24871a1",
+      "resolvedSha": "e6e0d30c5d7435a7ccf2ee9badb6343513b6b7c9",
       "packageVersion": "0.1.0",
-      "treeSha256": "8a33d9bebacd74a705a8952e31ed368a74508676b1b573c86018c91951f3e3f8"
+      "treeSha256": "2e8b064bfb48ef398b0084afda176283eb9b9258b0cec3a475b2557e87b93be6"
     },
     {
       "packageName": "@cinatra-ai/social-media-connector",
       "repo": "cinatra-ai/social-media-connector",
-      "resolvedSha": "a94590643db2b02e4e7b137571c4c4b7dc7abd4d",
+      "resolvedSha": "b341ecd837828d2003a7d17373430a14f0b937fa",
       "packageVersion": "0.1.0",
-      "treeSha256": "56d27fc20b33d87f1fc87ebcbd6b22d4822bfc9a7ab347ff8e31737597b09084"
+      "treeSha256": "b8936a53748fde4baaf298dba38e085cd527cd15506657fd97f1ec4393d5230f"
     },
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "6f38f9217ed73dbd07a5705ebba3ae12ea832de2",
+      "resolvedSha": "24ef68a77e28819453116b32d17b729d3b3b1823",
       "packageVersion": "0.1.0",
-      "treeSha256": "d358f0077775759b124a90d5f650d30c836876218dc63dee9b45706d509110cc"
+      "treeSha256": "7e7cd7e292aaa081423fa2f90f347e253daed7994aff0bf2659a3191a27c2674"
     },
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "9d86d075088a8dfc8449e6f55f5eedad87da96be",
+      "resolvedSha": "c282991fcd989ddd40dc7f8882b68a7e77c8b5f4",
       "packageVersion": "0.1.0",
-      "treeSha256": "1937c3e405ba4a65bee733ab49f6906ccb00ebbce080e2c23f5cd992d7b8c335"
+      "treeSha256": "2dece115f21b172981a89e675d3cf554be7256aab86c0ae818abbba6d670add0"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
       "repo": "cinatra-ai/wordpress-assistant-connector",
-      "resolvedSha": "827fdac01e3f42327622f980450bbdc79d2b5a5d",
+      "resolvedSha": "ac438409c1ad2c0dfa82b2251198e601ef0930e9",
       "packageVersion": "0.1.0",
-      "treeSha256": "98d7e849717e17462709cd7414e1ddd781253241f7ddc99595c2b5e3d9f85a06"
+      "treeSha256": "eb80c042d9991804d40a4165b31ca886964e6231d66cc632fbb8c51e6c5af1a2"
     },
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "51ca96fba1c20902245ef9265bc73412d960c3e9",
+      "resolvedSha": "6a4e00397a0655e612cd04f89b38be850de29c80",
       "packageVersion": "0.1.0",
-      "treeSha256": "f8b8c9995a9ed9c8cc605210e18f9ded20efe0e047bd8a916176e2d764c84388"
+      "treeSha256": "028a3b093ff8c1a0931b4bfe08d2414c268568cafd37257a35719a3e0f0b331e"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
       "repo": "cinatra-ai/youtube-connector",
-      "resolvedSha": "ff5b197bc3b732e4ce5a3aca10b4cd63f712e7c0",
+      "resolvedSha": "d399c26b8f8b8971170f3c8f3d88ee2bba4429ef",
       "packageVersion": "0.1.0",
-      "treeSha256": "bd916ea5a2b3a6ef2066d1dd7c8a94167bcd9d691760d085b01b016cbab8cf26"
+      "treeSha256": "4f2b9f9c2c098b35b1bb0275f2888423b484b92a3aac696cde6c0e25711aea4a"
     }
   ]
 }
