@@ -31,6 +31,23 @@ export type NotificationInput = {
   metadata?: Record<string, unknown>;
   sourceJobId?: string;
   sourceJobName?: string;
+  /**
+   * Stable per-user idempotency key for one LOGICAL notification occurrence.
+   *
+   * When set, the INSERT dedupes on the partial unique index
+   * `(user_id, dedupe_key)` via ON CONFLICT DO NOTHING — a repeat write of
+   * the same logical event (double-emitting writers, retried deliveries,
+   * overlapping recipient fanouts that resolve to the same user) collapses
+   * to ONE row instead of rendering twice in the flyout (issue #50).
+   *
+   * Semantics: the key identifies an OCCURRENCE, not an event type —
+   * recurring events that should notify again must mint a fresh key per
+   * occurrence. When `dedupeKey` is set it is the ONLY conflict target the
+   * INSERT arbitrates on (Postgres accepts a single conflict target), so a
+   * caller must not rely on the legacy `(user_id, source_job_id, kind)` job
+   * dedupe for the same row.
+   */
+  dedupeKey?: string;
 };
 
 /**
@@ -50,6 +67,8 @@ export type NotificationRecord = {
   metadata?: Record<string, unknown>;
   sourceJobId?: string;
   sourceJobName?: string;
+  /** General per-user dedupe key — see `NotificationInput.dedupeKey`. */
+  dedupeKey?: string;
   createdAt: string;
   readAt?: string;
 };
@@ -77,6 +96,11 @@ export type AppNotification = {
   // running row + its terminal row into one.
   sourceJobId?: string;
   sourceJobName?: string;
+  // General per-user dedupe key (issue #50) — server-side ON CONFLICT
+  // collapse for repeated writes of the same logical event. Pass-through
+  // for client visibility/debugging; the collapse itself happens at INSERT
+  // time, so the flyout never receives two rows sharing one dedupeKey.
+  dedupeKey?: string;
   // Arbitrary metadata pass-through. Today's only consumer is
   // `metadata.progress = { status, jobId, jobName, startedAt }` for
   // background-process rows.

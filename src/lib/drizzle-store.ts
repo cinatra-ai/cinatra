@@ -761,7 +761,8 @@ END $$` },
     //     and a destructive backfill is out of scope here.
     //   - The notifications service (packages/notifications/src/service.ts)
     //     *always* writes a non-null user_id; the partial indexes below
-    //     (notifications_user_unread_idx, notifications_dedupe_job_kind_idx)
+    //     (notifications_user_unread_idx, notifications_dedupe_job_kind_idx,
+    //     notifications_dedupe_key_idx)
     //     scope to WHERE user_id IS NOT NULL so reads never return legacy
     //     orphan rows, and dedupe never collides across orphans.
     //   - A future migration may DROP COLUMN payload + SET NOT NULL on
@@ -781,6 +782,7 @@ END $$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS metadata jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS source_job_id text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS source_job_name text` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS dedupe_key text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS read_at timestamptz` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."notifications" ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()` },
     { text: `CREATE INDEX IF NOT EXISTS notifications_user_unread_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (user_id, read_at, created_at DESC) WHERE user_id IS NOT NULL` },
@@ -789,6 +791,13 @@ END $$` },
     // notifications for the same (user, source job, kind) tuple. Partial
     // unique index so rows without a source_job_id remain unconstrained.
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_job_kind_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (user_id, source_job_id, kind) WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL` },
+    // General per-user dedupe key (issue #50): writers that emit the same
+    // LOGICAL notification more than once (double-emitting milestone
+    // writers, recipient fanouts that overlap on one user) pass a stable
+    // `dedupeKey`; the INSERT in packages/notifications/src/service.ts then
+    // arbitrates ON CONFLICT (user_id, dedupe_key) DO NOTHING. Partial
+    // unique index so rows without a dedupe_key remain unconstrained.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_key_idx ON "${schemaName.replaceAll('"', '""')}"."notifications" (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL AND user_id IS NOT NULL` },
     // ------------------------------------------------------------------
     // LISTEN/NOTIFY for real-time inbox flyout updates.
 

@@ -86,6 +86,10 @@ function toAppNotification(
     readAt: record.readAt,
     sourceJobId: record.sourceJobId,
     sourceJobName: record.sourceJobName,
+    // General per-user dedupe key (issue #50) — parity with the SSE path,
+    // which serializes the NotificationRecord from listNotificationsForUser
+    // directly.
+    dedupeKey: record.dedupeKey,
     metadata: record.metadata,
   };
 }
