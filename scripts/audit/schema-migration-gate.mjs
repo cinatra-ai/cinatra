@@ -380,13 +380,19 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
     line.match(TABLE_REF_RE)?.[1] ??
     line.match(INDEX_TABLE_RE)?.[1] ??
     null;
+  // A line that BEGINS a statement must name its target itself — when it
+  // does not (the target sits on a later line), it never inherits the sticky
+  // enclosing-table context, so it cannot ride a new table's carve-out.
+  const isStatementStart = (line) =>
+    /\bCREATE\s+(?:UNIQUE\s+)?INDEX\b|\bCREATE\s+TABLE\b|\bALTER\s+TABLE\b|\bDROP\s+TABLE\b|\bUPDATE\b|\bDELETE\s+FROM\b|\bINSERT\s+INTO\b/i.test(line);
 
   for (const a of addEff) {
     if (a.region.kind !== "executed-ddl") continue; // Drizzle defs mirror the DDL; the executed-DDL change is the signal
     // Changes scoped to a table created in this same change are additive (no
-    // pre-existing rows). Column-level lines without a target of their own
+    // pre-existing rows). Only column-level lines (no statement of their own)
     // fall back to the enclosing-table context.
-    if (newTables.has(ownTarget(a.trimmed) ?? a.table)) continue;
+    const target = ownTarget(a.trimmed) ?? (isStatementStart(a.trimmed) ? null : a.table);
+    if (target !== null && newTables.has(target)) continue;
     for (const { rule, re, doc } of ADDED_DESTRUCTIVE_RULES) {
       if (re.test(a.trimmed)) {
         destructive.push({ rule, line: a.trimmed, doc });

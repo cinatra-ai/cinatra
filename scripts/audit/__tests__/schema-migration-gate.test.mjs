@@ -292,6 +292,16 @@ test("a new table in the same hunk cannot launder a statement aimed at an EXISTI
     `    { text: \`UPDATE ${S}."widgets" SET label = ''\` },`,
   ]);
   assert.deepEqual(r.destructive.map((d) => d.rule).sort(), ["data-rewrite", "unique-index-existing-table"]);
+
+  // Multi-line form: the statement-start line carries no target of its own,
+  // so it must NOT inherit the new table's context either.
+  const multiLine = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`CREATE TABLE IF NOT EXISTS ${S}."gadgets" (id text PRIMARY KEY)\` },`,
+    "    { text: `CREATE UNIQUE INDEX IF NOT EXISTS widgets_label_uq",
+    `      ON ${S}."widgets" (label)\` },`,
+  ]);
+  assert.deepEqual(multiLine.destructive.map((d) => d.rule), ["unique-index-existing-table"]);
 });
 
 test("destructive: DROP TABLE on an existing table; additive when the table is created in the same change", () => {
