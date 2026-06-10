@@ -274,3 +274,51 @@ describe("connector MCP discovery maps", () => {
     ).toThrow(/ambiguous/);
   });
 });
+
+describe("external-MCP toolbox capability marker + loader map", () => {
+  it("every record carries providesExternalMcpToolbox as a boolean, and it DISCRIMINATES (hasMcpModule does not)", async () => {
+    const { records } = await buildManifest();
+    for (const r of records) {
+      expect(typeof r.providesExternalMcpToolbox).toBe("boolean");
+    }
+    const markerSlugs = records
+      .filter((r) => r.providesExternalMcpToolbox)
+      .map((r) => r.packageName.split("/")[1]);
+    expect(markerSlugs).toEqual(
+      expect.arrayContaining(["apify-connector", "drupal-mcp-connector", "wordpress-mcp-connector"]),
+    );
+    // Self-MCP capability modules also set hasMcpModule (apollo, crm, email, …)
+    // — records with hasMcpModule but WITHOUT the marker must exist, proving
+    // the marker is the discriminating selector hasMcpModule never was.
+    const selfMcpOnly = records.filter((r) => r.hasMcpModule && !r.providesExternalMcpToolbox);
+    expect(selfMcpOnly.length).toBeGreaterThan(0);
+    // And the marker is not derived from hasMcpModule: apify declares it with
+    // no self-MCP capability module at all.
+    const apify = records.find((r) => r.packageName.split("/")[1] === "apify-connector");
+    expect(apify?.providesExternalMcpToolbox).toBe(true);
+    expect(apify?.hasMcpModule).toBe(false);
+  });
+
+  it("emits a toolbox loader entry for marker-bearing extensions that ship src/mcp/toolbox.ts", async () => {
+    const { records, externalMcpToolboxes } = await buildManifest();
+    const recordByPackage = new Map(records.map((r) => [r.packageName, r]));
+    expect(externalMcpToolboxes.length).toBeGreaterThan(0);
+    for (const e of externalMcpToolboxes) {
+      const rec = recordByPackage.get(e.packageName);
+      // Marker WITHOUT a toolbox module is allowed (registry-resolved
+      // extension), but every loader entry MUST come from a marker-bearing
+      // record — fail-closed pairing enforced at generation.
+      expect(rec?.providesExternalMcpToolbox).toBe(true);
+      expect(e.slug).toBe(e.packageName.split("/")[1]);
+      // The host resolves this exact export from the loaded namespace.
+      expect(e.factory).toMatch(/^create[A-Za-z0-9]*ExternalMcpToolbox$/);
+    }
+    // deterministic slug order (the injection path flattens in map order)
+    const slugs = externalMcpToolboxes.map((e) => e.slug);
+    expect(slugs).toEqual([...slugs].sort());
+    // The three first-party external-MCP extensions are covered.
+    expect(slugs).toEqual(
+      expect.arrayContaining(["apify-connector", "drupal-mcp-connector", "wordpress-mcp-connector"]),
+    );
+  });
+});

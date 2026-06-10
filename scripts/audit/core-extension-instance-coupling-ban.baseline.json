@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 98,
-      "keys": 171,
-      "occurrences": 223
+      "files": 96,
+      "keys": 168,
+      "occurrences": 220
     },
     "mechanical": {
       "files": 4,
@@ -149,8 +149,6 @@
     "src/app/setup/connections/page.tsx :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/a2a-dev-auto-connect.ts :: package :: @cinatra-ai/gemini-connector": 1,
     "src/lib/a2a-dev-auto-connect.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/apify-mcp-connection.ts :: package :: @cinatra-ai/apify-connector": 1,
-    "src/lib/apify-mcp-connection.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/artifacts/artifact-creation.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/artifact-service.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/mcp.ts :: package :: @cinatra-ai/marketing-icp-artifact": 1,
@@ -173,7 +171,6 @@
     "src/lib/blog/wordpress.ts :: package :: @cinatra-ai/blog-connector": 1,
     "src/lib/dev-auto-setup.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/drupal-api.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/drupal-mcp-connection.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/email-system.ts :: package :: @cinatra-ai/email-connector": 1,
     "src/lib/email-system.ts :: package :: @cinatra-ai/gmail-connector": 1,
     "src/lib/generated/connector-setup-pages.ts :: package :: @cinatra-ai/a2a-server-connector": 1,

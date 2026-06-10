@@ -28,6 +28,14 @@ export default defineConfig({
         find: "@cinatra-ai/skills/mcp-client",
         replacement: path.join(__dirname, "tests/__stubs__/skills-mcp-client.ts"),
       },
+      // mcp-access.ts imports @cinatra-ai/mcp-server/credentials (mapped via
+      // tsconfig path alias in app builds); the package's exports field omits
+      // the subpath under node conditions, so vitest needs an explicit
+      // resolver. Inert stub; tests vi.mock() the specifier when needed.
+      {
+        find: "@cinatra-ai/mcp-server/credentials",
+        replacement: path.join(__dirname, "tests/__stubs__/mcp-server-credentials.ts"),
+      },
     ],
   },
   test: {

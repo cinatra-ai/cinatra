@@ -1,6 +1,8 @@
-// Verifies buildDrupalMcpServerTools +
-// getDrupalMcpInstanceStatuses source the Bearer header from the
-// Nango vault.
+// Verifies getDrupalMcpInstanceStatuses + probeDrupalMcp source the Bearer
+// header from the Nango vault (via the host shim @/lib/nango) and classify
+// probe responses correctly. The LLM toolbox BUILDER that used to live in
+// @/lib/drupal-mcp-connection moved into the drupal-mcp-connector extension
+// (src/mcp/toolbox.ts) — its tests live there now.
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
@@ -12,14 +14,17 @@ vi.mock("@/lib/wordpress-mcp-connection", () => ({
   isPrivateUrl: vi.fn((u: string) => /localhost|127\.0\.0\.1|::1/.test(u)),
 }));
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango", () => ({
   buildBearerAuthHeaderFromNango: vi.fn(),
-  isNangoConfigured: vi.fn(),
 }));
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
-import { buildBearerAuthHeaderFromNango, isNangoConfigured } from "@cinatra-ai/nango-connector";
-import { buildDrupalMcpServerTools, getDrupalMcpInstanceStatuses } from "@/lib/drupal-mcp-connection";
+import { buildBearerAuthHeaderFromNango } from "@/lib/nango";
+import {
+  getDrupalMcpInstanceStatuses,
+  probeDrupalMcp,
+  resolveDrupalMcpServerUrl,
+} from "@/lib/drupal-mcp-connection";
 
 const inst = (id: string, siteUrl?: string) => ({
   id,
@@ -33,7 +38,6 @@ const inst = (id: string, siteUrl?: string) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(isNangoConfigured).mockReturnValue(true);
   // Default Nango success — individual tests override.
   vi.mocked(buildBearerAuthHeaderFromNango).mockResolvedValue({ Authorization: "Bearer default-token" });
   // Default fetch: 200 OK so HEAD-probe classify is "registered".
@@ -45,97 +49,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("buildDrupalMcpServerTools", () => {
-  it("returns [] when Nango is unconfigured and warns once", async () => {
-    vi.mocked(isNangoConfigured).mockReturnValue(false);
-    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [inst("a"), inst("b")] });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const result = await buildDrupalMcpServerTools("openai");
-
-    expect(result).toEqual([]);
-    expect(vi.mocked(buildBearerAuthHeaderFromNango)).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
+describe("resolveDrupalMcpServerUrl", () => {
+  it("appends the MCP route to the trimmed site URL", () => {
+    expect(resolveDrupalMcpServerUrl("https://site.example.com/")).toBe(
+      "https://site.example.com/_mcp_tools",
+    );
   });
+});
 
-  it("returns [] when no instances configured", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [] });
-    expect(await buildDrupalMcpServerTools("openai")).toEqual([]);
-  });
+describe("probeDrupalMcp — classification", () => {
+  // Note: drupal-mcp-connection.ts has a module-level probeCache keyed by
+  // the resolved endpoint. Use unique siteUrls per test to avoid bleed.
 
-  it("skips private URLs (localhost) — never returned to LLM", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("a", "http://localhost:8082")],
-    });
-    expect(await buildDrupalMcpServerTools("openai")).toEqual([]);
-    // No Nango lookup for private rows — they're skipped first.
-    expect(vi.mocked(buildBearerAuthHeaderFromNango)).not.toHaveBeenCalled();
-  });
-
-  it("emits one LlmMcpServerTool per instance with Nango-backed Authorization header (no mcpApiKey read)", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [inst("a"), inst("b")] });
-    vi.mocked(buildBearerAuthHeaderFromNango)
-      .mockResolvedValueOnce({ Authorization: "Bearer token-a" })
-      .mockResolvedValueOnce({ Authorization: "Bearer token-b" });
-
-    const result = await buildDrupalMcpServerTools("openai");
-
-    expect(result).toHaveLength(2);
-    expect(result[0]).toMatchObject({
-      type: "mcp",
-      serverLabel: "drupal-a",
-      serverUrl: "https://site-a.example.com/_mcp_tools",
-      headers: { Authorization: "Bearer token-a" },
-    });
-    expect(result[1]).toMatchObject({
-      type: "mcp",
-      serverLabel: "drupal-b",
-      headers: { Authorization: "Bearer token-b" },
-    });
-    expect(vi.mocked(buildBearerAuthHeaderFromNango)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(buildBearerAuthHeaderFromNango)).toHaveBeenCalledWith({
-      providerConfigKey: "cinatra-drupal",
-      connectionId: "a",
-      label: "drupal-a",
-    });
-  });
-
-  it("skips instances where Nango header lookup returns null", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [inst("a"), inst("b")] });
-    vi.mocked(buildBearerAuthHeaderFromNango)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ Authorization: "Bearer token-b" });
-
-    const result = await buildDrupalMcpServerTools("openai");
-
-    expect(result).toHaveLength(1);
-    expect(result[0].serverLabel).toBe("drupal-b");
-  });
-
-  it("classifies HTTP 401 as auth_error → tool not registered", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("a", "https://auth-error.example.com")],
-    });
+  it("classifies HTTP 401 as auth_error", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ status: 401 } as Response)));
-    expect(await buildDrupalMcpServerTools("openai")).toEqual([]);
+    expect(await probeDrupalMcp("https://probe-401.example.com", "Bearer t")).toBe("auth_error");
   });
 
   it("treats HTTP 405 as registered (HEAD-not-supported fallback)", async () => {
-    vi.mocked(getDrupalAPISettings).mockReturnValue({
-      instances: [inst("a", "https://head-not-supported.example.com")],
-    });
     vi.stubGlobal("fetch", vi.fn(async () => ({ status: 405 } as Response)));
-    const tools = await buildDrupalMcpServerTools("openai");
-    expect(tools).toHaveLength(1);
+    expect(await probeDrupalMcp("https://probe-405.example.com", "Bearer t")).toBe("registered");
   });
 });
 
 describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
-  // Note: drupal-mcp-connection.ts has a module-level probeCache keyed by
-  // `${siteUrl}/_mcp_tools`. Use unique siteUrls here to avoid bleed from
-  // the buildDrupalMcpServerTools tests above (which also probe).
-
   it("classifies unreachable when Nango credential is missing (no token in response)", async () => {
     vi.mocked(getDrupalAPISettings).mockReturnValue({
       instances: [inst("status-missing-cred", "https://status-missing.example.com")],

@@ -142,6 +142,10 @@ export type {
 
 export { UI_SURFACE_KINDS, isUiSurfaceKind } from "./manifest";
 export type { UiSurfaceKind, ExtensionMigration, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
+export type {
+  ExtensionExternalMcpTool,
+  ExtensionExternalMcpToolbox,
+} from "./external-mcp-toolbox-contract";
 export { parseDevFixtures, DevFixtureValidationError, DEV_FIXTURE_SURFACES } from "./dev-fixtures";
 export type { DevFixture, DevFixtureFile, DevFixtureSetting, DevFixtureObject } from "./dev-fixtures";
 

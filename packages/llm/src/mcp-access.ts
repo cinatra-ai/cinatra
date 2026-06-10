@@ -7,9 +7,12 @@
 import "server-only";
 
 import type { LlmProvider, LlmMcpServerTool } from "./types";
-import { buildWordPressMcpServerTools } from "@/lib/wordpress-mcp-connection";
-import { buildDrupalMcpServerTools } from "@/lib/drupal-mcp-connection";
-import { buildApifyMcpServerTools } from "@/lib/apify-mcp-connection";
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import {
+  loadExternalMcpToolboxBySlug,
+  sanitizeExternalMcpToolboxTools,
+} from "@/lib/external-mcp-toolbox-loader.server";
+import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
 
 // Re-export so existing callers don't need to change their imports.
@@ -262,9 +265,64 @@ export async function buildA2aBearerToken(provider: LlmProvider = "openai"): Pro
 }
 
 /**
+ * Resolve one external-MCP-capable extension record to its injectable tools.
+ *
+ * First-party extensions ship a toolbox module recorded in the generated
+ * manifest loader map (resolved by slug, no package named here); extensions
+ * WITHOUT a first-party builder resolve through the `external_mcp_servers`
+ * registry by slug (id → label fallback; the registry's connector-scope guard
+ * applies and fail-closed drops the tool without an actor frame) — unless the
+ * caller opted out of registry injection (`skipRegistryFallback`).
+ *
+ * Never throws — a failing extension degrades to "no tools from this
+ * extension" with a warning, without dropping the other toolboxes.
+ */
+async function buildToolboxToolsForSlug(
+  slug: string,
+  provider: LlmProvider,
+  skipRegistryFallback: boolean,
+): Promise<LlmMcpServerTool[]> {
+  try {
+    const toolbox = await loadExternalMcpToolboxBySlug(slug);
+    if (toolbox) {
+      return sanitizeExternalMcpToolboxTools(slug, await toolbox.buildTools(provider));
+    }
+    if (skipRegistryFallback) return [];
+    const registryTool = await buildSingleExternalMcpTool(slug);
+    if (registryTool) return [registryTool];
+    console.warn(
+      `[mcp-access] external-MCP toolbox extension "${slug}" has no first-party builder and no external_mcp_servers row — injecting nothing for it`,
+    );
+    return [];
+  } catch (err) {
+    console.warn(
+      `[mcp-access] external-MCP toolbox "${slug}" failed — injecting nothing for it`,
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
+  }
+}
+
+export type BuildExternalMcpServerToolsOptions = {
+  /**
+   * When true, marker-bearing extensions WITHOUT a first-party builder are
+   * NOT resolved through the `external_mcp_servers` registry. Mirrors the
+   * `skipExternalMcpRegistry` flag of the legacy always-inject path so a
+   * caller that opts out of registry injection cannot reach registry rows
+   * through the manifest fallback either.
+   */
+  skipRegistryFallback?: boolean;
+};
+
+/**
  * Build the array of EXTERNAL MCP server tools — i.e. MCP servers that are
- * NOT the cinatra self-MCP. Currently this is the WordPress MCP adapter.
- * Designed to be extended with additional external MCP servers in the future.
+ * NOT the cinatra self-MCP.
+ *
+ * MANIFEST-DRIVEN: the set of contributing extensions is the generated
+ * extension manifest's records carrying the `providesExternalMcpToolbox`
+ * capability marker — adding/removing an external-MCP-capable extension
+ * requires no edit here. Builds run concurrently per extension; results are
+ * flattened in the manifest's deterministic (packageName-sorted) order.
  *
  * Returns an empty array on failure or when no external MCP servers are
  * configured — never throws. The caller is responsible for prepending the
@@ -273,14 +331,18 @@ export async function buildA2aBearerToken(provider: LlmProvider = "openai"): Pro
  */
 export async function buildExternalMcpServerTools(
   provider: LlmProvider,
+  options: BuildExternalMcpServerToolsOptions = {},
 ): Promise<LlmMcpServerTool[]> {
   try {
-    const [wpTools, drupalTools, apifyTools] = await Promise.all([
-      buildWordPressMcpServerTools(provider),
-      buildDrupalMcpServerTools(provider),
-      buildApifyMcpServerTools(provider),
-    ]);
-    return [...wpTools, ...drupalTools, ...apifyTools];
+    const slugs = Object.values(STATIC_EXTENSION_MANIFEST)
+      .filter((record) => record.providesExternalMcpToolbox)
+      .map((record) => record.packageName.split("/")[1]);
+    const toolLists = await Promise.all(
+      slugs.map((slug) =>
+        buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true),
+      ),
+    );
+    return toolLists.flat();
   } catch (err) {
     console.warn(
       `[mcp-access] buildExternalMcpServerTools(${provider}): failed — returning empty list`,

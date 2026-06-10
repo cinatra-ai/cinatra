@@ -62,6 +62,16 @@ export type CinatraManifest = {
   devFixtures?: string;
   /** UI hot-pluggability classification. */
   uiSurface?: UiSurfaceKind;
+  /**
+   * External-MCP-toolbox capability marker. `true` declares that this
+   * extension contributes EXTERNAL MCP server tools to the LLM toolbox
+   * injection path (`buildExternalMcpServerTools`): the host selects
+   * manifest records carrying this marker instead of name-listing
+   * extensions. Distinct from `hasMcpModule` (self-MCP capability modules
+   * registered on the cinatra MCP server), which is NOT a discriminating
+   * external-MCP selector.
+   */
+  providesExternalMcpToolbox?: boolean;
 
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
@@ -108,6 +118,16 @@ export type NormalizedExtensionRecord = {
   configSchema: Record<string, unknown> | null;
   /** Least-privilege host ports (derived/declared; empty until mapped). */
   requestedHostPorts: HostPortName[];
+  /**
+   * External-MCP-toolbox capability marker (`cinatra.providesExternalMcpToolbox`).
+   *
+   * REQUIRED (always present, boolean) so both loaders emit it on EVERY record
+   * and the static manifest type cannot silently drop it — the generator emits
+   * `false` unless the extension declares `true`. The LLM toolbox-injection
+   * path selects records by this field; toggling it (or
+   * installing/uninstalling the extension) is what changes injection.
+   */
+  providesExternalMcpToolbox: boolean;
   /**
    * SDK ABI range the extension was built against (`cinatra.sdkAbiRange`), or
    * null when unpinned. The loader's ABI gate consults this (the host computes
