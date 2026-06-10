@@ -261,8 +261,21 @@ const ADDED_DESTRUCTIVE_RULES = [
   { rule: "drop-column", re: /\bDROP\s+COLUMN\b/i, doc: "DROP COLUMN on a table that exists on main" },
   { rule: "rename", re: /\bRENAME\s+(?:TO|COLUMN)\b/i, doc: "renaming a table or column" },
   { rule: "retype", re: /\bALTER\s+COLUMN\b.*\b(?:TYPE|SET\s+DATA\s+TYPE)\b/i, doc: "retyping a column (ALTER COLUMN ... TYPE)" },
+  // A split ALTER COLUMN — the line ends after the column name (or a dangling
+  // SET / SET DATA) so the action sits on a LATER diff line where this
+  // per-line classifier cannot see it. The destructive completions (TYPE /
+  // SET DATA TYPE / SET NOT NULL) and the additive ones (SET DEFAULT /
+  // DROP NOT NULL / DROP DEFAULT) are indistinguishable from this line, so
+  // classify conservatively as a retype: an artifact is demanded, never
+  // silently waived. Additive ALTER COLUMN actions kept on one line (the
+  // bootstrap DDL's own style) never match — their action keyword closes the
+  // statement on the same line.
+  { rule: "retype-split-line", re: /\bALTER\s+COLUMN\s+(?:"[^"]+"|[a-z0-9_]+)(?:\s+SET(?:\s+DATA)?)?\s*[,;]?\s*$/i, doc: "ALTER COLUMN whose action continues on a later line — treated as a retype (the action is not visible on this line; keep additive ALTER COLUMN actions like SET DEFAULT on a single line)" },
   { rule: "set-not-null", re: /\bSET\s+NOT\s+NULL\b/i, doc: "adding NOT NULL to an existing column" },
-  { rule: "add-constraint", re: /\b(?:ADD|VALIDATE)\s+CONSTRAINT\b/i, doc: "adding/tightening a constraint over existing rows" },
+  // Both the named form (ADD/VALIDATE CONSTRAINT) and PostgreSQL's anonymous
+  // shorthand (ADD UNIQUE / PRIMARY KEY / FOREIGN KEY / CHECK / EXCLUDE) —
+  // identical semantics over existing rows, per the same README bullet.
+  { rule: "add-constraint", re: /\b(?:ADD|VALIDATE)\s+CONSTRAINT\b|\bADD\s+(?:UNIQUE|PRIMARY\s+KEY|FOREIGN\s+KEY|CHECK|EXCLUDE)\b/i, doc: "adding/tightening a constraint over existing rows (named CONSTRAINT or shorthand ADD UNIQUE / PRIMARY KEY / FOREIGN KEY / CHECK / EXCLUDE)" },
   // INSERT INTO and UPDATE are flagged without requiring a same-line
   // SET/SELECT: the real backfills in the bootstrap DDL are multi-line, so
   // the rest of the statement lands on other diff lines. UPDATE matches a
