@@ -113,14 +113,13 @@ describe("gateStaticRecordsToLiveRows (pure decision function)", () => {
 // ---------------------------------------------------------------------------
 
 const readEffectiveStatusByPackageNames = vi.fn();
-const ensureStaticBundleLifecycleAnchors = vi.fn(async (..._args: unknown[]) => ({
+const ensureStaticBundleLifecycleAnchors = vi.fn(async () => ({
   seededLive: [] as string[],
   seededArchived: [] as string[],
   failed: [] as string[],
 }));
-const runStaticBundleActivation = vi.fn(
-  async (records: Array<{ packageName: string }>, ..._rest: unknown[]) =>
-    records.map((r) => ({ packageName: r.packageName, status: "registered" as const })),
+const runStaticBundleActivation = vi.fn(async (records: Array<{ packageName: string }>) =>
+  records.map((r) => ({ packageName: r.packageName, status: "registered" as const })),
 );
 
 vi.mock("server-only", () => ({}));
@@ -129,15 +128,16 @@ vi.mock("@cinatra-ai/extensions", () => ({
     readEffectiveStatusByPackageNames(...args),
 }));
 vi.mock("@/lib/static-bundle-lifecycle", () => ({
-  ensureStaticBundleLifecycleAnchors: (...args: unknown[]) =>
-    ensureStaticBundleLifecycleAnchors(...args),
+  ensureStaticBundleLifecycleAnchors: () => ensureStaticBundleLifecycleAnchors(),
 }));
 vi.mock("@cinatra-ai/sdk-extensions", async (importOriginal) => {
   const original = await importOriginal<typeof import("@cinatra-ai/sdk-extensions")>();
   return {
     ...original,
-    runStaticBundleActivation: (records: Array<{ packageName: string }>, ...rest: unknown[]) =>
-      runStaticBundleActivation(records, ...rest),
+    runStaticBundleActivation: (records: Array<{ packageName: string }>, deps: unknown) => {
+      void deps; // the driver deps are not under test here
+      return runStaticBundleActivation(records);
+    },
   };
 });
 vi.mock("@/lib/generated/extensions.server", () => ({
