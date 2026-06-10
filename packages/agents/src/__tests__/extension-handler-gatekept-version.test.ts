@@ -53,14 +53,16 @@ vi.mock("@cinatra-ai/skills", () => ({
   cleanupForAgent: vi.fn(async () => {}),
 }));
 
-vi.mock("@cinatra-ai/registries", () => {
+vi.mock("@cinatra-ai/registries", async () => {
+  // Real (pure, dependency-free) vendor-scope helpers — the handler keys the
+  // install config's packageScope on the PACKAGE's own scope, never on the
+  // instance identity (issue #103).
+  const scope = await vi.importActual<typeof import("../../../registries/src/scope")>(
+    "../../../registries/src/scope",
+  );
   class InstanceNamespaceNotConfiguredError extends Error {}
-  return { InstanceNamespaceNotConfiguredError };
+  return { ...scope, InstanceNamespaceNotConfiguredError };
 });
-
-vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(() => null),
-}));
 
 // withInstallLock is dynamically imported; make it a pass-through.
 vi.mock("../materialize-agent-package", () => ({

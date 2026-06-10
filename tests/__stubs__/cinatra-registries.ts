@@ -39,3 +39,13 @@ export async function listAgentPackages(
 ): Promise<Array<{ packageName: string; packageVersion: string }>> {
   return [];
 }
+
+// Vendor-scope helpers for the install-time dependency-confusion gate
+// (issue #103). Pure and dependency-free, so the stub re-exports the real
+// implementations — host modules (gatekept-install, actions) call these at
+// runtime and must get real parsing behavior, not a missing symbol.
+export {
+  FIRST_PARTY_PACKAGE_SCOPE,
+  vendorScopeOfPackage,
+  dependencyScopePrefixesFor,
+} from "../../packages/registries/src/scope";
