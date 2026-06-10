@@ -224,32 +224,87 @@ export function extractFactoryExport(source, re, context) {
 // ---------------------------------------------------------------------------
 // Chat-widget manifest/widgets pairing check (source-level, pure + exported).
 //
-// The pure-data manifest module (src/widgets/manifest.ts) declares wizard
-// steps by `widgetId:` string literal; the component module
+// The pure-data manifest module (src/widgets/manifest.ts) references widgets
+// by `widgetId:` (wizard steps: a string literal; detectors: a string literal
+// OR a Record whose string VALUES are widget ids); the component module
 // (src/widgets/index.ts) defines the widgets (`id:` string literals inside the
 // WidgetDefinition[]). The route-handler catalog path loads ONLY the manifest
-// module, so a wizard step naming a widget the package does not define cannot
-// be detected at runtime there — it MUST fail generation. Over-collection of
-// `id:` literals from the widgets source (e.g. other object literals) can only
-// weaken this check, never false-fail it; a widgetId built dynamically (no
-// string literal) is rejected as undeclared — declare ids as literals.
+// module, so a manifest naming a widget the package does not define cannot be
+// detected at runtime there — it MUST fail generation:
+//   - every collected widgetId must be a DEFINED widget id;
+//   - a `widgetId:` whose value is not a plain string literal ('/"/` without
+//     ${}) or an inline record of plain string values is NON-LITERAL
+//     (identifier, computed, template interpolation) and is rejected outright
+//     — the check cannot see through it, so it fails closed.
+// Over-collection of `id:` literals from the widgets source (e.g. other
+// object literals) can only weaken the coverage check, never false-fail it.
 // ---------------------------------------------------------------------------
-const MANIFEST_WIZARD_STEP_ID_RE = /\bwidgetId:\s*"([^"]+)"/g;
-const WIDGETS_DEFINED_ID_RE = /\bid:\s*"([^"]+)"/g;
+// A plain string literal: '...' | "..." | `...` with no ${} interpolation.
+const STRING_LITERAL_RE = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)/;
+const WIDGETS_DEFINED_ID_RE = /\bid:\s*(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)/g;
+
+function literalValue(m) {
+  return m[1] ?? m[2] ?? m[3];
+}
 
 export function assertManifestWidgetIdsCovered(manifestSource, widgetsSource, context) {
   const defined = new Set(
-    Array.from(widgetsSource.matchAll(WIDGETS_DEFINED_ID_RE), (m) => m[1]),
+    Array.from(widgetsSource.matchAll(WIDGETS_DEFINED_ID_RE), literalValue),
   );
-  const missing = Array.from(
-    manifestSource.matchAll(MANIFEST_WIZARD_STEP_ID_RE),
-    (m) => m[1],
-  ).filter((id) => !defined.has(id));
+  const referenced = [];
+  const WIDGET_ID_KEY_RE = /\bwidgetId:\s*/g;
+  let key;
+  while ((key = WIDGET_ID_KEY_RE.exec(manifestSource)) !== null) {
+    const rest = manifestSource.slice(key.index + key[0].length);
+    const lit = STRING_LITERAL_RE.exec(rest);
+    if (lit) {
+      referenced.push(literalValue(lit));
+      continue;
+    }
+    if (rest.startsWith("{")) {
+      // Detector record form: { group: "widget.id", ... } — validate the
+      // string VALUES inside the balanced braces; any non-literal value
+      // (depth-1 `:` not followed by a plain string literal) fails closed.
+      let depth = 0;
+      let end = 0;
+      for (; end < rest.length; end++) {
+        if (rest[end] === "{") depth++;
+        else if (rest[end] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (depth !== 0) {
+        throw new Error(
+          `[extension-manifest] ${context}: unbalanced widgetId record in src/widgets/manifest.ts`,
+        );
+      }
+      const record = rest.slice(0, end + 1);
+      const VALUE_RE = /:\s*(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`|([^,}\s][^,}]*))/g;
+      let v;
+      while ((v = VALUE_RE.exec(record)) !== null) {
+        if (v[4] !== undefined) {
+          throw new Error(
+            `[extension-manifest] ${context}: non-literal widgetId record value ` +
+              `(${v[4].trim()}) in src/widgets/manifest.ts — widget ids must be plain string literals`,
+          );
+        }
+        referenced.push(v[1] ?? v[2] ?? v[3]);
+      }
+      continue;
+    }
+    throw new Error(
+      `[extension-manifest] ${context}: non-literal widgetId value in src/widgets/manifest.ts ` +
+        `(${rest.slice(0, 40).trim()}…) — widget ids must be plain string literals ` +
+        `(no identifiers, no computed values, no \${} interpolation)`,
+    );
+  }
+  const missing = referenced.filter((id) => !defined.has(id));
   if (missing.length > 0) {
     throw new Error(
-      `[extension-manifest] ${context}: manifest wizard step(s) reference widget id(s) ` +
+      `[extension-manifest] ${context}: manifest wizard step(s)/detector(s) reference widget id(s) ` +
         `not defined in src/widgets/index.ts: ${[...new Set(missing)].join(", ")} ` +
-        `(declare every step's widgetId as an id: "..." literal in the widgets module)`,
+        `(declare every referenced widget id as an id: "..." literal in the widgets module)`,
     );
   }
 }

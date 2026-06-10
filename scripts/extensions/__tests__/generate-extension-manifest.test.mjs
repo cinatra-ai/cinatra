@@ -472,6 +472,40 @@ describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
     expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).not.toThrow();
   });
 
+  it("accepts single-quoted and template (no-interpolation) literals", () => {
+    const widgetsSingle = `export const w = [ { id: 'acme.finder', label: "F", component: F } ];`;
+    const manifestSingle = `export const m = { wizard: { steps: [ { widgetId: 'acme.finder' } ] } };`;
+    expect(() => assertManifestWidgetIdsCovered(manifestSingle, widgetsSingle, "q src/widgets")).not.toThrow();
+    const manifestTpl = "export const m = { wizard: { steps: [ { widgetId: `acme.finder` } ] } };";
+    expect(() => assertManifestWidgetIdsCovered(manifestTpl, widgetsSingle, "q src/widgets")).not.toThrow();
+  });
+
+  it("REJECTS a non-literal widgetId (identifier / computed / interpolated)", () => {
+    const cases = [
+      `export const m = { wizard: { steps: [ { widgetId: STEP_ONE } ] } };`,
+      `export const m = { wizard: { steps: [ { widgetId: prefix + ".finder" } ] } };`,
+      "export const m = { wizard: { steps: [ { widgetId: `${p}.finder` } ] } };",
+    ];
+    for (const manifestSrc of cases) {
+      expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "dyn src/widgets")).toThrow(
+        /non-literal widgetId/,
+      );
+    }
+  });
+
+  it("validates detector record-map VALUES as widget ids (and rejects non-literal values)", () => {
+    const ok = `export const m = { detectors: [ { widgetId: { a: "acme.finder", b: 'acme.editor' } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(ok, widgetsSrc, "rec src/widgets")).not.toThrow();
+    const missing = `export const m = { detectors: [ { widgetId: { a: "acme.ghost" } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(missing, widgetsSrc, "rec src/widgets")).toThrow(
+      /not defined in src\/widgets\/index\.ts: acme\.ghost/,
+    );
+    const dynamic = `export const m = { detectors: [ { widgetId: { a: SOME_CONST } } ] };`;
+    expect(() => assertManifestWidgetIdsCovered(dynamic, widgetsSrc, "rec src/widgets")).toThrow(
+      /non-literal widgetId record value/,
+    );
+  });
+
   it("FAILS generation when a wizard step names an undefined widget id", () => {
     const manifestSrc = `
       export const acmeManifest = {
@@ -481,7 +515,7 @@ describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
       };
     `;
     expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).toThrow(
-      /acme src\/widgets: manifest wizard step\(s\) reference widget id\(s\) not defined in src\/widgets\/index\.ts: acme\.ghost/,
+      /acme src\/widgets: manifest wizard step\(s\)\/detector\(s\) reference widget id\(s\) not defined in src\/widgets\/index\.ts: acme\.ghost/,
     );
   });
 
