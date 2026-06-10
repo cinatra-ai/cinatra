@@ -210,6 +210,42 @@ describe("inspectTarball hardening", () => {
     const { violations } = await inspect(gz);
     expect(violations.some((v) => v.includes("archive root"))).toBe(true);
   });
+
+  it("rejects setuid/setgid/sticky mode bits on files and directories", async () => {
+    for (const extra of [
+      { path: `sample-connector-${SHA_A}/sneaky`, body: "x", mode: 0o4755 },
+      { path: `sample-connector-${SHA_A}/sneaky2`, body: "x", mode: 0o2644 },
+      { path: `sample-connector-${SHA_A}/sneaky3`, body: "x", mode: 0o1644 },
+      { path: `sample-connector-${SHA_A}/odd-dir/`, type: "Directory", mode: 0o2775 },
+    ]) {
+      const gz = await goodArchive({ extra: [extra] });
+      const { violations } = await inspect(gz);
+      expect(
+        violations.some((v) => v.includes("special mode bits")),
+        `mode ${(extra.mode).toString(8)} must be rejected`,
+      ).toBe(true);
+    }
+  });
+
+  it("accepts umask-noisy modes (codeload emits 664/775) — normalized at extraction", async () => {
+    const gz = await goodArchive({
+      extra: [
+        { path: `sample-connector-${SHA_A}/plain.txt`, body: "x", mode: 0o664 },
+        { path: `sample-connector-${SHA_A}/run.sh`, body: "#!/bin/sh\n", mode: 0o775 },
+      ],
+    });
+    const { violations, records } = await inspect(gz);
+    expect(violations).toEqual([]);
+    const dest = scratch();
+    const tarBuffer = await gunzipBounded(gz);
+    const { extractVerifiedTarball } = await import("../prod-extension-acquisition.mjs");
+    await extractVerifiedTarball(tarBuffer, dest, { tar });
+    const { statSync } = await import("node:fs");
+    expect(statSync(path.join(dest, "plain.txt")).mode & 0o7777).toBe(0o644);
+    expect(statSync(path.join(dest, "run.sh")).mode & 0o7777).toBe(0o755);
+    // and the disk re-hash matches the archive hash (modes normalized, not lost)
+    expect(computeTreeSha256FromDir(dest)).toBe(foldTreeHash(records));
+  });
 });
 
 // --- tree hash ------------------------------------------------------------
@@ -377,6 +413,36 @@ describe("acquireProdRequiredExtensions", () => {
       readFileSync(path.join(root, "extensions/scope/sample-connector", ACQUISITION_MARKER_FILENAME), "utf8"),
     );
     expect(marker.resolvedSha).toBe("c".repeat(40));
+  });
+
+  it("keeps the previously verified tree when a pin-moved re-acquisition fails", async () => {
+    const gz = await goodArchive();
+    const root = await workspaceWithLock(gz);
+    await acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} });
+
+    // Move the pin, then make the replacement download fail.
+    const lock = JSON.parse(readFileSync(path.join(root, LOCK_FILENAME), "utf8"));
+    lock.packages[0].resolvedSha = "c".repeat(40);
+    writeFileSync(path.join(root, LOCK_FILENAME), JSON.stringify(lock));
+    await expect(
+      acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz, { status: 404 }), log: () => {} }),
+    ).rejects.toThrow(/HTTP 404/);
+    // The old verified tree must still be in place (no empty slot).
+    expect(existsSync(path.join(root, "extensions/scope/sample-connector/package.json"))).toBe(true);
+  });
+
+  it("fails loud when the lock and the declared requiredExtensions drift apart", async () => {
+    const gz = await goodArchive();
+    const root = await workspaceWithLock(gz);
+    writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        cinatra: { requiredExtensions: ["@scope/sample-connector@^0.1.0", "@scope/undeclared-in-lock@^0.1.0"] },
+      }),
+    );
+    await expect(
+      acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} }),
+    ).rejects.toThrow(/declared but not locked: @scope\/undeclared-in-lock/);
   });
 
   it("fails loud when marker-claimed content was tampered with", async () => {

@@ -80,8 +80,11 @@ function versionSatisfiesCommonRange(version, range) {
   const [cmaj, cmin, cpat] = [Number(caret[1]), Number(caret[2]), Number(caret[3])];
   if (maj !== cmaj) return false;
   if (cmaj > 0) return min > cmin || (min === cmin && pat >= cpat);
-  // npm caret on major 0: widen at the minor only.
-  return min === cmin && pat >= cpat;
+  // npm caret on major 0 (canonical semantics, matching the host checker):
+  // ^0.minor.patch widens at the PATCH for minor>0, and ^0.0.z admits only
+  // the exact patch.
+  if (min !== cmin) return false;
+  return cmin > 0 ? pat >= cpat : pat === cpat;
 }
 
 function lsRemoteMainSha(url) {
@@ -106,8 +109,13 @@ function repoSlugFromUrl(url) {
 }
 
 function parseArgs(argv) {
-  const i = argv.indexOf("--select");
-  const select = i >= 0 && argv[i + 1] ? argv[i + 1].split(",").map((s) => s.trim()).filter(Boolean) : [];
+  let raw = null;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--select") raw = argv[i + 1] ?? "";
+    else if (argv[i].startsWith("--select=")) raw = argv[i].slice("--select=".length);
+  }
+  const select = raw !== null ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  if (raw !== null && select.length === 0) fail("--select was given but no package names were provided");
   return { select };
 }
 
@@ -136,12 +144,29 @@ const selected = (name) =>
   select.length === 0 || select.includes(name) || select.includes(shortName(name));
 
 const entries = requiredRaw.map(parseEntry).filter(Boolean);
+
+// Fail-closed selector matching: a typo'd --select that matches nothing must
+// not silently keep every existing pin and exit green.
+if (select.length > 0) {
+  const matchable = new Set(entries.flatMap((e) => [e.packageName, shortName(e.packageName)]));
+  const unmatched = select.filter((s) => !matchable.has(s));
+  if (unmatched.length > 0) {
+    fail(
+      `--select entries match no required extension: ${unmatched.join(", ")} ` +
+        `(valid: the full @scope/name or the short name of a cinatra.requiredExtensions entry)`,
+    );
+  }
+}
+
 const locked = [];
+let refreshedCount = 0;
+let keptCount = 0;
 for (const entry of entries) {
   if (!selected(entry.packageName)) {
     const kept = existingByName.get(entry.packageName);
     if (!kept) fail(`--select skipped ${entry.packageName}, but the existing lock has no entry to keep for it`);
     locked.push(kept);
+    keptCount += 1;
     continue;
   }
   const repoUrl = devExtensions[entry.packageName];
@@ -192,6 +217,7 @@ for (const entry of entries) {
     packageVersion: manifest.version,
     treeSha256: foldTreeHash(records),
   });
+  refreshedCount += 1;
 }
 
 locked.sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0));
@@ -207,4 +233,7 @@ const doc = {
   packages: locked,
 };
 writeFileSync(LOCK_PATH, JSON.stringify(doc, null, 2) + "\n");
-console.log(`[update-required-extension-lock] wrote ${locked.length} pinned package(s) to ${LOCK_PATH}`);
+console.log(
+  `[update-required-extension-lock] wrote ${locked.length} pinned package(s) to ${LOCK_PATH} ` +
+    `(${refreshedCount} refreshed, ${keptCount} kept from the existing lock)`,
+);
