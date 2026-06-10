@@ -61,9 +61,9 @@
     {
       "packageName": "@cinatra-ai/crm-connector",
       "repo": "cinatra-ai/crm-connector",
-      "resolvedSha": "ed7e53bad2091f741f156a11453ce6d50f29f0e8",
+      "resolvedSha": "635284d5814a9497f361687d5904904ba349bc90",
       "packageVersion": "0.1.0",
-      "treeSha256": "adc73dcf474c5ef3e1eb5e510f93597c7f183f0b207ec80a8180f761cb89c748"
+      "treeSha256": "373c25727e921e8d34a7a9fe6da7f9fd5e692e782cd615ef6930a7b4017cb628"
     },
     {
       "packageName": "@cinatra-ai/default-artifact",
