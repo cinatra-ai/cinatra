@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "crypto";
+
 // Host delivery for release-workflow notifications. The engine computes WHICH
 // transitions notify WHICH roles (owner/assignee/approver,
 // engine/notifications.ts matrix); this module resolves those abstract roles to
@@ -162,6 +164,12 @@ export function buildWorkflowNotifier(): WorkflowNotifier {
       : undefined;
 
     // Resolve + de-duplicate recipients (owner and assignee can coincide).
+    //
+    // NOTE: this Map dedupes by RECIPIENT IDENTITY only. Two distinct
+    // recipients (e.g. owner {kind:"user"} + assignee {kind:"team"}) can
+    // still fan out to an OVERLAPPING user set inside
+    // createNotificationForRecipient — the per-delivery `dedupeKey` below is
+    // what collapses that overlap to one row per user (issue #50).
     const recipients = new Map<string, NotificationRecipient>();
     for (const role of n.recipients) {
       if (role === "approver") {
@@ -176,11 +184,20 @@ export function buildWorkflowNotifier(): WorkflowNotifier {
     if (recipients.size === 0) return;
 
     const copy = COPY[n.event];
+    // ONE dedupe key per logical delivery, shared across every recipient of
+    // THIS WorkflowNotification. A user reached through two overlapping
+    // recipients (owner user X + assignee team containing X) collapses to a
+    // single row via the (user_id, dedupe_key) unique index. The random
+    // suffix scopes the key to this delivery only — a LATER occurrence of
+    // the same event type mints a fresh key and notifies again
+    // (WorkflowNotification carries no engine event id to key on instead).
+    const dedupeKey = `workflow:${n.event}:${wf.id}:${n.taskId ?? "-"}:${randomUUID()}`;
     const input = {
       title: copy.title,
       body: bodyFor(n.event, wf.name, task?.title, n.payload),
       kind: copy.kind,
       href: `/workflows/${wf.id}`,
+      dedupeKey,
     };
     for (const recipient of recipients.values()) {
       try {
