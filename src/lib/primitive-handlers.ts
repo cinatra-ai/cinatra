@@ -7,22 +7,39 @@ import { createBlogContentPrimitiveHandlers } from "@/lib/blog/mcp/handlers";
 // runs can fail at execution.
 import { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
 import { createSkillsPrimitiveHandlers } from "@cinatra-ai/skills/mcp-handlers";
-import { createGmailPrimitiveHandlers } from "@cinatra-ai/gmail-connector/mcp-handlers";
-import { createWordPressPrimitiveHandlers } from "@cinatra-ai/wordpress-mcp-connector/mcp-handlers";
-import { createDrupalPrimitiveHandlers } from "@cinatra-ai/drupal-mcp-connector/mcp-handlers";
-import { createLinkedInPrimitiveHandlers } from "@cinatra-ai/linkedin-connector/mcp-handlers";
-import { createApolloPrimitiveHandlers } from "@cinatra-ai/apollo-connector/mcp-handlers";
+// Connector primitive handlers are NOT imported here. They are captured from
+// the generated extension manifest (a connector opts in by exporting a
+// create*PrimitiveHandlers() factory on its `mcp-handlers` subpath) — see
+// loadConnectorPrimitiveHandlers (src/lib/connector-mcp-registration.server.ts).
+import { loadConnectorPrimitiveHandlers } from "@/lib/connector-mcp-registration.server";
+import { loadConnectorModule } from "@/lib/connector-modules.server";
 import { createPermissionsPrimitiveHandlers } from "@cinatra-ai/permissions/mcp-handlers";
 // Trigger handlers exposed for the deterministic passthrough.
 import { createTriggerHandlers } from "@cinatra-ai/trigger";
 import { createExtensionsPrimitiveHandlers } from "@cinatra-ai/extensions/mcp-handlers";
-import {
-  getStoredGoogleCalendarAppointments,
-  addGoogleCalendarAppointmentSchedule,
-  addUserGoogleCalendarAppointmentSchedule,
-} from "@cinatra-ai/google-calendar-connector";
 
-export function collectAllPrimitiveHandlers() {
+// Structural data contract for the calendar appointment-schedule surface —
+// resolved by SLUG through the manifest entry-module loader (the host names no
+// connector package). The export shape below is the host↔connector contract.
+type AppointmentScheduleModule = {
+  getStoredGoogleCalendarAppointments: (userId?: string) => unknown;
+  addGoogleCalendarAppointmentSchedule: (url: string) => Promise<unknown>;
+  addUserGoogleCalendarAppointmentSchedule: (userId: string, url: string) => Promise<unknown>;
+};
+
+const APPOINTMENT_SCHEDULE_SLUG = "google-calendar-connector";
+
+async function loadAppointmentScheduleModule(): Promise<AppointmentScheduleModule> {
+  const mod = await loadConnectorModule<AppointmentScheduleModule>(APPOINTMENT_SCHEDULE_SLUG);
+  if (!mod) {
+    throw new Error(
+      `Appointment-schedule connector module not bundled (slug: ${APPOINTMENT_SCHEDULE_SLUG})`,
+    );
+  }
+  return mod;
+}
+
+export async function collectAllPrimitiveHandlers() {
   return {
     // Agent builder first — ensures agent_* tools are within the
     // MAX_FUNCTION_TOOLS window (OpenAI caps function tools at 128).
@@ -54,28 +71,26 @@ export function collectAllPrimitiveHandlers() {
     // + objects_list + objects_get + objects_type_register + objects_types_list.
     ...createObjectsPrimitiveHandlers(),
     ...createSkillsPrimitiveHandlers(),
-    ...createGmailPrimitiveHandlers(),
-    ...createWordPressPrimitiveHandlers(),
-    ...createDrupalPrimitiveHandlers(),
-    ...createLinkedInPrimitiveHandlers(),
-    ...createApolloPrimitiveHandlers(),
+    // Manifest-discovered connector primitive handlers (manifest slug order).
+    ...(await loadConnectorPrimitiveHandlers()),
     ...createPermissionsPrimitiveHandlers(),
     ...createTriggerHandlers(),
     "calendar_appointments_list": async () => {
-      return getStoredGoogleCalendarAppointments();
+      const calendar = await loadAppointmentScheduleModule();
+      return calendar.getStoredGoogleCalendarAppointments();
     },
     "calendar_appointments_add": async (request: unknown) => {
       const { input } = request as { input?: Record<string, unknown> };
       const url = typeof input?.url === "string" ? input.url : "";
       if (!url) return { error: "A booking page URL is required." };
       const invokingUserId = typeof input?._userId === "string" ? input._userId : undefined;
+      const calendar = await loadAppointmentScheduleModule();
       if (invokingUserId) {
-        const { addUserGoogleCalendarAppointmentSchedule } = await import("@cinatra-ai/google-calendar-connector");
-        await addUserGoogleCalendarAppointmentSchedule(invokingUserId, url);
-        return getStoredGoogleCalendarAppointments(invokingUserId);
+        await calendar.addUserGoogleCalendarAppointmentSchedule(invokingUserId, url);
+        return calendar.getStoredGoogleCalendarAppointments(invokingUserId);
       }
-      await addGoogleCalendarAppointmentSchedule(url);
-      return getStoredGoogleCalendarAppointments();
+      await calendar.addGoogleCalendarAppointmentSchedule(url);
+      return calendar.getStoredGoogleCalendarAppointments();
     },
   };
 }

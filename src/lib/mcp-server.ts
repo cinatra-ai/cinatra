@@ -13,18 +13,11 @@ import { createDashboardsModule } from "@cinatra-ai/dashboards/module";
 // Vanilla drizzle-cube/mcp tools (discover, validate, load) are mounted under
 // /api/mcp with the existing Better Auth / OAuth gate.
 import { createDashboardCubesMcpModule } from "@cinatra-ai/dashboards/cubes-mcp-module";
-import { createEmailModule } from "@cinatra-ai/email-connector/mcp-module";
-import { createGmailModule } from "@cinatra-ai/gmail-connector/mcp-module";
-import { createGoogleCalendarModule } from "@cinatra-ai/google-calendar-connector/mcp-module";
-import { createApolloModule } from "@cinatra-ai/apollo-connector/mcp-module";
-import { createWordPressModule } from "@cinatra-ai/wordpress-mcp-connector/mcp-module";
-import { createDrupalModule } from "@cinatra-ai/drupal-mcp-connector/mcp-module";
-import { createLinkedInModule } from "@cinatra-ai/linkedin-connector/mcp-module";
-import { createSocialMediaModule } from "@cinatra-ai/social-media-connector/mcp-module";
-import { createBlogModule } from "@cinatra-ai/blog-connector/mcp-module";
-import { createCrmModule } from "@cinatra-ai/crm-connector/mcp-module";
-import { createTwentyConnectorModule } from "@cinatra-ai/twenty-connector/mcp-module";
-import { createMediaFeedsModule } from "@cinatra-ai/media-feeds-connector/mcp-module";
+// Connector MCP capability modules are NOT imported here. They are discovered
+// from the generated extension manifest and registered through the same
+// registration pass as extension-registered tools — see
+// loadConnectorMcpModules (src/lib/connector-mcp-registration.server.ts).
+import { loadConnectorMcpModules } from "@/lib/connector-mcp-registration.server";
 import { createPermissionsModule } from "@cinatra-ai/permissions/mcp-module";
 import { createSkillsModule } from "@cinatra-ai/skills/mcp-module";
 import { createMetricsCostModule } from "@cinatra-ai/metric-cost-api";
@@ -47,40 +40,15 @@ import { listExtensionMcpTools, markEffectiveExtensionMcpTools } from "@/lib/ext
 
 const MCP_SERVER_SETTINGS_KEY = "mcp_server";
 
+// Host/platform capability modules. Connector modules are NOT listed here —
+// they resolve from the generated extension manifest (loadConnectorMcpModules)
+// so no specific connector package is named on this registration path.
 const modules = [
   createArtifactsModule(),
   createContextModule(),
   createObjectsModule(),
   createProjectsModule(),
   createBlogContentModule(),
-  // Inject a TRUSTED actor resolver: the static email_send handler must derive
-  // the human subject userId/orgId from the request/run context (the MCP SDK
-  // `extra` carries no actor), so the connector stays SDK-only while routing by
-  // the right user. Same resolution the register(ctx) path uses via ctx.authSession.
-  createEmailModule({
-    resolveActor: async () => {
-      const { resolveExtensionActorSummary } = await import("@/lib/extension-host-actor");
-      const s = await resolveExtensionActorSummary();
-      return { userId: s?.userId ?? undefined, orgId: s?.organizationId ?? undefined };
-    },
-  }),
-  createGmailModule(),
-  createGoogleCalendarModule(),
-  createApolloModule(),
-  createWordPressModule(),
-  createDrupalModule(),
-  createLinkedInModule(),
-  createSocialMediaModule({
-    resolveActor: async () => {
-      const { resolveExtensionActorSummary } = await import("@/lib/extension-host-actor");
-      const s = await resolveExtensionActorSummary();
-      return { userId: s?.userId ?? undefined, orgId: s?.organizationId ?? undefined };
-    },
-  }),
-  createBlogModule(),
-  createCrmModule(),
-  createTwentyConnectorModule(),
-  createMediaFeedsModule(),
   createPermissionsModule(),
   createSkillsModule(),
   createMetricsCostModule(),
@@ -101,6 +69,19 @@ const modules = [
   createWorkflowsModule(buildWorkflowHandlerDeps()),
 ];
 
+// TRUSTED actor resolver, passed uniformly to every manifest-discovered
+// connector module factory: a connector tool that must derive the human
+// subject userId/orgId from the request/run context (the MCP SDK `extra`
+// carries no actor) consumes it; the others ignore it. Same resolution the
+// register(ctx) path uses via ctx.authSession.
+const connectorModuleHostOptions = {
+  resolveActor: async () => {
+    const { resolveExtensionActorSummary } = await import("@/lib/extension-host-actor");
+    const s = await resolveExtensionActorSummary();
+    return { userId: s?.userId ?? undefined, orgId: s?.organizationId ?? undefined };
+  },
+};
+
 // Exported so a hermetic test can run the registration pass against a stub
 // server and assert the registered tool count stays below the 128 function-tool
 // ceiling that the OpenAI Responses API silently truncates above. Future module
@@ -119,8 +100,8 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
     return new Set(manifests.map((m) => m.packageName));
   });
 
-  // Record the tool names the static modules register so the extension replay
-  // below can skip any name already claimed (dedup — the vendored server's
+  // Record the tool names the platform + manifest-discovered modules register
+  // so the extension replay below can skip any name already claimed (dedup — the vendored server's
   // duplicate behavior is not relied upon). Non-registerTool members delegate to
   // the real server (bound to it, not the proxy, to avoid proxy-`this` surprises).
   //
@@ -147,19 +128,29 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
     await mod.registerCapabilities(recordingServer);
   }
 
-  // Replay EXTENSION-registered MCP tools (register(ctx) → ctx.mcp.registerTool)
-  // AFTER the static modules. EMPTY by default → no-op (existing tool set
-  // unchanged). Skip any name a static module already claimed; wrap the
-  // extension's plain handler result into the MCP content/structuredContent
-  // envelope (mirrors the static connector modules). Track which tools were
-  // ACTUALLY registered (not skipped) → the authz boundary keys its
-  // shadow-allow on this EFFECTIVE set, so a skipped (host-colliding)
-  // registration can never unlock a host tool.
+  // Manifest-discovered connector MCP modules. Registered through the SAME
+  // recording pass as the platform modules so the replay below dedupes against
+  // them — no connector package is named on this path (the generated manifest
+  // is the only place a connector is identified).
+  for (const mod of await loadConnectorMcpModules(connectorModuleHostOptions)) {
+    await mod.registerCapabilities(recordingServer);
+  }
+
+  // PRIMARY extension registration mechanism: replay EXTENSION-registered MCP
+  // tools (register(ctx) → ctx.mcp.registerTool). An extension that registers
+  // its tools at activation needs no module entry at all — this replay is how
+  // extension tools reach the server. Runs AFTER the platform + discovered
+  // modules so a name they already claimed is SKIPPED; wrap the extension's
+  // plain handler result into the MCP content/structuredContent envelope
+  // (mirrors the connector modules). Track which tools were ACTUALLY
+  // registered (not skipped) → the authz boundary keys its shadow-allow on
+  // this EFFECTIVE set, so a skipped (host-colliding) registration can never
+  // unlock a host tool.
   const effectiveExtensionTools: { name: string; packageName: string }[] = [];
   for (const tool of listExtensionMcpTools()) {
     if (registeredNames.has(tool.name)) {
       console.debug(
-        `[mcp] extension tool "${tool.name}" (${tool.packageName}) skipped — name already claimed by a static module or a reserved host built-in`,
+        `[mcp] extension tool "${tool.name}" (${tool.packageName}) skipped — name already claimed by a registered module or a reserved host built-in`,
       );
       continue;
     }
@@ -177,7 +168,7 @@ export async function registerAllCapabilities(server: McpRuntimeToolServer) {
       async (input: unknown) => {
         const raw = await handler(input);
         // Normalize the plain handler result into the MCP envelope (mirrors the
-        // static connector modules): arrays → { items }, objects → as-is,
+        // connector modules): arrays → { items }, objects → as-is,
         // scalars/undefined → { result }.
         const resolved = raw === undefined ? null : raw;
         return {
@@ -202,8 +193,8 @@ type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>
 /**
  * Build the host's UNIVERSAL in-process primitive-handler map
  * so `ctx.mcp.callPrimitive(name, input)` can invoke ANY host primitive by name,
- * the same code path the live MCP transport uses. Captures every static module's
- * `registerTool(name, config, handler)` plus the replayed extension tools into a
+ * the same code path the live MCP transport uses. Captures every registered
+ * module's `registerTool(name, config, handler)` plus the replayed extension tools into a
  * `name → handler` map by running the SAME registration pass against a pure
  * RECORDING server (no real transport, no live server mutated). The captured
  * handler is the MCP-SDK callback `(args, extra) => CallToolResult`; the
@@ -229,15 +220,21 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
     registerScreen: () => undefined,
   } as unknown as McpRuntimeToolServer;
 
-  // Static capability modules (the same array the live server registers).
+  // Platform capability modules (the same array the live server registers).
   for (const mod of modules) {
     await mod.registerCapabilities(recordingServer);
   }
 
+  // Manifest-discovered connector modules (same discovery + options the live
+  // server uses, so the captured map mirrors the live tool surface).
+  for (const mod of await loadConnectorMcpModules(connectorModuleHostOptions)) {
+    await mod.registerCapabilities(recordingServer);
+  }
+
   // Replay extension-registered tools (register(ctx) → ctx.mcp.registerTool),
-  // skipping names a static module already claimed (dedupe parity with the live
-  // server). Wrap the plain handler result into the MCP envelope so the captured
-  // handler shape is uniform with the static ones.
+  // skipping names a platform/discovered module already claimed (dedupe parity
+  // with the live server). Wrap the plain handler result into the MCP envelope
+  // so the captured handler shape is uniform with the module-registered ones.
   for (const tool of listExtensionMcpTools()) {
     if (handlers.has(tool.name)) continue;
     const handler = tool.handler;

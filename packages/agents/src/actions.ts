@@ -1296,7 +1296,7 @@ export async function recompileAgentTemplate(
   const template = await readAgentTemplateById(templateId);
   if (!template) throw new Error("Agent template not found");
 
-  const allHandlers = collectAllPrimitiveHandlers();
+  const allHandlers = await collectAllPrimitiveHandlers();
   const toolNames = Object.keys(allHandlers);
 
   // NOTE: compileWorkflow may throw when the compiler's post-generation

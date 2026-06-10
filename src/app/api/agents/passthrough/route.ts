@@ -265,7 +265,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const handlers = collectAllPrimitiveHandlers();
+  const handlers = await collectAllPrimitiveHandlers();
   const handler = handlers[tool];
   if (typeof handler !== "function") {
     return NextResponse.json(

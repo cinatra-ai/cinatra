@@ -183,6 +183,36 @@ function entryFlags(rec) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// MCP capability-module + primitive-handler factory discovery.
+//
+// A connector exposes its MCP capability module by exporting a single
+// `create*Module()` factory from `src/mcp/module.ts` (subpath `<pkg>/mcp-module`)
+// and, optionally, its in-process primitive handlers by exporting a single
+// `create*PrimitiveHandlers()` factory from `src/mcp/handlers.ts` (subpath
+// `<pkg>/mcp-handlers`). The generator records the factory EXPORT NAME next to
+// the literal dynamic-import loader so the host can resolve the factory from
+// the imported namespace without naming any connector package.
+// ---------------------------------------------------------------------------
+const MCP_MODULE_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*Module)\s*\(/g;
+const PRIMITIVE_HANDLERS_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*PrimitiveHandlers)\s*\(/g;
+
+// Extract the factory export name from a connector MCP source file, or null
+// when the file exports no matching factory (the connector does not take part
+// in that surface). MORE THAN ONE match is ambiguous and FAILS generation —
+// the host resolves exactly one factory per loader entry.
+export function extractFactoryExport(source, re, context) {
+  re.lastIndex = 0;
+  const matches = Array.from(source.matchAll(re)).map((m) => m[1]);
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      `[extension-manifest] ${context}: ambiguous factory exports (${matches.join(", ")}) — exactly one is required`,
+    );
+  }
+  return matches[0];
+}
+
 function isObj(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -378,7 +408,61 @@ export async function buildManifest() {
     .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
-  return { records, connectorSetupPages, connectorSettingsPages, connectorEntryModules };
+  // Connector MCP capability modules: every connector that ships src/mcp/module.ts
+  // (hasMcpModule) MUST export exactly one create*Module() factory — the host
+  // registers these modules from this map, so a module the generator cannot
+  // resolve would silently fall off the MCP surface. FAIL CLOSED at generation.
+  const connectorMcpModules = records
+    .filter((r) => r.kind === "connector" && r.hasMcpModule)
+    .map((r) => {
+      const moduleSource = readFileSync(join(REPO_ROOT, r.sourceDir, "src/mcp/module.ts"), "utf8");
+      const factory = extractFactoryExport(
+        moduleSource,
+        MCP_MODULE_FACTORY_RE,
+        `${r.packageName} src/mcp/module.ts`,
+      );
+      if (!factory) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} ships src/mcp/module.ts but exports no create*Module() factory`,
+        );
+      }
+      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory };
+    })
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
+  // Connector in-process primitive handlers: a connector OPTS IN by exporting a
+  // create*PrimitiveHandlers() factory from src/mcp/handlers.ts. A handlers file
+  // without the factory export is not part of this surface (skipped, not an
+  // error) — the factory export IS the registration.
+  const connectorPrimitiveHandlers = records
+    .filter(
+      (r) => r.kind === "connector" && fileExists(join(r.sourceDir, "src/mcp/handlers.ts")),
+    )
+    .map((r) => {
+      const handlersSource = readFileSync(
+        join(REPO_ROOT, r.sourceDir, "src/mcp/handlers.ts"),
+        "utf8",
+      );
+      const factory = extractFactoryExport(
+        handlersSource,
+        PRIMITIVE_HANDLERS_FACTORY_RE,
+        `${r.packageName} src/mcp/handlers.ts`,
+      );
+      return factory
+        ? { slug: r.packageName.split("/")[1], packageName: r.packageName, factory }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
+  return {
+    records,
+    connectorSetupPages,
+    connectorSettingsPages,
+    connectorEntryModules,
+    connectorMcpModules,
+    connectorPrimitiveHandlers,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +477,7 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
-function emitServer(records, connectorEntryModules) {
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
@@ -441,6 +525,26 @@ function emitServer(records, connectorEntryModules) {
   const entryModules = connectorEntryModules
     .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(p.packageName)}),`)
     .join("\n");
+  // Connector MCP capability-module loader map: slug → { literal dynamic import
+  // of <pkg>/mcp-module, factory export name }. Consumed by
+  // src/lib/connector-mcp-registration.server.ts — the host registers connector
+  // MCP modules from this map instead of importing them by package name.
+  const mcpModules = connectorMcpModules
+    .map(
+      (p) =>
+        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-module`)}), factory: ${JSON.stringify(p.factory)} },`,
+    )
+    .join("\n");
+  // Connector primitive-handler loader map: slug → { literal dynamic import of
+  // <pkg>/mcp-handlers, factory export name }. Consumed by
+  // src/lib/connector-mcp-registration.server.ts for the in-process
+  // primitive-handler capture.
+  const primitiveHandlers = connectorPrimitiveHandlers
+    .map(
+      (p) =>
+        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-handlers`)}), factory: ${JSON.stringify(p.factory)} },`,
+    )
+    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
     `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
@@ -457,7 +561,15 @@ function emitServer(records, connectorEntryModules) {
     `// Literal specifiers only (Turbopack-safe). Consumed by\n` +
     `// src/lib/connector-modules.server.ts.\n` +
     `export const GENERATED_CONNECTOR_ENTRY_MODULES: Record<string, () => Promise<unknown>> = {\n` +
-    `${entryModules}\n};\n`
+    `${entryModules}\n};\n\n` +
+    `// slug → { loader, factory export name } for connector MCP surfaces.\n` +
+    `// Literal specifiers only (Turbopack-safe). Consumed by\n` +
+    `// src/lib/connector-mcp-registration.server.ts.\n` +
+    `export type GeneratedConnectorFactoryEntry = { load: () => Promise<unknown>; factory: string };\n\n` +
+    `export const GENERATED_CONNECTOR_MCP_MODULES: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
+    `${mcpModules}\n};\n\n` +
+    `export const GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
+    `${primitiveHandlers}\n};\n`
   );
 }
 
@@ -562,10 +674,16 @@ const OUT_CLIENT = join(GEN_DIR, "extensions.client.tsx");
 
 async function main() {
   const args = process.argv.slice(2);
-  const { records, connectorSetupPages, connectorSettingsPages, connectorEntryModules } =
-    await buildManifest();
+  const {
+    records,
+    connectorSetupPages,
+    connectorSettingsPages,
+    connectorEntryModules,
+    connectorMcpModules,
+    connectorPrimitiveHandlers,
+  } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers)],
     [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
   ];
