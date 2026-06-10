@@ -1,11 +1,19 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import {
-  getPostgresConnectionString,
-  ensurePostgresSchema,
-  postgresSchema,
-} from "@/lib/database";
+
+// `database.ts` lazily `require()`s this module's `buildArtifactRefSyncQueries`
+// inside `upsertChatThreadInDatabase`. A STATIC `import ... from "@/lib/database"`
+// here closes that into an import cycle: under Turbopack the back-edge resolves
+// to a half-initialised module namespace, so `mod.buildArtifactRefSyncQueries`
+// reads as `undefined` ("is not a function") and every `POST /api/chat/save`
+// 500s. Reach into database.ts LAZILY instead (the codebase's existing
+// cross-module pattern — see `artifact-creation.ts`, `database.ts:1218/1385`)
+// so there is no static back-edge to complete the cycle.
+function db(): typeof import("@/lib/database") {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("@/lib/database");
+}
 
 // Replay-safe artifact reference (pin) table.
 //
@@ -43,8 +51,8 @@ export type ArtifactRefInput = {
   originKind: string;
 };
 
-const conn = (): string => getPostgresConnectionString();
-const q = (): string => postgresSchema.replaceAll('"', '""');
+const conn = (): string => db().getPostgresConnectionString();
+const q = (): string => db().postgresSchema.replaceAll('"', '""');
 
 /** Idempotent batch insert of artifact refs (one row per ref). The
  *  unique index on (org_id, artifact_id, representation_revision_id,
@@ -57,7 +65,7 @@ export function recordArtifactRefs(input: {
   refs: ArtifactRefInput[];
 }): void {
   if (input.refs.length === 0) return;
-  ensurePostgresSchema();
+  db().ensurePostgresSchema();
   // Validate each pin candidate's (representation, resource,
   // artifact_blobs) chain is fully alive. `representation` rows are
   // immutable/append-only and SURVIVE GC, so a pure
@@ -194,7 +202,7 @@ export function syncArtifactRefsForReferrer(input: {
   createdBy?: string | null;
   refs: ArtifactRefInput[];
 }): void {
-  ensurePostgresSchema();
+  db().ensurePostgresSchema();
   // Per-referrer advisory lock + single held-lock transaction
   // spanning INSERTs + DELETE. The composable query-builder is the
   // canonical impl; this standalone wraps it in its own transaction.
@@ -211,7 +219,7 @@ export function syncArtifactRefsForReferrer(input: {
 /** Count active pins on a given artifact (any referrer). Used by
  *  `tombstoneArtifact` to decide between immediate-GC and retention. */
 export function countArtifactRefs(orgId: string, artifactId: string): number {
-  ensurePostgresSchema();
+  db().ensurePostgresSchema();
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
@@ -233,7 +241,7 @@ export function isRepresentationPinned(
   artifactId: string,
   representationRevisionId: string,
 ): boolean {
-  ensurePostgresSchema();
+  db().ensurePostgresSchema();
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
@@ -255,7 +263,7 @@ export function deleteArtifactRefsForReferrer(input: {
   referrerKind: ReferrerKind;
   referrerId: string;
 }): void {
-  ensurePostgresSchema();
+  db().ensurePostgresSchema();
   runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
