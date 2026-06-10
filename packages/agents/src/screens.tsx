@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import { Badge } from "@/components/ui/badge";
+import { RiskBadge } from "@/components/risk-badge";
 import { Button } from "@/components/ui/button";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -439,12 +440,6 @@ export async function AgentApprovalDetailScreen({ id }: { id: string }) {
 // Registry helpers
 // ---------------------------------------------------------------------------
 
-function registryRiskVariant(level: string): "destructive" | "outline" | "secondary" {
-  if (level === "critical" || level === "high") return "destructive";
-  if (level === "medium") return "outline";
-  return "secondary"; // low
-}
-
 /**
  * Test/DI seam for the agent-detail manifest read config. Production leaves
  * these undefined so the real `@/lib/gatekept-install` server-only module is
@@ -782,9 +777,9 @@ export async function RegistryEntryDetailSections({
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Risk Level</p>
             <p className="mt-1 text-sm text-foreground">
-              <Badge variant={registryRiskVariant(entry.riskLevel)}>
-                {entry.riskLevel}
-              </Badge>
+              {/* Shared semantic badge — the catalog list view renders the
+                  SAME component, so list and detail presentation never drift. */}
+              <RiskBadge riskLevel={entry.riskLevel} />
             </p>
           </div>
         </div>
