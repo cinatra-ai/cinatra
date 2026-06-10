@@ -29,12 +29,18 @@ import {
   restoreExtensionPackageFormAction,
   reinstallLatestFormAction,
 } from "../actions";
-import { comparePluginVersions, listAgentPackages } from "@cinatra-ai/registries";
+import {
+  comparePluginVersions,
+  getPublishedExtensionSummary,
+  listAgentPackages,
+} from "@cinatra-ai/registries";
+import { resolveRiskLevelsByPackageName } from "./registry-risk";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { extensionHasBeenUsedBatch } from "@cinatra-ai/extensions";
 import { RegistryUninstallForm } from "./registry-uninstall-form";
 import type { DestinationVariant } from "./registry-uninstall-form";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
+import { RiskBadge } from "@/components/risk-badge";
 import {
   TableBody,
   TableCell,
@@ -182,6 +188,20 @@ export async function RegistryCatalogScreen({
     return { template, destinationVariant };
   });
 
+  // Risk column data for BOTH tabs. Fast path: the `available` registry page
+  // fetched above (riskLevel rides on every summary). Backfill: names that
+  // page missed (q filter / row cap / viewer scope) resolve through a
+  // packument-only read. Rows absent from the map render an em dash — see
+  // registry-risk.ts for the full contract.
+  const riskLevelByPackageName = await resolveRiskLevelsByPackageName({
+    summaries: available,
+    packageNames: [...activeTemplates, ...archivedTemplates].map(
+      (template) => template.packageName,
+    ),
+    readPublishedSummary: (packageName) =>
+      getPublishedExtensionSummary({ packageName }, verdaccioConfig),
+  });
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -227,11 +247,15 @@ export async function RegistryCatalogScreen({
                       <TableRow>
                         <TableHead>Extension</TableHead>
                         <TableHead>Description</TableHead>
+                        <TableHead>Risk</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {activeRowsWithVariant.map(({ template, destinationVariant }) => {
                         const registryEntry = availableByName.get(
+                          template.packageName ?? "",
+                        );
+                        const riskLevel = riskLevelByPackageName.get(
                           template.packageName ?? "",
                         );
 
@@ -341,6 +365,21 @@ export async function RegistryCatalogScreen({
                                 </span>
                               </div>
                             </TableCell>
+                            <TableCell>
+                              {/* Same RiskBadge as the detail page's "Risk Level"
+                                  field. Unresolved registry metadata renders a
+                                  neutral placeholder, never a guessed level. */}
+                              {riskLevel ? (
+                                <RiskBadge riskLevel={riskLevel} />
+                              ) : (
+                                <span
+                                  aria-label="Risk level unavailable"
+                                  className="text-sm text-muted-foreground"
+                                >
+                                  —
+                                </span>
+                              )}
+                            </TableCell>
                           </TableRow>
                         );
                       })}
@@ -363,10 +402,14 @@ export async function RegistryCatalogScreen({
                       <TableRow>
                         <TableHead>Extension</TableHead>
                         <TableHead>Description</TableHead>
+                        <TableHead>Risk</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {archivedTemplates.map((template: AgentTemplateRecord) => {
+                        const riskLevel = riskLevelByPackageName.get(
+                          template.packageName ?? "",
+                        );
                         const scopedMatch = /^@([^/]+)\/(.+)$/.exec(
                           template.packageName ?? "",
                         );
@@ -440,6 +483,21 @@ export async function RegistryCatalogScreen({
                                   v{template.packageVersion}
                                 </span>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              {/* Same RiskBadge as the detail page's "Risk Level"
+                                  field. Unresolved registry metadata renders a
+                                  neutral placeholder, never a guessed level. */}
+                              {riskLevel ? (
+                                <RiskBadge riskLevel={riskLevel} />
+                              ) : (
+                                <span
+                                  aria-label="Risk level unavailable"
+                                  className="text-sm text-muted-foreground"
+                                >
+                                  —
+                                </span>
+                              )}
                             </TableCell>
                           </TableRow>
                         );
