@@ -16,13 +16,16 @@
 #   it additionally requires both owners' review + an auditable PR-body rationale
 #   (enforced by review process / CONTRIBUTING; recorded here in the job log).
 #
-# RUNNER REQUIREMENT: the full UAT needs Docker (WP/Drupal + app services) + the
-# read-only deploy key (secret WP_DRUPAL_UAT_DEPLOY_KEY) to clone the private
-# companion repos. Set the `WP_DRUPAL_UAT_RUNNER` repo variable to a provisioned
-# (self-hosted) runner label if ubuntu-latest cannot host the stack. When the
-# credential is absent on a contract-path PR the gate FAILS loud (not a silent
-# skip) unless the override label is present. After the public flip the clone is
-# anonymous (HTTPS) and the key requirement falls away.
+# RUNNER REQUIREMENT: the full UAT needs Docker (WP/Drupal + app services) plus
+# the app-service env (SUPABASE_DB_URL, BETTER_AUTH_SECRET, REDIS_URL, …). Set
+# the `WP_DRUPAL_UAT_RUNNER` repo variable to a provisioned (self-hosted) runner
+# label if ubuntu-latest cannot host the stack — whether ubuntu-latest suffices
+# is answered empirically by the next contract-path run / 07:00Z nightly.
+# CREDENTIALS: the companion devApp repos (wordpress-plugin, drupal-module,
+# a2a-servers-dev) are PUBLIC — `cinatra setup dev` clones them anonymously over
+# HTTPS, so no deploy key is required. The secret WP_DRUPAL_UAT_DEPLOY_KEY is
+# OPTIONAL and forwarded when present (future private repos); the shared action
+# skips its SSH-config step entirely when the key is empty.
 
 name: WP/Drupal UAT Gate
 
@@ -30,7 +33,18 @@ on:
   pull_request:
     # Draft PRs skip the real UAT (green-stub via run_real); ready_for_review runs
     # it for real; converted_to_draft lets concurrency cancel an in-flight run.
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+    # labeled/unlabeled re-evaluate the gate when `override-wp-drupal-uat` is
+    # toggled (otherwise removing the label could leave a stale-green check).
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        ready_for_review,
+        converted_to_draft,
+        labeled,
+        unlabeled,
+      ]
   schedule:
     - cron: "0 7 * * *" # nightly full suite (07:00 UTC)
 
@@ -113,12 +127,19 @@ jobs:
           "
 
   # Stable required status check — always runs on PRs, branches internally.
+  # `!cancelled()` keeps it running (and failing loud below) when changed-paths
+  # itself fails — a skipped required check would otherwise satisfy protection.
   uat-gate:
-    if: github.event_name == 'pull_request'
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     needs: changed-paths
     runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
+      - name: Fail loud if changed-paths did not succeed
+        if: needs.changed-paths.result != 'success'
+        run: |
+          echo "::error::changed-paths result: ${{ needs.changed-paths.result }} — path relevance unknown, failing the gate instead of skipping."
+          exit 1
       - name: Override label present → skip with audit note
         if: contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
         run: |
@@ -129,30 +150,19 @@ jobs:
           needs.changed-paths.outputs.run_real != 'true'
           && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
         run: echo "No WP/Drupal contract paths touched, or draft PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
-      - name: Require the UAT clone credential
-        id: cred
+      - name: Checkout
         if: >-
           needs.changed-paths.outputs.run_real == 'true'
           && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
-        env:
-          WP_DRUPAL_UAT_DEPLOY_KEY: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
-        run: |
-          set -e
-          if [ -z "${WP_DRUPAL_UAT_DEPLOY_KEY}" ]; then
-            echo "::error::WP/Drupal UAT credential (secret WP_DRUPAL_UAT_DEPLOY_KEY) is not configured."
-            echo "Contract/plugin paths were touched, so the live UAT is required. Either:"
-            echo "  - configure the read-only deploy key + WP_DRUPAL_UAT_RUNNER (a Docker-capable runner), or"
-            echo "  - add the 'override-wp-drupal-uat' label (both-owners review + PR-body rationale)."
-            exit 1
-          fi
-          echo "run=true" >> "$GITHUB_OUTPUT"
-      - name: Checkout
-        if: steps.cred.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run full UAT suite
-        if: steps.cred.outputs.run == 'true'
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@4c903fe9ca71ad47752a2bc92b72893e5f7c9814 # v1.0.0-next.4c903fe
+        if: >-
+          needs.changed-paths.outputs.run_real == 'true'
+          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@5c1a35972ef9dc4b0a7fe627be704e016d27f394 # v0.1.0
         with:
+          # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
+          # when configured so a future private flip keeps working unchanged.
           deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
 
   nightly:
@@ -160,17 +170,10 @@ jobs:
     runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 50
     steps:
-      - name: Require the UAT clone credential
-        env:
-          WP_DRUPAL_UAT_DEPLOY_KEY: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
-        run: |
-          set -e
-          if [ -z "${WP_DRUPAL_UAT_DEPLOY_KEY}" ]; then
-            echo "::error::Nightly WP/Drupal UAT cannot run — WP_DRUPAL_UAT_DEPLOY_KEY not configured. Failures route to both owners."
-            exit 1
-          fi
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run full UAT suite
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@4c903fe9ca71ad47752a2bc92b72893e5f7c9814 # v1.0.0-next.4c903fe
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@5c1a35972ef9dc4b0a7fe627be704e016d27f394 # v0.1.0
         with:
+          # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
+          # when configured so a future private flip keeps working unchanged.
           deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
