@@ -369,6 +369,75 @@ jobs:
         run: |
           node -e "import('./scripts/better-auth-migrate.mts').then(m => { const opts = m.buildMigrationAuthOptions(); const ids = opts.plugins.map(p => p.id); const expected = ['username','two-factor','admin','organization','jwt','oauth-provider']; if (JSON.stringify(ids) !== JSON.stringify(expected)) { console.error('migration plugin ids mismatch:', ids, '!=', expected); process.exit(1); } console.log('migration plugins OK:', ids.join(',')); }).catch(e => { console.error('FAIL:', e); process.exit(1); })"
 
+  # Core-store schema migration gate. The first-party core store schema is
+  # hand-mirrored DDL (`buildCreateStoreSchemaQueries` + the Drizzle table
+  # defs in src/lib/drizzle-store.ts) applied by an idempotent bootstrap — so
+  # a DESTRUCTIVE schema change (drop/rename/retype/NOT NULL/unique index on
+  # existing tables, data rewrites) silently strands deployed user data unless
+  # the PR ships the one-shot migration artifact migrations/README.md
+  # requires (migrations/NNNN_*.sql + its manifest entry, in the same PR).
+  # The gate diffs the PR against its base, classifies in-scope schema changes
+  # per that convention, and fails ONLY when a user-land-affecting change
+  # ships no artifact. Better Auth schema (guarded by auth-schema-drift above)
+  # and extension-owned DDL are out of scope and ignored.
+  # The companion test replays the gate over the labelled fixture corpus at
+  # scripts/audit/__fixtures__/schema-migration/ — the executable form of the
+  # convention — and fails on any misclassification.
+  # Pure node + node:test (like actions-pin-gate): no pnpm install needed.
+  # fetch-depth 0 so the merge-base diff against the PR base resolves.
+  schema-migration-gate:
+    name: Core-store schema migration gate
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so the merge-base diff can resolve origin/<pr.base.ref>.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Compute diff base
+        id: base
+        # PRs → origin/<pr.base.ref>. Pushes → previous-tip (github.event.before)
+        # so a push to main still diffs only what the push changed. Same shape as
+        # the ratchet gates' base resolution; falls back to HEAD (self-compare,
+        # empty diff) when the ref cannot resolve rather than failing closed on
+        # infrastructure.
+        run: |
+          if [ -n "${{ github.event.pull_request.base.ref }}" ]; then
+            base="origin/${{ github.event.pull_request.base.ref }}"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            base="${{ github.event.before }}"
+          else
+            base="origin/main"
+          fi
+          if [ -n "$base" ] && ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+            head="$(git rev-parse --verify --quiet HEAD || true)"
+            if [ -z "$head" ]; then
+              echo "::error::diff base '${base}' did not resolve AND HEAD did not resolve — cannot anchor the schema-migration gate."
+              exit 1
+            fi
+            echo "::notice::diff base '${base}' did not resolve — using HEAD so the gate self-compares (empty diff)"
+            base="$head"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Schema migration gate (destructive DDL needs a migration artifact)
+        env:
+          SCHEMA_MIGRATION_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/schema-migration-gate.mjs
+
+      - name: Gate classifier tests (labelled fixture corpus + unit edges)
+        run: node --test scripts/audit/__tests__/schema-migration-gate.test.mjs
+
   # Release Workflows package gate — unit (102) + integration (73) tests.
   # Dedicated job (mirrors `rbac-resolver-unit` + the e2e jobs' service-
   # container pattern) so the suite gates independently of the well-known
