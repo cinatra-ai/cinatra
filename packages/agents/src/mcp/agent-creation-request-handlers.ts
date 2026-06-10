@@ -8,12 +8,14 @@ import {
   editRejectedRequest,
   decideAgentCreationRequestCas,
   markAgentCreationRequestPublished,
+  markAgentCreationRequestNotificationSent,
   computeSnapshotHash,
   AgentCreationRequestNotFoundError,
   StaleProposalError,
   InvalidStateTransitionError,
   type AgentCreationRequestSnapshot,
   type AgentCreationRequestRow,
+  type AgentCreationRequestNotificationState,
 } from "@/lib/agent-creation-requests-store";
 import {
   readConnectorConfigFromDatabase,
@@ -296,6 +298,69 @@ function readAllowSelfApproval(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Author-facing decision notification (issue #79). The idempotency claim is
+// stamped ATOMICALLY by the decide CAS itself (decideAgentCreationRequestCas
+// writes notification_state = {decision, claimedAt} in the same UPDATE that
+// wins proposed → decided), so this helper runs exactly when the caller owns
+// the current decision cycle's notification — at-most-once, mirroring the
+// workflow reconciler's `notification_state.solicitedAt` pattern. The dedupe
+// key carries `decidedAt` (a fresh timestamp per decision), so a re-decision
+// after an author edit mints a fresh key while a retried send of THIS
+// decision collapses via the (user_id, dedupe_key) unique index.
+// Best-effort: every failure (dynamic import, write) is logged and never
+// blocks the decide — the decision is already committed and audited.
+// ---------------------------------------------------------------------------
+async function notifyAuthorOfDecision(after: AgentCreationRequestRow): Promise<void> {
+  const decided = after.status === "approved" ? ("approved" as const) : ("rejected" as const);
+  // Reason comes from the COMMITTED row (persisted only for rejections) —
+  // never from raw caller input that may not have been stored.
+  const reason = after.rejectionReason ?? undefined;
+  // The claim identity stamped by the decide CAS — threaded through to the
+  // sentAt stamp so a stalled notifier can only ever acknowledge ITS OWN
+  // cycle's claim (never a later cycle's, after an edit + re-decision).
+  const claim = after.notificationState as AgentCreationRequestNotificationState | null;
+  try {
+    // Register the notifications host adapters before touching the /server
+    // writers (idempotent side-effect; same contract as
+    // src/lib/workflow-notifier.ts). Without it a decide reached through a
+    // path that never loaded the facade/boot graph would throw inside
+    // createNotificationForRecipient and silently drop the notification.
+    await import("@/lib/notifications-host");
+    const { createNotificationForRecipient } = await import(
+      "@cinatra-ai/notifications/server"
+    );
+    await createNotificationForRecipient(
+      // Recipient is server-derived from the persisted author row — never
+      // caller-controlled (no fanout escalation).
+      { kind: "user", userId: after.authorId },
+      {
+        title: decided === "approved" ? "Agent proposal approved" : "Agent proposal rejected",
+        body:
+          `Your agent creation request '${after.packageName}' was ${decided}.` +
+          (reason ? ` Reason: ${reason}` : ""),
+        kind: decided === "approved" ? "success" : "warning",
+        // No href: the request detail page is admin-only; authors follow up
+        // via the chat `agent_creation_request_get/list` primitives.
+        dedupeKey: `agent-creation-request:${after.id}:${decided}:${after.decidedAt ?? ""}`,
+      },
+    );
+    if (claim) {
+      markAgentCreationRequestNotificationSent({
+        id: after.id,
+        orgId: after.orgId,
+        decision: claim.decision,
+        claimedAt: claim.claimedAt,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[agent_creation_request_decide] author notification failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // agent_creation_request_decide — admin-only. CAS-guarded. Approve dispatches
 // the existing gated publish under the approving admin's actor frame.
 // State machine: proposed → approved (durable intermediate) → published
@@ -358,6 +423,12 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
       ...(input.reason ? { reason: input.reason } : {}),
     },
   });
+
+  // Author-facing decision notification — fires for BOTH decisions right
+  // after the CAS + audit (winning the decide CAS above IS the notification
+  // claim). The decision stands regardless of the approve-path publish
+  // outcome below (retry_publish never re-notifies).
+  await notifyAuthorOfDecision(after);
 
   if (input.decision === "reject") {
     return toEnvelope(after);

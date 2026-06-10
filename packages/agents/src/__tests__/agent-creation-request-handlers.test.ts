@@ -7,6 +7,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   - self-approval is rejected by default.
 //   - CAS stale-snapshot rejection.
 //   - propose NEVER calls the live agent_source_* tools.
+//   - author decision notifications (issue #79): gated by the decide CAS
+//     (winning it IS the notification claim), both decisions, best-effort
+//     (a notify failure never fails the decide).
 
 const storeMock = vi.hoisted(() => ({
   createAgentCreationRequest: vi.fn(),
@@ -15,6 +18,7 @@ const storeMock = vi.hoisted(() => ({
   editRejectedRequest: vi.fn(),
   decideAgentCreationRequestCas: vi.fn(),
   markAgentCreationRequestPublished: vi.fn(),
+  markAgentCreationRequestNotificationSent: vi.fn(),
   computeSnapshotHash: vi.fn(() => "fakehash"),
   AgentCreationRequestNotFoundError: class extends Error {},
   StaleProposalError: class extends Error {
@@ -59,6 +63,21 @@ const storeReadMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeReadMock);
 
+// Mock the lazily-imported notifications server surface (issue #79 emits).
+// `hostState.loaded` flips when the "@/lib/notifications-host" adapter
+// registration side-effect module is imported — the emit path must import it
+// before the /server writers so the adapters are registered on EVERY call
+// path (not just ones that already loaded the facade/boot graph).
+const hostState = vi.hoisted(() => ({ loaded: false }));
+vi.mock("@/lib/notifications-host", () => {
+  hostState.loaded = true;
+  return {};
+});
+const notificationsMock = vi.hoisted(() => ({
+  createNotificationForRecipient: vi.fn(async () => []),
+}));
+vi.mock("@cinatra-ai/notifications/server", () => notificationsMock);
+
 import {
   handleAgentCreationRequestPropose,
   handleAgentCreationRequestDecide,
@@ -101,6 +120,7 @@ describe("agent_creation_request handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeMock.computeSnapshotHash.mockReturnValue("fakehash");
+    notificationsMock.createNotificationForRecipient.mockResolvedValue([]);
     dbMock.readConnectorConfigFromDatabase.mockReturnValue({ allowSelfApproval: false });
     storeReadMock.readAgentTemplates.mockResolvedValue({ items: [], total: 0 });
   });
@@ -286,6 +306,133 @@ describe("agent_creation_request handlers", () => {
       )) as { error?: string };
       expect(out.error).toMatch(/package-name collision/i);
       expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("author decision notifications (issue #79)", () => {
+    const DECIDED_ROW = {
+      id: "req-1",
+      orgId: "org-1",
+      authorId: "user-author",
+      snapshotHash: "fakehash",
+      decidedAt: "2026-06-10T12:00:00.000Z",
+      packageName: "@test/test-agent",
+      packageSlug: "test-agent",
+      packageVersion: "0.1.0",
+      proposalSnapshot: SAMPLE_INPUT,
+    };
+    const PROPOSED_ROW = {
+      ...DECIDED_ROW,
+      status: "proposed",
+      decidedAt: null,
+    };
+
+    it("reject notifies the author with the COMMITTED rejection reason (never raw caller input)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      // The committed row's reason intentionally differs from the caller's
+      // raw input — the notification must render the persisted value.
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...DECIDED_ROW, status: "rejected", rejectionReason: "stored reason",
+        notificationState: { decision: "rejected", claimedAt: "2026-06-10T12:00:01.000Z" },
+      });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "reject", reason: "caller raw reason", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(notificationsMock.createNotificationForRecipient).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [recipient, input] = (notificationsMock.createNotificationForRecipient.mock.calls as any[])[0];
+      expect(recipient).toEqual({ kind: "user", userId: "user-author" });
+      expect(input.title).toMatch(/rejected/i);
+      expect(input.kind).toBe("warning");
+      expect(input.body).toContain("@test/test-agent");
+      expect(input.body).toContain("stored reason");
+      expect(input.body).not.toContain("caller raw reason");
+      // Dedupe key is decision-cycle-stable: decidedAt is part of the key, so
+      // a later re-decision (after an author edit) mints a fresh key.
+      expect(input.dedupeKey).toBe(
+        "agent-creation-request:req-1:rejected:2026-06-10T12:00:00.000Z",
+      );
+      // The notifications-host adapter registration side-effect module was
+      // imported on the emit path (every call path, not just boot-loaded ones).
+      expect(hostState.loaded).toBe(true);
+      // The sentAt stamp is scoped to the EXACT claim the decide CAS minted —
+      // a stalled notifier can never acknowledge a later cycle's claim.
+      expect(storeMock.markAgentCreationRequestNotificationSent).toHaveBeenCalledWith({
+        id: "req-1", orgId: "org-1",
+        decision: "rejected", claimedAt: "2026-06-10T12:00:01.000Z",
+      });
+    });
+
+    it("approve notifies the author even when the downstream publish fails (decision stands)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...DECIDED_ROW, status: "approved",
+        notificationState: { decision: "approved", claimedAt: "2026-06-10T12:00:01.000Z" },
+      });
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue({
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ error: "compile blew up" })),
+        agent_source_publish: vi.fn(async () => ({ published: true })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/compile/i);
+      expect(notificationsMock.createNotificationForRecipient).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [recipient, input] = (notificationsMock.createNotificationForRecipient.mock.calls as any[])[0];
+      expect(recipient).toEqual({ kind: "user", userId: "user-author" });
+      expect(input.title).toMatch(/approved/i);
+      expect(input.kind).toBe("success");
+      // approve persists no rejection reason — the body must not invent one
+      // from raw caller input.
+      expect(input.body).not.toMatch(/reason/i);
+      expect(storeMock.markAgentCreationRequestNotificationSent).toHaveBeenCalledWith({
+        id: "req-1", orgId: "org-1",
+        decision: "approved", claimedAt: "2026-06-10T12:00:01.000Z",
+      });
+    });
+
+    it("a notification write failure never fails the decide (best-effort)", async () => {
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...DECIDED_ROW, status: "rejected",
+      });
+      notificationsMock.createNotificationForRecipient.mockRejectedValueOnce(
+        new Error("notifications table on fire"),
+      );
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "reject", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string; structuredContent?: { request?: { status?: string } } };
+      expect(out.error).toBeUndefined();
+      expect(out.structuredContent?.request?.status).toBe("rejected");
+      // sentAt is only stamped after a SUCCESSFUL write.
+      expect(storeMock.markAgentCreationRequestNotificationSent).not.toHaveBeenCalled();
+    });
+
+    it("does not attempt any notification when the CAS decide fails (stale snapshot)", async () => {
+      // Losing the decide CAS IS losing the notification claim — the claim is
+      // stamped by the same atomic UPDATE, so a loser must emit nothing.
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      storeMock.decideAgentCreationRequestCas.mockImplementation(() => {
+        throw new storeMock.StaleProposalError();
+      });
+      await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "reject", expectedSnapshotHash: "OLD-HASH" },
+          ADMIN),
+      );
+      expect(notificationsMock.createNotificationForRecipient).not.toHaveBeenCalled();
+      expect(storeMock.markAgentCreationRequestNotificationSent).not.toHaveBeenCalled();
     });
   });
 });

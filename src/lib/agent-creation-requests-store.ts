@@ -40,6 +40,18 @@ export type AgentCreationRequestSnapshot = {
   skillMd?: string | null;
 };
 
+/** Author-facing decision-notification tracking (issue #79). The claim
+ *  ({decision, claimedAt}) is stamped atomically by the decide CAS UPDATE in
+ *  `decideAgentCreationRequestCas`; `sentAt` is merged in after the
+ *  notification row was actually created. NULL means "no decision claimed for
+ *  the current cycle" — an author edit (rejected → proposed) resets it so the
+ *  next decision notifies again. */
+export type AgentCreationRequestNotificationState = {
+  decision: "approved" | "rejected";
+  claimedAt: string;
+  sentAt?: string;
+};
+
 export type AgentCreationRequestRow = {
   id: string;
   orgId: string;
@@ -281,6 +293,7 @@ SET proposal_snapshot = $3,
     decided_by = NULL,
     decided_at = NULL,
     rejection_reason = NULL,
+    notification_state = NULL,
     updated_at = now()
 WHERE id = $1 AND org_id = $2`,
         values: [
@@ -300,7 +313,17 @@ WHERE id = $1 AND org_id = $2`,
 /** CAS-guarded decide: proposed → approved | rejected. CAS on snapshot_hash:
  *  if the proposal was edited since the admin saw it, the hash mismatches and
  *  StaleProposalError is thrown (the decision is for a snapshot that no longer
- *  represents the current proposal). */
+ *  represents the current proposal).
+ *
+ *  The SAME atomic UPDATE also claims the author-facing decision notification
+ *  (issue #79): `notification_state` is stamped {decision, claimedAt} in the
+ *  decide statement itself, so "won the decide CAS" and "owns this cycle's
+ *  notification" are one and the same — there is no separate claim step for a
+ *  delayed notifier from an earlier cycle to race (an author edit resets
+ *  notification_state and moves the row back to 'proposed'; the next decide
+ *  mints its own fresh claim). The win is verified via the UPDATE's rowCount,
+ *  NOT by re-reading the status — two same-decision racers would both see the
+ *  decided status on a re-read, but only one gets rowCount=1. */
 export function decideAgentCreationRequestCas(input: {
   id: string;
   orgId: string;
@@ -324,7 +347,11 @@ export function decideAgentCreationRequestCas(input: {
   const schema = q();
   const nextStatus: AgentCreationRequestStatus =
     input.decision === "approve" ? "approved" : "rejected";
-  runPostgresQueriesSync({
+  const notificationClaim: AgentCreationRequestNotificationState = {
+    decision: nextStatus as "approved" | "rejected",
+    claimedAt: new Date().toISOString(),
+  };
+  const [res] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
       {
@@ -333,6 +360,7 @@ SET status = $3,
     decided_by = $4,
     decided_at = now(),
     rejection_reason = $5,
+    notification_state = $7,
     updated_at = now()
 WHERE id = $1 AND org_id = $2 AND snapshot_hash = $6 AND status = 'proposed'`,
         values: [
@@ -342,16 +370,59 @@ WHERE id = $1 AND org_id = $2 AND snapshot_hash = $6 AND status = 'proposed'`,
           input.decidedBy,
           input.decision === "reject" ? (input.reason ?? null) : null,
           input.expectedSnapshotHash,
+          JSON.stringify(notificationClaim),
         ],
       },
     ],
   });
-  const after = readAgentCreationRequestById(input.id, input.orgId);
-  if (!after || after.status !== nextStatus) {
+  if ((res?.rowCount ?? 0) !== 1) {
     // Lost the race or the row changed mid-flight.
     throw new StaleProposalError(input.id);
   }
+  const after = readAgentCreationRequestById(input.id, input.orgId);
+  if (!after || after.status !== nextStatus) {
+    // Row changed again between the UPDATE and the re-read.
+    throw new StaleProposalError(input.id);
+  }
   return after;
+}
+
+/** Stamp `notification_state.sentAt` after the notification row was actually
+ *  created (best-effort bookkeeping on top of the claim stamped by the decide
+ *  CAS — the decide CAS is the idempotency gate; this records delivery for
+ *  observability/backfill). Merging via `||` preserves the claim fields, and
+ *  the WHERE is scoped to the EXACT claim being acknowledged
+ *  (decision + claimedAt): a stalled cycle-1 notifier that resumes after an
+ *  author edit + re-decision finds a DIFFERENT claim on the row and no-ops —
+ *  it can never make the new cycle look delivered. */
+export function markAgentCreationRequestNotificationSent(input: {
+  id: string;
+  orgId: string;
+  decision: "approved" | "rejected";
+  claimedAt: string;
+}): void {
+  ensurePostgresSchema();
+  const schema = q();
+  runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `UPDATE "${schema}"."agent_creation_request"
+SET notification_state = notification_state || $3::jsonb, updated_at = now()
+WHERE id = $1 AND org_id = $2
+  AND notification_state IS NOT NULL
+  AND notification_state->>'decision' = $4
+  AND notification_state->>'claimedAt' = $5`,
+        values: [
+          input.id,
+          input.orgId,
+          JSON.stringify({ sentAt: new Date().toISOString() }),
+          input.decision,
+          input.claimedAt,
+        ],
+      },
+    ],
+  });
 }
 
 /** Promote approved → published after the gated publish has materialized the
