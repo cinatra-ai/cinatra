@@ -116,10 +116,8 @@ export function ServiceAccountsTable({ initialAccounts }: ServiceAccountsTablePr
           ...prev,
         ]);
         createFormRef.current?.reset();
-      } catch (err) {
-        toast.error(
-          `Failed to create service account: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      } catch {
+        toast.error("Could not create the service account.");
       }
     });
   }
@@ -152,10 +150,8 @@ export function ServiceAccountsTable({ initialAccounts }: ServiceAccountsTablePr
               : a,
           ),
         );
-      } catch (err) {
-        toast.error(
-          `Failed to rotate service account: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      } catch {
+        toast.error("Could not rotate the service account.");
       }
     });
   }
@@ -175,10 +171,8 @@ export function ServiceAccountsTable({ initialAccounts }: ServiceAccountsTablePr
         setAccounts((prev) =>
           prev.map((a) => (a.id === id ? { ...a, revokedAt: new Date() } : a)),
         );
-      } catch (err) {
-        toast.error(
-          `Failed to revoke service account: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      } catch {
+        toast.error("Could not revoke the service account.");
       }
     });
   }
@@ -197,10 +191,8 @@ export function ServiceAccountsTable({ initialAccounts }: ServiceAccountsTablePr
       try {
         await deleteServiceAccountAction(fd);
         setAccounts((prev) => prev.filter((a) => a.id !== target.id));
-      } catch (err) {
-        toast.error(
-          `Failed to delete service account: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      } catch {
+        toast.error("Could not delete the service account.");
       }
     });
   }

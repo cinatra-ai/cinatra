@@ -280,7 +280,7 @@ export { RollbackButton } from "./rollback-button";
 
 export { RegistryPermissionsScreen } from "./screens";
 
-export { RegistryEntryDetailScreen } from "./screens";
+export { RegistryEntryDetailSections } from "./screens";
 export { PublishModal } from "./publish-modal";
 
 export {
@@ -487,6 +487,7 @@ export {
   LLM_PROVIDERS,
   LLM_CAPABILITIES,
   ALLOWED_MODEL_IDS,
+  DEFAULT_OPENAI_MODEL_ID,
   OasCinatraLlmSchema,
 } from "./llm-provider-policy";
 export type {

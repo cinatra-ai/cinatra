@@ -30,8 +30,8 @@ export function DevelopmentLoggingForm({ providers }: DevelopmentLoggingFormProp
         throw error;
       }
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save development logging settings.",
+        title: "Development logging save failed",
+        body: "Unable to save development logging settings.",
         kind: "error",
       });
     }

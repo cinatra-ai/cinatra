@@ -36,10 +36,10 @@ export function ChangeRepoButton({ repositories, currentRepo }: ChangeRepoModalP
       });
       setOpen(false);
       router.refresh();
-    } catch (error) {
+    } catch {
       addNotification({
         title: "Repository save failed",
-        body: error instanceof Error ? error.message : "Unable to save the GitHub repository.",
+        body: "Unable to save the GitHub repository.",
         kind: "error",
       });
     }

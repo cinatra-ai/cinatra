@@ -20,10 +20,10 @@ export function SaveSkillsDataPathForm({
         body: "The skills data path has been updated.",
         kind: "success",
       });
-    } catch (error) {
+    } catch {
       addNotification({
-        title: "Save failed",
-        body: error instanceof Error ? error.message : "Unable to save the skills data path.",
+        title: "Skills storage save failed",
+        body: "Unable to save the skills data path.",
         kind: "error",
       });
     }

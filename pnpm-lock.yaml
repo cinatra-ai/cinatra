@@ -1404,8 +1404,8 @@ importers:
         specifier: ^7.9.0
         version: 7.9.0
       drizzle-cube:
-        specifier: 0.5.6
-        version: 0.5.6(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3)
+        specifier: 0.5.7
+        version: 0.5.7(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3)
       elkjs:
         specifier: ^0.11.1
         version: 0.11.1
@@ -1708,8 +1708,8 @@ importers:
         specifier: ^5.100.10
         version: 5.100.10(react@19.2.6)
       drizzle-cube:
-        specifier: 0.5.6
-        version: 0.5.6(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3)
+        specifier: 0.5.7
+        version: 0.5.7(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3)
       drizzle-orm:
         specifier: ^0.45.0
         version: 0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0)
@@ -7799,8 +7799,8 @@ packages:
     resolution: {integrity: sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA==}
     engines: {node: '>=12'}
 
-  drizzle-cube@0.5.6:
-    resolution: {integrity: sha512-M5wpk7IOliLD4grxXrAU7LtC1vvASxRbz2h2GcCDAO8H+f4OnhviPmxHkYRvf291mDJG2wxHjxl7G5hPT9Ye4Q==}
+  drizzle-cube@0.5.7:
+    resolution: {integrity: sha512-hgvwmg53D4aKl3Pbco45IBVmFNwdV9PUumZ7YkfEUohG78m3Zl7ab/uaNrlK65ye3hH7lNVacQxKthjhjJDERQ==}
     hasBin: true
     peerDependencies:
       '@anthropic-ai/sdk': '>=0.30.0'
@@ -13287,7 +13287,7 @@ snapshots:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)
-      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
+      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
       '@trpc/server': 11.15.1(typescript@6.0.3)
       clsx: 2.1.1
       cronstrue: 3.14.0
@@ -16151,7 +16151,7 @@ snapshots:
       '@trpc/server': 11.15.1(typescript@6.0.3)
       typescript: 6.0.3
 
-  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
+  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
     dependencies:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)
@@ -17820,11 +17820,11 @@ snapshots:
 
   dotenv@17.3.1: {}
 
-  drizzle-cube@0.5.6(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3):
+  drizzle-cube@0.5.7(@anthropic-ai/sdk@0.96.0(zod@4.4.3))(@cfworker/json-schema@4.1.1)(@nivo/heatmap@0.99.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(@types/react@19.2.14)(@xyflow/react@12.10.2(@types/react@19.2.14)(immer@11.1.4)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(cors@2.8.6)(d3@7.9.0)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@prisma/client@5.22.0)(@types/pg@8.20.0)(better-sqlite3@12.8.0)(kysely@0.28.17)(pg@8.20.0))(elkjs@0.11.1)(express@5.2.1)(hono@4.12.9)(immer@11.1.4)(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(openai@6.38.0(ws@8.20.0)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react-grid-layout@2.2.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(recharts@3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.6)(react@19.2.6)(redux@5.0.1))(use-sync-external-store@1.6.0(react@19.2.6))(zod@4.4.3):
     dependencies:
       '@modelcontextprotocol/ext-apps': 1.7.1(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
-      '@tanstack/react-query': 5.99.2(react@19.2.6)
+      '@tanstack/react-query': 5.100.10(react@19.2.6)
       d3: 7.9.0
       highlight.js: 11.11.1
       lz-string: 1.5.0

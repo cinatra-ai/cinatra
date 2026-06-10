@@ -14,10 +14,11 @@ import {
   restoreExtensionPackageFormAction,
 } from "../actions";
 import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
-import type { MarketplaceCardData, MarketplaceCardKind } from "./marketplace-card-model";
+import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
-import { Bot, FileText, Package, Plug, Sparkles, Star, Workflow } from "lucide-react";
+import { Star } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Main } from "@/components/layout/main";
@@ -38,26 +39,6 @@ import { readRegistryPolicy } from "../registry-policy";
 // Restore CTA and "More details" link are preserved unchanged; install-state
 // still resolves against agent_templates keyed by packageName.
 // ---------------------------------------------------------------------------
-
-// Emblem icon per extension kind for the ExtensionCard accent chip.
-function extensionKindEmblem(kind: MarketplaceCardKind) {
-  const className = "size-5";
-  switch (kind) {
-    case "skill":
-      return <Sparkles className={className} />;
-    case "connector":
-      return <Plug className={className} />;
-    case "artifact":
-      return <FileText className={className} />;
-    case "workflow":
-      return <Workflow className={className} />;
-    case "agent":
-      return <Bot className={className} />;
-    case "unknown":
-    default:
-      return <Package className={className} />;
-  }
-}
 
 // Commerce badge → shadcn Badge variant. All semantic; no raw palette.
 function CommerceBadge({ badge }: { badge: MarketplaceCardData["badge"] }) {

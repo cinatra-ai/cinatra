@@ -62,8 +62,8 @@ export function WorkflowControls({
         const r = await action();
         if (r.ok) toast.success(successMessage);
         else toast.error(`Action rejected${r.reason ? `: ${r.reason}` : ""}`);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Action failed");
+      } catch {
+        toast.error("Could not update the workflow.");
       }
     });
   }

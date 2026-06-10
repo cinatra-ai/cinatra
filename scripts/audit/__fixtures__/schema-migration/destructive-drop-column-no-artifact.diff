@@ -1,0 +1,31 @@
+diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
+index 0cc7630..ac53835 100644
+--- a/src/lib/drizzle-store.ts
++++ b/src/lib/drizzle-store.ts
+@@ -842,7 +842,6 @@ END $$` },
+       provider text NOT NULL,
+       model text,
+       operation text,
+-      agent_label text,
+       input_tokens integer NOT NULL DEFAULT 0,
+       output_tokens integer NOT NULL DEFAULT 0,
+       cached_input_tokens integer NOT NULL DEFAULT 0,
+@@ -870,7 +869,6 @@ END $$` },
+       ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT '',
+       ADD COLUMN IF NOT EXISTS model text,
+       ADD COLUMN IF NOT EXISTS operation text,
+-      ADD COLUMN IF NOT EXISTS agent_label text,
+       ADD COLUMN IF NOT EXISTS input_tokens integer NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS output_tokens integer NOT NULL DEFAULT 0,
+       ADD COLUMN IF NOT EXISTS cached_input_tokens integer NOT NULL DEFAULT 0,
+@@ -887,7 +885,9 @@ END $$` },
+ END $$` },
+     { text: `CREATE INDEX IF NOT EXISTS usage_events_occurred_at_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (occurred_at DESC)` },
+     { text: `CREATE INDEX IF NOT EXISTS usage_events_provider_occurred_at_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (provider, occurred_at DESC)` },
+-    { text: `CREATE INDEX IF NOT EXISTS usage_events_agent_label_occurred_at_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (agent_label, occurred_at DESC)` },
++    // agent_label was unread after the per-agent cost rollups moved to traces.
++    { text: `DROP INDEX IF EXISTS usage_events_agent_label_occurred_at_idx` },
++    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."usage_events" DROP COLUMN IF EXISTS agent_label` },
+     // model_pricing table for @cinatra-ai/metric-cost-api
+     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."model_pricing" (
+       id text PRIMARY KEY,

@@ -88,10 +88,10 @@ const REPO_ROOT = new URL("../../", import.meta.url).pathname.replace(/\/+$/, ""
 export const TARGET_PATHS = Object.freeze([
   "packages/extensions/src",
   "packages/agents/src/extension-handler.ts",
-  // The agent-detail reader (RegistryEntryDetailScreen + resolveDetailReadConfig)
+  // The agent-detail reader (RegistryEntryDetailSections + resolveDetailReadConfig)
   // and the registry install/update/uninstall server actions — the REAL
-  // transitive install/detail consumers. RegistryEntryDetailScreen renders the
-  // marketplace detail page (delegated from the [scope]/[name] route), so a
+  // transitive install/detail consumers. RegistryEntryDetailSections renders the
+  // marketplace detail body (delegated from the [scope]/[name] route), so a
   // direct loadVerdaccioConfigForReads()/getAgentPackage() here would defeat the
   // broker read-proxy on the detail path; actions.ts drives install/update.
   "packages/agents/src/screens.tsx",

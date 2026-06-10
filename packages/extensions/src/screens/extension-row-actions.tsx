@@ -62,8 +62,10 @@ export function ExtensionRowActions({
       // Page-level refresh: revalidatePath is called server-side by the action;
       // a simple reload picks up the updated origin.visibility from the DB.
       window.location.reload();
-    } catch (err) {
-      toast.error((err as Error).message ?? "Promotion failed");
+    } catch {
+      // Server-action errors are masked in production builds — show friendly,
+      // operation-specific copy instead of the raw caught message (#20).
+      toast.error("Could not promote the extension to public.");
     } finally {
       setPending(false);
     }

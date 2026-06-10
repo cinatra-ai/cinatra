@@ -47,8 +47,8 @@ export function TeamSettingsForm({
           };
           toast.error(messages[result.error]);
         }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Failed to rename slug.");
+      } catch {
+        toast.error("Could not rename the team slug.");
       }
     });
   };

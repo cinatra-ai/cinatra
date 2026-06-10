@@ -75,6 +75,7 @@
       "@cinatra-ai/agents/client-entry": ["./packages/agents/src/client-entry.ts"],
       "@cinatra-ai/agents/cli": ["./packages/agents/src/cli/index.ts"],
       "@cinatra-ai/agents/auth-policy": ["./packages/agents/src/auth-policy.ts"],
+      "@cinatra-ai/agents/llm-provider-policy": ["./packages/agents/src/llm-provider-policy.ts"],
       "@cinatra-ai/agents/store": ["./packages/agents/src/store.ts"],
       "@cinatra-ai/agents/mcp-handlers": ["./packages/agents/src/mcp/handlers.ts"],
       "@cinatra-ai/agents/integration/register-object-types": ["./packages/agents/src/integration/register-object-types.ts"],

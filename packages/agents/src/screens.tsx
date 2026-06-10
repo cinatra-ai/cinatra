@@ -48,6 +48,7 @@ import { Button } from "@/components/ui/button";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
+import { MarketplaceReadmeSection } from "@/components/marketplace-readme-section";
 import { Tabs, TabsContent, TabsList, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ImportAgentForm } from "./import-form";
@@ -522,10 +523,19 @@ export async function resolveDetailReadConfig(
 }
 
 // ---------------------------------------------------------------------------
-// RegistryEntryDetailScreen
+// RegistryEntryDetailSections
+//
+// The agent-specific BODY of the marketplace detail view. The page shell —
+// <Main>, the marketplace hero header (kind emblem + name + license badge +
+// freshness/version meta), and <PageContent> — is owned by the
+// /configuration/marketplace/[scope]/[name] route, which renders the same
+// shell for every extension kind from the marketplace `ExtensionDetail`.
+// This component contributes only the agent sections beneath it, with the
+// README block FIRST (the primary-body slot, mirroring the public page's
+// Description tab) followed by the admin metadata + install controls.
 // ---------------------------------------------------------------------------
 
-export async function RegistryEntryDetailScreen({
+export async function RegistryEntryDetailSections({
   packageName,
   listedVersion,
 }: {
@@ -722,146 +732,145 @@ export async function RegistryEntryDetailScreen({
     : null;
 
   return (
-    <Main className="min-h-screen">
-      <PageHeader
-        title={entry.title}
-        description={entry.description ?? undefined}
-        actions={
-          <div className="flex items-center gap-2">
-            <span className="rounded-chip border border-line px-2 py-0.5 text-xs font-mono text-muted-foreground">
-              v{entry.packageVersion}
-            </span>
-            <Badge variant={registryRiskVariant(entry.riskLevel)}>
-              {entry.riskLevel}
-            </Badge>
-            <Button asChild variant="outline">
-              <Link href="/configuration/extensions">Back</Link>
-            </Button>
-          </div>
-        }
-      />
-      <PageContent className="flex flex-col gap-6 pb-8">
-        {entry.deprecated ? (
-          <section className="soft-panel rounded-card px-6 py-5">
-            <p className="text-sm text-muted-foreground">
-              This extension version has been deprecated. It stays available for auditability, but new installs should usually prefer a newer version.
-            </p>
-          </section>
-        ) : null}
-
+    <>
+      {entry.deprecated ? (
         <section className="soft-panel rounded-card px-6 py-5">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Extension Details</h2>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Package</p>
-              <p className="mt-1 font-mono text-sm text-foreground">{entry.packageName}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Published</p>
-              <p className="mt-1 text-sm text-foreground">{formatDate(entry.publishedAt)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Registry</p>
-              <p className="mt-1 text-sm text-foreground">{entry.registryUrl}</p>
-            </div>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            This extension version has been deprecated. It stays available for auditability, but new installs should usually prefer a newer version.
+          </p>
         </section>
+      ) : null}
 
-        <section className="soft-panel rounded-card px-6 py-5">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Tool Access</h2>
-          {entry.toolAccess.filter(Boolean).length === 0 ? (
-            <p className="text-sm text-muted-foreground">No tool access defined.</p>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {entry.toolAccess.filter(Boolean).map((tool) => (
-                <Badge key={tool} variant="outline" className="rounded-chip">
-                  {tool}
-                </Badge>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="soft-panel rounded-card px-6 py-5">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Approval Gates</h2>
-          {entry.hasApprovalGates ? (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <TriangleAlert className="h-4 w-4 shrink-0" />
-              This agent includes steps that require human approval.
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">No approval gates required.</p>
-          )}
-        </section>
-
-        <section className="soft-panel rounded-card px-6 py-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Install</h2>
-          {canInstall || canUninstall ? (
-            <div className="flex items-center gap-3">
-              {showInstallButton && canInstall && (
-                <InstallScopeDialog
-                  packageName={entry.packageName}
-                  packageVersion={entry.packageVersion}
-                  installTargets={installTargets}
-                  ownerEntityNames={ownerEntityNames}
-                  currentProjectId={currentProjectId}
-                  activeOrgId={activeOrgId ?? ""}
-                  defaultValue={installDefaultValue}
-                  installAction={installRegistryPackageAtScope}
-                />
-              )}
-              {showUpdateButton && canInstall && (
-                <form action={updateAction}>
-                  <Button type="submit">Update</Button>
-                </form>
-              )}
-              {installedTemplate && canUninstall && uninstallAction ? (
-                <RegistryUninstallForm
-                  action={uninstallAction}
-                  packageTitle={entry.title}
-                />
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Install requires admin role.</p>
-          )}
-        </section>
-
-        {entry.readme ? (
-          <section className="soft-panel rounded-card px-6 py-5">
-            <h2 className="text-sm font-semibold text-foreground mb-3">About</h2>
-            <div
-              data-slot="extension-readme"
-              className="readme-markdown text-sm leading-relaxed text-foreground"
-              // Sanitized Markdown render via `renderReadmeMarkdown`
-              // (packages/agents/src/readme-render.ts). The helper uses
-              // marked v18 with a constrained renderer that strips raw HTML
-              // + unsafe link/image schemes; the README is canonical raw
-              // Markdown from the package tarball (extracted by the sync
-              // worker with a size cap), so render-time sanitization is the
-              // right boundary. `dangerouslySetInnerHTML` is acceptable here
-              // because the input has been sanitized by a dedicated,
-              // auditable helper.
-              // eslint-disable-next-line react/no-danger
-              dangerouslySetInnerHTML={{ __html: renderReadmeMarkdown(entry.readme) }}
-            />
-          </section>
-        ) : null}
-
-        <section className="soft-panel rounded-card px-6 py-5">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Version History</h2>
-          <RegistryVersionHistoryList
-            packageName={entry.packageName}
-            items={entry.availableVersions.map<RegistryVersionRow>((v) => ({
-              version: v.version,
-              deprecated: v.deprecated,
-              isCurrent: v.version === (entry.distTags["latest"] ?? entry.packageVersion),
-            }))}
-            orderedVersions={entry.availableVersions.map((v) => v.version)}
+      {/* PRIMARY BODY — the README occupies the first content slot
+          (only the deprecation status notice above may precede it),
+          mirroring the public marketplace's Description tab. Today the
+          content is the Verdaccio package README rendered by the existing
+          sanitizing helper; switching the source to the marketplace
+          `readmeMarkdown` (plus heading demotion + typography parity) is
+          the README-parity follow-up that fills this slot. */}
+      {entry.readme ? (
+        <MarketplaceReadmeSection>
+          <div
+            data-slot="extension-readme"
+            className="readme-markdown text-sm leading-relaxed text-foreground"
+            // Sanitized Markdown render via `renderReadmeMarkdown`
+            // (packages/agents/src/readme-render.ts). The helper uses
+            // marked v18 with a constrained renderer that strips raw HTML
+            // + unsafe link/image schemes; the README is canonical raw
+            // Markdown from the package tarball (extracted by the sync
+            // worker with a size cap), so render-time sanitization is the
+            // right boundary. `dangerouslySetInnerHTML` is acceptable here
+            // because the input has been sanitized by a dedicated,
+            // auditable helper.
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={{ __html: renderReadmeMarkdown(entry.readme) }}
           />
-        </section>
-      </PageContent>
-    </Main>
+        </MarketplaceReadmeSection>
+      ) : null}
+
+      <section className="soft-panel rounded-card px-6 py-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Extension Details</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Package</p>
+            <p className="mt-1 font-mono text-sm text-foreground">{entry.packageName}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Version</p>
+            <p className="mt-1 font-mono text-sm text-foreground">v{entry.packageVersion}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Published</p>
+            <p className="mt-1 text-sm text-foreground">{formatDate(entry.publishedAt)}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Registry</p>
+            <p className="mt-1 text-sm text-foreground">{entry.registryUrl}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Risk Level</p>
+            <p className="mt-1 text-sm text-foreground">
+              <Badge variant={registryRiskVariant(entry.riskLevel)}>
+                {entry.riskLevel}
+              </Badge>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="soft-panel rounded-card px-6 py-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Tool Access</h2>
+        {entry.toolAccess.filter(Boolean).length === 0 ? (
+          <p className="text-sm text-muted-foreground">No tool access defined.</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {entry.toolAccess.filter(Boolean).map((tool) => (
+              <Badge key={tool} variant="outline" className="rounded-chip">
+                {tool}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="soft-panel rounded-card px-6 py-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Approval Gates</h2>
+        {entry.hasApprovalGates ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            This agent includes steps that require human approval.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">No approval gates required.</p>
+        )}
+      </section>
+
+      <section className="soft-panel rounded-card px-6 py-5">
+        <h2 className="text-sm font-semibold text-foreground mb-4">Install</h2>
+        {canInstall || canUninstall ? (
+          <div className="flex items-center gap-3">
+            {showInstallButton && canInstall && (
+              <InstallScopeDialog
+                packageName={entry.packageName}
+                packageVersion={entry.packageVersion}
+                installTargets={installTargets}
+                ownerEntityNames={ownerEntityNames}
+                currentProjectId={currentProjectId}
+                activeOrgId={activeOrgId ?? ""}
+                defaultValue={installDefaultValue}
+                installAction={installRegistryPackageAtScope}
+              />
+            )}
+            {showUpdateButton && canInstall && (
+              <form action={updateAction}>
+                <Button type="submit">Update</Button>
+              </form>
+            )}
+            {installedTemplate && canUninstall && uninstallAction ? (
+              <RegistryUninstallForm
+                action={uninstallAction}
+                packageTitle={entry.title}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Install requires admin role.</p>
+        )}
+      </section>
+
+      <section className="soft-panel rounded-card px-6 py-5">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Version History</h2>
+        <RegistryVersionHistoryList
+          packageName={entry.packageName}
+          items={entry.availableVersions.map<RegistryVersionRow>((v) => ({
+            version: v.version,
+            deprecated: v.deprecated,
+            isCurrent: v.version === (entry.distTags["latest"] ?? entry.packageVersion),
+          }))}
+          orderedVersions={entry.availableVersions.map((v) => v.version)}
+        />
+      </section>
+    </>
   );
 }
 
