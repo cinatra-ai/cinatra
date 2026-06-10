@@ -52,6 +52,7 @@ import {
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
 
+import { useDashboardFilterBarVisible } from "./dashboard-filter-bar-visibility";
 import {
   useDashboardPageAnchor,
   type DashboardPageAnchor,
@@ -104,6 +105,13 @@ export function CinatraDashboardToolbar() {
     handleAddPortlet,
   } = useDashboardContext();
 
+  // When the dashboard filter bar renders beneath this toolbar it does so
+  // as a CHILD TOOLBAR (design spec §Nested toolbar — see
+  // `<DashboardFilterBarSlot>` in composed-dashboard.tsx), so the gap
+  // tightens to the 6px stack gap; otherwise keep the regular 16px space
+  // before the grid.
+  const filterBarFollows = useDashboardFilterBarVisible();
+
   const pageActions: readonly DashboardPageAction[] =
     (pageAnchor && DASHBOARD_PAGE_ACTIONS[pageAnchor]) || [];
 
@@ -117,7 +125,7 @@ export function CinatraDashboardToolbar() {
     <Toolbar
       aria-label="Dashboard"
       data-cinatra-dashboard-toolbar="true"
-      className="sticky top-0 z-10 mb-4"
+      className={`sticky top-0 z-10 ${filterBarFollows ? "mb-1.5" : "mb-4"}`}
     >
       {pageActions.length > 0 && (
         <ToolbarGroup>
