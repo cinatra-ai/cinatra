@@ -45,6 +45,7 @@ vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
 import {
   deriveSkillRegistration,
   resolveSkillIdForCapability,
+  resolveInstalledSkillSourcePath,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
@@ -431,5 +432,62 @@ describe("installed_extension lifecycle gate (explicit-tombstone semantics)", ()
       mk("@acme/f-norow"),
     ]);
     expect(kept.map((e) => e.pkgName)).toEqual(["@acme/f-live", "@acme/f-norow"]);
+  });
+});
+
+describe("resolveInstalledSkillSourcePath", () => {
+  it("resolves the on-disk SKILL.md path of the providing extension", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "widget-skills",
+      name: "@acme/widget-skills",
+      kind: "skill",
+      slugs: ["do-thing"],
+    });
+    const resolved = await resolveInstalledSkillSourcePath("@acme/widget-skills:do-thing");
+    // Compare under cwd (realpathed on macOS, where tmpdir is a /var symlink).
+    expect(resolved).toBe(
+      path.join(process.cwd(), "extensions", "acme", "widget-skills", "skills", "do-thing", "SKILL.md"),
+    );
+  });
+
+  it("resolves a chat skill id through the assistant-skills carve-out (no path candidates)", async () => {
+    await writeExtension({
+      vendor: "cinatra-ai",
+      pkgDir: "assistant-skills",
+      name: "@cinatra-ai/assistant-skills",
+      kind: "skill",
+      slugs: ["chat-assistant-core"],
+    });
+    const resolved = await resolveInstalledSkillSourcePath("@cinatra-ai/chat:chat-assistant-core");
+    expect(resolved).toBe(
+      path.join(
+        process.cwd(),
+        "extensions",
+        "cinatra-ai",
+        "assistant-skills",
+        "skills",
+        "chat-assistant-core",
+        "SKILL.md",
+      ),
+    );
+  });
+
+  it("returns null when no active extension provides the skill id", async () => {
+    expect(await resolveInstalledSkillSourcePath("@nobody/missing:none-zzz")).toBeNull();
+  });
+
+  it("does NOT resolve a non-skill kind unless explicitly allowed", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "art-pkg2",
+      name: "@acme/art-pkg2",
+      kind: "artifact",
+      slugs: ["do-art"],
+    });
+    expect(await resolveInstalledSkillSourcePath("@acme/art-pkg2:do-art")).toBeNull();
+    expect(
+      await resolveInstalledSkillSourcePath("@acme/art-pkg2:do-art", { allowKinds: ["artifact"] }),
+    ).toBe(path.join(process.cwd(), "extensions", "acme", "art-pkg2", "skills", "do-art", "SKILL.md"));
   });
 });

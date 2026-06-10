@@ -45,7 +45,10 @@ import {
   type AuthorDraft,
 } from "./author-draft";
 
-const AUTHOR_AGENT_PACKAGE_NAME = "@cinatra-ai/author-agent";
+// EXPORTED as the canonical author-lane identity: the chat-dispatch
+// creation-flow set (creation-flow-packages.ts) derives from THIS constant
+// instead of carrying its own copy of the package name.
+export const AUTHOR_AGENT_PACKAGE_NAME = "@cinatra-ai/author-agent";
 const AUTHOR_AGENT_DIR_SLUG = "author-agent";
 const AUTHOR_AGENT_LOG_LABEL = "run_author_agent";
 

@@ -591,6 +591,11 @@ export type { ResolvedLaneSkillSet } from "./resolve-required-creation-skill-ids
 export { runAuthorAgent } from "./run-author-agent";
 export type { RunAuthorAgentInput } from "./run-author-agent";
 
+// The agent-creation-flow package set, derived from the creation skill-lane
+// definitions (reviewer lanes + author lane) — consumed by the chat
+// explicit-dispatch gate instead of a hand-maintained literal set there.
+export { getAgentCreationFlowPackages } from "./creation-flow-packages";
+
 // Hard pre-enqueue preflight. Fails as a configuration error before any
 // authoring writes; NEVER a mid-run partial failure. Wired at the top of
 // `handleAgentCreationReview` after JSON validation but before the deterministic

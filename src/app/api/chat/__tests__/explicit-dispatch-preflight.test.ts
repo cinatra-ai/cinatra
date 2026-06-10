@@ -51,6 +51,16 @@ vi.mock("@cinatra-ai/agents", () => ({
     mocks.resolveSkills(...args),
   createAgentBuilderPrimitiveHandlers: () => ({}),
   readPublishedAgentTemplates: vi.fn(async () => []),
+  // The SUT derives CREATION_FLOW_PACKAGES from this at module load. The
+  // mocked value is the canonical 4 — the real derivation is pinned by
+  // packages/agents/src/__tests__/creation-flow-packages.test.ts.
+  getAgentCreationFlowPackages: () =>
+    new Set([
+      "@cinatra-ai/planner-agent",
+      "@cinatra-ai/code-reviewer-agent",
+      "@cinatra-ai/security-reviewer-agent",
+      "@cinatra-ai/author-agent",
+    ]),
 }));
 
 vi.mock("@cinatra-ai/mcp-client", () => ({

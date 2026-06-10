@@ -515,6 +515,31 @@ export async function ensureInstalledSkillsRegistered(
 }
 
 /**
+ * Resolve the ON-DISK `SKILL.md` source path of whichever active extension
+ * provides `skillId`, or null when none does. Same discovery substrate as
+ * {@link ensureInstalledSkillRegistered} (scan + derive + match), but returns
+ * the path WITHOUT touching the catalog — for consumers that need a raw disk
+ * read as a catalog-unavailable fallback (e.g. the chat runner's system-prompt
+ * fallback), replacing per-consumer hardcoded extension path candidates.
+ */
+export async function resolveInstalledSkillSourcePath(
+  skillId: string,
+  opts?: { allowKinds?: readonly string[] },
+): Promise<string | null> {
+  const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
+  const exts = await scanSkillExtensions();
+  for (const ext of exts) {
+    if (!allow.has(ext.kind)) continue;
+    for (const slug of ext.slugs) {
+      if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId === skillId) {
+        return path.join(ext.pkgDir, "skills", slug, "SKILL.md");
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Map a stable, package-OWNED capability key (e.g. `blog.generate-ideas`) to
  * the concrete skillId of the active extension declaring it via
  * `cinatra.capabilities`. Returns null when no active extension provides the

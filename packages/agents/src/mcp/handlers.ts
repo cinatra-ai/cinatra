@@ -81,7 +81,7 @@ import { compileOasAgentJson, injectCinatraLlmIntoApiNodes } from "../oas-compil
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
-import { handleAgentCreationReview } from "../agent-creation-review";
+import { handleAgentCreationReview, REVIEWER_LANE_PACKAGES } from "../agent-creation-review";
 import {
   handleAgentCreationRequestPropose,
   handleAgentCreationRequestEdit,
@@ -2786,16 +2786,13 @@ async function handleAgentBuilderGitRead(
 // fully bypassed). Returns a PreflightResult when pin is active so the caller
 // can short-circuit on `ok:false`.
 //
-// The required skills set is the same 3-reviewer-lane set used in
-// agent_creation_review.ts (security/code/planner) — the write path doesn't
+// The required skills set is the canonical 3-reviewer-lane set exported by
+// agent-creation-review.ts (security/code/planner) — the write path doesn't
 // know which lane will be dispatched later, so it gates on the broadest set.
+// Reused (not copied) so the lane definition stays single-sourced.
 // ---------------------------------------------------------------------------
 
-const REVIEWER_LANE_PACKAGES_FOR_WRITE = [
-  "@cinatra-ai/security-reviewer-agent",
-  "@cinatra-ai/code-reviewer-agent",
-  "@cinatra-ai/planner-agent",
-];
+const REVIEWER_LANE_PACKAGES_FOR_WRITE = REVIEWER_LANE_PACKAGES;
 
 async function runAgentSourceWritePreflightIfPinned(): Promise<AgentCreationPreflightResult | null> {
   const { isAgentCreationPinActive } = await import("@/lib/database");
