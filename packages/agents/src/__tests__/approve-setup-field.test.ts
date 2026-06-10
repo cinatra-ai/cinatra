@@ -8,11 +8,13 @@
  * Only the setup-* path and the real-UUID throw remain.
  *
  * Test structure:
- *  1. "setup-{runId}" synthetic path — validates run, merges inputParams,
- *     transitions to "queued", enqueues AGENT_BUILDER_EXECUTION.
+ *  1. "setup-{runId}" synthetic path — validates run, then merges inputParams
+ *     AND transitions to "queued" in ONE atomic CAS UPDATE pinned to
+ *     status = 'pending_approval' (#76 regression), enqueues
+ *     AGENT_BUILDER_EXECUTION only after the write resolves with one row.
  *  2. Real UUID path — throws with clear error message.
  *
- *   pnpm --filter @cinatra/agent-builder exec vitest run \
+ *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/approve-setup-field.test.ts
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -20,14 +22,34 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 // DB mock — captures Drizzle update calls for assertion
 // ---------------------------------------------------------------------------
-const dbWrites: Array<{ op: string; table: string; set: any }> = [];
+const dbWrites: Array<{ op: string; table: string; set: any; where: any }> = [];
+
+// Failure injection for the #76 regression tests:
+//  - `rejectNextUpdate`: the next UPDATE rejects BEFORE recording the write —
+//    modeling a statement that never committed (Postgres single-statement
+//    atomicity).
+//  - `staleNextUpdate`: the next UPDATE resolves with ZERO rows — modeling the
+//    CAS losing a race (the run left pending_approval between the early read
+//    and the write), again without recording a write.
+const dbFail = vi.hoisted(() => ({ rejectNextUpdate: false, staleNextUpdate: false }));
 
 const dbMock = vi.hoisted(() => {
   const update = vi.fn((_table: any) => ({
     set: vi.fn((payload: any) => ({
-      where: vi.fn(async () => {
-        dbWrites.push({ op: "update", table: "agent_runs", set: payload });
-      }),
+      where: vi.fn((condition: any) => ({
+        returning: vi.fn(async () => {
+          if (dbFail.rejectNextUpdate) {
+            dbFail.rejectNextUpdate = false;
+            throw new Error("__db_write_failed__");
+          }
+          if (dbFail.staleNextUpdate) {
+            dbFail.staleNextUpdate = false;
+            return [];
+          }
+          dbWrites.push({ op: "update", table: "agent_runs", set: payload, where: condition });
+          return [{ id: "updated-row" }];
+        }),
+      })),
     })),
   }));
   return { update };
@@ -67,13 +89,33 @@ vi.mock("../wayflow-url", () => ({
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 
+// Circular-safe stringify for inspecting Drizzle SQL condition trees (they
+// reference table/column objects with back-references). Used to pin the
+// CAS shape of the approval UPDATE's WHERE clause.
+function sqlConditionToString(condition: unknown): string {
+  const seen = new Set<object>();
+  return JSON.stringify(condition, (_key, value) => {
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) return "[circular]";
+      seen.add(value);
+    }
+    return value;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 1. "setup-{runId}" synthetic path (setup interrupt loop)
 // ---------------------------------------------------------------------------
 describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks (NOT clearAllMocks): clearAllMocks keeps queued
+    // mockResolvedValue implementations, so e.g. a readAgentTemplateById
+    // programmed in one test would leak into later tests. resetAllMocks
+    // restores every mock to its creation-time implementation.
+    vi.resetAllMocks();
     dbWrites.length = 0;
+    dbFail.rejectNextUpdate = false;
+    dbFail.staleNextUpdate = false;
   });
 
   it("merges single-field value into inputParams and re-enqueues AGENT_BUILDER_EXECUTION", async () => {
@@ -142,6 +184,124 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     );
     expect(stringChunks).toContain('"https://example.com"');
     expect(stringChunks).not.toContain('{"url":"https://example.com"}');
+  });
+
+  // ---------------------------------------------------------------------------
+  // #76 regression: the inputParams merge and the pending_approval -> queued
+  // status flip used to be two sequential UPDATE statements; a crash between
+  // them left the run with merged inputParams but a stale pending_approval
+  // status. The fix combines both into ONE CAS UPDATE on the agent_runs row
+  // (WHERE id = runId AND status = 'pending_approval') — Postgres
+  // single-statement atomicity means there is no partial-state window at all,
+  // and the status guard means a concurrent reject/stop/fail can't be
+  // clobbered back to "queued". These tests pin (a) the single-statement
+  // shape, (b) that a failed write commits nothing and never enqueues the
+  // resume job, (c) the CAS WHERE shape, and (d) that a lost CAS race throws
+  // and never enqueues.
+  // ---------------------------------------------------------------------------
+  it("REGRESSION (#76): single-field approval issues exactly ONE UPDATE carrying both inputParams merge and status flip", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a1",
+      templateId: "tpl-a1",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-a1", "actor-1", { name: "Alice" }, "name");
+
+    // Exactly one statement hit the DB...
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbWrites).toHaveLength(1);
+    // ...and it carries BOTH effects in the same .set payload.
+    expect(dbWrites[0].set.inputParams).toBeDefined();
+    expect(dbWrites[0].set.status).toBe("queued");
+  });
+
+  it("REGRESSION (#76): grouped-form approval issues exactly ONE UPDATE carrying both inputParams merge and status flip", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a2",
+      templateId: "tpl-a2",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-a2",
+      inputSchema: { properties: { website: {}, senderEmail: {} } },
+    });
+
+    await approveReviewTaskInternal("setup-run-a2", "actor-1", {
+      website: "https://ex.com",
+      senderEmail: "a@b.com",
+    });
+
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    expect(dbWrites).toHaveLength(1);
+    expect(dbWrites[0].set.inputParams).toBeDefined();
+    expect(dbWrites[0].set.status).toBe("queued");
+  });
+
+  it("REGRESSION (#76): a mid-write failure commits nothing — no partial state, no resume job enqueued", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a3",
+      templateId: "tpl-a3",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    dbFail.rejectNextUpdate = true;
+    await expect(
+      approveReviewTaskInternal("setup-run-a3", "actor-1", { name: "Alice" }, "name"),
+    ).rejects.toThrow(/__db_write_failed__/);
+
+    // The single statement failed atomically: neither the inputParams merge
+    // nor the status flip was committed...
+    expect(dbWrites).toHaveLength(0);
+    // ...and only one statement was ever attempted (nothing committed before
+    // the failing write either).
+    expect(dbMock.update).toHaveBeenCalledTimes(1);
+    // Redis enqueue must only fire after the DB commit succeeds.
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("REGRESSION (#76): the approval UPDATE is CAS-shaped — WHERE pins id AND status = 'pending_approval'", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a4",
+      templateId: "tpl-a4",
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-a4", "actor-1", { name: "Alice" }, "name");
+
+    expect(dbWrites).toHaveLength(1);
+    const whereStr = sqlConditionToString(dbWrites[0].where);
+    // Both CAS conditions must be bound into the WHERE clause: the row id...
+    expect(whereStr).toContain("run-a4");
+    // ...and the expected-status guard. Without it, a concurrent
+    // reject/stop/fail landing between the early read and this write would be
+    // silently clobbered back to "queued".
+    expect(whereStr).toContain("pending_approval");
+  });
+
+  it("REGRESSION (#76): CAS loses to a concurrent transition — zero rows updated throws stale, nothing enqueued", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-a5",
+      templateId: "tpl-a5",
+      status: "pending_approval", // early read still sees pending_approval...
+      inputParams: {},
+    });
+
+    // ...but by write time another path has transitioned the run, so the CAS
+    // UPDATE matches zero rows.
+    dbFail.staleNextUpdate = true;
+    await expect(
+      approveReviewTaskInternal("setup-run-a5", "actor-1", { name: "Alice" }, "name"),
+    ).rejects.toThrow(/left pending_approval before the approval committed/);
+
+    // Nothing was committed and the resume job must NOT be enqueued — the
+    // concurrent transition (e.g. reject -> failed) owns the run now.
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 
   it("merges grouped-form values (no fieldName) via JSONB object spread", async () => {
@@ -247,7 +407,7 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
 // ---------------------------------------------------------------------------
 describe("approveReviewTaskInternal — real UUID path removed", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("throws a clear error for any real UUID reviewTaskId (no DB row lookup attempted)", async () => {
@@ -262,7 +422,7 @@ describe("approveReviewTaskInternal — real UUID path removed", () => {
 // ---------------------------------------------------------------------------
 describe("approveReviewTaskInternal — wayflow-* sourceType guard", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     dbWrites.length = 0;
   });
 

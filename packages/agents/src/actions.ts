@@ -145,7 +145,8 @@ export async function approveReviewTask(
   // check as the auth layer for UI callers.
   //
   // `values` is forwarded so setup-field interrupts can
-  // merge into agent_runs.inputParams atomically with the approval transaction.
+  // merge into agent_runs.inputParams atomically with the approval status
+  // flip (one CAS UPDATE — see approveReviewTaskInternal, #76).
   //
   // `fieldName` is forwarded so setup paths can bypass the provenance read.
   // Default undefined preserves back-compat for all current callers.
