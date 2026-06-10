@@ -1,6 +1,6 @@
 import "server-only";
 
-import { eq, sql, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import { db } from "./db";
@@ -32,9 +32,11 @@ import {
 // to approve the task before invoking this function.
 //
 // On the setup-* path, the inputParams merge and the status transition back
-// to "queued" are combined into a SINGLE UPDATE statement on the agent_runs
-// row, so both effects commit atomically — a mid-write crash cannot leave the
-// run with merged inputParams but a stale pending_approval status (#76).
+// to "queued" are combined into a SINGLE compare-and-swap UPDATE on the
+// agent_runs row (WHERE status = 'pending_approval'), so both effects commit
+// atomically — a mid-write crash cannot leave the run with merged inputParams
+// but a stale pending_approval status, and a concurrent reject/stop/fail
+// cannot be clobbered back to "queued" (#76).
 // enqueueBackgroundJob (Redis) runs AFTER that write resolves — it is a
 // separate system and must only fire after the DB commit succeeds.
 // ---------------------------------------------------------------------------
@@ -70,9 +72,9 @@ export async function approveReviewTaskInternal(
   // branch:
   //   (a) validates run exists and run.status === "pending_approval"
   //   (b) validates fieldName is present in the request values (single-field path)
-  //   (c) merges the approved field value(s) into agent_runs.inputParams
-  //   (d) transitions the run back to "queued"
-  //   (e) re-enqueues AGENT_BUILDER_EXECUTION so the setup loop re-evaluates
+  //   (c) merges the approved field value(s) into agent_runs.inputParams AND
+  //       transitions the run back to "queued" in one CAS UPDATE (#76)
+  //   (d) re-enqueues AGENT_BUILDER_EXECUTION so the setup loop re-evaluates
   //       pending fields (may emit another INTERRUPT or fall through to dispatch)
   // ---------------------------------------------------------------------------
   if (reviewTaskId.startsWith("setup-")) {
@@ -144,21 +146,35 @@ export async function approveReviewTaskInternal(
       }
     }
 
-    // Single atomic UPDATE (#76): merge the approved value(s) into inputParams
-    // (when present) AND transition the run back to "queued" — so
+    // Single atomic CAS UPDATE (#76): merge the approved value(s) into
+    // inputParams (when present) AND transition the run back to "queued" — so
     // runAgentBuilderExecutionJob won't skip — in ONE statement. Both writes
     // target the same agent_runs row; combining them removes the partial-state
     // window entirely (a crash can no longer land between the merge and the
     // status flip). Postgres evaluates the self-referential JSONB merge
     // against the pre-update row, so mixing it with the plain status
     // assignment is safe.
-    await db
+    //
+    // The `status = 'pending_approval'` guard in the WHERE clause makes the
+    // statement compare-and-swap-shaped (mirroring
+    // store.ts:updateAgentRunStatusConditional): the early `run.status`
+    // read above is only a fast-fail, so a concurrent reject/stop/fail that
+    // lands between that read and this write must NOT be clobbered back to
+    // "queued". Zero rows updated ⇒ stale approval ⇒ throw, and the resume
+    // job is never enqueued.
+    const casResult = await db
       .update(agentRuns)
       .set({
         ...(inputParamsMerge !== null ? { inputParams: inputParamsMerge } : {}),
         status: "queued",
       })
-      .where(eq(agentRuns.id, runId));
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.status, "pending_approval")))
+      .returning({ id: agentRuns.id });
+    if (casResult.length !== 1) {
+      throw new Error(
+        `Setup approval rejected: run ${runId} left pending_approval before the approval committed (concurrent transition)`,
+      );
+    }
 
     await enqueueBackgroundJob(
       BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
