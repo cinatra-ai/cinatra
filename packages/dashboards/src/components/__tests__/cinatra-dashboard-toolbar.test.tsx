@@ -19,12 +19,13 @@
 
 import "./jsdom-shims";
 import React, { type ComponentProps } from "react";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { DashboardProvider, useDashboardContext } from "drizzle-cube/client";
@@ -72,10 +73,12 @@ function renderToolbar({
   pageAnchor,
   editable = true,
   dashboardModes = ["grid"],
+  onConfigChange,
 }: {
   pageAnchor?: DashboardPageAnchor | string;
   editable?: boolean;
   dashboardModes?: ProviderProps["dashboardModes"];
+  onConfigChange?: ProviderProps["onConfigChange"];
 } = {}) {
   return render(
     <DashboardPageAnchorProvider
@@ -85,6 +88,7 @@ function renderToolbar({
         config={EMPTY_CONFIG}
         editable={editable}
         dashboardModes={dashboardModes}
+        onConfigChange={onConfigChange}
       >
         <CinatraDashboardToolbar />
         <ContextProbe />
@@ -189,6 +193,22 @@ describe("CinatraDashboardToolbar — owner-doctrine labels via useDashboardCont
     fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
     expect(screen.queryByRole("button", { name: "Grid" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rows" })).toBeNull();
+  });
+
+  test("clicking 'Rows' drives the layout-mode change through onConfigChange", async () => {
+    const onConfigChange = vi.fn();
+    renderToolbar({ dashboardModes: ["grid", "rows"], onConfigChange });
+    fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rows" }));
+
+    await waitFor(() => {
+      expect(onConfigChange).toHaveBeenCalled();
+    });
+    const nextConfig = onConfigChange.mock.calls.at(-1)?.[0] as {
+      layoutMode?: string;
+    };
+    expect(nextConfig?.layoutMode).toBe("rows");
   });
 });
 

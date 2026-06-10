@@ -31,6 +31,7 @@ vi.mock("drizzle-cube/client", async (importOriginal) => {
 });
 
 import { ComposedDashboard } from "../composed-dashboard";
+import { DashboardsClientShell } from "../dashboards-client-shell";
 
 afterEach(cleanup);
 
@@ -96,5 +97,34 @@ describe("ComposedDashboard — assembly gating", () => {
     expect(
       screen.queryByRole("button", { name: "Edit dashboard" }),
     ).toBeNull();
+  });
+});
+
+describe("ComposedDashboard under DashboardsClientShell — page-anchor seam", () => {
+  test("the shell's pageAnchor reaches the toolbar; the DOM satisfies the SSR-fallback-hiding selector", () => {
+    // Mounts the REAL shell (page-anchor context + CubeProvider + attrs)
+    // around the composition, then asserts the exact structural premise the
+    // `dashboard-theme.css` `body:has(...)` rule keys on to hide the
+    // server-rendered PageHeader fallback. jsdom does not apply CSS, so the
+    // selector match — shell attrs wrapping the live toolbar action — is
+    // the testable contract.
+    render(
+      <DashboardsClientShell pageAnchor="agents">
+        <ComposedDashboard config={ONE_PORTLET_CONFIG} editable />
+      </DashboardsClientShell>,
+    );
+
+    const liveAction = document.querySelector(
+      '[data-cinatra-dashboard-shell="true"][data-cinatra-page-anchor="agents"] ' +
+        '[data-cinatra-page-action="run-agent"]',
+    );
+    expect(liveAction).not.toBeNull();
+    expect(liveAction?.getAttribute("href")).toBe("/agents/run");
+
+    // Both route actions render inside the toolbar, in declared order.
+    const anchors = [
+      ...document.querySelectorAll("[data-cinatra-page-action]"),
+    ].map((a) => a.getAttribute("data-cinatra-page-action"));
+    expect(anchors).toEqual(["run-agent", "create-agent"]);
   });
 });
