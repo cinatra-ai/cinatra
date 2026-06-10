@@ -116,9 +116,14 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
 // Most tests run with NO required-in-prod packages. A single test flips a package
 // into this set to drive the dispatcher's required-in-prod NEW-install branch
 // (which creates the placeholder canonical row at status `locked`, not `active`).
+// The packages this suite installs carry no version pin (bare names — unpinned),
+// so the dispatcher's required-pin gate (`checkRequiredExtensionVersionPin`,
+// step 0 of runHostInstallLocked) verdicts `ok` for every ref here — mirror that
+// faithfully; the refusal paths are covered by the extensions-package suites.
 const requiredInProdPackages = new Set<string>();
 vi.mock("../required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => requiredInProdPackages.has(pkg),
+  checkRequiredExtensionVersionPin: () => ({ ok: true }),
 }));
 
 // Mock the host uiSurface resolver so the boot-path connector-handler
@@ -140,6 +145,7 @@ vi.mock("@/lib/connector-runtime-install-surface", () => ({
 // mock that subpath alias too so both resolve to the stub.
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => requiredInProdPackages.has(pkg),
+  checkRequiredExtensionVersionPin: () => ({ ok: true }),
 }));
 
 // runHostInstall now wraps the whole direct-install path in the per-package
