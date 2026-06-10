@@ -323,9 +323,41 @@ export async function filterRetiredSkillExtensions(
   return kept;
 }
 
+/**
+ * The subset of `skillIds` whose OWNER package is explicitly tombstoned.
+ * Owner identity is derived from the skillId's package prefix (`@scope/pkg:slug`)
+ * through the same candidate union as the scan filter; the assistant-skills
+ * carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows → kept, by the
+ * no-row rule. Fail-open: a failed status read tombstones nothing.
+ */
+async function tombstonedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (skillIds.length === 0) return out;
+  const candidatesById = new Map(
+    skillIds.map((id) => [
+      id,
+      resolveSkillOwnerPackageCandidates({ packageName: id.split(":")[0] ?? id }),
+    ]),
+  );
+  const statusMap = await readLifecycleStatusFailOpen([
+    ...new Set([...candidatesById.values()].flat()),
+  ]);
+  if (statusMap === null) return out; // fail-open
+  for (const [id, candidates] of candidatesById) {
+    const statuses = candidates
+      .map((c) => statusMap.get(c))
+      .filter((s): s is "active" | "archived" => s !== undefined);
+    if (!statuses.includes("active") && statuses.includes("archived")) out.add(id);
+  }
+  return out;
+}
+
 // Memoize SUCCESSFUL (and in-flight) registrations per skillId. A miss or a
 // zero-registration outcome is NOT cached, so a later install is picked up on
-// the next call (guardrail: do not negative-cache misses).
+// the next call (guardrail: do not negative-cache misses). A memoized success
+// is RE-GATED against the lifecycle store on every call (below): an extension
+// archived AFTER its skill registered must stop resolving without a process
+// restart, and its dropped memo lets a later RESTORE re-register.
 const registrationMemo = new Map<string, Promise<void>>();
 
 /**
@@ -339,7 +371,22 @@ export function ensureInstalledSkillRegistered(
   opts?: { allowKinds?: readonly string[] },
 ): Promise<void> {
   const existing = registrationMemo.get(skillId);
-  if (existing) return existing;
+  if (existing) {
+    // Live-state re-gate of a memoized success: an extension archived AFTER
+    // its skill registered must not keep resolving until process restart.
+    // Fail-open (a failed status read trusts the memo). Dropping the memo
+    // lets a later RESTORE re-register through the scan path.
+    return (async () => {
+      if ((await tombstonedSkillIds([skillId])).has(skillId)) {
+        if (registrationMemo.get(skillId) === existing) registrationMemo.delete(skillId);
+        console.info(
+          `[cinatra:skills] memoized registration for "${skillId}" dropped — its owner extension is retired (tombstoned)`,
+        );
+        return;
+      }
+      return existing;
+    })();
+  }
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const run = (async () => {
     const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
@@ -393,12 +440,26 @@ export function ensureInstalledSkillRegistered(
  * never throws. The returned promise settles once every requested id's
  * registration (in-flight or freshly started here) has completed.
  */
-export function ensureInstalledSkillsRegistered(
+export async function ensureInstalledSkillsRegistered(
   skillIds: readonly string[],
   opts?: { allowKinds?: readonly string[] },
 ): Promise<void> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const unique = [...new Set(skillIds)];
+  // Live-state re-gate of memoized successes (mirrors the single-id entry
+  // point, one batched status read): drop the memo of any id whose owner
+  // extension is now tombstoned so it is neither trusted as registered nor
+  // re-registered (the scan filter excludes its package), and a later restore
+  // retries. Fail-open on a failed status read.
+  const memoized = unique.filter((id) => registrationMemo.has(id));
+  if (memoized.length > 0) {
+    for (const id of await tombstonedSkillIds(memoized)) {
+      registrationMemo.delete(id);
+      console.info(
+        `[cinatra:skills] memoized registration for "${id}" dropped — its owner extension is retired (tombstoned)`,
+      );
+    }
+  }
   const pending = unique.filter((id) => !registrationMemo.has(id));
 
   if (pending.length > 0) {

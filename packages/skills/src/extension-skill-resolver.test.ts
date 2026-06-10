@@ -369,6 +369,47 @@ describe("installed_extension lifecycle gate (explicit-tombstone semantics)", ()
     expect(registerExtensionSkillMock).not.toHaveBeenCalled();
   });
 
+  it("re-gates a MEMOIZED registration: archive stops it, restore re-registers (no process restart)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "regate-skills",
+      name: "@acme/regate-skills",
+      kind: "skill",
+      slugs: ["regate-one"],
+    });
+    const id = "@acme/regate-skills:regate-one";
+    // 1) live (no rows) → registers and memoizes
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    // 2) archived AFTER registration → the memoized success is dropped, no re-register
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-skills", "archived"]]));
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    // 3) restored → the dropped memo lets the scan path re-register
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-skills", "active"]]));
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-gates memoized registrations on the BATCH path too", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "regate-batch",
+      name: "@acme/regate-batch",
+      kind: "skill",
+      slugs: ["batch-one"],
+    });
+    const id = "@acme/regate-batch:batch-one";
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-batch", "archived"]]));
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-batch", "active"]]));
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(2);
+  });
+
   it("filterRetiredSkillExtensions drops only tombstoned descriptors", async () => {
     const mk = (pkgName: string) => ({
       pkgDir: `/x/${pkgName}`,
