@@ -15,7 +15,7 @@ import {
   DeploymentRegistryConfigNotAvailableError,
 } from "@/lib/deployment-registry-config";
 import { decryptSecret } from "@/lib/instance-secrets";
-import { readDestinationCredential } from "@/lib/drizzle-store";
+import { readDestinationCredential } from "@/lib/extension-destinations-store";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { ExtensionOrigin } from "@cinatra-ai/agents/schema";
 

@@ -579,7 +579,7 @@ export async function savePrivateDestinationCredential(input: {
 }): Promise<void> {
   await requireAdminSession();
   const { encryptSecret } = await import("@/lib/instance-secrets");
-  const { writeDestinationCredential } = await import("@/lib/drizzle-store");
+  const { writeDestinationCredential } = await import("@/lib/extension-destinations-store");
 
   const tokenEnc = encryptSecret(
     input.publishTokenPlaintext,

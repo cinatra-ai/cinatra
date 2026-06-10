@@ -6,7 +6,8 @@ import { dirname, resolve } from "node:path";
 // ---------------------------------------------------------------------------
 // Cross-process schema-init DDL serialization + completion-marker guard.
 //
-// `ensurePostgresSchema()` in src/lib/database.ts runs ~180 DDL queries on
+// `ensurePostgresSchema()` in src/lib/postgres-schema-init.ts (extracted from
+// database.ts in cinatra#104) runs ~180 DDL queries on
 // cold boot. Two Turbopack compile workers (separate PIDs) initing the
 // schema simultaneously will both run the DDL set and race on `pg_class`
 // /`pg_namespace`, surfacing as a 500 with `ERROR: tuple concurrently
@@ -36,7 +37,7 @@ import { dirname, resolve } from "node:path";
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const DATABASE_TS = resolve(REPO_ROOT, "src/lib/database.ts");
+const DATABASE_TS = resolve(REPO_ROOT, "src/lib/postgres-schema-init.ts");
 
 function extractEnsureSchemaDdlCall(src: string): string {
   // Find the runPostgresQueriesSync call in ensurePostgresSchema's slow
@@ -47,7 +48,7 @@ function extractEnsureSchemaDdlCall(src: string): string {
   const start = src.indexOf(marker);
   if (start < 0) {
     throw new Error(
-      `Could not locate "${marker}" comment in src/lib/database.ts — has the slow-path comment block been renamed or removed?`,
+      `Could not locate "${marker}" comment in src/lib/postgres-schema-init.ts — has the slow-path comment block been renamed or removed?`,
     );
   }
   // 4500 chars after the marker covers the entire commented block + the
