@@ -4,37 +4,52 @@ import Link from "next/link";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-// Instance hard-delete uses the connector's manage-gated action — a single
-// org-admin `requireExtensionAction` gate shared with the dispatch-route
-// settings page. Imported from the connector's single entry alongside
-// WordPressNangoConnectCard so core references this connector at ONE occurrence
-// (IoC — core-extension instance-coupling gate). The blog-connector selector
-// action stays host-side.
-import {
-  WordPressNangoConnectCard,
-  deleteWordPressInstanceAction,
-} from "@cinatra-ai/wordpress-mcp-connector";
-import { getNangoFrontendConfig, getNangoStatus } from "@cinatra-ai/nango-connector";
+import type { ComponentType } from "react";
 import { Button } from "@/components/ui/button";
 import { listWordPressInstances, getWordPressAPIStatus } from "@/lib/wordpress-api";
+import { getNangoFrontendConfig, getNangoStatus } from "@/lib/nango";
 import { setWordPressBlogConnectorAction } from "@/app/campaigns/actions";
 // The connection UI exposes the per-instance blog-connector selector.
-// The registered set comes from the
-// @cinatra-ai/blog-connector facade registry (boot-populated via
-// src/lib/register-blog-providers.ts, imported here as a side-effect).
+// The registered set comes from the blog-connector facade registry
+// (boot-populated via src/lib/register-blog-providers.ts, imported here as a
+// side-effect).
 import "@/lib/register-blog-providers";
-import { listInstalledBlogConnectors } from "@cinatra-ai/blog-connector";
+// Connector server modules resolve through the generated extension manifest —
+// this mount names no connector package. Instance hard-delete uses the
+// connector's manage-gated action (a single org-admin `requireExtensionAction`
+// gate shared with the dispatch-route settings page); the blog-connector
+// selector action stays host-side.
+import { requireConnectorModule } from "@/lib/connector-modules.server";
+
+type WordPressConnectorModule = {
+  WordPressNangoConnectCard: ComponentType<{
+    nangoFrontendConfig: ReturnType<typeof getNangoFrontendConfig>;
+    connectionServiceReady: boolean;
+  }>;
+  deleteWordPressInstanceAction: (formData: FormData) => Promise<void>;
+};
+
+type BlogConnectorModule = {
+  listInstalledBlogConnectors: () => Array<{
+    definition: { connectorId: string; name: string };
+  }>;
+};
 
 export const metadata: Metadata = { title: "WordPress | Cinatra" };
 
 export default async function WordPressPage() {
+  const [{ WordPressNangoConnectCard, deleteWordPressInstanceAction }, blogModule] =
+    await Promise.all([
+      requireConnectorModule<WordPressConnectorModule>("wordpress-mcp-connector"),
+      requireConnectorModule<BlogConnectorModule>("blog-connector"),
+    ]);
   const [instances, status] = await Promise.all([
     listWordPressInstances(),
     Promise.resolve(getWordPressAPIStatus()),
   ]);
   const nangoFrontendConfig = getNangoFrontendConfig();
   const nangoStatus = getNangoStatus();
-  const blogConnectors = listInstalledBlogConnectors().map((c) => ({
+  const blogConnectors = blogModule.listInstalledBlogConnectors().map((c) => ({
     connectorId: c.definition.connectorId,
     name: c.definition.name,
   }));
