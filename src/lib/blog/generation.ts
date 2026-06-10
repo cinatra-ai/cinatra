@@ -14,6 +14,7 @@ import {
   updateBlogPostDraftImage,
   updateBlogPostDraftGenerationState,
   updateBlogPostImageGenerationState,
+  markBlogPostImageGenerationStoppedIfRunning,
   updateBlogPostIdeaGenerationState,
   updateBlogPostLinkedInDraftGenerationState,
   updateBlogPostWordPressDraftGenerationState,
@@ -839,12 +840,11 @@ export async function stopBlogPostImageRegeneration(projectId: string) {
   if (project.imageGeneration.jobId) {
     await cancelBackgroundJob(project.imageGeneration.jobId);
   }
-  await updateBlogPostImageGenerationState(project.id, {
-    ...project.imageGeneration,
-    status: "stopped",
-    message: "Blog post image generation stopped.",
-    updatedAt: new Date().toISOString(),
-  });
+  // The worker may have committed a terminal state (e.g. `succeeded`) while
+  // the cancel round-trip above was in flight. The store-level conditional
+  // transition re-checks and writes in ONE synchronous block (no await
+  // boundary), so an already-terminal outcome is never clobbered.
+  await markBlogPostImageGenerationStoppedIfRunning(project.id, "Blog post image generation stopped.");
   return await readBlogPostsProjectById(projectId);
 }
 

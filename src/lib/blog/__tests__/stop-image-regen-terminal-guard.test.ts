@@ -1,23 +1,36 @@
 /**
- * stopBlogPostImageRegeneration must be a no-op when the job has already
- * reached a terminal state (mirrors stop-linkedin-draft-terminal-guard).
+ * stopBlogPostImageRegeneration must never clobber a terminal state
+ * (mirrors stop-linkedin-draft-terminal-guard, plus the race window).
  *
- * Without the guard, a cancel racing job completion clobbers a
- * succeeded/failed status with `stopped`, erasing the outcome of an
+ * Two layers:
+ *  1. pre-check — already-terminal BEFORE the stop reads → early return;
+ *  2. conditional store transition — the worker may commit `succeeded`
+ *     BETWEEN the stop's read and its write (while cancelBackgroundJob is in
+ *     flight); the stop therefore delegates the write to
+ *     markBlogPostImageGenerationStoppedIfRunning, whose body re-checks and
+ *     writes in ONE synchronous block (no await boundary — pinned by a
+ *     source-text contract below).
+ *
+ * Without these, a cancel racing job completion erases the outcome of an
  * already-finished job — and, in the dashboard portlet's manual refSwapMode,
- * suppressing the keep/revert gate even though the pipeline already applied
+ * suppresses the keep/revert gate even though the pipeline already applied
  * the new image refs.
  */
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const readBlogPostsProjectById = vi.fn();
 const updateBlogPostImageGenerationState = vi.fn();
+const markBlogPostImageGenerationStoppedIfRunning = vi.fn();
 const cancelBackgroundJob = vi.fn();
 
 vi.mock("../store", () => ({
   readBlogPostsProjectById: (...args: unknown[]) => readBlogPostsProjectById(...args),
   updateBlogPostImageGenerationState: (...args: unknown[]) =>
     updateBlogPostImageGenerationState(...args),
+  markBlogPostImageGenerationStoppedIfRunning: (...args: unknown[]) =>
+    markBlogPostImageGenerationStoppedIfRunning(...args),
   // Other store exports referenced by generation.ts at import time. They are
   // unused by the function under test but must resolve.
   createBlogPostsProject: vi.fn(),
@@ -92,6 +105,7 @@ describe("stopBlogPostImageRegeneration - terminal-state guard", () => {
   beforeEach(() => {
     readBlogPostsProjectById.mockReset();
     updateBlogPostImageGenerationState.mockReset();
+    markBlogPostImageGenerationStoppedIfRunning.mockReset();
     cancelBackgroundJob.mockReset();
   });
 
@@ -105,22 +119,44 @@ describe("stopBlogPostImageRegeneration - terminal-state guard", () => {
     const result = await stopBlogPostImageRegeneration("proj-1");
     expect(result).toBe(project);
     expect(updateBlogPostImageGenerationState).not.toHaveBeenCalled();
+    expect(markBlogPostImageGenerationStoppedIfRunning).not.toHaveBeenCalled();
     expect(cancelBackgroundJob).not.toHaveBeenCalled();
   });
 
-  it("cancels and stops when status is running", async () => {
+  it("cancels and stops via the CONDITIONAL transition when status is running", async () => {
     const before = makeProject("running");
     const after = { ...before, imageGeneration: { ...before.imageGeneration, status: "stopped" as const } };
     readBlogPostsProjectById
       .mockResolvedValueOnce(before)
       .mockResolvedValueOnce(after);
-    updateBlogPostImageGenerationState.mockResolvedValueOnce(undefined);
+    markBlogPostImageGenerationStoppedIfRunning.mockResolvedValueOnce(true);
 
     const result = await stopBlogPostImageRegeneration("proj-1");
     expect(cancelBackgroundJob).toHaveBeenCalledWith("job-42");
-    expect(updateBlogPostImageGenerationState).toHaveBeenCalledTimes(1);
-    expect(updateBlogPostImageGenerationState.mock.calls[0]![1]).toMatchObject({ status: "stopped" });
+    expect(markBlogPostImageGenerationStoppedIfRunning).toHaveBeenCalledWith(
+      "proj-1",
+      "Blog post image generation stopped.",
+    );
+    // Never the unconditional setter — only the compare-and-write transition.
+    expect(updateBlogPostImageGenerationState).not.toHaveBeenCalled();
     expect(result).toBe(after);
+  });
+
+  it("race window: worker commits `succeeded` during the cancel round-trip → no clobber", async () => {
+    const before = makeProject("running");
+    const afterWorkerWon = {
+      ...before,
+      imageGeneration: { ...before.imageGeneration, status: "succeeded" as const, jobId: null },
+    };
+    readBlogPostsProjectById
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(afterWorkerWon);
+    // Conditional transition declines: the state is already terminal.
+    markBlogPostImageGenerationStoppedIfRunning.mockResolvedValueOnce(false);
+
+    const result = await stopBlogPostImageRegeneration("proj-1");
+    expect(updateBlogPostImageGenerationState).not.toHaveBeenCalled();
+    expect(result).toBe(afterWorkerWon); // succeeded outcome preserved
   });
 
   it("stops when status is idle without a jobId (no cancel call)", async () => {
@@ -129,10 +165,34 @@ describe("stopBlogPostImageRegeneration - terminal-state guard", () => {
     readBlogPostsProjectById
       .mockResolvedValueOnce(before)
       .mockResolvedValueOnce(after);
-    updateBlogPostImageGenerationState.mockResolvedValueOnce(undefined);
+    markBlogPostImageGenerationStoppedIfRunning.mockResolvedValueOnce(true);
 
     await stopBlogPostImageRegeneration("proj-1");
     expect(cancelBackgroundJob).not.toHaveBeenCalled();
-    expect(updateBlogPostImageGenerationState).toHaveBeenCalledTimes(1);
+    expect(markBlogPostImageGenerationStoppedIfRunning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("markBlogPostImageGenerationStoppedIfRunning - atomicity source contract", () => {
+  it("has NO await boundary in its body (read-check-write stays one synchronous block)", () => {
+    const source = readFileSync(resolve(__dirname, "../store.ts"), "utf8");
+    const start = source.indexOf("export async function markBlogPostImageGenerationStoppedIfRunning");
+    expect(start).toBeGreaterThan(-1);
+    // Function bodies in store.ts are brace-balanced; scan to the matching brace.
+    const bodyStart = source.indexOf("{", start);
+    let depth = 0;
+    let end = bodyStart;
+    for (let i = bodyStart; i < source.length; i++) {
+      if (source[i] === "{") depth++;
+      else if (source[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    const body = source.slice(bodyStart, end + 1);
+    expect(body).not.toMatch(/\bawait\b/);
   });
 });

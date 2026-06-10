@@ -929,6 +929,41 @@ export async function updateBlogPostImageGenerationState(projectId: string, stat
   });
 }
 
+/**
+ * Conditional stop transition for the image pipeline
+ * (stopBlogPostImageRegeneration). Reads, checks, and writes in ONE
+ * synchronous block — deliberately NO await boundary anywhere in the body —
+ * so a terminal state (succeeded/failed/stopped) committed by the in-process
+ * job worker while the caller's cancel round-trip was in flight is never
+ * clobbered with `stopped` (interleaving only happens at await points).
+ * Returns true when the stop transition was applied.
+ */
+export async function markBlogPostImageGenerationStoppedIfRunning(projectId: string, message: string) {
+  const store = readStore();
+  const project = store.projects.find((entry) => entry.id === projectId);
+  if (!project) return false;
+  const status = project.imageGeneration?.status;
+  if (status === "succeeded" || status === "failed" || status === "stopped") return false;
+  const stamped = nowIso();
+  writeStore({
+    projects: store.projects.map((entry) =>
+      entry.id === projectId
+        ? {
+            ...entry,
+            updatedAt: stamped,
+            imageGeneration: {
+              ...entry.imageGeneration,
+              status: "stopped" as const,
+              message,
+              updatedAt: stamped,
+            },
+          }
+        : entry,
+    ),
+  });
+  return true;
+}
+
 export async function updateBlogPostLinkedInDraftGenerationState(projectId: string, state: BlogPostLinkedInDraftState) {
   const store = readStore();
   writeStore({
