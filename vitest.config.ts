@@ -267,6 +267,9 @@ export default defineConfig({
       "packages/cli/src/__tests__/**/*.test.{ts,mjs}",
       // SDK ABI contract: dependency-normalization shim (pure; no IO).
       "packages/sdk-extensions/src/**/__tests__/**/*.test.{ts,tsx}",
+      // SDK Nango connect surfaces: orphaned Connect UI cleanup contract (#48)
+      // (source-text + module-load smoke; vitest env is node — no DOM render).
+      "packages/sdk-ui/src/**/__tests__/**/*.test.{ts,tsx}",
       // Extension inventory + dependency-graph generator (pure; reads repo).
       "scripts/extensions/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
