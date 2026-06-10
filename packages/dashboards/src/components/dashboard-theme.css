@@ -156,17 +156,72 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
   display: none;
 }
 
-/* Dashboard filters toolbar (DEFERRED, owner-visual-inspection): the
- * composable `<DashboardFilterBar>` is mounted by `composed-dashboard.tsx`
- * but currently un-styled by Cinatra. The owner wants it restyled as a
- * sub-toolbar of the main toolbar — same ground / radius / height /
- * separators as the design-system `<Toolbar>`. No CSS rule ships here
- * yet — adding an un-targeted selector would be dead code and tax the
- * cascade. The owner identifies the live DOM signature at visual review;
- * if the filter bar's internal markup proves too opaque to style safely,
- * the follow-up replaces it with a host-owned bar via the same
- * `useDashboardContext()` seam the toolbar uses.
+/* Dashboard filter bar as a CHILD TOOLBAR (design spec §Nested toolbar,
+ * cinatra#65).
+ *
+ * `<DashboardFilterBarSlot>` (composed-dashboard.tsx) provides the stable
+ * host hook `[data-cinatra-dashboard-filter-bar]` plus the nested-toolbar
+ * geometry (20px inset; 6px stack gap via the toolbar's own margin). The
+ * cube paints every bar/chip color through inline
+ * `style={{ … var(--dc-*) … }}`, so the restyle is a SCOPED VARIABLE
+ * REDEFINITION — no DC-internal DOM mutation, and the only class-keyed
+ * rules below target three single-purpose utility hooks pinned by
+ * `__tests__/dc-filter-bar-contract.test.ts`.
+ *
+ *  - ground   → --toolbar-l2 (one level beneath the primary toolbar)
+ *  - borders  → transparent (spec: embedded controls are borderless;
+ *               the child-toolbar ground is their container)
+ *  - hover    → a foreground tint on the ground (spec: hover/selected are
+ *               background tints; DC drives hover through
+ *               --dc-surface-hover in mouseenter handlers)
+ *  - shadow   → none (a toolbar is flat chrome)
+ * Active chips keep DC's solid --dc-primary + white text: that pair is an
+ * inline literal (`color: 'white'`), so re-tinting it would need blanket
+ * !important guesswork; solid indigo stays readable on the light ground.
  */
+[data-cinatra-dashboard-filter-bar] {
+  --dc-surface: var(--toolbar-l2);
+  --dc-border: transparent;
+  /* Foreground-based tint = the canonical ToolbarButton hover
+     (hover:bg-foreground/[0.06]) — and it inverts correctly in dark
+     mode, where --foreground flips to near-white. */
+  --dc-surface-hover: color-mix(in srgb, var(--foreground) 6%, var(--toolbar-l2));
+  --dc-shadow-sm: none;
+}
+
+/* Floating panels opened FROM the bar must not inherit the toolbar
+ * treatment: drizzle-cube's date/XTD/value popovers render in-place
+ * (`dc:absolute`, not portaled) and the filter edit modal renders an
+ * inline `dc:fixed` overlay inside this same subtree. Both paint with
+ * the very vars overridden above, so restore the panel surface here. */
+[data-cinatra-dashboard-filter-bar] .dc\:absolute,
+[data-cinatra-dashboard-filter-bar] .dc\:fixed {
+  --dc-surface: var(--popover);
+  --dc-border: var(--border);
+  --dc-surface-hover: color-mix(in srgb, var(--surface-muted) 60%, var(--card));
+  --dc-shadow-sm: var(--cinatra-shadow-soft);
+}
+
+/* Toolbar geometry on the bar root (the cube's own rounded container —
+ * a DIRECT grandchild of the hook, so popover/modal internals that also
+ * carry dc:rounded-lg are not affected): 8px chip radius per §Toolbar,
+ * and the §Nested toolbar L2 bar height. */
+[data-cinatra-dashboard-filter-bar] > div > .dc\:rounded-lg {
+  border-radius: var(--r-chip, 0.5rem);
+  min-height: 42px;
+}
+
+/* Hairline group separators per §Toolbar (24px navy hairline family —
+ * same bg-line-strong/20 tone as the canonical <ToolbarSeparator>).
+ * `!important` is required: the cube sets these colors inline from
+ * --dc-border, which the scope above blanks to transparent. Scoped to
+ * the bar root only (NOT the popovers/modal restored above). */
+[data-cinatra-dashboard-filter-bar] > div > .dc\:rounded-lg .dc\:w-px {
+  background-color: color-mix(in srgb, var(--line-strong) 20%, transparent) !important;
+}
+[data-cinatra-dashboard-filter-bar] > div > .dc\:rounded-lg .dc\:border-t {
+  border-top-color: color-mix(in srgb, var(--line-strong) 20%, transparent) !important;
+}
 
 .dashboard-grid-container [data-portlet-id] {
   border-radius: var(--radius-xl, 0.75rem) !important;

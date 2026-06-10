@@ -20,6 +20,8 @@
   --color-surface-strong: var(--surface-strong);
   --color-surface-muted: var(--surface-muted);
   --color-toolbar: var(--toolbar);
+  --color-toolbar-l2: var(--toolbar-l2);
+  --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-accent-soft: var(--accent-soft);

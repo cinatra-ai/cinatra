@@ -37,7 +37,30 @@ import {
 } from "drizzle-cube/client";
 
 import { CinatraDashboardToolbar } from "./cinatra-dashboard-toolbar";
+import { useDashboardFilterBarVisible } from "./dashboard-filter-bar-visibility";
 import { DcModalA11yScope } from "./dc-modal-a11y-scope";
+
+/**
+ * Host wrapper that renders drizzle-cube's `<DashboardFilterBar>` as a
+ * CHILD TOOLBAR of `<CinatraDashboardToolbar>` (design spec §Nested
+ * toolbar, cinatra#65): inset 20px from the toolbar above (`ml-5`); the
+ * 6px stack gap comes from the toolbar tightening its own bottom margin
+ * while the bar is visible (see cinatra-dashboard-toolbar.tsx). The
+ * `data-cinatra-dashboard-filter-bar` attribute is the STABLE HOOK the
+ * scoped restyle in dashboard-theme.css targets — the cube's internal
+ * markup is all inline `style={{ … var(--dc-*) … }}`, so the restyle
+ * happens by redefining those vars inside this scope, never by DOM
+ * mutation. Mount INSIDE the provider (it reads `useDashboardContext()`).
+ */
+function DashboardFilterBarSlot() {
+  const visible = useDashboardFilterBarVisible();
+  if (!visible) return null;
+  return (
+    <div data-cinatra-dashboard-filter-bar="true" className="ml-5">
+      <DashboardFilterBar />
+    </div>
+  );
+}
 
 export type ComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
@@ -52,7 +75,7 @@ export function ComposedDashboard(props: ComposedDashboardProps) {
     <DashboardProvider {...props} dashboardModes={dashboardModes}>
       <DcModalA11yScope>
         {!isEmpty && <CinatraDashboardToolbar />}
-        {!isEmpty && <DashboardFilterBar />}
+        {!isEmpty && <DashboardFilterBarSlot />}
         <DashboardGridSurface />
         <DashboardModals />
       </DcModalA11yScope>
