@@ -29,14 +29,32 @@ type AppointmentScheduleModule = {
 
 const APPOINTMENT_SCHEDULE_SLUG = "google-calendar-connector";
 
+const APPOINTMENT_SCHEDULE_EXPORTS = [
+  "getStoredGoogleCalendarAppointments",
+  "addGoogleCalendarAppointmentSchedule",
+  "addUserGoogleCalendarAppointmentSchedule",
+] as const;
+
 async function loadAppointmentScheduleModule(): Promise<AppointmentScheduleModule> {
-  const mod = await loadConnectorModule<AppointmentScheduleModule>(APPOINTMENT_SCHEDULE_SLUG);
+  const mod = await loadConnectorModule<Partial<AppointmentScheduleModule>>(
+    APPOINTMENT_SCHEDULE_SLUG,
+  );
   if (!mod) {
     throw new Error(
       `Appointment-schedule connector module not bundled (slug: ${APPOINTMENT_SCHEDULE_SLUG})`,
     );
   }
-  return mod;
+  // The generic loader cannot type-check the export shape; validate it at the
+  // boundary so a renamed/removed export fails with a contract error, not an
+  // "is not a function" deep in a handler.
+  for (const member of APPOINTMENT_SCHEDULE_EXPORTS) {
+    if (typeof mod[member] !== "function") {
+      throw new Error(
+        `Appointment-schedule connector module (slug: ${APPOINTMENT_SCHEDULE_SLUG}) is missing the "${member}" export`,
+      );
+    }
+  }
+  return mod as AppointmentScheduleModule;
 }
 
 export async function collectAllPrimitiveHandlers() {
