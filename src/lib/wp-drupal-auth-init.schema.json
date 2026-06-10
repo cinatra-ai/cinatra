@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cinatra.ai/contracts/wp-drupal-assistant/v1/auth-init.schema.json",
   "title": "Cinatra WP/Drupal assistant — authenticated stream-init request (v1)",
-  "description": "POST body the WordPress plugin / Drupal module sends to /api/{wordpress,drupal}/bundle.js's downstream stream endpoint (/api/agents/{wordpress,drupal}-content-editor/stream) to open an authenticated assistant session. Sent with `Authorization: Bearer <apiKey>`. The `contractVersion` field pins the plugin↔core wire contract so a plugin built against v0.1.0 fails loud (admin-visible error) rather than silently when Cinatra's contract later changes.",
+  "description": "POST body the WordPress plugin / Drupal module sends to /api/{wordpress,drupal}/bundle.js's downstream stream endpoint (/api/agents/{wordpress,drupal}-content-editor/stream) to open an authenticated assistant session. Sent with `Authorization: Bearer <apiKey>`. The `contractVersion` field pins the plugin↔core wire contract so a plugin built against an older Cinatra fails loud (admin-visible error) rather than silently when the contract later changes.",
   "type": "object",
   "required": ["contractVersion", "messages"],
   "additionalProperties": false,

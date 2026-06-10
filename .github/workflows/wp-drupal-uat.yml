@@ -1,6 +1,14 @@
 # WordPress/Drupal assistant Playwright UAT gate.
 #
-# - Path-filtered HARD gate on PRs: when contract / plugin-integration paths are
+# The UAT RUN LOGIC (composite action) lives in cinatra-ai/ci
+# (.github/actions/wp-drupal-uat-run) — shared CI plumbing that operates on a
+# cinatra core checkout. This caller stays in THIS repo because its subject is
+# core PRs: the path filter below targets core integration paths and the
+# Playwright suite itself lives in tests/e2e/wp-drupal-uat/. The canonical
+# wire contract lives in cinatra-ai/wordpress-assistant-connector
+# (contracts/wp-drupal-assistant/).
+#
+# - Path-filtered HARD gate on PRs: when plugin-integration paths are
 #   touched, the full UAT suite must pass; otherwise the gate passes quickly.
 #   The `uat-gate` job ALWAYS runs so it is a stable required status check.
 # - Nightly cron runs the full suite regardless of touched paths.
@@ -41,6 +49,7 @@ jobs:
     timeout-minutes: 3
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
+      contract_schema: ${{ steps.filter.outputs.contract_schema }}
       # run_real = run the real UAT: relevant paths touched AND not a draft PR.
       # (changed-paths only runs on pull_request, so draft is defined here.)
       run_real: ${{ steps.filter.outputs.relevant == 'true' && github.event.pull_request.draft != true }}
@@ -50,8 +59,11 @@ jobs:
         id: filter
         with:
           filters: |
+            contract_schema:
+              - 'src/lib/wp-drupal-auth-init.schema.json'
             relevant:
-              - 'contracts/wp-drupal-assistant/**'
+              - 'src/lib/wp-drupal-contract.ts'
+              - 'src/lib/wp-drupal-auth-init.schema.json'
               - 'src/app/api/wordpress/**'
               - 'src/app/api/drupal/**'
               - 'src/lib/wordpress-mcp-connection.ts'
@@ -62,6 +74,43 @@ jobs:
               - 'tests/e2e/config/base.ts'
               - 'dev/wordpress-plugin/**'
               - 'dev/drupal-module/**'
+
+  # Reciprocal contract lock-step gate (canonical-first ordering): a core PR
+  # that edits the ENFORCED auth-init schema copy must match the CANONICAL
+  # schema already on the contract repo's default branch
+  # (cinatra-ai/wordpress-assistant-connector, contracts/wp-drupal-assistant/).
+  # The contract repo's own gate covers the other direction plus a weekly
+  # drift schedule. Cheap (two checkouts + a deep-compare), so it runs on
+  # drafts too.
+  contract-schema-lockstep:
+    if: github.event_name == 'pull_request' && needs.changed-paths.outputs.contract_schema == 'true'
+    needs: changed-paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout the canonical contract repo
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: cinatra-ai/wordpress-assistant-connector
+          path: .wp-drupal-contract
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+      - name: Enforced copy matches the canonical v1 auth-init schema
+        run: |
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            import assert from 'node:assert/strict';
+            const canonical = JSON.parse(readFileSync('.wp-drupal-contract/contracts/wp-drupal-assistant/v1/auth-init.schema.json', 'utf8'));
+            const enforced = JSON.parse(readFileSync('src/lib/wp-drupal-auth-init.schema.json', 'utf8'));
+            assert.deepEqual(
+              enforced,
+              canonical,
+              'src/lib/wp-drupal-auth-init.schema.json does not match the canonical v1 auth-init schema on the contract repo default branch — land the canonical change first (canonical-first ordering), then update the enforced copy here.',
+            );
+            console.log('OK: enforced copy matches the canonical v1 auth-init schema.');
+          "
 
   # Stable required status check — always runs on PRs, branches internally.
   uat-gate:
@@ -102,7 +151,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run full UAT suite
         if: steps.cred.outputs.run == 'true'
-        uses: ./.github/actions/wp-drupal-uat-run
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@b7144ef8c76ad03367edb097db9fb3e4c08093c1 # v1.0.0-next.b7144ef
         with:
           deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
 
@@ -122,6 +171,6 @@ jobs:
           fi
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run full UAT suite
-        uses: ./.github/actions/wp-drupal-uat-run
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@b7144ef8c76ad03367edb097db9fb3e4c08093c1 # v1.0.0-next.b7144ef
         with:
           deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}

@@ -7,9 +7,11 @@
 // catalog tools (create_company / create_person / create_view), using the
 // bootstrap-minted API key.
 //
-// Invoked as a step of scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs (the operator
-// entry point that already seeds Apple, mints the API key, and creates the
-// required `cinatraObjectId` custom field). Idempotency marker: each
+// Invoked as a step of the Twenty bootstrap proof
+// (scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs in the twenty-connector
+// repo — the operator entry point that already seeds Apple, mints the API key,
+// and creates the required `cinatraObjectId` custom field; it imports this
+// file from its core checkout). Idempotency marker: each
 // company/person carries `cinatraObjectId = fixtureId`; views are matched by
 // name. Create-if-absent; never duplicates.
 //

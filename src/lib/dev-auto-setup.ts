@@ -323,7 +323,8 @@ async function autoSetupLocalWordPress(): Promise<Status> {
  *      bearer is NOT de-authed on subsequent boots.
  *
  * Bearer minting + attaching is the operator's job: run the bootstrap proof
- * (`scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs`) once to mint a JWT, then
+ * (`extensions/cinatra-ai/twenty-connector/scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs`,
+ * cloned back from the twenty-connector repo) once to mint a JWT, then
  * attach it via the setup-page at `/connectors/cinatra-ai/twenty-connector/setup`
  * (which writes the Nango connection id back onto this row). Until that
  * happens, MCP calls fire without a bearer and Twenty returns 401 — which

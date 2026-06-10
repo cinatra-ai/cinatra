@@ -835,7 +835,7 @@ jobs:
 
       # Wholesale root Vitest suite — the gate of record for the root
       # `vitest.config.ts` include (src/**/__tests__, scripts/**/__tests__,
-      # tests/contracts, packages/cli, packages/sdk-extensions). Runs the
+      # packages/cli, packages/sdk-extensions). Runs the
       # STABILIZED set: every file is fixed or carved out in vitest.config.ts
       # `test.exclude` (node:test files, the DB-integration tier, and the
       # documented quarantines). This closes the
