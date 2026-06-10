@@ -29,6 +29,8 @@
 import type { APIRequestContext } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
+import { waitForHydration } from "../config/hydration";
+
 const RUN_ID_RE =
   /\/api\/agents\/runs\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
 
@@ -84,6 +86,15 @@ async function typeAndSend(
   page: import("@playwright/test").Page,
   text: string,
 ): Promise<void> {
+  // Hydration gate (#82) on the prompt element itself: the Enter-to-send
+  // handler is a React synthetic event, so a pre-hydration Enter press is
+  // silently lost even though `insertText` lands (native contenteditable).
+  // `toBeEditable` alone does NOT prove hydration — contentEditable is an
+  // SSR-visible DOM attribute. No-op after the first call (the spec never
+  // reloads, and hydration persists for the session).
+  await waitForHydration(page, {
+    selectors: ['[data-testid="chat-prompt-input"]'],
+  });
   const prompt = page.getByTestId("chat-prompt-input");
   // The prompt is disabled (contentEditable="false") while a chat SSE turn
   // is active — wait until it is editable again before driving it.

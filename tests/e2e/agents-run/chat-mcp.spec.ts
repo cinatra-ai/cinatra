@@ -24,6 +24,7 @@
 import type { APIResponse } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
+import { waitForHydration } from "../config/hydration";
 import { CHAT_MCP_FIXTURES } from "./chat-mcp-fixtures";
 import {
   awaitPendingApproval,
@@ -190,6 +191,11 @@ async function driveSetupLoopFallback(
   page: import("@playwright/test").Page,
   prompt: string,
 ): Promise<void> {
+  // Every caller reaches this right after a `domcontentloaded` reload of
+  // the run-detail page, so the fill/Continue-click below can race
+  // dev-mode hydration exactly like driveHitlScreen's renderer clicks
+  // (#82). Gate here — driveHitlScreen gates its own path internally.
+  await waitForHydration(page);
   const urlMatch = prompt.match(/https?:\/\/[^\s)]+/);
   const url = urlMatch?.[0] ?? "";
   // Visible textbox under the HITL panel; tolerate either generic

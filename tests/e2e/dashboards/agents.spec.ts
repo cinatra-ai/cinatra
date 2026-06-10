@@ -18,6 +18,8 @@
  */
 import { test, expect, type ConsoleMessage, type Request } from "@playwright/test";
 
+import { waitForHydration } from "../config/hydration";
+
 // Module-level capture buffers so the afterEach hook can read what each
 // test recorded. Cleared per-test via the beforeEach hook.
 const consoleAll: Array<{ type: string; text: string }> = [];
@@ -137,6 +139,14 @@ test.describe("/agents live-verify", () => {
     await page.goto("/agents");
     await expect(page).toHaveURL(/\/agents$/);
 
+    // React-hydration gate (#82). The portlet titles (step 4), the chart
+    // SVG (7) and the table rows (8) only exist after DC mounts client-side
+    // — i.e. after `hydrateRoot` commits — and the suite's `expect` budget
+    // is 10s while dev-mode hydration lands ~20-40s after domcontentloaded.
+    // Gate on the app-shell sidebar (SSR-visible sentinel) growing its
+    // `__reactFiber$` key before asserting anything DC-mounted.
+    await waitForHydration(page);
+
     // 3: page chrome.
     // exact: true — getByRole name matching is substring by default, so a
     // bare "Agents" ALSO resolves the portlet card headings ("Top 5 recently
@@ -193,6 +203,8 @@ test.describe("/agents live-verify", () => {
     // seeded /agents portlets never trigger it. If a future change
     // accidentally breaks /batch, single-query mounts still work but
     // useMultiCubeLoadQuery falls back here. Hit it directly via fetch.
+    // No hydration gate here (#82): page.evaluate(fetch) only needs the
+    // document/cookie context, not React's synthetic event handlers.
     await page.goto("/agents");
     const resp = await page.evaluate(async () => {
       const r = await fetch("/api/dashboards/cubejs-api/v1/batch", {
