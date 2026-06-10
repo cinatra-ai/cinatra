@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 
+import type { ExternalMcpOAuthClient } from "@cinatra-ai/sdk-extensions";
 import { betterAuthDb } from "@/lib/better-auth-db";
 
 // Single source of truth (app-runtime TS) for INSERTs/DELETEs against
@@ -11,8 +12,9 @@ import { betterAuthDb } from "@/lib/better-auth-db";
 // table and is intentionally out of scope here; it owns its own
 // connection pool and a larger column set (skipConsent, requirePKCE,
 // scopes, etc.) than the runtime callers need. Keep this module narrow
-// to the runtime use cases (service accounts + assistant users) so the
-// helper does not balloon into a config-laden "kitchen sink."
+// to the runtime use cases (service accounts + assistant users + the
+// external MCP-client surface below) so the helper does not balloon
+// into a config-laden "kitchen sink."
 
 // Mirror of @better-auth/oauth-provider/utils.defaultHasher — SHA-256
 // digest, base64url-encoded, with the trailing `=` padding stripped.
@@ -113,5 +115,108 @@ export async function insertOAuthClientWithTx(
 export async function deleteOAuthClientByClientId(clientId: string): Promise<void> {
   await betterAuthDb.execute(sql`
     DELETE FROM public."oauthClient" WHERE "clientId" = ${clientId}
+  `);
+}
+
+// ---------------------------------------------------------------------------
+// External MCP-client surface. The host owns this read (it backs both the
+// /connectors readiness probe and the SDK MCP OAuth-client store the
+// mcp-client connector consumes) so the connector package never imports
+// `@/lib/*` host modules for it.
+// ---------------------------------------------------------------------------
+
+type ExternalMcpClientRow = {
+  id: string;
+  clientId: string;
+  name: string | null;
+  redirectUris: unknown;
+  createdAt: Date | string | null;
+  updatedAt: Date | string | null;
+};
+
+function parseRedirectURLs(value: unknown): string[] {
+  if (Array.isArray(value))
+    return value.filter((entry): entry is string => typeof entry === "string");
+  if (typeof value !== "string" || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseDate(value: Date | string | null): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+// Boundary predicate for EXTERNAL MCP OAuth clients — everything Cinatra
+// itself registered is internal: the app's self-client, the per-LLM-provider
+// clients, assistant users (matched by `user."userType"`, not just the
+// `assistant-` name prefix — the built-in assistant client is named
+// `cinatra-built-in`), and service accounts (host-controlled
+// `service-account-` name prefix; their rows are not user-linked). ONE shared
+// fragment for the list and the delete below so the two can never drift: a
+// client the setup page will not list can also never be deleted through the
+// connector's disconnect action.
+const externalMcpOAuthClientPredicate = sql`
+  COALESCE(disabled, false) = false
+  AND "clientId" <> 'cinatra-app-mcp-client'
+  AND "clientId" NOT LIKE 'cinatra-llm-%'
+  AND COALESCE(name, '') NOT LIKE 'assistant-%'
+  AND COALESCE(name, '') NOT LIKE 'service-account-%'
+  AND NOT EXISTS (
+    SELECT 1 FROM public."user" u
+    WHERE u.id = "oauthClient"."userId"
+      AND u."userType" = 'assistant'
+  )
+`;
+
+/**
+ * Every externally-registered MCP OAuth client (Claude Desktop, Claude.ai,
+ * ChatGPT, any other MCP-compatible client), newest first. Deliberately
+ * generic — no client-name filtering; internal clients are excluded by
+ * {@link externalMcpOAuthClientPredicate}.
+ */
+export async function listExternalMcpOAuthClients(): Promise<ExternalMcpOAuthClient[]> {
+  const result = await betterAuthDb.execute<ExternalMcpClientRow>(sql`
+    SELECT id, "clientId", name, "redirectUris", "createdAt", "updatedAt"
+    FROM public."oauthClient"
+    WHERE ${externalMcpOAuthClientPredicate}
+    ORDER BY "createdAt" DESC NULLS LAST
+  `);
+  const rows = (result.rows ?? []) as ExternalMcpClientRow[];
+  return rows.map((row) => ({
+    id: row.id,
+    clientId: row.clientId,
+    name: row.name,
+    redirectURLs: parseRedirectURLs(row.redirectUris),
+    createdAt: parseDate(row.createdAt),
+    updatedAt: parseDate(row.updatedAt),
+  }));
+}
+
+/** Count of externally-registered MCP OAuth clients (the /connectors readiness probe). */
+export async function countExternalMcpOAuthClients(): Promise<number> {
+  const clients = await listExternalMcpOAuthClients();
+  return clients.length;
+}
+
+/**
+ * Delete one EXTERNAL MCP OAuth client. Scoped by the same predicate as the
+ * list above, so internal clients (self-client, LLM clients, assistants,
+ * service accounts) can never be deleted through this surface even with a
+ * forged clientId — use {@link deleteOAuthClientByClientId} for the internal
+ * lifecycles that own those rows.
+ */
+export async function deleteExternalMcpOAuthClient(clientId: string): Promise<void> {
+  await betterAuthDb.execute(sql`
+    DELETE FROM public."oauthClient"
+    WHERE "clientId" = ${clientId} AND ${externalMcpOAuthClientPredicate}
   `);
 }

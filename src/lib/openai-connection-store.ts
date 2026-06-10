@@ -6,6 +6,7 @@
 // store cache so either read path stays coherent.
 
 import { revalidatePath } from "next/cache";
+import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import {
   readMetadataValueFromDatabase,
   writeMetadataValueToDatabase,
@@ -41,7 +42,7 @@ function getDefaultOpenAIServiceTier(): OpenAIServiceTier {
 
 function defaultConnection(): OpenAIConnection {
   return {
-    defaultModel: "gpt-5",
+    defaultModel: DEFAULT_OPENAI_MODEL_ID,
     serviceTier: getDefaultOpenAIServiceTier(),
     availableModels: [],
     loggingEnabled: true,
@@ -87,7 +88,7 @@ export function readOpenAIConnection(): OpenAIConnection | null {
   }
   // Normalize with defaults so callers never need to re-check every optional field.
   return {
-    defaultModel: raw.defaultModel ?? "gpt-5",
+    defaultModel: raw.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     apiKey: raw.apiKey,
     projectId: raw.projectId,
     organizationId: raw.organizationId,
@@ -128,7 +129,7 @@ export async function updateOpenAIConnection(input: {
     apiKey: input.apiKey ?? current.apiKey,
     projectId: input.projectId ?? current.projectId,
     organizationId: input.organizationId ?? current.organizationId,
-    defaultModel: input.defaultModel ?? current.defaultModel ?? "gpt-5",
+    defaultModel: input.defaultModel ?? current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: input.serviceTier ?? current.serviceTier ?? getDefaultOpenAIServiceTier(),
     loggingEnabled: input.loggingEnabled ?? current.loggingEnabled ?? true,
     promptCachingEnabled:
@@ -147,7 +148,7 @@ export async function updateOpenAIConnection(input: {
 export async function clearOpenAIConnection(): Promise<void> {
   const current = readOpenAIConnection() ?? defaultConnection();
   const next: OpenAIConnection = {
-    defaultModel: current.defaultModel ?? "gpt-5",
+    defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
     loggingEnabled: current.loggingEnabled ?? true,
     promptCachingEnabled: current.promptCachingEnabled ?? isAppDevelopmentMode(),
@@ -165,7 +166,7 @@ export async function updateOpenAILoggingEnabled(loggingEnabled: boolean): Promi
   const current = readOpenAIConnection() ?? defaultConnection();
   const next: OpenAIConnection = {
     ...current,
-    defaultModel: current.defaultModel ?? "gpt-5",
+    defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
     loggingEnabled,
     promptCachingEnabled: current.promptCachingEnabled ?? isAppDevelopmentMode(),
@@ -181,7 +182,7 @@ export async function updateOpenAIPromptCaching(enabled: boolean): Promise<void>
   const current = readOpenAIConnection() ?? defaultConnection();
   const next: OpenAIConnection = {
     ...current,
-    defaultModel: current.defaultModel ?? "gpt-5",
+    defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
     loggingEnabled: current.loggingEnabled ?? true,
     promptCachingEnabled: enabled,
