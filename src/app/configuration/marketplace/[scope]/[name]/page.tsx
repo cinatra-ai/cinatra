@@ -14,6 +14,7 @@ import {
 import {
   MarketplaceReadmeMarkdownSection,
   MarketplaceReadmeSection,
+  hasRenderableReadmeMarkdown,
 } from "@/components/marketplace-readme-section";
 
 // npm package-name parts: lowercase alphanumeric + `_`, `.`, `-`, must not
@@ -146,7 +147,10 @@ export default async function ExtensionMarketplaceEntryPage({
  * omits the slot cleanly — no empty pane.
  */
 function NonAgentDetailBody({ detail }: { detail: MarketplaceExtensionGetOutput }) {
-  const hasReadme = (detail.readmeMarkdown ?? "").trim() !== "";
+  // Decide on the SANITIZED render, not the raw string: a README that
+  // sanitizes down to nothing (e.g. raw HTML only) must still fall back to
+  // the plain-text description instead of rendering no primary body.
+  const hasReadme = hasRenderableReadmeMarkdown(detail.readmeMarkdown);
   if (hasReadme) {
     return <MarketplaceReadmeMarkdownSection markdown={detail.readmeMarkdown} />;
   }

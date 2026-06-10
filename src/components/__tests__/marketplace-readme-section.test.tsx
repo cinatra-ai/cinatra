@@ -18,6 +18,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   MARKETPLACE_README_BODY_CLASS,
   MarketplaceReadmeMarkdownSection,
+  hasRenderableReadmeMarkdown,
 } from "../marketplace-readme-section";
 
 describe("MarketplaceReadmeMarkdownSection — rendering", () => {
@@ -72,6 +73,24 @@ describe("MarketplaceReadmeMarkdownSection — empty handling (no empty pane)", 
       <MarketplaceReadmeMarkdownSection markdown={"<div><script>x</script></div>"} />,
     );
     expect(html).toBe("");
+  });
+});
+
+describe("hasRenderableReadmeMarkdown — fallback decision helper", () => {
+  it("is true for markdown that renders visible output", () => {
+    expect(hasRenderableReadmeMarkdown("# Title\n\nBody.")).toBe(true);
+    expect(hasRenderableReadmeMarkdown("plain text")).toBe(true);
+  });
+
+  it.each([null, undefined, "", "   \n\t  "])(
+    "is false for %j markdown",
+    (markdown) => {
+      expect(hasRenderableReadmeMarkdown(markdown)).toBe(false);
+    },
+  );
+
+  it("is false when the markdown sanitizes down to nothing (raw HTML only)", () => {
+    expect(hasRenderableReadmeMarkdown("<div><script>x</script></div>")).toBe(false);
   });
 });
 
