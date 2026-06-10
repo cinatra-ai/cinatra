@@ -113,8 +113,16 @@ export function parseUnifiedDiff(diffText) {
       continue;
     }
     if (!file) continue;
-    if (raw.startsWith("rename from ") || raw.startsWith("rename to ")) {
+    // Pure renames carry NO ---/+++ lines, so read the paths off the rename
+    // headers (they come without the a/ b/ prefixes).
+    if (raw.startsWith("rename from ")) {
       file.status = "renamed";
+      file.oldPath = raw.slice("rename from ".length).trim();
+      continue;
+    }
+    if (raw.startsWith("rename to ")) {
+      file.status = "renamed";
+      file.newPath = raw.slice("rename to ".length).trim();
       continue;
     }
     if (raw.startsWith("--- ")) {
@@ -255,7 +263,11 @@ const ADDED_DESTRUCTIVE_RULES = [
   { rule: "retype", re: /\bALTER\s+COLUMN\b.*\b(?:TYPE|SET\s+DATA\s+TYPE)\b/i, doc: "retyping a column (ALTER COLUMN ... TYPE)" },
   { rule: "set-not-null", re: /\bSET\s+NOT\s+NULL\b/i, doc: "adding NOT NULL to an existing column" },
   { rule: "add-constraint", re: /\b(?:ADD|VALIDATE)\s+CONSTRAINT\b/i, doc: "adding/tightening a constraint over existing rows" },
-  { rule: "data-rewrite", re: /\bDELETE\s+FROM\b|\bUPDATE\s+(?:"|\S+\s+SET\b)|\bINSERT\s+INTO\b.*\bSELECT\b/i, doc: "data rewrite against an existing table (UPDATE / DELETE / backfill)" },
+  // INSERT INTO is flagged without requiring a same-line SELECT: the real
+  // backfills in the bootstrap DDL are multi-line, so the SELECT lands on a
+  // different diff line. The new-table carve-out still exempts seeds into
+  // tables created in the same change.
+  { rule: "data-rewrite", re: /\bDELETE\s+FROM\b|\bUPDATE\s+(?:"|\S+\s+SET\b)|\bINSERT\s+INTO\b/i, doc: "data rewrite against an existing table (UPDATE / DELETE / INSERT backfill)" },
 ];
 
 /**
@@ -356,14 +368,22 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
   }
   const removedOnDelete = remEff.some((r) => /\bON\s+DELETE\b/i.test(r.trimmed));
 
+  // The table a statement names ITSELF (DROP TABLE / data writes / CREATE or
+  // ALTER TABLE / index ON). Wins over the sticky enclosing-table context so
+  // a hunk that creates a new table cannot launder a same-hunk statement
+  // aimed at an EXISTING table through the new-table carve-out.
+  const ownTarget = (line) =>
+    line.match(/\b(?:DROP\s+TABLE|UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(?:.*?\.)?"([a-z0-9_]+)"/i)?.[1] ??
+    line.match(TABLE_REF_RE)?.[1] ??
+    line.match(INDEX_TABLE_RE)?.[1] ??
+    null;
+
   for (const a of addEff) {
     if (a.region.kind !== "executed-ddl") continue; // Drizzle defs mirror the DDL; the executed-DDL change is the signal
     // Changes scoped to a table created in this same change are additive (no
-    // pre-existing rows). For DROP TABLE the line's own target wins over the
-    // enclosing context (a table both created and dropped in the same PR
-    // never existed on main).
-    const dropTarget = a.trimmed.match(/\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:.*?\.)?"([a-z0-9_]+)"/i)?.[1];
-    if (newTables.has(dropTarget ?? a.table)) continue;
+    // pre-existing rows). Column-level lines without a target of their own
+    // fall back to the enclosing-table context.
+    if (newTables.has(ownTarget(a.trimmed) ?? a.table)) continue;
     for (const { rule, re, doc } of ADDED_DESTRUCTIVE_RULES) {
       if (re.test(a.trimmed)) {
         destructive.push({ rule, line: a.trimmed, doc });
@@ -480,6 +500,7 @@ export function detectMigrationArtifact(files, readBaseFile) {
   }
   const newEntries = finalEntries.slice(baseEntries.length);
   const maxBaseSeq = baseEntries.reduce((m, e) => Math.max(m, Number(e?.seq) || 0), 0);
+  const sqlBasenames = new Set(sqlFiles.map((p) => p.slice("migrations/".length)));
   let prevSeq = maxBaseSeq;
   for (const e of newEntries) {
     const seq = Number(e?.seq);
@@ -487,6 +508,14 @@ export function detectMigrationArtifact(files, readBaseFile) {
       problems.push(`${MIGRATION_MANIFEST_PATH}: new entry seq '${e?.seq}' must be strictly increasing (last shipped: ${String(prevSeq).padStart(4, "0")})`);
     } else {
       prevSeq = seq;
+    }
+    // Every new ledger entry must bind to an SQL file added in THIS diff with
+    // a matching sequence prefix — a manifest-only entry (or a mismatched
+    // seq) cannot stand in for the migration it claims.
+    if (typeof e?.file !== "string" || !sqlBasenames.has(e.file)) {
+      problems.push(`${MIGRATION_MANIFEST_PATH}: entry '${e?.file ?? e?.seq}' has no matching migrations/ SQL file added in this diff`);
+    } else if (!e.file.startsWith(`${e?.seq}_`)) {
+      problems.push(`${MIGRATION_MANIFEST_PATH}: entry seq '${e?.seq}' does not match its filename '${e.file}'`);
     }
   }
   for (const p of sqlFiles) {

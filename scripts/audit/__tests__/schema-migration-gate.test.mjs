@@ -253,6 +253,32 @@ test("destructive: data rewrite (UPDATE) added inside the DDL region; DML builde
   assert.equal(dml.inScopeChanges, 0);
 });
 
+test("destructive: multi-line INSERT backfill into an existing table (no same-line SELECT needed); seed into a new table is additive", () => {
+  const backfill = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`INSERT INTO ${S}."widgets" (id, label)`,
+    `      SELECT id, name FROM ${S}."legacy_widgets"\` },`,
+  ]);
+  assert.deepEqual(backfill.destructive.map((d) => d.rule), ["data-rewrite"]);
+
+  const seed = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`CREATE TABLE IF NOT EXISTS ${S}."defaults" (id text PRIMARY KEY)\` },`,
+    `    { text: \`INSERT INTO ${S}."defaults" (id) VALUES ('a') ON CONFLICT DO NOTHING\` },`,
+  ]);
+  assert.deepEqual(seed.destructive, []);
+});
+
+test("a new table in the same hunk cannot launder a statement aimed at an EXISTING table", () => {
+  const r = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`CREATE TABLE IF NOT EXISTS ${S}."gadgets" (id text PRIMARY KEY)\` },`,
+    `    { text: \`CREATE UNIQUE INDEX IF NOT EXISTS widgets_label_uq ON ${S}."widgets" (label)\` },`,
+    `    { text: \`UPDATE ${S}."widgets" SET label = ''\` },`,
+  ]);
+  assert.deepEqual(r.destructive.map((d) => d.rule).sort(), ["data-rewrite", "unique-index-existing-table"]);
+});
+
 test("destructive: DROP TABLE on an existing table; additive when the table is created in the same change", () => {
   const existing = classify(21, 21, [
     `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
@@ -370,6 +396,39 @@ test("artifact: rewriting a shipped ledger entry or regressing the sequence is r
   assert.ok(regressed.problems.some((p) => p.includes("strictly increasing")), regressed.problems.join("; "));
 });
 
+test("artifact: a manifest-only entry (no SQL file in the diff) and a seq/filename mismatch are rejected", () => {
+  const manifestOnly = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff("migrations/0002_x.sql", null, "ALTER TABLE x;") +
+        fullReplaceDiff(
+          MIGRATION_MANIFEST_PATH,
+          BASE_MANIFEST,
+          manifestWith([
+            ENTRY_0001,
+            { seq: "0002", file: "0002_x.sql", summary: "x", destructive: false, tables: [] },
+            { seq: "0003", file: "0003_phantom.sql", summary: "phantom", destructive: true, tables: [] },
+          ]),
+        ),
+    ),
+    readBase,
+  );
+  assert.equal(manifestOnly.complete, false);
+  assert.ok(manifestOnly.problems.some((p) => p.includes("no matching migrations/ SQL file")), manifestOnly.problems.join("; "));
+
+  const mismatched = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff("migrations/0002_x.sql", null, "ALTER TABLE x;") +
+        fullReplaceDiff(
+          MIGRATION_MANIFEST_PATH,
+          BASE_MANIFEST,
+          manifestWith([ENTRY_0001, { seq: "0003", file: "0002_x.sql", summary: "x", destructive: true, tables: [] }]),
+        ),
+    ),
+    readBase,
+  );
+  assert.ok(mismatched.problems.some((p) => p.includes("does not match its filename")), mismatched.problems.join("; "));
+});
+
 test("artifact: malformed migration filenames are rejected", () => {
   const a = detectMigrationArtifact(
     parseUnifiedDiff(fullReplaceDiff("migrations/2_Bad_Name.sql", null, "ALTER TABLE x;")),
@@ -407,13 +466,25 @@ test("runGate fails a destructive change whose artifact entry is not labelled de
   assert.equal(honest.verdict, "pass");
 });
 
-test("runGate fails closed when the schema file is deleted or renamed", () => {
+test("runGate fails closed when the schema file is deleted or renamed (including a pure rename with no hunks)", () => {
   const deleted = runGate({
     diffText: fullReplaceDiff(IN_SCOPE_FILE, BASE, null),
     readBaseFile: () => BASE,
   });
   assert.equal(deleted.verdict, "fail");
   assert.deepEqual(deleted.destructive.map((d) => d.rule), ["schema-file-moved"]);
+
+  // A 100%-similarity rename emits only rename headers — no ---/+++, no hunks.
+  const pureRename = runGate({
+    diffText:
+      `diff --git a/${IN_SCOPE_FILE} b/src/lib/store-schema.ts\n` +
+      `similarity index 100%\n` +
+      `rename from ${IN_SCOPE_FILE}\n` +
+      `rename to src/lib/store-schema.ts\n`,
+    readBaseFile: () => BASE,
+  });
+  assert.equal(pureRename.verdict, "fail");
+  assert.deepEqual(pureRename.destructive.map((d) => d.rule), ["schema-file-moved"]);
 });
 
 test("runGate ignores out-of-scope auth/extension files entirely", () => {
