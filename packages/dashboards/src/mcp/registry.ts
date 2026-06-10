@@ -91,6 +91,9 @@ export function registerDashboardPrimitives(server: McpRuntimeToolServer): void 
         if (userId) actorBase.userId = userId;
         if (orgId) actorBase.orgId = orgId;
         if (platformRole) actorBase.platformRole = platformRole;
+        // Transport-resolved org-membership role — coherent with the
+        // userId/orgId stamped from the same request-context frame above.
+        if (requestCtx?.orgRole) actorBase.orgRole = requestCtx.orgRole;
 
         const result = await handler({
           primitiveName: name,

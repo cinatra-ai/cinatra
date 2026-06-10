@@ -178,6 +178,14 @@ export function registerExtensionsPrimitives(server: McpRuntimeToolServer) {
           // Forward platformRole so downstream handlers (audit, lifecycle)
           // see the trusted admin hint without re-reading cookies.
           ...(platformRole ? { platformRole } : {}),
+          // Forward the transport-resolved org-membership role. Guarded on
+          // the stamped userId matching the store's userId: the role was
+          // resolved for the store's (orgId, userId) pair, and the admin
+          // gate above may have preferred a session userId — never pair the
+          // store's role with a different principal.
+          ...(store?.orgRole && userId && userId === (store?.userId ?? undefined)
+            ? { orgRole: store.orgRole }
+            : {}),
         };
 
         // Dispatch to the typed handler. extensions_search does not take an

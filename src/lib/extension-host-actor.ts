@@ -175,7 +175,15 @@ async function resolveFromMcpRequestContext(): Promise<TrustedResolution | null>
       ...(orgId !== undefined ? { orgId } : {}),
     },
     orgId,
-    { ...(ctx.platformRole ? { platformRole: ctx.platformRole } : {}) },
+    {
+      ...(ctx.platformRole ? { platformRole: ctx.platformRole } : {}),
+      // Transport-resolved org-membership role, carried natively on the MCP
+      // request context — coherent with the top-level ctx.userId/ctx.orgId
+      // used above (non-A2A branch only; the A2A branch above never reads
+      // top-level identity fields). Feeds the host actor summary's
+      // `orgRole` field, which previously was always null on the MCP path.
+      ...(ctx.orgRole ? { orgRole: ctx.orgRole } : {}),
+    },
   ) as ActorContext;
   return { actor, subjectUserId: userId ?? null };
 }

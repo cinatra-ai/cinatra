@@ -31,6 +31,7 @@ import {
   type ProjectGrant,
 } from "@/lib/better-auth-db";
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
 // Client-safe types and schema live in auth-policy-types.ts so that client
 // components can import them without pulling in this file's server-only guard.
@@ -287,12 +288,37 @@ export async function actorContextFromMcpRequest(
     // The kernel will still deny system-level resources without admin role.
   }
 
+  // Use the orgRole carried natively on the MCP request context (resolved
+  // once at transport context-build time) instead of re-resolving the
+  // membership row per gate. ORG-MATCH GUARD (fail closed): the carried role
+  // is only meaningful for the transport's own (userId, orgId) identity
+  // pair, but this adapter's `orgId` param is sometimes the RESOURCE's org
+  // (e.g. template.orgId at handlers.ts agent_template delete) — attaching a
+  // role resolved for a different org would mis-scope authority across
+  // orgs. Additionally require the store userId to match the envelope's
+  // actor.userId so a forwarded envelope for another principal never
+  // inherits the transport caller's role. On any mismatch the hint stays
+  // undefined and the kernel/gates keep their existing on-demand
+  // `resolveOrgRoleForUser` fallback behavior (never widens).
+  let orgRole: "org_owner" | "org_admin" | "member" | undefined;
+  const requestCtx = mcpRequestContextStorage.getStore();
+  if (
+    requestCtx?.orgRole &&
+    orgId != null &&
+    requestCtx.orgId === orgId &&
+    actor.userId != null &&
+    requestCtx.userId === actor.userId
+  ) {
+    orgRole = requestCtx.orgRole;
+  }
+
   // Pass projectGrants (canonical axis); projectIds is derived inside
   // buildActorContextFromPrimitive (single derivation).
   return buildActorContextFromPrimitive(actor, orgId, {
     teamIds,
     projectGrants,
     platformRole,
+    orgRole,
   });
 }
 

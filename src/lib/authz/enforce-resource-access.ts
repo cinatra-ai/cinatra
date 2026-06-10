@@ -173,6 +173,22 @@ function deriveRoleHints(actor: PrimitiveActorContext): ActorRoleHints {
     (actor as unknown as { orgId?: string | null }).orgId ??
     undefined;
 
+  // MCP-actor compatibility for orgRole, mirroring the direct platformRole
+  // fallback above: MCP registries stamp the transport-resolved membership
+  // role (`PrimitiveActorContext.orgRole`, carried natively per issue #83)
+  // on the envelope rather than encoding it in `roles[]`. Gated on the
+  // envelope ALSO carrying its own org id (actorOrgId) — the stamped role is
+  // only meaningful for the org stamped in the SAME envelope, and the
+  // kernel's cross-org guard compares that same actorOrganizationId against
+  // the resource org. Roleless envelopes keep `orgRole: undefined` (existing
+  // behavior; per-gate on-demand resolution still covers them).
+  if (!orgRole && actorOrgId) {
+    const direct = (actor as unknown as { orgRole?: unknown }).orgRole;
+    if (direct === "org_owner" || direct === "org_admin" || direct === "member") {
+      orgRole = direct;
+    }
+  }
+
   return {
     platformRole,
     orgRole,

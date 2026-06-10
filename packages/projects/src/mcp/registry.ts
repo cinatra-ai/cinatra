@@ -183,6 +183,11 @@ export function registerProjectsPrimitives(server: McpRuntimeToolServer) {
           actorBase.organizationId = orgId;
         }
         if (platformRole) actorBase.platformRole = platformRole;
+        // Transport-resolved org-membership role, coherent with the
+        // orgId/userId read from the same request-context frame above.
+        // deriveRoleHints' direct fallback (enforce-resource-access.ts)
+        // consumes it so org-admin decisions evaluate natively over MCP.
+        if (requestCtx?.orgRole) actorBase.orgRole = requestCtx.orgRole;
 
         // Forward Better Auth role hints (platform admin flag,
         // team/project membership) into the actor envelope.

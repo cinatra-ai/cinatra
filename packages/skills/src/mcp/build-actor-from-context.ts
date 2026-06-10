@@ -19,6 +19,11 @@ export type SkillsActorEnvelope = {
   userId?: string;
   orgId?: string;
   platformRole?: "platform_admin" | "member";
+  // Transport-resolved org-membership role, carried natively on the MCP
+  // request context (resolved once at transport context-build time for the
+  // SAME userId/orgId pair forwarded below) — coherent with `orgId` in this
+  // envelope by construction.
+  orgRole?: "org_owner" | "org_admin" | "member";
 };
 
 export function buildActorFromMcpContextWithStore(
@@ -27,6 +32,7 @@ export function buildActorFromMcpContextWithStore(
         userId?: string | null;
         orgId?: string | null;
         platformRole?: "platform_admin" | "member";
+        orgRole?: "org_owner" | "org_admin" | "member";
       }
     | undefined,
 ): SkillsActorEnvelope {
@@ -36,5 +42,6 @@ export function buildActorFromMcpContextWithStore(
     userId: ctx?.userId ?? undefined,
     orgId: ctx?.orgId ?? undefined,
     platformRole: ctx?.platformRole,
+    orgRole: ctx?.orgRole,
   };
 }

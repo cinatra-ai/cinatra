@@ -33,7 +33,7 @@ import { McpConsentScreen } from "./components/mcp-consent-screen";
 import { writeMcpServerLogFile } from "@/lib/mcp-logging";
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readServiceAccountByClientId } from "./service-accounts";
-import { resolveActorIdentity } from "./actor-identity";
+import { resolveActorIdentity, resolveOrgRoleFromMembership } from "./actor-identity";
 import { isDelegatedChatMcpToolAllowed } from "./delegated-chat-tool-policy";
 import {
   isTrustedDevHost,
@@ -669,6 +669,23 @@ export type McpRequestContext = {
    * those contexts and correctly denies elevation.
    */
   platformRole?: "platform_admin" | "member";
+  /**
+   * The caller's role in the active organization (`orgId` above), resolved
+   * ONCE at transport context-build time from the better-auth membership row
+   * for the (resolved orgId, resolved userId) pair — owner → `"org_owner"`,
+   * admin → `"org_admin"`, member → `"member"` (same mapping as
+   * `cachedResolveOrgRole` in src/lib/auth-session.ts). Left undefined when
+   * either id is missing, the membership row does not exist, or the lookup
+   * fails — downstream gates keep their existing on-demand
+   * `resolveOrgRoleForUser` fallback, so absence never widens access.
+   *
+   * Trust boundary: only the transport handler writes this field, after the
+   * request has been authenticated (cookie session, delegated OBO token, or
+   * dev-bypass identity). Coherent with `orgId`/`userId` in the same store
+   * frame by construction; consumers must not pair it with an orgId from any
+   * other source.
+   */
+  orgRole?: "org_owner" | "org_admin" | "member";
   /**
    * Set when the request authenticated via a chat-delegated on-behalf-of token.
    * `delegatedRestricted` gates the call-time tool guard
@@ -1439,6 +1456,17 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
         readServiceAccount: readServiceAccountByClientId,
         pool: betterAuthPool,
       }));
+    // Resolve the caller's role in the active org ONCE, AFTER the full
+    // orgId/userId resolution chain (cookie session, delegated OBO token,
+    // trusted-dev / A2A dev bypass) has settled, so the carried `orgRole` is
+    // always coherent with the `orgId`/`userId` stamped on this same store
+    // frame. Undefined when either id is missing or no membership row exists
+    // — downstream gates keep their on-demand fallback (never widens).
+    const resolvedOrgRole = await resolveOrgRoleFromMembership({
+      orgId: resolvedOrgId,
+      userId: resolvedUserId,
+      pool: betterAuthPool,
+    });
     // Resolve agent run-context.
     //
     // Primary path: options.getRunContext callback (written by the bridge route
@@ -1470,6 +1498,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       packageVersion?: string;
       agentSpecVersion?: string;
       platformRole?: "platform_admin" | "member";
+      orgRole?: "org_owner" | "org_admin" | "member";
       delegatedActor?: DelegatedMcpActor | null;
       delegatedRestricted?: boolean;
     } = {
@@ -1489,6 +1518,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       packageVersion: requestPackageVersion,
       agentSpecVersion: requestAgentSpecVersion,
       platformRole: resolvedPlatformRole,
+      orgRole: resolvedOrgRole,
       // delegated-chat allowlist is keyed on the CHAT delegation type only.
       // agent-run delegated tokens are unrestricted at registration time
       // (the dispatched agent's job IS to mutate); per-handler authz +

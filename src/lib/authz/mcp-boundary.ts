@@ -35,6 +35,15 @@ export type McpBoundaryRequest = {
     orgId?: string | null;
     userId?: string | null;
     platformRole?: "platform_admin" | "member" | null;
+    /**
+     * Org-membership role carried natively on the MCP request context —
+     * resolved once at transport context-build time for the SAME
+     * orgId/userId pair in this frame (see McpRequestContext.orgRole).
+     * When present, the boundary's synthetic actor uses it instead of the
+     * coarse "member" default so org-admin-gated classifications evaluate
+     * correctly at the boundary. Absent → existing member default.
+     */
+    orgRole?: "org_owner" | "org_admin" | "member" | null;
     delegatedRestricted?: boolean;
     /**
      * Agent run id from the signed delegated-actor token (when the
@@ -58,6 +67,9 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
   // a `member`. The kernel's `resolveRoles` only pushes the member role when
   // `orgRole` is set, so we default it here for the coarse boundary check
   // (the per-handler authz still does the fine-grained ownership lookup).
+  // When the transport carried the resolved membership role (ctx.orgRole,
+  // coherent with ctx.orgId/ctx.userId by construction), prefer it over the
+  // coarse default so org_admin/org_owner boundary decisions are native.
   const isMember = !!ctx?.userId && !!ctx?.orgId;
   return {
     principalType: "HumanUser",
@@ -65,7 +77,10 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
     authSource: "mcp",
     policyVersion: "current",
     organizationId: ctx?.orgId ?? undefined,
-    orgRole: ctx?.platformRole === "platform_admin" ? undefined : isMember ? "member" : undefined,
+    orgRole:
+      ctx?.platformRole === "platform_admin"
+        ? undefined
+        : ctx?.orgRole ?? (isMember ? "member" : undefined),
     platformRole: ctx?.platformRole ?? undefined,
     ...(extraRoles && extraRoles.length > 0 ? ({ roles: extraRoles } as Partial<ActorContext>) : {}),
   } as ActorContext;
