@@ -7,7 +7,8 @@
 //
 // Contract lives in scripts/audit/actions-pinned-gate.mjs:
 //   - remote `uses:` must be owner/repo[/path]@<40-lowercase-hex> with a
-//     trailing `# vX.Y.Z` version comment
+//     trailing version comment matching the upstream tag (`# vX.Y.Z`, or
+//     `# X.Y.Z` for upstreams that tag without a `v` prefix)
 //   - local `./` and `docker://` refs are exempt
 //   - the source-LINE shape is enforced (a `#` inside quotes is not a comment)
 
@@ -105,8 +106,23 @@ test("VERSION_COMMENT_RE: accepts v6 / v6.0 / v6.0.2 / pre-release / build-metad
   }
 });
 
-test("VERSION_COMMENT_RE: rejects missing-v / freeform / empty", () => {
-  for (const c of ["# 6.0.2", "# latest", "# pin", "", "# sha"]) {
+// Some upstreams tag WITHOUT a `v` prefix (shivammathur/setup-php tags
+// `2.37.2`); the comment must equal the real upstream tag or Renovate's
+// tag lookup fails and the dep silently never updates. The `v` is optional.
+test("VERSION_COMMENT_RE: accepts the same forms without the v prefix (non-v upstream tags)", () => {
+  for (const c of [
+    "# 2.37.2", "# 6", "# 6.0", "# 6.0.2", "#2.37.2",
+    "# 1.2.3-beta-1", "# 1.2.3+build.7", "# 1.2.3-rc.1+build.2",
+  ]) {
+    assert.ok(VERSION_COMMENT_RE.test(c), c);
+  }
+});
+
+test("VERSION_COMMENT_RE: rejects freeform / garbage / empty", () => {
+  for (const c of [
+    "# latest", "# pin", "", "# sha", "# v", "#", "# main@f0323d2",
+    "# version 2", "# vv6.0.2", "# v6.0.2 extra words", "# .2.37",
+  ]) {
     assert.ok(!VERSION_COMMENT_RE.test(c), c);
   }
 });
@@ -117,6 +133,17 @@ test("VERSION_COMMENT_RE: rejects missing-v / freeform / empty", () => {
 test("classifyRef: a correctly pinned remote ref is ok", () => {
   const c = classifyRef(`actions/checkout@${SHA}`, "# v6.0.2");
   assert.deepEqual(c, { kind: "remote", ok: true, violations: [] });
+});
+
+test("classifyRef: a pinned ref with a non-v upstream-tag comment is ok", () => {
+  const c = classifyRef(`shivammathur/setup-php@${SHA2}`, "# 2.37.2");
+  assert.deepEqual(c, { kind: "remote", ok: true, violations: [] });
+});
+
+test("classifyRef: pinned SHA with a garbage comment is a violation", () => {
+  const c = classifyRef(`actions/checkout@${SHA}`, "# main@f0323d2");
+  assert.equal(c.ok, false);
+  assert.equal(c.violations.length, 1);
 });
 
 test("classifyRef: local ref is exempt", () => {

@@ -5,9 +5,10 @@
 // Fails CI if any *remote* `uses:` ref in the repo's GitHub Actions YAML
 // (`.github/workflows/**` workflows AND `.github/actions/**` local composite
 // actions) is not pinned to an immutable 40-char commit SHA carrying a
-// human-readable `# vX.Y.Z` version comment. A moved upstream tag (`@v6`) can
-// silently run new code against this repo's `GITHUB_TOKEN`; an immutable SHA
-// cannot. This gate keeps the pins from rotting back to tags.
+// human-readable version comment matching the upstream tag (`# vX.Y.Z`, or
+// `# X.Y.Z` for upstreams that tag without a `v` prefix). A moved upstream
+// tag (`@v6`) can silently run new code against this repo's `GITHUB_TOKEN`;
+// an immutable SHA cannot. This gate keeps the pins from rotting back to tags.
 //
 // `.github/actions/**` is in scope because a workflow's `uses: ./.github/...`
 // (a local, exempt ref) invokes a composite action whose OWN `uses:` refs run
@@ -15,12 +16,13 @@
 // one in a workflow.
 //
 // SCOPE: this is a purely-offline *format* check. It deliberately does NOT
-// assert SHA<->tag correctness (that the `# vX.Y.Z` comment's tag actually
+// assert SHA<->tag correctness (that the version comment's tag actually
 // points at the pinned SHA in the upstream repo) — a local static parser can't
 // resolve a SHA to its upstream tag without a network call. SHA<->tag
 // correctness is verified at *authoring* time against each upstream repo, and
-// refreshed by Dependabot's grouped `github-actions` updater, which understands
-// SHA+comment pins and bumps both together.
+// refreshed by Renovate's `github-actions` manager, which treats the comment
+// as the version-of-record and rewrites SHA + comment together (which is also
+// why the comment must equal the REAL upstream tag — see VERSION_COMMENT_RE).
 //
 // EXEMPTIONS (not "remote actions"):
 //   - local actions:        `uses: ./.github/actions/foo`
@@ -43,12 +45,19 @@ import { execSync } from "node:child_process";
 export const PINNED_REF_RE =
   /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\/[A-Za-z0-9._/-]+@[0-9a-f]{40}$/;
 
-// A well-formed version comment: `# v` + 1..3 dot-separated numbers, with an
-// optional semver pre-release / build-metadata suffix (`-beta-1`, `+build.7`).
-// Accepts `# v6`, `# v6.0`, `# v6.0.2`, `# v6.0.2-beta.1`. One leading space
-// after `#` is conventional but optional.
+// A well-formed version comment: `#`, an OPTIONAL `v`, then 1..3
+// dot-separated numbers, with an optional semver pre-release / build-metadata
+// suffix (`-beta-1`, `+build.7`). Accepts `# v6`, `# v6.0`, `# v6.0.2`,
+// `# v6.0.2-beta.1` — and the same forms without the `v` (`# 2.37.2`),
+// because some upstreams tag WITHOUT a `v` prefix (e.g. shivammathur/setup-php
+// tags `2.37.2`) and the comment must match the REAL upstream tag for
+// Renovate to resolve it (a fabricated `# v2.37.2` makes the dep silently
+// never update). The `v` is therefore optional; the comment should mirror the
+// upstream tag exactly. The immutable 40-char SHA pin (PINNED_REF_RE) is the
+// security control — this comment is human/tooling metadata. One leading
+// space after `#` is conventional but optional.
 export const VERSION_COMMENT_RE =
-  /^#[ \t]*v\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$/;
+  /^#[ \t]*v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?$/;
 
 // Matches a `uses` key at the start of a (block-style) source line, allowing an
 // optional `- ` list prefix, optional quotes around the key, and whitespace
@@ -171,8 +180,8 @@ export function classifyRef(ref, comment) {
   if (!VERSION_COMMENT_RE.test(comment)) {
     violations.push(
       comment
-        ? `comment "${comment}" is not a well-formed version comment (want \`# vX.Y.Z\`)`
-        : "missing version comment (want a trailing `# vX.Y.Z`)",
+        ? `comment "${comment}" is not a well-formed version comment (want \`# vX.Y.Z\` or \`# X.Y.Z\`, matching the upstream tag)`
+        : "missing version comment (want a trailing `# vX.Y.Z` / `# X.Y.Z` matching the upstream tag)",
     );
   }
   return { kind: "remote", ok: violations.length === 0, violations };
@@ -283,7 +292,8 @@ function main() {
       for (const v of o.violations) console.error(`      - ${v}`);
     }
     console.error(
-      "\nPin every remote action to a 40-char commit SHA with a `# vX.Y.Z` comment.\n" +
+      "\nPin every remote action to a 40-char commit SHA with a version comment that\n" +
+        "matches the upstream tag exactly (`# vX.Y.Z`, or `# X.Y.Z` for upstreams that tag without a `v`).\n" +
         "Resolve the SHA from the upstream repo (e.g. `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`).\n" +
         "Local `./` and `docker://` refs are exempt.",
     );
