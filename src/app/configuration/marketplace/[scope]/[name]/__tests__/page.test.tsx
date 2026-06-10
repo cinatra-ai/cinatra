@@ -8,6 +8,8 @@ const {
   registryEntryDetailSectionsMock,
   marketplaceDetailHeaderMock,
   marketplaceReadmeSectionMock,
+  marketplaceReadmeMarkdownSectionMock,
+  hasRenderableReadmeMarkdownMock,
   resolveDetailFreshnessAtMock,
   notFoundMock,
   MarketplaceMcpErrorStub,
@@ -30,6 +32,8 @@ const {
     registryEntryDetailSectionsMock: vi.fn(),
     marketplaceDetailHeaderMock: vi.fn(),
     marketplaceReadmeSectionMock: vi.fn(),
+    marketplaceReadmeMarkdownSectionMock: vi.fn(),
+    hasRenderableReadmeMarkdownMock: vi.fn(),
     resolveDetailFreshnessAtMock: vi.fn(),
     notFoundMock: vi.fn(() => {
       throw new Error("NEXT_NOT_FOUND");
@@ -78,6 +82,8 @@ vi.mock("@/components/marketplace-detail-header", () => ({
 
 vi.mock("@/components/marketplace-readme-section", () => ({
   MarketplaceReadmeSection: marketplaceReadmeSectionMock,
+  MarketplaceReadmeMarkdownSection: marketplaceReadmeMarkdownSectionMock,
+  hasRenderableReadmeMarkdown: hasRenderableReadmeMarkdownMock,
 }));
 
 import ExtensionMarketplaceEntryPage from "../page";
@@ -144,10 +150,17 @@ describe("ExtensionMarketplaceEntryPage", () => {
     registryEntryDetailSectionsMock.mockReset();
     marketplaceDetailHeaderMock.mockReset();
     marketplaceReadmeSectionMock.mockReset();
+    marketplaceReadmeMarkdownSectionMock.mockReset();
+    hasRenderableReadmeMarkdownMock.mockReset();
     resolveDetailFreshnessAtMock.mockReset();
     notFoundMock.mockClear();
     requireAdminSessionMock.mockResolvedValue({ user: { id: "admin-1" } });
     resolveDetailFreshnessAtMock.mockReturnValue("2026-06-01T00:00:00.000Z");
+    // Default to the real helper's happy-path shape: any non-blank markdown
+    // counts as renderable. The sanitized-empty edge overrides per test.
+    hasRenderableReadmeMarkdownMock.mockImplementation(
+      (markdown: string | null | undefined) => (markdown ?? "").trim() !== "",
+    );
   });
 
   it("uses the anonymous public detail endpoint for the marketplace preflight", async () => {
@@ -167,6 +180,27 @@ describe("ExtensionMarketplaceEntryPage", () => {
     expect(sections[0].props).toMatchObject({
       packageName: "@cinatra-ai/web-research-agent",
       listedVersion: "0.1.16",
+      readmeMarkdown: null,
+    });
+  });
+
+  it("threads the marketplace readmeMarkdown into the agent detail sections", async () => {
+    fetchPublicDetailMock.mockResolvedValue(
+      publicDetail({ readmeMarkdown: "# Acme Agent\n\nFull readme body." }),
+    );
+
+    const result = await ExtensionMarketplaceEntryPage({
+      params: Promise.resolve({ scope: "cinatra-ai", name: "web-research-agent" }),
+    });
+
+    const sections = findElementsByType(result, registryEntryDetailSectionsMock);
+    expect(sections).toHaveLength(1);
+    // The agent sections receive the marketplace-sourced README — the same
+    // field the public Description tab renders — so the primary body never
+    // falls back to Verdaccio's entry.readme.
+    expect(sections[0].props).toMatchObject({
+      packageName: "@cinatra-ai/web-research-agent",
+      readmeMarkdown: "# Acme Agent\n\nFull readme body.",
     });
   });
 
@@ -235,6 +269,57 @@ describe("ExtensionMarketplaceEntryPage", () => {
     expect(slotHtml).toContain("Builds slide decks from briefs.");
   });
 
+  it("renders the marketplace readmeMarkdown as the non-agent primary body, over the plain-text fallback", async () => {
+    fetchPublicDetailMock.mockResolvedValue(
+      publicDetail({
+        kind: "skill",
+        longDescription: "Plain fallback text.",
+        readmeMarkdown: "# Slide Deck Skill\n\nFull readme body.",
+      }),
+    );
+
+    const result = await ExtensionMarketplaceEntryPage({
+      params: Promise.resolve({ scope: "cinatra-ai", name: "slide-deck-skill" }),
+    });
+
+    // The markdown README (the field the public Description tab renders)
+    // takes the primary-body slot...
+    const markdownSlots = findElementsByType(
+      result,
+      marketplaceReadmeMarkdownSectionMock,
+    );
+    expect(markdownSlots).toHaveLength(1);
+    expect(markdownSlots[0].props).toMatchObject({
+      markdown: "# Slide Deck Skill\n\nFull readme body.",
+    });
+    // ...and the plain-text fallback section does not also render.
+    expect(findElementsByType(result, marketplaceReadmeSectionMock)).toHaveLength(0);
+  });
+
+  it("falls back to the plain-text description when the README sanitizes down to nothing", async () => {
+    // e.g. a README consisting solely of raw HTML — non-blank as a string,
+    // but the sanitizing renderer strips it to empty output.
+    hasRenderableReadmeMarkdownMock.mockReturnValue(false);
+    fetchPublicDetailMock.mockResolvedValue(
+      publicDetail({
+        kind: "skill",
+        longDescription: "Plain fallback text.",
+        readmeMarkdown: "<div><script>x</script></div>",
+      }),
+    );
+
+    const result = await ExtensionMarketplaceEntryPage({
+      params: Promise.resolve({ scope: "cinatra-ai", name: "slide-deck-skill" }),
+    });
+
+    expect(
+      findElementsByType(result, marketplaceReadmeMarkdownSectionMock),
+    ).toHaveLength(0);
+    const readmeSlots = findElementsByType(result, marketplaceReadmeSectionMock);
+    expect(readmeSlots).toHaveLength(1);
+    expect(JSON.stringify(readmeSlots[0].props)).toContain("Plain fallback text.");
+  });
+
   it("omits the README slot cleanly when a non-agent listing has no descriptive text", async () => {
     fetchPublicDetailMock.mockResolvedValue(
       publicDetail({
@@ -250,6 +335,9 @@ describe("ExtensionMarketplaceEntryPage", () => {
     });
 
     expect(findElementsByType(result, marketplaceReadmeSectionMock)).toHaveLength(0);
+    expect(
+      findElementsByType(result, marketplaceReadmeMarkdownSectionMock),
+    ).toHaveLength(0);
     expect(findElementsByType(result, marketplaceDetailHeaderMock)).toHaveLength(1);
   });
 

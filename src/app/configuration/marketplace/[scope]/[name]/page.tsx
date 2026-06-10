@@ -11,7 +11,11 @@ import {
   MarketplaceDetailHeader,
   resolveDetailFreshnessAt,
 } from "@/components/marketplace-detail-header";
-import { MarketplaceReadmeSection } from "@/components/marketplace-readme-section";
+import {
+  MarketplaceReadmeMarkdownSection,
+  MarketplaceReadmeSection,
+  hasRenderableReadmeMarkdown,
+} from "@/components/marketplace-readme-section";
 
 // npm package-name parts: lowercase alphanumeric + `_`, `.`, `-`, must not
 // start with `.` or `_`. We accept the case-insensitive form so the route
@@ -113,9 +117,15 @@ export default async function ExtensionMarketplaceEntryPage({
           // directly. `latestVersion` is the storefront-listed version; null
           // (unlisted) leaves the sections to default to "latest" under the
           // flag, and is ignored entirely when the flag is OFF.
+          //
+          // readmeMarkdown threads the marketplace-sourced README (the same
+          // field the public Description tab renders) into the primary-body
+          // README slot — the agent sections never fall back to Verdaccio's
+          // entry.readme.
           <RegistryEntryDetailSections
             packageName={packageName}
             listedVersion={detail.latestVersion ?? undefined}
+            readmeMarkdown={detail.readmeMarkdown ?? null}
           />
         ) : (
           <NonAgentDetailBody detail={detail} />
@@ -130,30 +140,30 @@ export default async function ExtensionMarketplaceEntryPage({
  * rendered purely from the marketplace `ExtensionDetail` — no Verdaccio read.
  *
  * The README slot is the primary body (mirroring the public Description tab).
- * This shell positions the block only: the plain-text long description stands
- * in until the README-parity follow-up renders `readmeMarkdown` (markdown,
- * sanitization, typography) into the same slot. When the listing carries no
- * descriptive text at all, the slot is omitted cleanly — no empty pane.
+ * When the listing carries `readmeMarkdown`, it renders with full markdown
+ * parity (sanitizing renderer, heading demotion, editorial typography) — the
+ * same treatment as the public page. A listing without a README falls back to
+ * its plain-text long description; a listing with no descriptive text at all
+ * omits the slot cleanly — no empty pane.
  */
 function NonAgentDetailBody({ detail }: { detail: MarketplaceExtensionGetOutput }) {
+  // Decide on the SANITIZED render, not the raw string: a README that
+  // sanitizes down to nothing (e.g. raw HTML only) must still fall back to
+  // the plain-text description instead of rendering no primary body.
+  const hasReadme = hasRenderableReadmeMarkdown(detail.readmeMarkdown);
+  if (hasReadme) {
+    return <MarketplaceReadmeMarkdownSection markdown={detail.readmeMarkdown} />;
+  }
   const fallbackText =
     detail.longDescription?.trim() || detail.description?.trim() || "";
-  const hasReadme = (detail.readmeMarkdown ?? "").trim() !== "";
-  if (!fallbackText && !hasReadme) {
+  if (!fallbackText) {
     return null;
   }
   return (
     <MarketplaceReadmeSection>
-      {fallbackText ? (
-        <p className="text-sm leading-relaxed whitespace-pre-line text-foreground">
-          {fallbackText}
-        </p>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          The full description is included with this extension&apos;s package
-          README.
-        </p>
-      )}
+      <p className="text-sm leading-relaxed whitespace-pre-line text-foreground">
+        {fallbackText}
+      </p>
     </MarketplaceReadmeSection>
   );
 }

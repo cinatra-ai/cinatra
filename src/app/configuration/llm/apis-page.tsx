@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import { getAnthropicAPIStatus, CLAUDE_MODELS } from "@cinatra-ai/anthropic-connector";
-import { getGeminiAPIStatus } from "@cinatra-ai/gemini-connector";
-import { getConfiguredOpenAIConnection } from "@cinatra-ai/openai-connector";
+import type { ComponentType } from "react";
 import { NangoManagedApiCard } from "@cinatra-ai/sdk-ui/nango";
 import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango";
 import { PageHeader } from "@/components/page-header";
@@ -18,42 +16,87 @@ import { Card, CardContent } from "@/components/ui/card";
 import { DefaultProvidersCard } from "@/app/configuration/llm/_default-llm-select";
 import { Input } from "@/components/ui/input";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
-// Direct per-icon imports avoid Turbopack having to process the 3,412-line
-// barrel file and 10,000+ icon files in @icons-pack/react-simple-icons (59 MB).
-// Tree-shaking is irrelevant here: the package sideEffects:false flag doesn't
-// prevent Turbopack from parsing the entire re-export barrel to resolve
-// symbols. Direct file imports keep compilation memory bounded.
-import { LinkedInSettingsPage } from "@cinatra-ai/linkedin-connector/settings-page";
-import { AnthropicSettingsContent } from "@cinatra-ai/anthropic-connector/settings-page";
 import { ExternalMcpSettingsPage } from "@/lib/external-mcp-settings-page";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
-import { readOpenAIConnection } from "@/lib/openai-connection-store";
-import {
-  getDefaultOpenAIServiceTier,
-  isOpenAIConnectionReady,
-  listAvailableOpenAIModels,
-  filterVisibleOpenAIModels,
-  filterSelectableOpenAIModels,
-  OPENAI_SERVICE_TIER_OPTIONS,
-} from "@cinatra-ai/openai-connector";
+import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connection-store";
+// Connector status reads, model lists, and settings components resolve through
+// the generated extension manifest (entry modules + settings-page loaders) —
+// this page names no connector package. The structural types below are the
+// export shapes this surface consumes (its host↔connector data contract).
+import { loadConnectorModule } from "@/lib/connector-modules.server";
+import { getConnectorSettingsPageLoader } from "@/lib/connector-setup-pages";
+
+type ProviderStatus = { status: string };
+
+type AnthropicConnectorModule = {
+  getAnthropicAPIStatus: () => ProviderStatus;
+  CLAUDE_MODELS: readonly string[];
+};
+
+type GeminiConnectorModule = {
+  getGeminiAPIStatus: () => ProviderStatus;
+};
+
+type OpenAIConnectionSnapshot = {
+  apiKey?: string;
+  projectId?: string;
+  organizationId?: string;
+  defaultModel?: string;
+  promptCachingEnabled?: boolean;
+  availableModels?: string[];
+};
+
+type OpenAIConnectorModule = {
+  getConfiguredOpenAIConnection: (
+    connection?: OpenAIConnection,
+  ) => Promise<OpenAIConnectionSnapshot | null>;
+  isOpenAIConnectionReady: (connection?: OpenAIConnection | OpenAIConnectionSnapshot) => boolean;
+  listAvailableOpenAIModels: (input: {
+    projectId?: string;
+    organizationId?: string;
+  }) => Promise<string[]>;
+  filterVisibleOpenAIModels: (models: string[]) => string[];
+  filterSelectableOpenAIModels: (models: string[]) => string[];
+  getDefaultOpenAIServiceTier: () => string;
+  OPENAI_SERVICE_TIER_OPTIONS: Array<{ value: string; label: string }>;
+};
+
+type SettingsContentProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+async function loadSettingsComponent(
+  slug: string,
+  exportName: string,
+): Promise<ComponentType<SettingsContentProps> | null> {
+  const loader = getConnectorSettingsPageLoader(slug);
+  if (!loader) return null;
+  const mod = (await loader()) as Record<string, unknown>;
+  const component = mod[exportName];
+  return typeof component === "function"
+    ? (component as ComponentType<SettingsContentProps>)
+    : null;
+}
 // ---------------------------------------------------------------------------
 // OpenAI modal content — async server component (backs ?modal=openai overlay)
 // ---------------------------------------------------------------------------
 
 async function OpenAIModalContent() {
+  const openai = await loadConnectorModule<OpenAIConnectorModule>("openai-connector");
+  if (!openai) return null;
   const connection = readOpenAIConnection();
   const nangoStatus = getNangoStatus();
   const nangoFrontendConfig = getNangoFrontendConfig();
-  const defaultServiceTier = getDefaultOpenAIServiceTier();
-  const configuredConnection = await getConfiguredOpenAIConnection(connection ?? undefined);
-  const isConnected = isOpenAIConnectionReady(configuredConnection ?? connection ?? undefined);
+  const defaultServiceTier = openai.getDefaultOpenAIServiceTier();
+  const configuredConnection = await openai.getConfiguredOpenAIConnection(connection ?? undefined);
+  const isConnected = openai.isOpenAIConnectionReady(configuredConnection ?? connection ?? undefined);
   const connectionServiceReady = nangoStatus.status === "connected";
   const hasNangoConnection = Boolean(getPrimarySavedNangoConnection("openai"));
 
   let availableModels = connection?.availableModels ?? configuredConnection?.availableModels ?? [];
   if (configuredConnection?.apiKey) {
     try {
-      const fetchedModels = await listAvailableOpenAIModels({
+      const fetchedModels = await openai.listAvailableOpenAIModels({
         projectId: configuredConnection.projectId,
         organizationId: configuredConnection.organizationId,
       });
@@ -64,8 +107,8 @@ async function OpenAIModalContent() {
       // Keep the last validated model list if the live refresh fails.
     }
   }
-  availableModels = filterVisibleOpenAIModels(availableModels);
-  const selectableModels = new Set(filterSelectableOpenAIModels(availableModels));
+  availableModels = openai.filterVisibleOpenAIModels(availableModels);
+  const selectableModels = new Set(openai.filterSelectableOpenAIModels(availableModels));
   const promptCachingEnabled = configuredConnection?.promptCachingEnabled ?? isAppDevelopmentMode();
 
   return (
@@ -101,7 +144,7 @@ async function OpenAIModalContent() {
               defaultValue={connection?.serviceTier ?? defaultServiceTier}
               className="rounded-control border border-line bg-surface-strong px-4 py-3"
             >
-              {OPENAI_SERVICE_TIER_OPTIONS.map((option) => (
+              {openai.OPENAI_SERVICE_TIER_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -172,17 +215,20 @@ function pickSearchParam(value: string | string[] | undefined) {
 export const metadata: Metadata = { title: "LLM" };
 
 export default async function APIsPage({ searchParams }: APIsPageProps) {
-  const [
-    claudeStatus,
-    geminiStatus,
-    configuredOpenAIConnection,
-    resolvedSearchParams,
-  ] = await Promise.all([
-    Promise.resolve(getAnthropicAPIStatus()),
-    Promise.resolve(getGeminiAPIStatus()),
-    getConfiguredOpenAIConnection(),
+  const [anthropic, gemini, openai, resolvedSearchParams] = await Promise.all([
+    loadConnectorModule<AnthropicConnectorModule>("anthropic-connector"),
+    loadConnectorModule<GeminiConnectorModule>("gemini-connector"),
+    loadConnectorModule<OpenAIConnectorModule>("openai-connector"),
     (searchParams ?? Promise.resolve({})) as Promise<Record<string, string | string[] | undefined>>,
   ]);
+  const claudeStatus: ProviderStatus = anthropic?.getAnthropicAPIStatus() ?? {
+    status: "not_connected",
+  };
+  const geminiStatus: ProviderStatus = gemini?.getGeminiAPIStatus() ?? {
+    status: "not_connected",
+  };
+  const configuredOpenAIConnection = (await openai?.getConfiguredOpenAIConnection()) ?? null;
+  const anthropicModels = [...(anthropic?.CLAUDE_MODELS ?? [])];
   const savedIntegration = pickSearchParam(resolvedSearchParams.saved);
   const currentDefaultProvider = readDefaultLlmProviderFromDatabase();
   const openaiConnected = Boolean(configuredOpenAIConnection?.apiKey);
@@ -206,6 +252,17 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
 
   const modal = pickSearchParam(resolvedSearchParams.modal);
 
+  // Settings components resolve through the generated settings-page loader map
+  // only when their modal is requested.
+  const LinkedInSettings =
+    modal === "linkedin"
+      ? await loadSettingsComponent("linkedin-connector", "LinkedInSettingsPage")
+      : null;
+  const AnthropicSettings =
+    modal === "anthropic"
+      ? await loadSettingsComponent("anthropic-connector", "AnthropicSettingsContent")
+      : null;
+
   return (
     <>
       <Main className="min-h-screen">
@@ -226,7 +283,7 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                   geminiConnected={geminiConnected}
                   classificationModel={readObjectsClassificationModelFromDatabase()}
                   availableModels={["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "gpt-4.1-nano"]}
-                  anthropicModels={[...CLAUDE_MODELS]}
+                  anthropicModels={anthropicModels}
                   // MUST mirror AGENT_CREATION_OPENAI_MODELS in src/app/campaigns/actions.ts
                   // (gpt-5 family). The classification availableModels (gpt-4*) is a
                   // separate purpose the agent-creation action would reject.
@@ -252,17 +309,17 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
         </PageContent>
       </Main>
 
-      {modal === "linkedin" ? (
-        <LinkedInSettingsPage searchParams={searchParams} />
+      {LinkedInSettings ? (
+        <LinkedInSettings searchParams={searchParams} />
       ) : null}
 
       {modal === "openai" ? (
         <OpenAIModalContent />
       ) : null}
 
-      {modal === "anthropic" ? (
+      {AnthropicSettings ? (
         <ConnectorSettingsDialog closeHref="/configuration/llm">
-          <AnthropicSettingsContent searchParams={searchParams} />
+          <AnthropicSettings searchParams={searchParams} />
         </ConnectorSettingsDialog>
       ) : null}
 
