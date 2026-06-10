@@ -7,6 +7,7 @@ import {
   sanitizeLogoDataUri,
   extractFactoryExport,
   validateWidgetStreamDeclaration,
+  assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
@@ -445,4 +446,46 @@ describe("chat-widget module discovery", () => {
     expect(names).toEqual(
       expect.arrayContaining(["@cinatra-ai/apollo-connector", "@cinatra-ai/crm-connector"]),
     );  });
+});
+
+describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
+  const widgetsSrc = `
+    export const acmeWidgets: WidgetDefinition[] = [
+      { id: "acme.finder", label: "Find", component: Finder },
+      { id: "acme.editor", label: "Edit", component: Editor },
+    ];
+  `;
+
+  it("passes when every wizard step widgetId is a defined widget id", () => {
+    const manifestSrc = `
+      export const acmeManifest: WidgetManifest = {
+        id: "acme",
+        description: "d",
+        wizard: { steps: [ { widgetId: "acme.finder", description: "f" }, { widgetId: "acme.editor", description: "e" } ] },
+      };
+    `;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).not.toThrow();
+  });
+
+  it("passes for a manifest without wizard steps (nothing to cover)", () => {
+    const manifestSrc = `export const acmeManifest = { id: "acme", description: "d" };`;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).not.toThrow();
+  });
+
+  it("FAILS generation when a wizard step names an undefined widget id", () => {
+    const manifestSrc = `
+      export const acmeManifest = {
+        id: "acme",
+        description: "d",
+        wizard: { steps: [ { widgetId: "acme.ghost", description: "g" } ] },
+      };
+    `;
+    expect(() => assertManifestWidgetIdsCovered(manifestSrc, widgetsSrc, "acme src/widgets")).toThrow(
+      /acme src\/widgets: manifest wizard step\(s\) reference widget id\(s\) not defined in src\/widgets\/index\.ts: acme\.ghost/,
+    );
+  });
+
+  it("the real widget-bearing extensions pass the pairing check (buildManifest does not throw)", async () => {
+    await expect(buildManifest()).resolves.toBeTruthy();
+  });
 });
