@@ -108,20 +108,25 @@ function ModeTabContent({
   return (
     <div className="flex max-w-3xl flex-col gap-5">
       {connectionsRedirectFromTab ? (
-        // Explicit-redirect notice so a prod user who arrived from a
-        // "Configure Nango" / "configure connection service" CTA (or a
-        // bookmark / external link) does NOT silently land here without
-        // knowing why. The Connections tab is dev-only by design — in
-        // prod the credential setup happens via env vars + per-connector
-        // pages.
+        // Explicit-redirect notice for prod users who arrive via a stale
+        // `?tab=connections|credentials` URL (a bookmark / external link, or
+        // a "configure connection service" CTA from an extension pinned to a
+        // pre-cinatra#66 sdk-ui — current CTAs point at /setup/connections).
+        // The Connections tab is dev-only by design — in prod the connection
+        // service is configured on /setup/connections (or via env vars), and
+        // credentials live on the per-connector setup pages.
         <Alert variant="default" className="rounded-panel">
           <AlertTitle>Connections tab is dev-only</AlertTitle>
           <AlertDescription>
             You followed a link to <code className="font-mono text-xs">?tab={connectionsRedirectFromTab}</code>,
-            but this Cinatra instance is running in production mode where
-            credential setup happens via environment variables and the
-            per-connector setup pages. The Connections tab only renders in
-            development mode.
+            but this Cinatra instance is running in production mode where the
+            Connections tab is not available. To configure the connection
+            service, use{" "}
+            <Link href="/setup/connections" className="underline underline-offset-4">
+              Setup &gt; Connections
+            </Link>{" "}
+            (or set the corresponding environment variables). Per-connector
+            credentials live on each connector&apos;s setup page.
           </AlertDescription>
         </Alert>
       ) : null}
