@@ -23,4 +23,10 @@ describe("llm subpath resolution", () => {
     const mod = await import("@cinatra-ai/llm/anthropic-logging-state");
     expect(mod).toBeTruthy();
   });
+
+  it("resolves @cinatra-ai/llm/openai-model-capabilities subpath", async () => {
+    const mod = await import("@cinatra-ai/llm/openai-model-capabilities");
+    expect(typeof mod.openAiModelSupportsShell).toBe("function");
+    expect(mod.OPENAI_SHELL_INCOMPATIBLE_MODEL_IDS.has("gpt-5")).toBe(true);
+  });
 });
