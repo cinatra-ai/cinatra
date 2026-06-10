@@ -1272,9 +1272,6 @@ importers:
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:../agents
-      '@cinatra-ai/apollo-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/apollo-connector
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:../llm

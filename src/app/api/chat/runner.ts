@@ -280,8 +280,11 @@ async function buildUserContext(userId?: string): Promise<string> {
   // schedules, ...) — resolved registration-driven from the chat-user-context
   // capability registry, deterministically ordered and failure-isolated.
   const sections: string[] = await buildChatUserContextSections(userId);
+  // Live widget/wizard manifests — resolved ONCE per turn from the extension
+  // manifest + lifecycle (both loops below read the same snapshot).
+  const allManifests = await getAllManifests();
 
-  for (const manifest of getAllManifests()) {
+  for (const manifest of allManifests) {
     if (!manifest.wizard) continue;
     const { resourceType, resourceIdArg } = manifest.wizard.staging;
     const staged = getAllStagedByType(resourceType);
@@ -299,7 +302,7 @@ async function buildUserContext(userId?: string): Promise<string> {
     sections.push(`Staged ${resourceType}s (use ${resourceIdArg} to update via ${updateTools}):\n${list}`);
   }
 
-  const wizards = getAllManifests().filter((m) => m.wizard);
+  const wizards = allManifests.filter((m) => m.wizard);
   if (wizards.length > 0) {
     const widgetSections = wizards.map((m) => {
       const steps = m.wizard!.steps.map((s) => `  - ${s.description}`).join("\n");
