@@ -94,7 +94,16 @@ vi.mock("../lifecycle-primitive", () => ({
     await _internalDeleteInstalledExtension(id);
   },
 }));
-vi.mock("../required-in-prod", () => ({ isPackageRequiredInProd: () => false }));
+// The REQUIRED-PIN GATE verdict is controllable per-test (default: pass).
+const { checkRequiredExtensionVersionPin } = vi.hoisted(() => ({
+  checkRequiredExtensionVersionPin: vi.fn(
+    (_input: unknown): { ok: true } | { ok: false; requiredRange: string; reason: string } => ({ ok: true }),
+  ),
+}));
+vi.mock("../required-in-prod", () => ({
+  isPackageRequiredInProd: () => false,
+  checkRequiredExtensionVersionPin: (input: unknown) => checkRequiredExtensionVersionPin(input as never),
+}));
 
 // --- mocked activate hook (the real-integrity pipeline) ---------------------
 const fireExtensionActivate = vi.fn();
@@ -839,5 +848,70 @@ describe("restore dependency-closure gate", () => {
 
     // Closure passed → the restore + activate re-register proceeded.
     expect(fireExtensionActivate).toHaveBeenCalledWith("@v/mixed-scope-connector", "org-1", "1.0.0");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REQUIRED-PIN GATE — a package pinned in `cinatra.requiredExtensions` may only
+// be installed/updated at a concrete version satisfying the pinned range. The
+// gate runs at the TOP of the host installer, on EVERY kind's path, BEFORE the
+// row-ensure / native handler / pipeline — so a refusal mutates NOTHING.
+// ---------------------------------------------------------------------------
+describe("dispatcher REQUIRED-PIN GATE (versioned cinatra.requiredExtensions)", () => {
+  const refusal = {
+    ok: false as const,
+    requiredRange: "^0.1.0",
+    reason:
+      'update of @v/pinned-agent@0.2.0 refused: this host pins the required extension to "^0.1.0"',
+  };
+
+  it("REFUSES an INSTALL outside the pin BEFORE any mutation (no row, no handler, no pipeline)", async () => {
+    const handler = makeHandler("agent");
+    extensionRegistry.register(handler);
+    checkRequiredExtensionVersionPin.mockReturnValueOnce({ ...refusal, reason: refusal.reason.replace("update", "install") });
+
+    await expect(
+      extensionRegistry.install("agent", makeRef("@v/pinned-agent"), orgActor),
+    ).rejects.toThrow(/pins the required extension to "\^0\.1\.0"/);
+
+    expect(rows).toHaveLength(0); // no canonical row ensured
+    expect(handler.install).not.toHaveBeenCalled();
+    expect(fireExtensionActivate).not.toHaveBeenCalled();
+    // The gate saw the dispatched ref (name + version + op).
+    expect(checkRequiredExtensionVersionPin).toHaveBeenCalledWith({
+      packageName: "@v/pinned-agent",
+      version: "1.0.0",
+      op: "install",
+    });
+  });
+
+  it("REFUSES an UPDATE outside the pin the same way (every kind dispatches through here)", async () => {
+    const handler = makeHandler("connector");
+    extensionRegistry.register(handler);
+    checkRequiredExtensionVersionPin.mockReturnValueOnce(refusal);
+
+    await expect(
+      extensionRegistry.update("connector", makeRef("@v/pinned-agent"), orgActor),
+    ).rejects.toThrow(/pins the required extension/);
+
+    expect(rows).toHaveLength(0);
+    expect(handler.update).not.toHaveBeenCalled();
+    expect(fireExtensionActivate).not.toHaveBeenCalled();
+    expect(checkRequiredExtensionVersionPin).toHaveBeenCalledWith({
+      packageName: "@v/pinned-agent",
+      version: "1.0.0",
+      op: "update",
+    });
+  });
+
+  it("PASSES a pinned-satisfying (or unpinned) ref — install proceeds normally", async () => {
+    const handler = makeHandler("connector");
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: true });
+
+    await extensionRegistry.install("connector", makeRef("@v/ok-connector"), orgActor);
+
+    expect(handler.install).toHaveBeenCalledTimes(1);
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/ok-connector", "org-1", "1.0.0");
   });
 });
