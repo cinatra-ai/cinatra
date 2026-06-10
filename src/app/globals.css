@@ -14,10 +14,15 @@
   --surface: #f7f7f3;
   --surface-strong: #ffffff;
   --surface-muted: #e8e8e3;
-  /* Toolbar ground (design-system.html §Toolbar) — aliased to
-     --surface-muted; isolated semantic so a future toolbar tone can
-     diverge without touching every surface-muted call site. */
-  --toolbar: var(--surface-muted);
+  /* Toolbar ground (design-system.html §Toolbar) — spec chrome #dcddd5,
+     darker than --surface-muted on purpose: embedded controls are
+     borderless, so the ground itself must read as the container.
+     §Nested toolbar: each child level lightens ~6L toward the page
+     (L2/L3 below), stopping short of the paper. Spec values are
+     enforced by scripts/audit/toolbar-tokens.mjs. */
+  --toolbar: #dcddd5;
+  --toolbar-l2: #e3e4dc;
+  --toolbar-l3: #e9eae2;
   --muted: #5a6477;
   /* Accent is canonical desaturated indigo. */
   --accent: #364e81;
@@ -102,9 +107,11 @@
   --surface: #f7f7f3;
   --surface-strong: #ffffff;
   --surface-muted: #e8e8e3;
-  /* Toolbar ground (design-system.html §Toolbar) — aliased to
-     --surface-muted. */
-  --toolbar: var(--surface-muted);
+  /* Toolbar ground (design-system.html §Toolbar / §Nested toolbar) —
+     spec chrome; child levels lighten toward the page. */
+  --toolbar: #dcddd5;
+  --toolbar-l2: #e3e4dc;
+  --toolbar-l3: #e9eae2;
   --muted: #5a6477;
   /* Accent is canonical desaturated indigo. */
   --accent: #364e81;
@@ -345,7 +352,13 @@
   --surface: oklch(0.165 0.04 259);
   --surface-strong: oklch(0.21 0.04 259);
   --surface-muted: oklch(0.279 0.041 260.031);
+  /* Dark toolbar ground keeps the muted chrome; the spec defines the
+     nested-toolbar lightening for light mode only ("toward the page"),
+     so in dark mode each child level steps toward the darker page
+     background instead — same direction, inverted lightness. */
   --toolbar: var(--surface-muted);
+  --toolbar-l2: color-mix(in oklab, var(--toolbar) 72%, var(--background));
+  --toolbar-l3: color-mix(in oklab, var(--toolbar) 45%, var(--background));
   --muted: oklch(0.704 0.04 256.788);
   --accent: oklch(0.929 0.013 255.508);
   --accent-soft: oklch(0.279 0.041 260.031);
@@ -401,6 +414,8 @@
   --color-surface-strong: var(--surface-strong);
   --color-surface-muted: var(--surface-muted);
   --color-toolbar: var(--toolbar);
+  --color-toolbar-l2: var(--toolbar-l2);
+  --color-toolbar-l3: var(--toolbar-l3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-accent-soft: var(--accent-soft);

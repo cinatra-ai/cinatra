@@ -1,10 +1,19 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Toolbar,
+  ToolbarButton,
+  ToolbarGroup,
+  ToolbarSearchGroup,
+  ToolbarSearchInput,
+  ToolbarSeparator,
+} from "@/components/ui/toolbar";
 import { upsertModelPricingAction, triggerLiteLlmSyncAction } from "../actions";
 import type { ModelPricingRow } from "../store";
 import type { LiteLlmSyncResult } from "../litellm-sync";
@@ -52,33 +61,41 @@ export function ModelPricingTable({ rows }: ModelPricingTableProps) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Toolbar: search + sync */}
-      <div className="flex items-center gap-3">
-        <Input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search models, providers…"
-          className="w-72 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-foreground/20"
-        />
-        <div className="ml-auto flex items-center gap-3">
-        {syncResult && (
-          <span className={`shrink-0 text-xs ${syncResult.errors > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-            {syncResult.errors > 0 && syncResult.errorMessage
-              ? `Error: ${syncResult.errorMessage}`
-              : `Synced: ${syncResult.inserted} inserted, ${syncResult.updated} updated, ${syncResult.skipped} skipped`}
-          </span>
-        )}
-        <Button
-          type="button"
-          onClick={handleSync}
-          disabled={isSyncing}
-          className="shrink-0 rounded-control bg-foreground px-4 py-1.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50"
-        >
-          {isSyncing ? "Refreshing..." : "Refresh price list"}
-        </Button>
-        </div>
-      </div>
+      {/* design-system.html §Toolbar — canonical control bar (borderless
+          embedded controls on the toolbar ground; the search pill is the
+          only white surface). */}
+      <Toolbar aria-label="Model pricing controls">
+        <ToolbarSearchGroup className="max-w-md flex-none">
+          <ToolbarSearchInput
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search models, providers…"
+          />
+        </ToolbarSearchGroup>
+        <ToolbarGroup className="ml-auto">
+          {syncResult && (
+            <span
+              className={`shrink-0 px-2 text-xs ${syncResult.errors > 0 ? "text-destructive" : "text-muted-foreground"}`}
+            >
+              {syncResult.errors > 0 && syncResult.errorMessage
+                ? `Error: ${syncResult.errorMessage}`
+                : `Synced: ${syncResult.inserted} inserted, ${syncResult.updated} updated, ${syncResult.skipped} skipped`}
+            </span>
+          )}
+        </ToolbarGroup>
+        <ToolbarSeparator />
+        <ToolbarGroup>
+          <ToolbarButton
+            type="button"
+            onClick={handleSync}
+            disabled={isSyncing}
+            className="text-foreground"
+          >
+            <RefreshCw aria-hidden="true" className="size-3.5 shrink-0" />
+            {isSyncing ? "Refreshing..." : "Refresh price list"}
+          </ToolbarButton>
+        </ToolbarGroup>
+      </Toolbar>
 
       {/* Pricing table */}
       <Card className="border-line bg-surface backdrop-blur-none gap-0 py-0 overflow-hidden">
