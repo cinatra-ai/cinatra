@@ -13,10 +13,13 @@
  *     caller from exfiltrating bytes through the preview path that would
  *     otherwise force-download via the content endpoint.
  *   - Per-MIME byte caps: markdown 10MB, text 10MB, image 25MB,
- *     PDF 100MB. Anything bigger 413s; the user can still download
- *     uncapped via the content endpoint.
+ *     PDF 100MB, audio 100MB, video 500MB. Anything bigger 413s; the
+ *     user can still download uncapped via the content endpoint. An
+ *     allowlisted MIME with NO registered cap fails closed (415) so a
+ *     future allowlist edit cannot silently serve uncapped bytes.
  *   - Range support — required for `<embed>`-served PDFs (browsers issue
- *     bytes 0-1 then re-request).
+ *     bytes 0-1 then re-request) and for `<video>`/`<audio>` scrubbing
+ *     (browsers issue `bytes=0-` then seek with follow-up ranges).
  *
  * Guardrail: the preview route ALWAYS calls
  * `previewDispositionFor`. The content route ALWAYS calls
@@ -53,6 +56,20 @@ const BYTE_CAPS: Readonly<Record<string, number>> = {
   "image/gif": 25 * ONE_MB,
   "image/webp": 25 * ONE_MB,
   "image/svg+xml": 25 * ONE_MB,
+  // Media is range-served (never buffered wholesale), so the cap bounds
+  // which artifacts are previewable — not per-request transfer size.
+  "video/mp4": 500 * ONE_MB,
+  "video/webm": 500 * ONE_MB,
+  "video/ogg": 500 * ONE_MB,
+  "audio/mpeg": 100 * ONE_MB,
+  "audio/mp4": 100 * ONE_MB,
+  "audio/x-m4a": 100 * ONE_MB,
+  "audio/ogg": 100 * ONE_MB,
+  "audio/wav": 100 * ONE_MB,
+  "audio/x-wav": 100 * ONE_MB,
+  "audio/webm": 100 * ONE_MB,
+  "audio/flac": 100 * ONE_MB,
+  "audio/aac": 100 * ONE_MB,
 };
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -67,6 +84,11 @@ const SECURITY_HEADERS: Record<string, string> = {
   // are auth-gated.
   "Cache-Control": "private, no-store",
   "Accept-Ranges": "bytes",
+  // Auth-gated bytes must not be embeddable by cross-origin documents
+  // (e.g. a third-party page mounting `<video src>` against this route
+  // and riding ambient cookies). Same-origin detail-page handlers are
+  // unaffected.
+  "Cross-Origin-Resource-Policy": "same-origin",
 };
 
 type RangeResult =
@@ -162,8 +184,19 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
 
   // Per-MIME byte cap. 413 if exceeded; user can still
   // download via the content endpoint.
+  //
+  // Fail closed on cap drift: every allowlisted MIME MUST have a
+  // registered cap. If a future allowlist edit forgets the cap, the
+  // route 415s instead of serving uncapped bytes (and the preview-route
+  // parity test, which expects 200 for every allowlisted MIME, fails).
   const cap = BYTE_CAPS[resolved.mime];
-  if (cap !== undefined && resolved.sizeBytes > cap) {
+  if (cap === undefined) {
+    return Response.json(
+      { ok: false, error: "Preview unsupported for this MIME type" },
+      { status: 415 },
+    );
+  }
+  if (resolved.sizeBytes > cap) {
     return Response.json(
       {
         ok: false,

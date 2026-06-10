@@ -120,6 +120,14 @@ LIMIT 1`,
 // in `<embed>` form (browser's bundled PDF viewer); the preview route's
 // CSP is `sandbox` (no privileges) which most browsers tolerate for the
 // PDF viewer because it runs in its own isolated process.
+//
+// Video/audio entries are passive media — no script surface under the
+// preview CSP; the browser's media stack renders them (`<video>`/`<audio>`
+// in the detail-page handlers, range-served by the preview route). The
+// set stays exact-string (NO wildcard `video/*` matching) and is limited
+// to containers browsers broadly play natively. `video/quicktime` and
+// `video/x-msvideo` stay excluded: codec support is too inconsistent for
+// an inline player, so they keep the metadata-card + download fallback.
 const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "text/markdown",
   "text/x-markdown",
@@ -130,6 +138,18 @@ const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
   "image/gif",
   "image/webp",
   "image/svg+xml",
+  "video/mp4",
+  "video/webm",
+  "video/ogg",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/ogg",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/webm",
+  "audio/flac",
+  "audio/aac",
 ]);
 
 /** Test-only export so unit tests can reason about the allowlist without
