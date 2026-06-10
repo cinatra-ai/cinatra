@@ -1517,8 +1517,8 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 // and <non-terminal>→failed edges so user-cancel works from any live state).
 const LEGAL_TRANSITIONS = new Set<`${AgentRunStatus}->${AgentRunStatus}`>([
   // Setup / dispatch
-  "pending_input->queued",        // run-actions.ts: triggerAgentRun, createAndTriggerRun(x2), scheduleAgentRun
-  "queued->pending_input",        // run-actions.ts: compensation reverts (x4)
+  "pending_input->queued",        // run-actions.ts: triggerAgentRun, createAndTriggerRunCore, startDevChildPreviewRun
+  "queued->pending_input",        // run-actions.ts: compensation reverts (x2)
   "queued->pending_approval",     // execution.ts: setup-interrupt loop (per-field + grouped)
   "queued->running",              // execution.ts: dispatch CAS (langgraph + external branches)
   "pending_approval->running",    // langgraph-execution.ts:89 (resume CAS)
