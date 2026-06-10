@@ -5,15 +5,11 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 48,
-      "files": 33
+      "edges": 46,
+      "files": 32
     }
   },
   "edges": {
-    "src/app/api/chat/runner.ts": [
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/google-calendar-connector"
-    ],
     "src/app/api/nango/connect/session/route.ts": [
       "@cinatra-ai/nango-connector"
     ],

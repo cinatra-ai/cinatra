@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 89,
-      "keys": 145,
-      "occurrences": 185
+      "files": 86,
+      "keys": 135,
+      "occurrences": 173
     },
     "mechanical": {
       "files": 4,
@@ -39,9 +39,6 @@
     "packages/agents/src/list-curator-scrape-schema-renderer.tsx :: package :: @cinatra-ai/list-curator-agent": 1,
     "packages/agents/src/list-picker-actions.ts :: package :: @cinatra-ai/crm-connector": 1,
     "packages/agents/src/list-picker-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
-    "packages/agents/src/mcp/handlers.ts :: package :: @cinatra-ai/code-reviewer-agent": 1,
-    "packages/agents/src/mcp/handlers.ts :: package :: @cinatra-ai/planner-agent": 1,
-    "packages/agents/src/mcp/handlers.ts :: package :: @cinatra-ai/security-reviewer-agent": 1,
     "packages/agents/src/mcp/schemas.ts :: package :: @cinatra-ai/email-recipient-selection-agent": 1,
     "packages/agents/src/mcp/schemas.ts :: package :: @cinatra-ai/email-test-delivery-agent": 1,
     "packages/agents/src/mcp/schemas.ts :: package :: @cinatra-ai/media-feed-lister-agent": 1,
@@ -118,13 +115,6 @@
     "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
     "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
     "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,
-    "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/author-agent": 1,
-    "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/code-reviewer-agent": 1,
-    "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/planner-agent": 1,
-    "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/security-reviewer-agent": 1,
-    "src/app/api/chat/runner.ts :: package :: @cinatra-ai/gmail-connector": 1,
-    "src/app/api/chat/runner.ts :: package :: @cinatra-ai/google-calendar-connector": 1,
-    "src/app/api/chat/runner.ts :: path :: extensions/cinatra-ai/assistant-skills": 3,
     "src/app/api/nango/connect/session/route.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/app/api/nango/connections/save/route.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/app/api/nango/webhook/route.ts :: package :: @cinatra-ai/nango-connector": 1,

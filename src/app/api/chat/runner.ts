@@ -3,27 +3,33 @@ import "server-only";
 // Transport-connector DI registrations live in
 // `@/lib/register-transport-connectors` and run on import via the
 // instrumentation entrypoint. In dev (Turbopack) the chat route bundle
-// can compile separately, instantiating its own copy of
-// `@cinatra-ai/gmail-connector` (and siblings) without the registration
-// side-effect — `getGmailDeps()` then throws "host runtime deps not
-// registered" mid-chat. Importing the registrar here side-effects into
-// the chat bundle's module graph too, so every transport connector is
-// wired before `buildUserContext` reads them.
+// can compile separately, instantiating its own copy of each transport
+// connector package without the registration side-effect — the connector's
+// deps resolution then throws "host runtime deps not registered" mid-chat.
+// Importing the registrar here side-effects into the chat bundle's module
+// graph too, so the host DI deps every transport connector needs are wired
+// before the chat turn runs (chat-user-context providers register through
+// each connector's own `register(ctx)` via the serverEntry loader). This is
+// a core->core edge: the registrar is host code, no extension is named here.
 import "@/lib/register-transport-connectors";
 
 import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
 import {
   detectExplicitDispatchDirective,
   detectExplicitDispatchPackage,
 } from "./explicit-dispatch";
 import { serverSideExplicitDispatch } from "./explicit-dispatch-server";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
-import { ensureInstalledSkillsRegistered } from "@cinatra-ai/skills";
+import {
+  ensureInstalledSkillsRegistered,
+  resolveInstalledSkillSourcePath,
+} from "@cinatra-ai/skills";
 import { getAllStagedByType } from "@/lib/wizard-staging-store";
 import { getAllManifests } from "@/lib/wizard-manifest-registry";
-import { getStoredGmailSendAsAddresses } from "@cinatra-ai/gmail-connector";
-import { getStoredGoogleCalendarAppointments } from "@cinatra-ai/google-calendar-connector";
+// Connector-owned user-context sections (gmail send-as addresses, calendar
+// appointment schedules, ...) resolve through the chat-user-context capability
+// registry — the runner no longer imports any connector package by name.
+import { buildChatUserContextSections } from "./chat-user-context";
 import {
   hasConfiguredLlmRuntime,
   stream,
@@ -95,11 +101,6 @@ const CHAT_SKILL_SLUGS = [
 ] as const;
 const CHAT_SYSTEM_SKILL_ID = "@cinatra-ai/chat:chat-assistant-core";
 const CHAT_SKILL_IDS = CHAT_SKILL_SLUGS.map((slug) => `@cinatra-ai/chat:${slug}`);
-const chatSkillMdCandidates = (slug: string) => [
-  path.resolve(process.cwd(), `extensions/cinatra-ai/assistant-skills/skills/${slug}/SKILL.md`),
-  path.resolve(__dirname, `../../../../extensions/cinatra-ai/assistant-skills/skills/${slug}/SKILL.md`),
-  path.resolve(__dirname, `../../../../../extensions/cinatra-ai/assistant-skills/skills/${slug}/SKILL.md`),
-];
 // Raised 16 → 24 because the three-tier discovery flow
 // (agent_source_list + agent_list + extensions_search + agent_registry_list
 // + agent_source_read of a golden example) adds ~5 calls before authoring
@@ -206,15 +207,19 @@ function deriveResultLabel(toolName: string, result: string, serverLabel?: strin
   return `${resourceLabel} ${verb}`.trim();
 }
 
-function loadSystemPromptFromDisk(): string | null {
+// Catalog-unavailable fallback: read the chat core SKILL.md straight from
+// disk. The on-disk location is resolved through the skills layer's generic
+// install/uninstall-aware extension scan (the same substrate that registers
+// the chat sub-skills), NOT through hardcoded extension path candidates — the
+// runner names only the stable `@cinatra-ai/chat:` skill id (an auth-policy
+// data-contract id), never the providing extension package or its disk path.
+async function loadSystemPromptFromDisk(): Promise<string | null> {
   try {
-    const candidates = chatSkillMdCandidates("chat-assistant-core");
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        const raw = readFileSync(candidate, "utf8");
-        const stripped = raw.replace(/^---[\s\S]*?\n---\n/, "");
-        return stripped.trim();
-      }
+    const skillMdPath = await resolveInstalledSkillSourcePath(CHAT_SYSTEM_SKILL_ID);
+    if (skillMdPath && existsSync(skillMdPath)) {
+      const raw = readFileSync(skillMdPath, "utf8");
+      const stripped = raw.replace(/^---[\s\S]*?\n---\n/, "");
+      return stripped.trim();
     }
   } catch (err) {
     console.warn("[chat] disk SKILL.md fallback failed:", (err as Error).message);
@@ -242,7 +247,9 @@ function loadSystemPromptFromDisk(): string | null {
 // call every turn. The `@cinatra-ai/chat:` skill-id namespace (an auth-policy
 // boundary) is preserved by the resolver's `assistant-skills` special-case in
 // `deriveSkillRegistration`. The disk SKILL.md prompt fallback
-// (`loadSystemPromptFromDisk`) is intentionally left untouched.
+// (`loadSystemPromptFromDisk`) resolves its path through the same generic
+// scan (`resolveInstalledSkillSourcePath`), so it carries no extension path
+// candidates either.
 function ensureChatSkillRegistered(): Promise<void> {
   return ensureInstalledSkillsRegistered(CHAT_SKILL_IDS);
 }
@@ -259,7 +266,7 @@ async function loadSystemPrompt(): Promise<string> {
   } catch {
     // fall through
   }
-  const onDisk = loadSystemPromptFromDisk();
+  const onDisk = await loadSystemPromptFromDisk();
   if (onDisk) return onDisk;
   return [
     "You are the Cinatra AI assistant.",
@@ -268,20 +275,11 @@ async function loadSystemPrompt(): Promise<string> {
   ].join("\n");
 }
 
-function buildUserContext(userId?: string): string {
-  const sections: string[] = [];
-
-  const gmail = getStoredGmailSendAsAddresses(userId);
-  if (gmail.aliases.length > 0) {
-    const list = gmail.aliases.map((a) => a.displayName ? `${a.displayName} <${a.email}>` : a.email).join(", ");
-    sections.push(`Gmail send-as addresses: ${list}`);
-  }
-
-  const cal = getStoredGoogleCalendarAppointments(userId);
-  if (cal.appointments.length > 0) {
-    const list = cal.appointments.map((a) => `"${a.title}" (${a.bookingPageUrl})`).join(", ");
-    sections.push(`Appointment schedules: ${list}`);
-  }
+async function buildUserContext(userId?: string): Promise<string> {
+  // Connector-owned sections first (send-as addresses, appointment
+  // schedules, ...) — resolved registration-driven from the chat-user-context
+  // capability registry, deterministically ordered and failure-isolated.
+  const sections: string[] = await buildChatUserContextSections(userId);
 
   for (const manifest of getAllManifests()) {
     if (!manifest.wizard) continue;
@@ -433,7 +431,7 @@ export async function runChatTurn(args: RunChatTurnArgs): Promise<void> {
   ];
 
   const systemPrompt = await loadSystemPrompt();
-  const userContext = buildUserContext(userId);
+  const userContext = await buildUserContext(userId);
   // Surface the operator's instance namespace + freeze state to the LLM so
   // it stops emitting hardcoded `@cinatra/<slug>` package names on non-cinatra
   // deployments. The chat SKILL.md uses `@<vendor>/<slug>` as a placeholder;
