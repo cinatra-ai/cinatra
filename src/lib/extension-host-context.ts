@@ -587,7 +587,13 @@ export function createExtensionProbeHostContext(
     registerProvider: (capability, provider) => {
       recorder.capabilityProviders.push({ capability, provider });
     },
-    resolveProviders: () => [],
+    // READS stay REAL (matching the probe contract: read ports are real, only
+    // registration sinks are inert). A register(ctx) that resolves a host
+    // service capability at activation — e.g. the email/blog facades fail loud
+    // when their `@cinatra-ai/host:*` routing service is absent — must see the
+    // same live providers the real activation would, or the hot-update
+    // pre-verify would falsely reject a valid digest with `register-threw`.
+    resolveProviders: (capability) => resolveCapabilityProviders(capability),
   };
   const probeObjects: ExtensionHostContext["objects"] = granted.has("objects")
     ? {

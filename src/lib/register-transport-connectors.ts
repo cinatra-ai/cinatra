@@ -2,16 +2,25 @@ import "server-only";
 
 // Host-side DI wiring for transport connector packages.
 //
-// Each transport connector exports `register<X>Connector(deps)` as its boot
-// contract. Host calls each at boot with concrete impls of the host's runtime
-// infra (`@/lib/database`, `@/lib/nango`, etc.). After this module loads, every
-// transport connector's functions resolve their deps from the injected
-// singleton — `@/lib/*` is no longer reachable from the connector package
-// itself.
+// Transport-registration cutover: the transport connectors that ship a `serverEntry`
+// (`register(ctx)`) now BIND THEMSELVES at activation — the StaticBundleLoader
+// (dev) / RuntimePackageLoader (prod package store) discovers them from the
+// generated manifest and calls `register(ctx)`; each connector adapts the
+// PER-CONCERN host services this module registers into the generic capability
+// registry (legacy connector-config KV, the Nango connection-storage surface,
+// google-oauth runtime, the secrets codec, the external-MCP registry, MCP
+// self-client headers, instance identity) into its own deps slot. Adding or
+// removing such a transport extension requires NO edit to this file — the
+// manifest + capability registry carry the wiring.
+//
+// What REMAINS statically wired here (explicitly out of the the transport-registration cutover scope):
+// the LLM-platform connectors (openai, anthropic — LLM-provider extensibility
+// is deferred), and the drupal/wordpress content-editor MCP connectors. Their
+// `register<X>Connector(deps)` calls stay until their own cutover phase.
 //
 // This file is imported at boot from `src/instrumentation.node.ts` (Next.js
-// runtime entry) and the BullMQ worker entrypoint. Adding a new transport
-// connector? Add its `register<X>Connector(...)` call here.
+// runtime entry) and the BullMQ worker boot path. `@/lib/*` is no longer
+// reachable from any connector package itself.
 
 import {
   readConnectorConfigFromDatabase,
@@ -32,7 +41,8 @@ import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { createNotification } from "@/lib/notifications";
-import { requireAuthSession } from "@/lib/auth-session";
+import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
+import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
 import {
   getGoogleOAuthStatus,
   googleApiFetch,
@@ -45,14 +55,6 @@ import {
   updateOpenAILoggingEnabled,
 } from "@/lib/openai-connection-store";
 
-import { registerGmailConnector } from "@cinatra-ai/gmail-connector";
-import { registerResendConnector } from "@cinatra-ai/resend-connector";
-import { registerGoogleCalendarConnector } from "@cinatra-ai/google-calendar-connector";
-import { registerApolloConnector } from "@cinatra-ai/apollo-connector";
-import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
-import { registerApifyConnector } from "@cinatra-ai/apify-connector";
-import { registerGeminiConnector } from "@cinatra-ai/gemini-connector";
-import { registerTailscaleConnector } from "@cinatra-ai/tailscale-connector";
 // Import the registrar from the LEAF `deps` subpath (not the package index): the
 // openai index transitively pulls @cinatra-ai/skills → @cinatra-ai/agents, which
 // (via agents server-actions) imports THIS module — a cycle that left the
@@ -61,14 +63,15 @@ import { registerTailscaleConnector } from "@cinatra-ai/tailscale-connector";
 import { registerOpenAIConnector } from "@cinatra-ai/openai-connector/deps";
 // anthropic-connector binds its host deps. Imported from the
 // package INDEX (re-exports `registerAnthropicConnector` from its leaf `./deps`) —
-// anthropic's index has no boot cycle, so this matches gemini/apify and resolves in
-// every context (the bare `/deps` subpath of a `"type":"module"` package does not).
+// anthropic's index has no boot cycle, so this matches the drupal/wordpress
+// imports and resolves in every context (the bare `/deps` subpath of a
+// `"type":"module"` package does not).
 import { registerAnthropicConnector } from "@cinatra-ai/anthropic-connector";
 import { registerDrupalConnector } from "@cinatra-ai/drupal-mcp-connector";
 import { registerWordPressConnector } from "@cinatra-ai/wordpress-mcp-connector";
-// Nango connection-storage surface — host-owned impls bound into the Nango
-// consumer connectors' `deps` slots so those connectors carry no
-// `@cinatra-ai/nango-connector` sibling code import (SDK-only decouple).
+// Nango connection-storage surface — host-owned impls bound into the remaining
+// statically-wired connectors' `deps` slots AND published once as the
+// per-concern nango host-service capability the serverEntry transports resolve.
 import {
   buildBearerAuthHeaderFromNango,
   CINATRA_NANGO_CONNECTION_IDS,
@@ -108,131 +111,73 @@ import { getDrupalAPISettings } from "@/lib/drupal-api";
 
 let _registered = false;
 
+/** The provider key the host registers its per-concern service impls under in
+ * the capability registry. Not an extension package name (reserved host id). */
+const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
+
 /**
- * Wire host-runtime impls into every transport connector. Idempotent — safe
- * to call from multiple boot paths; only the first call wires (subsequent
- * calls no-op so test setups that re-import this module don't double-bind).
- *
- * DI scope:
- * - Host-internal modules behind `@/` (`@/lib/database`,
- *   `@/lib/mcp-pagination`, `@/lib/external-mcp-registry`) → injected here.
- * - Workspace packages (`@cinatra-ai/nango-connector`,
- *   `@cinatra-ai/google-oauth-connection`) → imported directly inside each
- *   connector (legitimate cross-workspace dep, no DI needed).
+ * Publish the per-concern host connector services into the capability
+ * registry. A serverEntry transport's `register(ctx)` resolves exactly the
+ * concerns it needs via `ctx.capabilities.resolveProviders(<id>)` and adapts
+ * them into its own deps slot — the host names no transport here.
+ */
+function registerHostConnectorServices(): void {
+  const svc = HOST_CONNECTOR_SERVICE_CAPABILITIES;
+  const register = (capability: string, impl: unknown) =>
+    registerCapabilityProvider(capability, { packageName: HOST_PROVIDER_PACKAGE, impl });
+
+  register(svc.connectorConfig, {
+    read: readConnectorConfigFromDatabase,
+    write: writeConnectorConfigToDatabase,
+  });
+
+  register(svc.nangoConnectionStorage, {
+    isConfigured: isNangoConfigured,
+    getStatus: getNangoStatus,
+    getFrontendConfig: getNangoFrontendConfig,
+    getPrimarySavedConnection: getPrimarySavedNangoConnection,
+    ensureIntegration: ensureNangoIntegration,
+    ensureConnectorIntegration: ensureNangoConnectorIntegration,
+    importConnection: importNangoConnection,
+    getCredentials: getNangoCredentials,
+    saveConnectionRecord: saveNangoConnectionRecord,
+    removeConnectionRecord: removeNangoConnectionRecord,
+    deleteConnection: deleteNangoConnection,
+    clearConnectionRecords: clearNangoConnectionRecords,
+    buildBearerAuthHeader: buildBearerAuthHeaderFromNango,
+    providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
+    connectionIds: CINATRA_NANGO_CONNECTION_IDS,
+  });
+
+  register(svc.googleOAuth, {
+    getStatus: getGoogleOAuthStatus,
+    apiFetch: googleApiFetch,
+    refreshAccessTokenIfNeeded: refreshGoogleOAuthAccessTokenIfNeeded,
+  });
+
+  register(svc.secretsCodec, { encryptSecret, decryptSecret });
+
+  register(svc.externalMcpRegistry, {
+    upsertServer: upsertExternalMcpServer,
+    deleteServer: deleteExternalMcpServer,
+  });
+
+  register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
+
+  register(svc.instanceIdentity, { read: readInstanceIdentity });
+}
+
+/**
+ * Wire host-runtime impls into the remaining statically-bound connectors and
+ * publish the per-concern host services. Idempotent — safe to call from
+ * multiple boot paths; only the first call wires (subsequent calls no-op so
+ * test setups that re-import this module don't double-bind).
  */
 export function registerTransportConnectors(): void {
   if (_registered) return;
   _registered = true;
 
-  registerGmailConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    nango: {
-      getPrimarySavedConnection: getPrimarySavedNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-    },
-    oauth: {
-      getStatus: getGoogleOAuthStatus,
-      apiFetch: googleApiFetch,
-      refreshAccessTokenIfNeeded: refreshGoogleOAuthAccessTokenIfNeeded,
-    },
-    requireSessionUserId: async () => (await requireAuthSession()).user.id,
-  });
-
-  registerResendConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    encryptSecret,
-    decryptSecret,
-  });
-
-  registerGoogleCalendarConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    requireSessionUserId: async () => (await requireAuthSession()).user.id,
-  });
-
-  registerApolloConnector({
-    nango: {
-      isConfigured: isNangoConfigured,
-      getPrimarySavedConnection: getPrimarySavedNangoConnection,
-      ensureIntegration: ensureNangoIntegration,
-      // Apollo imports WITHOUT `connectorKey` (verified write-then-read-back),
-      // then saves the pointer explicitly — so the nested-key cast the other
-      // connectors need does not apply here.
-      importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      getCredentials: getNangoCredentials,
-      saveConnectionRecord: saveNangoConnectionRecord,
-      deleteConnection: deleteNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-      connectionIds: CINATRA_NANGO_CONNECTION_IDS,
-    },
-    emitUsage: emitUsageEvent,
-  });
-
-  registerApifyConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    upsertExternalMcpServer,
-    deleteExternalMcpServer,
-    nango: {
-      isConfigured: isNangoConfigured,
-      ensureConnectorIntegration: ensureNangoConnectorIntegration,
-      // The connector's structural deps type widens the nested `connectorKey` to
-      // `string`; the host owns the real `NangoConnectorKey` union and the
-      // connector only ever passes a valid key, so cast at this boundary.
-      importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      getCredentials: getNangoCredentials,
-      saveConnectionRecord: saveNangoConnectionRecord,
-      removeConnectionRecord: removeNangoConnectionRecord,
-      deleteConnection: deleteNangoConnection,
-      // Nango-vault bearer header for the connector's external-MCP toolbox.
-      buildBearerAuthHeader: buildBearerAuthHeaderFromNango,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-      connectionIds: CINATRA_NANGO_CONNECTION_IDS,
-    },
-  });
-
-  registerGeminiConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    buildAppMcpSelfClientHeaders,
-    nango: {
-      isConfigured: isNangoConfigured,
-      getPrimarySavedConnection: getPrimarySavedNangoConnection,
-      ensureIntegration: ensureNangoIntegration,
-      // Connector's structural deps type omits the nested `connectorKey`; the
-      // host owns the real NangoConnectorKey union (see the apify note above).
-      importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      getCredentials: getNangoCredentials,
-      saveConnectionRecord: saveNangoConnectionRecord,
-      deleteConnection: deleteNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-      connectionIds: CINATRA_NANGO_CONNECTION_IDS,
-    },
-  });
-
-  registerTailscaleConnector({
-    readConnectorConfigFromDatabase,
-    writeConnectorConfigToDatabase,
-    readInstanceIdentity,
-    nango: {
-      isConfigured: isNangoConfigured,
-      ensureIntegration: ensureNangoIntegration,
-      // See the apify note above — cast the widened nested `connectorKey`.
-      importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      getCredentials: getNangoCredentials,
-      deleteConnection: deleteNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-    },
-  });
+  registerHostConnectorServices();
 
   registerOpenAIConnector({
     readConnectorConfigFromDatabase,
@@ -256,7 +201,8 @@ export function registerTransportConnectors(): void {
       getCredentials: getNangoCredentials,
       ensureIntegration: ensureNangoIntegration,
       // Connector's structural deps type widens the nested `connectorKey`; the
-      // host owns the real NangoConnectorKey union (see the gemini/apify note).
+      // host owns the real NangoConnectorKey union and the connector only ever
+      // passes a valid key, so cast at this boundary.
       importConnection: (input) =>
         importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
       deleteConnection: deleteNangoConnection,
@@ -290,7 +236,7 @@ export function registerTransportConnectors(): void {
       getCredentials: getNangoCredentials,
       ensureIntegration: ensureNangoIntegration,
       // Connector's structural deps type widens the nested `connectorKey`; the host
-      // owns the real NangoConnectorKey union (same note as openai/gemini/apify).
+      // owns the real NangoConnectorKey union (same note as the openai block).
       importConnection: (input) =>
         importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
       deleteConnection: deleteNangoConnection,
@@ -342,22 +288,23 @@ export function registerTransportConnectors(): void {
 
   // Observability parity: agent extensions log per-package via
   // `[cinatra:extensions:agent]`; skill extensions log a scan summary via
-  // flat `[cinatra:extensions]`. Connectors need a boot confirmation so they
-  // do not appear unloaded. This line confirms the host-DI bindings ran.
+  // flat `[cinatra:extensions]`. This line confirms the host-DI bindings +
+  // host-service publication ran. The serverEntry transports log their own
+  // activation through the loader result lines.
   //
   // Dev-gated for parity: the skill/agent scans are CINATRA_RUNTIME_MODE-gated,
   // so prod/worker boots stay lean (the bindings still run; only the
   // confirmation line is suppressed).
   if (process.env.CINATRA_RUNTIME_MODE === "development") {
     console.info(
-      "[register-transport-connectors] wired host-DI connector bindings: " +
-        "gmail, resend, google-calendar, apollo, drupal, wordpress " +
-        "(github/linkedin/youtube/media-feeds/openai/gemini/claude/nango/" +
-        "tailscale/apify/email need no DI — domain-lib or workspace-compiled).",
+      "[register-transport-connectors] wired host-DI bindings (openai/claude/" +
+        "drupal/wordpress) + published per-concern host connector services " +
+        "(serverEntry transports self-bind at activation).",
     );
   }
 }
 
 // Auto-register on module load. Boot paths import this module at startup;
-// the moment it loads, transport connectors are usable.
+// the moment it loads, the statically-bound connectors are usable and the
+// host services are resolvable by activating serverEntry transports.
 registerTransportConnectors();

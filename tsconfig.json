@@ -194,6 +194,7 @@
       "@cinatra-ai/crm-connector/mcp-module": ["./extensions/cinatra-ai/crm-connector/src/mcp/module.ts"],
       "@cinatra-ai/crm-connector/widgets": ["./extensions/cinatra-ai/crm-connector/src/widgets/index.ts"],
       "@cinatra-ai/twenty-connector": ["./extensions/cinatra-ai/twenty-connector/src/index.ts"],
+      "@cinatra-ai/twenty-connector/register": ["./extensions/cinatra-ai/twenty-connector/src/register.ts"],
       "@cinatra-ai/twenty-connector/mcp-module": ["./extensions/cinatra-ai/twenty-connector/src/mcp/module.ts"],
       "@cinatra-ai/twenty-connector/setup-page": ["./extensions/cinatra-ai/twenty-connector/src/setup-page.tsx"],
       "@cinatra-ai/gmail-connector": ["./extensions/cinatra-ai/gmail-connector/src/index.ts"],

@@ -34,6 +34,43 @@ function registry(): Map<string, CrmConnector> {
   return map;
 }
 
+// Optional EXTERNAL resolver — the host binds this ONCE at boot to surface CRM
+// providers that self-registered through the generic capability registry
+// (a provider extension's serverEntry doing
+// `ctx.capabilities.registerProvider("crm-provider", …)`). Pulled LAZILY on
+// every lookup so teardown (capability invalidation) is reflected immediately
+// and activation order never matters. Anchored on globalThis for the same
+// cross-compilation reason as the Map above.
+const CRM_PROVIDER_EXTERNAL_RESOLVER_KEY = Symbol.for(
+  "@cinatra-ai/sdk-extensions:crm-provider-external-resolver/v1",
+);
+type ResolverHolder = {
+  [k: symbol]: (() => readonly CrmConnector[]) | null | undefined;
+};
+const _resolverHolder = globalThis as unknown as ResolverHolder;
+
+/**
+ * Bind (or clear) the host's lazy external CRM-provider resolver. Called once
+ * at boot by the host bootstrap; the resolver typically reads the host
+ * capability registry and structurally validates each impl before returning it.
+ */
+export function setCrmProviderExternalResolver(
+  resolver: (() => readonly CrmConnector[]) | null,
+): void {
+  _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY] = resolver;
+}
+
+function externalProviders(): readonly CrmConnector[] {
+  const resolver = _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY];
+  if (!resolver) return [];
+  try {
+    return resolver();
+  } catch {
+    // A broken external resolver must never take down direct registrations.
+    return [];
+  }
+}
+
 /**
  * Register a concrete CRM provider. Called at boot (host
  * register-crm-providers.ts → the provider extension's registerXProvider()).
@@ -43,17 +80,28 @@ export function registerCrmProvider(provider: CrmConnector): void {
   registry().set(provider.providerId, provider);
 }
 
-/** Resolve a registered provider by id, or null if none is registered. */
+/**
+ * Resolve a registered provider by id, or null if none is registered. Direct
+ * registrations win over external (capability-resolved) providers with the
+ * same providerId.
+ */
 export function lookupCrmProvider(providerId: string): CrmConnector | null {
-  return registry().get(providerId) ?? null;
+  const direct = registry().get(providerId);
+  if (direct) return direct;
+  return externalProviders().find((p) => p.providerId === providerId) ?? null;
 }
 
 /** All registered providers (boot diagnostics / multi-provider resolution). */
 export function listCrmProviders(): CrmConnector[] {
-  return Array.from(registry().values());
+  const out = new Map<string, CrmConnector>();
+  for (const p of externalProviders()) out.set(p.providerId, p);
+  // Direct registrations override external ones with the same id.
+  for (const [id, p] of registry()) out.set(id, p);
+  return Array.from(out.values());
 }
 
 /** @internal test-only — clear the registry so a fresh wiring is required. */
 export function _resetCrmProviderRegistry(): void {
   registry().clear();
+  _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY] = null;
 }

@@ -203,7 +203,12 @@ describe("execution.ts — enrichment call sites", () => {
       type: "object",
       properties: { website: expect.objectContaining({ type: "string" }) },
     });
-    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({ userId: "user-a" });
+    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({
+      userId: "user-a",
+      // Transport-registration cutover: execution injects the host email-send capability resolver so the
+      // enricher resolves sender aliases registration-driven.
+      resolveEmailSendProviders: expect.any(Function),
+    });
     // onInterrupt receives the extracted inner property (with __enriched from deep spy).
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(onInterruptSpy.mock.calls[0]![0]).toMatchObject({ __enriched: true });
@@ -237,7 +242,12 @@ describe("execution.ts — enrichment call sites", () => {
     await runAgentBuilderExecutionJob({ runId: run.id }, "job-1");
 
     expect(enrichSpy).toHaveBeenCalledTimes(1);
-    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({ userId: "user-a" });
+    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({
+      userId: "user-a",
+      // Transport-registration cutover: execution injects the host email-send capability resolver so the
+      // enricher resolves sender aliases registration-driven.
+      resolveEmailSendProviders: expect.any(Function),
+    });
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(onInterruptSpy.mock.calls[0]![0]).toMatchObject({ __enriched: true });
   });
@@ -285,7 +295,12 @@ describe("execution.ts — enrichment call sites", () => {
     });
 
     expect(enrichSpy).toHaveBeenCalledTimes(1);
-    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({ userId: "user-a" });
+    expect((enrichSpy.mock.calls[0] as unknown[])[1]).toEqual({
+      userId: "user-a",
+      // Transport-registration cutover: execution injects the host email-send capability resolver so the
+      // enricher resolves sender aliases registration-driven.
+      resolveEmailSendProviders: expect.any(Function),
+    });
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     expect(onInterruptSpy.mock.calls[0]![0]).toMatchObject({ __enriched: true });
   });

@@ -43,10 +43,11 @@ import "@/lib/register-extension-mcp-oauth-client-store";
 // importing the nango-connector/agents stores by name (SDK-only decouple).
 import "@/lib/register-a2a-connection-provider";
 
-// Wire the email-connector facade at boot:
-// register every EmailConnector provider (gmail today) + configure host-
-// side routing + dev-mode override. After this loads, callers can call
-// sendEmailThroughSystem(msg) from @cinatra-ai/email-connector.
+// Publish the host-side email ROUTING services (sender-identity resolution,
+// dev-mode override, sent-email writer) behind the
+// `@cinatra-ai/host:email-routing` capability. The email facade extension
+// configures itself at serverEntry activation; concrete providers register
+// behind the `email-send` capability from their own serverEntry.
 import "@/lib/register-email-providers";
 // Bind the google-oauth connection provider (SDK globalThis DI slot) so the
 // google-oauth-connector's in-package setup page + save action can resolve the
@@ -67,23 +68,18 @@ import "@/lib/register-crm-request-actor";
 // pointer-repair worker paths resolve the slot too.
 import "@/lib/register-objects-provider";
 
-// Wire the crm-connector facade at boot:
-// registers every CrmConnector provider (twenty today) with the facade so
-// lookupCrmProvider("twenty") resolves. After this loads, callers can use
-// crmFacade.{contact,account,list}.* from @cinatra-ai/crm-connector.
+// Bind the SDK CRM provider registry's external resolver to the capability
+// registry so a CRM provider registered from an extension serverEntry
+// (`crm-provider` capability) resolves through lookupCrmProvider — the host
+// names no concrete CRM provider. (The social facade needs no host impls; it
+// configures itself at serverEntry activation over the `social-post`
+// capability.)
 import "@/lib/register-crm-providers";
 
-// Wire the social-media-connector facade at boot.
-// Auto-registers on import: configureSocialMediaSystem + registerSocialMediaConnector(linkedIn).
-// After this loads, callers can call publishSocialMediaPostThroughSystem(post)
-// from @cinatra-ai/social-media-connector.
-import "@/lib/register-social-providers";
-
-// Wire the blog-connector facade at boot.
-// Auto-registers on import: configureBlogSystem + registerBlogConnector(defaultBlogConnector).
-// After this loads, callers can call buildBlogDraftPayloadThroughSystem(input)
-// from @cinatra-ai/blog-connector. Bundled site connectors self-register via their
-// serverEntry into the facade (the SDK blog-connector provider slot).
+// Publish the host-side blog ROUTING services (`@cinatra-ai/host:blog-routing`)
+// and keep the SDK blog-connector slot bound (routing into the `blog-connector`
+// capability). The blog facade extension configures itself at serverEntry
+// activation.
 import "@/lib/register-blog-providers";
 
 export async function register() {
@@ -182,20 +178,22 @@ export async function register() {
     );
   }
 
-  // Prototype: run the StaticBundleLoader ALONGSIDE the legacy
-  // facade registrations imported above, proving the host can consume the
-  // generated manifest + activate a `register(ctx)`-shaped extension. ADDITIVE +
-  // dev-default-on (the legacy registration already ran at import; the loader's
-  // `capabilities` port dedupes by connectorId, so an already-registered provider
-  // is a logged no-op). Dev-only + kill-switchable; never blocks boot. A later
-  // cutover makes this the source of truth + drops the legacy path.
-  if (
-    process.env.CINATRA_RUNTIME_MODE === "development" &&
-    process.env.CINATRA_DISABLE_STATIC_BUNDLE_LOADER !== "true"
-  ) {
+  // The StaticBundleLoader (the BUNDLED half of "dual loaders, single
+  // activation"). Transport-registration cutover: no longer an additive dev-only prototype —
+  // the serverEntry transports' host wiring registers THROUGH activation
+  // (`register(ctx)` adapts the per-concern host services), so this loader IS
+  // the registration path for the workspace-compiled bundled extensions in
+  // EVERY runtime mode (the RuntimePackageLoader below stays the store half
+  // for live-installed packages; its registrations REPLACE same-key bundled
+  // ones, so an installed version wins). Failure isolation stays
+  // per-extension; the REQUIRED-set assertion below catches a silent miss.
+  // Kill-switchable.
+  const bootActivationResults: import("@cinatra-ai/sdk-extensions").ActivationResult[] = [];
+  if (process.env.CINATRA_DISABLE_STATIC_BUNDLE_LOADER !== "true") {
     try {
       const { loadStaticBundleExtensions } = await import("@/lib/static-bundle-loader");
       const results = await loadStaticBundleExtensions();
+      bootActivationResults.push(...results);
       if (results.length) {
         console.info(
           `[boot] StaticBundleLoader: ${results.length} result(s) — ` +
@@ -205,7 +203,7 @@ export async function register() {
         );
       }
     } catch (err) {
-      console.error("[boot] StaticBundleLoader failed (non-fatal, additive prototype):", err);
+      console.error("[boot] StaticBundleLoader failed (non-fatal per-extension; the required-set assertion below fails loud):", err);
     }
   }
 
@@ -247,6 +245,7 @@ export async function register() {
       const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
       const resolveInstallAnchor = await makeDefaultInstallAnchorResolver();
       const results = await loadRuntimePackageExtensions(undefined, { resolveInstallAnchor });
+      bootActivationResults.push(...results);
       if (results.length) {
         console.info(
           `[boot] RuntimePackageLoader: ${results.length} result(s) — ` +
@@ -258,6 +257,20 @@ export async function register() {
     } catch (err) {
       console.error("[boot] RuntimePackageLoader failed (non-fatal):", err);
     }
+  }
+
+  // Loader hardening for the registration cutover: after BOTH boot loaders ran, assert every REQUIRED
+  // serverEntry extension actually activated. The serverEntry transports'
+  // host wiring now happens AT activation, so a silent activation miss means
+  // dead transports (e.g. platform mail) — console.error always; THROWS
+  // outside development (deliberately NOT wrapped in a swallow — a prod boot
+  // must not come up half-wired). Kill-switchable for emergency operability:
+  // CINATRA_DISABLE_REQUIRED_ACTIVATION_ASSERT=true.
+  {
+    const { assertRequiredExtensionActivations } = await import(
+      "@/lib/required-extension-activation"
+    );
+    assertRequiredExtensionActivations(bootActivationResults);
   }
 
   // (Extension migrations run INSIDE loadRuntimePackageExtensions above —

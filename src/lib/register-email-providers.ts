@@ -1,31 +1,31 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Host-side wiring for @cinatra-ai/email-connector.
+// Host-side email ROUTING services.
 //
-// Imported at boot to:
-//   1. Configure the email-connector facade with host-side routing +
-//      dev-mode override impls (host knows the database; facade does not).
-//   2. Register every concrete EmailConnector provider (gmail today;
-//      future smtp/ses/outlook providers add their registerEmailConnector
-//      calls here).
+// Transport-registration cutover: this module no longer imports any email provider package.
+// Concrete providers (gmail, resend, future smtp/ses) register themselves
+// behind the `email-send` capability from their own `serverEntry`
+// (`register(ctx)` → `ctx.capabilities.registerProvider("email-send", …)`),
+// and the email facade extension configures itself at activation by resolving
+// the HOST-side routing impls this module publishes under the
+// `@cinatra-ai/host:email-routing` capability:
 //
-// After this module loads, `sendEmailThroughSystem(msg)` from any caller
-// (workspace package or host) routes via the registered provider with
-// dev-mode override applied centrally.
+//   1. the sender-identity objects lookup chain (host knows the objects layer
+//      + actor model; the facade does not),
+//   2. the dev-mode recipient override (host knows the connector-config KV),
+//   3. the best-effort sent-email object writer.
+//
+// The final routing step — "fall back to the first registered provider" —
+// lives in the facade itself (it owns the registry), so `resolveConnectorId`
+// here returns null when no explicit/identity step resolves.
 // ---------------------------------------------------------------------------
 
-import {
-  configureEmailSystem,
-  registerEmailConnector,
-  emailConnectorRegistry,
-  type EmailSystemMessage,
-} from "@cinatra-ai/email-connector";
-import { gmailEmailConnector } from "@cinatra-ai/gmail-connector";
-import { resendEmailConnector, getResendStatus } from "@cinatra-ai/resend-connector";
 import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { createSessionObjectsClient } from "@cinatra-ai/objects";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
+import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
+import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
 
 /**
  * These sender-identity reads run on a system/registration path with no user
@@ -102,7 +102,7 @@ async function findSenderIdentityFor(opts: {
     // that routes to the org/first-registered connector is operationally
     // significant; surface it.
     console.warn(
-      `[email-connector] sender-identity auto-resolve failed for ${opts.ownerLevel}:${opts.ownerId} ` +
+      `[email-routing] sender-identity auto-resolve failed for ${opts.ownerLevel}:${opts.ownerId} ` +
         `(falling through to next routing step): ${err instanceof Error ? err.message : String(err)}`,
     );
     return null;
@@ -143,12 +143,12 @@ async function resolveSenderIdentityById(
 }
 
 /**
- * Routing chain:
+ * Routing chain (the facade applies its own first-registered fallback after a
+ * null return here):
  *   1. Explicit `connectorId` if caller passed one (no DB / object lookup)
  *   2. Explicit `senderIdentityId` → `objects_get` → identity's connectorId
- *   3. `userId` → first @cinatra-ai/email:sender-identity object owned by user
- *   4. `orgId` → first @cinatra-ai/email:sender-identity object owned by org
- *   5. Fallback → first registered connector
+ *   3. `userId` → first sender-identity object owned by user
+ *   4. `orgId` → first sender-identity object owned by org
  *
  * Fall-through semantics:
  *   - Step 2 (EXPLICIT senderIdentityId): genuine not-found → fall through
@@ -156,14 +156,13 @@ async function resolveSenderIdentityById(
  *     explicitly-chosen identity to a fallback connector).
  *   - Steps 3-4 (AUTO-resolve user/org): any failure → warn + fall through
  *     (the caller did not pick these; best-effort is correct here).
- *   - Step 5: first registered connector from the registry.
  */
 async function resolveConnectorId(opts: {
   explicitConnectorId?: string;
   senderIdentityId?: string;
   userId?: string;
   orgId?: string;
-}): Promise<string> {
+}): Promise<string | null> {
   if (opts.explicitConnectorId) {
     return opts.explicitConnectorId;
   }
@@ -174,30 +173,24 @@ async function resolveConnectorId(opts: {
   }
 
   if (opts.userId) {
-    const userId = await findSenderIdentityFor({
+    const userIdentity = await findSenderIdentityFor({
       ownerLevel: "user",
       ownerId: opts.userId,
       orgId: opts.orgId,
     });
-    if (userId?.connectorId) return userId.connectorId;
+    if (userIdentity?.connectorId) return userIdentity.connectorId;
   }
 
   if (opts.orgId) {
-    const orgId = await findSenderIdentityFor({
+    const orgIdentity = await findSenderIdentityFor({
       ownerLevel: "organization",
       ownerId: opts.orgId,
       orgId: opts.orgId,
     });
-    if (orgId?.connectorId) return orgId.connectorId;
+    if (orgIdentity?.connectorId) return orgIdentity.connectorId;
   }
 
-  const first = emailConnectorRegistry.listAll()[0];
-  if (!first) {
-    throw new Error(
-      "No email connector is registered. Add a `registerEmailConnector(...)` call in src/lib/register-email-providers.ts.",
-    );
-  }
-  return first.definition.connectorId;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +199,13 @@ async function resolveConnectorId(opts: {
 
 const DEV_OVERRIDE_KEY = "email-system-development";
 
-function applyDevModeOverride(msg: EmailSystemMessage): EmailSystemMessage {
+type DevOverridableMessage = {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+};
+
+function applyDevModeOverride<M extends DevOverridableMessage>(msg: M): M {
   const settings = readConnectorConfigFromDatabase<{
     developmentModeEnabled?: boolean;
     overrideRecipientEmail?: string;
@@ -225,22 +224,35 @@ function applyDevModeOverride(msg: EmailSystemMessage): EmailSystemMessage {
 // Sent-email object writer
 // ---------------------------------------------------------------------------
 
+type SentEmailReceiptLike = {
+  providerId: string;
+  providerMessageId: string;
+  providerThreadId?: string;
+  internetMessageId?: string;
+  sentAt: string;
+};
+
+type SentEmailMessageLike = {
+  fromEmail?: string;
+  to: string[];
+  subject: string;
+};
+
 /**
- * Best-effort write of `@cinatra-ai/email:sent-email` after a successful
+ * Best-effort write of the sent-email object after a successful
  * provider.send(). The facade calls this and swallows errors — the email
  * has already been delivered by this point, so failure here only loses
  * the semantic object record (the email_send_events audit row is still
  * written by the orchestration layer in trigger-email-send-use-cases.ts).
  *
- * Identity key on the @cinatra-ai/email:sent-email object type is
- * `idempotencyKey`. We synthesize it as
- * `email-send:<providerId>:<providerMessageId>` — a provider message id is
- * unique within a provider, so this is stable + collision-free across
- * recipients. The key does not include recipient and does not need to.
+ * Identity key on the sent-email object type is `idempotencyKey`,
+ * synthesized as `email-send:<providerId>:<providerMessageId>` — a provider
+ * message id is unique within a provider, so this is stable + collision-free
+ * across recipients. The key does not include recipient and does not need to.
  */
 async function saveSentEmailObject(input: {
-  msg: import("@cinatra-ai/email-connector").EmailSystemMessage;
-  receipt: import("@cinatra-ai/email-connector").EmailSendReceipt;
+  msg: unknown;
+  receipt: unknown;
   routing: {
     connectorId: string;
     senderIdentityId?: string;
@@ -253,27 +265,29 @@ async function saveSentEmailObject(input: {
   // objects-layer failure here surface as a thrown error to whatever invoked the
   // facade (the email was already delivered by the time this runs).
   try {
+    const msg = input.msg as SentEmailMessageLike;
+    const receipt = input.receipt as SentEmailReceiptLike;
     const { objectsClient } = await import("@cinatra-ai/objects");
     const idempotencyKey =
-      `email-send:${input.receipt.providerId}:${input.receipt.providerMessageId}`;
+      `email-send:${receipt.providerId}:${receipt.providerMessageId}`;
     await objectsClient.save({
       typeHint: "@cinatra-ai/email:sent-email",
       rawData: {
         auditId: idempotencyKey, // synthetic — standalone email_send path has no real audit row
         idempotencyKey,
         connectorId: input.routing.connectorId,
-        fromEmail: input.msg.fromEmail,
-        toEmail: input.msg.to[0] ?? "",
-        subject: input.msg.subject,
-        providerMessageId: input.receipt.providerMessageId,
-        providerThreadId: input.receipt.providerThreadId,
-        internetMessageId: input.receipt.internetMessageId,
-        sentAt: input.receipt.sentAt,
+        fromEmail: msg.fromEmail,
+        toEmail: msg.to[0] ?? "",
+        subject: msg.subject,
+        providerMessageId: receipt.providerMessageId,
+        providerThreadId: receipt.providerThreadId,
+        internetMessageId: receipt.internetMessageId,
+        sentAt: receipt.sentAt,
       },
     });
   } catch (err) {
     console.warn(
-      `[email-connector] sent-email object write failed (send already succeeded): ${err instanceof Error ? err.message : String(err)}`,
+      `[email-routing] sent-email object write failed (send already succeeded): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -288,40 +302,17 @@ export function registerEmailProviders(): void {
   if (_registered) return;
   _registered = true;
 
-  configureEmailSystem({
-    resolveConnectorId,
-    applyDevModeOverride,
-    saveSentEmailObject,
+  registerCapabilityProvider(HOST_CONNECTOR_SERVICE_CAPABILITIES.emailRouting, {
+    packageName: "@cinatra-ai/host",
+    impl: {
+      resolveConnectorId,
+      applyDevModeOverride,
+      saveSentEmailObject,
+    },
   });
-
-  registerEmailConnector(gmailEmailConnector);
-  registerEmailConnector(resendEmailConnector);
-
-  // Future providers register here:
-  // registerEmailConnector(smtpEmailConnector);
-  // registerEmailConnector(sesEmailConnector);
-
-  // Boot summary (non-secret): confirms the registry actually populated and
-  // surfaces why platform mail is/isn't routable in production. All imports in
-  // THIS module use the "@cinatra-ai/*" package specifier (same as
-  // email-system.ts), so the registry read here is the SAME singleton instance
-  // the send path consumes — no dual-instance hazard. Logs registered connector
-  // IDs + Resend instance status/detail + env-key presence (boolean only).
-  try {
-    const ids = emailConnectorRegistry.listAll().map((c) => c.definition.connectorId);
-    const rs = getResendStatus();
-    console.log(
-      `[register-email-providers] boot: registry=[${ids.join(", ")}] ` +
-        `resendStatus=${rs.status}${rs.detail ? ` (${rs.detail})` : ""} ` +
-        `envKey=${Boolean(process.env.RESEND_API_KEY)}`,
-    );
-  } catch (err) {
-    console.warn(
-      `[register-email-providers] boot summary failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
 }
 
 // Auto-register on module load — boot paths import this module at startup
-// (via instrumentation.node.ts or worker entrypoints).
+// (via instrumentation.node.ts or worker entrypoints). The email facade
+// extension consumes the routing impls at its serverEntry activation.
 registerEmailProviders();

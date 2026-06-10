@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 60,
-      "files": 39
+      "edges": 50,
+      "files": 34
     }
   },
   "edges": {
@@ -22,7 +22,6 @@
       "@cinatra-ai/nango-connector"
     ],
     "src/app/api/nango/connections/save/route.ts": [
-      "@cinatra-ai/gmail-connector",
       "@cinatra-ai/nango-connector"
     ],
     "src/app/api/nango/webhook/route.ts": [
@@ -89,10 +88,6 @@
     "src/lib/drupal-api.ts": [
       "@cinatra-ai/nango-connector"
     ],
-    "src/lib/email-system.ts": [
-      "@cinatra-ai/email-connector",
-      "@cinatra-ai/gmail-connector"
-    ],
     "src/lib/host-required-packages.ts": [
       "@cinatra-ai/openai-connector"
     ],
@@ -115,21 +110,6 @@
     ],
     "src/lib/register-all-object-types.ts": [
       "@cinatra-ai/crm-connector"
-    ],
-    "src/lib/register-blog-providers.ts": [
-      "@cinatra-ai/blog-connector"
-    ],
-    "src/lib/register-crm-providers.ts": [
-      "@cinatra-ai/twenty-connector"
-    ],
-    "src/lib/register-email-providers.ts": [
-      "@cinatra-ai/email-connector",
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/resend-connector"
-    ],
-    "src/lib/register-social-providers.ts": [
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/social-media-connector"
     ],
     "src/lib/registry-credentials.ts": [
       "@cinatra-ai/nango-connector"

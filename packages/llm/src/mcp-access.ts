@@ -13,6 +13,7 @@ import {
   sanitizeExternalMcpToolboxTools,
 } from "@/lib/external-mcp-toolbox-loader.server";
 import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
+import { buildAllToolboxProviderTools } from "@/lib/llm-toolbox-providers";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
 
 // Re-export so existing callers don't need to change their imports.
@@ -324,6 +325,10 @@ export type BuildExternalMcpServerToolsOptions = {
  * requires no edit here. Builds run concurrently per extension; results are
  * flattened in the manifest's deterministic (packageName-sorted) order.
  *
+ * REGISTRATION-DRIVEN (appended): every `llm-toolbox` capability provider a
+ * serverEntry registered at activation contributes its tools as well — the
+ * registry call sites collapse duplicate server labels first-wins.
+ *
  * Returns an empty array on failure or when no external MCP servers are
  * configured — never throws. The caller is responsible for prepending the
  * cinatra self-MCP (via buildLlmMcpServerTool) so that the MCP injection
@@ -337,12 +342,20 @@ export async function buildExternalMcpServerTools(
     const slugs = Object.values(STATIC_EXTENSION_MANIFEST)
       .filter((record) => record.providesExternalMcpToolbox)
       .map((record) => record.packageName.split("/")[1]);
-    const toolLists = await Promise.all(
-      slugs.map((slug) =>
-        buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true),
+    const [manifestToolLists, capabilityTools] = await Promise.all([
+      Promise.all(
+        slugs.map((slug) =>
+          buildToolboxToolsForSlug(slug, provider, options.skipRegistryFallback === true),
+        ),
       ),
-    );
-    return toolLists.flat();
+      // Registration-driven: every `llm-toolbox` capability provider (apify
+      // today) ALSO contributes its tools to the legacy always-inject set. A
+      // connector resolving through BOTH paths (manifest marker + capability
+      // provider) yields identical tool definitions; the registry call sites
+      // collapse duplicate server labels first-wins.
+      buildAllToolboxProviderTools(provider),
+    ]);
+    return [...manifestToolLists.flat(), ...capabilityTools];
   } catch (err) {
     console.warn(
       `[mcp-access] buildExternalMcpServerTools(${provider}): failed — returning empty list`,

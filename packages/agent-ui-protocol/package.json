@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@cinatra-ai/a2a": "workspace:*",
-    "@cinatra-ai/gmail-connector": "workspace:*",
+    "@cinatra-ai/sdk-extensions": "workspace:*",
     "ioredis": "^5.10.1"
   },
   "devDependencies": {
