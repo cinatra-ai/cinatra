@@ -1,93 +1,35 @@
 "use server";
 
 // File-level "use server" directive so these server actions can be imported
-// by client components (import-form.tsx, export-button.tsx) safely.
+// by client components (import-form.tsx) safely.
+//
+// Agent ZIP format (app upload path — import-form.tsx, the MCP import
+// handler, and the startup ensure-agent-package builders all produce or
+// consume this shape):
+//   - agent.json    : an OAS Flow document (component_type: "Flow"). DB
+//                     column values (inputSchema, approvalPolicy, prompt,
+//                     packageName, ...) are DERIVED by compileOasAgentJson,
+//                     never read as literal fields.
+//   - manifest.json : { version: 1, ... } — importAgentTemplateCore rejects
+//                     any other version.
+//   - package.json  : optional sibling carrying packageName/packageVersion +
+//                     cinatra.agentDependencies.
+// The round trip is guarded by the manifest-version check plus full OAS
+// compilation/validation on import. (A former exportAgentTemplate server
+// action emitted a different, incompatible envelope — componentType "Agent"
+// with metadata.cinatra.formatVersion 2 — that the importer could never
+// parse; it had no callers and was removed. The CLI's `cinatra agent
+// export/import` pair speaks its own self-consistent legacy formatVersion-1
+// shape and is intentionally NOT covered by this contract.)
 
 import { createHash, randomUUID } from "node:crypto";
-import { redirect } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
-  readAgentTemplateById,
   createAgentTemplate,
   createAgentVersion,
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
-import { createZipBuffer } from "./zip-helpers";
 import { importAgentTemplateCore } from "./import-agent-core";
-
-// ---------------------------------------------------------------------------
-// exportAgentTemplate
-// ---------------------------------------------------------------------------
-
-export async function exportAgentTemplate(
-  templateId: string,
-): Promise<{ zipBase64: string; fileName: string }> {
-  await requireAdminSession();
-
-  const template = await readAgentTemplateById(templateId);
-  if (!template) throw new Error("Agent template not found");
-
-  const exportedAt = new Date().toISOString();
-
-  // Guard: compiledPlan must be an array in the ZIP (legacy DB rows may have stored it
-  // as a double-encoded string if they were imported from an older ZIP format).
-  const compiledPlanSafe = Array.isArray(template.compiledPlan)
-    ? template.compiledPlan
-    : (typeof template.compiledPlan === "string"
-        ? (() => { try { const p = JSON.parse(template.compiledPlan as unknown as string); return Array.isArray(p) ? p : []; } catch { return []; } })()
-        : []);
-
-  // Strip UI-only __ fields from inputSchema before export — agent.json is a public capability contract
-  const inputSchemaCopy = JSON.parse(JSON.stringify(template.inputSchema)) as Record<string, unknown>;
-  const props = inputSchemaCopy.properties as Record<string, unknown> | undefined;
-  if (props) {
-    for (const key of Object.keys(props)) {
-      if (key.startsWith("__")) delete props[key];
-    }
-  }
-  if (Array.isArray(inputSchemaCopy.required)) {
-    inputSchemaCopy.required = (inputSchemaCopy.required as string[]).filter((k: string) => !k.startsWith("__"));
-  }
-
-  const agentJson = JSON.stringify({
-    componentType: "Agent",
-    id: template.id,
-    name: template.name,
-    description: template.description ?? null,
-    sourceNl: template.sourceNl,
-    status: template.status,
-    exportedAt,
-    metadata: {
-      cinatra: {
-        formatVersion: 2,
-        packageName: template.packageName ?? undefined,
-        packageVersion: template.packageVersion ?? undefined,
-        executionProvider: template.executionProvider,
-        type: template.type ?? "leaf",
-        compiledPlan: compiledPlanSafe,
-        inputSchema: inputSchemaCopy,
-        outputSchema: template.outputSchema ?? null,
-        approvalPolicy: template.approvalPolicy,
-        taskSpec: template.taskSpec ?? null,
-        hitlScreens: template.hitlScreens ?? [],
-      },
-    },
-  }, null, 2);
-  const manifestJson = JSON.stringify({ version: 1, exportedAt, cinatra: "agent-builder-v1" }, null, 2);
-
-  const zipBuf = createZipBuffer([
-    { name: "agent.json", content: agentJson },
-    { name: "manifest.json", content: manifestJson },
-  ]);
-
-  const slug = template.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const dateStr = exportedAt.slice(0, 10).replace(/-/g, "");
-  return { zipBase64: zipBuf.toString("base64"), fileName: `cinatra-agent-${slug}-${dateStr}.zip` };
-}
-
-// ---------------------------------------------------------------------------
-// importAgentTemplate
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // createLocalAgentTemplateVersion — shared creation path for ZIP imports and

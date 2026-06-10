@@ -174,7 +174,6 @@ export {
 // Auth-neutral approval helper for external /api/a2a/resume callers.
 export { approveReviewTaskInternal } from "./review-task-actions";
 export {
-  exportAgentTemplate,
   importAgentTemplate,
   createLocalAgentTemplateVersion,
   type LocalAgentTemplateSeed,
