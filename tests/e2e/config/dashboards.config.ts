@@ -38,9 +38,10 @@ export default defineConfig({
   // project pre-compiles `/v1/meta` via APIRequestContext, but the
   // browser's `POST /v1/load` may still trigger a compile if Next.js
   // doesn't reuse the meta-path compilation. The pre-armed
-  // `waitForResponse` in agents.spec.ts has its own 60s budget; this
-  // 120s ceiling leaves room for chrome render + portlet mount + final
-  // SVG + table assertions on top.
+  // `waitForResponse` in agents.spec.ts has its own budget
+  // (HYDRATION_TIMEOUT_MS + 30s — 60s on CI, where hydration is sub-5s
+  // against the prebuilt server); this 120s ceiling leaves room for
+  // chrome render + portlet mount + final SVG + table assertions on top.
   timeout: 120_000,
   expect: { timeout: 10_000 },
   retries: process.env.CI ? 2 : 0,

@@ -18,7 +18,7 @@
  */
 import { test, expect, type ConsoleMessage, type Request } from "@playwright/test";
 
-import { waitForHydration } from "../config/hydration";
+import { HYDRATION_TIMEOUT_MS, waitForHydration } from "../config/hydration";
 
 // Module-level capture buffers so the afterEach hook can read what each
 // test recorded. Cleared per-test via the beforeEach hook.
@@ -127,12 +127,14 @@ test.describe("/agents live-verify", () => {
     // is attached before any response could possibly fire. Otherwise a
     // fast cube response (post-warmup) can arrive between page.goto
     // resolving and waitForResponse attaching, and the wait silently
-    // misses it. Generous 60s timeout to absorb residual dev-mode
-    // compile lag if the cube-route warm-up in auth.setup.ts step 7
-    // didn't fully pre-compile the load path.
+    // misses it. Budget = hydration budget + 30s headroom: the DC only
+    // issues `/v1/load` after `hydrateRoot` commits, so this waiter must
+    // outlive the worst-case hydration wait below (#82) plus residual
+    // dev-mode compile lag if the cube-route warm-up in auth.setup.ts
+    // step 7 didn't fully pre-compile the load path.
     const cubeLoadResponse = page.waitForResponse(
       (r) => r.url().includes("/api/dashboards/cubejs-api/v1/load") && r.status() === 200,
-      { timeout: 60_000 },
+      { timeout: HYDRATION_TIMEOUT_MS + 30_000 },
     );
 
     // 1 + 2: route resolution.
