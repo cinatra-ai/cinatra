@@ -1,7 +1,7 @@
 "use client";
 import { useState, type ComponentProps } from "react";
-import { DashboardGrid } from "drizzle-cube/client";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
+import { ComposedDashboard } from "./composed-dashboard";
 
 const EMPTY_CONFIG: DashboardConfigV1_1 = {
   portlets: [],
@@ -13,13 +13,13 @@ export function DeskDashboardGrid() {
   const [config, setConfig] = useState<DashboardConfigV1_1>(EMPTY_CONFIG);
 
   return (
-    <DashboardGrid
-      config={config as unknown as ComponentProps<typeof DashboardGrid>["config"]}
+    <ComposedDashboard
+      config={config as unknown as ComponentProps<typeof ComposedDashboard>["config"]}
       editable
       onConfigChange={
         ((next: unknown) => {
           setConfig(next as DashboardConfigV1_1);
-        }) as ComponentProps<typeof DashboardGrid>["onConfigChange"]
+        }) as ComponentProps<typeof ComposedDashboard>["onConfigChange"]
       }
       onSave={async (next) => {
         setConfig(next as unknown as DashboardConfigV1_1);
