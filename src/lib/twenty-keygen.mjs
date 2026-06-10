@@ -3,8 +3,10 @@
 // and probing whether a bearer actually authenticates. Node built-ins only
 // (no app/DB/Nango imports) so it is safe to import from BOTH the Next.js dev
 // runtime (src/lib/dev-auto-setup.ts) AND the plain-node bootstrap proof
-// (scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs) — single source of truth for the
-// brittle Twenty CLI command + JWT shape, per the convergence decision.
+// (scripts/twenty-bootstrap/twenty-bootstrap-proof.mjs in the twenty-connector
+// repo, which imports this file from its core checkout) — single source of
+// truth for the brittle Twenty CLI command + JWT shape, per the convergence
+// decision.
 
 // Reuse contract for callers: a probe of "ok"/"unreachable" means keep the
 // existing key; only a definite "unauthorized" (401/403) — or a missing

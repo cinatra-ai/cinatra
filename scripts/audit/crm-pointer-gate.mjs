@@ -19,7 +19,9 @@
  *   - `extensions/cinatra-ai/crm-connector/**`     (the facade)
  *   - `extensions/cinatra-ai/twenty-connector/**`  (the provider)
  *   - `packages/objects/src/resolvers/crm-resolver.ts` (hydration)
- *   - `scripts/twenty-bootstrap/**`                            (bootstrap + cutover)
+ *     (the Twenty bootstrap + cutover tooling moved to the twenty-connector
+ *     repo and is covered by the extensions/cinatra-ai/twenty-connector/
+ *     clone-back entry above)
  *   - `packages/entity-{accounts,contacts}/**` and `packages/lists/**`
  *     during their deprecation-stub window
  *
@@ -100,7 +102,6 @@ const ALLOWLIST_PREFIXES = [
   "extensions/cinatra-ai/crm-connector/",
   "extensions/cinatra-ai/twenty-connector/",
   "packages/objects/src/resolvers/crm-resolver.ts",
-  "scripts/twenty-bootstrap/",
   "scripts/audit/crm-pointer-gate.mjs",
   "scripts/audit/__tests__/crm-pointer-gate.test.mjs",
   "scripts/audit/__tests__/fixtures/crm-pointer-gate/",

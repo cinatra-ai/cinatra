@@ -260,13 +260,9 @@ export default defineConfig({
       "src/components/**/*.test.{ts,tsx}",
       "src/app/configuration/permissions/**/*.test.{ts,tsx}",
       "scripts/audit/__tests__/**/*.test.{ts,mjs}",
-      "scripts/twenty-bootstrap/__tests__/**/*.test.{ts,mjs}",
       // Vendor Anthropic skills fetcher safety tests (spawn-based; no network;
       // CI-postinstall env safety).
       "scripts/__tests__/**/*.test.{ts,mjs}",
-      // WordPress/Drupal assistant plugin↔core contract tests (schema +
-      // fixture conformance; no live services).
-      "tests/contracts/**/*.test.{ts,mts}",
       // CLI dev-marketplace plugin sync (dependency-injected git; no real git).
       "packages/cli/src/__tests__/**/*.test.{ts,mjs}",
       // SDK ABI contract: dependency-normalization shim (pure; no IO).

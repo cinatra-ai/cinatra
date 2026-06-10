@@ -2,19 +2,26 @@ import "server-only";
 
 import { Validator } from "@cfworker/json-schema";
 
-import authInitSchema from "../../contracts/wp-drupal-assistant/v1/auth-init.schema.json";
+import authInitSchema from "./wp-drupal-auth-init.schema.json";
 
 // ---------------------------------------------------------------------------
 // Versioned plugin↔core contract for the WordPress plugin / Drupal module
-// assistant. The JSON Schemas + golden fixtures in
-// contracts/wp-drupal-assistant/v1/ are the source of truth; this module is the
-// cinatra-side runtime validator that pins the wire contract so a plugin built
-// against one version fails loud (admin-visible) rather than silently when the
-// contract later changes.
+// assistant. The canonical contract (JSON Schemas + golden fixtures) lives in
+// the cinatra-ai/wordpress-assistant-connector repo under
+// contracts/wp-drupal-assistant/v1/ (shared with the Drupal assistant
+// connector); this module is the cinatra-side runtime validator that pins the
+// wire contract so a plugin built against one version fails loud
+// (admin-visible) rather than silently when the contract later changes.
 //
-// Forward-compatibility rule: to add a v2 contract, add
-// contracts/wp-drupal-assistant/v2/ and extend SUPPORTED_CONTRACT_VERSIONS +
-// the per-version validator map below. The validator CORE does not change.
+// The co-located wp-drupal-auth-init.schema.json is core's ENFORCED COPY of
+// the canonical v1 auth-init schema (bundled, no runtime file I/O). The
+// contract repo's CI deep-compares this copy against the canonical schema, so
+// the two cannot drift silently — update both sides together.
+//
+// Forward-compatibility rule: to add a v2 contract, add v2 schemas in the
+// contract repo, update the enforced copy here, and extend
+// SUPPORTED_CONTRACT_VERSIONS + the per-version validator map below. The
+// validator CORE does not change.
 // ---------------------------------------------------------------------------
 
 export const CURRENT_CONTRACT_VERSION = "v1" as const;
