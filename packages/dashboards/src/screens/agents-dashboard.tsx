@@ -1,8 +1,9 @@
 /**
  * /agents screen.
  *
- * Renders a real `<DashboardGrid>` from drizzle-cube/client themed to
- * shadcn tokens. The page is a server component that:
+ * Renders a real drizzle-cube dashboard (composable pieces + the
+ * Cinatra-owned toolbar) themed to shadcn tokens. The page is a server
+ * component that:
  *
  *   1. Resolves the better-auth session -> Cinatra SecurityContext.
  *      Unauthenticated callers get a redirect to /sign-in.
@@ -112,11 +113,11 @@ export async function AgentsDashboardPage() {
         divider={false}
         actions={
           /* Server-rendered SSR fallback so primary CTAs stay reachable
-             when the polish hook has not yet (or never) injected the
-             equivalent anchors into the DC toolbar. `dashboard-theme.css`
-             hides this block via a `body:has(...)` rule that keys on the
-             LIVE presence of an injected `[data-cinatra-page-action]`
-             anchor — see `use-dashboard-toolbar-polish.ts`. */
+             until the client-side dashboard toolbar hydrates (it renders
+             the same actions — see `cinatra-dashboard-toolbar.tsx`).
+             `dashboard-theme.css` hides this block via a `body:has(...)`
+             rule that keys on the LIVE presence of the toolbar's
+             `[data-cinatra-page-action]` anchor. */
           <div
             data-cinatra-page-actions-fallback="agents"
             className="flex flex-wrap items-center gap-2"

@@ -2,7 +2,8 @@
 /**
  * AgentsDashboardGrid.
  *
- * Client-side wrapper around drizzle-cube's `<DashboardGrid>`. The save
+ * Client-side wrapper around `<ComposedDashboard>` (drizzle-cube's
+ * composable dashboard pieces + the Cinatra-owned toolbar). The save
  * handler wraps a Next Server Action so persistence runs server-side
  * through the mutation service's `upsertDashboardConfig`.
  *
@@ -30,17 +31,19 @@
  *
  * Why local React state for `config`
  * ----------------------------------
- * On edit-mode exit, DC's inner `Dr` re-derives the visible grid from
- * `props.config`. If we pass `initialConfig` straight through, that prop
- * never moves after first render and the visible layout snaps back to the
- * pre-edit baseline even though the DB already holds the new layout.
- * Holding a local mirror that we advance inside the coordinator's
- * `onCommit` keeps the prop in sync with persisted state across edit-mode
- * toggles.
+ * On edit-mode exit, DC re-derives the visible grid from `props.config`.
+ * If we pass `initialConfig` straight through, that prop never moves after
+ * first render and the visible layout snaps back to the pre-edit baseline
+ * even though the DB already holds the new layout. Holding a local mirror
+ * that we advance inside the coordinator's `onCommit` keeps the prop in
+ * sync with persisted state across edit-mode toggles.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DashboardGrid } from "drizzle-cube/client";
 import type { DashboardConfigV1_1 } from "../store/dashboard-config";
+import {
+  ComposedDashboard,
+  type ComposedDashboardProps,
+} from "./composed-dashboard";
 import {
   createAutoSaveCoordinator,
   type AutoSaveCoordinator,
@@ -130,13 +133,13 @@ export function AgentsDashboardGrid({
   }
 
   return (
-    <DashboardGrid
-      config={config as unknown as React.ComponentProps<typeof DashboardGrid>["config"]}
+    <ComposedDashboard
+      config={config as unknown as ComposedDashboardProps["config"]}
       editable={editable}
       onConfigChange={
         ((next: unknown) => {
           schedule(next as DashboardConfigV1_1);
-        }) as React.ComponentProps<typeof DashboardGrid>["onConfigChange"]
+        }) as ComposedDashboardProps["onConfigChange"]
       }
       onSave={async (next) => {
         const coord = coordinatorRef.current;

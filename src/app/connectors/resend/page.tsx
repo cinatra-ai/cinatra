@@ -9,7 +9,12 @@ import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { requireAdminSession } from "@/lib/auth-session";
-import { getResendConfig, getResendStatus } from "@cinatra-ai/resend-connector";
+// The connector's server module resolves through the generated extension
+// manifest — this mount names no connector package. Resend ships no React
+// setup/settings page (its surface is this host mount), so the module's
+// config/status exports are the data contract consumed here.
+import { requireConnectorModule } from "@/lib/connector-modules.server";
+import type { ResendConnectorModule } from "./resend-connector-module";
 
 import { saveResendConfigAction, sendResendTestEmailAction } from "./actions";
 
@@ -28,6 +33,8 @@ export default async function ResendConnectorPage(props: { searchParams?: Promis
   const notice = pick(sp.notice);
   const error = pick(sp.error);
 
+  const { getResendConfig, getResendStatus } =
+    await requireConnectorModule<ResendConnectorModule>("resend-connector");
   const config = getResendConfig();
   const status = getResendStatus();
   const statusBadge =
