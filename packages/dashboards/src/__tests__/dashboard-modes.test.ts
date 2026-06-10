@@ -8,18 +8,20 @@ import { describe, it, expect } from "vitest";
  * toggle). Editable index dashboards enable `["grid","rows"]`; the personal
  * dashboard and read-only per-entity detail dashboards keep the default.
  *
- * Source assertions (no browser): drizzle-cube renders the toggle only when
- * `allowedModes.length > 1`, so the wiring IS the behaviour — visual placement
- * is verified in a browser and the floating-overlay placement is
- * documented as deferred in `dashboard-theme.css`.
+ * Source assertions (no browser): the host toolbar renders the toggle only
+ * when `allowedModes.length > 1` (behaviour covered by
+ * `components/__tests__/cinatra-dashboard-toolbar.test.tsx`), so the wiring
+ * IS the behaviour. The value flows shell → `<CubeProvider>` →
+ * `useCubeFeatures()` → `<DashboardProvider>`; the second leg lives in
+ * `composed-dashboard.tsx` and is asserted below.
  */
 const SRC = join(__dirname, "..");
 const SHELL = readFileSync(
   join(SRC, "components", "dashboards-client-shell.tsx"),
   "utf-8",
 );
-const THEME_CSS = readFileSync(
-  join(SRC, "components", "dashboard-theme.css"),
+const COMPOSED = readFileSync(
+  join(SRC, "components", "composed-dashboard.tsx"),
   "utf-8",
 );
 const read = (p: string) => readFileSync(join(SRC, "screens", p), "utf-8");
@@ -58,17 +60,18 @@ describe("DashboardsClientShell dashboardModes prop", () => {
   });
 });
 
-describe("Grid/Rows toggle → second-level sub-toolbar placement", () => {
-  it("positions the in-toolbar toggle into the sub-toolbar strip + right-aligns the gap-3 controls", () => {
-    const idx = THEME_CSS.indexOf("Grid/Rows layout-mode toggle");
-    expect(idx, "placement comment block must exist").toBeGreaterThan(-1);
-    const block = THEME_CSS.slice(idx, idx + 2400);
-    // the toggle wrapper is absolutely positioned into the reserved bottom strip
-    expect(block).toMatch(/position:\s*absolute/);
-    // the gap-3 sub-toolbar controls right-align so they clear the left-anchored toggle
-    expect(block).toMatch(/justify-content:\s*flex-end/);
-    // Cinatra-side CSS only — must target the in-toolbar toggle, never the
-    // body-portaled floating overlay copy (no reparenting / no global override).
-    expect(block).toMatch(/dc\\:gap-4/);
+describe("dashboardModes reaches the dashboard state machine", () => {
+  it("ComposedDashboard forwards the CubeProvider value into DashboardProvider", () => {
+    // The shell's declared modes only gate the toggle if the composition
+    // reads them back out of the cube context and hands them to the
+    // provider — a directly-mounted provider would otherwise fall back to
+    // upstream's permissive ['rows','grid'] default. Match the actual call
+    // site (destructure + JSX forward), not prose in comments. The runtime
+    // proof (toggle gated by the shell's modes) lives in
+    // `components/__tests__/composed-dashboard.test.tsx`.
+    expect(COMPOSED).toMatch(
+      /const\s*\{\s*dashboardModes\s*\}\s*=\s*useCubeFeatures\(\)/,
+    );
+    expect(COMPOSED).toMatch(/dashboardModes=\{dashboardModes\}/);
   });
 });
