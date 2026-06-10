@@ -136,13 +136,15 @@ export function buildWorkflowAgentTaskExecutor(): Executor {
         workflowTaskId: prov.workflowTaskId,
       });
 
-      // Enqueue only when THIS dispatch inserted the run. An idempotent hit
-      // (run.id !== runId) was already enqueued by the prior dispatch; the
-      // worker's queued→running CAS guards any double-enqueue regardless. We use
-      // softPreflight because the delegated reconciler has no live session actor —
-      // a missing/unconfigured connector then surfaces as a run failure at
-      // execution (captured by retry/dead-letter), not a hard enqueue block.
-      if (run.id === runId) {
+      // Enqueue when THIS dispatch inserted the run, OR when an idempotent hit
+      // (run.id !== runId) is still `queued` — the prior dispatch may have
+      // crashed between createAgentRun and enqueueAgentRun, and the lease-based
+      // re-dispatch must repair that gap or the child run polls as queued
+      // forever. The worker's queued→running CAS guards any double-enqueue. We
+      // use softPreflight because the delegated reconciler has no live session
+      // actor — a missing/unconfigured connector then surfaces as a run failure
+      // at execution (captured by retry/dead-letter), not a hard enqueue block.
+      if (run.id === runId || run.status === "queued") {
         await enqueueAgentRun(
           { runId: run.id },
           { connectorDependencies: template.connectorDependencies, softPreflight: true },

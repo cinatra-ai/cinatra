@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "../db";
-import { workflow, workflowTask, workflowEvent, workflowApproval, workflowTaskAttempt } from "../schema";
+import { workflow, workflowTask, workflowEvent, workflowApproval, workflowTaskAttempt, workflowDispatchLease } from "../schema";
 import { reconstructSpec } from "../store";
 import { validateStart } from "../spec";
 import { assertTransition } from "../state/transitions";
@@ -202,6 +202,9 @@ export async function cancelWorkflow(workflowId: string, deps: LifecycleDeps = {
       .update(workflowApproval)
       .set({ invalidatedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(workflowApproval.workflowId, workflowId), eq(workflowApproval.status, "pending")));
+    // Tidiness: no dispatch can outlive a cancelled workflow — clear its
+    // dispatch leases (a dropped in-flight outcome would otherwise strand one).
+    await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, workflowId));
     await tx.insert(workflowEvent).values({
       id: id("wevent"),
       workflowId,

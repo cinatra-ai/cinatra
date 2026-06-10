@@ -3,7 +3,7 @@ import { releaseWorkflowsSchemaTables } from "../schema";
 import * as publicSurface from "../index";
 
 describe("release-workflows schema", () => {
-  it("declares all 9 workflow tables", () => {
+  it("declares all 10 workflow tables", () => {
     const names = Object.keys(releaseWorkflowsSchemaTables).sort();
     expect(names).toEqual(
       [
@@ -11,6 +11,7 @@ describe("release-workflows schema", () => {
         "workflowApproval",
         "workflowArtifact",
         "workflowDependency",
+        "workflowDispatchLease",
         "workflowEvent",
         "workflowGate",
         "workflowTask",

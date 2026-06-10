@@ -22,14 +22,23 @@ export const ENGINE_OPS = {
   /** Crash recovery: an instantaneous (non-agent, non-manual) executor left
    *  `running` longer than this crashed mid-dispatch → reset for re-claim. */
   crashRecoveryMs: 2 * 60_000,
+  /** Durable dispatch lease: a claimed dispatch holds a lease for this long;
+   *  the in-flight dispatcher heartbeat-extends it. A lease that lapses
+   *  without an outcome marks the dispatcher dead → the task is reclaimable. */
+  dispatchLeaseTtlMs: 2 * 60_000,
+  /** How often the in-flight dispatcher extends its lease (well under the TTL
+   *  so a healthy-but-slow dispatch is never reclaimed). */
+  dispatchLeaseHeartbeatMs: 30_000,
 } as const;
 
 /** Executor types whose dispatch is instantaneous + idempotent — safe to
  *  re-claim after a crash mid-dispatch. agent_task/manual legitimately stay
- *  `running` (manual awaits a human; an agent_task awaits its child run). A
- *  agent_task whose dispatch crashed before recording a child run id is NOT
- *  auto-recovered — that needs a durable dispatch lease to distinguish a crash
- *  from a slow in-flight dispatch; `findStuckTasks` surfaces it meanwhile. */
+ *  `running` (manual awaits a human; an agent_task awaits its child run). An
+ *  agent_task whose dispatch crashed before recording a child run id is
+ *  recovered via the durable dispatch lease: the claim tx acquires a
+ *  heartbeat-extended lease, so an EXPIRED lease distinguishes a crashed
+ *  dispatcher from a slow in-flight dispatch and the reconciler re-dispatches
+ *  the SAME attempt under its original idempotency key (see claimReadyTasks). */
 export const INSTANTANEOUS_EXECUTOR_TYPES = new Set(["checkpoint", "approval", "wait", "timer", "notification"]);
 
 /** Exponential backoff for a retry attempt (attemptNo is 1-based). */
