@@ -1,5 +1,5 @@
-// Static-bundle lifecycle seeding (the manifest-completeness half of the P707
-// lifecycle-correctness contract). The seeder ensures ONE platform-scoped
+// Static-bundle lifecycle seeding (the manifest-completeness half of the
+// static-bundle lifecycle-correctness contract). The seeder ensures ONE platform-scoped
 // ANCHOR row per bundled serverEntry package so the loader's strict allow-list
 // can read "no row" as retirement — and it must NEVER resurrect an operator's
 // archive/uninstall decision.

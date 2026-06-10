@@ -1,4 +1,4 @@
-// Static-bundle lifecycle correctness (P707, IOC-34/IOC-35).
+// Static-bundle lifecycle correctness (IOC-34/IOC-35).
 //
 // Covers the three cooperating pieces that make bundled `serverEntry`
 // extensions lifecycle-correct end-to-end, without a DB:
