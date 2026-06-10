@@ -1,6 +1,12 @@
 import { eq, notInArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+// SQL-TEXT-ONLY driver (cinatra#104): the pg-proxy driver builds queries
+// without importing `pg`. Turbopack externalizes `pg` via dynamic `import()`
+// (esm_import), which would make this module — and every static importer up
+// to database.ts — an ASYNC module, breaking the codebase's synchronous
+// `require()` composition (see src/lib/postgres-config.ts). Code that needs
+// a REAL pg connection lives in src/lib/extension-destinations-store.ts.
+// Enforced by src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
 
@@ -25,7 +31,10 @@ type TableName =
   | "record_activities"
   | "chat_threads";
 
-function createStoreTables(schemaName: string) {
+// Exported ONLY for src/lib/extension-destinations-store.ts (the table
+// definitions are shared with the real-connection credential store). Treat
+// as internal everywhere else — use the build*Query helpers below.
+export function createStoreTables(schemaName: string) {
   const schema = pgSchema(schemaName);
 
   return {
@@ -111,31 +120,6 @@ function createStoreTables(schemaName: string) {
 
 type StoreTables = ReturnType<typeof createStoreTables>;
 
-// ---------------------------------------------------------------------------
-// Real DB connection for extension_destinations async read/write.
-// Uses a lazy-singleton Pool keyed by schema name (mirrors agents/src/db.ts).
-// The query-builder (getStore below) uses drizzle({ } as never) for SQL text
-// construction; this pool is only used by readDestinationCredential /
-// writeDestinationCredential which require actual execution.
-// ---------------------------------------------------------------------------
-declare global {
-  var __cinatraDestCredPool: Pool | undefined;
-}
-
-function getDestCredPool(): Pool {
-  if (globalThis.__cinatraDestCredPool) return globalThis.__cinatraDestCredPool;
-  const connectionString = process.env.SUPABASE_DB_URL;
-  if (!connectionString) {
-    throw new Error("SUPABASE_DB_URL is required for destination credential store");
-  }
-  const pool = new Pool({ connectionString });
-  pool.on("error", (err) => {
-    console.error("[drizzle-store] pg pool idle client error:", err.message);
-  });
-  globalThis.__cinatraDestCredPool = pool;
-  return pool;
-}
-
 const storeCache = new Map<string, { db: ReturnType<typeof drizzle>; tables: StoreTables }>();
 
 function getStore(schemaName: string) {
@@ -145,7 +129,14 @@ function getStore(schemaName: string) {
   }
 
   const tables = createStoreTables(schemaName);
-  const db = drizzle({} as never);
+  // pg-proxy remote callback. Queries built here are only ever `.toSQL()`'d
+  // (see toQueryInput) and executed via runPostgresQueriesSync; nothing may
+  // execute through the driver itself.
+  const db = drizzle(async () => {
+    throw new Error(
+      "drizzle-store is a SQL-text builder; execute queries via runPostgresQueriesSync",
+    );
+  });
   const store = { db, tables };
   storeCache.set(schemaName, store);
   return store;
@@ -4226,103 +4217,6 @@ export function buildDeleteRowsNotInQuery(
 // This function produces a parameterized INSERT that database.ts runs via
 // runPostgresQueriesSync (same pattern as all other write helpers in this file).
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Destination credential store read/write helpers.
-// Uses a real Pool connection (getDestCredPool) for async execution.
-// AAD binding: callers use "destination.<id>.publish-token" /
-//   "destination.<id>.read-token" when calling decryptSecret/encryptSecret.
-// ---------------------------------------------------------------------------
-
-export type ExtensionDestinationRow = {
-  id: string;
-  label: string;
-  registryUrl: string;
-  tokenCiphertext: string;
-  tokenIv: string;
-  tokenAlgo: string;
-  readTokenCiphertext: string | null;
-  readTokenIv: string | null;
-};
-
-/**
- * Reads the destination credential row by id.
- * Returns null when no row matches.
- *
- * Caller MUST run `requireAdminSession()` before calling this function.
- * Caller MUST call `decryptSecret(row, aad: "destination.<id>.publish-token")` on
- * the returned ciphertext.
- */
-export async function readDestinationCredential(
-  destinationId: string,
-): Promise<ExtensionDestinationRow | null> {
-  const schemaName = process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra";
-  const tables = createStoreTables(schemaName);
-  const db = drizzle(getDestCredPool(), { schema: {} });
-  const rows = await db
-    .select()
-    .from(tables.extension_destinations)
-    .where(eq(tables.extension_destinations.id, destinationId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-  return {
-    id: row.id,
-    label: row.label,
-    registryUrl: row.registryUrl,
-    tokenCiphertext: row.tokenCiphertext,
-    tokenIv: row.tokenIv,
-    tokenAlgo: row.tokenAlgo,
-    readTokenCiphertext: row.readTokenCiphertext ?? null,
-    readTokenIv: row.readTokenIv ?? null,
-  };
-}
-
-/**
- * Upserts (insert-or-update) a destination credential row.
- * Token ciphertexts MUST already be encrypted with per-field AAD:
- *   tokenCiphertext → encrypted with aad: "destination.<id>.publish-token"
- *   readTokenCiphertext → encrypted with aad: "destination.<id>.read-token"
- *
- * Caller MUST run `requireAdminSession()` before calling this function.
- */
-export async function writeDestinationCredential(input: {
-  id: string;
-  label: string;
-  registryUrl: string;
-  tokenCiphertext: string;
-  tokenIv: string;
-  readTokenCiphertext?: string;
-  readTokenIv?: string;
-}): Promise<void> {
-  const schemaName = process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra";
-  const tables = createStoreTables(schemaName);
-  const db = drizzle(getDestCredPool(), { schema: {} });
-  await db
-    .insert(tables.extension_destinations)
-    .values({
-      id: input.id,
-      label: input.label,
-      registryUrl: input.registryUrl,
-      tokenCiphertext: input.tokenCiphertext,
-      tokenIv: input.tokenIv,
-      tokenAlgo: "aes-256-gcm",
-      readTokenCiphertext: input.readTokenCiphertext ?? null,
-      readTokenIv: input.readTokenIv ?? null,
-    })
-    .onConflictDoUpdate({
-      target: tables.extension_destinations.id,
-      set: {
-        label: input.label,
-        registryUrl: input.registryUrl,
-        tokenCiphertext: input.tokenCiphertext,
-        tokenIv: input.tokenIv,
-        readTokenCiphertext: input.readTokenCiphertext ?? null,
-        readTokenIv: input.readTokenIv ?? null,
-        updatedAt: new Date(),
-      },
-    });
-}
-
 export type ExtensionLifecycleAuditRow = {
   id: string;
   actorId: string;

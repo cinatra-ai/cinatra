@@ -1,19 +1,23 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
-// `database.ts` lazily `require()`s this module's `buildArtifactRefSyncQueries`
-// inside `upsertChatThreadInDatabase`. A STATIC `import ... from "@/lib/database"`
-// here closes that into an import cycle: under Turbopack the back-edge resolves
-// to a half-initialised module namespace, so `mod.buildArtifactRefSyncQueries`
-// reads as `undefined` ("is not a function") and every `POST /api/chat/save`
-// 500s. Reach into database.ts LAZILY instead (the codebase's existing
-// cross-module pattern — see `artifact-creation.ts`, `database.ts:1218/1385`)
-// so there is no static back-edge to complete the cycle.
-function db(): typeof import("@/lib/database") {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("@/lib/database");
-}
+// SYNC LEAF contract (cinatra#104): this module is lazily `require()`d by
+// `upsertChatThreadInDatabase` (database.ts) to compose pin-sync queries into
+// the thread-save transaction, so it MUST stay synchronous under Turbopack —
+// and it must NEVER import (statically) or `require()` (at runtime)
+// `@/lib/database`. database.ts is an ASYNC module in Turbopack dev (its
+// graph reaches `import()`-loaded externals), and BOTH directions of that
+// coupling break: a static import makes THIS module async (so database.ts's
+// `require()` of it yields a Promise — "buildArtifactRefSyncQueries is not a
+// function", pre-#46 bug), while a runtime `require("@/lib/database")` yields
+// database.ts's module Promise — `postgresSchema` reads as `undefined`
+// (#104). The connection/schema primitives live in the sync leaves
+// postgres-config.ts / postgres-schema-init.ts precisely so this module can
+// import them statically. Contract enforced by
+// src/lib/__tests__/postgres-sync-leaf-imports.test.ts.
 
 // Replay-safe artifact reference (pin) table.
 //
@@ -51,8 +55,8 @@ export type ArtifactRefInput = {
   originKind: string;
 };
 
-const conn = (): string => db().getPostgresConnectionString();
-const q = (): string => db().postgresSchema.replaceAll('"', '""');
+const conn = (): string => getPostgresConnectionString();
+const q = (): string => postgresSchema.replaceAll('"', '""');
 
 /** Idempotent batch insert of artifact refs (one row per ref). The
  *  unique index on (org_id, artifact_id, representation_revision_id,
@@ -65,7 +69,7 @@ export function recordArtifactRefs(input: {
   refs: ArtifactRefInput[];
 }): void {
   if (input.refs.length === 0) return;
-  db().ensurePostgresSchema();
+  ensurePostgresSchema();
   // Validate each pin candidate's (representation, resource,
   // artifact_blobs) chain is fully alive. `representation` rows are
   // immutable/append-only and SURVIVE GC, so a pure
@@ -202,7 +206,7 @@ export function syncArtifactRefsForReferrer(input: {
   createdBy?: string | null;
   refs: ArtifactRefInput[];
 }): void {
-  db().ensurePostgresSchema();
+  ensurePostgresSchema();
   // Per-referrer advisory lock + single held-lock transaction
   // spanning INSERTs + DELETE. The composable query-builder is the
   // canonical impl; this standalone wraps it in its own transaction.
@@ -219,7 +223,7 @@ export function syncArtifactRefsForReferrer(input: {
 /** Count active pins on a given artifact (any referrer). Used by
  *  `tombstoneArtifact` to decide between immediate-GC and retention. */
 export function countArtifactRefs(orgId: string, artifactId: string): number {
-  db().ensurePostgresSchema();
+  ensurePostgresSchema();
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
@@ -241,7 +245,7 @@ export function isRepresentationPinned(
   artifactId: string,
   representationRevisionId: string,
 ): boolean {
-  db().ensurePostgresSchema();
+  ensurePostgresSchema();
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
@@ -263,7 +267,7 @@ export function deleteArtifactRefsForReferrer(input: {
   referrerKind: ReferrerKind;
   referrerId: string;
 }): void {
-  db().ensurePostgresSchema();
+  ensurePostgresSchema();
   runPostgresQueriesSync({
     connectionString: conn(),
     queries: [
