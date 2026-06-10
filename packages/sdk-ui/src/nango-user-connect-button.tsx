@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import NangoFrontend from "@nangohq/frontend";
+import type { ConnectUI } from "@nangohq/frontend";
 import { StatusPill } from "./status-pill";
 import { Button } from "./ui/button";
 
@@ -63,34 +64,49 @@ function useNangoUserConnect({
     setPending(true);
     onError?.("");
 
+    // Hoisted so the catch blocks below can close the Connect UI iframe.
+    // openConnectUI() mounts a full-viewport modal (skeleton loaders) BEFORE a
+    // session token exists; without close() on the failure paths the modal is
+    // orphaned: it spins forever and keeps body scroll locked (#48).
+    // ConnectUI.close() is idempotent and safe to call before a token is set.
+    let connect: ConnectUI | undefined;
     try {
       const nangoFrontend = new NangoFrontend();
-      const connect = nangoFrontend.openConnectUI({
+      connect = nangoFrontend.openConnectUI({
         ...(nangoFrontendConfig?.baseURL ? { baseURL: nangoFrontendConfig.baseURL } : {}),
         ...(nangoFrontendConfig?.apiURL ? { apiURL: nangoFrontendConfig.apiURL } : {}),
         onEvent: async (event) => {
           if (event.type === "connect") {
-            const response = await fetch("/api/nango/connections/save", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                connectorKey,
-                providerConfigKey: event.payload.providerConfigKey,
-                connectionId: event.payload.connectionId,
-                scope: "user",
-              }),
-            });
+            // This callback is invoked as `void onEvent(event)` by
+            // @nangohq/frontend — a thrown error would become an unhandled
+            // rejection and orphan the modal, so failures must be handled here.
+            try {
+              const response = await fetch("/api/nango/connections/save", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  connectorKey,
+                  providerConfigKey: event.payload.providerConfigKey,
+                  connectionId: event.payload.connectionId,
+                  scope: "user",
+                }),
+              });
 
-            if (!response.ok) {
-              const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-              throw new Error(payload?.error ?? "Unable to save the connection.");
+              if (!response.ok) {
+                const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+                throw new Error(payload?.error ?? "Unable to save the connection.");
+              }
+
+              connect?.close();
+              setPending(false);
+              router.refresh();
+            } catch (error) {
+              connect?.close();
+              setPending(false);
+              onError?.(error instanceof Error ? error.message : "Unable to save the connection.");
             }
-
-            connect.close();
-            setPending(false);
-            router.refresh();
           }
 
           if (event.type === "error") {
@@ -122,6 +138,10 @@ function useNangoUserConnect({
 
       connect.setSessionToken(payload.sessionToken);
     } catch (error) {
+      // Close the orphaned Connect UI so the error is actually visible
+      // (programmatic close() does not emit a "close" event, so pending is
+      // cleared here explicitly).
+      connect?.close();
       setPending(false);
       onError?.(error instanceof Error ? error.message : "Unable to open the connection flow.");
     }
@@ -145,15 +165,19 @@ export function NangoUserConnectButton({
   onError,
   onClickOverride,
 }: NangoUserConnectButtonProps) {
+  // Fallback error surface: no call site is required to pass `onError`, and a
+  // connect-session failure must still be visible once the orphaned Connect UI
+  // is closed (#48). Used only when the caller does not supply `onError`.
+  const [fallbackError, setFallbackError] = useState<string | null>(null);
   const { pending, openConnection } = useNangoUserConnect({
     connectorKey,
     reconnectConnectionId,
     nangoFrontendConfig,
     prerequisiteErrorMessage,
-    onError,
+    onError: onError ?? ((message) => setFallbackError(message || null)),
   });
 
-  return (
+  const button = (
     <Button
       type="button"
       onClick={() => {
@@ -168,6 +192,17 @@ export function NangoUserConnectButton({
     >
       {pending ? "Opening..." : connected ? reconnectLabel : connectLabel}
     </Button>
+  );
+
+  if (onError) {
+    return button;
+  }
+
+  return (
+    <div className="inline-flex flex-col items-start gap-2">
+      {button}
+      {fallbackError ? <p className="text-sm text-destructive">{fallbackError}</p> : null}
+    </div>
   );
 }
 
