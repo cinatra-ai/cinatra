@@ -161,13 +161,14 @@ function iconForSlug(slug: string): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// Paired logos — bidirectional MCP connectors render `[brand] ⇄ [Cinatra]`
-// in the card's logo area instead of the single brand mark.
+// Paired logos — the bidirectional assistant connectors render
+// `[brand] ⇄ [Cinatra]` in the card's logo area instead of the single brand
+// mark. (The plain MCP connectors keep their single mark via ICON_BY_SLUG.)
 // ---------------------------------------------------------------------------
 
 const PAIRED_BRAND_BY_SLUG = new Map<string, { brand: string; icon: ReactNode }>([
-  ["drupal-mcp-connector", { brand: "Drupal", icon: <SiDrupal size={20} color="default" aria-hidden="true" /> }],
-  ["wordpress-mcp-connector", { brand: "WordPress", icon: <SiWordpress size={20} color="default" aria-hidden="true" /> }],
+  ["drupal-assistant-connector", { brand: "Drupal", icon: <SiDrupal size={20} color="default" aria-hidden="true" /> }],
+  ["wordpress-assistant-connector", { brand: "WordPress", icon: <SiWordpress size={20} color="default" aria-hidden="true" /> }],
 ]);
 
 function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }) {
