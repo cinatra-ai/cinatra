@@ -126,10 +126,14 @@ on `main`, so touching it is additive overall.
 
 ## Enforcement
 
-This convention will be enforced by a `scripts/audit`-style CI gate (landing
-separately) that fails a PR which makes a destructive in-scope schema change
-without shipping a migration artifact. The labelled sample diffs that gate's
-classifier must reproduce live in
+This convention is enforced by
+[`scripts/audit/schema-migration-gate.mjs`](../scripts/audit/schema-migration-gate.mjs)
+(the `schema-migration-gate` job in `build-image.yml`): it diffs a PR against
+its base, classifies in-scope schema changes per the definitions above, and
+fails only when a destructive change ships no migration artifact. The
+labelled sample diffs its classifier must reproduce live in
 [`scripts/audit/__fixtures__/schema-migration/`](../scripts/audit/__fixtures__/schema-migration/)
-— they are the executable form of the definitions above, and are authoritative
-ahead of the gate itself.
+— they are the executable form of the definitions above, and the gate's test
+suite replays every one of them. When the convention gains a new
+destructive/additive case, add the fixture and the classifier rule in the
+same PR.

@@ -1,0 +1,64 @@
+name: ui-design-system-gate
+
+# Thin caller for the org-wide shadcn design-system gate
+# (cinatra-ai/cinatra-engineering#62). The preset's import/raw-JSX blocks are
+# integrated into this repo's own eslint.config.mjs (Layers 1, 4, 4b, 5 + the
+# raw-JSX warn block — see PR #44); the gate installs deps and runs ESLint
+# against that config. The inputs mirror the in-repo carve-outs:
+#   - ui_globs           = Layer 5 shadcn-primitive dirs (Radix re-allowed)
+#   - drizzle_cube_globs = Layer 4 drizzle-cube/client + react-grid-layout
+#                          carve-out (packages/dashboards/src/components)
+#   - strictness         = raw-JSX block severity (warn until tree is clean)
+#
+# lint_command scopes enforcement to the design-system boundary rules
+# (no-restricted-imports / no-restricted-syntax) loaded from the repo's own
+# flat config. ESLint is not otherwise CI-enforced in this repo (~300
+# pre-existing errors of unrelated debt, mostly no-explicit-any in tests —
+# see PR #44), so a plain `eslint .` exit code would gate on that debt, not
+# on the design system. The filter fails on any boundary ERROR or any fatal
+# parse failure (fail-closed: a missing report also fails), and prints —
+# without failing on — the warn-level raw-JSX findings until they are
+# ramped to error. --no-inline-config keeps the "exemptions are files-glob
+# carve-outs, never inline eslint-disable" contract enforceable: without
+# it an inline disable comment suppresses the exact rule IDs the filter
+# counts and the gate exits 0 on a banned import.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ui-design-system-gate:
+    uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@4c903fe9ca71ad47752a2bc92b72893e5f7c9814 # v0.1.0
+    with:
+      ui_globs: "**/components/ui/**,**/src/ui/**"
+      drizzle_cube_globs: "packages/dashboards/src/components/**"
+      strictness: warn
+      lint_command: |
+        REPORT="${RUNNER_TEMP:-/tmp}/ui-design-system-report.json"
+        npx eslint . --no-inline-config -f json -o "$REPORT" || true
+        REPORT="$REPORT" node -e '
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT, "utf8"));
+          const GATED = new Set(["no-restricted-imports", "no-restricted-syntax"]);
+          let errors = 0, warnings = 0, fatals = 0;
+          for (const file of report) {
+            for (const m of file.messages) {
+              if (m.fatal) {
+                fatals += 1;
+                console.error("FATAL " + file.filePath + ":" + (m.line || 0) + " " + m.message);
+                continue;
+              }
+              if (!GATED.has(m.ruleId)) continue;
+              const loc = file.filePath + ":" + m.line + ":" + m.column + " [" + m.ruleId + "] " + m.message;
+              if (m.severity === 2) { errors += 1; console.error("ERROR " + loc); }
+              else { warnings += 1; console.log("warn  " + loc); }
+            }
+          }
+          console.log("ui-design-system-gate: " + errors + " error(s), " + warnings + " warning(s), " + fatals + " parse failure(s) across " + report.length + " files.");
+          if (errors > 0 || fatals > 0) process.exit(1);
+        '
