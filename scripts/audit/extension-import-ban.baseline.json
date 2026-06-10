@@ -22,9 +22,6 @@
     "@cinatra-ai/linkedin-connector": [
       "@/lib/linkedin-api"
     ],
-    "@cinatra-ai/mcp-client-registry-connector": [
-      "@/lib/better-auth-db"
-    ],
     "@cinatra-ai/media-feeds-connector": [
       "@/lib/youtube-api"
     ],

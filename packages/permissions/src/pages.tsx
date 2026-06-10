@@ -21,6 +21,15 @@ export async function PermissionsAuthPage({
     redirect("/");
   }
 
+  // Fresh install (no Better Auth users yet): make /sign-up the canonical URL
+  // for the bootstrap state. The middleware route guard (cookie-only, DB-free)
+  // still sends sessionless visitors to /sign-in first; this server redirect
+  // performs the second hop so the browser lands on /sign-up instead of
+  // rendering the sign-up form under the /sign-in URL.
+  if (!hasUsers && path === "sign-in") {
+    redirect("/sign-up");
+  }
+
   const showBootstrapRegistration = !hasUsers && path !== "sign-out";
 
   return (

@@ -11,6 +11,7 @@ import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
+import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import {
@@ -176,7 +177,7 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
                   defaultValue={
                     connection?.defaultModel && selectableModels.has(connection.defaultModel)
                       ? connection.defaultModel
-                      : "gpt-5.4"
+                      : DEFAULT_OPENAI_MODEL_ID
                   }
                   disabled={!hasApiKey}
                 >
@@ -192,7 +193,7 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
                   </SelectContent>
                 </Select>
               ) : (
-                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? "gpt-5"} />
+                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID} />
               )}
             </Field>
             <div className="sm:col-span-2 flex justify-end">

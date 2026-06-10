@@ -39,7 +39,7 @@ vi.mock("@/lib/external-mcp-registry", () => ({
 }));
 
 // Stub heavy provider SDKs + connectors so importing ./registry does
-// not drag in @cinatra-ai/mcp-client-registry-connector (was claude-connector pre 434.2; → @/lib/database → app-level code).
+// not drag in @cinatra-ai/mcp-client-connector (was claude-connector pre 434.2; → @/lib/database → app-level code).
 vi.mock("@cinatra-ai/anthropic-connector", () => ({
   getConfiguredAnthropicConnection: vi.fn(async () => null),
 }));

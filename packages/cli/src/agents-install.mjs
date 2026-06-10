@@ -15,6 +15,8 @@ import { resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 
+import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+
 const USAGE = `Usage: cinatra agents install [<name>[@<range>]] [options]
 Options:
   --manifest <path>       Read root name+range from a manifest file (package.json shape)
@@ -34,24 +36,14 @@ Exit codes:
 // schema-compatible: any cache hit on a v1 lockfile forces a full
 // re-resolution so the v2 fields land.
 const LOCKFILE_VERSION = 2;
-const KNOWN_CONNECTOR_PACKAGE_IDS = new Set([
-  "@cinatra-ai/openai-connector",
-  "@cinatra-ai/anthropic-connector",
-  "@cinatra-ai/gemini-connector",
-  "@cinatra-ai/mcp-client-registry-connector",
-  "@cinatra-ai/gmail-connector",
-  "@cinatra-ai/google-calendar-connector",
-  "@cinatra-ai/apollo-connector",
-  "@cinatra-ai/apify-connector",
-  "@cinatra-ai/linkedin-connector",
-  "@cinatra-ai/youtube-connector",
-  "@cinatra-ai/wordpress-mcp-connector",
-  "@cinatra-ai/drupal-mcp-connector",
-  "@cinatra-ai/tailscale-connector",
-  "@cinatra-ai/github-connector",
-  "@cinatra-ai/a2a-server-connector",
-  "@cinatra-ai/google-oauth-connector",
-]);
+// `connectorDependencies` entries are validated against the CLI-safe connector
+// catalog (the same descriptors the host registry consumes) instead of a
+// hand-maintained copy of the package-id list — the copy had already drifted
+// from the catalog, and a literal list re-pins extension instance names in
+// core (instance-coupling gate).
+const KNOWN_CONNECTOR_PACKAGE_IDS = new Set(
+  CONNECTOR_DESCRIPTORS.map((d) => d.packageId),
+);
 // Any well-formed scoped npm name is accepted in agentDependencies, matching
 // Verdaccio's '@cinatra/*-agent' block.
 const SCOPED_NAME_PATTERN = /^@[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/i;
