@@ -144,6 +144,16 @@ export default defineConfig({
           "packages/llm/src/anthropic-logging-state.ts",
         ),
       },
+      // Dependency-free capability leaf (hosted-shell support per OpenAI
+      // model). Imported by src/app/api/chat/shell-skill-gate.ts and its
+      // test; like /actor-context it must be aliased BEFORE the bare entry.
+      {
+        find: "@cinatra-ai/llm/openai-model-capabilities",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/providers/openai-model-capabilities.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

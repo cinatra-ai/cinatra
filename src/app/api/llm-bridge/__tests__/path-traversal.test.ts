@@ -60,6 +60,8 @@ vi.mock("@cinatra-ai/llm", () => ({
   runResolvedSkillAwareDeterministicLlmTask:
     runResolvedSkillAwareDeterministicLlmTaskMock,
   createLocalSkillShellTool: createLocalSkillShellToolMock,
+  // Real predicate shape: only base gpt-5 / gpt-5-mini lack hosted shell.
+  openAiModelSupportsShell: (modelId: string) => modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   resolveConfiguredLlmRuntime: resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentials: getLlmMcpCredentialsMock,
   // Bridge route imports this for cinatra_llm dispatch.
