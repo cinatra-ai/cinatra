@@ -23,6 +23,13 @@
       "summary": "Add notifications.dedupe_key + partial unique index (user_id, dedupe_key) for the general per-user notification dedupe (issue #50). Required by the unique-index-on-existing-table rule; cannot collide in practice — the column is new, so every pre-existing row is outside the partial-index predicate.",
       "destructive": true,
       "tables": ["notifications"]
+    },
+    {
+      "seq": "0002",
+      "file": "0002_drop-agent-templates-durable.sql",
+      "summary": "Drop the dead agent_templates.durable column (issue #84). No routing/execution code ever read it and every writer only persisted the default false, so no user-land data is lost; required by the drop-column-on-existing-table rule.",
+      "destructive": true,
+      "tables": ["agent_templates"]
     }
   ]
 }

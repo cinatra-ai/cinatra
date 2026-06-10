@@ -72,7 +72,6 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // Persisted from `cinatra.connectorDependencies` in the published manifest.
   connectorDependencies: text("connector_dependencies"),
   ioSpec:            text("io_spec"),              // AgentIOSpec JSON; nullable
-  durable:           boolean("durable").notNull().default(false),                              // distributed-tier flag (BullMQ)
   hitlRequired:      boolean("hitl_required").notNull().default(false),                        // HITL gate flag
   executionProvider: text("execution_provider").notNull().default("wayflow"),                  // execution runtime provider
   // lg_graph_code: Python StateGraph module emitted by the compiler for

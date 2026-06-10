@@ -79,7 +79,6 @@ const shared = vi.hoisted(() => {
     hitlScreens: null,
     agentDependencies: null,
     ioSpec: null,
-    durable: false,
     hitlRequired: false,
     executionProvider: "wayflow",
     lgGraphCode: null,

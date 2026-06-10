@@ -36,7 +36,6 @@ function makeTemplate(
     packageVersion: "1.2.0",
     currentVersionId: null,
     hitlScreens: null,
-    durable: false,
     hitlRequired: false,
     executionProvider: "default",
     lgGraphCode: null,
