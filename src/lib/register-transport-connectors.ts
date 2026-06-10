@@ -93,7 +93,18 @@ import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
 // WordPress instance hard-delete — bound into the wordpress connector's
 // `deps.deleteInstance` so the connector's relocated delete action carries no
 // `@/lib/wordpress-api` edge.
-import { deleteWordPressInstance } from "@/lib/wordpress-api";
+import { deleteWordPressInstance, getWordPressAPISettings } from "@/lib/wordpress-api";
+// External-MCP toolbox surfaces — instance settings, the cached reachability
+// probes, endpoint resolution, and the private-URL policy stay host-side and
+// are bound into the wordpress/drupal connector deps so their `mcp-toolbox`
+// modules carry no `@/` edge.
+import {
+  isPrivateUrl,
+  probeWordPressInstanceMcpAdapter,
+  resolveWordPressMcpFallbackEndpoint,
+} from "@/lib/wordpress-mcp-connection";
+import { probeDrupalMcp, resolveDrupalMcpServerUrl } from "@/lib/drupal-mcp-connection";
+import { getDrupalAPISettings } from "@/lib/drupal-api";
 
 let _registered = false;
 
@@ -178,6 +189,8 @@ export function registerTransportConnectors(): void {
       saveConnectionRecord: saveNangoConnectionRecord,
       removeConnectionRecord: removeNangoConnectionRecord,
       deleteConnection: deleteNangoConnection,
+      // Nango-vault bearer header for the connector's external-MCP toolbox.
+      buildBearerAuthHeader: buildBearerAuthHeaderFromNango,
       providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
       connectionIds: CINATRA_NANGO_CONNECTION_IDS,
     },
@@ -295,6 +308,13 @@ export function registerTransportConnectors(): void {
     dispatchContentEditor: dispatchContentEditorViaA2A,
     // Nango-vault bearer header for the Drupal MCP HTTP client.
     buildNangoBearerHeader: buildBearerAuthHeaderFromNango,
+    // External-MCP toolbox surfaces (consumed by the connector's mcp-toolbox
+    // module): instance settings + cached probe + endpoint/URL policy.
+    listMcpInstances: () => getDrupalAPISettings().instances,
+    probeMcp: probeDrupalMcp,
+    resolveMcpServerUrl: resolveDrupalMcpServerUrl,
+    isPrivateUrl,
+    isNangoConfigured,
   });
 
   registerWordPressConnector({
@@ -307,6 +327,12 @@ export function registerTransportConnectors(): void {
     deleteInstance: async (id) => {
       await deleteWordPressInstance(id);
     },
+    // External-MCP toolbox surfaces (consumed by the connector's mcp-toolbox
+    // module): instance settings + cached probe + endpoint/URL policy.
+    listMcpInstances: () => getWordPressAPISettings().instances,
+    probeMcpAdapter: probeWordPressInstanceMcpAdapter,
+    resolveMcpServerUrl: resolveWordPressMcpFallbackEndpoint,
+    isPrivateUrl,
   });
 
   // Remaining transport connectors (github, linkedin, youtube, media-feeds)

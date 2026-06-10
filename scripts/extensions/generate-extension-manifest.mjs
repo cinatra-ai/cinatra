@@ -196,6 +196,12 @@ function entryFlags(rec) {
 // ---------------------------------------------------------------------------
 const MCP_MODULE_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*Module)\s*\(/g;
 const PRIMITIVE_HANDLERS_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*PrimitiveHandlers)\s*\(/g;
+// External-MCP toolbox factory (`src/mcp/toolbox.ts` → subpath `<pkg>/mcp-toolbox`).
+// Participation requires BOTH the `cinatra.providesExternalMcpToolbox: true`
+// capability marker AND the toolbox module; the marker alone means the
+// extension's external MCP server resolves through the host registry
+// (`external_mcp_servers`) instead of a first-party builder.
+const EXTERNAL_MCP_TOOLBOX_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*ExternalMcpToolbox)\s*\(/g;
 
 // Extract the factory export name from a connector MCP source file, or null
 // when the file exports no matching factory (the connector does not take part
@@ -375,6 +381,10 @@ export async function buildManifest() {
       // Least-privilege host ports the extension requests (manifest-declared;
       // derived empirically per-extension during the decoupling sweep).
       requestedHostPorts: Array.isArray(cin.requestedHostPorts) ? cin.requestedHostPorts : [],
+      // External-MCP-toolbox capability marker. The DISCRIMINATING selector for
+      // the LLM toolbox-injection path (`hasMcpModule` is not one — self-MCP
+      // capability modules also set it). Declared, never inferred.
+      providesExternalMcpToolbox: cin.providesExternalMcpToolbox === true,
       // ABI range the extension was built against — the loader's ABI gate
       // consults it (null = unpinned). MUST round-trip or the gate is decorative.
       sdkAbiRange: typeof cin.sdkAbiRange === "string" ? cin.sdkAbiRange : null,
@@ -455,6 +465,42 @@ export async function buildManifest() {
     .filter(Boolean)
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
+  // External-MCP toolbox builders: an extension takes part in the LLM
+  // toolbox-injection path by declaring the `providesExternalMcpToolbox`
+  // capability marker. Marker + `src/mcp/toolbox.ts` → a first-party builder
+  // loader entry (exactly one create*ExternalMcpToolbox() factory, FAIL CLOSED
+  // like the MCP-module map). Marker WITHOUT the module → no entry (the host
+  // resolves the extension's server through the external_mcp_servers
+  // registry). A toolbox module WITHOUT the marker is dead code that would
+  // silently never inject — generation error.
+  const externalMcpToolboxes = records
+    .map((r) => {
+      const hasToolboxModule = fileExists(join(r.sourceDir, "src/mcp/toolbox.ts"));
+      if (!r.providesExternalMcpToolbox) {
+        if (hasToolboxModule) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} ships src/mcp/toolbox.ts but does not declare cinatra.providesExternalMcpToolbox: true — the toolbox would never be injected`,
+          );
+        }
+        return null;
+      }
+      if (!hasToolboxModule) return null; // registry-resolved external-MCP extension
+      const toolboxSource = readFileSync(join(REPO_ROOT, r.sourceDir, "src/mcp/toolbox.ts"), "utf8");
+      const factory = extractFactoryExport(
+        toolboxSource,
+        EXTERNAL_MCP_TOOLBOX_FACTORY_RE,
+        `${r.packageName} src/mcp/toolbox.ts`,
+      );
+      if (!factory) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} ships src/mcp/toolbox.ts but exports no create*ExternalMcpToolbox() factory`,
+        );
+      }
+      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
   return {
     records,
     connectorSetupPages,
@@ -462,6 +508,7 @@ export async function buildManifest() {
     connectorEntryModules,
     connectorMcpModules,
     connectorPrimitiveHandlers,
+    externalMcpToolboxes,
   };
 }
 
@@ -477,7 +524,7 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
-function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers) {
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
@@ -497,6 +544,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             uiSurface: r.uiSurface,
             configSchema: r.configSchema,
             requestedHostPorts: r.requestedHostPorts,
+            providesExternalMcpToolbox: r.providesExternalMcpToolbox,
             sdkAbiRange: r.sdkAbiRange,
             dependencies: r.dependencies,
             displayName: r.displayName,
@@ -545,6 +593,17 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
         `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-handlers`)}), factory: ${JSON.stringify(p.factory)} },`,
     )
     .join("\n");
+  // External-MCP toolbox loader map: slug → { literal dynamic import of
+  // <pkg>/mcp-toolbox, factory export name }. Consumed by
+  // src/lib/external-mcp-toolbox-loader.server.ts — the LLM toolbox-injection
+  // path resolves first-party external-MCP builders from this map instead of
+  // importing them by package name.
+  const mcpToolboxes = externalMcpToolboxes
+    .map(
+      (p) =>
+        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-toolbox`)}), factory: ${JSON.stringify(p.factory)} },`,
+    )
+    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
     `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
@@ -569,7 +628,13 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `export const GENERATED_CONNECTOR_MCP_MODULES: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
     `${mcpModules}\n};\n\n` +
     `export const GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
-    `${primitiveHandlers}\n};\n`
+    `${primitiveHandlers}\n};\n\n` +
+    `// slug → { loader, factory export name } for extension external-MCP toolbox\n` +
+    `// builders (records declaring providesExternalMcpToolbox that ship a\n` +
+    `// first-party toolbox module). Literal specifiers only (Turbopack-safe).\n` +
+    `// Consumed by src/lib/external-mcp-toolbox-loader.server.ts.\n` +
+    `export const GENERATED_EXTERNAL_MCP_TOOLBOXES: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
+    `${mcpToolboxes}\n};\n`
   );
 }
 
@@ -681,9 +746,10 @@ async function main() {
     connectorEntryModules,
     connectorMcpModules,
     connectorPrimitiveHandlers,
+    externalMcpToolboxes,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes)],
     [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
   ];

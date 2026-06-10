@@ -18,6 +18,35 @@ import {
   buildRegisteredExternalMcpServerTools,
   buildSingleExternalMcpTool,
 } from "@/lib/external-mcp-registry";
+import {
+  loadExternalMcpToolboxBySlug,
+  sanitizeExternalMcpToolboxTools,
+} from "@/lib/external-mcp-toolbox-loader.server";
+
+/**
+ * First-wins dedupe by `serverLabel`. The manifest-driven toolbox path and the
+ * registry-wide global injection can both resolve the SAME
+ * `external_mcp_servers` row (identical label + content) for a marker-bearing
+ * extension without a first-party builder; providers reject duplicate server
+ * labels, so the combined list keeps the first occurrence. A label collision
+ * with DIFFERENT definitions indicates a real configuration bug — warn.
+ */
+function dedupeMcpToolsByServerLabel(tools: LlmMcpServerTool[]): LlmMcpServerTool[] {
+  const seen = new Map<string, LlmMcpServerTool>();
+  for (const tool of tools) {
+    const existing = seen.get(tool.serverLabel);
+    if (!existing) {
+      seen.set(tool.serverLabel, tool);
+      continue;
+    }
+    if (existing.serverUrl !== tool.serverUrl) {
+      console.warn(
+        `[llm-registry] duplicate MCP server label "${tool.serverLabel}" with different URLs — keeping the first`,
+      );
+    }
+  }
+  return [...seen.values()];
+}
 
 // ---------------------------------------------------------------------------
 // MCP server tool injection — OpenAI and Anthropic
@@ -72,14 +101,19 @@ export async function resolveMcpToolsForDeclaredIds(params: {
   };
   if (declaredToolboxIds === undefined) {
     const cinatraMcpTool = await resolveCinatraMcpTool();
-    const externalMcpTools = await buildExternalMcpServerTools(provider);
+    // skipExternalMcpRegistry must ALSO suppress the manifest path's
+    // registry fallback (marker-bearing extensions without a first-party
+    // builder resolve through external_mcp_servers rows) — otherwise the
+    // opt-out would be reachable through the back door.
+    const externalMcpTools = await buildExternalMcpServerTools(provider, {
+      skipRegistryFallback: skipExternalMcpRegistry === true,
+    });
     const registeredMcpTools = skipExternalMcpRegistry
       ? []
       : await buildRegisteredExternalMcpServerTools();
     return [
       ...(cinatraMcpTool ? [cinatraMcpTool] : []),
-      ...externalMcpTools,
-      ...registeredMcpTools,
+      ...dedupeMcpToolsByServerLabel([...externalMcpTools, ...registeredMcpTools]),
     ];
   }
   const tools: LlmMcpServerTool[] = [];
@@ -102,6 +136,33 @@ export async function resolveMcpToolsForDeclaredIds(params: {
           `[resolveMcpToolsForDeclaredIds] declared toolbox id "apify-connector" resolved to 0 tools (Nango unconfigured or no connection saved)`,
         );
       }
+      continue;
+    }
+    // Manifest-driven first-party toolboxes: a declared id matching a slug in
+    // the generated external-MCP toolbox loader map resolves through the
+    // extension's own builder (same source as the legacy always-inject set) —
+    // no host edit per extension. Failures degrade to "no tools from this id"
+    // (declared-id resolution never throws).
+    try {
+      const toolbox = await loadExternalMcpToolboxBySlug(declaredId);
+      if (toolbox) {
+        const toolboxTools = sanitizeExternalMcpToolboxTools(
+          declaredId,
+          await toolbox.buildTools(provider),
+        );
+        tools.push(...toolboxTools);
+        if (toolboxTools.length === 0) {
+          console.warn(
+            `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" resolved to 0 tools (extension unconfigured or endpoints unreachable)`,
+          );
+        }
+        continue;
+      }
+    } catch (err) {
+      console.warn(
+        `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" failed to resolve via the manifest toolbox loader — agent will run without this tool`,
+        err instanceof Error ? err.message : String(err),
+      );
       continue;
     }
     const externalTool = await buildSingleExternalMcpTool(declaredId);
@@ -134,7 +195,7 @@ export async function resolveChatExternalMcpTools(
     buildExternalMcpServerTools(provider),
     buildRegisteredExternalMcpServerTools(),
   ]);
-  return [...externalMcpTools, ...registeredMcpTools];
+  return dedupeMcpToolsByServerLabel([...externalMcpTools, ...registeredMcpTools]);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,23 +1,22 @@
 /**
- * WordPress MCP adapter integration.
+ * WordPress MCP adapter integration — probe/status + URL-policy home.
  *
  * The WordPress/mcp-adapter plugin (https://github.com/WordPress/mcp-adapter)
- * exposes an MCP server at a REST namespace on the WP site. We register that
- * server as an EXTERNAL MCP server in the cinatra LLM orchestration layer so
- * every agent call receives WP tools alongside the cinatra self-MCP server.
- *
- * This is a PARALLEL connection: it complements the existing connector-wordpress
- * REST integration. Both coexist.
+ * exposes an MCP server at a REST namespace on the WP site. The LLM toolbox
+ * INJECTION of those servers is manifest-driven: the wordpress-mcp-connector
+ * extension's `mcp-toolbox` module builds the injected tools (resolved through
+ * the generated manifest loader map), consuming this file's probe + endpoint
+ * helpers via its host-bound deps (src/lib/register-transport-connectors.ts).
+ * This file keeps the host-owned pieces: the cached reachability probe (also
+ * used by the assistant-connector settings pages), the endpoint resolution,
+ * and the private-URL policy shared with the external-MCP registry.
  *
  * Uses EXISTING connector-wordpress credentials (siteUrl + username +
  * applicationPassword), so no new credential entry is required.
  *
- * Once connected, WP MCP tools are visible to ALL cinatra agents via the
- * standard llm injection path.
- *
  * The cinatra.php plugin shows an admin notice inside WP admin if
- * mcp-adapter is not active. On the cinatra side, we silently skip instances
- * where the adapter is not detected.
+ * mcp-adapter is not active. On the cinatra side, injection silently skips
+ * instances where the adapter is not detected.
  *
  * NOTE: The WordPress/mcp-adapter plugin registers under REST namespace "mcp"
  * with route path "/mcp/mcp-adapter-default-server". With pretty permalinks
@@ -29,8 +28,6 @@
 import "server-only";
 
 import { Buffer } from "node:buffer";
-import { getWordPressAPISettings, type WordPressInstanceSettings } from "@/lib/wordpress-api";
-import type { LlmMcpServerTool, LlmProvider } from "@cinatra-ai/llm";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -80,9 +77,11 @@ export function resolveWordPressMcpEndpoint(siteUrl: string): string {
 
 /**
  * Resolve the query-string REST API endpoint for a given WP instance.
- * Used as a fallback probe when pretty permalinks are not enabled.
+ * Used as a fallback probe when pretty permalinks are not enabled, and as the
+ * INJECTED server URL (it works in all WP configurations) — the
+ * wordpress-mcp-connector toolbox consumes it via its host-bound deps.
  */
-function resolveWordPressMcpFallbackEndpoint(siteUrl: string): string {
+export function resolveWordPressMcpFallbackEndpoint(siteUrl: string): string {
   const trimmed = siteUrl.replace(/\/+$/, "");
   return `${trimmed}/index.php?rest_route=${WP_MCP_ADAPTER_ROUTE}`;
 }
@@ -100,11 +99,22 @@ export function isWordPressMcpAdapterEndpoint(url: string): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * The credential fields the probe needs from a WP instance (structural subset
+ * of `WordPressInstanceSettings` so the host can bind the probe into the
+ * wordpress-mcp-connector deps without widening to the full settings shape).
+ */
+export type WordPressMcpProbeTarget = {
+  siteUrl: string;
+  username: string;
+  applicationPassword: string;
+};
+
+/**
  * Build the HTTP Basic auth header value from a WP instance's credentials.
  * The mcp-adapter plugin authenticates using the same WordPress Application
  * Passwords scheme that the existing connector-wordpress REST client uses.
  */
-function buildBasicAuthHeader(instance: WordPressInstanceSettings): string {
+function buildBasicAuthHeader(instance: WordPressMcpProbeTarget): string {
   const credentials = `${instance.username}:${instance.applicationPassword}`;
   const encoded = Buffer.from(credentials, "utf8").toString("base64");
   return `Basic ${encoded}`;
@@ -189,72 +199,13 @@ async function probeWordPressMcpAdapter(
  * so the UI can show specific guidance per failure mode.
  */
 export async function probeWordPressInstanceMcpAdapter(
-  instance: WordPressInstanceSettings,
+  instance: WordPressMcpProbeTarget,
 ): Promise<WordPressMcpAdapterStatus> {
   const authHeader = buildBasicAuthHeader(instance);
   return probeWordPressMcpAdapter(instance.siteUrl, authHeader);
 }
 
-// ---------------------------------------------------------------------------
-// Main export
-// ---------------------------------------------------------------------------
-
-/**
- * Build LlmMcpServerTool entries — one per configured WP instance where the
- * mcp-adapter plugin is reachable. Returns an empty array when no WP instances
- * are configured or none have the adapter installed (silent no-op, never throws).
- *
- * The provider parameter is accepted for parity with buildLlmMcpServerTool()
- * but currently unused — the WP MCP server description is the same regardless
- * of which LLM provider will consume it.
- */
-export async function buildWordPressMcpServerTools(
-  _provider: LlmProvider,
-): Promise<LlmMcpServerTool[]> {
-  try {
-    const { instances } = getWordPressAPISettings();
-    if (!instances || instances.length === 0) return [];
-
-    const tools: LlmMcpServerTool[] = [];
-    for (const instance of instances) {
-      // Private/local URLs are reachable by Cinatra but not by external LLM providers.
-      // Skip them here — they still show status badges in the administration UI.
-      if (isPrivateUrl(instance.siteUrl)) {
-        console.log(
-          `[wordpress-mcp-connection] ${instance.siteUrl} is a private URL — skipping MCP tool injection (not reachable by LLM provider)`,
-        );
-        continue;
-      }
-
-      const authHeader = buildBasicAuthHeader(instance);
-
-      const status = await probeWordPressMcpAdapter(instance.siteUrl, authHeader);
-      if (status !== "registered") {
-        console.log(
-          `[wordpress-mcp-connection] mcp-adapter status "${status}" for ${instance.siteUrl} — skipping`,
-        );
-        continue;
-      }
-
-      // Use the query-string form as the server URL since pretty permalinks
-      // may not be enabled — this is the form that works in all WP configurations.
-      const serverUrl = resolveWordPressMcpFallbackEndpoint(instance.siteUrl);
-      tools.push({
-        type: "mcp",
-        serverLabel: `wordpress-${instance.id}`,
-        serverUrl,
-        headers: { Authorization: authHeader },
-        serverDescription: `WordPress site ${instance.name} (${instance.siteUrl}) — MCP adapter`,
-        allowedTools: null,
-        requireApproval: "never",
-      });
-    }
-    return tools;
-  } catch (err) {
-    console.warn(
-      "[wordpress-mcp-connection] failed to build WP MCP server tools — skipping injection",
-      err instanceof Error ? err.message : String(err),
-    );
-    return [];
-  }
-}
+// NOTE: the LLM toolbox builder that used to live here moved into the
+// wordpress-mcp-connector extension (`src/mcp/toolbox.ts`, resolved through the
+// generated manifest's external-MCP toolbox loader map) — the host no longer
+// hardcodes which extensions contribute external MCP tools.

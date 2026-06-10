@@ -1,11 +1,26 @@
 import "server-only";
 
+// Drupal MCP (`drupal/mcp_tools`) probe/status home. The LLM toolbox INJECTION
+// of Drupal MCP servers is manifest-driven: the drupal-mcp-connector
+// extension's `mcp-toolbox` module builds the injected tools (resolved through
+// the generated manifest loader map), consuming this file's probe + endpoint
+// helpers via its host-bound deps (src/lib/register-transport-connectors.ts).
+// This file keeps the host-owned probe used by the connector settings pages.
+
 import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
-import { buildBearerAuthHeaderFromNango, isNangoConfigured } from "@cinatra-ai/nango-connector";
-import type { LlmMcpServerTool, LlmProvider } from "@cinatra-ai/llm";
+import { buildBearerAuthHeaderFromNango } from "@/lib/nango";
 
 const MCP_TOOLS_PATH = "/_mcp_tools";
+
+/**
+ * Canonical MCP endpoint URL for a Drupal site — the probe target and the
+ * INJECTED server URL (the drupal-mcp-connector toolbox consumes it via its
+ * host-bound deps; this file owns the route constant).
+ */
+export function resolveDrupalMcpServerUrl(siteUrl: string): string {
+  return siteUrl.replace(/\/+$/, "") + MCP_TOOLS_PATH;
+}
 
 export type DrupalMcpStatus = "registered" | "not_installed" | "auth_error" | "unreachable";
 
@@ -42,7 +57,7 @@ export async function probeDrupalMcp(
   siteUrl: string,
   authHeader: string,
 ): Promise<DrupalMcpStatus> {
-  const endpoint = siteUrl.replace(/\/+$/, "") + MCP_TOOLS_PATH;
+  const endpoint = resolveDrupalMcpServerUrl(siteUrl);
   const cacheKey = endpoint;
   const cached = probeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.status;
@@ -90,60 +105,7 @@ export async function getDrupalMcpInstanceStatuses(): Promise<DrupalMcpInstanceS
   return out;
 }
 
-export async function buildDrupalMcpServerTools(_provider: LlmProvider): Promise<LlmMcpServerTool[]> {
-  try {
-    const { instances } = getDrupalAPISettings();
-    if (!instances || instances.length === 0) return [];
-    // Short-circuit when Nango isn't available to avoid per-instance lookups
-    // that would all log warnings.
-    if (!isNangoConfigured()) {
-      if (instances.length > 0) {
-        console.warn(
-          `[drupal-mcp-connection] Nango not configured — skipping ${instances.length} Drupal instance(s)`,
-        );
-      }
-      return [];
-    }
-    const tools: LlmMcpServerTool[] = [];
-    for (const instance of instances) {
-      if (isPrivateUrl(instance.siteUrl)) {
-        console.log(
-          `[drupal-mcp-connection] ${instance.siteUrl} is private — skipping (LLM providers cannot reach localhost)`,
-        );
-        continue;
-      }
-      // Resolve the Bearer header from Nango via the first-party helper
-      // so the token never touches this file.
-      const headers = await buildBearerAuthHeaderFromNango({
-        providerConfigKey: instance.providerConfigKey,
-        connectionId: instance.nangoConnectionId,
-        label: `drupal-${instance.id}`,
-      });
-      if (!headers) {
-        // Helper already warned with the label.
-        continue;
-      }
-      const status = await probeDrupalMcp(instance.siteUrl, headers.Authorization);
-      if (status !== "registered") {
-        console.log(`[drupal-mcp-connection] ${instance.siteUrl} status=${status} — skipping`);
-        continue;
-      }
-      tools.push({
-        type: "mcp",
-        serverLabel: `drupal-${instance.id}`,
-        serverUrl: instance.siteUrl.replace(/\/+$/, "") + MCP_TOOLS_PATH,
-        headers,
-        serverDescription: `Drupal site ${instance.name} (${instance.siteUrl}) — drupal/mcp_tools`,
-        allowedTools: null,
-        requireApproval: "never",
-      });
-    }
-    return tools;
-  } catch (err) {
-    console.warn(
-      "[drupal-mcp-connection] buildDrupalMcpServerTools failed",
-      err instanceof Error ? err.message : String(err),
-    );
-    return [];
-  }
-}
+// NOTE: the LLM toolbox builder that used to live here moved into the
+// drupal-mcp-connector extension (`src/mcp/toolbox.ts`, resolved through the
+// generated manifest's external-MCP toolbox loader map) — the host no longer
+// hardcodes which extensions contribute external MCP tools.

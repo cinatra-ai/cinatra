@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 63,
-      "files": 41
+      "edges": 60,
+      "files": 39
     }
   },
   "edges": {
@@ -63,10 +63,6 @@
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/nango-connector"
     ],
-    "src/lib/apify-mcp-connection.ts": [
-      "@cinatra-ai/apify-connector",
-      "@cinatra-ai/nango-connector"
-    ],
     "src/lib/background-jobs.ts": [
       "@cinatra-ai/crm-connector",
       "@cinatra-ai/twenty-connector"
@@ -91,9 +87,6 @@
       "@cinatra-ai/nango-connector"
     ],
     "src/lib/drupal-api.ts": [
-      "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/drupal-mcp-connection.ts": [
       "@cinatra-ai/nango-connector"
     ],
     "src/lib/email-system.ts": [

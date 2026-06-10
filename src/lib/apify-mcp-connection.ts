@@ -1,68 +1,42 @@
 import "server-only";
 
-import { getApifySettings } from "@cinatra-ai/apify-connector";
-import {
-  buildBearerAuthHeaderFromNango,
-  CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-  isNangoConfigured,
-} from "@cinatra-ai/nango-connector";
 import type { LlmMcpServerTool, LlmProvider } from "@cinatra-ai/llm";
+import {
+  loadExternalMcpToolboxBySlug,
+  sanitizeExternalMcpToolboxTools,
+} from "@/lib/external-mcp-toolbox-loader.server";
 
 // ---------------------------------------------------------------------------
-// First-party Apify MCP tool builder.
+// TRANSITIONAL shim for the Apify first-party toolbox.
 //
-// Parallel to `buildDrupalMcpServerTools` (`src/lib/drupal-mcp-connection.ts`)
-// and `buildWordPressMcpServerTools` (`src/lib/wordpress-mcp-connection.ts`).
-// Apify leaves `external_mcp_servers` entirely; this builder is the only
-// injection path for the Apify MCP server.
+// The builder itself lives in the apify-connector extension's `mcp-toolbox`
+// module, resolved through the generated manifest loader map — this file names
+// NO extension package. It survives only because the declared-toolbox-id
+// resolution in packages/llm/src/registry.ts routes the legacy
+// "apify-connector" toolbox id through this entry point; that branch (and with
+// it this shim) is retired by the provider/transport-registration cutover.
 //
-// The Bearer token comes from the Nango vault under the cinatra-apify
-// integration (provider: "apify"). The MCP server URL stays clean
-// (`https://mcp.apify.com`); the token rides in the `Authorization` header.
+// Contract preserved: returns [] on any failure — never throws (the
+// declared-id path has no catch of its own around this call).
 // ---------------------------------------------------------------------------
 
-const APIFY_MCP_URL = "https://mcp.apify.com";
-const APIFY_MCP_LABEL = "apify-connector";
+const APIFY_TOOLBOX_SLUG = "apify-connector";
 
 export async function buildApifyMcpServerTools(
-  _provider: LlmProvider,
+  provider: LlmProvider,
 ): Promise<LlmMcpServerTool[]> {
   try {
-    const settings = getApifySettings();
-    if (!isNangoConfigured()) {
-      // Fail closed loudly, matching Drupal's builder. Only warn when there's
-      // actually a connection that would otherwise have been injected.
-      if (settings.nangoConnectionId) {
-        console.warn(
-          "[apify-mcp-connection] Nango not configured — Apify MCP server disabled (connector: apify)",
-        );
-      }
+    const toolbox = await loadExternalMcpToolboxBySlug(APIFY_TOOLBOX_SLUG);
+    if (!toolbox) {
+      console.warn(
+        `[apify-mcp-connection] no generated external-MCP toolbox entry for "${APIFY_TOOLBOX_SLUG}" — returning empty list`,
+      );
       return [];
     }
-    if (!settings.nangoConnectionId) {
-      // No stored connection to inject.
-      return [];
-    }
-    const headers = await buildBearerAuthHeaderFromNango({
-      providerConfigKey: CINATRA_NANGO_PROVIDER_CONFIG_KEYS.apify,
-      connectionId: settings.nangoConnectionId,
-      label: "apify",
-    });
-    if (!headers) {
-      // Helper already warned about the connection label (no token).
-      return [];
-    }
-    return [
-      {
-        type: "mcp",
-        serverLabel: APIFY_MCP_LABEL,
-        serverUrl: APIFY_MCP_URL,
-        headers,
-        serverDescription: "Apify MCP — actor tools",
-        allowedTools: null,
-        requireApproval: "never",
-      },
-    ];
+    return sanitizeExternalMcpToolboxTools(
+      APIFY_TOOLBOX_SLUG,
+      await toolbox.buildTools(provider),
+    );
   } catch (err) {
     console.warn(
       `[apify-mcp-connection] buildApifyMcpServerTools failed: ${err instanceof Error ? err.message : String(err)}`,
