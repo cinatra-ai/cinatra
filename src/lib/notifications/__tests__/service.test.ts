@@ -161,7 +161,7 @@ describe("createNotificationForRecipient", () => {
     expect(sql).toContain("DO NOTHING");
     const values = lastValues();
     // params: id, user_id, recipient_kind, recipient_id, topic, kind, title,
-    //         body, href, metadata, source_job_id, source_job_name
+    //         body, href, metadata, source_job_id, source_job_name, dedupe_key
     expect(values[1]).toBe("u-1");
     expect(values[2]).toBe("user");
     expect(values[4]).toBe("user:u-1");
@@ -246,6 +246,91 @@ describe("createNotificationForRecipient", () => {
     );
     const sql = lastSql();
     expect(sql).toContain("now(), NULL");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// General dedupeKey (issue #50 — "notification flyout shows the same
+// notification twice"). A stable dedupeKey makes repeated writes of the same
+// LOGICAL notification collapse via ON CONFLICT (user_id, dedupe_key)
+// DO NOTHING, so the flyout never receives two same-content rows with
+// different ids.
+// ---------------------------------------------------------------------------
+describe("createNotificationForRecipient — general dedupeKey (issue #50)", () => {
+  const insertedRow = {
+    id: "n-1",
+    user_id: "u-1",
+    recipient_kind: "user",
+    recipient_id: "u-1",
+    topic: "user:u-1",
+    kind: "info",
+    title: "Writing files",
+    body: "",
+    dedupe_key: "agent-creation-progress:run-1:writing_files",
+  };
+
+  it("arbitrates on (user_id, dedupe_key) and binds the key when dedupeKey is set", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [insertedRow] }]);
+    const out = await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      {
+        title: "Writing files",
+        kind: "info",
+        dedupeKey: "agent-creation-progress:run-1:writing_files",
+      },
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]!.dedupeKey).toBe(
+      "agent-creation-progress:run-1:writing_files",
+    );
+    const sql = lastSql();
+    expect(sql).toContain("ON CONFLICT (user_id, dedupe_key)");
+    expect(sql).toContain("WHERE dedupe_key IS NOT NULL AND user_id IS NOT NULL");
+    expect(sql).toContain("DO NOTHING");
+    // The dedupeKey row must NOT arbitrate on the legacy job index — Postgres
+    // accepts exactly one conflict target per INSERT.
+    expect(sql).not.toContain("ON CONFLICT (user_id, source_job_id, kind)");
+    const values = lastValues();
+    expect(values[12]).toBe("agent-creation-progress:run-1:writing_files");
+  });
+
+  it("keeps the legacy job conflict target and a NULL dedupe_key when dedupeKey is absent", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [insertedRow] }]);
+    await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "Done", kind: "success", sourceJobId: "j-7" },
+    );
+    const sql = lastSql();
+    expect(sql).toContain("ON CONFLICT (user_id, source_job_id, kind)");
+    expect(sql).not.toContain("ON CONFLICT (user_id, dedupe_key)");
+    expect(lastValues()[12]).toBeNull();
+  });
+
+  it("normalizes a blank dedupeKey to NULL (an empty string must never become a unique key)", async () => {
+    runQueriesMock.mockReturnValueOnce([{ rows: [insertedRow] }]);
+    await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      { title: "Done", kind: "success", dedupeKey: "   " },
+    );
+    const sql = lastSql();
+    expect(sql).toContain("ON CONFLICT (user_id, source_job_id, kind)");
+    expect(sql).not.toContain("ON CONFLICT (user_id, dedupe_key)");
+    expect(lastValues()[12]).toBeNull();
+  });
+
+  it("returns [] when the dedupe_key conflict swallows the duplicate write (regression: issue #50)", async () => {
+    // Second write of the same logical notification: ON CONFLICT DO NOTHING
+    // returns no row — no second flyout entry, no SSE trigger fire.
+    runQueriesMock.mockReturnValueOnce([{ rows: [] }]);
+    const out = await createNotificationForRecipient(
+      { kind: "user", userId: "u-1" },
+      {
+        title: "Writing files",
+        kind: "info",
+        dedupeKey: "agent-creation-progress:run-1:writing_files",
+      },
+    );
+    expect(out).toEqual([]);
   });
 });
 

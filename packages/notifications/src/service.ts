@@ -81,6 +81,8 @@ function rowToRecord(row: Record<string, unknown>): NotificationRecord | null {
       typeof row.source_job_name === "string"
         ? row.source_job_name
         : undefined,
+    dedupeKey:
+      typeof row.dedupe_key === "string" ? row.dedupe_key : undefined,
     createdAt:
       row.created_at instanceof Date
         ? row.created_at.toISOString()
@@ -111,7 +113,7 @@ export function listNotificationsForUser(userId: string): NotificationRecord[] {
     connectionString: host.getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, created_at, read_at
+        text: `SELECT id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at
           FROM ${schemaQualified("notifications")}
           WHERE user_id = $1
           ORDER BY created_at DESC
@@ -227,18 +229,36 @@ function insertNotificationRowForUser(args: {
   // correct read state and the SSE flyout sees the row in its final shape.
   const readAtSql = args.options.autoMarkRead ? "now()" : "NULL";
 
+  // General dedupe key (issue #50). Blank/whitespace keys normalize to NULL —
+  // an empty string must never become a real unique key for the user.
+  const dedupeKey = args.input.dedupeKey?.trim() || null;
+
+  // Postgres accepts exactly ONE conflict target per INSERT, so the dedupe
+  // arbiter is chosen per row: a `dedupeKey` row arbitrates on the general
+  // `(user_id, dedupe_key)` partial unique index; otherwise the legacy
+  // job-lifecycle `(user_id, source_job_id, kind)` index applies. A caller
+  // that sets `dedupeKey` therefore must NOT also rely on the job index for
+  // the same row (a same-(user, job, kind) re-insert with a DIFFERENT
+  // dedupeKey would raise instead of no-op). Both partial unique indexes are
+  // created in the host's drizzle-store.ts.
+  const conflictSql = dedupeKey
+    ? `ON CONFLICT (user_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL AND user_id IS NOT NULL
+            DO NOTHING`
+    : `ON CONFLICT (user_id, source_job_id, kind)
+            WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
+            DO NOTHING`;
+
   const host = getNotificationsHostAdapters();
   const [result] = host.runPostgresQueriesSync({
     connectionString: host.getPostgresConnectionString(),
     queries: [
       {
         text: `INSERT INTO ${schemaQualified("notifications")}
-          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, created_at, read_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), ${readAtSql})
-          ON CONFLICT (user_id, source_job_id, kind)
-            WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
-            DO NOTHING
-          RETURNING id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, created_at, read_at`,
+          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), ${readAtSql})
+          ${conflictSql}
+          RETURNING id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, dedupe_key, created_at, read_at`,
         values: [
           id,
           args.userId,
@@ -252,6 +272,7 @@ function insertNotificationRowForUser(args: {
           args.input.metadata ? JSON.stringify(args.input.metadata) : null,
           args.input.sourceJobId ?? null,
           args.input.sourceJobName ?? null,
+          dedupeKey,
         ],
       },
     ],
@@ -374,15 +395,19 @@ export function markAllNotificationsReadForUser(userId: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Append-only agent-creation progress event log.
+// Agent-creation progress event log — one row per (run, milestone).
 //
-// Each milestone is a NEW INSERT row in cinatra.notifications. The
+// Each DISTINCT milestone is a NEW INSERT row in cinatra.notifications. The
 // `(user_id, source_job_id, kind)` partial unique index would collapse
 // repeated emits when source_job_id is the runId, so we use a per-event
 // `randomUUID()` for source_job_id and put the grouping identity in
 // `metadata.progress.runId`. The renderer in inline-agent-run-card.tsx
 // filters by metadata.category + metadata.progress.runId (NOT
-// sourceJobId), so milestones display as an ordered append-only timeline.
+// sourceJobId), so milestones display as an ordered timeline.
+//
+// Idempotency lives on the general `dedupe_key` instead (issue #50):
+// `agent-creation-progress:<runId>:<milestone>` collapses a re-emit of the
+// SAME milestone for the same run while keeping one row per milestone.
 //
 // All emits are `kind: "info"` + `autoMarkRead: true` — the bell badge
 // stays focused on terminal `success`/`error` rows from
@@ -394,6 +419,15 @@ export function markAllNotificationsReadForUser(userId: string): void {
 //   - metadata.category is ALWAYS "agent_creation_progress" (never
 //     drifts to "background_process").
 //   - source_job_id is ALWAYS a fresh UUID per emit (never the runId).
+//   - dedupe_key is ALWAYS `agent-creation-progress:<runId>:<milestone>`
+//     so the timeline is ONE ROW PER MILESTONE PER RUN, not one row per
+//     emit. Re-emits of the same milestone for the same run (the
+//     agent_source_write + agent_source_write_files pair both emitting
+//     "writing_files", review re-invocations re-emitting the review
+//     milestones, the dispatch-side + review-side "syncing_skills" pair)
+//     collapse via ON CONFLICT DO NOTHING instead of rendering the same
+//     notification twice in the flyout (issue #50). DIFFERENT milestones
+//     of one run never collapse (the milestone is part of the key).
 //   - recipient is server-derived from actor.principalId (never
 //     caller-controlled — see callers).
 // ---------------------------------------------------------------------------
@@ -445,6 +479,10 @@ export async function emitAgentCreationProgress(
       // (user_id, source_job_id, kind). The runId lives in metadata.progress.runId.
       sourceJobId: randomUUID(),
       sourceJobName: "agent-creation-progress",
+      // Stable per-(run, milestone) key: the SAME milestone emitted more
+      // than once for one run (double writers / review re-runs) collapses
+      // to one row; different milestones keep their own rows (issue #50).
+      dedupeKey: `agent-creation-progress:${args.runId}:${args.milestone}`,
       metadata: {
         category: "agent_creation_progress",
         progress: {

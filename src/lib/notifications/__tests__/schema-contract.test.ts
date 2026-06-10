@@ -38,6 +38,7 @@ const EXPECTED_COLUMNS = [
   "metadata",
   "source_job_id",
   "source_job_name",
+  "dedupe_key",
   "created_at",
   "read_at",
 ] as const;
@@ -46,6 +47,12 @@ const CONFLICT_TARGET =
   "ON CONFLICT (user_id, source_job_id, kind)";
 const DEDUPE_INDEX_TARGET =
   "(user_id, source_job_id, kind) WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL";
+// General per-user dedupe key (issue #50) — second partial unique index +
+// the alternate conflict target the writer picks when input.dedupeKey is set.
+const DEDUPE_KEY_CONFLICT_TARGET =
+  "ON CONFLICT (user_id, dedupe_key)";
+const DEDUPE_KEY_INDEX_TARGET =
+  "(user_id, dedupe_key) WHERE dedupe_key IS NOT NULL AND user_id IS NOT NULL";
 
 const queries = buildCreateStoreSchemaQueries("cinatra");
 const texts = queries.map((q) => q.text);
@@ -80,6 +87,12 @@ function extractSql(pattern: RegExp): string {
 // The INSERT ... VALUES ... ON CONFLICT ... RETURNING template literal.
 const insertSql = extractSql(
   /INSERT INTO \$\{schemaQualified\("notifications"\)\}[\s\S]*?RETURNING[\s\S]*?read_at`/,
+);
+// The conflict clause is selected per-insert (Postgres accepts exactly one
+// conflict target): the two branches live in the `conflictSql` ternary right
+// above the INSERT template literal and are interpolated as ${conflictSql}.
+const conflictTernarySql = extractSql(
+  /const conflictSql = dedupeKey[\s\S]*?DO NOTHING`;/,
 );
 // The list SELECT template literal.
 const selectSql = extractSql(
@@ -119,13 +132,28 @@ describe("notifications schema-contract (DDL ⇄ writer-SQL drift guard)", () =>
     expect(notificationsDdlBlob).toContain(
       `CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_job_kind_idx ON "cinatra"."notifications" ${DEDUPE_INDEX_TARGET}`,
     );
-    // Writer side: the ON CONFLICT clause must be byte-identical to the
-    // fixed conflict-target literal.
-    expect(insertSql).toContain(CONFLICT_TARGET);
-    expect(insertSql).toContain(
+    // Writer side: the legacy job conflict target lives in the `conflictSql`
+    // ternary (selected when no dedupeKey is supplied) and the INSERT
+    // interpolates it.
+    expect(conflictTernarySql.length).toBeGreaterThan(0);
+    expect(conflictTernarySql).toContain(CONFLICT_TARGET);
+    expect(conflictTernarySql).toContain(
       "WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL",
     );
-    expect(insertSql).toContain("DO NOTHING");
+    expect(conflictTernarySql).toContain("DO NOTHING");
+    expect(insertSql).toContain("${conflictSql}");
+  });
+
+  it("the general dedupe_key conflict target matches on BOTH sides (issue #50)", () => {
+    // DDL side: the second partial UNIQUE index.
+    expect(notificationsDdlBlob).toContain(
+      `CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_key_idx ON "cinatra"."notifications" ${DEDUPE_KEY_INDEX_TARGET}`,
+    );
+    // Writer side: the dedupeKey branch of the `conflictSql` ternary.
+    expect(conflictTernarySql).toContain(DEDUPE_KEY_CONFLICT_TARGET);
+    expect(conflictTernarySql).toContain(
+      "WHERE dedupe_key IS NOT NULL AND user_id IS NOT NULL",
+    );
   });
 
   it("the AFTER INSERT LISTEN/NOTIFY trigger + function are present in the generated DDL", () => {
