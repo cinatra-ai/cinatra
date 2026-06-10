@@ -343,6 +343,11 @@ export class InProcessAgentExecutor implements AgentExecutor {
   // Map A2A taskId → AbortController, so cancelTask can interrupt the
   // observer-side poll loop without touching the BullMQ job.
   private readonly aborters = new Map<string, AbortController>();
+  // Map A2A taskId → A2A contextId, so cancelTask can publish the originating
+  // contextId on its canceled status-update instead of an empty string.
+  // Mirrors the `contexts` map in legacy-agent-executor.ts. Populated at the
+  // top of execute(); cleaned up wherever taskToRun/aborters are.
+  private readonly taskToContext = new Map<string, string>();
   private readonly getPinnedVersionForTask?: (
     taskId: string,
   ) => string | undefined;
@@ -363,6 +368,7 @@ export class InProcessAgentExecutor implements AgentExecutor {
 
     const aborter = new AbortController();
     this.aborters.set(requestContext.taskId, aborter);
+    this.taskToContext.set(requestContext.taskId, requestContext.contextId);
     // When true, _backgroundPoll owns cleanup; finally block skips it.
     let earlyFinishCalled = false;
 
@@ -564,6 +570,7 @@ export class InProcessAgentExecutor implements AgentExecutor {
         // Ensure cleanup even on unexpected throw.
         this.aborters.delete(requestContext.taskId);
         this.taskToRun.delete(requestContext.taskId);
+        this.taskToContext.delete(requestContext.taskId);
       });
 
     } finally {
@@ -573,6 +580,7 @@ export class InProcessAgentExecutor implements AgentExecutor {
       if (!earlyFinishCalled) {
         this.aborters.delete(requestContext.taskId);
         this.taskToRun.delete(requestContext.taskId);
+        this.taskToContext.delete(requestContext.taskId);
         eventBus.finished();
       }
     }
@@ -635,6 +643,7 @@ export class InProcessAgentExecutor implements AgentExecutor {
     } finally {
       this.aborters.delete(requestContext.taskId);
       this.taskToRun.delete(requestContext.taskId);
+      this.taskToContext.delete(requestContext.taskId);
     }
   }
 
@@ -649,12 +658,26 @@ export class InProcessAgentExecutor implements AgentExecutor {
     const aborter = this.aborters.get(taskId);
     if (aborter) aborter.abort();
 
+    // Resolve the originating contextId so consumers can correlate the
+    // canceled status-update with its context. Primary source is the
+    // taskToContext map (populated at execute() start). If the background
+    // poller already cleaned the map (e.g. the run parked at input-required —
+    // a non-terminal, still-cancelable state), fall back to the task store,
+    // which retains the contextId for the task's lifetime.
+    let contextId = this.taskToContext.get(taskId) ?? "";
+    if (!contextId && this.config.taskStore) {
+      try {
+        const stored = await this.config.taskStore.load(taskId);
+        contextId = stored?.contextId ?? "";
+      } catch {
+        // best-effort — fall through with "" rather than failing the cancel.
+      }
+    }
+
     eventBus.publish({
       kind: "status-update",
       taskId,
-      // contextId unknown at cancel-time without additional bookkeeping;
-      // InMemoryTaskStore accepts any string and the client already knows it.
-      contextId: "",
+      contextId,
       status: {
         state: "canceled",
         timestamp: new Date().toISOString(),
@@ -668,5 +691,6 @@ export class InProcessAgentExecutor implements AgentExecutor {
     // owned by execute()'s finally block.
     this.aborters.delete(taskId);
     this.taskToRun.delete(taskId);
+    this.taskToContext.delete(taskId);
   }
 }
