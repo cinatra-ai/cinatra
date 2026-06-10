@@ -32,6 +32,11 @@ import "@/lib/register-transport-connectors";
 // without importing host auth modules directly.
 import "@/lib/register-extension-action-guard";
 import "@/lib/register-extension-connector-config-store";
+// Bind the Better Auth oauthClient surface (SDK globalThis DI slot) so the
+// mcp-client connector's setup page + disconnect action can list/delete the
+// external MCP OAuth clients without importing @/lib/better-auth-db directly
+// (SDK-only decouple).
+import "@/lib/register-extension-mcp-oauth-client-store";
 // Wire the host A2A connection-storage provider (Nango connection records +
 // external-agent-template store) behind the SDK's requireA2AConnectionProvider()
 // contract, so the a2a-server-connector's "use server" actions resolve it without

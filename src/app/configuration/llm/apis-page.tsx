@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
+import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { Label } from "@/components/ui/label";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
@@ -113,7 +114,7 @@ async function OpenAIModalContent() {
               <>
                 <select
                   name="defaultModel"
-                  defaultValue={connection?.defaultModel && selectableModels.has(connection.defaultModel) ? connection.defaultModel : "gpt-5.4"}
+                  defaultValue={connection?.defaultModel && selectableModels.has(connection.defaultModel) ? connection.defaultModel : DEFAULT_OPENAI_MODEL_ID}
                   className="rounded-control border border-line bg-surface-strong px-4 py-3"
                 >
                   {availableModels.map((model) => (
@@ -125,7 +126,7 @@ async function OpenAIModalContent() {
               </>
             ) : (
               <>
-                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? "gpt-5"} />
+                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID} />
                 <span className="text-xs font-normal text-muted-foreground">
                   Save a working key first to load available models.
                 </span>

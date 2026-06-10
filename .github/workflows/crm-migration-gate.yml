@@ -65,3 +65,6 @@ jobs:
 
       - name: OAS banned-primitives gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/oas-banned-primitives-gate.test.mjs
+
+      - name: CRM pointer-row gate tests
+        run: node --test scripts/audit/__tests__/crm-pointer-gate.test.mjs

@@ -135,7 +135,12 @@ const oldNameDenylist: ReadonlyArray<{ packageName: string; reason: string }> = 
   {
     packageName: "@cinatra-ai/claude-connector",
     reason:
-      "Use @cinatra-ai/mcp-client-registry-connector. The package is the inbound MCP-client registry, not a Claude integration.",
+      "Use @cinatra-ai/mcp-client-connector. The package is the inbound MCP-client connector, not a Claude integration.",
+  },
+  {
+    packageName: "@cinatra-ai/mcp-client-registry-connector",
+    reason:
+      "Renamed to @cinatra-ai/mcp-client-connector — the generic inbound MCP-client connector (vendor-neutral branding, no Claude-only client filter).",
   },
   {
     packageName: "@cinatra-ai/skill-creator",
