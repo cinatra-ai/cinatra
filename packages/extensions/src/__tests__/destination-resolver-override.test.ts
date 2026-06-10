@@ -52,7 +52,7 @@ describe("resolvePublishDestination — vendorScopeOverride", () => {
       }),
       DeploymentRegistryConfigNotAvailableError: class extends Error {},
     }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
       writeDestinationCredential: vi.fn(async () => {}),
     }));
@@ -83,7 +83,7 @@ describe("resolvePublishDestination — vendorScopeOverride", () => {
       }),
       DeploymentRegistryConfigNotAvailableError: class extends Error {},
     }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
       writeDestinationCredential: vi.fn(async () => {}),
     }));
@@ -118,7 +118,7 @@ describe("resolvePublishDestination — vendorScopeOverride", () => {
       }),
       DeploymentRegistryConfigNotAvailableError: class extends Error {},
     }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => ({
         id: FIXTURE_DEST_ID,
         label: "test",
@@ -158,7 +158,7 @@ describe("resolvePublishDestination — vendorScopeOverride", () => {
       }),
       DeploymentRegistryConfigNotAvailableError: class extends Error {},
     }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
       writeDestinationCredential: vi.fn(async () => {}),
     }));
@@ -189,7 +189,7 @@ describe("resolvePublishDestination — vendorScopeOverride", () => {
       }),
       DeploymentRegistryConfigNotAvailableError: class extends Error {},
     }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
       writeDestinationCredential: vi.fn(async () => {}),
     }));

@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("server-only", () => ({}));
 
 // Mock database dependencies so no real DB is needed in extensions package tests
-vi.mock("@/lib/drizzle-store", () => ({
+vi.mock("@/lib/extension-destinations-store", () => ({
   readDestinationCredential: vi.fn(() => Promise.resolve(null)),
   writeDestinationCredential: vi.fn(() => Promise.resolve()),
 }));
@@ -134,7 +134,7 @@ describe("resolvePublishDestination", () => {
       },
     }));
 
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => ({
         id: FIXTURE_DEST_ID,
         label: "test",

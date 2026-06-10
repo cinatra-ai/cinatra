@@ -14,7 +14,7 @@ import type { VerdaccioConfig } from "@cinatra-ai/registries";
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/drizzle-store", () => ({
+vi.mock("@/lib/extension-destinations-store", () => ({
   readDestinationCredential: vi.fn(() => Promise.resolve(null)),
   writeDestinationCredential: vi.fn(() => Promise.resolve()),
 }));
