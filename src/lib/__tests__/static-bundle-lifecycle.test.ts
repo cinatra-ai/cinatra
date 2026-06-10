@@ -10,7 +10,7 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 const readInstalledExtensionsByPackageName = vi.fn();
 const installExtensionManifest = vi.fn();
 const transitionExtensionLifecycle = vi.fn();
-const isPackageRequiredInProd = vi.fn((..._args: unknown[]) => false);
+const isPackageRequiredInProd = vi.fn<(pkg: string) => boolean>(() => false);
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
@@ -22,7 +22,7 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   transitionExtensionLifecycle: (...args: unknown[]) => transitionExtensionLifecycle(...args),
 }));
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
-  isPackageRequiredInProd: (...args: unknown[]) => isPackageRequiredInProd(...args),
+  isPackageRequiredInProd: (pkg: string) => isPackageRequiredInProd(pkg),
 }));
 vi.mock("@/lib/generated/extensions.server", () => ({
   STATIC_EXTENSION_RECORDS: [
