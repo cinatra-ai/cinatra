@@ -10,7 +10,9 @@ RUN corepack enable
 # .pnpmfile.cjs is required at install time: the lockfile records its checksum,
 # and its readPackage hook re-hydrates the cloned extensions' first-party "*"
 # specs to workspace:* so they link the workspace SDK packages.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
+# cinatra-required-extensions.lock.json drives the acquire step below; copying
+# it in this layer makes a lock bump cache-bust the acquisition.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs cinatra-required-extensions.lock.json ./
 COPY packages packages
 COPY patches patches
 # Root postinstall hook (scripts/vendor-anthropic-skills.mjs) runs during
@@ -18,11 +20,21 @@ COPY patches patches
 # only after the later `COPY . .`. Copying it here preserves the lockfile-
 # only cache-bust for the install layer when only scripts/ changes.
 COPY scripts scripts
-# The extension source (cloned back into the build context before this build by
-# the clone-extensions CI step) must be present at install time so the workspace
-# graph is complete and the extensions' workspace SDK deps link (else the later
-# `next build` cannot resolve them).
-COPY extensions extensions
+
+# Two-phase install around the pinned extension acquisition:
+#   1. first frozen install WITHOUT extensions/ — pnpm tolerates the missing
+#      workspace members (it lays down dangling extension symlinks) and this
+#      install provides the root `tar` dependency + a runnable packages/cli;
+#   2. acquire the required-extension bootable set from the committed lock —
+#      codeload tarballs pinned to commit SHAs, hardened extraction, tree-hash
+#      + package.json verification (packages/cli/src/prod-extension-acquisition.mjs).
+#      Any network / 404 / integrity failure FAILS the image build right here;
+#   3. second frozen install links the now-present extension packages so their
+#      workspace SDK deps resolve (else the later `next build` cannot).
+# The build context never supplies extensions/ (.dockerignore excludes it);
+# the verified in-image acquisition is the only source of extension code.
+RUN pnpm install --frozen-lockfile
+RUN node packages/cli/bin/cinatra.mjs extensions acquire-prod
 RUN pnpm install --frozen-lockfile
 
 COPY . .

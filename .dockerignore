@@ -6,12 +6,19 @@ node_modules
 
 # VCS / editor / agent dirs
 .git
-# Nested .git from the companion extension repos cloned into the build context
+# Nested .git from the companion extension repos cloned into the working tree
 # — keep the source, drop their git metadata.
 **/.git
 .gitignore
 .vscode
 .claude
+
+# Extension source never enters the image from the build context. The image
+# acquires the required-extension set INSIDE the build from the committed
+# cinatra-required-extensions.lock.json (SHA-pinned + integrity-verified;
+# see the Dockerfile acquire step), so a local dev clone tree cannot leak an
+# unpinned/divergent copy into the image.
+extensions
 
 # Local env / data — never bake into image
 .env
