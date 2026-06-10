@@ -47,6 +47,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -421,6 +422,25 @@ export async function extractVerifiedTarball(tarBuffer, destDir, { tar }) {
     extractor.on("finish", resolvePromise);
     extractor.end(tarBuffer);
   });
+  // node-tar applies the process umask at file creation, so the normalized
+  // entry modes can land narrower on disk (e.g. 0600 under umask 077) —
+  // harmless but not canonical. Walk the extracted tree once and chmod every
+  // node to the exact git pair keyed on the (umask-surviving) owner-exec
+  // bit, so the applied modes are deterministic for any builder umask.
+  // (A umask hostile enough to strip owner bits changes the exec-bit hash
+  // input and fails the re-hash that follows extraction — fail closed.)
+  const normalizeModes = (dir) => {
+    for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        chmodSync(full, 0o755);
+        normalizeModes(full);
+      } else if (dirent.isFile()) {
+        chmodSync(full, (statSync(full).mode & 0o100) !== 0 ? 0o755 : 0o644);
+      }
+    }
+  };
+  normalizeModes(destDir);
 }
 
 function readMarker(destDir) {
@@ -497,9 +517,13 @@ export async function acquireProdRequiredExtensions({
   // The lock must match the declaration it was generated from. Enforcing the
   // bijection HERE (not only in the CI coverage gate) means the image build
   // itself fails on a drifted lock — the publish path cannot outrun a
-  // forgotten `update-required-extension-lock` regeneration.
-  const declared = readDeclaredRequiredExtensionNames(path.join(repoRoot, "package.json"));
-  if (declared.size > 0) {
+  // forgotten `update-required-extension-lock` regeneration. Only a root with
+  // NO package.json at all skips the cross-check (unit-test scratch roots);
+  // a real workspace manifest that declares nothing while the lock pins
+  // packages is itself drift and fails loud.
+  const rootManifestPath = path.join(repoRoot, "package.json");
+  if (existsSync(rootManifestPath)) {
+    const declared = readDeclaredRequiredExtensionNames(rootManifestPath);
     const lockedNames = new Set(lock.packages.map((p) => p.packageName));
     const missingFromLock = [...declared].filter((n) => !lockedNames.has(n)).sort();
     const staleInLock = [...lockedNames].filter((n) => !declared.has(n)).sort();

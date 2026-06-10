@@ -445,6 +445,36 @@ describe("acquireProdRequiredExtensions", () => {
     ).rejects.toThrow(/declared but not locked: @scope\/undeclared-in-lock/);
   });
 
+  it("fails loud when a present manifest declares no required extensions at all", async () => {
+    // Fail-closed bijection: only a root with NO package.json skips the
+    // cross-check; a manifest without the block while the lock pins packages
+    // is itself drift.
+    const gz = await goodArchive();
+    const root = await workspaceWithLock(gz);
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "scratch" }));
+    await expect(
+      acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} }),
+    ).rejects.toThrow(/locked but not declared: @scope\/sample-connector/);
+  });
+
+  it("applies canonical modes regardless of the process umask", async () => {
+    const previousUmask = process.umask(0o077);
+    try {
+      const gz = await goodArchive({
+        extra: [{ path: `sample-connector-${SHA_A}/bin/run.sh`, body: "#!/bin/sh\n", mode: 0o775 }],
+      });
+      const root = await workspaceWithLock(gz);
+      await acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} });
+      const { statSync } = await import("node:fs");
+      const dest = path.join(root, "extensions/scope/sample-connector");
+      expect(statSync(path.join(dest, "package.json")).mode & 0o7777).toBe(0o644);
+      expect(statSync(path.join(dest, "bin/run.sh")).mode & 0o7777).toBe(0o755);
+      expect(statSync(path.join(dest, "bin")).mode & 0o7777).toBe(0o755);
+    } finally {
+      process.umask(previousUmask);
+    }
+  });
+
   it("fails loud when marker-claimed content was tampered with", async () => {
     const gz = await goodArchive();
     const root = await workspaceWithLock(gz);
