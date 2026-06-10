@@ -41,9 +41,12 @@
 //
 // This module is data-driven end to end: package identities come from the
 // lockfile, never from code (no host->extension coupling is added here).
-// `tar` (a root dependency) is imported lazily AFTER the workspace guard so
-// `cinatra setup prod` inside the standalone runtime image — where the
-// workspace and the `tar` dependency do not exist — skips cleanly.
+// `tar` (a root dependency) is imported lazily AFTER the entry guards so
+// `cinatra setup prod` inside the standalone runtime image — detected
+// POSITIVELY by `server.js` + `.next/` at the root (Next's file tracing
+// copies pnpm-workspace.yaml into the standalone output, so "no workspace
+// file" alone is NOT a reliable standalone signal), where the `tar`
+// dependency may not exist — skips cleanly.
 
 import { createHash } from "node:crypto";
 import {
@@ -504,6 +507,28 @@ export async function acquireProdRequiredExtensions({
   log = console.log,
 } = {}) {
   if (!repoRoot) throw new Error("[prod-extension-acquisition] repoRoot is required");
+  // Standalone runtime image — POSITIVE detection, checked FIRST. Next's
+  // output-file tracing mirrors the project root into .next/standalone
+  // INCLUDING pnpm-workspace.yaml (so "workspace file absent" is NOT a
+  // reliable standalone detector) and INCLUDING the host-imported extension
+  // sources WITHOUT their acquisition markers (tracing copies only the
+  // imported files) — running the acquisition there would refuse on
+  // "exists but is not acquisition-managed" and brick `setup prod` on a
+  // perfectly good image (caught by scripts/ci/prod-boot-e2e.sh). The
+  // standalone root is identified by the traced server entry `server.js`
+  // sitting NEXT TO `.next/` — true only for the standalone output (a real
+  // repo root has no root-level server.js; the build stage's standalone
+  // output lives nested under .next/standalone/, not at the build root).
+  if (
+    existsSync(path.join(repoRoot, "server.js")) &&
+    existsSync(path.join(repoRoot, ".next"))
+  ) {
+    log(
+      "- Required-extension acquisition: skipped (standalone runtime image — the extension " +
+        "source was baked and verified at image build time).",
+    );
+    return { skipped: true, reason: "standalone-runtime-image" };
+  }
   if (!existsSync(path.join(repoRoot, "pnpm-workspace.yaml"))) {
     log(
       "- Required-extension acquisition: skipped (no pnpm workspace at this root — the standalone " +
