@@ -70,6 +70,8 @@ vi.mock("@cinatra-ai/llm", () => ({
     deterministic: false,
   })),
   createLocalSkillShellTool: vi.fn(() => null),
+  // Real predicate shape: only base gpt-5 / gpt-5-mini lack hosted shell.
+  openAiModelSupportsShell: (modelId: string) => modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   // Bridge route imports this for cinatra_llm dispatch.
   resolveProviderAdapter: vi.fn(async () => ({})),
   PreferredProviderUnavailableError: class PreferredProviderUnavailableError extends Error {

@@ -86,6 +86,12 @@ export {
 
 // Connection helpers
 export { getConfiguredOpenAIConnection, type OpenAIConnectionConfig } from "./providers/openai";
+// Per-model capability facts (hosted-shell support) — the single set shared by
+// every shell-skill-delivery surface (chat runner gate, llm-bridge route).
+export {
+  OPENAI_SHELL_INCOMPATIBLE_MODEL_IDS,
+  openAiModelSupportsShell,
+} from "./providers/openai-model-capabilities";
 export { type AnthropicConnectionConfig } from "./providers/anthropic";
 export { getConfiguredGeminiConnection, DEFAULT_GEMINI_MODEL } from "./providers/gemini";
 

@@ -30,6 +30,7 @@ import { getAllManifests } from "@/lib/wizard-manifest-registry";
 // appointment schedules, ...) resolve through the chat-user-context capability
 // registry — the runner no longer imports any connector package by name.
 import { buildChatUserContextSections } from "./chat-user-context";
+import { shouldDeliverChatShellSkillTools } from "./shell-skill-gate";
 import {
   hasConfiguredLlmRuntime,
   stream,
@@ -409,9 +410,26 @@ export async function runChatTurn(args: RunChatTurnArgs): Promise<void> {
   }
 
   // Guarantee the chat skill resolves with an on-disk sourcePath so
-  // buildSkillTools emits the shell tool (not read_skill).
+  // buildSkillTools emits the shell tool (also feeds the catalog-backed
+  // loadSystemPrompt above; the read_skill fallback is retired).
   await ensureChatSkillRegistered();
-  const skillTools = await buildSkillTools({ skillIds: CHAT_SKILL_IDS });
+  // Model-aware shell delivery (issue #47). OpenAI rejects the hosted
+  // `shell` tool for gpt-5 / gpt-5-mini; sending it 400s EVERY chat turn.
+  // Chat passes no per-request model, so adapter.defaultModel (the
+  // connection's defaultModel) is exactly the model this request uses.
+  // Mirror the llm-bridge degrade semantics: skip the skill shell tool and
+  // keep the turn running — never reintroduce a read_skill function tool.
+  const deliverShellSkillTools = shouldDeliverChatShellSkillTools(adapter);
+  if (!deliverShellSkillTools) {
+    console.warn(
+      `[chat] shell-incompatible OpenAI model "${adapter.defaultModel}" — ` +
+        "skipping the chat skill shell tool (skill delivery degrades; the " +
+        "turn continues with MCP + web_search tools only)",
+    );
+  }
+  const skillTools = deliverShellSkillTools
+    ? await buildSkillTools({ skillIds: CHAT_SKILL_IDS })
+    : [];
   const chatCinatraMcpTool = await buildLlmMcpServerToolForChat(
     adapter.provider,
     { delegation: "chat", userId, orgId: sessionOrgId, platformRole },

@@ -246,6 +246,7 @@
       "@cinatra-ai/llm/anthropic-log-directory": ["./packages/llm/src/anthropic-log-directory.ts"],
       "@cinatra-ai/llm/anthropic-logging-state": ["./packages/llm/src/anthropic-logging-state.ts"],
       "@cinatra-ai/llm/actor-context": ["./packages/llm/src/actor-context.ts"],
+      "@cinatra-ai/llm/openai-model-capabilities": ["./packages/llm/src/providers/openai-model-capabilities.ts"],
       "@cinatra-ai/notifications/host-adapters": ["./packages/notifications/src/host-adapters.ts"],
       "@cinatra-ai/notifications/types": ["./packages/notifications/src/types.ts"],
       "@cinatra-ai/notifications/client": ["./packages/notifications/src/client.ts"],

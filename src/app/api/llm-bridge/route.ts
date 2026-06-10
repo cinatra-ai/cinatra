@@ -11,6 +11,7 @@ import {
   resolveConfiguredLlmRuntime,
   resolveProviderAdapter,
   createLocalSkillShellTool,
+  openAiModelSupportsShell,
   buildLlmMcpServerToolForAgentRun,
   getLlmMcpCredentials,
   PreferredProviderUnavailableError,
@@ -630,31 +631,21 @@ export async function POST(req: Request): Promise<Response> {
       // Model-aware skill-tool injection.
       // OpenAI's Responses API rejects the `shell` tool for several
       // models (gpt-5 returns "400 Tool 'shell' is not supported with
-      // gpt-5"). When the agent's preferredModel is in the no-shell set,
-      // fall back to a `read_skill` function tool which works on any
-      // model. The fallback returns SKILL.md content the same way the
-      // shell tool would, just as a function-call instead of a native
-      // shell call. Surfaced by tracing the web-scrape-agent failure to
+      // gpt-5"). Surfaced by tracing the web-scrape-agent failure to
       // a docker/wayflow `_patched_run_task EXCEPTION` line:
       // packages/llm/src/providers/openai.ts translates
       // `type:"shell"` to the Responses API tool, which the model rejects.
-      // Per OpenAI docs, only the base gpt-5 +
-      // gpt-5-mini lack hosted shell support. gpt-5.4 and gpt-5.5 both
-      // list "Hosted shell: Supported" — and gpt-5.5 is the canonical
-      // model for new Cinatra agents per openai_connection.defaultModel.
-      // gpt-4.1 family is omitted because hosted-shell incompatibility for
-      // that family is unverified and those models are not in the allowed
-      // set anyway; if a future agent picks one and shell fails, the
-      // function-tool fallback below catches it.
-      const SHELL_INCOMPATIBLE_MODELS = new Set<string>([
-        "gpt-5",
-        "gpt-5-mini",
-      ]);
+      // The no-shell model set lives in the shared capability leaf
+      // (@cinatra-ai/llm/openai-model-capabilities) so this route and the
+      // chat runner gate (src/app/api/chat/shell-skill-gate.ts) cannot
+      // drift apart. When the agent's preferredModel is shell-incompatible,
+      // skill delivery degrades (see the else branch below) — the legacy
+      // `read_skill` function-tool fallback is retired.
       const dispatchModel =
         dispatch.kind === "dispatch"
           ? (dispatch.preferredModel ?? "")
           : "";
-      const modelSupportsShell = !SHELL_INCOMPATIBLE_MODELS.has(dispatchModel);
+      const modelSupportsShell = openAiModelSupportsShell(dispatchModel);
       if (modelSupportsShell) {
         // Bridge-side preflight: register the auto-discovered SKILL.md into
         // the catalog so its on-disk copy lives under the default

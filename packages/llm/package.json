@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./actor-context": "./src/actor-context.ts",
     "./anthropic-log-directory": "./src/anthropic-log-directory.ts",
-    "./anthropic-logging-state": "./src/anthropic-logging-state.ts"
+    "./anthropic-logging-state": "./src/anthropic-logging-state.ts",
+    "./openai-model-capabilities": "./src/providers/openai-model-capabilities.ts"
   },
   "scripts": {
     "test": "vitest run"
