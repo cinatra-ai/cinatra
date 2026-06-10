@@ -7,6 +7,7 @@ import {
 } from "@cinatra-ai/mcp-client";
 import {
   createAgentBuilderPrimitiveHandlers,
+  getAgentCreationFlowPackages,
   readPublishedAgentTemplates,
 } from "@cinatra-ai/agents";
 import { runDeterministicLlmTask } from "@cinatra-ai/llm";
@@ -24,17 +25,14 @@ import { buildAgentInstancePath } from "@/lib/agent-url";
 // preflight failure: NO `agent_run` invocation, NO half-started run, and
 // the runner.ts caller treats the dispatch as TERMINAL (no LLM fallthrough).
 //
-// `@cinatra-ai/lint-policy-agent` is intentionally OMITTED — it is the
-// deterministic skill-free scanner. Including it would cause
-// a false `anthropic_no_skills_resolved` preflight failure when the
-// Anthropic pin is active.
+// The set is DERIVED from the creation skill-lane definitions owned by the
+// agents package (reviewer lanes + author lane) — not a hand-maintained
+// literal list here. The lint-policy agent is excluded by construction: it is
+// the deterministic skill-free scanner, not a lane, and gating it would cause
+// a false `anthropic_no_skills_resolved` preflight failure when the Anthropic
+// pin is active. Exported for the standing-invariant sentinel tests.
 // ---------------------------------------------------------------------------
-export const CREATION_FLOW_PACKAGES = new Set<string>([
-  "@cinatra-ai/planner-agent",
-  "@cinatra-ai/code-reviewer-agent",
-  "@cinatra-ai/security-reviewer-agent",
-  "@cinatra-ai/author-agent",
-]);
+export const CREATION_FLOW_PACKAGES: ReadonlySet<string> = getAgentCreationFlowPackages();
 
 /**
  * Bridge: ActorContext (chat kernel) → PrimitiveActorContext (in-process).

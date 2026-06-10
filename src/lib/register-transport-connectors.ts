@@ -281,6 +281,13 @@ export function registerTransportConnectors(): void {
     isPrivateUrl,
   });
 
+  // Chat user-context providers register through each connector's own
+  // `register(ctx)` (gmail-connector#7 / google-calendar-connector#7) via the
+  // serverEntry loader — the pre-#75 transitional boot bridge that registered
+  // the same records here was dropped when the legacy named-import site was
+  // removed by the serverEntry cutover (#75). The records carry their own
+  // packageName, so registry keying/dedupe is unchanged.
+
   // Remaining transport connectors (github, linkedin, youtube, media-feeds)
   // have only DOMAIN-lib imports (no host-internal infra deps), so no DI
   // registration is needed. Their `@/lib/<x>-api` imports are domain modules

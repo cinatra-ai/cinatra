@@ -345,3 +345,13 @@ export type {
   NangoConnectionSavedHook,
   LlmToolboxProvider,
 } from "./host-connector-services-contract";
+
+// Chat user-context contribution: a connector contributes pre-formatted chat
+// system-prompt sections through the generic capability registry (see the
+// trust-boundary note in the contract module) instead of the chat runner
+// importing the connector package by name.
+export { CHAT_USER_CONTEXT_CAPABILITY_ID } from "./chat-user-context-contract";
+export type {
+  ChatUserContextContributor,
+  ChatUserContextProviderRecord,
+} from "./chat-user-context-contract";

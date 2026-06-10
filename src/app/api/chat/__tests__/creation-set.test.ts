@@ -1,15 +1,19 @@
 /**
- * Standing-invariant sentinel for the `CREATION_FLOW_PACKAGES` set.
+ * Wiring sentinel for the `CREATION_FLOW_PACKAGES` export.
  *
- * This is a deliberately tiny, self-contained regression file (separate from
- * explicit-dispatch-preflight.test.ts) whose ONLY job is to fail loudly the
- * moment the creation-flow package set changes. The chat dispatch preflight
- * gate keys off membership in this set; a silent add/remove would either
- * (a) start gating an unrelated package, or (b) stop gating a creation agent.
+ * The set is now DERIVED: `explicit-dispatch-server.ts` re-exports
+ * `getAgentCreationFlowPackages()` from the agents package (the creation
+ * skill-lane definitions) instead of carrying a hand-maintained literal set.
+ * The REAL derivation sentinel (pinning the canonical 4 against the actual
+ * lane modules) lives in
+ * `packages/agents/src/__tests__/creation-flow-packages.test.ts`; THIS file
+ * asserts the chat-side wiring — that the exported set is exactly what the
+ * agents-package derivation returns and that gate membership behaves.
  *
  * Mock prelude mirrors explicit-dispatch-preflight.test.ts — required only so
  * `../explicit-dispatch-server` is import-safe (its dynamic-import deps are
- * never exercised by these pure set assertions).
+ * never exercised by these pure set assertions). The mocked derivation
+ * returns the canonical 4 — the same values the real sentinel pins.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -24,6 +28,13 @@ vi.mock("@cinatra-ai/agents", () => ({
   resolveRequiredCreationSkillIds: vi.fn(),
   createAgentBuilderPrimitiveHandlers: () => ({}),
   readPublishedAgentTemplates: vi.fn(async () => []),
+  getAgentCreationFlowPackages: () =>
+    new Set([
+      "@cinatra-ai/planner-agent",
+      "@cinatra-ai/code-reviewer-agent",
+      "@cinatra-ai/security-reviewer-agent",
+      "@cinatra-ai/author-agent",
+    ]),
 }));
 vi.mock("@cinatra-ai/mcp-client", () => ({
   createInProcessPrimitiveTransport: vi.fn(() => ({})),

@@ -137,7 +137,12 @@ async function emitMilestoneIfThreaded(
 // The 3 reviewer agent packages whose per-agent methodology skills are
 // required catalog entries for dispatch. The author-agent is NOT dispatched
 // from this primitive; it's the typed-artifact emitter for the chat-side flow.
-const REVIEWER_LANE_PACKAGES = [
+//
+// EXPORTED as the canonical reviewer-lane definition: the write preflight
+// (mcp/handlers.ts) and the chat-dispatch creation-flow set
+// (creation-flow-packages.ts) derive from THIS constant instead of carrying
+// their own copies of the package names.
+export const REVIEWER_LANE_PACKAGES = [
   "@cinatra-ai/security-reviewer-agent",
   "@cinatra-ai/code-reviewer-agent",
   "@cinatra-ai/planner-agent",
