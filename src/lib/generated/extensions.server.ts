@@ -182,3 +182,29 @@ export const GENERATED_EXTERNAL_MCP_TOOLBOXES: Record<string, GeneratedConnector
   "drupal-mcp-connector": { load: () => import("@cinatra-ai/drupal-mcp-connector/mcp-toolbox"), factory: "createDrupalExternalMcpToolbox" },
   "wordpress-mcp-connector": { load: () => import("@cinatra-ai/wordpress-mcp-connector/mcp-toolbox"), factory: "createWordPressExternalMcpToolbox" },
 };
+
+// agentSlug → widget-stream agent entry (declared via cinatra.widgetStream).
+// Literal specifiers only (Turbopack-safe). Consumed by
+// src/lib/widget-stream-agents.server.ts — the host stream route resolves
+// widget agents from this map; it never names a connector package.
+export type GeneratedWidgetStreamContextField = { key: string; maxLength: number };
+export type GeneratedWidgetStreamAuth = {
+  tokenConfigKey: string;
+  instancesConfigKey: string;
+  requiredInstanceFields: string[];
+};
+export type GeneratedWidgetStreamAgentEntry = {
+  load: () => Promise<unknown>;
+  packageName: string;
+  factory: string;
+  label: string;
+  subjectNoun: string;
+  skillCapability: string;
+  contextFields: GeneratedWidgetStreamContextField[];
+  auth: GeneratedWidgetStreamAuth;
+};
+
+export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStreamAgentEntry> = {
+  "drupal-content-editor": { load: () => import("@cinatra-ai/drupal-mcp-connector/widget-chat-tool"), "packageName":"@cinatra-ai/drupal-mcp-connector","factory":"createDrupalWidgetChatTool","label":"Drupal","subjectNoun":"node","skillCapability":"widget-chat.drupal-content-editor","contextFields":[{"key":"instanceId","maxLength":64},{"key":"nodeId","maxLength":32},{"key":"nodeBundle","maxLength":32},{"key":"nodeStatus","maxLength":32},{"key":"href","maxLength":500}],"auth":{"tokenConfigKey":"drupal_widget_auth","instancesConfigKey":"drupal","requiredInstanceFields":["id","name","nangoConnectionId"]} },
+  "wordpress-content-editor": { load: () => import("@cinatra-ai/wordpress-mcp-connector/widget-chat-tool"), "packageName":"@cinatra-ai/wordpress-mcp-connector","factory":"createWordPressWidgetChatTool","label":"WordPress","subjectNoun":"post","skillCapability":"widget-chat.wordpress-content-editor","contextFields":[{"key":"instanceId","maxLength":64},{"key":"postId","maxLength":32},{"key":"postType","maxLength":32},{"key":"postStatus","maxLength":32},{"key":"href","maxLength":500}],"auth":{"tokenConfigKey":"wordpress_widget_auth","instancesConfigKey":"wordpress","requiredInstanceFields":["id","name","username","applicationPassword"]} },
+};

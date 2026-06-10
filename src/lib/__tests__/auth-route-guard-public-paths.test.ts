@@ -16,6 +16,14 @@ import * as path from "node:path";
 const GUARD_PATH = path.resolve(__dirname, "..", "auth-route-guard.ts");
 const guardSource = fs.readFileSync(GUARD_PATH, "utf-8");
 
+const WIDGET_PATHS_PATH = path.resolve(
+  __dirname,
+  "..",
+  "generated",
+  "widget-stream-public-paths.ts",
+);
+const widgetPathsSource = fs.readFileSync(WIDGET_PATHS_PATH, "utf-8");
+
 describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes", () => {
   it("contains /api/llm-bridge (existing pattern)", () => {
     expect(guardSource).toMatch(/"\/api\/llm-bridge"/);
@@ -88,15 +96,29 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
     expect((line ?? "").toLowerCase()).toMatch(/do not broaden/);
   });
 
-  it("widget-public agent streams are the two exact CMS slugs, not a broad /api/agents prefix", () => {
-    expect(guardSource).toMatch(
+  it("widget-public agent streams are exact generated slugs, not a broad /api/agents prefix", () => {
+    // The exact-path list is GENERATED from each extension's cinatra.widgetStream
+    // declaration; the guard consumes it as PUBLIC_AGENT_STREAM_PATHS. The two
+    // CMS slugs must be present in the generated list...
+    expect(widgetPathsSource).toMatch(
       /"\/api\/agents\/wordpress-content-editor\/stream"/,
     );
-    expect(guardSource).toMatch(
+    expect(widgetPathsSource).toMatch(
       /"\/api\/agents\/drupal-content-editor\/stream"/,
     );
-    // PUBLIC_AGENT_STREAM_PATHS must remain an exact-match list (.includes),
-    // never collapse into a public `/api/agents` prefix.
+    // ...every generated entry must be a precise /api/agents/<slug>/stream path
+    // (never a prefix), and the file must stay imports-free + slug-only
+    // (proxy-bundle-safe; no extension package identifiers).
+    const entries = [...widgetPathsSource.matchAll(/^\s*"([^"]+)",\s*$/gm)].map((m) => m[1]);
+    expect(entries.length).toBeGreaterThanOrEqual(2);
+    for (const e of entries) {
+      expect(e).toMatch(/^\/api\/agents\/[a-z0-9-]+\/stream$/);
+    }
+    expect(widgetPathsSource).not.toMatch(/^import /m);
+    expect(widgetPathsSource).not.toMatch(/@cinatra-ai\//);
+    // The guard wires the generated list in and must remain an exact-match
+    // list (.includes), never collapse into a public `/api/agents` prefix.
+    expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_PUBLIC_PATHS/);
     expect(guardSource).not.toMatch(/"\/api\/agents"/);
   });
 });

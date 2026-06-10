@@ -27,15 +27,20 @@ import "server-only";
 //
 // Discovery is filesystem-driven (the install/uninstall-aware substrate for
 // bundled + marketplace extensions): an uninstalled extension's directory is
-// gone, so it stops resolving. The coarse `installed_extension` lifecycle gate
-// is intentionally NOT applied here yet — that hardening lands with the live
-// runtime installer, and applying it now could expose an unseeded-row gap in
-// prod that the legacy self-heals were silently masking.
+// gone, so it stops resolving. On top of that, the coarse `installed_extension`
+// lifecycle gate IS applied at the resolver entry points (the live runtime
+// installer has shipped): an extension whose canonical rows exist but are ALL
+// retired (effective status "archived") is skipped — the explicit-tombstone
+// semantics proven by the StaticBundleLoader's `gateRetiredStaticRecords`. A
+// package with NO rows is KEPT (bundled extensions are not necessarily
+// lifecycle-tracked — "no row" must not read as "retired", so unseeded prod
+// rows cannot regress), and a failed status read keeps everything (fail-open).
 
 import { existsSync, realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { registerExtensionSkill } from "./register-extension-skill";
+import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
 
 // ---------------------------------------------------------------------------
 // Skill-ID derivation (canonical home — re-exported by the dev watcher).
@@ -251,9 +256,108 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Coarse `installed_extension` lifecycle gate (explicit-tombstone semantics).
+// ---------------------------------------------------------------------------
+//
+// Mirrors the StaticBundleLoader's proven `gateRetiredStaticRecords`: drop a
+// scanned extension ONLY when its package has canonical `installed_extension`
+// rows AND none are live (effective status "archived"). "No row" is KEPT —
+// bundled extensions are not necessarily lifecycle-tracked, so an unseeded
+// prod row must never stop skill resolution. The status read goes through a
+// FAIL-SOFT dynamic import of `@cinatra-ai/extensions` (same posture as the
+// `@cinatra-ai/agents/agent-install-path` import above — skills must not
+// hard-depend on the extensions package, which itself consumes skills);
+// any import/DB failure keeps every extension (fail-open, like the loader).
+//
+// Identity drift: `installed_extension.package_name` is not always the npm
+// form (slugified rows exist — see manifest-identity.ts), so each extension is
+// matched by its candidate-key union from `resolveSkillOwnerPackageCandidates`.
+
+async function readLifecycleStatusFailOpen(
+  candidateNames: string[],
+): Promise<Map<string, "active" | "archived"> | null> {
+  if (candidateNames.length === 0) return new Map();
+  try {
+    const { readEffectiveStatusByPackageNames } = await import("@cinatra-ai/extensions");
+    return await readEffectiveStatusByPackageNames(candidateNames);
+  } catch (err) {
+    console.warn(
+      "[cinatra:skills] lifecycle status read failed — keeping all scanned extensions (fail-open):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Drop scanned extensions that are explicitly RETIRED (tombstoned) in the
+ * canonical `installed_extension` lifecycle store. Keep on no-row and on a
+ * failed status read. Exported for tests.
+ */
+export async function filterRetiredSkillExtensions(
+  exts: SkillExtensionDescriptor[],
+): Promise<SkillExtensionDescriptor[]> {
+  if (exts.length === 0) return exts;
+  const candidatesByExt = exts.map((ext) =>
+    resolveSkillOwnerPackageCandidates({ packageName: ext.pkgName }),
+  );
+  const statusMap = await readLifecycleStatusFailOpen([...new Set(candidatesByExt.flat())]);
+  if (statusMap === null) return exts; // fail-open
+  const kept: SkillExtensionDescriptor[] = [];
+  for (let i = 0; i < exts.length; i++) {
+    const statuses = candidatesByExt[i]!
+      .map((c) => statusMap.get(c))
+      .filter((s): s is "active" | "archived" => s !== undefined);
+    const live = statuses.includes("active");
+    const tombstoned = !live && statuses.includes("archived");
+    if (tombstoned) {
+      console.info(
+        `[cinatra:skills] skipping retired (tombstoned) extension "${exts[i]!.pkgName}" — ` +
+          "its installed_extension rows are all archived",
+      );
+      continue;
+    }
+    kept.push(exts[i]!);
+  }
+  return kept;
+}
+
+/**
+ * The subset of `skillIds` whose OWNER package is explicitly tombstoned.
+ * Owner identity is derived from the skillId's package prefix (`@scope/pkg:slug`)
+ * through the same candidate union as the scan filter; the assistant-skills
+ * carve-out prefix (`@cinatra-ai/chat`) has no lifecycle rows → kept, by the
+ * no-row rule. Fail-open: a failed status read tombstones nothing.
+ */
+async function tombstonedSkillIds(skillIds: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (skillIds.length === 0) return out;
+  const candidatesById = new Map(
+    skillIds.map((id) => [
+      id,
+      resolveSkillOwnerPackageCandidates({ packageName: id.split(":")[0] ?? id }),
+    ]),
+  );
+  const statusMap = await readLifecycleStatusFailOpen([
+    ...new Set([...candidatesById.values()].flat()),
+  ]);
+  if (statusMap === null) return out; // fail-open
+  for (const [id, candidates] of candidatesById) {
+    const statuses = candidates
+      .map((c) => statusMap.get(c))
+      .filter((s): s is "active" | "archived" => s !== undefined);
+    if (!statuses.includes("active") && statuses.includes("archived")) out.add(id);
+  }
+  return out;
+}
+
 // Memoize SUCCESSFUL (and in-flight) registrations per skillId. A miss or a
 // zero-registration outcome is NOT cached, so a later install is picked up on
-// the next call (guardrail: do not negative-cache misses).
+// the next call (guardrail: do not negative-cache misses). A memoized success
+// is RE-GATED against the lifecycle store on every call (below): an extension
+// archived AFTER its skill registered must stop resolving without a process
+// restart, and its dropped memo lets a later RESTORE re-register.
 const registrationMemo = new Map<string, Promise<void>>();
 
 /**
@@ -267,10 +371,25 @@ export function ensureInstalledSkillRegistered(
   opts?: { allowKinds?: readonly string[] },
 ): Promise<void> {
   const existing = registrationMemo.get(skillId);
-  if (existing) return existing;
+  if (existing) {
+    // Live-state re-gate of a memoized success: an extension archived AFTER
+    // its skill registered must not keep resolving until process restart.
+    // Fail-open (a failed status read trusts the memo). Dropping the memo
+    // lets a later RESTORE re-register through the scan path.
+    return (async () => {
+      if ((await tombstonedSkillIds([skillId])).has(skillId)) {
+        if (registrationMemo.get(skillId) === existing) registrationMemo.delete(skillId);
+        console.info(
+          `[cinatra:skills] memoized registration for "${skillId}" dropped — its owner extension is retired (tombstoned)`,
+        );
+        return;
+      }
+      return existing;
+    })();
+  }
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const run = (async () => {
-    const exts = await scanSkillExtensions();
+    const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
     for (const ext of exts) {
       if (!allow.has(ext.kind)) continue;
       const provides = ext.slugs.some(
@@ -321,17 +440,31 @@ export function ensureInstalledSkillRegistered(
  * never throws. The returned promise settles once every requested id's
  * registration (in-flight or freshly started here) has completed.
  */
-export function ensureInstalledSkillsRegistered(
+export async function ensureInstalledSkillsRegistered(
   skillIds: readonly string[],
   opts?: { allowKinds?: readonly string[] },
 ): Promise<void> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const unique = [...new Set(skillIds)];
+  // Live-state re-gate of memoized successes (mirrors the single-id entry
+  // point, one batched status read): drop the memo of any id whose owner
+  // extension is now tombstoned so it is neither trusted as registered nor
+  // re-registered (the scan filter excludes its package), and a later restore
+  // retries. Fail-open on a failed status read.
+  const memoized = unique.filter((id) => registrationMemo.has(id));
+  if (memoized.length > 0) {
+    for (const id of await tombstonedSkillIds(memoized)) {
+      registrationMemo.delete(id);
+      console.info(
+        `[cinatra:skills] memoized registration for "${id}" dropped — its owner extension is retired (tombstoned)`,
+      );
+    }
+  }
   const pending = unique.filter((id) => !registrationMemo.has(id));
 
   if (pending.length > 0) {
     const run = (async () => {
-      const exts = await scanSkillExtensions();
+      const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
       const registeredAll = new Set<string>();
       const packagesDone = new Set<string>();
       for (const ext of exts) {
@@ -393,7 +526,7 @@ export async function resolveSkillIdForCapability(
   opts?: { allowKinds?: readonly string[] },
 ): Promise<string | null> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
-  const exts = await scanSkillExtensions();
+  const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     const slug = ext.capabilities[capabilityKey];

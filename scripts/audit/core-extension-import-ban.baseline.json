@@ -5,15 +5,11 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 50,
-      "files": 34
+      "edges": 48,
+      "files": 33
     }
   },
   "edges": {
-    "src/app/api/agents/[agentSlug]/stream/route.ts": [
-      "@cinatra-ai/drupal-mcp-connector",
-      "@cinatra-ai/wordpress-mcp-connector"
-    ],
     "src/app/api/chat/runner.ts": [
       "@cinatra-ai/gmail-connector",
       "@cinatra-ai/google-calendar-connector"

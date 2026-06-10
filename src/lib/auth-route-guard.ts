@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
+import { GENERATED_WIDGET_STREAM_PUBLIC_PATHS } from "@/lib/generated/widget-stream-public-paths";
 
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
@@ -16,22 +17,21 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/review",     // Review-merge endpoint — bridge-token auth enforced inside via isAuthorizedBridgeRequest. The route is kept for external callers that want the trust boundary without writing TypeScript. Host-app callers SHOULD use mergeReviewLanes from @cinatra-ai/agents directly.
   "/api/auditor",    // Auditor-agent run-skills/apply WayFlow ApiNode callbacks — bridge-token auth enforced inside via isAuthorizedBridgeRequest (direct UI/MCP callers still require a session in-handler)
   "/.well-known",  // OAuth / OIDC discovery metadata (RFC 8414, RFC 8707)
-  "/api/wordpress/bundle.js", // Assistant widget bundle (public JS; also matcher-excluded as *.js). Precise path — do NOT broaden to /api/wordpress. Widget chat is the /api/agents/wordpress-content-editor/stream entry below.
+  "/api/wordpress/bundle.js", // Assistant widget bundle (public JS; also matcher-excluded as *.js). Precise path — do NOT broaden to /api/wordpress. Widget chat is covered by the generated PUBLIC_AGENT_STREAM_PATHS below.
   "/api/webhooks/wordpress", // WordPress publish-event webhook receiver — auth enforced inside route handler (HMAC-SHA256)
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available
   "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only, mirrors /api/skills/reset-repo). Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
 ];
 
 // Only the CMS content-editor agent stream slugs are widget-public.
-// These are hit by unauthenticated browser widgets (Drupal/WordPress admin pages)
-// and the route handler enforces auth via CORS Origin allowlist + Bearer API key
-// (see src/app/api/agents/[agentSlug]/stream/route.ts — resolveAllowedOrigin +
-// validateToken). Do NOT generalize to a /api/agents prefix — other future agent routes
-// must continue to require a session.
-const PUBLIC_AGENT_STREAM_PATHS = [
-  "/api/agents/drupal-content-editor/stream",
-  "/api/agents/wordpress-content-editor/stream",
-];
+// These are hit by unauthenticated browser widgets (CMS admin pages) and the
+// route handler enforces auth via CORS Origin allowlist + Bearer API key
+// (see src/app/api/agents/[agentSlug]/stream/route.ts — generic widget-stream
+// origin/token validation). The list is GENERATED from each extension's
+// cinatra.widgetStream declaration (slug-only, proxy-bundle-safe file) — adding
+// a widget-stream extension requires no edit here. Do NOT generalize to a
+// /api/agents prefix — other agent routes must continue to require a session.
+const PUBLIC_AGENT_STREAM_PATHS = GENERATED_WIDGET_STREAM_PUBLIC_PATHS;
 
 const PUBLIC_EXACT_PATHS = [
   "/favicon.ico",

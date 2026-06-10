@@ -1,176 +1,54 @@
 import { NextResponse } from "next/server";
-import { existsSync } from "node:fs";
-import path from "node:path";
 
 import {
   stream as orchestrateStream,
   buildSkillTools,
 } from "@cinatra-ai/llm";
-import type { LlmTool, LlmFunctionTool } from "@cinatra-ai/llm";
-import { createDrupalWidgetChatTool } from "@cinatra-ai/drupal-mcp-connector/widget-chat-tool";
-import { createWordPressWidgetChatTool } from "@cinatra-ai/wordpress-mcp-connector/widget-chat-tool";
-import { registerExtensionSkill } from "@cinatra-ai/skills";
+import type { LlmTool } from "@cinatra-ai/llm";
+import { ensureSkillForCapability } from "@cinatra-ai/skills";
 
 import {
-  resolveDrupalWidgetOrigin,
-  validateDrupalWidgetToken,
-  buildDrupalCorsHeaders,
-} from "@/lib/drupal-widget-auth";
+  resolveWidgetStreamAgent,
+  buildWidgetChatTool,
+} from "@/lib/widget-stream-agents.server";
 import {
-  resolveWordPressWidgetOrigin,
-  validateWordPressWidgetToken,
-  buildWordPressCorsHeaders,
-} from "@/lib/wordpress-widget-auth";
+  resolveWidgetStreamOrigin,
+  validateWidgetStreamToken,
+  buildWidgetStreamCorsHeaders,
+} from "@/lib/widget-stream-auth";
 import { validateAuthInitRequest } from "@/lib/wp-drupal-contract";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
-// Memoized prod self-heal: ensure drupal-widget-chat is registered in the
-// skills catalog before buildSkillTools resolves it. Mirrors the proven
-// runner.ts ensureChatSkillRegistered pattern exactly.
-// ---------------------------------------------------------------------------
-
-const drupalWidgetSkillMdCandidates = [
-  path.resolve(process.cwd(), "extensions/cinatra-ai/drupal-skills/skills/drupal-widget-chat/SKILL.md"),
-  path.resolve(__dirname, "../../../../extensions/cinatra-ai/drupal-skills/skills/drupal-widget-chat/SKILL.md"),
-  path.resolve(__dirname, "../../../../../extensions/cinatra-ai/drupal-skills/skills/drupal-widget-chat/SKILL.md"),
-];
-
-let drupalWidgetSkillRegistration: Promise<void> | null = null;
-function ensureDrupalWidgetSkillRegistered(): Promise<void> {
-  if (drupalWidgetSkillRegistration) return drupalWidgetSkillRegistration;
-  drupalWidgetSkillRegistration = (async () => {
-    try {
-      const skillMdPath = drupalWidgetSkillMdCandidates.find((c) => existsSync(c));
-      if (!skillMdPath) {
-        console.warn(
-          "[agent-stream:drupal-content-editor] drupal-widget-chat SKILL.md not found on disk — " +
-            "cannot register into skills layer; skill delivery will degrade until fixed",
-        );
-        return;
-      }
-      const { sourcePath } = await registerExtensionSkill({
-        skillId: "@cinatra-ai/drupal-skills:drupal-widget-chat",
-        packageName: "@cinatra-ai/drupal-skills",
-        skillMdPath,
-      });
-      console.info(
-        `[agent-stream:drupal-content-editor] registered drupal-widget-chat into skills layer (sourcePath: ${sourcePath})`,
-      );
-    } catch (err) {
-      // Reset so a transient failure can retry on the next request.
-      drupalWidgetSkillRegistration = null;
-      console.error(
-        "[agent-stream:drupal-content-editor] failed to register drupal-widget-chat into skills layer:",
-        (err as Error).message,
-      );
-    }
-  })();
-  return drupalWidgetSkillRegistration;
-}
-
-const wordpressWidgetSkillMdCandidates = [
-  path.resolve(process.cwd(), "extensions/cinatra-ai/wordpress-mcp-connector/skills/wordpress-widget-chat/SKILL.md"),
-  path.resolve(__dirname, "../../../../extensions/cinatra-ai/wordpress-mcp-connector/skills/wordpress-widget-chat/SKILL.md"),
-  path.resolve(__dirname, "../../../../../extensions/cinatra-ai/wordpress-mcp-connector/skills/wordpress-widget-chat/SKILL.md"),
-];
-
-let wordpressWidgetSkillRegistration: Promise<void> | null = null;
-function ensureWordPressWidgetSkillRegistered(): Promise<void> {
-  if (wordpressWidgetSkillRegistration) return wordpressWidgetSkillRegistration;
-  wordpressWidgetSkillRegistration = (async () => {
-    try {
-      const skillMdPath = wordpressWidgetSkillMdCandidates.find((c) => existsSync(c));
-      if (!skillMdPath) {
-        console.warn(
-          "[agent-stream:wordpress-content-editor] wordpress-widget-chat SKILL.md not found on disk — " +
-            "cannot register into skills layer; skill delivery will degrade until fixed",
-        );
-        return;
-      }
-      const { sourcePath } = await registerExtensionSkill({
-        skillId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
-        packageName: "@cinatra-ai/wordpress-mcp-connector",
-        skillMdPath,
-      });
-      console.info(
-        `[agent-stream:wordpress-content-editor] registered wordpress-widget-chat into skills layer (sourcePath: ${sourcePath})`,
-      );
-    } catch (err) {
-      wordpressWidgetSkillRegistration = null;
-      console.error(
-        "[agent-stream:wordpress-content-editor] failed to register wordpress-widget-chat into skills layer:",
-        (err as Error).message,
-      );
-    }
-  })();
-  return wordpressWidgetSkillRegistration;
-}
-
-// ---------------------------------------------------------------------------
-// Per-slug agent stream registry. Adding a new agent = add a registry entry.
-// No new route files needed; each agent uses the same per-agent SSE pattern.
+// Generic per-agent widget SSE stream. Registration is MANIFEST-DRIVEN: a
+// widget-bearing extension declares `cinatra.widgetStream` (agentSlug, label,
+// subjectNoun, skillCapability, contextFields, auth policy) and ships a
+// `widget-chat-tool` factory; the generated manifest carries the slug-keyed
+// entry and this route resolves it generically. Adding a widget-stream
+// extension requires NO edit to this file (or to the auth-route-guard — its
+// public-path list is generated from the same declarations).
 //
-// Auth: route-level CORS Origin allowlist + Bearer token. The route's path is
-// also whitelisted in src/lib/auth-route-guard.ts PUBLIC_AGENT_STREAM_PATHS so
-// unauthenticated browser widgets reach this handler instead of being redirected
-// to /sign-in.
+// Auth: route-level CORS Origin allowlist + Bearer token, both driven by the
+// entry's declared auth policy (instances config key + validity fields, token
+// config key). The route's path is whitelisted via the generated
+// PUBLIC_AGENT_STREAM_PATHS in src/lib/auth-route-guard.ts so unauthenticated
+// browser widgets reach this handler instead of being redirected to /sign-in.
 //
-// The route calls stream with a per-CMS widget-chat function tool
-// and skill tool. The LLM decides whether to chat conversationally or call the
-// content-editor tool.
+// The route calls stream with the extension's widget-chat function tool and
+// skill tool (resolved + self-healed through the generic
+// extension-skill-resolver via the declared skillCapability). The LLM decides
+// whether to chat conversationally or call the content-editor tool.
 // SSE wire format on the widget side is FROZEN: text/changes/error/done frames
-// only.
+// only, and the `changes` frame keeps its `fields`/`nodeId`/`postId` shape.
 // ---------------------------------------------------------------------------
-
-type AgentStreamConfig = {
-  resolveAllowedOrigin: (origin: string | null) => string | null;
-  validateToken: (token: string) => boolean;
-  buildCorsHeaders: (allowedOrigin: string) => Record<string, string>;
-};
-
-const AGENT_STREAM_REGISTRY: Record<string, AgentStreamConfig> = {
-  "drupal-content-editor": {
-    resolveAllowedOrigin: resolveDrupalWidgetOrigin,
-    validateToken: validateDrupalWidgetToken,
-    buildCorsHeaders: buildDrupalCorsHeaders,
-  },
-  "wordpress-content-editor": {
-    resolveAllowedOrigin: resolveWordPressWidgetOrigin,
-    validateToken: validateWordPressWidgetToken,
-    buildCorsHeaders: buildWordPressCorsHeaders,
-  },
-};
 
 type StreamRequestBody = {
   contractVersion?: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   context?: Record<string, unknown>;
 };
-
-// ---------------------------------------------------------------------------
-// Helper: build the per-CMS widget-chat tool + skill ID + label.
-// ---------------------------------------------------------------------------
-
-function buildWidgetChatToolFor(
-  agentSlug: string,
-  context: Record<string, unknown>,
-): { tool: LlmFunctionTool; skillId: string; cmsLabel: "Drupal" | "WordPress" } {
-  if (agentSlug === "drupal-content-editor") {
-    return {
-      tool: createDrupalWidgetChatTool({ context }),
-      skillId: "@cinatra-ai/drupal-skills:drupal-widget-chat",
-      cmsLabel: "Drupal",
-    };
-  }
-  return {
-    tool: createWordPressWidgetChatTool({ context }),
-    skillId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
-    cmsLabel: "WordPress",
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -181,11 +59,11 @@ export async function OPTIONS(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const cfg = AGENT_STREAM_REGISTRY[agentSlug];
-  if (!cfg) return new NextResponse(null, { status: 404 });
-  const allowed = cfg.resolveAllowedOrigin(request.headers.get("Origin"));
+  const entry = resolveWidgetStreamAgent(agentSlug);
+  if (!entry) return new NextResponse(null, { status: 404 });
+  const allowed = resolveWidgetStreamOrigin(request.headers.get("Origin"), entry.auth);
   if (!allowed) return new NextResponse(null, { status: 403 });
-  return new NextResponse(null, { status: 200, headers: cfg.buildCorsHeaders(allowed) });
+  return new NextResponse(null, { status: 200, headers: buildWidgetStreamCorsHeaders(allowed) });
 }
 
 export async function POST(
@@ -193,21 +71,21 @@ export async function POST(
   { params }: { params: Promise<{ agentSlug: string }> },
 ): Promise<Response> {
   const { agentSlug } = await params;
-  const cfg = AGENT_STREAM_REGISTRY[agentSlug];
-  if (!cfg) {
+  const entry = resolveWidgetStreamAgent(agentSlug);
+  if (!entry) {
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }
 
-  const allowedOrigin = cfg.resolveAllowedOrigin(request.headers.get("Origin"));
+  const allowedOrigin = resolveWidgetStreamOrigin(request.headers.get("Origin"), entry.auth);
   if (!allowedOrigin) {
     console.warn(`[agent-stream:${agentSlug}] Origin not allowed:`, request.headers.get("Origin"));
     return new NextResponse("Origin not allowed", { status: 403 });
   }
-  const corsHeaders = cfg.buildCorsHeaders(allowedOrigin);
+  const corsHeaders = buildWidgetStreamCorsHeaders(allowedOrigin);
 
   const auth = request.headers.get("Authorization");
   const bearer = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!bearer || !cfg.validateToken(bearer)) {
+  if (!bearer || !validateWidgetStreamToken(bearer, entry.auth)) {
     return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
   }
 
@@ -236,49 +114,64 @@ export async function POST(
 
   const context = body.context ?? {};
 
-  // Build per-CMS function tool, skill ID, and label.
-  const { tool, skillId, cmsLabel } = buildWidgetChatToolFor(agentSlug, context);
+  // Resolve the skill THROUGH the declared capability key (generic
+  // extension-skill-resolver: maps the capability to the active skill-bearing
+  // extension and lazily registers its SKILL.md — the prod self-heal). The
+  // skill may be co-located in the connector itself or in a sibling skill
+  // package, hence both kinds are allowed. FAIL LOUD pre-SSE: no active
+  // extension providing the capability is a configuration/install error the
+  // admin must see as a clean JSON 500, not an aborted half-opened stream.
+  let skillId: string;
+  try {
+    skillId = await ensureSkillForCapability(entry.skillCapability, {
+      allowKinds: ["skill", "connector"],
+    });
+  } catch (err) {
+    console.error(`[agent-stream:${agentSlug}] skill capability resolution failed:`, err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to resolve widget skill" },
+      { status: 500, headers: corsHeaders },
+    );
+  }
 
-  // Ensure the per-CMS widget-chat skill is registered in the catalog before
-  // buildSkillTools tries to resolve it (prod self-heal, memoized per-process).
-  if (agentSlug === "drupal-content-editor") {
-    await ensureDrupalWidgetSkillRegistered();
-  } else {
-    await ensureWordPressWidgetSkillRegistered();
+  // Build the extension's widget-chat function tool from the manifest loader
+  // entry. FAIL LOUD pre-SSE (import/factory/shape errors are host wiring
+  // bugs, not user errors — surface them as a clean 500).
+  let tool;
+  try {
+    tool = await buildWidgetChatTool(agentSlug, entry, context);
+  } catch (err) {
+    console.error(`[agent-stream:${agentSlug}] widget-chat tool build failed:`, err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to build widget tool" },
+      { status: 500, headers: corsHeaders },
+    );
   }
 
   // Sanitize client-supplied context strings before embedding in the system
   // prompt. Strips CR/LF/tabs (so attacker-controlled strings can't add
   // fake instructions on a new line) and bounds length (so a 1MB href can't
-  // dominate the system-prompt window). The factory tool path (createXWidgetChatTool)
-  // uses identity override on its own and is unaffected — this sanitiser is for
+  // dominate the system-prompt window). The factory tool path uses identity
+  // override on its own and is unaffected — this sanitiser is for
   // system-prompt embedding only.
   const safe = (s: unknown, max = 200): string =>
     String(s ?? "")
       .replace(/[\r\n\t]+/g, " ")
       .slice(0, max);
 
-  // Build the system prompt with explicit CMS context. Full routing rules live
-  // in the SKILL.md the LLM reads via the read_skill tool.
+  // Build the system prompt with explicit CMS context from the declared
+  // contextFields. Full routing rules live in the SKILL.md the LLM reads via
+  // the skill tool.
   const cmsContextBlock =
-    agentSlug === "drupal-content-editor"
-      ? `\n\nCurrent Drupal context:\n` +
-        `- instanceId: ${safe(context.instanceId, 64)}\n` +
-        `- nodeId: ${safe(context.nodeId, 32)}\n` +
-        `- nodeBundle: ${safe(context.nodeBundle, 32)}\n` +
-        `- nodeStatus: ${safe(context.nodeStatus, 32)}\n` +
-        `- href: ${safe(context.href, 500)}\n`
-      : `\n\nCurrent WordPress context:\n` +
-        `- instanceId: ${safe(context.instanceId, 64)}\n` +
-        `- postId: ${safe(context.postId, 32)}\n` +
-        `- postType: ${safe(context.postType, 32)}\n` +
-        `- postStatus: ${safe(context.postStatus, 32)}\n` +
-        `- href: ${safe(context.href, 500)}\n`;
+    `\n\nCurrent ${entry.label} context:\n` +
+    entry.contextFields
+      .map((field) => `- ${field.key}: ${safe(context[field.key], field.maxLength)}\n`)
+      .join("");
 
   const systemPrompt =
-    `You are the Cinatra in-CMS assistant embedded in a ${cmsLabel} content editor. ` +
+    `You are the Cinatra in-CMS assistant embedded in a ${entry.label} content editor. ` +
     `Read the widget-chat skill using the provided skill tool for routing rules. ` +
-    `When the user asks for any change to the current ${cmsLabel === "Drupal" ? "node" : "post"}, ` +
+    `When the user asks for any change to the current ${entry.subjectNoun}, ` +
     `call the content-editor tool with their instructions. ` +
     `When the user is conversational (greeting, question, discussion), answer directly without calling tools. ` +
     `Never paste tool-result JSON into your reply — write a natural-language summary instead.` +
@@ -287,11 +180,10 @@ export async function POST(
   // Build the tools array. Use ONLY the single function tool plus skill tools.
   // Pitfall 7 — widget chat is scoped narrowly to the current node/post; do NOT
   // expose the full primitive-handlers surface to the LLM here.
-  // buildSkillTools throws fail-loud when a skill is undeliverable (not in
-  // catalog / no sourcePath). The self-heal above should make this impossible
-  // in production, but on transient failure return a JSON error before the SSE
-  // stream is constructed so the client sees a clean 500 rather than an aborted
-  // half-opened stream.
+  // buildSkillTools returns [] (with a warning) when no skill resolved with an
+  // on-disk sourcePath — the self-heal above should make that impossible, but
+  // on failure return a JSON error BEFORE the SSE stream is constructed so the
+  // client sees a clean 500 rather than a silently skill-less assistant.
   let skillTools;
   try {
     skillTools = await buildSkillTools({ skillIds: [skillId] });
@@ -299,6 +191,16 @@ export async function POST(
     console.error(`[agent-stream:${agentSlug}] buildSkillTools threw:`, err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to build skill tools" },
+      { status: 500, headers: corsHeaders },
+    );
+  }
+  if (skillTools.length === 0) {
+    console.error(
+      `[agent-stream:${agentSlug}] no mountable skill tools for "${skillId}" — ` +
+        "widget skill delivery failed (registration self-heal did not produce a deliverable skill)",
+    );
+    return NextResponse.json(
+      { error: "Widget skill is unavailable. Please try again." },
       { status: 500, headers: corsHeaders },
     );
   }
@@ -341,10 +243,9 @@ export async function POST(
             // Widget bundle has no tool-call UI — no SSE frame emitted here.
           },
           onToolResult: (result) => {
-            if (
-              result.name !== "drupal_content_editor_run" &&
-              result.name !== "wordpress_content_editor_run"
-            ) {
+            // Only the widget's own content-editor tool can emit a `changes`
+            // frame — gate on the BUILT tool's name (no per-CMS literals).
+            if (result.name !== tool.name) {
               return;
             }
             let parsed:

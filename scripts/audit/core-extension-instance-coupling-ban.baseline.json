@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 90,
-      "keys": 150,
-      "occurrences": 199
+      "files": 89,
+      "keys": 145,
+      "occurrences": 185
     },
     "mechanical": {
       "files": 4,
@@ -118,11 +118,6 @@
     "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
     "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
     "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,
-    "src/app/api/agents/[agentSlug]/stream/route.ts :: package :: @cinatra-ai/drupal-mcp-connector": 1,
-    "src/app/api/agents/[agentSlug]/stream/route.ts :: package :: @cinatra-ai/drupal-skills": 3,
-    "src/app/api/agents/[agentSlug]/stream/route.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 4,
-    "src/app/api/agents/[agentSlug]/stream/route.ts :: path :: extensions/cinatra-ai/drupal-skills": 3,
-    "src/app/api/agents/[agentSlug]/stream/route.ts :: path :: extensions/cinatra-ai/wordpress-mcp-connector": 3,
     "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/author-agent": 1,
     "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/code-reviewer-agent": 1,
     "src/app/api/chat/explicit-dispatch-server.ts :: package :: @cinatra-ai/planner-agent": 1,

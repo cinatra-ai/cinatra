@@ -203,6 +203,7 @@ const PRIMITIVE_HANDLERS_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*Pr
 // extension's external MCP server resolves through the host registry
 // (`external_mcp_servers`) instead of a first-party builder.
 const EXTERNAL_MCP_TOOLBOX_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*ExternalMcpToolbox)\s*\(/g;
+const WIDGET_CHAT_TOOL_FACTORY_RE = /export\s+function\s+(create[A-Za-z0-9]*WidgetChatTool)\s*\(/g;
 
 // Extract the factory export name from a connector MCP source file, or null
 // when the file exports no matching factory (the connector does not take part
@@ -222,6 +223,84 @@ export function extractFactoryExport(source, re, context) {
 
 function isObj(v) {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+// ---------------------------------------------------------------------------
+// Widget-stream capability declaration (`cinatra.widgetStream`).
+//
+// A connector that backs an in-CMS chat widget declares its stream surface in
+// its package.json instead of being hardcoded in the host's
+// /api/agents/[agentSlug]/stream route:
+//   - `agentSlug`        — the public route slug the widget posts to
+//   - `label`            — human CMS label used in the system prompt
+//   - `subjectNoun`      — what the agent edits ("node"/"post"/…)
+//   - `skillCapability`  — the `cinatra.capabilities` key (declared by the
+//                          skill-bearing package) the route resolves + self-heals
+//                          through the generic extension-skill-resolver
+//   - `contextFields`    — ordered `{ key, maxLength }` list embedded (sanitized)
+//                          into the system prompt from the request context
+//   - `auth`             — `{ tokenConfigKey, instancesConfigKey,
+//                          requiredInstanceFields }` driving the generic
+//                          origin-allowlist + bearer-token validation
+// The package must also ship `src/widget-chat-tool.ts` exporting exactly one
+// `create*WidgetChatTool()` factory; the generator records the factory name next
+// to a literal dynamic-import loader (Turbopack-safe), exactly like the
+// connector MCP surfaces. FAIL-CLOSED: a malformed declaration, a missing
+// factory, or an unresolvable `<pkg>/widget-chat-tool` subpath is a generation
+// error — a silently dropped entry would 404 the live widget.
+// ---------------------------------------------------------------------------
+const WIDGET_AGENT_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const WIDGET_CONTEXT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
+const WIDGET_CONFIG_KEY_RE = /^[a-z0-9_]+$/;
+
+export function validateWidgetStreamDeclaration(pkgName, ws) {
+  const errors = [];
+  const at = `${pkgName} cinatra.widgetStream`;
+  if (!isObj(ws)) return [`${at}: must be an object`];
+  if (typeof ws.agentSlug !== "string" || !WIDGET_AGENT_SLUG_RE.test(ws.agentSlug)) {
+    errors.push(`${at}.agentSlug: must be a kebab-case slug`);
+  }
+  if (typeof ws.label !== "string" || !ws.label.trim()) {
+    errors.push(`${at}.label: must be a non-empty string`);
+  }
+  if (typeof ws.subjectNoun !== "string" || !ws.subjectNoun.trim()) {
+    errors.push(`${at}.subjectNoun: must be a non-empty string`);
+  }
+  if (typeof ws.skillCapability !== "string" || !ws.skillCapability.trim()) {
+    errors.push(`${at}.skillCapability: must be a non-empty string`);
+  }
+  if (!Array.isArray(ws.contextFields) || ws.contextFields.length === 0) {
+    errors.push(`${at}.contextFields: must be a non-empty array`);
+  } else {
+    const seen = new Set();
+    ws.contextFields.forEach((f, i) => {
+      if (!isObj(f) || typeof f.key !== "string" || !WIDGET_CONTEXT_KEY_RE.test(f.key)) {
+        errors.push(`${at}.contextFields[${i}].key: must be an identifier`);
+        return;
+      }
+      if (seen.has(f.key)) errors.push(`${at}.contextFields[${i}].key: duplicate "${f.key}"`);
+      seen.add(f.key);
+      if (!Number.isInteger(f.maxLength) || f.maxLength <= 0) {
+        errors.push(`${at}.contextFields[${i}].maxLength: must be a positive integer`);
+      }
+    });
+  }
+  if (!isObj(ws.auth)) {
+    errors.push(`${at}.auth: must be an object`);
+  } else {
+    for (const k of ["tokenConfigKey", "instancesConfigKey"]) {
+      if (typeof ws.auth[k] !== "string" || !WIDGET_CONFIG_KEY_RE.test(ws.auth[k])) {
+        errors.push(`${at}.auth.${k}: must be a snake_case connector-config key`);
+      }
+    }
+    if (
+      !Array.isArray(ws.auth.requiredInstanceFields) ||
+      ws.auth.requiredInstanceFields.some((f) => typeof f !== "string" || !f.trim())
+    ) {
+      errors.push(`${at}.auth.requiredInstanceFields: must be an array of non-empty strings`);
+    }
+  }
+  return errors;
 }
 
 // A plain-JS shape validator that MIRRORS the authoritative TS parser
@@ -502,6 +581,80 @@ export async function buildManifest() {
     .filter(Boolean)
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
+  // Widget-stream agents: a connector OPTS IN by declaring `cinatra.widgetStream`
+  // (validated fail-closed) and shipping src/widget-chat-tool.ts with exactly one
+  // create*WidgetChatTool() factory. Keyed by agentSlug — the host stream route
+  // resolves the slug generically; adding a widget extension requires NO host
+  // edit. The `<pkg>/widget-chat-tool` subpath must be resolvable (tsconfig path
+  // alias or package.json exports) or the literal dynamic import would fail at
+  // runtime — asserted here, at generation.
+  const tsconfigText = readFileSync(join(REPO_ROOT, "tsconfig.json"), "utf8");
+  const widgetStreamAgents = records
+    .filter((r) => r.kind === "connector")
+    .map((r) => {
+      const ws = readCinatraManifest(r.sourceDir).widgetStream;
+      if (ws === undefined) return null;
+      const errors = validateWidgetStreamDeclaration(r.packageName, ws);
+      if (errors.length > 0) {
+        throw new Error(
+          `[extension-manifest] invalid widgetStream declaration:\n  - ${errors.join("\n  - ")}`,
+        );
+      }
+      const toolPath = join(r.sourceDir, "src/widget-chat-tool.ts");
+      if (!fileExists(toolPath)) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} declares cinatra.widgetStream but ships no src/widget-chat-tool.ts`,
+        );
+      }
+      const subpath = `${r.packageName}/widget-chat-tool`;
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      const hasExportsEntry = isObj(pkgJson.exports) && "./widget-chat-tool" in pkgJson.exports;
+      if (!tsconfigText.includes(JSON.stringify(subpath)) && !hasExportsEntry) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} declares cinatra.widgetStream but "${subpath}" is not ` +
+            `resolvable (no tsconfig.json path alias and no package.json exports["./widget-chat-tool"]) — ` +
+            `the generated literal import would fail at runtime`,
+        );
+      }
+      const toolSource = readFileSync(join(REPO_ROOT, toolPath), "utf8");
+      const factory = extractFactoryExport(
+        toolSource,
+        WIDGET_CHAT_TOOL_FACTORY_RE,
+        `${r.packageName} src/widget-chat-tool.ts`,
+      );
+      if (!factory) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} src/widget-chat-tool.ts exports no create*WidgetChatTool() factory`,
+        );
+      }
+      return {
+        agentSlug: ws.agentSlug,
+        packageName: r.packageName,
+        factory,
+        label: ws.label,
+        subjectNoun: ws.subjectNoun,
+        skillCapability: ws.skillCapability,
+        contextFields: ws.contextFields.map((f) => ({ key: f.key, maxLength: f.maxLength })),
+        auth: {
+          tokenConfigKey: ws.auth.tokenConfigKey,
+          instancesConfigKey: ws.auth.instancesConfigKey,
+          requiredInstanceFields: [...ws.auth.requiredInstanceFields],
+        },
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.agentSlug.localeCompare(b.agentSlug));
+  const widgetSlugOwners = new Map();
+  for (const w of widgetStreamAgents) {
+    const owner = widgetSlugOwners.get(w.agentSlug);
+    if (owner) {
+      throw new Error(
+        `[extension-manifest] duplicate widgetStream agentSlug "${w.agentSlug}" (${owner} and ${w.packageName})`,
+      );
+    }
+    widgetSlugOwners.set(w.agentSlug, w.packageName);
+  }
+
   return {
     records,
     connectorSetupPages,
@@ -510,6 +663,7 @@ export async function buildManifest() {
     connectorMcpModules,
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
+    widgetStreamAgents,
   };
 }
 
@@ -525,7 +679,7 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
-function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes) {
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
@@ -605,6 +759,26 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
         `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-toolbox`)}), factory: ${JSON.stringify(p.factory)} },`,
     )
     .join("\n");
+  // Widget-stream agent map: agentSlug → { literal dynamic import of
+  // <pkg>/widget-chat-tool, factory export name, declared stream metadata }.
+  // Consumed by src/lib/widget-stream-agents.server.ts — the host's
+  // /api/agents/[agentSlug]/stream route resolves widget agents from this map
+  // instead of branching on hardcoded slugs / importing connectors by name.
+  const widgetAgents = widgetStreamAgents
+    .map((w) => {
+      const meta = {
+        packageName: w.packageName,
+        factory: w.factory,
+        label: w.label,
+        subjectNoun: w.subjectNoun,
+        skillCapability: w.skillCapability,
+        contextFields: w.contextFields,
+        auth: w.auth,
+      };
+      const metaJson = JSON.stringify(meta).slice(1, -1); // splice load into the object literal
+      return `  ${JSON.stringify(w.agentSlug)}: { load: () => import(${JSON.stringify(`${w.packageName}/widget-chat-tool`)}), ${metaJson} },`;
+    })
+    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
     `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
@@ -635,7 +809,51 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `// first-party toolbox module). Literal specifiers only (Turbopack-safe).\n` +
     `// Consumed by src/lib/external-mcp-toolbox-loader.server.ts.\n` +
     `export const GENERATED_EXTERNAL_MCP_TOOLBOXES: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
-    `${mcpToolboxes}\n};\n`
+    `${mcpToolboxes}\n};\n\n` +
+    `// agentSlug → widget-stream agent entry (declared via cinatra.widgetStream).\n` +
+    `// Literal specifiers only (Turbopack-safe). Consumed by\n` +
+    `// src/lib/widget-stream-agents.server.ts — the host stream route resolves\n` +
+    `// widget agents from this map; it never names a connector package.\n` +
+    `export type GeneratedWidgetStreamContextField = { key: string; maxLength: number };\n` +
+    `export type GeneratedWidgetStreamAuth = {\n` +
+    `  tokenConfigKey: string;\n` +
+    `  instancesConfigKey: string;\n` +
+    `  requiredInstanceFields: string[];\n` +
+    `};\n` +
+    `export type GeneratedWidgetStreamAgentEntry = {\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  packageName: string;\n` +
+    `  factory: string;\n` +
+    `  label: string;\n` +
+    `  subjectNoun: string;\n` +
+    `  skillCapability: string;\n` +
+    `  contextFields: GeneratedWidgetStreamContextField[];\n` +
+    `  auth: GeneratedWidgetStreamAuth;\n` +
+    `};\n\n` +
+    `export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStreamAgentEntry> = {\n` +
+    `${widgetAgents}\n};\n`
+  );
+}
+
+// Slug-only public-path list for the widget-stream route. SEPARATE generated
+// file with ZERO imports and no package identifiers: it is consumed by
+// src/lib/auth-route-guard.ts, which runs in the proxy bundle (src/proxy.ts) —
+// importing extensions.server.ts there would drag `server-only` + every
+// connector loader into the proxy.
+function emitWidgetStreamPublicPaths(widgetStreamAgents) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = widgetStreamAgents
+    .map((w) => `  ${JSON.stringify(`/api/agents/${w.agentSlug}/stream`)},`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Widget-public agent stream paths (one per cinatra.widgetStream declaration).\n` +
+    `// Slug-only data — NO imports, NO package identifiers (proxy-bundle safe).\n` +
+    `// Consumed by src/lib/auth-route-guard.ts: these paths skip the sign-in\n` +
+    `// redirect; the route itself enforces Origin allowlist + Bearer token.\n` +
+    `export const GENERATED_WIDGET_STREAM_PUBLIC_PATHS: readonly string[] = [\n` +
+    `${body}\n];\n`
   );
 }
 
@@ -737,6 +955,7 @@ export async function checkParity() {
 const OUT_SERVER = join(GEN_DIR, "extensions.server.ts");
 const OUT_SETUP = join(GEN_DIR, "connector-setup-pages.ts");
 const OUT_CLIENT = join(GEN_DIR, "extensions.client.tsx");
+const OUT_WIDGET_PATHS = join(GEN_DIR, "widget-stream-public-paths.ts");
 
 async function main() {
   const args = process.argv.slice(2);
@@ -748,11 +967,13 @@ async function main() {
     connectorMcpModules,
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
+    widgetStreamAgents,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents)],
     [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
+    [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
   ];
 
   if (args.includes("--print")) {
@@ -783,7 +1004,7 @@ async function main() {
   if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });
   for (const [path, content] of files) writeFileSync(path, content);
   const parity = await checkParity();
-  console.log(`[extension-manifest] wrote 3 files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages)`);
+  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents)`);
   if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");
     for (const p of parity) console.log("  - " + p);

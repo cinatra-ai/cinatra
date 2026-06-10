@@ -19,12 +19,20 @@ import os from "node:os";
 
 vi.mock("server-only", () => ({}));
 
-const { registerExtensionSkillMock } = vi.hoisted(() => ({
+const { registerExtensionSkillMock, readEffectiveStatusMock } = vi.hoisted(() => ({
   registerExtensionSkillMock: vi.fn(),
+  readEffectiveStatusMock: vi.fn(),
 }));
 
 vi.mock("./register-extension-skill", () => ({
   registerExtensionSkill: registerExtensionSkillMock,
+}));
+
+// The coarse installed_extension lifecycle gate reads canonical statuses via a
+// fail-soft dynamic import of @cinatra-ai/extensions. Default: no rows (empty
+// map) — the keep-on-no-row semantics every pre-gate test relies on.
+vi.mock("@cinatra-ai/extensions", () => ({
+  readEffectiveStatusByPackageNames: readEffectiveStatusMock,
 }));
 
 // Avoid loading the real install-path module (it pulls @/lib/database). Point
@@ -40,6 +48,7 @@ import {
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
   scanSkillExtensions,
+  filterRetiredSkillExtensions,
 } from "./extension-skill-resolver";
 
 let tmpDir: string;
@@ -72,6 +81,8 @@ async function writeExtension(input: {
 beforeEach(async () => {
   registerExtensionSkillMock.mockReset();
   registerExtensionSkillMock.mockResolvedValue({ id: "x", sourcePath: "data/skills/x" });
+  readEffectiveStatusMock.mockReset();
+  readEffectiveStatusMock.mockResolvedValue(new Map());
   tmpDir = await mkdtemp(path.join(os.tmpdir(), "ext-skill-resolver-"));
   origCwd = process.cwd();
   process.chdir(tmpDir);
@@ -265,5 +276,160 @@ describe("ensureInstalledSkillsRegistered (batch)", () => {
     // registration is the whole co-located package; rescanning for the failed
     // id necessarily re-touches the sibling, which is an idempotent upsert).
     expect(okFirst).toBe(1);
+  });
+});
+
+describe("installed_extension lifecycle gate (explicit-tombstone semantics)", () => {
+  it("skips a TOMBSTONED extension (rows exist, none live) for both resolution and registration", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "retired-skills",
+      name: "@acme/retired-skills",
+      kind: "skill",
+      capabilities: { "retired.cap-aaa": "retired-one" },
+      slugs: ["retired-one"],
+    });
+    readEffectiveStatusMock.mockResolvedValue(
+      new Map([["@acme/retired-skills", "archived"]]),
+    );
+    expect(await resolveSkillIdForCapability("retired.cap-aaa")).toBeNull();
+    await ensureInstalledSkillRegistered("@acme/retired-skills:retired-one");
+    expect(registerExtensionSkillMock).not.toHaveBeenCalled();
+  });
+
+  it("matches tombstone rows stored under the SLUGIFIED package_name form", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "slug-retired",
+      name: "@acme/slug-retired",
+      kind: "skill",
+      slugs: ["slug-one"],
+    });
+    // installed_extension.package_name drift: row keyed "acme-slug-retired".
+    readEffectiveStatusMock.mockResolvedValue(new Map([["acme-slug-retired", "archived"]]));
+    await ensureInstalledSkillRegistered("@acme/slug-retired:slug-one");
+    expect(registerExtensionSkillMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a LIVE extension (any candidate row active beats an archived sibling row)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "live-skills",
+      name: "@acme/live-skills",
+      kind: "skill",
+      slugs: ["live-one"],
+    });
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/live-skills", "active"]]));
+    await ensureInstalledSkillRegistered("@acme/live-skills:live-one");
+    expect(registerExtensionSkillMock).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: "@acme/live-skills:live-one" }),
+    );
+  });
+
+  it("keeps an extension with NO lifecycle rows (unseeded prod rows must not regress)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "unseeded-skills",
+      name: "@acme/unseeded-skills",
+      kind: "skill",
+      slugs: ["unseeded-one"],
+    });
+    readEffectiveStatusMock.mockResolvedValue(new Map()); // no rows at all
+    await ensureInstalledSkillRegistered("@acme/unseeded-skills:unseeded-one");
+    expect(registerExtensionSkillMock).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: "@acme/unseeded-skills:unseeded-one" }),
+    );
+  });
+
+  it("FAILS OPEN when the canonical status read throws (DB unavailable)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "failopen-skills",
+      name: "@acme/failopen-skills",
+      kind: "skill",
+      slugs: ["failopen-one"],
+    });
+    readEffectiveStatusMock.mockRejectedValue(new Error("db down"));
+    await ensureInstalledSkillRegistered("@acme/failopen-skills:failopen-one");
+    expect(registerExtensionSkillMock).toHaveBeenCalledWith(
+      expect.objectContaining({ skillId: "@acme/failopen-skills:failopen-one" }),
+    );
+  });
+
+  it("gates the batch path too (tombstoned package never registers in a batch)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "batch-retired",
+      name: "@acme/batch-retired",
+      kind: "skill",
+      slugs: ["batch-one"],
+    });
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/batch-retired", "archived"]]));
+    await ensureInstalledSkillsRegistered(["@acme/batch-retired:batch-one"]);
+    expect(registerExtensionSkillMock).not.toHaveBeenCalled();
+  });
+
+  it("re-gates a MEMOIZED registration: archive stops it, restore re-registers (no process restart)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "regate-skills",
+      name: "@acme/regate-skills",
+      kind: "skill",
+      slugs: ["regate-one"],
+    });
+    const id = "@acme/regate-skills:regate-one";
+    // 1) live (no rows) → registers and memoizes
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    // 2) archived AFTER registration → the memoized success is dropped, no re-register
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-skills", "archived"]]));
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    // 3) restored → the dropped memo lets the scan path re-register
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-skills", "active"]]));
+    await ensureInstalledSkillRegistered(id);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-gates memoized registrations on the BATCH path too", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "regate-batch",
+      name: "@acme/regate-batch",
+      kind: "skill",
+      slugs: ["batch-one"],
+    });
+    const id = "@acme/regate-batch:batch-one";
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-batch", "archived"]]));
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(1);
+    readEffectiveStatusMock.mockResolvedValue(new Map([["@acme/regate-batch", "active"]]));
+    await ensureInstalledSkillsRegistered([id]);
+    expect(registerExtensionSkillMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("filterRetiredSkillExtensions drops only tombstoned descriptors", async () => {
+    const mk = (pkgName: string) => ({
+      pkgDir: `/x/${pkgName}`,
+      pkgName,
+      pkgDirName: pkgName.split("/")[1] ?? pkgName,
+      kind: "skill",
+      capabilities: {},
+      slugs: [],
+    });
+    readEffectiveStatusMock.mockResolvedValue(
+      new Map([
+        ["@acme/f-live", "active"],
+        ["@acme/f-gone", "archived"],
+      ]),
+    );
+    const kept = await filterRetiredSkillExtensions([
+      mk("@acme/f-live"),
+      mk("@acme/f-gone"),
+      mk("@acme/f-norow"),
+    ]);
+    expect(kept.map((e) => e.pkgName)).toEqual(["@acme/f-live", "@acme/f-norow"]);
   });
 });
