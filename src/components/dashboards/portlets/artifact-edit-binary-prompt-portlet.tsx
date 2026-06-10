@@ -48,21 +48,30 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
   const [loading, startLoading] = useTransition();
   const [acting, startActing] = useTransition();
   const wasRunningRef = useRef(false);
+  // Stale-async guard: every load/action captures the objectId it was issued
+  // for and only commits state while that id is still selected — a late
+  // response for item A must never populate (or get applied to) item B.
+  const currentKeyRef = useRef<string | null>(null);
+  currentKeyRef.current = objectId;
 
   const reloadBaseline = useCallback(async () => {
-    if (!objectId || !parentObjectField) {
+    const key = objectId;
+    if (!key || !parentObjectField) {
       setBaseline(null);
       return;
     }
-    setBaseline(await loadArtifactBaselinePortlet({ objectId, parentObjectField }));
+    const res = await loadArtifactBaselinePortlet({ objectId: key, parentObjectField });
+    if (currentKeyRef.current === key) setBaseline(res);
   }, [objectId, parentObjectField]);
 
   const refreshStatus = useCallback(async () => {
-    if (!objectId || !generationPrimitive) {
+    const key = objectId;
+    if (!key || !generationPrimitive) {
       setStatus(null);
       return;
     }
-    setStatus(await loadBinaryGenerationStatusPortlet({ objectId, generationPrimitive }));
+    const res = await loadBinaryGenerationStatusPortlet({ objectId: key, generationPrimitive });
+    if (currentKeyRef.current === key) setStatus(res);
   }, [objectId, generationPrimitive]);
 
   // Selection change: reset everything, then load baseline + status (a run
@@ -103,6 +112,7 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
   const busyWithOtherPost = status?.busyWithOtherPost === true;
 
   function handleRegenerate() {
+    const key = objectId!;
     setError(null);
     // Manual mode: snapshot the CURRENT pair before starting so the user can
     // revert after the pipeline auto-applies the new image. The first
@@ -113,10 +123,11 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
     }
     startActing(async () => {
       const res = await startBinaryRegenerationAction({
-        parentObjectId: objectId!,
+        parentObjectId: key,
         generationPrimitive,
         prompt,
       });
+      if (currentKeyRef.current !== key) return;
       if (!res.ok) {
         setError(res.message);
         return;
@@ -126,9 +137,11 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
   }
 
   function handleCancel() {
+    const key = objectId!;
     setError(null);
     startActing(async () => {
-      const res = await cancelBinaryRegenerationAction({ parentObjectId: objectId!, generationPrimitive });
+      const res = await cancelBinaryRegenerationAction({ parentObjectId: key, generationPrimitive });
+      if (currentKeyRef.current !== key) return;
       if (!res.ok) {
         setError(res.message);
         return;
@@ -138,14 +151,16 @@ export function ArtifactEditBinaryPromptPortlet({ config, inputs }: PortletCompo
   }
 
   function handleRevert(snap: RefSnapshot) {
+    const key = objectId!;
     setError(null);
     startActing(async () => {
       const res = await applyBinaryRefSwapAction({
-        parentObjectId: objectId!,
+        parentObjectId: key,
         refSwapPrimitive,
         imageArtifactId: snap.artifactId,
         imageRepresentationRevisionId: snap.representationRevisionId,
       });
+      if (currentKeyRef.current !== key) return;
       if (!res.ok) {
         setError(res.message);
         return;

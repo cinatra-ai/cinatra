@@ -13,6 +13,7 @@ import { isPreviewInlineMime } from "@/lib/artifacts/artifact-read";
 import { listEventsForObject } from "@/lib/object-history/eligibility";
 import { readWorkflow, listWorkflows } from "@cinatra-ai/workflows/store";
 import { readBlogPostsProjectById } from "@/lib/blog/store";
+import { isBackgroundJobActive } from "@/lib/background-jobs";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { resolvePortletAuthz, objectResourceCheck, canReadObject, type PortletAuthz } from "@/lib/dashboards/portlet-authz";
 import {
@@ -300,7 +301,9 @@ export async function loadBinaryGenerationStatusPortlet(args: {
   if (!projectId || !postId) return null;
   const project = await readBlogPostsProjectById(projectId);
   if (!project || !project.posts.some((p) => p.id === postId)) return null;
-  const state = project.imageGeneration;
+  // Defensive: assembled store rows may predate the imageGeneration field
+  // (generation.ts itself null-coalesces it to the idle default).
+  const state = project.imageGeneration ?? { status: "idle", message: "", updatedAt: "", postId: undefined };
   if (state.postId === postId) {
     const status = normalizeBinaryGenerationStatus(state.status);
     return {
@@ -311,10 +314,16 @@ export async function loadBinaryGenerationStatusPortlet(args: {
     };
   }
   // Foreign-post state: expose only the running/blocked bit, nothing else.
+  // Same active-job check as startBinaryRegenerationAction: a STALE foreign
+  // "running" row (job gone) must not block the UI — the start primitive
+  // self-heals it.
+  const jobId = typeof state.jobId === "string" ? state.jobId : null;
+  const busyWithOtherPost =
+    state.status === "running" && (jobId ? await isBackgroundJobActive(jobId) : false);
   return {
     status: "idle",
     message: "",
     updatedAt: null,
-    busyWithOtherPost: state.status === "running",
+    busyWithOtherPost,
   };
 }
