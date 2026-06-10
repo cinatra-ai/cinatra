@@ -15,6 +15,7 @@
     "./lifecycle-primitive": "./src/lifecycle-primitive.ts",
     "./registry-immutability": "./src/registry-immutability.ts",
     "./required-in-prod": "./src/required-in-prod.ts",
+    "./static-bundle-anchor": "./src/static-bundle-anchor.ts",
     "./dependency-closure": "./src/dependency-closure.ts",
     "./system-extension-inventory": "./src/system-extension-inventory.ts",
     "./dev-version": "./src/dev-version.ts",

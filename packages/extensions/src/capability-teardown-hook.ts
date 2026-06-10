@@ -14,11 +14,13 @@ import "server-only";
 //
 // HONEST SCOPE: this clears the CURRENT process's in-memory registry only. It is
 // NOT cross-worker live uninstall (that, plus signature/worker isolation, is a
-// separate concern). Paired with the StaticBundleLoader archived-row (tombstone) gate, the
-// two together mean: (1) a purged extension's tools are dropped from the running
-// process, and (2) an ARCHIVED static `serverEntry` package does not re-register
-// on the next restart. (A HARD uninstall deletes the manifest row, so the
-// restart gate does not yet cover it — see static-bundle-loader.)
+// separate concern). Paired with the StaticBundleLoader strict allow-list gate,
+// the two together mean: (1) a purged extension's tools are dropped from the
+// running process, and (2) a retired static `serverEntry` package does not
+// re-register on the next restart — BOTH retire paths are covered: archive
+// leaves archived rows, and a HARD uninstall tombstones the static-bundle
+// ANCHOR row (see static-bundle-anchor.ts + lifecycle-primitive.ts), so
+// neither yields a live row for the gate to activate.
 
 /** Tears down the in-memory capability registrations for a purged package.
  *  Returns anything (e.g. the removed tool names) — the result is logged, not

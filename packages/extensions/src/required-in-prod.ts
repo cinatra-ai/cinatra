@@ -25,6 +25,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { listInstalledExtensions } from "./canonical-store";
+import { staticBundleAnchorVersion } from "./static-bundle-anchor";
 
 const PACKAGE_JSON_PATH = resolve(process.cwd(), "package.json");
 
@@ -247,8 +248,11 @@ export function checkRequiredExtensionVersionPin(
  * Presence: required-in-prod is a platform-wide contract, satisfied by any
  * installed row (`active` or `locked`) — we intentionally do not narrow by org.
  * Version: for a PINNED entry, EVERY active/locked row of that package must
- * carry a registry version satisfying the pin — a single drifted org-scoped
- * row is a real incompatibility, and a non-registry source (whose version is
+ * carry a verifiable version satisfying the pin — a single drifted org-scoped
+ * row is a real incompatibility. A registry (`verdaccio`) row carries its
+ * version directly; a static-bundle ANCHOR row (bundled-in-image, see
+ * static-bundle-anchor.ts) records the bundled version at seed time, which is
+ * checked the same way. Any OTHER non-registry source (whose version is
  * unverifiable) counts as a mismatch, never a silent pass.
  */
 export async function verifyRequiredInProdInstalled(): Promise<RequiredVerificationResult> {
@@ -279,7 +283,10 @@ export async function verifyRequiredInProdInstalled(): Promise<RequiredVerificat
     installed.push(entry.packageName);
     if (entry.versionRange === null) continue;
     for (const row of rows) {
-      const version = row.source.type === "verdaccio" ? row.source.version : null;
+      const version =
+        row.source.type === "verdaccio"
+          ? row.source.version
+          : staticBundleAnchorVersion(row.source);
       if (version === null || !satisfiesRequiredVersionRange(version, entry.versionRange)) {
         mismatched.push({
           packageName: entry.packageName,

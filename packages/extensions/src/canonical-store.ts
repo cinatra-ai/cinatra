@@ -188,8 +188,7 @@ export async function readInstalledExtensionsByPackageName(
 export async function readEffectiveStatusByPackageNames(
   packageNames: string[],
 ): Promise<Map<string, "active" | "archived">> {
-  const result = new Map<string, "active" | "archived">();
-  if (packageNames.length === 0) return result;
+  if (packageNames.length === 0) return new Map();
   const db = await getDb();
   const { inArray } = await import("drizzle-orm");
   const rows = await db
@@ -199,6 +198,18 @@ export async function readEffectiveStatusByPackageNames(
     })
     .from(installedExtensionTable)
     .where(inArray(installedExtensionTable.packageName, packageNames));
+  return aggregateEffectiveStatusByPackageName(rows);
+}
+
+/**
+ * The PURE aggregation half of `readEffectiveStatusByPackageNames` (same
+ * live-wins semantics, documented above), factored out so lifecycle-correctness
+ * tests can chain primitive → aggregate → loader gate without a DB.
+ */
+export function aggregateEffectiveStatusByPackageName(
+  rows: ReadonlyArray<{ packageName: string; status: string }>,
+): Map<string, "active" | "archived"> {
+  const result = new Map<string, "active" | "archived">();
   for (const row of rows) {
     const live = row.status === "active" || row.status === "locked";
     if (live) result.set(row.packageName, "active");
