@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { requireAuthSession } from "@/lib/auth-session";
+import { resolveChatWidgetCatalog } from "@/lib/chat-widget-catalog.server";
 import { ChatPage } from "@cinatra-ai/chat";
 
 export const metadata: Metadata = { title: "Chat" };
@@ -11,7 +12,17 @@ export default async function ChatPageMount({
   params: Promise<{ slug?: string[] }>;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const [{ slug }, session, rawSp] = await Promise.all([params, requireAuthSession(), searchParams ?? Promise.resolve({})]);
+  // The widget catalog is resolved per request from the generated extension
+  // manifest + extension lifecycle — installing/archiving a widget-bearing
+  // extension is reflected on the next chat page load with no host edit.
+  // Component values are React client references, serialized to the client
+  // ChatPage through props.
+  const [{ slug }, session, rawSp, widgetCatalog] = await Promise.all([
+    params,
+    requireAuthSession(),
+    searchParams ?? Promise.resolve({}),
+    resolveChatWidgetCatalog(),
+  ]);
   const sp = rawSp as Record<string, string | string[] | undefined>;
   const threadId = slug?.[0];
   const mention = typeof sp.mention === "string" ? sp.mention : undefined;
@@ -36,6 +47,8 @@ export default async function ChatPageMount({
             : undefined
       }
       initialPrompt={initialPrompt}
+      widgets={widgetCatalog.widgets}
+      widgetManifests={widgetCatalog.manifests}
     />
   );
 }

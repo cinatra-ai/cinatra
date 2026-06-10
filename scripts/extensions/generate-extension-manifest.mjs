@@ -655,6 +655,27 @@ export async function buildManifest() {
     widgetSlugOwners.set(w.agentSlug, w.packageName);
   }
 
+  // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
+  // by shipping src/widgets/index.ts (WidgetDefinition[] + components). It MUST
+  // then also ship src/widgets/manifest.ts (the pure-data WidgetManifest, no
+  // React) — server surfaces that only need metadata (the chat API route's
+  // wizard-manifest registry) load the manifest module and must never import
+  // the component graph, while the RSC chat mount loads the component module.
+  // FAIL CLOSED at generation: a component module without the manifest split
+  // would silently fall off the server-side wizard surface.
+  const chatWidgetModules = records
+    .filter((r) => fileExists(join(r.sourceDir, "src/widgets/index.ts")))
+    .map((r) => {
+      if (!fileExists(join(r.sourceDir, "src/widgets/manifest.ts"))) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} ships src/widgets/index.ts (chat widgets) ` +
+            `without src/widgets/manifest.ts — the pure-data manifest split is required ` +
+            `(route-handler bundles must not import the widget component graph)`,
+        );
+      }
+      return { packageName: r.packageName };
+    })
+    .sort((a, b) => a.packageName.localeCompare(b.packageName));
   return {
     records,
     connectorSetupPages,
@@ -664,7 +685,7 @@ export async function buildManifest() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
-  };
+    chatWidgetModules,  };
 }
 
 // ---------------------------------------------------------------------------
@@ -679,8 +700,7 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
-function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents) {
-  const script = "scripts/extensions/generate-extension-manifest.mjs";
+function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules) {  const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
       (r) =>
@@ -779,6 +799,18 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
       return `  ${JSON.stringify(w.agentSlug)}: { load: () => import(${JSON.stringify(`${w.packageName}/widget-chat-tool`)}), ${metaJson} },`;
     })
     .join("\n");
+  // Chat-widget loader maps: packageName → literal dynamic import of the
+  // component module (src/widgets/index.ts — RSC chat mount only) and of the
+  // pure-data manifest module (src/widgets/manifest.ts — safe in any server
+  // bundle, including route handlers). Same literal-specifier rule as the other
+  // maps. Presence in these maps IS the widget-bearing flag; both are consumed
+  // by src/lib/chat-widget-catalog.server.ts, keyed by packageName so the
+  // extension lifecycle (archived-tombstone gate) applies directly.
+  const chatWidgets = chatWidgetModules
+    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets`)}),`)
+    .join("\n");
+  const chatWidgetManifests = chatWidgetModules
+    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets/manifest`)}),`)    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
     `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
@@ -831,7 +863,20 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  auth: GeneratedWidgetStreamAuth;\n` +
     `};\n\n` +
     `export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStreamAgentEntry> = {\n` +
-    `${widgetAgents}\n};\n`
+    `${widgetAgents}\n};\n` +
+    `\n` +
+    `// packageName → dynamic import of the chat-widget COMPONENT module\n` +
+    `// (src/widgets/index.ts). Literal specifiers only (Turbopack-safe). RSC\n` +
+    `// consumers only (the chat mount) — the module graph includes "use client"\n` +
+    `// components. Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
+    `export const GENERATED_CHAT_WIDGET_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `${chatWidgets}\n};\n\n` +
+    `// packageName → dynamic import of the chat-widget MANIFEST module\n` +
+    `// (src/widgets/manifest.ts — pure data, no React). Safe in ANY server\n` +
+    `// bundle, including route handlers (the chat runner's wizard-manifest\n` +
+    `// registry). Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
+    `export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `${chatWidgetManifests}\n};\n`
   );
 }
 
@@ -853,8 +898,7 @@ function emitWidgetStreamPublicPaths(widgetStreamAgents) {
     `// Consumed by src/lib/auth-route-guard.ts: these paths skip the sign-in\n` +
     `// redirect; the route itself enforces Origin allowlist + Bearer token.\n` +
     `export const GENERATED_WIDGET_STREAM_PUBLIC_PATHS: readonly string[] = [\n` +
-    `${body}\n];\n`
-  );
+    `${body}\n];\n`  );
 }
 
 function emitConnectorSetupPages(setupPages, settingsPages) {
@@ -968,10 +1012,10 @@ async function main() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    chatWidgetModules,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents)],
-    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
   ];
@@ -1004,8 +1048,7 @@ async function main() {
   if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });
   for (const [path, content] of files) writeFileSync(path, content);
   const parity = await checkParity();
-  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents)`);
-  if (parity.length) {
+  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");
     for (const p of parity) console.log("  - " + p);
   } else {

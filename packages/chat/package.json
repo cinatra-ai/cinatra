@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@cinatra-ai/agents": "workspace:*",
-    "@cinatra-ai/apollo-connector": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "katex": "^0.16.47",
