@@ -182,7 +182,10 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
 [data-cinatra-dashboard-filter-bar] {
   --dc-surface: var(--toolbar-l2);
   --dc-border: transparent;
-  --dc-surface-hover: color-mix(in srgb, var(--line-strong) 6%, var(--toolbar-l2));
+  /* Foreground-based tint = the canonical ToolbarButton hover
+     (hover:bg-foreground/[0.06]) — and it inverts correctly in dark
+     mode, where --foreground flips to near-white. */
+  --dc-surface-hover: color-mix(in srgb, var(--foreground) 6%, var(--toolbar-l2));
   --dc-shadow-sm: none;
 }
 

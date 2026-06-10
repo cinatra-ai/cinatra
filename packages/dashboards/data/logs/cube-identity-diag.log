@@ -1,0 +1,5 @@
+2026-06-10T13:15:27.657Z {"reason":"als_getstore_returned_null","note":"drizzle-cube dispatch is running outside the MCP request frame"}
+2026-06-10T13:15:27.661Z {"reason":"top_level_ctx_missing_identity","hasUserId":false,"hasOrgId":true,"hasDelegatedActor":false,"delegatedActorOrgPresent":false,"delegatedActorUserPresent":false}
+2026-06-10T13:15:27.661Z {"reason":"top_level_ctx_missing_identity","hasUserId":true,"hasOrgId":false,"hasDelegatedActor":false,"delegatedActorOrgPresent":false,"delegatedActorUserPresent":false}
+2026-06-10T13:15:27.662Z {"reason":"a2a_path_missing_identity","hasA2aUser":true,"hasA2aOrg":false}
+2026-06-10T13:15:27.662Z {"reason":"a2a_path_missing_identity","hasA2aUser":false,"hasA2aOrg":true}
