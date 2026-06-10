@@ -3,8 +3,10 @@
 -- Issue #50 (notification flyout shows the same notification twice):
 -- add the general per-user notification dedupe key — a nullable
 -- `dedupe_key` column plus the partial unique index the writer's
--- `ON CONFLICT (user_id, dedupe_key) DO NOTHING` arbitrates on
--- (packages/notifications/src/service.ts).
+-- `ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL AND
+-- user_id IS NOT NULL DO NOTHING` arbitrates on (the conflict clause must
+-- carry the index predicate for Postgres partial-index inference; see
+-- packages/notifications/src/service.ts).
 --
 -- The convention classifies a unique index on an existing table as
 -- destructive (it can fail on existing duplicates), which is why this
