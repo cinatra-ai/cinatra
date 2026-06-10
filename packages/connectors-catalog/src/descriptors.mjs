@@ -175,12 +175,14 @@ const RAW_DESCRIPTORS = [
 
 /**
  * The public catalog: RAW entries + the slug-derived packageId. Derivation is
- * BY CONSTRUCTION (no entry can carry a hand-pinned package-name literal).
+ * BY CONSTRUCTION (no entry can carry a hand-pinned package-name literal):
+ * the derived packageId is assigned AFTER the spread, so a raw entry can
+ * never override it.
  * @type {ConnectorDescriptor[]}
  */
 export const CONNECTOR_DESCRIPTORS = RAW_DESCRIPTORS.map((d) => ({
-  packageId: packageIdForSlug(d.slug),
   ...d,
+  packageId: packageIdForSlug(d.slug),
 }));
 
 /** @returns {ConnectorDescriptor[]} defensive copy */

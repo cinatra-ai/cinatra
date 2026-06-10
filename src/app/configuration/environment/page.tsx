@@ -81,9 +81,11 @@ export default async function EnvironmentSettingsPage({
 function ModeTabContent({
   connectionsRedirectFromTab = null,
 }: {
-  /** Set to "connections" or "credentials" when a prod user arrived with
+  /** Set to "connections" or "credentials" when the user arrived with
    *  that tab in the URL and the page redirected them here because the
-   *  Connections tab is dev-only. `null` for normal Mode visits. */
+   *  Connections tab is retired (cinatra#35) — connection-service
+   *  configuration lives on /setup/connections. `null` for normal Mode
+   *  visits. */
   connectionsRedirectFromTab?: string | null;
 } = {}) {
   const appRuntimeMode = getAppRuntimeMode();
