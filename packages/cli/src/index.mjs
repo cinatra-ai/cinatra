@@ -2123,9 +2123,10 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     // Acquire the required-extension bootable set BEFORE any DB mutation:
     // pinned codeload tarballs verified against the committed lock (see
     // prod-extension-acquisition.mjs). Inside the standalone runtime image
-    // (no pnpm workspace) this is a documented no-op — the extension source
-    // was baked at image build. Any acquisition or re-link failure throws
-    // here, so a half-acquired tree can never be followed by DB setup.
+    // (positively detected by its root server.js + .next/) this is a
+    // documented no-op — the extension source was baked at image build. Any
+    // acquisition or re-link failure throws here, so a half-acquired tree
+    // can never be followed by DB setup.
     const { acquireProdRequiredExtensions } = await import("./prod-extension-acquisition.mjs");
     const acquisition = await acquireProdRequiredExtensions({ repoRoot });
     installAfterExtensionSync(repoRoot, acquisition, { failHard: true });

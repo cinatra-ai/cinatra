@@ -339,6 +339,33 @@ describe("acquireProdRequiredExtensions", () => {
     expect(result).toEqual({ skipped: true, reason: "not-a-workspace" });
   });
 
+  it("skips the standalone runtime root POSITIVELY even when pnpm-workspace.yaml was traced in", async () => {
+    // Next's output-file tracing mirrors pnpm-workspace.yaml AND marker-less
+    // extension sources into .next/standalone — the runtime image is NOT
+    // detectable by "no workspace file". server.js + .next/ at the root is.
+    const root = scratch();
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+    writeFileSync(path.join(root, "server.js"), "// next standalone server entry\n");
+    mkdirSync(path.join(root, ".next"));
+    // A traced, marker-less extension dir — the exact state that made the
+    // acquisition refuse ("exists but is not acquisition-managed") and brick
+    // `setup prod` in the runtime image before this guard.
+    mkdirSync(path.join(root, "extensions/scope/sample-connector"), { recursive: true });
+    const result = await acquireProdRequiredExtensions({ repoRoot: root, log: () => {} });
+    expect(result).toEqual({ skipped: true, reason: "standalone-runtime-image" });
+  });
+
+  it("does NOT skip a real workspace that merely has a .next/ build dir", async () => {
+    const gz = await goodArchive();
+    const root = await workspaceWithLock(gz);
+    mkdirSync(path.join(root, ".next")); // dev/build tree: .next exists, root server.js does not
+    const r = await acquireProdRequiredExtensions({ repoRoot: root, fetchImpl: fetchFor(gz), log: () => {} });
+    expect(r.skipped).toBeUndefined();
+    expect(r.results).toEqual([
+      expect.objectContaining({ action: "downloaded", pkgName: "@scope/sample-connector" }),
+    ]);
+  });
+
   it("downloads, verifies, and installs; re-run verifies in place", async () => {
     const gz = await goodArchive();
     const root = await workspaceWithLock(gz);
