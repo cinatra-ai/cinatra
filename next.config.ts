@@ -361,6 +361,24 @@ const nextConfig: NextConfig = {
         destination: "/personal",
         permanent: true,
       },
+      // The standalone /agents/status agent-list table is retired — /agents
+      // (the dashboard) is the single installed-agents surface.
+      // scripts/audit/agents-status-route-banned.mjs guards in-tree
+      // references; these permanent 308s preserve external bookmarks and
+      // browser history. Old /agents/status/<runId> run pages have no
+      // per-run mapping in the new [vendor]/[packageName]/[instanceId]
+      // scheme, so the catch-all also lands at /agents. Bare rule first per
+      // the table's convention.
+      {
+        source: "/agents/status",
+        destination: "/agents",
+        permanent: true,
+      },
+      {
+        source: "/agents/status/:path*",
+        destination: "/agents",
+        permanent: true,
+      },
       // mcp-machine-flow-allowlist-start
       // MCP OAuth handshake pages moved from the admin namespace to /api/mcp/*.
       // These specific rules run BEFORE the broad /administration/* catch-all so
