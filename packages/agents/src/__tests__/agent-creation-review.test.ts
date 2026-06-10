@@ -45,7 +45,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 // (`resolveRequiredCreationSkillIds`) and `loadReviewerPrompt` return a
 // tolerant `skillIds: []` per agent. Without this mock, vitest's ESM loader
 // tries to resolve the full skills-package dependency chain, which
-// transitively pulls in `@cinatra-ai/mcp-client-registry-connector`; those
+// transitively pulls in `@cinatra-ai/mcp-client-connector`; those
 // failed lookups are slow enough to break the "dispatches in PARALLEL" timing
 // assertion.
 vi.mock("@cinatra-ai/skills", () => ({

@@ -450,8 +450,14 @@ export async function hasAnyBetterAuthUsers() {
     return false;
   }
 
+  // Exclude assistant users (e.g. cinatra@system.local seeded on boot by
+  // ensureBuiltInCinatraAssistant) — same rationale as the count in
+  // ensureInitialAdminBootstrap below: a fresh install always carries the
+  // built-in assistant row, so counting it would make the bootstrap state
+  // (inline "Create the first account" form, /sign-up canonical redirect)
+  // unreachable on every real fresh install.
   const result = await betterAuthDb.execute<{ count: string }>(
-    sql`select count(*)::text as count from public."user"`,
+    sql`select count(*)::text as count from public."user" where "userType" is distinct from 'assistant'`,
   );
 
   return Number(result.rows[0]?.count ?? "0") > 0;

@@ -89,7 +89,13 @@ make setup
 make dev
 ```
 
-Open <http://localhost:3000>. The first user to register becomes the platform admin.
+`make setup` runs an interactive script (`scripts/setup.sh`) that checks prerequisites, starts the supporting Docker services (Postgres, Redis, Nango, and others), creates `.env.local`, and provisions the app — prompting for dev/prod mode and optional sample data along the way (`YES=1` accepts the defaults).
+
+Open <http://localhost:3000>. The first user to register becomes the platform admin and lands in the in-app setup wizard for the remaining first-run configuration.
+
+### Connect an LLM
+
+The final wizard step, **`/setup/ai`**, gives the instance a working model provider — the minimum is an OpenAI API key plus a default model, which is all agents and chat need to run. Additional providers are managed under Administration → LLM after setup: Gemini can be connected as the second globally eligible provider (it steps in when OpenAI is unavailable and can take over image generation), while Anthropic is available for specific purposes only, never as the global default. Provider configuration lives in-app, not in `.env` (the `OPENAI_API_KEY` env var only powers Graphiti object embeddings, not the assistant).
 
 **Keeping your checkout up to date.** After pulling new code, reconcile your dev environment —
 dependencies and the dev database schema — to match it:
