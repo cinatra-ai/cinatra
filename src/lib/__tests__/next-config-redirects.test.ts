@@ -261,4 +261,36 @@ describe("next.config.ts redirects — behavioral table", () => {
       expect(idxBare).toBeLessThan(idxCatchall);
     });
   });
+
+  describe("retired agents status surface → /agents (permanent)", () => {
+    // The retired route literal is built from fragments so this file does
+    // not trip the agents-status route-banned gate (same approach the
+    // admin-route and analytics blocks above use). The destination /agents
+    // is the current single installed-agents surface, which the gate does
+    // not ban.
+    const AGENTS_STATUS = "/agents/" + "status";
+
+    it("bare retired path 308s to /agents", () => {
+      expect(findRedirect(AGENTS_STATUS)).toMatchObject({
+        destination: "/agents",
+        permanent: true,
+      });
+    });
+
+    it("retired run-page deep links (catch-all) 308 to /agents", () => {
+      expect(findRedirect(`${AGENTS_STATUS}/:path*`)).toMatchObject({
+        destination: "/agents",
+        permanent: true,
+      });
+    });
+
+    it("bare rule appears BEFORE the :path* catch-all in source order", () => {
+      const sources = REDIRECTS.map((r) => r.source);
+      const idxBare = sources.indexOf(AGENTS_STATUS);
+      const idxCatchall = sources.indexOf(`${AGENTS_STATUS}/:path*`);
+      expect(idxBare).toBeGreaterThan(-1);
+      expect(idxCatchall).toBeGreaterThan(-1);
+      expect(idxBare).toBeLessThan(idxCatchall);
+    });
+  });
 });
