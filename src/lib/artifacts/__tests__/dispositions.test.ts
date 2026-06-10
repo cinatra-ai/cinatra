@@ -5,8 +5,8 @@
  * intentionally separate so neither can be subverted into the other's
  * behaviour by a future MIME-allowlist edit. These tests pair the two
  * helpers on every MIME class the preview route handles, plus the
- * negative cases (HTML, video, audio, application/octet-stream) that
- * preview must fall back to `attachment`.
+ * negative cases (HTML, non-allowlisted video/audio containers,
+ * application/octet-stream) that preview must fall back to `attachment`.
  *
  * The two helpers do NOT share a code path; if a future refactor tries
  * to consolidate them, this test pair MUST be updated to keep covering
@@ -65,6 +65,18 @@ describe("previewDispositionFor — inline only for allowlisted MIMEs", () => {
     ["image/gif", "anim.gif"],
     ["image/webp", "shot.webp"],
     ["image/svg+xml", "icon.svg"],
+    ["video/mp4", "demo.mp4"],
+    ["video/webm", "clip.webm"],
+    ["video/ogg", "reel.ogv"],
+    ["audio/mpeg", "clip.mp3"],
+    ["audio/mp4", "voice.m4a"],
+    ["audio/x-m4a", "memo.m4a"],
+    ["audio/ogg", "pod.ogg"],
+    ["audio/wav", "take.wav"],
+    ["audio/x-wav", "take2.wav"],
+    ["audio/webm", "note.weba"],
+    ["audio/flac", "master.flac"],
+    ["audio/aac", "stream.aac"],
   ];
   it.each(inlineCases)("returns inline for %s", (mime, filename) => {
     const out = previewDispositionFor(mime, filename);
@@ -74,8 +86,12 @@ describe("previewDispositionFor — inline only for allowlisted MIMEs", () => {
 
   const attachmentCases: ReadonlyArray<readonly [string, string]> = [
     ["text/html", "page.html"],
-    ["video/mp4", "demo.mp4"],
-    ["audio/mpeg", "clip.mp3"],
+    // Media containers deliberately OUTSIDE the allowlist (codec support
+    // too inconsistent for an inline player) must stay `attachment`.
+    ["video/quicktime", "capture.mov"],
+    ["video/x-msvideo", "legacy.avi"],
+    ["video/x-matroska", "rip.mkv"],
+    ["audio/midi", "tune.mid"],
     ["application/octet-stream", "blob.bin"],
     ["application/zip", "bundle.zip"],
     ["application/vnd.google-apps.document", "gdoc.ref"],
@@ -109,6 +125,18 @@ describe("guardrail — helpers do not share a code path", () => {
       "image/gif",
       "image/webp",
       "image/svg+xml",
+      "video/mp4",
+      "video/webm",
+      "video/ogg",
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/x-m4a",
+      "audio/ogg",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/webm",
+      "audio/flac",
+      "audio/aac",
     ]);
     // Drift detector — if the production set diverges, this test fails
     // and the helper docstring + the preview route's 415 list must be

@@ -73,6 +73,60 @@ function sniffMime(head: Uint8Array, declared?: string): string {
     return "application/pdf";
   if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05))
     return "application/zip";
+  // Media containers. These MUST be sniffed before the UTF-8 text
+  // heuristic: several (WebM/EBML, RIFF, bare-frame MP3) can have a
+  // NUL-free 16-byte head and would otherwise mis-sniff as text/plain,
+  // which both mislabels the artifact and routes playable media to the
+  // text preview handler.
+  //
+  // ISO-BMFF (`....ftyp`): container is shared by video/mp4, audio/mp4
+  // and audio/x-m4a — magic alone cannot pick the declared use, so a
+  // plausible media declaration wins; default video/mp4.
+  // QuickTime major brand `qt  ` is identified positively: the container
+  // IS QuickTime, which is deliberately NOT preview-allowlisted. Without
+  // this branch a .mov uploaded with a generic/missing declared MIME would
+  // be promoted to video/mp4 and ride the inline preview path the
+  // exclusion decision keeps it off.
+  if (b.length >= 8 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+    if (b.length >= 12 && b[8] === 0x71 && b[9] === 0x74 && b[10] === 0x20 && b[11] === 0x20)
+      return "video/quicktime";
+    return declared && /^(video|audio)\/[\w.+-]+$/.test(declared)
+      ? declared
+      : "video/mp4";
+  }
+  // EBML (WebM / Matroska). video/webm vs audio/webm is declared-use.
+  if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3)
+    return declared === "audio/webm" || declared === "video/x-matroska"
+      ? declared
+      : "video/webm";
+  // RIFF containers: WAVE → wav, WEBP → webp, "AVI " → avi.
+  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) {
+    if (b[8] === 0x57 && b[9] === 0x41 && b[10] === 0x56 && b[11] === 0x45)
+      return "audio/wav";
+    if (b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50)
+      return "image/webp";
+    if (b[8] === 0x41 && b[9] === 0x56 && b[10] === 0x49 && b[11] === 0x20)
+      return "video/x-msvideo";
+  }
+  // MPEG audio: ID3 tag, or a bare frame sync (0xFF Ex/Fx) confirmed by
+  // the declared MIME (the 2-byte sync alone is too weak a signature to
+  // overrule an arbitrary declaration).
+  if (b.length >= 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33)
+    return "audio/mpeg";
+  if (b.length >= 2 && b[0] === 0xff && (b[1] & 0xe0) === 0xe0 && declared === "audio/mpeg")
+    return "audio/mpeg";
+  // AAC in ADTS framing (0xFFF sync, layer 00), confirmed by the declared
+  // MIME — same weak-signature rule as bare-frame MP3 above. Without this,
+  // a NUL-free ADTS head declared audio/aac falls through to the UTF-8
+  // text heuristic and is stored as text/plain (mislabel + wrong handler).
+  if (b.length >= 2 && b[0] === 0xff && (b[1] & 0xf6) === 0xf0 && declared === "audio/aac")
+    return "audio/aac";
+  // FLAC (`fLaC`).
+  if (b.length >= 4 && b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43)
+    return "audio/flac";
+  // Ogg (`OggS`): container is shared by audio/ogg + video/ogg.
+  if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53)
+    return declared === "video/ogg" ? declared : "audio/ogg";
   // Heuristic UTF-8 text: no NUL in the head window.
   if (b.length > 0 && !b.includes(0)) {
     if (declared && /^text\/|application\/(json|markdown|xml|csv)/.test(declared))
