@@ -9,6 +9,7 @@ export {
   workflowGate,
   workflowEvent,
   workflowTaskAttempt,
+  workflowDispatchLease,
   workflowArtifact,
   workflowApproval,
   releaseWorkflowsSchemaTables,

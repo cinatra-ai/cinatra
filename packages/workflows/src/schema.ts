@@ -298,6 +298,47 @@ export const workflowTaskAttempt = cinatraSchema.table(
 );
 
 // ---------------------------------------------------------------------------
+// workflow_dispatch_lease — durable dispatch lease: one live lease per task,
+// held by the dispatcher that claimed the task. Acquired inside the claim tx,
+// heartbeat-extended while the executor is in flight, released in the same tx
+// that records the outcome. An EXPIRED lease on a running agent_task whose
+// attempt has no child_run_id is the durable signal that the dispatcher
+// crashed mid-dispatch (a slow in-flight dispatch keeps its lease alive via
+// heartbeat) — the reconciler then takes the lease over and re-dispatches the
+// SAME attempt under its original idempotency key. Transient operational
+// state, NOT evidence — every FK CASCADEs.
+// ---------------------------------------------------------------------------
+export const workflowDispatchLease = cinatraSchema.table(
+  "workflow_dispatch_lease",
+  {
+    id: text("id").primaryKey(),
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflow.id, { onDelete: "cascade" }),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => workflowTask.id, { onDelete: "cascade" }),
+    attemptId: text("attempt_id")
+      .notNull()
+      .references(() => workflowTaskAttempt.id, { onDelete: "cascade" }),
+    // Per-process holder (diagnostics) + per-acquire ownership token. ALL
+    // ownership checks (heartbeat, release, outcome settle) key on the token,
+    // never the holder alone — two overlapping claims in one process must not
+    // alias each other's lease.
+    holderId: text("holder_id").notNull(),
+    token: text("token").notNull(),
+    acquiredAt: timestamp("acquired_at", { withTimezone: true }).notNull(),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    // One live lease per task — the acquire path UPSERTs on this.
+    taskUniq: uniqueIndex("workflow_dispatch_lease_task_id_uniq").on(t.taskId),
+    workflowIdx: index("workflow_dispatch_lease_workflow_idx").on(t.workflowId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // workflow_artifact — produced drafts linked to the producing task, versioned
 // and pinned while referenced. Evidence table (task_id RESTRICT).
 // ---------------------------------------------------------------------------
@@ -377,6 +418,7 @@ export const releaseWorkflowsSchemaTables = {
   workflowGate,
   workflowEvent,
   workflowTaskAttempt,
+  workflowDispatchLease,
   workflowArtifact,
   workflowApproval,
 };

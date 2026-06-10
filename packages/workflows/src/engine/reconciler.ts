@@ -8,6 +8,7 @@ import {
   workflowDependency,
   workflowApproval,
   workflowTaskAttempt,
+  workflowDispatchLease,
   workflowArtifact,
   workflowGate,
   workflowEvent,
@@ -84,6 +85,10 @@ export type ReconcileDeps = {
 const id = (p: string) => `${p}_${randomUUID()}`;
 const ADVISORY = (wfId: string) => sql`SELECT pg_advisory_xact_lock(hashtext(${wfId}))`;
 
+/** Per-process dispatch-lease holder (diagnostics only — ownership checks key
+ *  on the per-acquire lease token, never the holder). */
+const LEASE_HOLDER_ID = `wfproc_${randomUUID()}`;
+
 type TaskRow = typeof workflowTask.$inferSelect;
 
 type ClaimedTask = {
@@ -93,7 +98,104 @@ type ClaimedTask = {
   /** `${wfId}:${taskId}:${attemptNo}` — passed to the agent_task executor for
    *  idempotent child-run dispatch. Identical to the attempt's stored key. */
   idempotencyKey: string;
+  /** Per-acquire dispatch-lease ownership token. recordOutcomes only settles
+   *  an outcome whose claim still owns the task's lease — a reclaimed lease
+   *  (token rotated by the takeover) drops the stale dispatcher's outcome. */
+  leaseToken: string;
 };
+
+/** Acquire the dispatch lease for a freshly-claimed task, inside the claim tx.
+ *  UPSERT on the one-lease-per-task unique index: a fresh claim replaces any
+ *  stale residue row (a task only reaches idle/scheduled after its prior
+ *  dispatch settled, so no LIVE lease can exist here).
+ *
+ *  Lease timestamps deliberately use the WALL clock, not the reconcile tick's
+ *  logical `now`: that `now` is captured once per tick, so after a long
+ *  poll/foreach/cascade phase a logical-now expiry could be born (nearly)
+ *  expired and a concurrent tick could reclaim a dispatch before its first
+ *  heartbeat. Gates/backoff keep the logical clock; lease liveness is wall-time. */
+async function acquireDispatchLease(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  wfId: string,
+  taskId: string,
+  attemptId: string,
+): Promise<string> {
+  const token = randomUUID();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + ENGINE_OPS.dispatchLeaseTtlMs);
+  await tx
+    .insert(workflowDispatchLease)
+    .values({
+      id: id("wlease"),
+      workflowId: wfId,
+      taskId,
+      attemptId,
+      holderId: LEASE_HOLDER_ID,
+      token,
+      acquiredAt: now,
+      heartbeatAt: now,
+      expiresAt,
+    })
+    .onConflictDoUpdate({
+      target: workflowDispatchLease.taskId,
+      set: { attemptId, holderId: LEASE_HOLDER_ID, token, acquiredAt: now, heartbeatAt: now, expiresAt },
+    });
+  return token;
+}
+
+/** Take over an EXPIRED lease (reclaim), inside the claim tx. A single
+ *  conditional UPDATE — the WHERE re-checks `token` + expiry on the current
+ *  row version under the row lock, so a lock-free heartbeat that lands between
+ *  the reclaim scan's read and this write makes the takeover a no-op instead
+ *  of stealing a live dispatcher's lease (its outcome would otherwise be
+ *  dropped by the ownership gate). Returns the new token, or null when the
+ *  lease was extended/rotated under us (dispatch is alive — skip reclaim). */
+async function takeOverDispatchLease(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  taskId: string,
+  observedToken: string,
+): Promise<string | null> {
+  const token = randomUUID();
+  const now = new Date();
+  const taken = await tx
+    .update(workflowDispatchLease)
+    .set({
+      holderId: LEASE_HOLDER_ID,
+      token,
+      acquiredAt: now,
+      heartbeatAt: now,
+      expiresAt: new Date(now.getTime() + ENGINE_OPS.dispatchLeaseTtlMs),
+    })
+    .where(
+      and(
+        eq(workflowDispatchLease.taskId, taskId),
+        eq(workflowDispatchLease.token, observedToken),
+        sql`${workflowDispatchLease.expiresAt} <= ${now}`,
+      ),
+    )
+    .returning({ id: workflowDispatchLease.id });
+  return taken.length > 0 ? token : null;
+}
+
+/** Heartbeat the dispatch lease while the executor is in flight (outside any
+ *  tx). Ownership-qualified on the token; a reclaimed lease is never extended
+ *  by its previous holder. Returns a stop() the dispatcher MUST call. */
+function startDispatchLeaseHeartbeat(taskId: string, leaseToken: string): { stop: () => void } {
+  const interval = setInterval(async () => {
+    try {
+      const now = new Date();
+      await db
+        .update(workflowDispatchLease)
+        .set({ heartbeatAt: now, expiresAt: new Date(now.getTime() + ENGINE_OPS.dispatchLeaseTtlMs) })
+        .where(and(eq(workflowDispatchLease.taskId, taskId), eq(workflowDispatchLease.token, leaseToken)));
+    } catch (err) {
+      // Best-effort: a missed heartbeat only risks an idempotent re-dispatch.
+      console.error(`[release-workflows:engine] dispatch-lease heartbeat(${taskId}) failed:`, (err as Error).message);
+    }
+  }, ENGINE_OPS.dispatchLeaseHeartbeatMs);
+  interval.unref?.();
+  return { stop: () => clearInterval(interval) };
+}
 
 async function loadGraph(wfId: string) {
   const tasks = await db.select().from(workflowTask).where(eq(workflowTask.workflowId, wfId));
@@ -226,6 +328,8 @@ async function claimReadyTasks(
         .update(workflowTaskAttempt)
         .set({ status: "failed", error: { recovered: "crash_mid_dispatch" }, completedAt: new Date(), updatedAt: new Date() })
         .where(and(eq(workflowTaskAttempt.taskId, task.id), eq(workflowTaskAttempt.status, "running")));
+      // The crashed dispatcher never released its lease — clear it with the reset.
+      await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.taskId, task.id));
       task.status = "scheduled";
       task.lockVersion += 1;
       statusById.set(task.id, "scheduled");
@@ -233,6 +337,56 @@ async function claimReadyTasks(
     }
 
     const claimed: ClaimedTask[] = [];
+
+    // Lease-based crash recovery for agent_task dispatch. An agent_task left
+    // `running` with a live attempt that has NO child_run_id is either a
+    // dispatch that crashed before recordOutcomes persisted the child id, or a
+    // dispatch still in flight outside the advisory lock. The dispatch lease
+    // disambiguates: an in-flight dispatcher heartbeat-extends its lease, so an
+    // EXPIRED lease marks the dispatcher dead. Reclaim = take the lease over
+    // (rotating the token, which drops the dead dispatcher's late outcome) and
+    // re-dispatch the SAME attempt under its original idempotency key — the
+    // host's createAgentRun is idempotent on that key, so this resolves to the
+    // existing child run (or creates the one the crash prevented), never a
+    // duplicate. No lease at all is NOT reclaimed: post-lease engines always
+    // acquire inside the claim tx, so lease-less running tasks are either
+    // pre-lease legacy rows or executor-not-wired placeholders — both stay on
+    // the findStuckTasks operator path (re-dispatch could not help the latter
+    // and legacy rows lack the lease provenance to prove the dispatcher died).
+    for (const task of tasks) {
+      if (claimed.length >= ENGINE_OPS.dispatchBatchCap) break;
+      if (task.status !== "running" || task.type !== "agent_task" || task.foreachConfig != null) continue;
+      const [attempt] = await tx
+        .select()
+        .from(workflowTaskAttempt)
+        .where(and(eq(workflowTaskAttempt.taskId, task.id), eq(workflowTaskAttempt.status, "running")))
+        .orderBy(desc(workflowTaskAttempt.attemptNo))
+        .limit(1);
+      if (!attempt || attempt.childRunId != null) continue; // child id persisted → poll path owns it
+      const [lease] = await tx
+        .select()
+        .from(workflowDispatchLease)
+        .where(eq(workflowDispatchLease.taskId, task.id));
+      if (!lease) continue; // legacy / executor-not-wired — operator path
+      // Expiry is judged on the WALL clock (leases are wall-time; the tick's
+      // logical `now` can be stale after a long poll/cascade phase).
+      if (lease.expiresAt.getTime() > Date.now()) continue; // live in-flight dispatch
+      // Conditional takeover: re-checks token + expiry under the row lock, so
+      // a heartbeat that extended the lease after our read makes this a no-op
+      // (the dispatcher is alive) instead of stealing its lease.
+      const token = await takeOverDispatchLease(tx, task.id, lease.token);
+      if (!token) continue; // lease extended/rotated under us — dispatch is alive
+      await recordEvent(
+        tx,
+        wfId,
+        task.id,
+        task.key,
+        "dispatch_reclaimed",
+        { attemptNo: attempt.attemptNo, idemKey: attempt.idempotencyKey, expiredHolder: lease.holderId },
+        provenance,
+      );
+      claimed.push({ task, attemptId: attempt.id, attemptNo: attempt.attemptNo, idempotencyKey: attempt.idempotencyKey, leaseToken: token });
+    }
     for (const task of tasks) {
       if (claimed.length >= ENGINE_OPS.dispatchBatchCap) break;
       if (task.status !== "idle" && task.status !== "scheduled") continue; // running/terminal skip
@@ -284,8 +438,13 @@ async function claimReadyTasks(
         continue;
       }
 
+      // Durable dispatch lease: acquired atomically with the claim so a crash
+      // anywhere between this commit and the outcome commit leaves a lease
+      // that lapses (no heartbeats from a dead process) → reclaimable above.
+      const leaseToken = await acquireDispatchLease(tx, wfId, task.id, attemptId);
+
       await recordEvent(tx, wfId, task.id, task.key, "dispatched", { attemptNo, idemKey }, provenance, idemKey);
-      claimed.push({ task: { ...task, status: "running", lockVersion: task.lockVersion + 1 }, attemptId, attemptNo, idempotencyKey: idemKey });
+      claimed.push({ task: { ...task, status: "running", lockVersion: task.lockVersion + 1 }, attemptId, attemptNo, idempotencyKey: idemKey, leaseToken });
     }
     return { inactive: false, status: wf.status, claimed, provenance };
   });
@@ -303,6 +462,23 @@ async function recordOutcomes(
     await tx.execute(ADVISORY(wfId));
     for (const { claimed, outcome } of results) {
       const taskId = claimed.task.id;
+      // Ownership gate: only the claim that still holds the task's dispatch
+      // lease may settle its outcome. A rotated token means the lease was
+      // reclaimed (this dispatcher was presumed dead) — its late outcome must
+      // be dropped, or a stale `failed` could burn the retry budget while the
+      // reclaimer's re-dispatch is live. A missing lease means the outcome was
+      // already settled (or torn down) — equally stale.
+      const [lease] = await tx
+        .select()
+        .from(workflowDispatchLease)
+        .where(eq(workflowDispatchLease.taskId, taskId));
+      if (!lease || lease.token !== claimed.leaseToken) continue;
+      // Release the lease in the SAME tx as the outcome write — the dispatch
+      // phase is over no matter the outcome (an awaiting agent/manual task is
+      // owned by the poll path / a human from here on).
+      await tx
+        .delete(workflowDispatchLease)
+        .where(and(eq(workflowDispatchLease.taskId, taskId), eq(workflowDispatchLease.token, claimed.leaseToken)));
       const [current] = await tx.select().from(workflowTask).where(eq(workflowTask.id, taskId));
       // Drop the outcome ENTIRELY if the task is no longer running — a concurrent
       // cancel/teardown moved it. Checking BEFORE the attempt write avoids leaving
@@ -396,15 +572,11 @@ async function pollRunningAgentTasks(
   // Outside the lock, collect running agent_task tasks + their live attempt's
   // child run id, then poll each child run's status.
   //
-  // NOTE: we deliberately do NOT auto-recover an agent_task that is `running`
-  // with a NULL child_run_id. Such a state is either a dispatch that crashed
-  // before recordOutcomes persisted the child id, OR a dispatch still in-flight
-  // outside the advisory lock (dispatch happens outside the lock). Those are
-  // indistinguishable from the attempt row alone, so a time-based reset would
-  // risk resetting a live dispatch → a duplicate child run with real side effects.
-  // Safe auto-recovery needs a durable dispatch lease/heartbeat or same-attempt
-  // re-dispatch reusing the idempotency key. Until then, `findStuckTasks` surfaces
-  // a stuck agent_task for operator/alerting.
+  // NOTE: an agent_task `running` with a NULL child_run_id is NOT handled
+  // here — that is the crash-mid-dispatch window owned by the durable dispatch
+  // lease: claimReadyTasks reclaims an expired lease and re-dispatches the
+  // SAME attempt under its original idempotency key (see the reclaim loop
+  // there). This poll path only settles attempts whose child id persisted.
   const runningTasksRaw = await db
     .select()
     .from(workflowTask)
@@ -645,6 +817,11 @@ async function applyRejectedApprovalPolicies(wfId: string, now: Date): Promise<s
             inArray(workflowTask.status, ["idle", "scheduled", "running", "pending_approval"]),
           ),
         );
+      // Tidiness: no dispatch can outlive a cancelled workflow — clear its
+      // leases (a dropped in-flight outcome would otherwise strand one).
+      // Same crash-window teardown limitation as cancelWorkflow: a child run
+      // whose id never reached the attempt is invisible here (see lifecycle.ts).
+      await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, wfId));
       await recordEvent(tx, wfId, null, null, "workflow_cancelled", { reason: "approval_rejected_cancel", cancelledChildRuns: childRunsToCancel.length }, prov);
     }
   });
@@ -809,6 +986,9 @@ async function finalizeWorkflow(wfId: string, now: Date): Promise<{ status: stri
       // lock) can bump lockVersion so this CAS affects 0 rows. Only the tick that
       // actually won the transition may write the terminal event + notify.
       if (moved.length > 0) {
+        // Tidiness: a terminal workflow has no live dispatch — clear any
+        // lease a crashed-then-superseded dispatcher left behind.
+        await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, wfId));
         await recordEvent(tx, wfId, null, null, `workflow_${next}`, {}, provenance);
         return { status: next, transitioned: true };
       }
@@ -896,11 +1076,13 @@ export async function reconcileWorkflow(workflowId: string, deps: ReconcileDeps 
       terminalTransitioned = fin.transitioned;
       break;
     }
-    // Dispatch OUTSIDE the tx (idempotent; keyed by attempt).
+    // Dispatch OUTSIDE the tx (idempotent; keyed by attempt). The lease
+    // heartbeat keeps a slow-but-healthy dispatch from being reclaimed.
     const results = await Promise.all(
       claimed.map(async (c) => {
         const exec = executors[c.task.type] ?? (() => ({ status: "running" as const, note: `no executor for ${c.task.type}` }));
         const childProv = buildChildRunProvenance(provenance!, c.task.id);
+        const heartbeat = startDispatchLeaseHeartbeat(c.task.id, c.leaseToken);
         let outcome: ExecutorOutcome;
         try {
           outcome = await exec({
@@ -915,6 +1097,8 @@ export async function reconcileWorkflow(workflowId: string, deps: ReconcileDeps 
           });
         } catch (err) {
           outcome = { status: "failed", error: { message: (err as Error).message } };
+        } finally {
+          heartbeat.stop();
         }
         return { claimed: c, outcome };
       }),

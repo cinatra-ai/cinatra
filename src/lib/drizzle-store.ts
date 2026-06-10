@@ -3764,6 +3764,24 @@ END $$` },
     // Captured agent-run output for foreach materializer source.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."workflow_task_attempt" ADD COLUMN IF NOT EXISTS output jsonb` },
 
+    // workflow_dispatch_lease — durable dispatch lease (one live lease per
+    // task; acquired in the claim tx, heartbeat-extended in flight, released
+    // with the outcome). Transient operational state, NOT evidence — every FK
+    // CASCADEs. Mirrors packages/workflows/src/schema.ts (workflowDispatchLease).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."workflow_dispatch_lease" (
+      id text PRIMARY KEY,
+      workflow_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."workflow"(id) ON DELETE CASCADE,
+      task_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."workflow_task"(id) ON DELETE CASCADE,
+      attempt_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."workflow_task_attempt"(id) ON DELETE CASCADE,
+      holder_id text NOT NULL,
+      token text NOT NULL,
+      acquired_at timestamptz NOT NULL,
+      heartbeat_at timestamptz NOT NULL,
+      expires_at timestamptz NOT NULL
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS workflow_dispatch_lease_task_id_uniq ON "${schemaName.replaceAll('"', '""')}"."workflow_dispatch_lease" (task_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS workflow_dispatch_lease_workflow_idx ON "${schemaName.replaceAll('"', '""')}"."workflow_dispatch_lease" (workflow_id)` },
+
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."workflow_artifact" (
       id text PRIMARY KEY,
       workflow_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."workflow"(id) ON DELETE CASCADE,

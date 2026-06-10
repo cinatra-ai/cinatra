@@ -11,7 +11,7 @@ agent.**
 | Path | Purpose |
 |------|---------|
 | `src/db.ts` | Lazy `pg.Pool` + Drizzle (Proxy value-exports). |
-| `src/schema.ts` | 9 Drizzle tables (workflow_template, workflow, workflow_task, workflow_dependency, workflow_gate, workflow_event, workflow_task_attempt, workflow_artifact, workflow_approval). |
+| `src/schema.ts` | 10 Drizzle tables (workflow_template, workflow, workflow_task, workflow_dependency, workflow_gate, workflow_event, workflow_task_attempt, workflow_dispatch_lease, workflow_artifact, workflow_approval). |
 | `src/spec/` | Shared Zod spec (template/draft/instance), resource limits, 3 validation tiers. |
 | `src/schedule/resolver.ts` | Server-side schedule resolver (`@date-fns/tz`) + cascade diff. |
 | `src/state/` | Transition matrices + roll-up; gate-ledger model. |

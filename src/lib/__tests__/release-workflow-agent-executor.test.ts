@@ -83,13 +83,28 @@ describe("buildWorkflowAgentTaskExecutor - tenancy + dispatch", () => {
     expect(mocks.enqueueAgentRun).toHaveBeenCalledOnce();
   });
 
-  it("skips re-enqueue on an idempotent hit (returned run id != generated id)", async () => {
+  it("skips re-enqueue on an idempotent hit whose run already left the queue", async () => {
     mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-A", orgId: "org-A", connectorDependencies: {} });
-    mocks.createAgentRun.mockResolvedValue({ id: "existing-run" }); // hit returns a different id from the generated one
+    // hit returns a different id from the generated one, already picked up by a worker
+    mocks.createAgentRun.mockResolvedValue({ id: "existing-run", status: "running" });
     const out = await buildWorkflowAgentTaskExecutor()(input({ templateId: "tmpl-A" }));
     expect(out.status).toBe("running");
     expect(out.childRunId).toBe("existing-run");
     expect(mocks.enqueueAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("repairs the enqueue gap: an idempotent hit still `queued` is re-enqueued", async () => {
+    // Crash-mid-dispatch repair: the prior dispatch crashed AFTER createAgentRun
+    // committed but BEFORE enqueueAgentRun, so the lease-based re-dispatch finds
+    // the existing run still `queued` and must enqueue it (idempotent — the
+    // worker's queued→running CAS guards a double-enqueue) or it polls forever.
+    mocks.readAgentTemplateById.mockResolvedValue({ id: "tmpl-A", orgId: "org-A", connectorDependencies: {} });
+    mocks.createAgentRun.mockResolvedValue({ id: "existing-run", status: "queued" });
+    const out = await buildWorkflowAgentTaskExecutor()(input({ templateId: "tmpl-A" }));
+    expect(out.status).toBe("running");
+    expect(out.childRunId).toBe("existing-run");
+    expect(mocks.enqueueAgentRun).toHaveBeenCalledOnce();
+    expect(mocks.enqueueAgentRun.mock.calls[0][0]).toEqual({ runId: "existing-run" });
   });
 
   it("returns AGENT_UNRESOLVED when no template resolves", async () => {
