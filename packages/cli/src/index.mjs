@@ -290,6 +290,7 @@ Usage:
   cinatra extensions purge <packageName> --confirm <packageName> --digest <d>
                           [--reason <r>] [--app-url <url>] --yes
   cinatra extensions submit <tarball.tgz> [--description "<text>"]
+  cinatra extensions acquire-prod
   cinatra mcp llm-access setup
   cinatra mcp llm-access refresh
   cinatra agent export <id-or-name> [--file <output.zip>]
@@ -336,6 +337,16 @@ Commands:
                     <tarball.tgz>     Path to the built .tgz.
                     --description     Optional short description recorded on
                                       the submission row.
+
+  extensions acquire-prod
+                    Download the production required-extension set into
+                    extensions/ from the committed
+                    cinatra-required-extensions.lock.json: codeload tarballs
+                    pinned to commit SHAs, hardened extraction, tree-hash +
+                    package.json verification. No git/gh binary needed.
+                    Idempotent; fails loud on any integrity mismatch. Run
+                    \`corepack pnpm install\` afterwards to link the packages
+                    (the Dockerfile and scripts/setup.sh prod flow do this).
 
   setup dev|prod    Prepare Better Auth, workspace schema, Nango administration, MCP
                     server, and OAuth clients. Leaves the app ready for first-user
@@ -2034,13 +2045,14 @@ function extensionDeclaresInstallableDeps(pkgDir) {
   }
 }
 
-function installAfterExtensionSync(repoRoot, syncResult) {
+function installAfterExtensionSync(repoRoot, syncResult, { failHard = false } = {}) {
   const results = syncResult && Array.isArray(syncResult.results) ? syncResult.results : [];
   if (results.length === 0) return; // no-config / nothing matched / nothing synced
-  // A real clone, a force-reset, or a fast-forward that moved HEAD (changed===true)
-  // needs a re-link; a no-op "updated"/"skipped-dirty" on a warm checkout does not.
+  // A real clone, a force-reset, a verified prod download ("downloaded"), or a
+  // fast-forward that moved HEAD (changed===true) needs a re-link; a no-op
+  // "updated"/"skipped-dirty"/"verified-existing" on a warm checkout does not.
   const materiallyChanged = results.some(
-    (r) => r.action === "cloned" || r.action === "force-reset" || r.changed === true,
+    (r) => r.action === "cloned" || r.action === "force-reset" || r.action === "downloaded" || r.changed === true,
   );
   // Recover an extension cloned by an earlier interrupted setup whose install
   // never ran (present but no node_modules) — gated on actually-declared deps so
@@ -2060,6 +2072,14 @@ function installAfterExtensionSync(repoRoot, syncResult) {
     env: process.env,
   });
   if (install.status !== 0) {
+    if (failHard) {
+      // Prod path: a failed re-link means the bootable set is NOT linked —
+      // abort (the caller runs this BEFORE any DB mutation).
+      throw new Error(
+        `Post-acquisition \`pnpm install\` failed (exit ${install.status}) — the required extensions are not ` +
+          `linked into the workspace. Fix the install error and re-run.`,
+      );
+    }
     console.error(
       `\n⚠ Post-extension-sync \`pnpm install\` FAILED — cloned extensions may not be linked into the workspace. ` +
         `Re-run \`corepack pnpm install\` in ${repoRoot}, then start the app.\n`,
@@ -2097,6 +2117,18 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       `Configured app runtime mode is "${runtimeMode}", but "${mode}" setup was requested. ` +
         `Update CINATRA_RUNTIME_MODE or use the matching setup command.`,
     );
+  }
+
+  if (mode === "prod") {
+    // Acquire the required-extension bootable set BEFORE any DB mutation:
+    // pinned codeload tarballs verified against the committed lock (see
+    // prod-extension-acquisition.mjs). Inside the standalone runtime image
+    // (no pnpm workspace) this is a documented no-op — the extension source
+    // was baked at image build. Any acquisition or re-link failure throws
+    // here, so a half-acquired tree can never be followed by DB setup.
+    const { acquireProdRequiredExtensions } = await import("./prod-extension-acquisition.mjs");
+    const acquisition = await acquireProdRequiredExtensions({ repoRoot });
+    installAfterExtensionSync(repoRoot, acquisition, { failHard: true });
   }
 
   const client = createClient(connectionString);
@@ -6681,6 +6713,20 @@ export async function runCli(argv) {
 
   if (command === "extensions" && mode === "purge") {
     await runExtensionsPurge(rest);
+    return;
+  }
+
+  if (command === "extensions" && mode === "acquire-prod") {
+    const { acquireProdRequiredExtensions } = await import("./prod-extension-acquisition.mjs");
+    const repoRoot = getRepoRoot();
+    const outcome = await acquireProdRequiredExtensions({ repoRoot });
+    if (outcome.skipped) {
+      console.log(`extensions acquire-prod: skipped (${outcome.reason}).`);
+      return;
+    }
+    console.log(
+      "Run `corepack pnpm install` next so the acquired extension packages are linked into the workspace.",
+    );
     return;
   }
 

@@ -104,10 +104,16 @@ describe("root package.json carries a version pin on EVERY required extension", 
       expect(e.versionRange, `${e.packageName} must carry a version range`).not.toBeNull();
       // The pinned range itself must be in a supported form (a malformed pin
       // would fail closed against EVERY version — a bricked required set).
+      // Judge each pin by its own lower bound — entries legitimately pin
+      // different lines (e.g. ^0.1.0 vs ^0.2.0), so no single concrete
+      // version exists across the whole set. (That each pin admits the REAL
+      // acquired version is asserted in required-extensions-lock.test.ts.)
+      const range = e.versionRange as string;
+      const lowerBound = range.replace(/^(\^|~|>=|=)\s*/, "").trim();
+      const lowerTriple = /^\d+\.\d+\.\d+$/.test(lowerBound) ? lowerBound : "0.0.0";
       expect(
-        satisfiesRequiredVersionRange("0.1.0", e.versionRange as string) ||
-          satisfiesRequiredVersionRange("0.1.3", e.versionRange as string),
-        `${e.packageName} pin "${e.versionRange}" must admit the current 0.1.x line`,
+        range === "*" || satisfiesRequiredVersionRange(lowerTriple, range),
+        `${e.packageName} pin "${range}" must admit its own lower bound (a malformed pin fails closed)`,
       ).toBe(true);
     }
   });

@@ -134,6 +134,17 @@ info "Installing dependencies..."
 pnpm install
 
 if [ "$RESOLVED_MODE" = "production" ]; then
+  # Production extension acquisition: the first `pnpm install` above provided
+  # the root `tar` dependency + the runnable CLI; this step downloads the
+  # required-extension set pinned + integrity-verified from the committed
+  # cinatra-required-extensions.lock.json (no git/gh binary needed), and the
+  # second `pnpm install` links the acquired packages into the workspace.
+  # Fails loud (set -e) on any network / 404 / integrity error. The acquisition
+  # inside `pnpm setup:prod` then re-verifies as an idempotent no-op.
+  info "Acquiring required extensions (pinned + integrity-verified)..."
+  node packages/cli/bin/cinatra.mjs extensions acquire-prod
+  info "Linking acquired extensions into the workspace..."
+  pnpm install
   info "Running Cinatra production setup..."
   pnpm setup:prod
 else
