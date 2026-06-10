@@ -98,7 +98,7 @@ function setupTopologyBMocks(overrides?: {
     decryptSecret: decryptMock,
   }));
 
-  vi.doMock("@/lib/drizzle-store", () => ({
+  vi.doMock("@/lib/extension-destinations-store", () => ({
     readDestinationCredential: vi.fn(async () => credential),
   }));
 
@@ -271,7 +271,7 @@ describe("resolveInstallEnvironment — topology B (shared-acl)", () => {
       readInstanceIdentity: () => ({ vendorName: "acme" }),
     }));
     vi.doMock("@/lib/instance-secrets", () => ({ decryptSecret: vi.fn(() => "tok") }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
     }));
     vi.doMock("@cinatra-ai/agents/store", () => ({
@@ -325,7 +325,7 @@ describe("resolveInstallEnvironment — topology B (shared-acl)", () => {
       readInstanceIdentity: () => ({ vendorName: "acme" }),
     }));
     vi.doMock("@/lib/instance-secrets", () => ({ decryptSecret: vi.fn(() => "tok") }));
-    vi.doMock("@/lib/drizzle-store", () => ({
+    vi.doMock("@/lib/extension-destinations-store", () => ({
       readDestinationCredential: vi.fn(async () => null),
     }));
     vi.doMock("@cinatra-ai/agents/store", () => ({
