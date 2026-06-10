@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import type { ZodType } from "zod";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -71,13 +72,16 @@ export function GroupedSetupFormRenderer(props: FieldRendererProps) {
   ];
 
   const zodSchema = useMemo(() => jsonSchemaToZod(schema), [schema]);
-  // jsonSchemaToZod returns ZodTypeAny with <unknown> payload; react-hook-form's
-  // zodResolver expects FieldValues (a record of string→unknown) — which is
-  // exactly the shape our grouped form state has. Cast once at the resolver
-  // boundary so the rest of the types flow through cleanly.
+  // jsonSchemaToZod returns ZodTypeAny (the schema shape is only known at
+  // runtime); react-hook-form's zodResolver wants the schema typed to the
+  // form's FieldValues — a record of string→unknown, which is exactly the
+  // shape our grouped form state has (the top-level call always passes an
+  // object schema). Cast once, precisely, at the resolver boundary so the
+  // rest of the types flow through cleanly.
   const form = useForm({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(zodSchema as any),
+    resolver: zodResolver(
+      zodSchema as ZodType<Record<string, unknown>, Record<string, unknown>>,
+    ),
     defaultValues: ((value ?? {}) as Record<string, unknown>),
   });
 
