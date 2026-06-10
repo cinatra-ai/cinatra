@@ -138,7 +138,14 @@ test.describe("/agents live-verify", () => {
     await expect(page).toHaveURL(/\/agents$/);
 
     // 3: page chrome.
-    await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+    // exact: true — getByRole name matching is substring by default, so a
+    // bare "Agents" ALSO resolves the portlet card headings ("Top 5 recently
+    // used agents", "5 latest run agents") once DC mounts them, tripping
+    // strict mode. Latent race: only visible when the portlets render before
+    // this assertion (warm CI runs). The page-chrome h1 is the exact match.
+    await expect(
+      page.getByRole("heading", { name: "Agents", exact: true }),
+    ).toBeVisible();
 
     // 4: both portlets.
     await expect(page.getByText("Top 5 recently used agents")).toBeVisible();
