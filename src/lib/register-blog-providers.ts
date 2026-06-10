@@ -1,75 +1,28 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Host-side wiring for the @cinatra-ai/blog-connector facade.
+// Host-side blog ROUTING services.
 //
-// Imported at boot to:
-//   1. Configure the blog-connector facade with host-side routing.
-//   2. Register the generic `defaultBlogConnector`.
-//   3. Bind the SDK blog-connector provider slot to the facade's registration
-//      sink, so any BUNDLED site connector self-registers (via its own
-//      serverEntry) WITHOUT the host naming a vendor scope. The provider replays
-//      any connector that activated before this binder ran (boot-order
-//      independence), so the static-bundle loader and this binder may run in any
-//      order.
+// Transport-registration cutover: this module no longer imports the blog facade package. The
+// blog facade extension configures ITSELF at activation (its `serverEntry`
+// `register(ctx)` calls its own `configureBlogSystem` + registers the generic
+// default connector), resolving the two HOST-side impls this module publishes
+// under the `@cinatra-ai/host:blog-routing` capability:
 //
-// After this module loads, `buildBlogDraftPayloadThroughSystem(input)` from
-// any caller routes via the registered connector.
+//   1. the blog-image artifact materializer,
+//   2. the blog project store.
 //
-// Routing chain (matches `email-connector:resolveConnectorId` shape):
-//   1. explicit `connectorId` if caller passed one
-//   2. `instanceBlogConnectorId` (from `WordPressInstanceSettings.blogConnectorId`)
-//   3. generic `"default"` connector
+// This module also keeps the SDK blog-connector provider slot bound, routing a
+// site connector's `registerBlogConnectorViaProvider(...)` into the generic
+// capability registry (`blog-connector` capability) — the facade resolves that
+// capability lazily, so the host still names no vendor scope and boot order
+// never matters.
 // ---------------------------------------------------------------------------
 
-import {
-  configureBlogSystem,
-  defaultBlogConnector,
-  registerBlogConnector,
-  blogConnectorRegistry,
-  type BlogConnector,
-} from "@cinatra-ai/blog-connector";
-import { setBlogConnectorProvider } from "@cinatra-ai/sdk-extensions";
+import { setBlogConnectorProvider, HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
 import { materializeBlogImageArtifact } from "@/lib/blog-image-materializer";
 import { createBlogProjectStore } from "@/lib/blog-project-store";
-import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-
-// Structural guard: a capability registered under "blog-connector" carries an
-// `impl: unknown`. Validate the BlogConnector shape before the facade trusts it,
-// so a mis-registered provider can never reach a draft-build call.
-function isBlogConnector(impl: unknown): impl is BlogConnector {
-  if (typeof impl !== "object" || impl === null) return false;
-  const candidate = impl as {
-    definition?: { connectorId?: unknown; name?: unknown; slug?: unknown };
-    buildDraftPayload?: unknown;
-  };
-  return (
-    typeof candidate.definition?.connectorId === "string" &&
-    typeof candidate.definition?.name === "string" &&
-    typeof candidate.definition?.slug === "string" &&
-    typeof candidate.buildDraftPayload === "function"
-  );
-}
-
-async function resolveConnectorId(opts: {
-  explicitConnectorId?: string;
-  instanceBlogConnectorId?: string;
-}): Promise<string> {
-  if (opts.explicitConnectorId) {
-    return opts.explicitConnectorId;
-  }
-  if (opts.instanceBlogConnectorId) {
-    return opts.instanceBlogConnectorId;
-  }
-  // Fallback — the always-present generic connector.
-  if (!blogConnectorRegistry.get("default")) {
-    throw new Error(
-      "@cinatra-ai/blog-connector: `default` connector is not registered. " +
-        "Add a `registerBlogConnector(defaultBlogConnector)` call in src/lib/register-blog-providers.ts.",
-    );
-  }
-  return "default";
-}
+import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 
 let _registered = false;
 
@@ -77,31 +30,24 @@ export function registerBlogProviders(): void {
   if (_registered) return;
   _registered = true;
 
-  configureBlogSystem({
-    resolveConnectorId,
-    materializeBlogImage: materializeBlogImageArtifact,
-    projectStore: createBlogProjectStore(),
-    // Lazily surface connectors that self-registered via the capability registry
-    // (`ctx.capabilities.registerProvider("blog-connector", …)` in a bundled/
-    // hot-installed vendor connector's serverEntry). Pulled on every facade read,
-    // so a teardown (invalidateProvidersForPackage) is reflected immediately and
-    // the host names no vendor scope. The structural guard rejects malformed impls.
-    resolveConnectorProviders: () =>
-      resolveCapabilityProviders("blog-connector")
-        .map((p) => p.impl)
-        .filter(isBlogConnector),
+  registerCapabilityProvider(HOST_CONNECTOR_SERVICE_CAPABILITIES.blogRouting, {
+    packageName: "@cinatra-ai/host",
+    impl: {
+      materializeBlogImage: materializeBlogImageArtifact,
+      projectStore: createBlogProjectStore(),
+    },
   });
 
-  registerBlogConnector(defaultBlogConnector);
-
-  // Bind the SDK blog-connector provider slot to the facade's registration sink.
-  // A bundled site connector's serverEntry calls `registerBlogConnectorViaProvider`
-  // (importing ONLY the SDK), which routes here — so the host registers EVERY
-  // bundled site connector generically, naming no vendor scope. The provider has
-  // already replayed any connector that activated before this binder ran.
+  // SDK slot → capability registry. A connector registered through the slot is
+  // keyed by its own connectorId (synthetic per-connector package key, so two
+  // site connectors never replace each other) and surfaces to the facade via
+  // its lazy `blog-connector` capability resolution.
   setBlogConnectorProvider({
     registerBlogConnector: (connector) =>
-      registerBlogConnector(connector as Parameters<typeof registerBlogConnector>[0]),
+      registerCapabilityProvider("blog-connector", {
+        packageName: `blog-connector-slot:${connector.definition.connectorId}`,
+        impl: connector,
+      }),
   });
 }
 

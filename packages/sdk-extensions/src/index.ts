@@ -111,6 +111,7 @@ export {
   registerCrmProvider,
   lookupCrmProvider,
   listCrmProviders,
+  setCrmProviderExternalResolver,
   _resetCrmProviderRegistry,
 } from "./crm-provider-registry-contract";
 export {
@@ -319,3 +320,28 @@ export {
   _resetBlogConnectorProviderForTests,
 } from "./blog-connector-provider-contract";
 export type { BlogConnectorProvider } from "./blog-connector-provider-contract";
+
+// Host connector-services capability contracts (the transport-registration cutover — transport/provider
+// registration via capabilities). Type-only for extensions; the host imports
+// the capability-id constants as values when registering the per-concern impls.
+export {
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  NANGO_CONNECTION_SAVED_CAPABILITY,
+  LLM_TOOLBOX_CAPABILITY,
+  SOCIAL_POST_CAPABILITY,
+  CRM_PROVIDER_CAPABILITY,
+  EMAIL_SEND_CAPABILITY,
+} from "./host-connector-services-contract";
+export type {
+  HostConnectorConfigService,
+  HostNangoConnectionStorageService,
+  HostGoogleOAuthService,
+  HostSecretsCodecService,
+  HostExternalMcpRegistryService,
+  HostMcpSelfClientService,
+  HostInstanceIdentityService,
+  HostEmailRoutingService,
+  HostBlogRoutingService,
+  NangoConnectionSavedHook,
+  LlmToolboxProvider,
+} from "./host-connector-services-contract";

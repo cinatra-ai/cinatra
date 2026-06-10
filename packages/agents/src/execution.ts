@@ -82,6 +82,16 @@ import {
   enrichSchemaWithResolvedData,
 } from "@cinatra-ai/agent-ui-protocol/server";
 import { getOrAddWayflowGateIndex } from "@cinatra-ai/a2a";
+// Host capability resolution for the HITL schema enricher: the enricher itself
+// is provider-agnostic (agent-ui-protocol imports no provider package); THIS
+// host-side caller injects the live `email-send` providers so sender-alias
+// enums resolve registration-driven.
+import { resolveEmailSendProviders } from "@/lib/email-send-providers";
+
+/** EnrichmentContext for a run owner — injects the email-send provider source. */
+function enrichmentContextFor(userId: string | null) {
+  return { userId, resolveEmailSendProviders };
+}
 
 // ---------------------------------------------------------------------------
 // Credential keys are stripped from WayFlow task.history before persistence.
@@ -507,7 +517,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     }
     const wayflowSchemaToSend = await enrichSchemaWithResolvedData(
       (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
-      { userId: run.runBy },
+      enrichmentContextFor(run.runBy),
     );
     adapter.onInterrupt(
       wayflowSchemaToSend,
@@ -963,7 +973,7 @@ async function runAgentBuilderExecutionJobInner(
       type: "object" as const,
       properties: { [fieldName]: fieldSchema as Record<string, unknown> },
     };
-    const enrichedEnvelope = await enrichSchemaWithResolvedData(fieldSchemaEnvelope, { userId: run.runBy });
+    const enrichedEnvelope = await enrichSchemaWithResolvedData(fieldSchemaEnvelope, enrichmentContextFor(run.runBy));
     const enrichedFieldSchema =
       (enrichedEnvelope.properties as Record<string, Record<string, unknown>>)[fieldName]
       ?? (fieldSchema as Record<string, unknown>);
@@ -1021,7 +1031,7 @@ async function runAgentBuilderExecutionJobInner(
     );
     const enrichedGroupedSchema = await enrichSchemaWithResolvedData(
       groupedSchema as unknown as Record<string, unknown>,
-      { userId: run.runBy },
+      enrichmentContextFor(run.runBy),
     );
     adapter.onInterrupt(
       enrichedGroupedSchema,

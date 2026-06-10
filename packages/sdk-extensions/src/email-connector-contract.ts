@@ -30,6 +30,17 @@ export type EmailConnectorDefinition = {
    * routing. Eligibility is gated on this flag, never inferred from getStatus().
    */
   supportsSystemEmail?: boolean;
+  /**
+   * Connection-scope discriminator for PER-USER routing surfaces. `"user"` =
+   * the connector represents an individual user's mailbox connection (e.g. a
+   * per-user OAuth provider) and is eligible for the host's per-user
+   * active-connector resolution; `"instance"` (and absent, for backward
+   * compatibility) = an instance-level transport that must NOT be auto-picked
+   * as a user's personal mailbox even when its instance credentials report
+   * "connected". Deliberately independent of `supportsSystemEmail` — the two
+   * flags gate opposite routing surfaces.
+   */
+  connectionScope?: "user" | "instance";
 };
 
 /**

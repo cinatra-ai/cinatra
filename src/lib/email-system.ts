@@ -1,16 +1,21 @@
 import "server-only";
 
+// Host email-system surfaces, dispatched over the `email-send` capability.
+//
+// Transport-registration cutover: this module imports NO email provider package. Every concrete
+// provider registers an `EmailConnector` impl behind the `email-send`
+// capability from its own `serverEntry`; this module resolves the live set via
+// `@/lib/email-send-providers` and dispatches on:
+//   - `definition.connectionScope === "user"` for the per-user mailbox surfaces
+//     (the old hardcoded per-provider dispatch — now any per-user provider), and
+//   - `definition.supportsSystemEmail` for the platform/purpose routing below.
+
 import type { EmailConnectorDefinition } from "@cinatra-ai/sdk-extensions";
 import {
-  findGmailReplyInThread,
-  getGmailConnectorStatus,
-  gmailAPIConnector,
-  sendGmailMessage,
-} from "@cinatra-ai/gmail-connector";
-import {
-  listInstalledEmailConnectors,
-  sendEmailThroughSystem as sendThroughEmailFacade,
-} from "@cinatra-ai/email-connector";
+  resolveEmailSendProviders,
+  findEmailSendProvider,
+  resolveHostEmailRouting,
+} from "@/lib/email-send-providers";
 import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import type { EmailReplyMatch, EmailSendReceipt, EmailSystemMessage } from "@/lib/types";
@@ -70,17 +75,37 @@ function applyDevelopmentRecipientOverride(message: EmailSystemMessage): EmailSy
   };
 }
 
+// Per-user mailbox surfaces. Eligibility is an EXPLICIT definition bit
+// (`connectionScope: "user"`), never inferred from getStatus(): an
+// instance-level transport (e.g. resend) must not be auto-picked as a user's
+// personal mailbox even when its instance credentials report "connected".
+function perUserEmailSendProviders() {
+  return resolveEmailSendProviders().filter(
+    (p) => p.definition.connectorId && p.definition.connectionScope === "user",
+  );
+}
+
 export async function listInstalledEmailConnectorStatuses(options?: { userId?: string }): Promise<InstalledEmailConnectorStatus[]> {
   const userId = await resolveEmailSystemUserId(options?.userId);
-  const gmailStatus = await getGmailConnectorStatus(userId);
-  return [
-    {
-      ...gmailAPIConnector,
-      status: gmailStatus.status,
-      accountEmail: gmailStatus.accountEmail,
-      detail: gmailStatus.detail,
-    },
-  ];
+  const out: InstalledEmailConnectorStatus[] = [];
+  for (const provider of perUserEmailSendProviders()) {
+    try {
+      const status = await provider.getStatus({ userId });
+      out.push({
+        ...provider.definition,
+        status: status.status,
+        accountEmail: status.accountEmail,
+        detail: status.detail,
+      });
+    } catch (err) {
+      out.push({
+        ...provider.definition,
+        status: "not_connected",
+        detail: err instanceof Error ? err.message : "Status check failed.",
+      });
+    }
+  }
+  return out;
 }
 
 export async function getActiveEmailConnectorStatus(options?: { userId?: string }): Promise<InstalledEmailConnectorStatus | null> {
@@ -100,11 +125,11 @@ export async function sendEmailThroughSystem(message: EmailSystemMessage, option
     throw new Error(`${activeConnector.name} does not support sending from a campaign-defined sender email.`);
   }
 
-  if (activeConnector.connectorId === "gmail") {
-    return sendGmailMessage(effectiveMessage, { userId });
+  const provider = findEmailSendProvider(activeConnector.connectorId);
+  if (!provider) {
+    throw new Error(`Unsupported email connector: ${activeConnector.connectorId}`);
   }
-
-  throw new Error(`Unsupported email connector: ${activeConnector.connectorId}`);
+  return provider.send(effectiveMessage, { userId });
 }
 
 export async function findReplyInEmailThread(input: {
@@ -119,14 +144,16 @@ export async function findReplyInEmailThread(input: {
     return null;
   }
 
-  if (activeConnector.connectorId === "gmail") {
-    return findGmailReplyInThread({
-      ...input,
-      userId,
-    });
+  const provider = findEmailSendProvider(activeConnector.connectorId);
+  if (!provider) {
+    return null;
   }
-
-  return null;
+  return provider.findReply({
+    providerThreadId: input.providerThreadId,
+    recipientEmail: input.recipientEmail,
+    sentAfter: input.sentAfter,
+    userId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +162,7 @@ export async function findReplyInEmailThread(input: {
 // Distinct from the per-user business-email path above. Some emails are sent
 // by Cinatra ITSELF (password reset, email verification, change-email
 // confirmation) — pre-auth, no user session, no org actor. Those go through
-// the provider-neutral facade with an EXPLICIT connectorId chosen here, NOT
+// the resolved provider with an EXPLICIT connectorId chosen here, NOT
 // through getActiveEmailConnectorStatus (which resolves a per-user connection).
 //
 // The operator assigns a provider to each purpose at /connectors/email; a
@@ -192,7 +219,7 @@ export type EmailProviderStatus = {
 // the /connectors/email hub to show which providers are connected vs. need
 // configuration.
 export async function listEmailProvidersWithStatus(): Promise<EmailProviderStatus[]> {
-  const connectors = listInstalledEmailConnectors();
+  const connectors = resolveEmailSendProviders();
   const out: EmailProviderStatus[] = [];
   for (const connector of connectors) {
     let status: { status: "connected" | "incomplete" | "not_connected"; detail?: string; accountEmail?: string };
@@ -244,6 +271,9 @@ async function resolvePurposeConnectorId(purpose: EmailPurpose): Promise<string 
 // Send a platform/system email through the chosen provider for the "platform"
 // purpose. Text-only by design (the EmailSystemMessage contract is text-only,
 // and plaintext auth links maximize deliverability + minimize phishing surface).
+// Dispatches DIRECTLY on the resolved provider with the same dev-mode override
+// + best-effort sent-email object write the email facade applies (resolved from
+// the shared host routing service so the two paths cannot drift).
 export async function sendPlatformEmail(input: {
   to: string | string[];
   subject: string;
@@ -256,10 +286,23 @@ export async function sendPlatformEmail(input: {
         "Configure one at /connectors/email (and the provider itself at /connectors/<provider>).",
     );
   }
+  const provider = findEmailSendProvider(connectorId);
+  if (!provider) {
+    throw new Error(`Email provider "${connectorId}" is not registered.`);
+  }
   const to = Array.isArray(input.to) ? input.to : [input.to];
-  return sendThroughEmailFacade(
-    { to, subject: input.subject, textBody: input.text },
-    { connectorId },
-  );
+  const routing = resolveHostEmailRouting();
+  const msg: EmailSystemMessage = { to, subject: input.subject, textBody: input.text };
+  const effective = routing
+    ? routing.applyDevModeOverride(msg)
+    : applyDevelopmentRecipientOverride(msg);
+  const receipt = await provider.send(effective);
+  if (routing?.saveSentEmailObject) {
+    void routing
+      .saveSentEmailObject({ msg: effective, receipt, routing: { connectorId } })
+      .catch(() => {
+        /* best-effort — the send already succeeded */
+      });
+  }
+  return receipt;
 }
-

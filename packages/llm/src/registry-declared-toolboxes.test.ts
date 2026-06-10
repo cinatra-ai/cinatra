@@ -4,9 +4,9 @@
  *
  * - A declared id matching a generated first-party toolbox slug resolves
  *   through the extension's own builder (no host edit per extension).
- * - The legacy "apify-connector" declared id still routes through the
- *   @/lib/apify-mcp-connection shim (the transport-registration cutover owns
- *   removing that branch).
+ * - A declared id served by a registered `llm-toolbox` capability provider
+ *   (apify today, via its serverEntry) resolves through that provider —
+ *   BEFORE the manifest-toolbox branch (registration-driven wins).
  * - Unknown ids still fall through to the external_mcp_servers resolver.
  * - The always-inject path and the chat path collapse duplicate server labels
  *   (a marker extension's registry row can be resolved by BOTH the manifest
@@ -54,8 +54,10 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", async (importOriginal) => {
     loadExternalMcpToolboxBySlug: vi.fn(async () => null),
   };
 });
-vi.mock("@/lib/apify-mcp-connection", () => ({
-  buildApifyMcpServerTools: vi.fn(async () => []),
+vi.mock("@/lib/llm-toolbox-providers", () => ({
+  // Default: no capability provider serves the id — fall through to the
+  // manifest-toolbox branch / registry resolver.
+  buildToolboxProviderTools: vi.fn(async () => null),
 }));
 
 import {
@@ -63,7 +65,7 @@ import {
   buildSingleExternalMcpTool,
 } from "@/lib/external-mcp-registry";
 import { loadExternalMcpToolboxBySlug } from "@/lib/external-mcp-toolbox-loader.server";
-import { buildApifyMcpServerTools } from "@/lib/apify-mcp-connection";
+import { buildToolboxProviderTools } from "@/lib/llm-toolbox-providers";
 import { buildExternalMcpServerTools } from "./mcp-access";
 import { resolveMcpToolsForDeclaredIds, resolveChatExternalMcpTools } from "./registry";
 
@@ -97,18 +99,18 @@ describe("resolveMcpToolsForDeclaredIds — declared ids", () => {
     expect(vi.mocked(buildSingleExternalMcpTool)).not.toHaveBeenCalled();
   });
 
-  it("keeps routing the legacy 'apify-connector' declared id through the apify shim", async () => {
+  it("routes a declared id served by an llm-toolbox capability provider through that provider", async () => {
     const apifyTool = tool("apify-connector", "https://mcp.apify.com");
-    vi.mocked(buildApifyMcpServerTools).mockResolvedValueOnce([apifyTool]);
+    vi.mocked(buildToolboxProviderTools).mockResolvedValueOnce([apifyTool]);
 
     const tools = await resolveMcpToolsForDeclaredIds({
       provider: "openai",
       declaredToolboxIds: ["apify-connector"],
     });
 
-    expect(vi.mocked(buildApifyMcpServerTools)).toHaveBeenCalledWith("openai");
+    expect(vi.mocked(buildToolboxProviderTools)).toHaveBeenCalledWith("apify-connector", "openai");
     expect(tools).toEqual([apifyTool]);
-    // The shim branch precedes the generic manifest-toolbox branch.
+    // The capability branch precedes the generic manifest-toolbox branch.
     expect(vi.mocked(loadExternalMcpToolboxBySlug)).not.toHaveBeenCalled();
   });
 

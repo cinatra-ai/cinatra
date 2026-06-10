@@ -55,6 +55,7 @@ const VALID_HOST_PORTS = new Set([
   "logger",
   "runtime",
   "capabilities",
+  "telemetry",
 ]);
 
 // Read the `cinatra` manifest block of an extension for the loader fields

@@ -123,17 +123,18 @@ export async function resolveMcpToolsForDeclaredIds(params: {
       if (cinatraMcpTool) tools.push(cinatraMcpTool);
       continue;
     }
-    // Apify is managed outside external_mcp_servers; route the legacy
-    // `apify-connector` toolbox id to the first-party builder. Without this
-    // branch, declared-id resolution would silently drop Apify tools for any
-    // agent that pinned `apify-connector` in its toolboxes.
-    if (declaredId === "apify-connector") {
-      const { buildApifyMcpServerTools } = await import("@/lib/apify-mcp-connection");
-      const apifyTools = await buildApifyMcpServerTools(provider);
-      tools.push(...apifyTools);
-      if (apifyTools.length === 0) {
+    // Registration-driven toolbox resolution: a connector managed OUTSIDE
+    // external_mcp_servers (apify today) registers an `llm-toolbox` capability
+    // provider for its declared toolbox id from its own serverEntry. Without
+    // this lookup, declared-id resolution would silently drop those tools for
+    // any agent that pinned the connector's toolbox id.
+    const { buildToolboxProviderTools } = await import("@/lib/llm-toolbox-providers");
+    const providerTools = await buildToolboxProviderTools(declaredId, provider);
+    if (providerTools !== null) {
+      tools.push(...providerTools);
+      if (providerTools.length === 0) {
         console.warn(
-          `[resolveMcpToolsForDeclaredIds] declared toolbox id "apify-connector" resolved to 0 tools (Nango unconfigured or no connection saved)`,
+          `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" resolved to 0 tools (connection unconfigured or not saved)`,
         );
       }
       continue;

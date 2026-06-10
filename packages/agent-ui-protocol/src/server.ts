@@ -60,5 +60,6 @@ export {
 export {
   enrichSchemaWithResolvedData,
   GMAIL_SEND_AS_DATA_SOURCE,
+  SEND_AS_DATA_SOURCE,
   type EnrichmentContext,
 } from "./schema-enricher";

@@ -1,17 +1,19 @@
 import "server-only";
 
-// Prototype: the host StaticBundleLoader (the dev half of
+// The host StaticBundleLoader (the BUNDLED half of
 // "dual loaders, single activation"). Thin wrapper that injects the real
 // generated manifest + literal server-entry import map + the host ctx factory
-// into the shared, pure `runStaticBundleActivation` driver. The prod
+// into the shared, pure `runStaticBundleActivation` driver. The
 // RuntimePackageLoader injects the package-store equivalents into the
 // SAME driver — that's what keeps the two loaders from diverging.
 //
-// ADDITIVE: this is NOT yet the source of truth for registration; it runs
-// ALONGSIDE the legacy boot registration and its `capabilities` port dedupes, so
-// activating resend here is a no-op-if-already-present (see
-// extension-host-context.ts). Only extensions that declare `cinatra.serverEntry`
-// are activated (prototype: resend-connector).
+// Transport-registration cutover: this IS the registration source of truth for the bundled
+// `serverEntry` extensions in every runtime mode — the transport/provider
+// connectors bind their host deps and register their capability providers
+// inside `register(ctx)`, adapted from the per-concern host services the boot
+// imports publish (see register-transport-connectors.ts). Only extensions
+// that declare `cinatra.serverEntry` are activated; required-set activation
+// is asserted post-boot (src/lib/required-extension-activation.ts).
 
 import {
   runStaticBundleActivation,
