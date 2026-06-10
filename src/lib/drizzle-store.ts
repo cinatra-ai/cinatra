@@ -761,7 +761,8 @@ END $$` },
     //     and a destructive backfill is out of scope here.
     //   - The notifications service (packages/notifications/src/service.ts)
     //     *always* writes a non-null user_id; the partial indexes below
-    //     (notifications_user_unread_idx, notifications_dedupe_job_kind_idx)
+    //     (notifications_user_unread_idx, notifications_dedupe_job_kind_idx,
+    //     notifications_dedupe_key_idx)
     //     scope to WHERE user_id IS NOT NULL so reads never return legacy
     //     orphan rows, and dedupe never collides across orphans.
     //   - A future migration may DROP COLUMN payload + SET NOT NULL on
