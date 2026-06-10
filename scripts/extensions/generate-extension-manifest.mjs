@@ -780,6 +780,29 @@ export async function buildManifest() {
       return { packageName: r.packageName };
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
+
+  // FAIL-CLOSED system-extension coverage (cinatra#35 / IOC-43): the
+  // host-owned `cinatra.systemExtensions` declaration (root package.json) is
+  // the data source for the locked system set
+  // (packages/extensions/src/system-extension-inventory.ts). Every declared
+  // entry must resolve to a generated-manifest record — a typo'd or removed
+  // package would otherwise silently never boot-lock. The declaration itself
+  // is required (the lock set must never be implicitly empty).
+  const rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+  const declaredSystem = rootPkg?.cinatra?.systemExtensions;
+  if (!Array.isArray(declaredSystem) || declaredSystem.length === 0) {
+    throw new Error(
+      "[extension-manifest] root package.json must declare a non-empty cinatra.systemExtensions array (host-owned locked system set)",
+    );
+  }
+  const recordNames = new Set(records.map((r) => r.packageName));
+  const unknownSystem = declaredSystem.filter((name) => !recordNames.has(name));
+  if (unknownSystem.length > 0) {
+    throw new Error(
+      `[extension-manifest] cinatra.systemExtensions entries missing from the generated manifest: ${unknownSystem.join(", ")}`,
+    );
+  }
+
   return {
     records,
     connectorSetupPages,

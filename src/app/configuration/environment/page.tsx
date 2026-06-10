@@ -15,13 +15,8 @@ import { requireAdminSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { getEffectiveViewerScope } from "@/lib/marketplace-credentials";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
-import {
-  buildTabs,
-  resolveEnvTab,
-  CONNECTIONS_TAB_VALUE,
-} from "./environment-tabs";
+import { buildTabs, resolveEnvTab } from "./environment-tabs";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
-import { NangoSettingsSection } from "@/lib/nango-settings-section";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -53,24 +48,18 @@ export default async function EnvironmentSettingsPage({
   const tabs = buildTabs();
   const params = await (searchParams ?? Promise.resolve({} as SearchParams));
   const rawTab = (Array.isArray(params.tab) ? params.tab[0] : params.tab) ?? "mode";
-  // Dev/prod gating + legacy `?tab=credentials` continuity alias live in
+  // The retired `?tab=connections|credentials` continuity handling lives in
   // ./environment-tabs (pure + unit-tested).
   const { tab, requestedConnections } = resolveEnvTab(rawTab, tabs);
   const activeContent =
-    tab === "mode" ? (
-      <ModeTabContent
-        connectionsRedirectFromTab={requestedConnections ? rawTab : null}
-      />
-    ) : tab === "instance" ? (
+    tab === "instance" ? (
       await InstanceTabContent()
     ) : tab === "registries" ? (
       <RegistriesTabContent params={params} defaultContactEmail={session.user.email ?? null} />
     ) : (
-      // tab === CONNECTIONS_TAB_VALUE — only reachable in dev mode (guarded by
-      // buildTabs() + the tabs.some() check above).
-      <NangoSettingsSection
-        searchParams={Promise.resolve(params)}
-        redirectTo={`/configuration/environment?tab=${CONNECTIONS_TAB_VALUE}`}
+      // tab === "mode" (incl. the retired connections/credentials fallback).
+      <ModeTabContent
+        connectionsRedirectFromTab={requestedConnections ? rawTab : null}
       />
     );
 
@@ -108,20 +97,19 @@ function ModeTabContent({
   return (
     <div className="flex max-w-3xl flex-col gap-5">
       {connectionsRedirectFromTab ? (
-        // Explicit-redirect notice for prod users who arrive via a stale
+        // Explicit-redirect notice for users who arrive via a stale
         // `?tab=connections|credentials` URL (a bookmark / external link, or
         // a "configure connection service" CTA from an extension pinned to a
         // pre-cinatra#66 sdk-ui — current CTAs point at /setup/connections).
-        // The Connections tab is dev-only by design — in prod the connection
+        // The Connections tab is retired (cinatra#35): the connection
         // service is configured on /setup/connections (or via env vars), and
         // credentials live on the per-connector setup pages.
         <Alert variant="default" className="rounded-panel">
-          <AlertTitle>Connections tab is dev-only</AlertTitle>
+          <AlertTitle>The Connections tab moved</AlertTitle>
           <AlertDescription>
             You followed a link to <code className="font-mono text-xs">?tab={connectionsRedirectFromTab}</code>,
-            but this Cinatra instance is running in production mode where the
-            Connections tab is not available. To configure the connection
-            service, use{" "}
+            but the Connections tab has been retired. To configure the
+            connection service, use{" "}
             <Link href="/setup/connections" className="underline underline-offset-4">
               Setup &gt; Connections
             </Link>{" "}

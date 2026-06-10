@@ -5,10 +5,25 @@
 // uninstall, force-delete, purge, registry-removal) for any row in this set.
 // Update is still allowed, preserving the lock.
 //
-// Inventory lives in CODE. Adding a package here without also declaring it in
-// `cinatra.requiredExtensions` (root package.json) would leave a gap; the drift
-// test enforces alignment.
+// The inventory is DATA, not code (cinatra#35 / IOC-43): the set is the
+// HOST-owned `cinatra.systemExtensions` declaration in the root package.json —
+// the same host-trust home (and read pattern) as `cinatra.requiredExtensions`
+// (./required-in-prod). It is deliberately NOT an extension-side declaration:
+// system/locked status is a host trust decision, and letting an extension's
+// own manifest self-declare it would be a privilege-escalation channel.
+// Alignment invariants:
+//   - systemExtensions ⊆ requiredExtensions (drift test) — a system package
+//     missing from requiredExtensions would leave the prod-boot verifier
+//     unable to ensure it is installed;
+//   - every entry must exist in the generated extension manifest — enforced
+//     fail-closed by scripts/extensions/generate-extension-manifest.mjs.
+// The reader FAILS CLOSED: a missing/malformed declaration throws (loudly
+// breaking boot-lock + destructive-op checks) instead of silently locking
+// nothing.
 import "server-only";
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import {
   readInstalledExtensionsByPackageName,
@@ -17,20 +32,75 @@ import { transitionExtensionLifecycle } from "./lifecycle-primitive";
 import { readRequiredInProdPackages } from "./required-in-prod";
 
 /**
- * System packages that ship locked.
- * Keeping them as constants (not pulling from package.json) ensures the
- * inventory is visible in source review, not deferred to runtime data.
+ * Locate the HOST root package.json (the one carrying the `cinatra` block).
+ * `process.cwd()` is the deployed/dev convention (same as ./required-in-prod),
+ * but test runners execute from workspace-package dirs, so ascend from cwd to
+ * the first package.json that declares `cinatra.systemExtensions`. Returns the
+ * cwd-local path when nothing declares the block — the fail-closed reader then
+ * reports THAT file's missing declaration.
  */
-export const SYSTEM_EXTENSIONS: readonly string[] = [
-  "@cinatra-ai/nango-connector",
-  "@cinatra-ai/code-reviewer-agent",
-  "@cinatra-ai/planner-agent",
-  "@cinatra-ai/author-agent",
-  "@cinatra-ai/lint-policy-agent",
-  "@cinatra-ai/security-reviewer-agent",
-  "@cinatra-ai/assistant-skills",
-  "@cinatra-ai/default-artifact",
-] as const;
+function resolveRootPackageJsonPath(): string {
+  let dir = process.cwd();
+  for (;;) {
+    const candidate = join(dir, "package.json");
+    if (existsSync(candidate)) {
+      try {
+        const parsed = JSON.parse(readFileSync(candidate, "utf8"));
+        if (Array.isArray(parsed?.cinatra?.systemExtensions)) return candidate;
+      } catch {
+        /* unreadable candidate — keep ascending */
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return resolve(process.cwd(), "package.json");
+    dir = parent;
+  }
+}
+
+/**
+ * Read the host-declared system-extension set from the root package.json
+ * (`cinatra.systemExtensions`). Fail-closed: throws on a missing, empty, or
+ * malformed declaration (entries must be scoped package NAMES, no ranges).
+ */
+export function readSystemExtensions(
+  packageJsonPath: string = resolveRootPackageJsonPath(),
+): readonly string[] {
+  let parsed: { cinatra?: { systemExtensions?: unknown } };
+  try {
+    parsed = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `system-extension inventory: cannot read root package.json at ${packageJsonPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  const declared = parsed.cinatra?.systemExtensions;
+  if (!Array.isArray(declared) || declared.length === 0) {
+    throw new Error(
+      "system-extension inventory: root package.json must declare a non-empty cinatra.systemExtensions array (host-owned system/locked set)",
+    );
+  }
+  for (const entry of declared) {
+    // Scoped bare NAME only — `@scope/name` (no version range; lock semantics
+    // key on names, and ranges live in requiredExtensions).
+    if (
+      typeof entry !== "string" ||
+      !/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(entry)
+    ) {
+      throw new Error(
+        `system-extension inventory: invalid cinatra.systemExtensions entry ${JSON.stringify(entry)} — expected a scoped package name`,
+      );
+    }
+  }
+  return Object.freeze([...new Set(declared as string[])]);
+}
+
+/**
+ * System packages that ship locked — read once at module load from the root
+ * package.json declaration (fail-loud, see readSystemExtensions).
+ */
+export const SYSTEM_EXTENSIONS: readonly string[] = readSystemExtensions();
 
 export function isSystemExtension(packageName: string): boolean {
   return SYSTEM_EXTENSIONS.includes(packageName);

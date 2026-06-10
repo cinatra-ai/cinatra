@@ -24,13 +24,6 @@ vi.mock("@/lib/instance-identity-cache", () => ({
 vi.mock("@cinatra-ai/registries", () => ({
   listAgentPackages: vi.fn(async () => []),
 }));
-vi.mock("@cinatra-ai/nango-connector/nango-settings-page", () => ({
-  NangoSettingsSection: () => null,
-}));
-vi.mock("@/lib/nango-settings-section", () => ({
-  NangoSettingsSection: () => null,
-}));
-
 import { reconcileFirstPublishedAt } from "@/app/configuration/instance/actions";
 import {
   type InstanceIdentity,
