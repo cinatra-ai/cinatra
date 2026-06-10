@@ -269,6 +269,21 @@ test("destructive: multi-line INSERT backfill into an existing table (no same-li
   assert.deepEqual(seed.destructive, []);
 });
 
+test("destructive: multi-line UPDATE with a schema-qualified target (SET on a later line)", () => {
+  const r = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`UPDATE ${S}."widgets"`,
+    "      SET label = '' WHERE label IS NULL` },",
+  ]);
+  assert.deepEqual(r.destructive.map((d) => d.rule), ["data-rewrite"]);
+});
+
+test("whitespace-only reformatting of a column definition is NOT destructive", () => {
+  const r = classify(15, 15, ["      label   text,"]);
+  assert.deepEqual(r.destructive, []);
+  assert.equal(r.inScopeChanges, 0);
+});
+
 test("a new table in the same hunk cannot launder a statement aimed at an EXISTING table", () => {
   const r = classify(21, 21, [
     `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,

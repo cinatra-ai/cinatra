@@ -263,11 +263,13 @@ const ADDED_DESTRUCTIVE_RULES = [
   { rule: "retype", re: /\bALTER\s+COLUMN\b.*\b(?:TYPE|SET\s+DATA\s+TYPE)\b/i, doc: "retyping a column (ALTER COLUMN ... TYPE)" },
   { rule: "set-not-null", re: /\bSET\s+NOT\s+NULL\b/i, doc: "adding NOT NULL to an existing column" },
   { rule: "add-constraint", re: /\b(?:ADD|VALIDATE)\s+CONSTRAINT\b/i, doc: "adding/tightening a constraint over existing rows" },
-  // INSERT INTO is flagged without requiring a same-line SELECT: the real
-  // backfills in the bootstrap DDL are multi-line, so the SELECT lands on a
-  // different diff line. The new-table carve-out still exempts seeds into
-  // tables created in the same change.
-  { rule: "data-rewrite", re: /\bDELETE\s+FROM\b|\bUPDATE\s+(?:"|\S+\s+SET\b)|\bINSERT\s+INTO\b/i, doc: "data rewrite against an existing table (UPDATE / DELETE / INSERT backfill)" },
+  // INSERT INTO and UPDATE are flagged without requiring a same-line
+  // SET/SELECT: the real backfills in the bootstrap DDL are multi-line, so
+  // the rest of the statement lands on other diff lines. UPDATE matches a
+  // (schema-qualified) quoted target or a single-line `UPDATE x ... SET`
+  // form — but not `ON CONFLICT ... DO UPDATE SET`. The new-table carve-out
+  // still exempts writes into tables created in the same change.
+  { rule: "data-rewrite", re: /\bDELETE\s+FROM\b|\bINSERT\s+INTO\b|\bUPDATE\s+(?:(?:[a-z0-9_]+\.)?"|\S+\s+SET\b)/i, doc: "data rewrite against an existing table (UPDATE / DELETE / INSERT backfill)" },
 ];
 
 /**
@@ -336,19 +338,20 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
     }
   }
 
-  // Cancel moved/reformatted lines: identical trimmed text under the SAME
-  // enclosing table cancels (a block reordered or re-indented is not a schema
-  // change). The table key keeps a column dropped from one table from being
-  // cancelled by the same column added to a different (e.g. new) table.
+  // Cancel moved/reformatted lines: whitespace-normalized identical text
+  // under the SAME enclosing table cancels (a block reordered, re-indented,
+  // or re-spaced is not a schema change). The table key keeps a column
+  // dropped from one table from being cancelled by the same column added to
+  // a different (e.g. new) table.
+  const cancelKey = (l) => `${l.table ?? ""}@@${l.trimmed.replace(/\s+/g, " ")}`;
   const addedPool = new Map();
   for (const a of added) {
-    const key = `${a.table ?? ""}@@${a.trimmed}`;
+    const key = cancelKey(a);
     addedPool.set(key, (addedPool.get(key) ?? []).concat(a));
   }
   const unmatchedRemoved = [];
   for (const r of removed) {
-    const key = `${r.table ?? ""}@@${r.trimmed}`;
-    const pool = addedPool.get(key);
+    const pool = addedPool.get(cancelKey(r));
     if (pool && pool.length > 0) pool.pop();
     else unmatchedRemoved.push(r);
   }
