@@ -32,6 +32,7 @@
       "@cinatra-ai/extensions/registry-immutability": ["./packages/extensions/src/registry-immutability.ts"],
       "@cinatra-ai/extensions/registry-policy": ["./packages/extensions/src/registry-policy.ts"],
       "@cinatra-ai/extensions/required-in-prod": ["./packages/extensions/src/required-in-prod.ts"],
+      "@cinatra-ai/extensions/static-bundle-anchor": ["./packages/extensions/src/static-bundle-anchor.ts"],
       "@cinatra-ai/extensions/dependency-closure": ["./packages/extensions/src/dependency-closure.ts"],
       "@cinatra-ai/extensions/system-extension-inventory": ["./packages/extensions/src/system-extension-inventory.ts"],
       "@cinatra-ai/extensions/dev-version": ["./packages/extensions/src/dev-version.ts"],

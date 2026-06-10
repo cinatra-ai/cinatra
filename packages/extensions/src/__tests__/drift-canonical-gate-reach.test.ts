@@ -72,6 +72,11 @@ const ALLOWED_FILES = [
   // never perform a real write — same pattern as the teardown test above.
   "packages/extensions/src/__tests__/dispatcher-install-ordering.test.ts",
   "src/lib/__tests__/extension-dispatch-public-path.test.ts",
+  // Static-bundle anchor lifecycle tests — mock the canonical-store writers
+  // (incl. _internalUpdateInstalledExtensionStatus) in vi.mock fixtures to
+  // exercise the uninstall TOMBSTONE path through the public primitive. They
+  // never perform a real write — same pattern as the tests above.
+  "packages/extensions/src/__tests__/static-bundle-anchor.test.ts",
 ];
 
 function findFilesWithPattern(pattern: RegExp): string[] {

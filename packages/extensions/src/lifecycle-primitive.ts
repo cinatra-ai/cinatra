@@ -23,6 +23,7 @@ import {
 } from "./canonical-store";
 import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
+import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
 import {
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
@@ -130,7 +131,9 @@ function transitionMatrix(
 }
 
 /**
- * Install — creates a new manifest row at `active` status.
+ * Install — creates a new manifest row at `active` (or `locked`) status; a
+ * static-bundle ANCHOR row may also start `archived` (tombstone seed — see the
+ * inline note below).
  */
 export async function installExtensionManifest(
   row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status"> & {
@@ -143,7 +146,15 @@ export async function installExtensionManifest(
     throw new LifecycleTransitionError("INVALID_INPUT", "packageName is required");
   }
   let initialStatus: ExtensionLifecycleStatus = row.status ?? "active";
-  if (initialStatus !== "active" && initialStatus !== "locked") {
+  // A static-bundle ANCHOR row (bundled-in-image provenance) may start
+  // `archived`: the boot seeder writes the tombstone DIRECTLY when it anchors a
+  // package that was retired before it was anchor-tracked, so there is never a
+  // live-row window (or a fallible install-then-archive two-step) that could
+  // resurrect the retired state. Every other source keeps the strict
+  // active|locked start contract.
+  const archivedAnchorStart =
+    initialStatus === "archived" && isStaticBundleAnchorSource(row.source as ExtensionSource);
+  if (initialStatus !== "active" && initialStatus !== "locked" && !archivedAnchorStart) {
     throw new LifecycleTransitionError(
       "ILLEGAL_TRANSITION",
       `install row cannot start at '${initialStatus}'; only active or locked allowed`,
@@ -184,8 +195,11 @@ export async function installExtensionManifest(
  *
  * The lifecycle primitive returns the new row; for `force_delete` / `purge`
  * / `registry_remove` / `uninstall` of a non-used non-locked row the row IS
- * removed and the function returns `null`. The primitive never yanks/deletes
- * from Verdaccio — only the local manifest row.
+ * removed and the function returns `null` — EXCEPT `uninstall` of a
+ * static-bundle ANCHOR row (bundled-in-image provenance, see
+ * static-bundle-anchor.ts), which writes an archived tombstone and returns the
+ * archived row so the bundled package stays lifecycle-tracked. The primitive
+ * never yanks/deletes from Verdaccio — only the local manifest row.
  */
 export async function transitionExtensionLifecycle(
   id: string,
@@ -222,6 +236,23 @@ export async function transitionExtensionLifecycle(
     if (ext.status === "locked") {
       // already thrown above, but defense-in-depth
       throw new LifecycleTransitionError("LOCKED_REJECTS_OP", `Cannot ${op} locked extension`);
+    }
+    // Static-bundle anchor TOMBSTONE: `uninstall` of the bundled lifecycle
+    // anchor row (see static-bundle-anchor.ts) ARCHIVES it instead of deleting.
+    // A bundled package's bytes ship in the image, so "uninstall" can only ever
+    // mean "do not activate" — the archived tombstone makes that durable:
+    // archive and uninstall converge on the same observable end-state, the
+    // StaticBundleLoader's strict allow-list gate skips the package on the next
+    // boot, and the boot seeder (which only creates an anchor when NONE exists)
+    // can never resurrect the decision. Access-policy rows are preserved,
+    // mirroring archive semantics. The deeper destructive ops
+    // (`force_delete` / `purge` / `registry_remove`) intentionally KEEP
+    // hard-delete semantics as the admin-grade factory reset: removing the
+    // anchor row erases the lifecycle memory, so the next boot re-seeds the
+    // package as live.
+    if (op === "uninstall" && isStaticBundleAnchorSource(ext.source)) {
+      if (ext.status === "archived") return ext; // idempotent re-uninstall
+      return _internalUpdateInstalledExtensionStatus(id, "archived");
     }
     await _internalDeleteInstalledExtension(id);
     // Clean the polymorphic access rows for installed-extension-anchored

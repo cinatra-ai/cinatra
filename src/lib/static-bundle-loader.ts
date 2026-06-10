@@ -30,33 +30,45 @@ import {
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 
 /**
- * Split-brain guard — the StaticBundleLoader explicit-retired-row
- * (tombstone) gate. Drop a bundled record from activation ONLY when its package
- * has canonical `installed_extension` rows AND none are live (effective status
- * `"archived"`) — i.e. it was explicitly ARCHIVED (a tombstone row survives). A
- * package with NO rows (absent from the status map) is KEPT: bundled image
- * extensions are not necessarily lifecycle-tracked yet (today neither
- * `serverEntry` connector has a manifest row), so "no row" must NOT be read as
- * "retired". Pure (testable in isolation).
+ * Split-brain guard — the StaticBundleLoader lifecycle gate, now a STRICT
+ * active|locked ALLOW-LIST. A bundled `serverEntry` record activates ONLY when
+ * its package has at least one live canonical `installed_extension` row
+ * (effective status `"active"` — i.e. an `active` or `locked` row exists).
+ * Both an explicit ARCHIVE (tombstone row, effective `"archived"`) and a HARD
+ * uninstall ("no row" — absent from the status map) are SKIPPED, so the two
+ * retire paths converge on the same observable end-state (IOC-34/IOC-35).
  *
- * HONEST SCOPE: this is an ARCHIVED-ROW guard, not a complete uninstall guard. A
- * HARD uninstall DELETES the `installed_extension` rows (see
- * `lifecycle-primitive` uninstall), leaving "no row" — which this gate KEEPS, so
- * a hard-uninstalled static `serverEntry` package WOULD still re-register on
- * boot. The gate cannot distinguish "never lifecycle-tracked" from "hard-deleted
- * manifest row". Closing that gap (target = strict active|locked allow-list, or
- * an archived tombstone on static-package uninstall) is gated on reconciling
- * connector manifests so `serverEntry` packages become manifest-complete.
+ * "No row" is readable as "retired" because bundled serverEntry packages are
+ * now manifest-complete: the boot seeder
+ * (static-bundle-lifecycle.ts, invoked below BEFORE the status read) ensures a
+ * platform-scoped lifecycle ANCHOR row per bundled serverEntry package, and
+ * `uninstall` of that anchor writes an archived tombstone instead of deleting
+ * it (lifecycle-primitive.ts) — so absence only occurs when seeding failed (the
+ * post-boot required-set activation assertion is the loud backstop) or on an
+ * admin-grade factory reset (force_delete/purge, which deliberately re-seeds
+ * live on the next boot).
+ *
+ * Records WITHOUT a serverEntry pass through ungated: they are not
+ * activation-relevant (the shared driver skips them with reason
+ * "no-server-entry") and are not lifecycle-seeded, so gating them would only
+ * produce false "skipped" noise.
+ *
+ * Pure (testable in isolation). The fail-open path on a THROWING status read
+ * (DB unavailable at boot) lives in the caller — never silently dropping live
+ * extensions on infrastructure failure.
  */
-export function gateRetiredStaticRecords<T extends { packageName: string }>(
+export function gateStaticRecordsToLiveRows<
+  T extends { packageName: string; serverEntry: string | null },
+>(
   records: readonly T[],
   statusByPackage: Map<string, "active" | "archived">,
 ): { active: T[]; skipped: string[] } {
   const active: T[] = [];
   const skipped: string[] = [];
   for (const r of records) {
-    if (statusByPackage.get(r.packageName) === "archived") skipped.push(r.packageName);
-    else active.push(r);
+    const activationRelevant = typeof r.serverEntry === "string" && r.serverEntry.length > 0;
+    if (!activationRelevant || statusByPackage.get(r.packageName) === "active") active.push(r);
+    else skipped.push(r.packageName);
   }
   return { active, skipped };
 }
@@ -69,19 +81,36 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
     sdkAbiRange: r.sdkAbiRange ?? undefined,
   }));
 
-  // Apply the explicit-retired-row gate. FAIL-OPEN: a canonical status read that
-  // throws (DB unavailable at boot) activates all records — the pre-gate
-  // behavior — never silently dropping live extensions.
+  // Manifest-completeness first: ensure every bundled serverEntry package has
+  // its lifecycle anchor row, so the strict allow-list below reads "no row" as
+  // a real retirement and never drops a merely-untracked live extension.
+  // Soft-failing by design (per-package logging inside).
+  try {
+    const { ensureStaticBundleLifecycleAnchors } = await import(
+      "@/lib/static-bundle-lifecycle"
+    );
+    await ensureStaticBundleLifecycleAnchors();
+  } catch (err) {
+    console.error(
+      "[static-bundle-loader] lifecycle anchor seeding threw (continuing to the status read):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
+  // Apply the strict allow-list gate. FAIL-OPEN: a canonical status read that
+  // throws (DB unavailable at boot) activates all records — never silently
+  // dropping live extensions on infrastructure failure.
   let records = allRecords;
   try {
     const statusByPackage = await readEffectiveStatusByPackageNames(
       allRecords.map((r) => r.packageName),
     );
-    const gated = gateRetiredStaticRecords(allRecords, statusByPackage);
+    const gated = gateStaticRecordsToLiveRows(allRecords, statusByPackage);
     if (gated.skipped.length > 0) {
       console.info(
-        `[static-bundle-loader] skipping ${gated.skipped.length} archived (tombstoned) ` +
-          `static extension(s): ${gated.skipped.join(", ")}`,
+        `[static-bundle-loader] skipping ${gated.skipped.length} static serverEntry ` +
+          `extension(s) without a live installed_extension row (archived or uninstalled): ` +
+          gated.skipped.join(", "),
       );
     }
     records = gated.active;
