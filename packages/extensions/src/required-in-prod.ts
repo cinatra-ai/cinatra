@@ -25,6 +25,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { listInstalledExtensions } from "./canonical-store";
+import type { InstalledExtension } from "./canonical-types";
 import { staticBundleAnchorVersion } from "./static-bundle-anchor";
 
 const PACKAGE_JSON_PATH = resolve(process.cwd(), "package.json");
@@ -254,15 +255,21 @@ export function checkRequiredExtensionVersionPin(
  * static-bundle-anchor.ts) records the bundled version at seed time, which is
  * checked the same way. Any OTHER non-registry source (whose version is
  * unverifiable) counts as a mismatch, never a silent pass.
+ *
+ * `rowsSnapshot` lets a caller that already read the canonical manifest (the
+ * boot closure gate) verify against the SAME snapshot its other checks used —
+ * one store read, no torn decision. When omitted, the store is read here.
  */
-export async function verifyRequiredInProdInstalled(): Promise<RequiredVerificationResult> {
+export async function verifyRequiredInProdInstalled(
+  rowsSnapshot?: InstalledExtension[],
+): Promise<RequiredVerificationResult> {
   const entries = readRequiredInProdEntries();
   const required = entries.map((e) => e.packageName);
   if (entries.length === 0) {
     return { ok: true, required: [], installed: [] };
   }
 
-  const all = await listInstalledExtensions({});
+  const all = rowsSnapshot ?? (await listInstalledExtensions({}));
   const liveRows = all.filter((e) => e.status === "active" || e.status === "locked");
   const liveByName = new Map<string, typeof liveRows>();
   for (const row of liveRows) {

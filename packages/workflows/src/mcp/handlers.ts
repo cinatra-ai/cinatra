@@ -75,6 +75,23 @@ export type WorkflowHandlerDeps = {
     sourcePackage: string,
     op: "list" | "read" | "use" | "execute",
   ) => Promise<void>;
+  /**
+   * Extension dependency-closure gate on the INSTANTIATE boundary for
+   * EXTENSION-ORIGIN templates. The host resolves the governing canonical
+   * `installed_extension` row for the package (actor-org row first, then the
+   * platform row — the same row-selection order as `assertExtensionAccess`)
+   * and evaluates its dependency closure: a broken REQUIRED closure, or a
+   * missing OPTIONAL dep under the workflow kind's declared
+   * "fail-instantiate" behavior (`optionalMissingBehaviorForKind`), throws /
+   * rejects fail-closed. Host-injected so `packages/workflows` does NOT
+   * import `@cinatra-ai/extensions`. Operator-authored templates (no
+   * `origin.package`) are not gated; when the dep is absent (tests /
+   * non-host callers) extension-origin templates are NOT additionally gated.
+   */
+  assertTemplateSourceDependencyClosure?: (
+    actor: { userId: string | null; orgId: string | null },
+    sourcePackage: string,
+  ) => Promise<void>;
 };
 
 /** Extract an extension-origin package name from a template row's origin jsonb. */
@@ -492,6 +509,23 @@ export function createWorkflowPrimitiveHandlers(deps: WorkflowHandlerDeps = {}) 
             return {
               error: e instanceof Error ? e.message : "You cannot use this workflow extension.",
               code: "FORBIDDEN",
+            };
+          }
+        }
+        // Dependency-closure gate (after access): the workflow kind declares
+        // optional-missing as "fail-instantiate", so a source extension with a
+        // broken required closure OR missing optional deps refuses to
+        // instantiate. Fail closed BEFORE any DB write.
+        if (sourcePackage && deps.assertTemplateSourceDependencyClosure) {
+          try {
+            await deps.assertTemplateSourceDependencyClosure(actor, sourcePackage);
+          } catch (e) {
+            return {
+              error:
+                e instanceof Error
+                  ? e.message
+                  : "This workflow extension's dependencies are not satisfied.",
+              code: "DEPENDENCY_CLOSURE",
             };
           }
         }

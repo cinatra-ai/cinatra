@@ -15,7 +15,11 @@ import { approverResolvable, type ApprovalScope } from "@/lib/workflow-approvers
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
-import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
+import {
+  listInstalledExtensions,
+  readInstalledExtensionsByPackageName,
+} from "@cinatra-ai/extensions/canonical-store";
+import { evaluateExecutionClosure } from "@cinatra-ai/extensions/dependency-closure";
 import { enforceExtensionAccess } from "@cinatra-ai/extensions/enforce-extension-access";
 
 export function buildWorkflowHandlerDeps(): WorkflowHandlerDeps {
@@ -96,6 +100,40 @@ export function buildWorkflowHandlerDeps(): WorkflowHandlerDeps {
         actorCtx,
         op,
       );
+    },
+    // Dependency-closure gate on the instantiate boundary. Resolves the SAME
+    // governing row as assertExtensionAccess (actor-org row, then platform
+    // row, then first live row) and evaluates its dependency closure over the
+    // live canonical manifest. Throws fail-closed when the required closure
+    // is broken OR when an optional dep is missing — the workflow kind's
+    // declared optional-missing behavior is "fail-instantiate"
+    // (optionalMissingBehaviorForKind). A package with no live workflow row
+    // is ungoverned here (assertExtensionAccess already denies non-live
+    // governed installs).
+    assertTemplateSourceDependencyClosure: async (actor, sourcePackage) => {
+      const rows = (await readInstalledExtensionsByPackageName(sourcePackage)).filter(
+        (r) => r.kind === "workflow" && (r.status === "active" || r.status === "locked"),
+      );
+      if (rows.length === 0) return; // ungoverned (no live install row) → allow.
+      const orgId = actor.orgId ?? undefined;
+      const row =
+        (orgId && rows.find((r) => r.organizationId === orgId)) ||
+        rows.find((r) => r.organizationId == null) ||
+        rows[0];
+      const all = await listInstalledExtensions({});
+      const live = all.filter((r) => r.status === "active" || r.status === "locked");
+      const lookup = (name: string) => live.find((r) => r.packageName === name);
+      const verdict = evaluateExecutionClosure(row, lookup);
+      if (verdict.executionBlock) {
+        const { code, missing } = verdict.executionBlock;
+        throw new Error(
+          code === "REQUIRED_MISSING"
+            ? `Cannot instantiate: ${sourcePackage} has missing/archived required dependencies: ${missing.join(", ")}.`
+            : `Cannot instantiate: ${sourcePackage} has missing/archived optional dependencies (${missing.join(", ")}) ` +
+              `and the workflow kind fails instantiation on missing optional dependencies. ` +
+              `Restore or install them, then retry.`,
+        );
+      }
     },
   };
 }

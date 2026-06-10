@@ -225,11 +225,27 @@ async function assertCanonicalRestoreClosure(packageName: string): Promise<void>
   // an archived/missing dep is therefore NOT "present" and counts as missing).
   const lookup = (name: string) =>
     allRows.find((r) => r.packageName === name && (r.status === "active" || r.status === "locked"));
-  const { assertInstallClosure } = await import("./dependency-closure");
+  const { assertInstallClosure, optionalMissingBehaviorForKind } = await import(
+    "./dependency-closure"
+  );
   // assertInstallClosure throws DependencyClosureError(REQUIRED_MISSING) naming
   // the missing deps for the first broken row; let it propagate as the refusal.
+  // Its returned ClosureResult carries the missing OPTIONAL deps — restore
+  // never blocks on those, but each is surfaced with the restored row's
+  // per-kind optional-missing behavior so the operator knows what the run
+  // layer will do about it (the behavior table in dependency-closure.ts).
   for (const target of targets) {
-    assertInstallClosure(target, lookup);
+    const result = assertInstallClosure(target, lookup);
+    if (result.missingOptional.length > 0) {
+      const behavior = optionalMissingBehaviorForKind(target.kind);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[extensions] restore of ${target.packageName} (kind=${target.kind}): optional ` +
+          `dependencies missing/archived [${result.missingOptional
+            .map((d) => `${d.packageName} (${d.status})`)
+            .join(", ")}] — per-kind optional-missing behavior is "${behavior}".`,
+      );
+    }
   }
 }
 

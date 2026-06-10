@@ -7,6 +7,7 @@ import {
   assertArchiveDoesNotBreakClosure,
   assertInstallClosure,
   computeClosure,
+  evaluateExecutionClosure,
   findBrokenClosures,
   optionalMissingBehaviorForKind,
 } from "../dependency-closure";
@@ -136,6 +137,69 @@ describe("optionalMissingBehaviorForKind", () => {
     expect(optionalMissingBehaviorForKind("skill")).toBe("log-continue");
     expect(optionalMissingBehaviorForKind("artifact")).toBe("log-continue");
     expect(optionalMissingBehaviorForKind("workflow")).toBe("fail-instantiate");
+  });
+});
+
+describe("evaluateExecutionClosure (per-kind optional-missing dispatch)", () => {
+  it("intact closure, nothing missing → clean verdict", () => {
+    const a = ext("a", "active", [req("b")], "agent");
+    const b = ext("b", "locked", []);
+    const verdict = evaluateExecutionClosure(a, (n) => ({ a, b }[n]));
+    expect(verdict.requiredClosureOk).toBe(true);
+    expect(verdict.advisory).toBeNull();
+    expect(verdict.executionBlock).toBeNull();
+  });
+
+  it("missing REQUIRED dep → executionBlock REQUIRED_MISSING for every kind", () => {
+    for (const kind of ["agent", "connector", "skill", "artifact", "workflow"] as const) {
+      const a = ext("a", "active", [req("ghost")], kind);
+      const verdict = evaluateExecutionClosure(a, (n) => ({ a }[n]));
+      expect(verdict.requiredClosureOk).toBe(false);
+      expect(verdict.executionBlock).toEqual({ code: "REQUIRED_MISSING", missing: ["ghost"] });
+    }
+  });
+
+  it("workflow with missing OPTIONAL dep → fail-instantiate executionBlock, required closure stays ok", () => {
+    const wf = ext("wf", "active", [opt("maybe")], "workflow");
+    const verdict = evaluateExecutionClosure(wf, (n) => ({ wf }[n]));
+    expect(verdict.requiredClosureOk).toBe(true);
+    expect(verdict.advisory?.behavior).toBe("fail-instantiate");
+    expect(verdict.executionBlock).toEqual({
+      code: "OPTIONAL_MISSING_FAILS_INSTANTIATE",
+      missing: ["maybe"],
+    });
+  });
+
+  it("agent/connector/skill/artifact with missing OPTIONAL dep → behavior-tagged advisory, NO executionBlock", () => {
+    const expected = {
+      agent: "stop-run-hitl",
+      connector: "skip-step-audit",
+      skill: "log-continue",
+      artifact: "log-continue",
+    } as const;
+    for (const [kind, behavior] of Object.entries(expected)) {
+      const a = ext("a", "active", [opt("maybe")], kind as keyof typeof expected);
+      const verdict = evaluateExecutionClosure(a, (n) => ({ a }[n]));
+      expect(verdict.requiredClosureOk).toBe(true);
+      expect(verdict.executionBlock).toBeNull();
+      expect(verdict.advisory).toMatchObject({ kind, behavior });
+      expect(verdict.advisory?.missingOptional.map((d) => d.packageName)).toEqual(["maybe"]);
+    }
+  });
+
+  it("closure is PRESENCE/STATUS-ONLY: a dep's versionConstraint is not evaluated", () => {
+    // The dependency edge demands an impossible exact version; the dep is
+    // present (active) at any version → satisfied. Version pinning for the
+    // required-in-prod set is enforced by verifyRequiredInProdInstalled, not here.
+    const dep: ExtensionDependency = {
+      ...req("b"),
+      versionConstraint: { kind: "exact", version: "999.999.999" },
+    };
+    const a = ext("a", "active", [dep], "workflow");
+    const b = ext("b", "active", []);
+    const verdict = evaluateExecutionClosure(a, (n) => ({ a, b }[n]));
+    expect(verdict.requiredClosureOk).toBe(true);
+    expect(verdict.executionBlock).toBeNull();
   });
 });
 

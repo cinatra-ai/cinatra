@@ -294,6 +294,14 @@ describe("verifyRequiredInProdInstalled — version mismatch reporting", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("verifies against a caller-provided rows SNAPSHOT without a second store read", async () => {
+    primeRequired(["@cinatra-ai/a@^0.1.0"]);
+    mocked.mockClear();
+    const res = await verifyRequiredInProdInstalled([row("@cinatra-ai/a", "0.1.2")] as never);
+    expect(res.ok).toBe(true);
+    expect(mocked).not.toHaveBeenCalled();
+  });
+
   // Static-bundle ANCHOR rows (bundled-in-image provenance, see
   // static-bundle-anchor.ts) record the bundled version at seed time, so a
   // pinned required entry is verified against it like a registry version —

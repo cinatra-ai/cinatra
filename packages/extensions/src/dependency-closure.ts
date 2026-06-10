@@ -113,6 +113,87 @@ export function optionalMissingBehaviorForKind(kind: ExtensionKind): OptionalMis
   }
 }
 
+/** The per-kind dispatch outcome for a target's missing OPTIONAL deps. */
+export type OptionalMissingAdvisory = {
+  /** The DEPENDENT's kind — the behavior table is keyed on it. */
+  kind: ExtensionKind;
+  behavior: OptionalMissingBehavior;
+  missingOptional: ClosureNode[];
+};
+
+/**
+ * The single dispatch verdict every closure-consuming surface keys on.
+ * Deliberately NOT one boolean: boot/restore gate on `requiredClosureOk`
+ * only (optional-missing must never fail a boot or a lifecycle restore),
+ * while execution surfaces (workflow instantiate today; agent-run /
+ * connector-step later) gate on `executionBlock`.
+ */
+export type ExecutionClosureVerdict = {
+  /** True when the target's REQUIRED transitive closure is intact. */
+  requiredClosureOk: boolean;
+  missingRequired: ClosureNode[];
+  /**
+   * Per-kind dispatch for the target's missing OPTIONAL deps (null when none
+   * are missing). For "stop-run-hitl" / "skip-step-audit" / "log-continue"
+   * this advisory IS the consumable handed to the respective run-layer
+   * surface; "fail-instantiate" additionally raises `executionBlock`.
+   */
+  advisory: OptionalMissingAdvisory | null;
+  /**
+   * Non-null when the target must not execute/instantiate: its required
+   * closure is broken (any kind), or its kind declares optional-missing as
+   * "fail-instantiate" (workflow) and an optional dep is missing.
+   */
+  executionBlock:
+    | { code: "REQUIRED_MISSING"; missing: string[] }
+    | { code: "OPTIONAL_MISSING_FAILS_INSTANTIATE"; missing: string[] }
+    | null;
+};
+
+/**
+ * Compute the per-kind execution-closure verdict for one target row.
+ *
+ * Closure semantics are PRESENCE/STATUS-ONLY by design: a dep is satisfied by
+ * any `active | locked` row of that package name — `versionConstraint` on the
+ * dependency edge is deliberately NOT evaluated here (version pinning for the
+ * required-in-prod set is enforced separately by
+ * `verifyRequiredInProdInstalled` in required-in-prod.ts).
+ */
+export function evaluateExecutionClosure(
+  target: InstalledExtension,
+  lookup: ManifestLookup,
+): ExecutionClosureVerdict {
+  const result = computeClosure(target, lookup);
+  const advisory: OptionalMissingAdvisory | null =
+    result.missingOptional.length > 0
+      ? {
+          kind: target.kind,
+          behavior: optionalMissingBehaviorForKind(target.kind),
+          missingOptional: result.missingOptional,
+        }
+      : null;
+
+  let executionBlock: ExecutionClosureVerdict["executionBlock"] = null;
+  if (result.missingRequired.length > 0) {
+    executionBlock = {
+      code: "REQUIRED_MISSING",
+      missing: result.missingRequired.map((d) => d.packageName),
+    };
+  } else if (advisory && advisory.behavior === "fail-instantiate") {
+    executionBlock = {
+      code: "OPTIONAL_MISSING_FAILS_INSTANTIATE",
+      missing: advisory.missingOptional.map((d) => d.packageName),
+    };
+  }
+
+  return {
+    requiredClosureOk: result.missingRequired.length === 0,
+    missingRequired: result.missingRequired,
+    advisory,
+    executionBlock,
+  };
+}
+
 /**
  * Boot diagnostics: scan a full manifest snapshot for any `active | locked` row
  * whose REQUIRED dependency closure is broken (a required dep is archived or
