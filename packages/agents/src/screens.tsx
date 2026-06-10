@@ -33,7 +33,6 @@ import { getAgentPackage } from "@cinatra-ai/registries";
 import type { VerdaccioConfig } from "@cinatra-ai/registries";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { RegistryVersionHistoryList, type RegistryVersionRow } from "./registry-version-history-list";
-import { renderReadmeMarkdown } from "./readme-render";
 import { RecompileForm } from "./recompile-form";
 import {
   TableBody,
@@ -48,7 +47,7 @@ import { Button } from "@/components/ui/button";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { MarketplaceReadmeSection } from "@/components/marketplace-readme-section";
+import { MarketplaceReadmeMarkdownSection } from "@/components/marketplace-readme-section";
 import { Tabs, TabsContent, TabsList, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ImportAgentForm } from "./import-form";
@@ -538,6 +537,7 @@ export async function resolveDetailReadConfig(
 export async function RegistryEntryDetailSections({
   packageName,
   listedVersion,
+  readmeMarkdown,
 }: {
   packageName: string;
   /**
@@ -547,6 +547,15 @@ export async function RegistryEntryDetailSections({
    * behavior is unchanged (legacy direct `loadVerdaccioConfigForReads`).
    */
   listedVersion?: string;
+  /**
+   * The marketplace-sourced README (`ExtensionDetail.readmeMarkdown`) resolved
+   * by the detail page via `extensionGet` — the same field the public
+   * marketplace Description tab renders. It is the ONLY source for the
+   * primary-body README section; Verdaccio's `entry.readme` is intentionally
+   * NOT a fallback, so the in-app body always matches the public listing.
+   * Empty/absent hides the section cleanly (no empty pane).
+   */
+  readmeMarkdown?: string | null;
 }) {
   const session = await requireAuthSession();
   // Compute role-aware booleans once per render.
@@ -743,30 +752,13 @@ export async function RegistryEntryDetailSections({
 
       {/* PRIMARY BODY — the README occupies the first content slot
           (only the deprecation status notice above may precede it),
-          mirroring the public marketplace's Description tab. Today the
-          content is the Verdaccio package README rendered by the existing
-          sanitizing helper; switching the source to the marketplace
-          `readmeMarkdown` (plus heading demotion + typography parity) is
-          the README-parity follow-up that fills this slot. */}
-      {entry.readme ? (
-        <MarketplaceReadmeSection>
-          <div
-            data-slot="extension-readme"
-            className="readme-markdown text-sm leading-relaxed text-foreground"
-            // Sanitized Markdown render via `renderReadmeMarkdown`
-            // (packages/agents/src/readme-render.ts). The helper uses
-            // marked v18 with a constrained renderer that strips raw HTML
-            // + unsafe link/image schemes; the README is canonical raw
-            // Markdown from the package tarball (extracted by the sync
-            // worker with a size cap), so render-time sanitization is the
-            // right boundary. `dangerouslySetInnerHTML` is acceptable here
-            // because the input has been sanitized by a dedicated,
-            // auditable helper.
-            // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: renderReadmeMarkdown(entry.readme) }}
-          />
-        </MarketplaceReadmeSection>
-      ) : null}
+          mirroring the public marketplace's Description tab. The content is
+          the marketplace-sourced `readmeMarkdown` (the SAME field the public
+          page renders — NOT Verdaccio's `entry.readme`), rendered through the
+          sanitizing `renderReadmeMarkdown` helper with headings demoted one
+          level (the hero owns the page <h1>) and the scoped editorial
+          typography. Empty/absent README → no section at all. */}
+      <MarketplaceReadmeMarkdownSection markdown={readmeMarkdown} />
 
       <section className="soft-panel rounded-card px-6 py-5">
         <h2 className="text-sm font-semibold text-foreground mb-3">Extension Details</h2>
