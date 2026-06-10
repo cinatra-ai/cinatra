@@ -209,8 +209,9 @@ export async function cancelWorkflow(workflowId: string, deps: LifecycleDeps = {
     // (createAgentRun committed, recordOutcomes never ran — child_run_id NULL)
     // is invisible to the childRows collection above and is NOT cancelled; the
     // reconciler never reclaims a non-active workflow, so it remains an
-    // orphaned-but-idle agent run. A host-side sweep could find it via the
-    // run's workflow_id/workflow_task_id provenance stamped at createAgentRun.
+    // orphaned (possibly still queued/running) agent run. A host-side sweep
+    // could find it via the run's workflow_id/workflow_task_id provenance
+    // stamped at createAgentRun.
     await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, workflowId));
     await tx.insert(workflowEvent).values({
       id: id("wevent"),
