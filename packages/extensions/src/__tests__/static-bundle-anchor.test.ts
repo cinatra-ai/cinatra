@@ -37,7 +37,7 @@ vi.mock("../permissions-store", () => ({
 import * as store from "../canonical-store";
 import { aggregateEffectiveStatusByPackageName } from "../canonical-store";
 import { deleteExtensionPermissions } from "../permissions-store";
-import { transitionExtensionLifecycle } from "../lifecycle-primitive";
+import { installExtensionManifest, transitionExtensionLifecycle } from "../lifecycle-primitive";
 import {
   STATIC_BUNDLE_ANCHOR_PATH_PREFIX,
   isStaticBundleAnchorSource,
@@ -130,6 +130,55 @@ describe("static-bundle anchor provenance helpers (pure)", () => {
         resolvedCommitOrTreeHash: "bundled@",
       }),
     ).toBeNull();
+  });
+});
+
+describe("archived-start tombstone seed (installExtensionManifest)", () => {
+  it("an anchor row may be created DIRECTLY archived (tombstone seed, no live window)", async () => {
+    const created = await installExtensionManifest(
+      {
+        id: "iext_seed",
+        packageName: PKG,
+        ownerLevel: "platform",
+        ownerId: null,
+        organizationId: null,
+        kind: "connector",
+        source: staticBundleAnchorSource(PKG, "0.1.0"),
+        requiredInProd: false,
+        dependencies: [],
+        manifestHash: null,
+        status: "archived",
+      },
+      OPTS,
+    );
+    expect(created.status).toBe("archived");
+  });
+
+  it("a NON-anchor source still refuses an archived start (strict active|locked contract)", async () => {
+    await expect(
+      installExtensionManifest(
+        {
+          id: "iext_seed2",
+          packageName: PKG,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "connector",
+          source: {
+            type: "verdaccio",
+            registryUrl: "http://localhost:4873",
+            packageName: PKG,
+            version: "0.1.0",
+            integrity: "sha512-x",
+          },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+          status: "archived",
+        },
+        OPTS,
+      ),
+    ).rejects.toMatchObject({ code: "ILLEGAL_TRANSITION" });
   });
 });
 

@@ -131,7 +131,9 @@ function transitionMatrix(
 }
 
 /**
- * Install — creates a new manifest row at `active` status.
+ * Install — creates a new manifest row at `active` (or `locked`) status; a
+ * static-bundle ANCHOR row may also start `archived` (tombstone seed — see the
+ * inline note below).
  */
 export async function installExtensionManifest(
   row: Omit<InstalledExtension, "createdAt" | "updatedAt" | "status"> & {
@@ -144,7 +146,15 @@ export async function installExtensionManifest(
     throw new LifecycleTransitionError("INVALID_INPUT", "packageName is required");
   }
   let initialStatus: ExtensionLifecycleStatus = row.status ?? "active";
-  if (initialStatus !== "active" && initialStatus !== "locked") {
+  // A static-bundle ANCHOR row (bundled-in-image provenance) may start
+  // `archived`: the boot seeder writes the tombstone DIRECTLY when it anchors a
+  // package that was retired before it was anchor-tracked, so there is never a
+  // live-row window (or a fallible install-then-archive two-step) that could
+  // resurrect the retired state. Every other source keeps the strict
+  // active|locked start contract.
+  const archivedAnchorStart =
+    initialStatus === "archived" && isStaticBundleAnchorSource(row.source as ExtensionSource);
+  if (initialStatus !== "active" && initialStatus !== "locked" && !archivedAnchorStart) {
     throw new LifecycleTransitionError(
       "ILLEGAL_TRANSITION",
       `install row cannot start at '${initialStatus}'; only active or locked allowed`,

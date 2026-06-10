@@ -9,7 +9,7 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 
 const readInstalledExtensionsByPackageName = vi.fn();
 const installExtensionManifest = vi.fn();
-const transitionExtensionLifecycle = vi.fn();
+const sourceSwitchExtension = vi.fn();
 const isPackageRequiredInProd = vi.fn<(pkg: string) => boolean>(() => false);
 
 vi.mock("server-only", () => ({}));
@@ -19,7 +19,7 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
 }));
 vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   installExtensionManifest: (...args: unknown[]) => installExtensionManifest(...args),
-  transitionExtensionLifecycle: (...args: unknown[]) => transitionExtensionLifecycle(...args),
+  sourceSwitchExtension: (...args: unknown[]) => sourceSwitchExtension(...args),
 }));
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => isPackageRequiredInProd(pkg),
@@ -80,6 +80,25 @@ const anchorRow = (status: InstalledExtension["status"]): InstalledExtension =>
     source: staticBundleAnchorSource("@cinatra-ai/bundled-connector", "0.1.0"),
   });
 
+/** A platform-scoped row that is NOT the anchor (e.g. a dispatcher install
+ *  done without an active org) — it occupies the unique platform identity
+ *  slot, so the seeder must ADOPT it instead of inserting a second row. */
+const platformNonAnchorRow = (status: InstalledExtension["status"]): InstalledExtension =>
+  row({
+    id: "iext_platform",
+    ownerLevel: "platform",
+    ownerId: null,
+    organizationId: null,
+    status,
+    source: {
+      type: "verdaccio",
+      registryUrl: "http://localhost:4873",
+      packageName: "@cinatra-ai/bundled-connector",
+      version: "0.1.0",
+      integrity: "sha512-x",
+    },
+  });
+
 async function runSeeder() {
   const { ensureStaticBundleLifecycleAnchors } = await import("@/lib/static-bundle-lifecycle");
   return ensureStaticBundleLifecycleAnchors();
@@ -93,6 +112,7 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
       ...row({}),
       ...r,
     }));
+    sourceSwitchExtension.mockImplementation(async (id: string) => row({ id }));
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -108,13 +128,14 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
     expect(arg.ownerLevel).toBe("platform");
     expect(arg.status).toBe("active");
     expect(isStaticBundleAnchorSource(arg.source)).toBe(true);
-    expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
   });
 
   it("anchor already exists (live) → no write", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([anchorRow("active")]);
     const result = await runSeeder();
     expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
     expect(result.seededLive).toEqual([]);
   });
 
@@ -122,40 +143,62 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([anchorRow("archived")]);
     const result = await runSeeder();
     expect(installExtensionManifest).not.toHaveBeenCalled();
-    expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
     expect(result.seededLive).toEqual([]);
     expect(result.seededArchived).toEqual([]);
   });
 
-  it("live org rows but no anchor → seeds a live anchor (matches effective state)", async () => {
+  it("pre-existing LIVE platform non-anchor row → ADOPTED via source switch (no second platform row)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([platformNonAnchorRow("active")]);
+    const result = await runSeeder();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).toHaveBeenCalledTimes(1);
+    const [id, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(id).toBe("iext_platform");
+    expect(isStaticBundleAnchorSource(newSource)).toBe(true);
+    expect(result.seededLive).toEqual(["@cinatra-ai/bundled-connector"]);
+  });
+
+  it("pre-existing ARCHIVED platform non-anchor row → adopted with status PRESERVED (no resurrection)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([platformNonAnchorRow("archived")]);
+    const result = await runSeeder();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).toHaveBeenCalledTimes(1); // status-preserving provenance switch
+    expect(result.seededArchived).toEqual(["@cinatra-ai/bundled-connector"]);
+    expect(result.seededLive).toEqual([]);
+  });
+
+  it("live org rows but no platform row → seeds a live anchor (matches effective state)", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([row({ status: "active" })]);
     const result = await runSeeder();
     expect(result.seededLive).toEqual(["@cinatra-ai/bundled-connector"]);
-    expect(transitionExtensionLifecycle).not.toHaveBeenCalled();
+    const arg = installExtensionManifest.mock.calls[0][0];
+    expect(arg.status).toBe("active");
   });
 
-  it("rows exist but NONE live (legacy retired) → anchor is seeded then ARCHIVED, preserving the retired state", async () => {
+  it("org rows exist but NONE live (legacy retired) → anchor is created DIRECTLY archived (no live window)", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([row({ status: "archived" })]);
-    installExtensionManifest.mockResolvedValueOnce(anchorRow("active"));
     const result = await runSeeder();
     expect(result.seededArchived).toEqual(["@cinatra-ai/bundled-connector"]);
     expect(result.seededLive).toEqual([]);
-    expect(transitionExtensionLifecycle).toHaveBeenCalledWith(
-      "iext_anchor",
-      "archive",
-      expect.objectContaining({ actor: expect.objectContaining({ source: "static-bundle-lifecycle" }) }),
-    );
+    expect(installExtensionManifest).toHaveBeenCalledTimes(1);
+    const arg = installExtensionManifest.mock.calls[0][0];
+    expect(arg.status).toBe("archived"); // tombstone seed — never transitions through live
+    expect(isStaticBundleAnchorSource(arg.source)).toBe(true);
   });
 
-  it("legacy retired + required-in-prod in PROD → left un-anchored (never flipped live)", async () => {
+  it("legacy retired + required-in-prod → still anchored ARCHIVED (retired state preserved, loud warn)", async () => {
     vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
     isPackageRequiredInProd.mockReturnValue(true);
     readInstalledExtensionsByPackageName.mockResolvedValue([row({ status: "archived" })]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await runSeeder();
-    expect(installExtensionManifest).not.toHaveBeenCalled();
-    expect(result.seededLive).toEqual([]);
-    expect(result.seededArchived).toEqual([]);
-    expect(result.failed).toEqual([]);
+    expect(result.seededArchived).toEqual(["@cinatra-ai/bundled-connector"]);
+    const arg = installExtensionManifest.mock.calls[0][0];
+    expect(arg.status).toBe("archived");
+    expect(arg.requiredInProd).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 
   it("insert race: install throws but a re-read finds the anchor → benign, not a failure", async () => {
