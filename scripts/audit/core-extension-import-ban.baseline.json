@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 81,
-      "files": 43
+      "edges": 63,
+      "files": 41
     }
   },
   "edges": {
@@ -108,20 +108,6 @@
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/openai-connector"
     ],
-    "src/lib/mcp-server.ts": [
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/blog-connector",
-      "@cinatra-ai/crm-connector",
-      "@cinatra-ai/drupal-mcp-connector",
-      "@cinatra-ai/email-connector",
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/google-calendar-connector",
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/media-feeds-connector",
-      "@cinatra-ai/social-media-connector",
-      "@cinatra-ai/twenty-connector",
-      "@cinatra-ai/wordpress-mcp-connector"
-    ],
     "src/lib/nango-connect-ui.ts": [
       "@cinatra-ai/nango-connector"
     ],
@@ -133,14 +119,6 @@
     ],
     "src/lib/nango.ts": [
       "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/primitive-handlers.ts": [
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/drupal-mcp-connector",
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/google-calendar-connector",
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/wordpress-mcp-connector"
     ],
     "src/lib/register-all-object-types.ts": [
       "@cinatra-ai/crm-connector"

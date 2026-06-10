@@ -443,7 +443,7 @@ async function handleAgentBuilderCompile(
   }
 
   try {
-    const allHandlers = collectAllPrimitiveHandlers();
+    const allHandlers = await collectAllPrimitiveHandlers();
     const primitiveToolNames = Object.keys(allHandlers);
     // Best-effort: append external MCP tool names. Failures are logged and skipped
     // inside fetchExternalMcpToolNames — they never block compilation.

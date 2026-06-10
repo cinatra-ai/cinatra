@@ -135,3 +135,33 @@ export const GENERATED_CONNECTOR_ENTRY_MODULES: Record<string, () => Promise<unk
   "wordpress-mcp-connector": () => import("@cinatra-ai/wordpress-mcp-connector"),
   "youtube-connector": () => import("@cinatra-ai/youtube-connector"),
 };
+
+// slug → { loader, factory export name } for connector MCP surfaces.
+// Literal specifiers only (Turbopack-safe). Consumed by
+// src/lib/connector-mcp-registration.server.ts.
+export type GeneratedConnectorFactoryEntry = { load: () => Promise<unknown>; factory: string };
+
+export const GENERATED_CONNECTOR_MCP_MODULES: Record<string, GeneratedConnectorFactoryEntry> = {
+  "apollo-connector": { load: () => import("@cinatra-ai/apollo-connector/mcp-module"), factory: "createApolloModule" },
+  "blog-connector": { load: () => import("@cinatra-ai/blog-connector/mcp-module"), factory: "createBlogModule" },
+  "crm-connector": { load: () => import("@cinatra-ai/crm-connector/mcp-module"), factory: "createCrmModule" },
+  "drupal-mcp-connector": { load: () => import("@cinatra-ai/drupal-mcp-connector/mcp-module"), factory: "createDrupalModule" },
+  "email-connector": { load: () => import("@cinatra-ai/email-connector/mcp-module"), factory: "createEmailModule" },
+  "gmail-connector": { load: () => import("@cinatra-ai/gmail-connector/mcp-module"), factory: "createGmailModule" },
+  "google-calendar-connector": { load: () => import("@cinatra-ai/google-calendar-connector/mcp-module"), factory: "createGoogleCalendarModule" },
+  "linkedin-connector": { load: () => import("@cinatra-ai/linkedin-connector/mcp-module"), factory: "createLinkedInModule" },
+  "media-feeds-connector": { load: () => import("@cinatra-ai/media-feeds-connector/mcp-module"), factory: "createMediaFeedsModule" },
+  "social-media-connector": { load: () => import("@cinatra-ai/social-media-connector/mcp-module"), factory: "createSocialMediaModule" },
+  "twenty-connector": { load: () => import("@cinatra-ai/twenty-connector/mcp-module"), factory: "createTwentyConnectorModule" },
+  "wordpress-mcp-connector": { load: () => import("@cinatra-ai/wordpress-mcp-connector/mcp-module"), factory: "createWordPressModule" },
+};
+
+export const GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: Record<string, GeneratedConnectorFactoryEntry> = {
+  "apollo-connector": { load: () => import("@cinatra-ai/apollo-connector/mcp-handlers"), factory: "createApolloPrimitiveHandlers" },
+  "drupal-mcp-connector": { load: () => import("@cinatra-ai/drupal-mcp-connector/mcp-handlers"), factory: "createDrupalPrimitiveHandlers" },
+  "gmail-connector": { load: () => import("@cinatra-ai/gmail-connector/mcp-handlers"), factory: "createGmailPrimitiveHandlers" },
+  "google-calendar-connector": { load: () => import("@cinatra-ai/google-calendar-connector/mcp-handlers"), factory: "createGoogleCalendarPrimitiveHandlers" },
+  "linkedin-connector": { load: () => import("@cinatra-ai/linkedin-connector/mcp-handlers"), factory: "createLinkedInPrimitiveHandlers" },
+  "media-feeds-connector": { load: () => import("@cinatra-ai/media-feeds-connector/mcp-handlers"), factory: "createMediaFeedsPrimitiveHandlers" },
+  "wordpress-mcp-connector": { load: () => import("@cinatra-ai/wordpress-mcp-connector/mcp-handlers"), factory: "createWordPressPrimitiveHandlers" },
+};

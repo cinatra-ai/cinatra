@@ -5,6 +5,7 @@ import {
   resolveDisplayName,
   sanitizeSvgToDataUri,
   sanitizeLogoDataUri,
+  extractFactoryExport,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
@@ -219,5 +220,57 @@ describe("manifest generator", () => {
       records.filter((r) => r.kind === "connector" && r.hasSettingsPage).map((r) => r.packageName),
     );
     for (const p of connectorSettingsPages) expect(haveSettings.has(p.packageName)).toBe(true);
+  });
+});
+
+describe("connector MCP discovery maps", () => {
+  it("emits one MCP-module loader entry per connector with hasMcpModule (factory resolved)", async () => {
+    const { records, connectorMcpModules } = await buildManifest();
+    const withModule = records.filter((r) => r.kind === "connector" && r.hasMcpModule);
+    expect(connectorMcpModules.length).toBe(withModule.length);
+    expect(connectorMcpModules.length).toBeGreaterThan(0);
+    const byPackage = new Set(withModule.map((r) => r.packageName));
+    for (const e of connectorMcpModules) {
+      expect(byPackage.has(e.packageName)).toBe(true);
+      expect(e.slug).toBe(e.packageName.split("/")[1]);
+      // The host resolves this exact export from the loaded namespace.
+      expect(e.factory).toMatch(/^create[A-Za-z0-9]*Module$/);
+    }
+    // deterministic slug order (the host registers in map order)
+    const slugs = connectorMcpModules.map((e) => e.slug);
+    expect(slugs).toEqual([...slugs].sort());
+  });
+
+  it("primitive-handler entries are connectors that OPT IN via a create*PrimitiveHandlers export", async () => {
+    const { records, connectorPrimitiveHandlers, connectorMcpModules } = await buildManifest();
+    const connectorByPackage = new Set(
+      records.filter((r) => r.kind === "connector").map((r) => r.packageName),
+    );
+    expect(connectorPrimitiveHandlers.length).toBeGreaterThan(0);
+    for (const e of connectorPrimitiveHandlers) {
+      expect(connectorByPackage.has(e.packageName)).toBe(true);
+      expect(e.factory).toMatch(/^create[A-Za-z0-9]*PrimitiveHandlers$/);
+    }
+    // A handlers file WITHOUT the factory export is not part of the surface:
+    // the handler map must be a subset of connectors, and any connector with an
+    // MCP module but no handler entry simply didn't export the factory.
+    const handlerSlugs = new Set(connectorPrimitiveHandlers.map((e) => e.slug));
+    const moduleSlugs = new Set(connectorMcpModules.map((e) => e.slug));
+    for (const slug of handlerSlugs) expect(moduleSlugs.has(slug)).toBe(true);
+  });
+
+  it("extractFactoryExport: none → null, one → name, two → throws (ambiguous)", () => {
+    const re = /export\s+function\s+(create[A-Za-z0-9]*Module)\s*\(/g;
+    expect(extractFactoryExport("export const x = 1;", re, "ctx")).toBeNull();
+    expect(extractFactoryExport("export function createProbeModule() {}", re, "ctx")).toBe(
+      "createProbeModule",
+    );
+    expect(() =>
+      extractFactoryExport(
+        "export function createProbeModule() {}\nexport function createOtherModule() {}",
+        re,
+        "ctx",
+      ),
+    ).toThrow(/ambiguous/);
   });
 });

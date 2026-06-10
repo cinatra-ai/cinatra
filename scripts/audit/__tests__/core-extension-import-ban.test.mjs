@@ -21,13 +21,18 @@ function runGate(extraEnv = {}) {
 }
 
 describe("core-extension-import-ban gate", () => {
-  it("scans real core->extension edges (mcp-server.ts imports connector modules)", () => {
+  it("scans real core->extension edges (and the MCP registration surfaces stay decoupled)", () => {
     const edges = scanCoreExtensionEdges();
-    expect(edges["src/lib/mcp-server.ts"]).toBeDefined();
-    expect(edges["src/lib/mcp-server.ts"].some((e) => e.endsWith("-connector"))).toBe(true);
-    // anthropic-connector is un-exempt → its host->ext edges ARE scanned.
+    // The scanner still sees the REMAINING real connector edges in the tree
+    // (the decoupling sweep shrinks this set toward zero).
     const flat = Object.values(edges).flat();
+    expect(flat.some((e) => e.endsWith("-connector"))).toBe(true);
+    // anthropic-connector is un-exempt → its host->ext edges ARE scanned.
     expect(flat).toContain("@cinatra-ai/anthropic-connector");
+    // The MCP module + primitive-handler registration surfaces resolve through
+    // the generated manifest now — no static connector import may reappear.
+    expect(edges["src/lib/mcp-server.ts"]).toBeUndefined();
+    expect(edges["src/lib/primitive-handlers.ts"]).toBeUndefined();
   });
 
   it("diffEdges flags a NEW edge as added and a gone edge as removed", () => {
