@@ -278,6 +278,53 @@ test("destructive: multi-line UPDATE with a schema-qualified target (SET on a la
   assert.deepEqual(r.destructive.map((d) => d.rule), ["data-rewrite"]);
 });
 
+test("destructive: shorthand anonymous constraints (ADD UNIQUE / CHECK / PRIMARY KEY / FOREIGN KEY) on an existing table; additive on a new table", () => {
+  const existing = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ADD UNIQUE (label)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ADD CHECK (amount > 0)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ADD PRIMARY KEY (id)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ADD FOREIGN KEY (label) REFERENCES ${S}."labels" (id)\` },`,
+  ]);
+  assert.deepEqual(
+    existing.destructive.map((d) => d.rule),
+    ["add-constraint", "add-constraint", "add-constraint", "add-constraint"],
+  );
+
+  const newTable = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`CREATE TABLE IF NOT EXISTS ${S}."gadgets" (id text PRIMARY KEY, name text)\` },`,
+    `    { text: \`ALTER TABLE ${S}."gadgets" ADD UNIQUE (name)\` },`,
+  ]);
+  assert.deepEqual(newTable.destructive, []);
+});
+
+test("destructive: split-line ALTER COLUMN retype (TYPE lands on a later diff line)", () => {
+  const split = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ALTER COLUMN amount`,
+    "      TYPE numeric(12,4)` },",
+  ]);
+  assert.deepEqual(split.destructive.map((d) => d.rule), ["retype-split-line"]);
+
+  // Dangling SET / SET DATA continuations are equally invisible — conservative.
+  const splitSetData = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ALTER COLUMN amount SET DATA`,
+    "      TYPE numeric(12,4)` },",
+  ]);
+  assert.deepEqual(splitSetData.destructive.map((d) => d.rule), ["retype-split-line"]);
+});
+
+test("additive: same-line ALTER COLUMN SET DEFAULT / DROP NOT NULL do not trip the split-line retype rule", () => {
+  const r = classify(21, 21, [
+    `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ALTER COLUMN amount SET DEFAULT 0\` },`,
+    `    { text: \`ALTER TABLE ${S}."widgets" ALTER COLUMN amount DROP NOT NULL\` },`,
+  ]);
+  assert.deepEqual(r.destructive, []);
+});
+
 test("whitespace-only reformatting of a column definition is NOT destructive", () => {
   const r = classify(15, 15, ["      label   text,"]);
   assert.deepEqual(r.destructive, []);
