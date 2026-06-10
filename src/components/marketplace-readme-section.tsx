@@ -72,6 +72,21 @@ export const MARKETPLACE_README_BODY_CLASS = [
 ].join(" ");
 
 /**
+ * Whether the marketplace `readmeMarkdown` produces any visible README body
+ * once rendered through the sanitizing renderer. Callers that own a fallback
+ * (e.g. the non-agent plain-text long description) must branch on THIS — not
+ * on a raw string check — so a README that sanitizes down to nothing (e.g.
+ * raw HTML only) still falls back instead of rendering no primary body.
+ * Both Marked instances are cached, so the render here and the render inside
+ * {@link MarketplaceReadmeMarkdownSection} stay cheap.
+ */
+export function hasRenderableReadmeMarkdown(
+  markdown: string | null | undefined,
+): boolean {
+  return renderReadmeMarkdown(markdown, { demoteHeadings: true }).trim() !== "";
+}
+
+/**
  * The README primary body of the marketplace detail view, sourced from the
  * marketplace `ExtensionDetail.readmeMarkdown` — the same field the public
  * marketplace.cinatra.ai Description tab renders. Rendering parity with the
