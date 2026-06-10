@@ -27,15 +27,20 @@ import "server-only";
 //
 // Discovery is filesystem-driven (the install/uninstall-aware substrate for
 // bundled + marketplace extensions): an uninstalled extension's directory is
-// gone, so it stops resolving. The coarse `installed_extension` lifecycle gate
-// is intentionally NOT applied here yet — that hardening lands with the live
-// runtime installer, and applying it now could expose an unseeded-row gap in
-// prod that the legacy self-heals were silently masking.
+// gone, so it stops resolving. On top of that, the coarse `installed_extension`
+// lifecycle gate IS applied at the resolver entry points (the live runtime
+// installer has shipped): an extension whose canonical rows exist but are ALL
+// retired (effective status "archived") is skipped — the explicit-tombstone
+// semantics proven by the StaticBundleLoader's `gateRetiredStaticRecords`. A
+// package with NO rows is KEPT (bundled extensions are not necessarily
+// lifecycle-tracked — "no row" must not read as "retired", so unseeded prod
+// rows cannot regress), and a failed status read keeps everything (fail-open).
 
 import { existsSync, realpathSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { registerExtensionSkill } from "./register-extension-skill";
+import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
 
 // ---------------------------------------------------------------------------
 // Skill-ID derivation (canonical home — re-exported by the dev watcher).
@@ -251,6 +256,73 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Coarse `installed_extension` lifecycle gate (explicit-tombstone semantics).
+// ---------------------------------------------------------------------------
+//
+// Mirrors the StaticBundleLoader's proven `gateRetiredStaticRecords`: drop a
+// scanned extension ONLY when its package has canonical `installed_extension`
+// rows AND none are live (effective status "archived"). "No row" is KEPT —
+// bundled extensions are not necessarily lifecycle-tracked, so an unseeded
+// prod row must never stop skill resolution. The status read goes through a
+// FAIL-SOFT dynamic import of `@cinatra-ai/extensions` (same posture as the
+// `@cinatra-ai/agents/agent-install-path` import above — skills must not
+// hard-depend on the extensions package, which itself consumes skills);
+// any import/DB failure keeps every extension (fail-open, like the loader).
+//
+// Identity drift: `installed_extension.package_name` is not always the npm
+// form (slugified rows exist — see manifest-identity.ts), so each extension is
+// matched by its candidate-key union from `resolveSkillOwnerPackageCandidates`.
+
+async function readLifecycleStatusFailOpen(
+  candidateNames: string[],
+): Promise<Map<string, "active" | "archived"> | null> {
+  if (candidateNames.length === 0) return new Map();
+  try {
+    const { readEffectiveStatusByPackageNames } = await import("@cinatra-ai/extensions");
+    return await readEffectiveStatusByPackageNames(candidateNames);
+  } catch (err) {
+    console.warn(
+      "[cinatra:skills] lifecycle status read failed — keeping all scanned extensions (fail-open):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * Drop scanned extensions that are explicitly RETIRED (tombstoned) in the
+ * canonical `installed_extension` lifecycle store. Keep on no-row and on a
+ * failed status read. Exported for tests.
+ */
+export async function filterRetiredSkillExtensions(
+  exts: SkillExtensionDescriptor[],
+): Promise<SkillExtensionDescriptor[]> {
+  if (exts.length === 0) return exts;
+  const candidatesByExt = exts.map((ext) =>
+    resolveSkillOwnerPackageCandidates({ packageName: ext.pkgName }),
+  );
+  const statusMap = await readLifecycleStatusFailOpen([...new Set(candidatesByExt.flat())]);
+  if (statusMap === null) return exts; // fail-open
+  const kept: SkillExtensionDescriptor[] = [];
+  for (let i = 0; i < exts.length; i++) {
+    const statuses = candidatesByExt[i]!
+      .map((c) => statusMap.get(c))
+      .filter((s): s is "active" | "archived" => s !== undefined);
+    const live = statuses.includes("active");
+    const tombstoned = !live && statuses.includes("archived");
+    if (tombstoned) {
+      console.info(
+        `[cinatra:skills] skipping retired (tombstoned) extension "${exts[i]!.pkgName}" — ` +
+          "its installed_extension rows are all archived",
+      );
+      continue;
+    }
+    kept.push(exts[i]!);
+  }
+  return kept;
+}
+
 // Memoize SUCCESSFUL (and in-flight) registrations per skillId. A miss or a
 // zero-registration outcome is NOT cached, so a later install is picked up on
 // the next call (guardrail: do not negative-cache misses).
@@ -270,7 +342,7 @@ export function ensureInstalledSkillRegistered(
   if (existing) return existing;
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
   const run = (async () => {
-    const exts = await scanSkillExtensions();
+    const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
     for (const ext of exts) {
       if (!allow.has(ext.kind)) continue;
       const provides = ext.slugs.some(
@@ -331,7 +403,7 @@ export function ensureInstalledSkillsRegistered(
 
   if (pending.length > 0) {
     const run = (async () => {
-      const exts = await scanSkillExtensions();
+      const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
       const registeredAll = new Set<string>();
       const packagesDone = new Set<string>();
       for (const ext of exts) {
@@ -393,7 +465,7 @@ export async function resolveSkillIdForCapability(
   opts?: { allowKinds?: readonly string[] },
 ): Promise<string | null> {
   const allow = new Set(opts?.allowKinds ?? DEFAULT_ALLOW_KINDS);
-  const exts = await scanSkillExtensions();
+  const exts = await filterRetiredSkillExtensions(await scanSkillExtensions());
   for (const ext of exts) {
     if (!allow.has(ext.kind)) continue;
     const slug = ext.capabilities[capabilityKey];
