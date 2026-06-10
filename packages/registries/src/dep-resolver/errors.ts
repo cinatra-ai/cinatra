@@ -41,9 +41,14 @@ export class PluginDependencyLimitError extends Error {
 export class PluginDependencyScopeError extends Error {
   public allowedScopePrefixes: readonly string[];
 
-  constructor(public packageName: string, scopePrefixes?: readonly string[]) {
+  // Accepts a single prefix as well as the allowlist shape so pre-allowlist
+  // callers of the exported class (`new PluginDependencyScopeError(name, "@x/")`)
+  // keep working at runtime.
+  constructor(public packageName: string, scopePrefixes?: readonly string[] | string) {
+    const normalized =
+      typeof scopePrefixes === "string" ? [scopePrefixes] : scopePrefixes;
     const allowed =
-      scopePrefixes && scopePrefixes.length > 0 ? scopePrefixes : ["@cinatra-ai/"];
+      normalized && normalized.length > 0 ? normalized : ["@cinatra-ai/"];
     super(
       `Only ${allowed.map((prefix) => `${prefix}*`).join(", ")} packages may appear in dependencies; received: ${packageName}`,
     );
