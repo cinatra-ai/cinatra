@@ -10,7 +10,9 @@
  *   - `text/markdown` / `.md` / `.markdown` → MarkdownHandler (rendered
  *     + raw side-by-side; reuses `marked` from the chat-page renderer).
  *   - `text/plain` → PlainTextHandler (`<pre class="whitespace-pre-wrap">`).
- *   - `application/pdf` → PdfHandler (`<embed>`, browser viewer).
+ *   - `application/pdf` → PdfHandler (`<embed>`, browser viewer; iOS
+ *     WebKit gets a dynamically-imported react-pdf inline fallback —
+ *     the request UA seeds its initial render, see #70).
  *   - `image/*` → ImageHandler (`<img>`, even for SVG — never inline
  *     `<svg>` from artifact content).
  *   - everything else → FallbackHandler (metadata card).
@@ -23,6 +25,7 @@
  *     http/https before it ever reaches this href).
  */
 import "server-only";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { Download, ExternalLink } from "lucide-react";
 
@@ -44,6 +47,7 @@ import {
 import { MarkdownHandler } from "./handlers/markdown-handler";
 import { PlainTextHandler } from "./handlers/plain-text-handler";
 import { PdfHandler } from "./handlers/pdf-handler";
+import { isIosUserAgent } from "./handlers/pdf-inline-support";
 import { ImageHandler } from "./handlers/image-handler";
 import { FallbackHandler } from "./handlers/fallback-handler";
 
@@ -100,6 +104,15 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   const downloadHref = revisionId
     ? `/api/artifacts/${id}/versions/${revisionId}/content`
     : null;
+
+  // UA hint for the PDF handler: known-iOS clients skip the broken
+  // `<embed>` from the very first render (the client corrects the hint
+  // post-hydration — iPadOS-as-Mac is indistinguishable server-side).
+  // The page is already `force-dynamic`, so reading headers adds nothing.
+  const pdfInitialFallback =
+    handler === "pdf"
+      ? isIosUserAgent((await headers()).get("user-agent") ?? "")
+      : false;
 
   const title = artifact.title ?? artifact.artifactId;
 
@@ -159,7 +172,13 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
                 />
               );
             case "pdf":
-              return <PdfHandler previewHref={previewHref} />;
+              return (
+                <PdfHandler
+                  previewHref={previewHref}
+                  downloadHref={downloadHref as string}
+                  initialFallback={pdfInitialFallback}
+                />
+              );
             case "image":
               return <ImageHandler previewHref={previewHref} alt={title} />;
             case "fallback":
