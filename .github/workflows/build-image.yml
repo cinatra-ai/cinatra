@@ -1700,12 +1700,13 @@ jobs:
     # probe-first discipline.
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
     # Bound the worst-case slow-runner hang. Typical wall-clock is ~10-11 min
-    # (next build is the dominant pole); we've seen occasional 25-30 min hangs
-    # on contended runners. 20 min is generous over normal and surfaces a real
-    # stall as a job failure (artifacts/logs preserved) instead of letting it
-    # eat the workflow budget invisibly. Same defensive class as the RBAC
-    # globalTimeout.
-    timeout-minutes: 20
+    # for the image build (next build is the dominant pole) plus ~3-5 min for
+    # the prod-boot e2e (image load + fresh-DB setup + boot + probes); we've
+    # seen occasional 25-30 min hangs on contended runners. 30 min is generous
+    # over normal and surfaces a real stall as a job failure (artifacts/logs
+    # preserved) instead of letting it eat the workflow budget invisibly. Same
+    # defensive class as the RBAC globalTimeout.
+    timeout-minutes: 30
     steps:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
@@ -1725,7 +1726,9 @@ jobs:
       # context deliberately excludes extensions/ (.dockerignore), so the
       # published image content is pinned by the lock, not by main-tip clones.
       # The test/gate jobs above keep their clone-back (they validate the
-      # tracking tree).
+      # tracking tree). The prod-boot e2e step below then BOOTS that image and
+      # asserts it serves — proving the no-private-extensions path end to end
+      # (issue #81), not just at build/typecheck level.
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
@@ -1754,24 +1757,57 @@ jobs:
             type=sha,format=long,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
-        id: build
+      # Build → boot-gate → push (issue #81). The image is FIRST built and
+      # loaded into the local docker daemon, then booted by the prod-boot e2e
+      # below; only after that gate passes does the (push-event-only) push step
+      # publish it. This ordering means an unbootable image is never published
+      # to GHCR at all — not even transiently — and every PR / merge-queue
+      # candidate proves the boots-without-private-extensions path before merge.
+      # Two build invocations are NOT two builds: the second runs against the
+      # same buildx builder, so every layer is already in its local cache and
+      # the push step is a pure cache re-export.
+      - name: Build image (load for prod-boot e2e)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
-          # Publish allowlist (mirrors the GHCR login gate above): build always
-          # runs on a real PR/merge_group as a build-only validation, but only
-          # `push` + `workflow_dispatch` actually push the image to GHCR.
-          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: cinatra-prod-boot-e2e:ci
           # Forward CI=true so the Dockerfile's `next build` skips the redundant
           # in-build tsc (types are gated by the required Typecheck job). Only set
           # here, in CI — a local `docker build` (no build-arg) keeps the check.
+          # MUST stay identical on the push step below so its cache hit is total.
           build-args: |
             CI=true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Boot the image WITHOUT private extensions cloned (the checkout above
+      # has no extensions/ tree at all): fresh Postgres + Redis on an isolated
+      # docker network, one-shot `cinatra setup prod`, the standalone app
+      # container, /api/health gate, page-render smoke, and data-driven
+      # fresh-DB anchor assertions. See scripts/ci/prod-boot-e2e.sh.
+      - name: Prod-boot e2e — boot the core without private extensions
+        env:
+          IMAGE: cinatra-prod-boot-e2e:ci
+        run: bash scripts/ci/prod-boot-e2e.sh
+
+      - name: Push image
+        id: build
+        # Publish allowlist (mirrors the GHCR login gate above): only `push`
+        # (main branch + `v*` tags) and a manual `workflow_dispatch` publish.
+        # PR and merge_group runs stop at the boot-gated load build above.
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Identical build-args to the load build above — required for the
+          # full builder-local cache hit that makes this a re-export, not a build.
+          build-args: |
+            CI=true
+          cache-from: type=gha
 
       # Release-gating (Model A): on a v* tag, after the image is pushed AND the
       # v-prefixed tag is confirmed resolvable in GHCR, tell ops to
