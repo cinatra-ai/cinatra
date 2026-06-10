@@ -6,6 +6,7 @@ import {
   sanitizeSvgToDataUri,
   sanitizeLogoDataUri,
   extractFactoryExport,
+  validateWidgetStreamDeclaration,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
@@ -320,5 +321,112 @@ describe("external-MCP toolbox capability marker + loader map", () => {
     expect(slugs).toEqual(
       expect.arrayContaining(["apify-connector", "drupal-mcp-connector", "wordpress-mcp-connector"]),
     );
+  });
+});
+
+describe("widget-stream agent map (cinatra.widgetStream)", () => {
+  it("emits one slug-keyed entry per declaring connector with a resolved create*WidgetChatTool factory", async () => {
+    const { records, widgetStreamAgents } = await buildManifest();
+    expect(widgetStreamAgents.length).toBeGreaterThanOrEqual(2);
+    const connectorByPackage = new Set(
+      records.filter((r) => r.kind === "connector").map((r) => r.packageName),
+    );
+    for (const w of widgetStreamAgents) {
+      expect(connectorByPackage.has(w.packageName)).toBe(true);
+      expect(w.agentSlug).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+      expect(w.factory).toMatch(/^create[A-Za-z0-9]*WidgetChatTool$/);
+      expect(w.label.length).toBeGreaterThan(0);
+      expect(w.subjectNoun.length).toBeGreaterThan(0);
+      expect(w.skillCapability.length).toBeGreaterThan(0);
+      expect(w.contextFields.length).toBeGreaterThan(0);
+      for (const f of w.contextFields) {
+        expect(typeof f.key).toBe("string");
+        expect(Number.isInteger(f.maxLength) && f.maxLength > 0).toBe(true);
+      }
+      expect(w.auth.tokenConfigKey).toMatch(/^[a-z0-9_]+$/);
+      expect(w.auth.instancesConfigKey).toMatch(/^[a-z0-9_]+$/);
+      expect(Array.isArray(w.auth.requiredInstanceFields)).toBe(true);
+    }
+    // deterministic slug order + unique slugs (the route resolves by slug)
+    const slugs = widgetStreamAgents.map((w) => w.agentSlug);
+    expect(slugs).toEqual([...slugs].sort());
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it("validateWidgetStreamDeclaration: valid declaration → no errors", () => {
+    expect(
+      validateWidgetStreamDeclaration("@x/p", {
+        agentSlug: "x-content-editor",
+        label: "X",
+        subjectNoun: "page",
+        skillCapability: "widget-chat.x-content-editor",
+        contextFields: [{ key: "pageId", maxLength: 32 }],
+        auth: {
+          tokenConfigKey: "x_widget_auth",
+          instancesConfigKey: "x",
+          requiredInstanceFields: ["id"],
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("validateWidgetStreamDeclaration: FAILS CLOSED on malformed declarations", () => {
+    const valid = {
+      agentSlug: "x-content-editor",
+      label: "X",
+      subjectNoun: "page",
+      skillCapability: "widget-chat.x",
+      contextFields: [{ key: "pageId", maxLength: 32 }],
+      auth: { tokenConfigKey: "x_widget_auth", instancesConfigKey: "x", requiredInstanceFields: [] },
+    };
+    expect(validateWidgetStreamDeclaration("@x/p", "nope").length).toBeGreaterThan(0);
+    expect(
+      validateWidgetStreamDeclaration("@x/p", { ...valid, agentSlug: "Bad Slug!" }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("agentSlug")]));
+    expect(
+      validateWidgetStreamDeclaration("@x/p", { ...valid, label: " " }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("label")]));
+    expect(
+      validateWidgetStreamDeclaration("@x/p", { ...valid, contextFields: [] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("contextFields")]));
+    expect(
+      validateWidgetStreamDeclaration("@x/p", {
+        ...valid,
+        contextFields: [{ key: "ok", maxLength: 32 }, { key: "ok", maxLength: 16 }],
+      }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate")]));
+    expect(
+      validateWidgetStreamDeclaration("@x/p", {
+        ...valid,
+        contextFields: [{ key: "bad key", maxLength: 0 }],
+      }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      validateWidgetStreamDeclaration("@x/p", {
+        ...valid,
+        auth: { tokenConfigKey: "Not-Snake", instancesConfigKey: "x", requiredInstanceFields: [] },
+      }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("tokenConfigKey")]));
+    expect(
+      validateWidgetStreamDeclaration("@x/p", {
+        ...valid,
+        auth: { tokenConfigKey: "x", instancesConfigKey: "x", requiredInstanceFields: [""] },
+      }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("requiredInstanceFields")]));
+  });
+
+  it("extractFactoryExport with the widget RE: none → null, one → name, two → ambiguous", () => {
+    const re = /export\s+function\s+(create[A-Za-z0-9]*WidgetChatTool)\s*\(/g;
+    expect(extractFactoryExport("export const x = 1;", re, "ctx")).toBeNull();
+    expect(
+      extractFactoryExport("export function createXWidgetChatTool() {}", re, "ctx"),
+    ).toBe("createXWidgetChatTool");
+    expect(() =>
+      extractFactoryExport(
+        "export function createXWidgetChatTool() {}\nexport function createYWidgetChatTool() {}",
+        re,
+        "ctx",
+      ),
+    ).toThrow(/ambiguous/);
   });
 });
