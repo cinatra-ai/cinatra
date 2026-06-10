@@ -258,6 +258,52 @@ describe("durable dispatch lease (integration)", () => {
     expect(await eventCountOfKind(wfId, "dispatch_reclaimed")).toBe(0);
   });
 
+  it("drops a stale dispatcher's outcome once its lease is taken over (token rotated)", async () => {
+    // The recordOutcomes ownership gate: a dispatcher that lost its lease to a
+    // reclaimer (token rotated) is presumed dead — its late outcome must be
+    // dropped, or a stale `failed` would burn the retry budget while the
+    // reclaimer's re-dispatch is live.
+    const wfId = await start(agentSpec("LeaseStaleOutcome"));
+    const rotateThenFail = buildExecutorRegistry({
+      agent_task: async () => {
+        // Simulate a concurrent reclaim landing while this dispatch is in
+        // flight: another process rotated the lease token.
+        const c = await pg();
+        await c.query(
+          `UPDATE "${SCHEMA}"."workflow_dispatch_lease" SET token = 'token-of-reclaimer', holder_id = 'wfproc_other' WHERE workflow_id = $1`,
+          [wfId],
+        );
+        await c.end();
+        return { status: "failed" as const, error: { message: "stale boom" } };
+      },
+    });
+    const t0 = new Date("2026-06-01T00:00:00Z");
+    await reconcileWorkflow(wfId, { executors: rotateThenFail, now: () => t0 });
+
+    // The stale `failed` was dropped: no attempt settle, no retry/dead-letter,
+    // and the reclaimer's lease is left untouched.
+    const attempt = await attemptForTask(wfId, "a");
+    expect(attempt.status).toBe("running");
+    expect(attempt.child_run_id).toBeNull();
+    expect(await attemptCountForTask(wfId, "a")).toBe(1);
+    expect((await statusByKey(wfId)).a).toBe("running");
+    expect(await eventCountOfKind(wfId, "retry_scheduled")).toBe(0);
+    expect(await eventCountOfKind(wfId, "dead_lettered")).toBe(0);
+    const leases = await leaseRows(wfId);
+    expect(leases).toHaveLength(1);
+    expect(leases[0].token).toBe("token-of-reclaimer");
+
+    // The task is NOT stranded: once the reclaimer's lease lapses in turn, the
+    // normal reclaim path re-dispatches the same attempt and recovery proceeds.
+    const calls: ExecutorInput[] = [];
+    const t1 = new Date(t0.getTime() + 60 * 60_000); // far past the lease TTL
+    await reconcileWorkflow(wfId, { executors: recordingExecutors(calls), now: () => t1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].attemptNo).toBe(1); // same attempt, same key
+    expect((await attemptForTask(wfId, "a")).child_run_id).toBe(`child:${calls[0].idempotencyKey}`);
+    expect(await eventCountOfKind(wfId, "dispatch_reclaimed")).toBe(1);
+  });
+
   it("does NOT reclaim without a lease — legacy rows stay on the operator path", async () => {
     const calls: ExecutorInput[] = [];
     const executors = recordingExecutors(calls);
