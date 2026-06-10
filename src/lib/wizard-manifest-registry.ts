@@ -3,7 +3,7 @@
  * from the generated extension manifest + extension lifecycle
  * (chat-widget-catalog.server.ts) — no extension package is named here, and
  * adding/removing a widget-bearing extension changes the result with zero
- * edits to this file (P709 / IOC-40, IOC-41).
+ * edits to this file (#34 / IOC-40, IOC-41).
  *
  * The former per-tool/per-resource lookup helpers (getManifestByResourceType,
  * findManifestForCreateTool/UpdateTool, getAllRefreshToolPatterns,

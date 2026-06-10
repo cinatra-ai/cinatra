@@ -430,3 +430,19 @@ describe("widget-stream agent map (cinatra.widgetStream)", () => {
     ).toThrow(/ambiguous/);
   });
 });
+
+describe("chat-widget module discovery", () => {
+  it("emits one chat-widget entry per extension shipping src/widgets/index.ts (manifest split enforced)", async () => {
+    const { chatWidgetModules } = await buildManifest();
+    // buildManifest THROWS for a widgets/index.ts without widgets/manifest.ts
+    // (lockstep rule), so every surviving entry has BOTH modules — the emitter
+    // derives the component map and the manifest map from the same list.
+    expect(chatWidgetModules.length).toBeGreaterThan(0);
+    // deterministic packageName order (the catalog resolves in map order)
+    const names = chatWidgetModules.map((e) => e.packageName);
+    expect(names).toEqual([...names].sort());
+    // The two widget-bearing extensions are covered.
+    expect(names).toEqual(
+      expect.arrayContaining(["@cinatra-ai/apollo-connector", "@cinatra-ai/crm-connector"]),
+    );  });
+});

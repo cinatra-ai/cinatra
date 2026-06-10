@@ -1,6 +1,6 @@
 import "server-only";
 
-// Manifest-driven resolution of the chat widget/wizard catalog (P709 /
+// Manifest-driven resolution of the chat widget/wizard catalog (#34 /
 // IOC-39..41). The set of widget-bearing extensions is the generated manifest's
 // GENERATED_CHAT_WIDGET_MODULES / GENERATED_CHAT_WIDGET_MANIFEST_MODULES maps
 // (literal dynamic-import maps emitted by

@@ -20,7 +20,7 @@ import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefin
 // extension manifest + extension lifecycle (src/lib/chat-widget-catalog.server.ts);
 // this file derives all detection/wizard/refresh behavior via the pure
 // widget-runtime factory. Adding/removing a widget-bearing extension requires
-// no edit to this file (P709 / IOC-39, IOC-41).
+// no edit to this file (#34 / IOC-39, IOC-41).
 import {
   createChatWidgetRuntime,
   EMPTY_WIDGETS,
