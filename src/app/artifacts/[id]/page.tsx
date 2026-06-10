@@ -13,17 +13,18 @@
  *   - `application/pdf` → PdfHandler (`<embed>`, browser viewer).
  *   - `image/*` → ImageHandler (`<img>`, even for SVG — never inline
  *     `<svg>` from artifact content).
- *   - everything else → FallbackHandler (metadata card; if the artifact
- *     is connector-ref-shaped, an external-open button).
+ *   - everything else → FallbackHandler (metadata card).
  *
- * Download button anchors right inside `PageHeader.actions`.
- * Hits the existing content endpoint (always `attachment` per
- * `downloadDispositionFor`).
+ * `PageHeader.actions` carries the artifact-level actions:
+ *   - Download — always (when a representation exists); hits the existing
+ *     content endpoint (always `attachment` per `downloadDispositionFor`).
+ *   - "Open in source application" — only when `artifact.sourceUrl` is
+ *     non-null (connector-ref artifacts; the service validates the URL to
+ *     http/https before it ever reaches this href).
  */
 import "server-only";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { Download } from "lucide-react";
+import { Download, ExternalLink } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
@@ -109,13 +110,29 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
         description={`${mime || "unknown"} · ${artifact.size} bytes`}
         divider={false}
         actions={
-          downloadHref ? (
-            <Button asChild variant="outline">
-              <a href={downloadHref} download>
-                <Download data-icon="inline-start" aria-hidden="true" />
-                Download
-              </a>
-            </Button>
+          downloadHref || artifact.sourceUrl ? (
+            <>
+              {artifact.sourceUrl ? (
+                <Button asChild variant="outline">
+                  <a
+                    href={artifact.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink data-icon="inline-start" aria-hidden="true" />
+                    Open in source application
+                  </a>
+                </Button>
+              ) : null}
+              {downloadHref ? (
+                <Button asChild variant="outline">
+                  <a href={downloadHref} download>
+                    <Download data-icon="inline-start" aria-hidden="true" />
+                    Download
+                  </a>
+                </Button>
+              ) : null}
+            </>
           ) : null
         }
       />

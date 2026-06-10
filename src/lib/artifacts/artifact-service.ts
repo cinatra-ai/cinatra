@@ -61,7 +61,37 @@ export type ArtifactSummary = {
   // `eligibleExtensions` is every active eligible extension (not drafts).
   eligibleExtensions: string[];
   primaryExtension: string;
+  // Validated "Open in source application" URL for connector-ref artifacts,
+  // projected from `objects.data.connectorRef.url` via
+  // `connectorRefSourceUrl` (http/https only). Null for every artifact
+  // without a connector-ref pointer — i.e. all blob/dashboard artifacts.
+  sourceUrl: string | null;
 };
+
+/**
+ * Typed connector-ref accessor: extract the safe external "open in source
+ * application" URL from a raw `objects.data` value.
+ *
+ * `objects.data` is org-supplied JSONB, so the URL is untrusted input that
+ * ends up in an `<a href>`. Only absolute `http:`/`https:` URLs pass
+ * (`javascript:`, `data:`, relative paths, and malformed shapes all return
+ * null); the canonical parsed `URL.href` is returned, never the raw string.
+ */
+export function connectorRefSourceUrl(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const ref = (data as { connectorRef?: unknown }).connectorRef;
+  if (typeof ref !== "object" || ref === null) return null;
+  const raw = (ref as { url?: unknown }).url;
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed.href;
+}
 
 // Every artifact row carries the same SEMANTIC_ARTIFACT_OBJECT_TYPE.
 function artifactObjectTypeIds(): Set<string> {
@@ -98,6 +128,7 @@ function toSummary(
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     primaryExtension:
       semanticIdentity?.primaryExtension ?? "@cinatra-ai/default-artifact",
+    sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }
 
