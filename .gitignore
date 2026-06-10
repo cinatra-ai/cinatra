@@ -68,3 +68,38 @@ tests/e2e/wp-drupal-uat/.uat/
 
 # Internal planning notes (local only)
 .planning/
+
+# --- cinatra-ai org baseline (union-merged from cinatra-ai/ci config/baseline.gitignore) ---
+
+# Dependencies (node / pnpm)
+.pnpm-store/
+
+# Build output (monorepo-typical)
+dist/
+# re-include the deliberately tracked vendored builds
+!packages/mcp-server/vendor/*/dist/
+!packages/mcp-server/vendor/*/dist/**
+build/
+out/
+.next/
+.turbo/
+
+# Logs and caches
+*.log
+pnpm-debug.log*
+.cache/
+.eslintcache
+
+# OS cruft
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Env files and secrets
+*.key
