@@ -98,6 +98,13 @@ for (const fixture of AGENT_FIXTURES) {
         // 120s nav timeout: the agent-detail route is
         // first-compiled by Turbopack on the first seeded fixture and the
         // dev server degrades under sustained suite load.
+        //
+        // No hydration gate on THIS goto (#82): nothing touches the DOM
+        // until the HITL loop below, which reloads the page and then
+        // drives the screen via driveHitlScreen — the suite's hydration
+        // gate (tests/e2e/config/hydration.ts) runs at that chokepoint.
+        // Everything between this goto and that reload is API-driven
+        // polling. The non-seeded branch gates inside startAgentRun.
         await page.goto(
           `/agents/${fixture.vendor}/${fixture.slug}/${encodeURIComponent(runId)}`,
           { waitUntil: "domcontentloaded", timeout: 120_000 },

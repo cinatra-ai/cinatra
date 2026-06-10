@@ -20,6 +20,7 @@
  */
 import { expect, type Page, type APIRequestContext } from "@playwright/test";
 
+import { waitForHydration } from "../config/hydration";
 import type { AgentFixture, HitlScreenSpec } from "./fixtures";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -52,7 +53,11 @@ type RunStatusResponse = {
 export async function startAgentRun(page: Page, fixture: AgentFixture): Promise<string> {
   // 1. Open the agent index — this also acts as a per-test smoke that
   //    the page mounts cleanly even after the preflight already ran.
-  await page.goto("/agents/run");
+  //    Gate on hydration BEFORE clicking the Run link (#82): a
+  //    pre-hydration click bypasses the Next.js client router (plain
+  //    anchor fallback) and races the dev-mode hydration window.
+  await page.goto("/agents/run", { waitUntil: "domcontentloaded" });
+  await waitForHydration(page);
 
   // 2. Locate the row's Run link by the deterministic `href` attribute.
   //    Row markup at packages/agents/src/pages.tsx renders
@@ -205,11 +210,21 @@ export async function awaitPendingApproval(
   );
 }
 
-/** Drive a single HITL screen according to the fixture spec. */
+/**
+ * Drive a single HITL screen according to the fixture spec.
+ *
+ * Every caller reaches this right after a `domcontentloaded` reload of
+ * the run-detail page (Track A + chat-mcp both reload so SSR re-fetches
+ * the current hitlContext), so this is the single chokepoint where UI
+ * clicks/fills can race dev-mode hydration. Gate here (#82) instead of
+ * at each callsite: the `advance*` helpers click renderer buttons whose
+ * synthetic handlers only exist after `hydrateRoot` commits.
+ */
 export async function driveHitlScreen(
   page: Page,
   screen: HitlScreenSpec,
 ): Promise<void> {
+  await waitForHydration(page);
   if (screen.kind === "custom-renderer") {
     await driveCustomRenderer(page, screen);
   } else {

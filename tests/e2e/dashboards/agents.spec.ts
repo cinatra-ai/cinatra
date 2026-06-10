@@ -18,6 +18,8 @@
  */
 import { test, expect, type ConsoleMessage, type Request } from "@playwright/test";
 
+import { HYDRATION_TIMEOUT_MS, waitForHydration } from "../config/hydration";
+
 // Module-level capture buffers so the afterEach hook can read what each
 // test recorded. Cleared per-test via the beforeEach hook.
 const consoleAll: Array<{ type: string; text: string }> = [];
@@ -125,17 +127,27 @@ test.describe("/agents live-verify", () => {
     // is attached before any response could possibly fire. Otherwise a
     // fast cube response (post-warmup) can arrive between page.goto
     // resolving and waitForResponse attaching, and the wait silently
-    // misses it. Generous 60s timeout to absorb residual dev-mode
-    // compile lag if the cube-route warm-up in auth.setup.ts step 7
-    // didn't fully pre-compile the load path.
+    // misses it. Budget = hydration budget + 30s headroom: the DC only
+    // issues `/v1/load` after `hydrateRoot` commits, so this waiter must
+    // outlive the worst-case hydration wait below (#82) plus residual
+    // dev-mode compile lag if the cube-route warm-up in auth.setup.ts
+    // step 7 didn't fully pre-compile the load path.
     const cubeLoadResponse = page.waitForResponse(
       (r) => r.url().includes("/api/dashboards/cubejs-api/v1/load") && r.status() === 200,
-      { timeout: 60_000 },
+      { timeout: HYDRATION_TIMEOUT_MS + 30_000 },
     );
 
     // 1 + 2: route resolution.
     await page.goto("/agents");
     await expect(page).toHaveURL(/\/agents$/);
+
+    // React-hydration gate (#82). The portlet titles (step 4), the chart
+    // SVG (7) and the table rows (8) only exist after DC mounts client-side
+    // — i.e. after `hydrateRoot` commits — and the suite's `expect` budget
+    // is 10s while dev-mode hydration lands ~20-40s after domcontentloaded.
+    // Gate on the app-shell sidebar (SSR-visible sentinel) growing its
+    // `__reactFiber$` key before asserting anything DC-mounted.
+    await waitForHydration(page);
 
     // 3: page chrome.
     // exact: true — getByRole name matching is substring by default, so a
@@ -193,6 +205,8 @@ test.describe("/agents live-verify", () => {
     // seeded /agents portlets never trigger it. If a future change
     // accidentally breaks /batch, single-query mounts still work but
     // useMultiCubeLoadQuery falls back here. Hit it directly via fetch.
+    // No hydration gate here (#82): page.evaluate(fetch) only needs the
+    // document/cookie context, not React's synthetic event handlers.
     await page.goto("/agents");
     const resp = await page.evaluate(async () => {
       const r = await fetch("/api/dashboards/cubejs-api/v1/batch", {
