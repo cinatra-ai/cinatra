@@ -204,6 +204,13 @@ export async function cancelWorkflow(workflowId: string, deps: LifecycleDeps = {
       .where(and(eq(workflowApproval.workflowId, workflowId), eq(workflowApproval.status, "pending")));
     // Tidiness: no dispatch can outlive a cancelled workflow — clear its
     // dispatch leases (a dropped in-flight outcome would otherwise strand one).
+    // KNOWN (pre-existing) LIMITATION: teardown only reaches child runs whose
+    // id was persisted on an attempt. A run created in the crash window
+    // (createAgentRun committed, recordOutcomes never ran — child_run_id NULL)
+    // is invisible to the childRows collection above and is NOT cancelled; the
+    // reconciler never reclaims a non-active workflow, so it remains an
+    // orphaned-but-idle agent run. A host-side sweep could find it via the
+    // run's workflow_id/workflow_task_id provenance stamped at createAgentRun.
     await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, workflowId));
     await tx.insert(workflowEvent).values({
       id: id("wevent"),

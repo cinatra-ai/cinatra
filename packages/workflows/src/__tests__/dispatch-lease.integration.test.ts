@@ -248,8 +248,10 @@ describe("durable dispatch lease (integration)", () => {
     expect(calls).toHaveLength(1);
 
     // Crash state, but the (slow) dispatcher's heartbeat keeps the lease alive.
+    // Lease liveness is WALL-time (heartbeats run on the wall clock), so the
+    // fabricated expiry must be wall-relative, not logical-now-relative.
     const t1 = new Date(t0.getTime() + 5 * 60_000);
-    await fabricateCrash(wfId, "a", { at: t0, expiresAt: new Date(t1.getTime() + 60 * 60_000) });
+    await fabricateCrash(wfId, "a", { at: t0, expiresAt: new Date(Date.now() + 60 * 60_000) });
 
     await reconcileWorkflow(wfId, { executors, now: () => t1 });
     expect(calls).toHaveLength(1); // no re-dispatch
@@ -295,6 +297,14 @@ describe("durable dispatch lease (integration)", () => {
 
     // The task is NOT stranded: once the reclaimer's lease lapses in turn, the
     // normal reclaim path re-dispatches the same attempt and recovery proceeds.
+    // Lease liveness is wall-time, so lapse the rotated lease explicitly (the
+    // simulated reclaimer died too and stopped heartbeating).
+    const cExpire = await pg();
+    await cExpire.query(
+      `UPDATE "${SCHEMA}"."workflow_dispatch_lease" SET expires_at = now() - interval '1 second' WHERE workflow_id = $1`,
+      [wfId],
+    );
+    await cExpire.end();
     const calls: ExecutorInput[] = [];
     const t1 = new Date(t0.getTime() + 60 * 60_000); // far past the lease TTL
     await reconcileWorkflow(wfId, { executors: recordingExecutors(calls), now: () => t1 });

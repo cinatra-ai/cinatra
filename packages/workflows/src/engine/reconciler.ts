@@ -104,18 +104,24 @@ type ClaimedTask = {
   leaseToken: string;
 };
 
-/** Acquire (or take over) the dispatch lease for a task, inside the claim tx.
+/** Acquire the dispatch lease for a freshly-claimed task, inside the claim tx.
  *  UPSERT on the one-lease-per-task unique index: a fresh claim replaces any
- *  stale lease left by a crashed dispatcher; a reclaim rotates the token so
- *  the previous holder's late outcome is dropped by the ownership check. */
+ *  stale residue row (a task only reaches idle/scheduled after its prior
+ *  dispatch settled, so no LIVE lease can exist here).
+ *
+ *  Lease timestamps deliberately use the WALL clock, not the reconcile tick's
+ *  logical `now`: that `now` is captured once per tick, so after a long
+ *  poll/foreach/cascade phase a logical-now expiry could be born (nearly)
+ *  expired and a concurrent tick could reclaim a dispatch before its first
+ *  heartbeat. Gates/backoff keep the logical clock; lease liveness is wall-time. */
 async function acquireDispatchLease(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   wfId: string,
   taskId: string,
   attemptId: string,
-  now: Date,
 ): Promise<string> {
   const token = randomUUID();
+  const now = new Date();
   const expiresAt = new Date(now.getTime() + ENGINE_OPS.dispatchLeaseTtlMs);
   await tx
     .insert(workflowDispatchLease)
@@ -135,6 +141,40 @@ async function acquireDispatchLease(
       set: { attemptId, holderId: LEASE_HOLDER_ID, token, acquiredAt: now, heartbeatAt: now, expiresAt },
     });
   return token;
+}
+
+/** Take over an EXPIRED lease (reclaim), inside the claim tx. A single
+ *  conditional UPDATE — the WHERE re-checks `token` + expiry on the current
+ *  row version under the row lock, so a lock-free heartbeat that lands between
+ *  the reclaim scan's read and this write makes the takeover a no-op instead
+ *  of stealing a live dispatcher's lease (its outcome would otherwise be
+ *  dropped by the ownership gate). Returns the new token, or null when the
+ *  lease was extended/rotated under us (dispatch is alive — skip reclaim). */
+async function takeOverDispatchLease(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  taskId: string,
+  observedToken: string,
+): Promise<string | null> {
+  const token = randomUUID();
+  const now = new Date();
+  const taken = await tx
+    .update(workflowDispatchLease)
+    .set({
+      holderId: LEASE_HOLDER_ID,
+      token,
+      acquiredAt: now,
+      heartbeatAt: now,
+      expiresAt: new Date(now.getTime() + ENGINE_OPS.dispatchLeaseTtlMs),
+    })
+    .where(
+      and(
+        eq(workflowDispatchLease.taskId, taskId),
+        eq(workflowDispatchLease.token, observedToken),
+        sql`${workflowDispatchLease.expiresAt} <= ${now}`,
+      ),
+    )
+    .returning({ id: workflowDispatchLease.id });
+  return taken.length > 0 ? token : null;
 }
 
 /** Heartbeat the dispatch lease while the executor is in flight (outside any
@@ -328,8 +368,14 @@ async function claimReadyTasks(
         .from(workflowDispatchLease)
         .where(eq(workflowDispatchLease.taskId, task.id));
       if (!lease) continue; // legacy / executor-not-wired — operator path
-      if (lease.expiresAt.getTime() > now.getTime()) continue; // live in-flight dispatch
-      const token = await acquireDispatchLease(tx, wfId, task.id, attempt.id, now);
+      // Expiry is judged on the WALL clock (leases are wall-time; the tick's
+      // logical `now` can be stale after a long poll/cascade phase).
+      if (lease.expiresAt.getTime() > Date.now()) continue; // live in-flight dispatch
+      // Conditional takeover: re-checks token + expiry under the row lock, so
+      // a heartbeat that extended the lease after our read makes this a no-op
+      // (the dispatcher is alive) instead of stealing its lease.
+      const token = await takeOverDispatchLease(tx, task.id, lease.token);
+      if (!token) continue; // lease extended/rotated under us — dispatch is alive
       await recordEvent(
         tx,
         wfId,
@@ -395,7 +441,7 @@ async function claimReadyTasks(
       // Durable dispatch lease: acquired atomically with the claim so a crash
       // anywhere between this commit and the outcome commit leaves a lease
       // that lapses (no heartbeats from a dead process) → reclaimable above.
-      const leaseToken = await acquireDispatchLease(tx, wfId, task.id, attemptId, now);
+      const leaseToken = await acquireDispatchLease(tx, wfId, task.id, attemptId);
 
       await recordEvent(tx, wfId, task.id, task.key, "dispatched", { attemptNo, idemKey }, provenance, idemKey);
       claimed.push({ task: { ...task, status: "running", lockVersion: task.lockVersion + 1 }, attemptId, attemptNo, idempotencyKey: idemKey, leaseToken });
@@ -773,6 +819,8 @@ async function applyRejectedApprovalPolicies(wfId: string, now: Date): Promise<s
         );
       // Tidiness: no dispatch can outlive a cancelled workflow — clear its
       // leases (a dropped in-flight outcome would otherwise strand one).
+      // Same crash-window teardown limitation as cancelWorkflow: a child run
+      // whose id never reached the attempt is invisible here (see lifecycle.ts).
       await tx.delete(workflowDispatchLease).where(eq(workflowDispatchLease.workflowId, wfId));
       await recordEvent(tx, wfId, null, null, "workflow_cancelled", { reason: "approval_rejected_cancel", cancelledChildRuns: childRunsToCancel.length }, prov);
     }
