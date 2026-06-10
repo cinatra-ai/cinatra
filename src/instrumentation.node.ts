@@ -273,6 +273,29 @@ export async function register() {
     assertRequiredExtensionActivations(bootActivationResults);
   }
 
+  // Extension dependency-closure + required-in-prod boot gate (issue #78).
+  // Grouped with the activation assert above: together they are the
+  // required-set boot enforcement (presence + version pins + dependency
+  // closure here; serverEntry activation above). Runs AFTER both loaders so
+  // the static-bundle lifecycle anchors are seeded. PROD: awaited + throwing
+  // (fail closed — the acquisition path `cinatra setup prod` owns remediation;
+  // kill switch CINATRA_DISABLE_REQUIRED_CLOSURE_ASSERT=true). DEV: the same
+  // gate runs fire-and-forget as a pure advisory (it never throws in dev).
+  // Optional-missing deps never fail boot — they are dispatched through the
+  // per-kind behavior table and logged (see extension-closure-boot-gate.ts).
+  {
+    const { enforceExtensionClosureAtBoot } = await import(
+      "@/lib/extension-closure-boot-gate"
+    );
+    if (process.env.CINATRA_RUNTIME_MODE === "development") {
+      void enforceExtensionClosureAtBoot().catch((err) => {
+        console.warn("[extension-closure] dev advisory failed (non-fatal):", err);
+      });
+    } else {
+      await enforceExtensionClosureAtBoot();
+    }
+  }
+
   // (Extension migrations run INSIDE loadRuntimePackageExtensions above —
   // for the loader's already trust-gated records, under the SAME verdict used for
   // in-process import — so an untrusted/pending package never creates its tables.
@@ -854,70 +877,8 @@ export async function register() {
     })();
   }
 
-  // Extension dependency-closure + required-in-prod boot advisories.
-  //
-  // Both are NON-throwing, LOG-only. A boot-time throw risks bricking on
-  // pre-existing data (same reasoning that defers the prod-fail-closed throw to
-  // a later prod-installer milestone), so everything is wrapped in try/catch and the whole block is
-  // fire-and-forget — boot is never broken or blocked by it. Dynamically
-  // imported (mirroring @/lib/extensions) so it stays out of unrelated bundles.
-  // Runs AFTER the `phase-production-build` guard above, so it never runs during
-  // `next build`.
-  void (async () => {
-    // Boot closure advisory: scan the installed-extension manifest
-    // for any active|locked row whose REQUIRED dependency closure is broken (a
-    // required dep is archived or missing) and log it loudly. findBrokenClosures
-    // is a PURE helper; it does NOT remediate.
-    try {
-      const { listInstalledExtensions } = await import(
-        "@cinatra-ai/extensions/canonical-store"
-      );
-      const { findBrokenClosures } = await import(
-        "@cinatra-ai/extensions/dependency-closure"
-      );
-      const rows = await listInstalledExtensions({});
-      const broken = findBrokenClosures(rows);
-      if (broken.length > 0) {
-        console.warn(
-          `[extensions] BOOT CLOSURE ADVISORY: ${broken.length} installed extension(s) ` +
-            `have missing/archived required dependencies: ` +
-            broken
-              .map((b) => `${b.packageName} → [${b.missingRequired.join(", ")}]`)
-              .join("; "),
-        );
-      }
-    } catch (err) {
-      console.warn(
-        "[extensions] boot closure advisory skipped (non-fatal):",
-        err instanceof Error ? err.message : err,
-      );
-    }
-
-    // Dev required-in-prod advisory: ONLY in development, verify the
-    // required-in-prod packages are installed/locked AND that pinned entries'
-    // installed versions satisfy their declared ranges. If any are not, log a
-    // warning noting that production would fail closed (the prod throw is
-    // deferred to the prod installer — NOT wired here).
-    if (process.env.CINATRA_RUNTIME_MODE === "development") {
-      try {
-        const { verifyRequiredInProdInstalled } = await import(
-          "@cinatra-ai/extensions/required-in-prod"
-        );
-        const result = await verifyRequiredInProdInstalled();
-        if (!result.ok) {
-          console.warn(
-            `[extensions] DEV ADVISORY: required-in-prod contract not satisfied — ` +
-              `${result.reason} (in production this would fail closed — ` +
-              `deferred to the prod installer)`,
-          );
-        }
-      } catch (err) {
-        console.warn(
-          "[extensions] dev required-in-prod advisory skipped (non-fatal):",
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-  })();
-
+  // (The extension dependency-closure + required-in-prod boot gate runs right
+  // after the required-set activation assertion above — awaited + fail-closed
+  // in production, fire-and-forget advisory in dev. See
+  // src/lib/extension-closure-boot-gate.ts.)
 }

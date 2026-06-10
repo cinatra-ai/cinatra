@@ -39,6 +39,31 @@ export type ClosureResult = {
 export type ManifestLookup = (packageName: string) => InstalledExtension | undefined;
 
 /**
+ * Scope-aware manifest lookup over a full snapshot: a dependent at org scope
+ * X resolves a dependency from X's own live (active|locked) row first, then
+ * from the platform-scoped row (organizationId null). A live row in a
+ * FOREIGN org never satisfies the edge — cross-org dependency bleed would be
+ * fail-open (org B's closure "satisfied" by an install org B cannot see).
+ * Platform-scoped dependents (organizationId null) resolve only
+ * platform-scoped rows.
+ */
+export function makeScopedManifestLookup(
+  rows: InstalledExtension[],
+  organizationId: string | null,
+): ManifestLookup {
+  return (name) => {
+    const live = rows.filter(
+      (r) => r.packageName === name && PRESENT_STATUSES.has(r.status),
+    );
+    return (
+      (organizationId != null
+        ? live.find((r) => r.organizationId === organizationId)
+        : undefined) ?? live.find((r) => r.organizationId == null)
+    );
+  };
+}
+
+/**
  * Compute the transitive dependency closure of a root extension over the
  * provided manifest snapshot. Cycles are handled (visited set). The lookup
  * returns the canonical row for a package name, or undefined if not installed.
@@ -113,22 +138,103 @@ export function optionalMissingBehaviorForKind(kind: ExtensionKind): OptionalMis
   }
 }
 
+/** The per-kind dispatch outcome for a target's missing OPTIONAL deps. */
+export type OptionalMissingAdvisory = {
+  /** The DEPENDENT's kind — the behavior table is keyed on it. */
+  kind: ExtensionKind;
+  behavior: OptionalMissingBehavior;
+  missingOptional: ClosureNode[];
+};
+
+/**
+ * The single dispatch verdict every closure-consuming surface keys on.
+ * Deliberately NOT one boolean: boot/restore gate on `requiredClosureOk`
+ * only (optional-missing must never fail a boot or a lifecycle restore),
+ * while execution surfaces (workflow instantiate today; agent-run /
+ * connector-step later) gate on `executionBlock`.
+ */
+export type ExecutionClosureVerdict = {
+  /** True when the target's REQUIRED transitive closure is intact. */
+  requiredClosureOk: boolean;
+  missingRequired: ClosureNode[];
+  /**
+   * Per-kind dispatch for the target's missing OPTIONAL deps (null when none
+   * are missing). For "stop-run-hitl" / "skip-step-audit" / "log-continue"
+   * this advisory IS the consumable handed to the respective run-layer
+   * surface; "fail-instantiate" additionally raises `executionBlock`.
+   */
+  advisory: OptionalMissingAdvisory | null;
+  /**
+   * Non-null when the target must not execute/instantiate: its required
+   * closure is broken (any kind), or its kind declares optional-missing as
+   * "fail-instantiate" (workflow) and an optional dep is missing.
+   */
+  executionBlock:
+    | { code: "REQUIRED_MISSING"; missing: string[] }
+    | { code: "OPTIONAL_MISSING_FAILS_INSTANTIATE"; missing: string[] }
+    | null;
+};
+
+/**
+ * Compute the per-kind execution-closure verdict for one target row.
+ *
+ * Closure semantics are PRESENCE/STATUS-ONLY by design: a dep is satisfied by
+ * any `active | locked` row of that package name — `versionConstraint` on the
+ * dependency edge is deliberately NOT evaluated here (version pinning for the
+ * required-in-prod set is enforced separately by
+ * `verifyRequiredInProdInstalled` in required-in-prod.ts).
+ */
+export function evaluateExecutionClosure(
+  target: InstalledExtension,
+  lookup: ManifestLookup,
+): ExecutionClosureVerdict {
+  const result = computeClosure(target, lookup);
+  const advisory: OptionalMissingAdvisory | null =
+    result.missingOptional.length > 0
+      ? {
+          kind: target.kind,
+          behavior: optionalMissingBehaviorForKind(target.kind),
+          missingOptional: result.missingOptional,
+        }
+      : null;
+
+  let executionBlock: ExecutionClosureVerdict["executionBlock"] = null;
+  if (result.missingRequired.length > 0) {
+    executionBlock = {
+      code: "REQUIRED_MISSING",
+      missing: result.missingRequired.map((d) => d.packageName),
+    };
+  } else if (advisory && advisory.behavior === "fail-instantiate") {
+    executionBlock = {
+      code: "OPTIONAL_MISSING_FAILS_INSTANTIATE",
+      missing: advisory.missingOptional.map((d) => d.packageName),
+    };
+  }
+
+  return {
+    requiredClosureOk: result.missingRequired.length === 0,
+    missingRequired: result.missingRequired,
+    advisory,
+    executionBlock,
+  };
+}
+
 /**
  * Boot diagnostics: scan a full manifest snapshot for any `active | locked` row
  * whose REQUIRED dependency closure is broken (a required dep is archived or
- * missing). PURE + non-throwing — instrumentation calls this at boot and LOGS
- * the result (it does NOT remediate). The lookup is built from the same rows,
- * so only `active | locked` rows count as present (an archived dep is missing).
+ * missing). PURE + non-throwing — the boot gate calls this and decides what to
+ * do with the result (it does NOT remediate). Each row's deps resolve through
+ * the SCOPE-AWARE lookup (own org row, then platform row — a foreign org's
+ * live row never satisfies the edge), and only `active | locked` rows count
+ * as present (an archived dep is missing).
  */
 export function findBrokenClosures(
   rows: InstalledExtension[],
 ): { packageName: string; missingRequired: string[] }[] {
-  const lookup: ManifestLookup = (name) =>
-    rows.find((r) => r.packageName === name && PRESENT_STATUSES.has(r.status));
   const broken: { packageName: string; missingRequired: string[] }[] = [];
   for (const row of rows) {
     if (!PRESENT_STATUSES.has(row.status)) continue;
-    const result = computeClosure(row, lookup);
+    const result = computeClosure(row, makeScopedManifestLookup(rows, row.organizationId));
     if (result.missingRequired.length > 0) {
       broken.push({
         packageName: row.packageName,

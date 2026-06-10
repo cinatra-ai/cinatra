@@ -1,7 +1,7 @@
 import "server-only";
 
 // Static-bundle lifecycle seeding (manifest-completeness for bundled
-// `serverEntry` extensions).
+// `serverEntry` extensions AND bundled required-in-prod extensions).
 //
 // The StaticBundleLoader's activation gate is a strict allow-list: a bundled
 // `serverEntry` package activates ONLY when a live (active|locked)
@@ -10,6 +10,19 @@ import "server-only";
 // module makes them lifecycle-tracked: at boot (invoked by the loader BEFORE
 // its status read) it ensures ONE platform-scoped ANCHOR row per bundled
 // serverEntry package, written through the canonical lifecycle primitive.
+//
+// Required-in-prod packages WITHOUT a serverEntry (skills, artifacts, agents,
+// schema-config connectors — 21 of the 33-entry required set today) are
+// anchored too: the prod acquisition path (`cinatra setup prod`) materializes
+// their SOURCE but inserts no canonical rows, and the extension-closure boot
+// gate (extension-closure-boot-gate.ts) fails a prod boot closed when a
+// required package has no live row. Anchoring the full bundled required set
+// here is what makes that gate's premise true — a violating prod boot is a
+// REAL defect (drifted image, row surgery, uninstall tombstone), not a
+// bootstrapping gap. Anchors carry the generated manifest's dependency edges
+// so the closure scan can actually validate bundled rows (pre-existing anchor
+// rows created before this change keep their persisted edges — refreshing
+// them is deliberately out of scope; new installs/anchors are complete).
 //
 // The anchor is the durable "lifecycle-tracked" memory that lets "no row" be
 // read unambiguously, and it must NEVER resurrect an operator's
@@ -49,7 +62,8 @@ export type StaticBundleLifecycleResult = {
 };
 
 /**
- * Ensure every bundled serverEntry package has a static-bundle anchor row.
+ * Ensure every bundled serverEntry package AND every bundled required-in-prod
+ * package has a static-bundle anchor row.
  * Idempotent per package; safe under concurrent boots (an insert race is
  * re-read and treated as benign when an anchor now exists). NOTE: this runs
  * lock-free at boot, before any user-driven lifecycle action can execute in
@@ -60,10 +74,6 @@ export type StaticBundleLifecycleResult = {
  */
 export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundleLifecycleResult> {
   const result: StaticBundleLifecycleResult = { seededLive: [], seededArchived: [], failed: [] };
-  const records = STATIC_EXTENSION_RECORDS.filter(
-    (r) => typeof r.serverEntry === "string" && r.serverEntry.length > 0,
-  );
-  if (records.length === 0) return result;
 
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
@@ -78,9 +88,16 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   const { isExtensionKind } = await import("@cinatra-ai/extensions/canonical-types");
   const { randomUUID } = await import("node:crypto");
 
+  const records = STATIC_EXTENSION_RECORDS.filter(
+    (r) =>
+      (typeof r.serverEntry === "string" && r.serverEntry.length > 0) ||
+      isPackageRequiredInProd(r.packageName),
+  );
+  if (records.length === 0) return result;
+
   const actorOpts = {
     actor: { source: "static-bundle-lifecycle" },
-    reason: "static-bundle anchor seed (bundled serverEntry package)",
+    reason: "static-bundle anchor seed (bundled serverEntry or required-in-prod package)",
   };
 
   for (const rec of records) {
@@ -134,7 +151,10 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
           kind: isExtensionKind(rec.kind) ? rec.kind : "connector",
           source: anchorSource,
           requiredInProd,
-          dependencies: [],
+          // Real edges from the generated manifest — the closure boot gate
+          // validates bundled rows through these (was: [] — which made the
+          // closure scan vacuous for every anchored package).
+          dependencies: rec.dependencies ?? [],
           manifestHash: null,
           status: legacyRetired ? "archived" : "active",
         },
@@ -162,16 +182,17 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   if (result.seededLive.length > 0 || result.seededArchived.length > 0) {
     console.info(
       `[static-bundle-lifecycle] anchored ${result.seededLive.length + result.seededArchived.length} ` +
-        `bundled serverEntry package(s)` +
+        `bundled serverEntry/required-in-prod package(s)` +
         (result.seededLive.length ? ` live: ${result.seededLive.join(", ")}` : "") +
         (result.seededArchived.length ? ` archived: ${result.seededArchived.join(", ")}` : ""),
     );
   }
   if (result.failed.length > 0) {
     console.error(
-      `[static-bundle-lifecycle] ${result.failed.length} bundled serverEntry package(s) could ` +
-        `NOT be anchored and will be skipped by the strict activation gate unless the status ` +
-        `read itself fails open: ${result.failed.join(", ")}`,
+      `[static-bundle-lifecycle] ${result.failed.length} bundled serverEntry/required-in-prod ` +
+        `package(s) could NOT be anchored — serverEntry packages will be skipped by the strict ` +
+        `activation gate unless the status read itself fails open; required-in-prod packages ` +
+        `without a live row fail the prod closure boot gate: ${result.failed.join(", ")}`,
     );
   }
   return result;

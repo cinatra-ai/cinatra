@@ -15,7 +15,14 @@ import { approverResolvable, type ApprovalScope } from "@/lib/workflow-approvers
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
-import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
+import {
+  listInstalledExtensions,
+  readInstalledExtensionsByPackageName,
+} from "@cinatra-ai/extensions/canonical-store";
+import {
+  evaluateExecutionClosure,
+  makeScopedManifestLookup,
+} from "@cinatra-ai/extensions/dependency-closure";
 import { enforceExtensionAccess } from "@cinatra-ai/extensions/enforce-extension-access";
 
 export function buildWorkflowHandlerDeps(): WorkflowHandlerDeps {
@@ -96,6 +103,48 @@ export function buildWorkflowHandlerDeps(): WorkflowHandlerDeps {
         actorCtx,
         op,
       );
+    },
+    // Dependency-closure gate on the instantiate boundary. Resolves the SAME
+    // governing row as assertExtensionAccess (actor-org row, then platform
+    // row, then first live row; rows exist but none live → DENY, mirroring
+    // the access gate so this dep fails closed even when used on its own)
+    // and evaluates its dependency closure over the canonical manifest with
+    // the ACTOR-SCOPED lookup (actor-org row, then platform row — a foreign
+    // org's install never satisfies an edge). Throws fail-closed when the
+    // required closure is broken OR when an optional dep is missing — the
+    // workflow kind's declared optional-missing behavior is
+    // "fail-instantiate" (optionalMissingBehaviorForKind). A package with NO
+    // workflow rows at all is ungoverned here (operator/dev template).
+    assertTemplateSourceDependencyClosure: async (actor, sourcePackage) => {
+      const allForPackage = (await readInstalledExtensionsByPackageName(sourcePackage)).filter(
+        (r) => r.kind === "workflow",
+      );
+      if (allForPackage.length === 0) return; // ungoverned (no install row) → allow.
+      const rows = allForPackage.filter((r) => r.status === "active" || r.status === "locked");
+      if (rows.length === 0) {
+        // Governed but retired — same fail-closed verdict as assertExtensionAccess.
+        throw new Error("Workflow extension is not active.");
+      }
+      const orgId = actor.orgId ?? undefined;
+      const row =
+        (orgId && rows.find((r) => r.organizationId === orgId)) ||
+        rows.find((r) => r.organizationId == null) ||
+        rows[0];
+      const all = await listInstalledExtensions({});
+      const verdict = evaluateExecutionClosure(
+        row,
+        makeScopedManifestLookup(all, actor.orgId ?? null),
+      );
+      if (verdict.executionBlock) {
+        const { code, missing } = verdict.executionBlock;
+        throw new Error(
+          code === "REQUIRED_MISSING"
+            ? `Cannot instantiate: ${sourcePackage} has missing/archived required dependencies: ${missing.join(", ")}.`
+            : `Cannot instantiate: ${sourcePackage} has missing/archived optional dependencies (${missing.join(", ")}) ` +
+              `and the workflow kind fails instantiation on missing optional dependencies. ` +
+              `Restore or install them, then retry.`,
+        );
+      }
     },
   };
 }
