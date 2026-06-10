@@ -1,10 +1,5 @@
-import {
-  getPrimarySavedNangoConnections,
-  listSavedNangoConnections,
-} from "@cinatra-ai/nango-connector";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { getStoredGoogleCalendarAppointments } from "@cinatra-ai/google-calendar-connector";
 import {
   requireAuthSession,
   getActorContext,
@@ -13,13 +8,6 @@ import {
   readOrgsWithTeamsForUser,
   readProjectsForUser,
 } from "@/lib/better-auth-db";
-import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";
-import { getWordPressAPISettings } from "@/lib/wordpress-api";
-import { getDrupalAPISettings } from "@/lib/drupal-api";
-import { getGoogleOAuthStatus } from "@cinatra-ai/google-oauth-connection";
-import { getApolloAPIStatus } from "@cinatra-ai/apollo-connector";
-import { getApifyStatus } from "@cinatra-ai/apify-connector";
-import { getTailscaleConnectionStatus } from "@cinatra-ai/tailscale-connector";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { Main } from "@/components/layout/main";
 import {
@@ -32,10 +20,10 @@ import {
   scopeSelectionMatches,
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
-import { getAnthropicAPIStatus } from "@cinatra-ai/anthropic-connector";
-import { getGeminiAPIStatus } from "@cinatra-ai/gemini-connector";
-import { getConfiguredOpenAIConnection } from "@cinatra-ai/openai-connector";
-import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+// Readiness comes from the registry's per-connector probes; importing the
+// built-in probe module registers them (side effect).
+import "@/lib/connector-readiness.server";
+import { listConnectorRegistryEntries } from "@/lib/connectors-registry.server";
 import { isConnectorVisibleToActor } from "@/lib/connector-policy";
 
 type ConnectorsPageProps = {
@@ -73,82 +61,6 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const scopeRaw = resolvedSearchParams?.scope;
   const requestedScope =
     typeof scopeRaw === "string" ? scopeRaw : Array.isArray(scopeRaw) ? scopeRaw[0] : undefined;
-
-  const userConnections = getPrimarySavedNangoConnections({
-    scope: "user",
-    userId: session.user.id,
-  });
-  const appointmentSchedules = getStoredGoogleCalendarAppointments(session.user.id);
-
-  const [googleOAuthStatus, configuredOpenAIConnection] = await Promise.all([
-    getGoogleOAuthStatus(),
-    getConfiguredOpenAIConnection(),
-  ]);
-  const apolloStatus = getApolloAPIStatus();
-  const apifyStatus = getApifyStatus();
-  const a2aConnectedCount = listSavedNangoConnections("a2aServer").length;
-  const wordpressConnectedCount = getWordPressAPISettings().instances.length;
-  const drupalConnectedCount = getDrupalAPISettings().instances.length;
-  // Inbound MCP-client readiness is a host-owned signal (the Better Auth
-  // oauthClient table), so the card needs no import from the extension.
-  const mcpClientConnectedCount = await countExternalMcpOAuthClients();
-  const tailscaleStatus = getTailscaleConnectionStatus();
-  const anthropicStatus = getAnthropicAPIStatus();
-  const geminiStatus = getGeminiAPIStatus();
-
-  const appointmentsCount = appointmentSchedules.appointments.length;
-
-  const READINESS_BY_SLUG = new Map<string, ReadinessSnapshot>([
-    ["openai-connector", { connected: Boolean(configuredOpenAIConnection?.apiKey) }],
-    ["anthropic-connector", { connected: anthropicStatus.status === "connected" }],
-    ["gemini-connector", { connected: geminiStatus.status === "connected" }],
-    [
-      "mcp-client-connector",
-      {
-        connected: mcpClientConnectedCount > 0,
-        connectedLabel: mcpClientConnectedCount > 0 ? `${mcpClientConnectedCount}` : undefined,
-      },
-    ],
-    ["gmail-connector", { connected: Boolean(userConnections.gmail) }],
-    [
-      "google-calendar-connector",
-      {
-        connected: Boolean(userConnections.googleCalendar) || appointmentsCount > 0,
-        connectedLabel:
-          appointmentsCount > 0 ? `${appointmentsCount} appt` : undefined,
-      },
-    ],
-    ["apollo-connector", { connected: apolloStatus.status === "connected" }],
-    ["apify-connector", { connected: apifyStatus.status === "connected" }],
-    ["linkedin-connector", { connected: Boolean(userConnections.linkedin) }],
-    ["youtube-connector", { connected: Boolean(userConnections.youtube) }],
-    [
-      "wordpress-mcp-connector",
-      {
-        connected: wordpressConnectedCount > 0,
-        connectedLabel:
-          wordpressConnectedCount > 0 ? `${wordpressConnectedCount}` : undefined,
-      },
-    ],
-    [
-      "drupal-mcp-connector",
-      {
-        connected: drupalConnectedCount > 0,
-        connectedLabel:
-          drupalConnectedCount > 0 ? `${drupalConnectedCount}` : undefined,
-      },
-    ],
-    ["tailscale-connector", { connected: tailscaleStatus.connected }],
-    ["github-connector", { connected: false }],
-    [
-      "a2a-server-connector",
-      {
-        connected: a2aConnectedCount > 0,
-        connectedLabel: a2aConnectedCount > 0 ? `${a2aConnectedCount}` : undefined,
-      },
-    ],
-    ["google-oauth-connector", { connected: googleOAuthStatus.status === "connected" }],
-  ]);
 
   // Build the actor's accessible scopes (organizations they belong to,
   // projects they can read). Used to populate the scope-filter Select.
@@ -202,30 +114,36 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     };
   }
 
-  const cards: ConnectorCardData[] = listConnectorDescriptors()
-    .filter((d) => isConnectorVisibleToActor(d.packageId, actor))
-    .filter((d) =>
+  // Readiness resolves through each registry entry's probe (registered by the
+  // built-in probe module or at runtime); a connector without a probe reports
+  // not connected. Probes run only for the cards the actor can see.
+  const readinessContext = { userId: session.user?.id ?? null };
+  const visibleEntries = listConnectorRegistryEntries()
+    .filter((entry) => isConnectorVisibleToActor(entry.packageId, actor))
+    .filter((entry) =>
       scopeSelectionMatches(
         effectiveScope,
-        normalizedScopeForConnector(d.slug, d.defaultVisibility),
+        normalizedScopeForConnector(entry.slug, entry.defaultVisibility),
       ),
-    )
-    .map((d) => {
-      const readiness = READINESS_BY_SLUG.get(d.slug) ?? { connected: false };
+    );
+  const cards: ConnectorCardData[] = await Promise.all(
+    visibleEntries.map(async (entry) => {
+      const readiness: ReadinessSnapshot = await entry.readinessProbe(readinessContext);
       // Prefer the extension's own self-describing identity (manifest
       // displayName + sanitized logo data URI) over the static host catalog, so
       // a connector renders its own card. Falls back to the catalog displayName
       // (always present) and, for the logo, to the client icon map when null.
-      const manifest = STATIC_EXTENSION_MANIFEST[d.packageId];
+      const manifest = STATIC_EXTENSION_MANIFEST[entry.packageId];
       return {
-        slug: d.slug,
-        name: manifest?.displayName ?? d.displayName,
+        slug: entry.slug,
+        name: manifest?.displayName ?? entry.displayName,
         logo: manifest?.logo ?? null,
         connected: readiness.connected,
         connectedLabel: readiness.connectedLabel,
-        href: `/connectors/cinatra-ai/${d.slug}/setup`,
+        href: entry.setupHref,
       };
-    });
+    }),
+  );
 
   return (
     <Main className="min-h-screen">

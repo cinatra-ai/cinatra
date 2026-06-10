@@ -81,8 +81,8 @@ export async function TeamsDashboardPage() {
         actions={
           /* Server-rendered SSR fallback — `dashboard-theme.css` hides
              this via a `body:has(...)` rule that keys on the LIVE
-             presence of an injected `[data-cinatra-page-action]`
-             anchor. See `use-dashboard-toolbar-polish.ts`. */
+             presence of the toolbar's `[data-cinatra-page-action]`
+             anchor. See `cinatra-dashboard-toolbar.tsx`. */
           <div data-cinatra-page-actions-fallback="teams">
             <Button asChild>
               <Link href="/teams/new">

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { renderAPIPluginPage } from "@/app/plugins-registry";
+import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 
 export const metadata: Metadata = { title: "LLM Setup" };
 
@@ -30,7 +31,11 @@ export default async function SettingsAPIPluginRoutePage({ params, searchParams 
   }
 
   if (apiSlug === "drupal") {
-    redirect("/connectors/drupal");
+    // Manifest-resolved dispatch href (same target the legacy /connectors/drupal
+    // mount redirects to — this skips the double hop).
+    const href = getConnectorSetupHref("drupal-mcp-connector");
+    if (!href) notFound();
+    redirect(href);
   }
 
   if (apiSlug === "openai-skills") {

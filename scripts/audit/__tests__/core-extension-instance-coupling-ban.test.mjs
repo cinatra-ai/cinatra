@@ -74,16 +74,64 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(files.has("src/lib/generated/connector-setup-pages.ts")).toBe(true);
   });
 
-  it("scanner-correctness regression: real imports adjacent to comments are counted (both previously-hidden sites)", () => {
+  it("scanner-correctness regression: real imports adjacent to comments are counted", () => {
     const occ = scanInstanceCoupling();
     // A line comment containing `@/lib/*` sits above the static import cluster —
     // the old regex stripper swallowed the whole cluster as a bogus block comment.
     const transport = Object.keys(occ).filter((k) => k.startsWith("src/lib/register-transport-connectors.ts :: package ::"));
     expect(transport.some((k) => k.endsWith("@cinatra-ai/gmail-connector"))).toBe(true);
     expect(transport.some((k) => k.endsWith("@cinatra-ai/tailscale-connector"))).toBe(true);
-    // A placeholder-import comment sits directly above the live loader map.
-    const loaders = Object.keys(occ).filter((k) => k.startsWith("src/lib/connector-setup-pages.ts :: package ::"));
-    expect(loaders.some((k) => k.endsWith("@cinatra-ai/openai-connector"))).toBe(true);
+    // The other previously-hidden site (the hand-maintained loader map in
+    // src/lib/connector-setup-pages.ts) has since been DECOUPLED — the
+    // comment-adjacent-loader-map shape is covered by the fixture test below.
+  });
+
+  it("scanner-correctness regression (fixture): a placeholder-import comment directly above a live loader entry does not hide it", () => {
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-"));
+    try {
+      mkdirSync(join(root, "src/lib"), { recursive: true });
+      writeFileSync(
+        join(root, "src/lib/loader-map.ts"),
+        [
+          "const LOADERS = {",
+          '  // replace the placeholder with `() => import("@scope/sample-connector/setup-page")`.',
+          '  "sample-connector": () => import("@scope/sample-connector/setup-page"),',
+          "};",
+          "export default LOADERS;",
+          "",
+        ].join("\n"),
+      );
+      const extensions = {
+        names: new Set(["@scope/sample-connector"]),
+        dirPaths: new Set(),
+      };
+      const occ = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      // ONE live occurrence — the comment naming the same package never counts,
+      // and the comment must not swallow the live entry below it.
+      expect(occ["src/lib/loader-map.ts :: package :: @scope/sample-connector"]).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("regression guard: the connector loader/registry surfaces are de-coupled (loaders + readiness resolve from the generated manifest)", () => {
+    const occ = scanInstanceCoupling();
+    for (const file of [
+      "src/lib/connector-setup-pages.ts",
+      "src/lib/connector-modules.server.ts",
+      "src/lib/connector-readiness.server.ts",
+      "src/lib/connectors-registry.server.ts",
+      "packages/connectors/src/pages.tsx",
+      "src/app/plugins-registry.tsx",
+      "src/app/api/app/setup-status/route.ts",
+      "src/app/configuration/llm/apis-page.tsx",
+      "src/app/connectors/wordpress/page.tsx",
+      "src/app/connectors/resend/page.tsx",
+      "src/app/connectors/resend/actions.ts",
+    ]) {
+      const keys = Object.keys(occ).filter((k) => k.startsWith(`${file} ::`));
+      expect(keys, `expected ${file} to stay de-coupled`).toEqual([]);
+    }
   });
 
   it("masks documented data-contract IDs before counting and reports them separately (exempt-set logic)", () => {
