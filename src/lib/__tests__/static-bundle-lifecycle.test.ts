@@ -33,14 +33,24 @@ vi.mock("@/lib/generated/extensions.server", () => ({
       serverEntry: "./register",
       requestedHostPorts: [],
       sdkAbiRange: null,
+      dependencies: [
+        {
+          packageName: "@cinatra-ai/dep-connector",
+          kind: "connector",
+          edgeType: "runtime",
+          versionConstraint: { kind: "semver-range", range: "*" },
+          requirement: "required",
+        },
+      ],
     },
     {
       packageName: "@cinatra-ai/ui-only-ext",
       kind: "connector",
       version: "0.1.0",
-      serverEntry: null, // NOT activation-relevant → never seeded
+      serverEntry: null, // not activation-relevant → seeded ONLY when required-in-prod
       requestedHostPorts: [],
       sdkAbiRange: null,
+      dependencies: [],
     },
   ],
   GENERATED_EXTENSION_SERVER_ENTRIES: {},
@@ -189,7 +199,7 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
 
   it("legacy retired + required-in-prod → still anchored ARCHIVED (retired state preserved, loud warn)", async () => {
     vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
-    isPackageRequiredInProd.mockReturnValue(true);
+    isPackageRequiredInProd.mockImplementation((pkg) => pkg === "@cinatra-ai/bundled-connector");
     readInstalledExtensionsByPackageName.mockResolvedValue([row({ status: "archived" })]);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = await runSeeder();
@@ -219,5 +229,43 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
     expect(result.failed).toEqual(["@cinatra-ai/bundled-connector"]);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("required-in-prod package WITHOUT a serverEntry → seeded (the closure boot gate's premise)", async () => {
+    // The prod acquisition path materializes source but inserts no rows, and
+    // the extension-closure boot gate fails a prod boot closed when a required
+    // package has no live row — so the seeder must anchor the FULL bundled
+    // required set, not just the serverEntry half.
+    isPackageRequiredInProd.mockImplementation((pkg) => pkg === "@cinatra-ai/ui-only-ext");
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    const result = await runSeeder();
+    expect(result.seededLive).toEqual([
+      "@cinatra-ai/bundled-connector",
+      "@cinatra-ai/ui-only-ext",
+    ]);
+    expect(installExtensionManifest).toHaveBeenCalledTimes(2);
+    const uiOnlyArg = installExtensionManifest.mock.calls.find(
+      (c) => (c[0] as { packageName: string }).packageName === "@cinatra-ai/ui-only-ext",
+    )?.[0] as Record<string, unknown>;
+    expect(uiOnlyArg).toBeDefined();
+    expect(uiOnlyArg.ownerLevel).toBe("platform");
+    expect(uiOnlyArg.requiredInProd).toBe(true);
+    expect(isStaticBundleAnchorSource(uiOnlyArg.source as never)).toBe(true);
+  });
+
+  it("anchor rows carry the generated manifest's dependency edges (closure scan is not vacuous)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    await runSeeder();
+    const arg = installExtensionManifest.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.packageName).toBe("@cinatra-ai/bundled-connector");
+    expect(arg.dependencies).toEqual([
+      {
+        packageName: "@cinatra-ai/dep-connector",
+        kind: "connector",
+        edgeType: "runtime",
+        versionConstraint: { kind: "semver-range", range: "*" },
+        requirement: "required",
+      },
+    ]);
   });
 });
