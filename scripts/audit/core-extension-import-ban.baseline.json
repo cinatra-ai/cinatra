@@ -5,18 +5,14 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 96,
-      "files": 49
+      "edges": 81,
+      "files": 43
     }
   },
   "edges": {
     "src/app/api/agents/[agentSlug]/stream/route.ts": [
       "@cinatra-ai/drupal-mcp-connector",
       "@cinatra-ai/wordpress-mcp-connector"
-    ],
-    "src/app/api/app/setup-status/route.ts": [
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/openai-connector"
     ],
     "src/app/api/chat/runner.ts": [
       "@cinatra-ai/gmail-connector",
@@ -44,12 +40,6 @@
     "src/app/configuration/development/page.tsx": [
       "@cinatra-ai/tailscale-connector"
     ],
-    "src/app/configuration/llm/apis-page.tsx": [
-      "@cinatra-ai/anthropic-connector",
-      "@cinatra-ai/gemini-connector",
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/openai-connector"
-    ],
     "src/app/configuration/mcp/llm-access/test/route.ts": [
       "@cinatra-ai/anthropic-connector",
       "@cinatra-ai/gemini-connector",
@@ -62,23 +52,6 @@
       "@cinatra-ai/apollo-connector",
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/openai-connector"
-    ],
-    "src/app/connectors/resend/actions.ts": [
-      "@cinatra-ai/resend-connector"
-    ],
-    "src/app/connectors/resend/page.tsx": [
-      "@cinatra-ai/resend-connector"
-    ],
-    "src/app/connectors/wordpress/page.tsx": [
-      "@cinatra-ai/blog-connector",
-      "@cinatra-ai/nango-connector",
-      "@cinatra-ai/wordpress-mcp-connector"
-    ],
-    "src/app/plugins-registry.tsx": [
-      "@cinatra-ai/apollo-connector",
-      "@cinatra-ai/linkedin-connector",
-      "@cinatra-ai/openai-connector",
-      "@cinatra-ai/youtube-connector"
     ],
     "src/app/setup/ai/page.tsx": [
       "@cinatra-ai/openai-connector"
