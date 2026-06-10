@@ -4,16 +4,13 @@
  * Renders a metadata card (filename, MIME, size, scope, created date)
  * when the artifact's MIME has no inline-preview path.
  *
- * **Connector-ref external linking is DEFERRED** to a future milestone:
- * a "prominent external link if connector-ref-shaped" is desired,
- * but the canonical `ArtifactSummary` does NOT expose the underlying
- * `objects.data` (the artifact-service `toSummary` deliberately drops
- * it), and no typed `connectorRef.url` / `externalUrl` field exists on
- * the service yet. This ships the metadata card + the universal
- * Download button; the "Open in source application" button lands when
- * a future milestone adds a typed connector-ref accessor to the
- * artifact service. This is a deliberate scope cut, not a missing
- * feature.
+ * Connector-ref external linking is NOT this component's concern: the
+ * "Open in source application" action renders in the detail page's
+ * `PageHeader.actions` (next to Download) whenever
+ * `ArtifactSummary.sourceUrl` is non-null — the artifact service projects
+ * it from `objects.data.connectorRef.url` via the validating
+ * `connectorRefSourceUrl` accessor, so it appears regardless of which
+ * MIME handler renders the body.
  */
 import type { ReactElement } from "react";
 

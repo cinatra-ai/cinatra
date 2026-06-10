@@ -75,4 +75,16 @@ export type ArtifactObjectData = {
   viewerHint: string;
   title?: string;
   excerpt?: string;
+  /**
+   * Connector-ref source pointer (canonical persisted shape).
+   *
+   * `url` is the absolute http(s) URL that opens the object in its source
+   * application (e.g. a Google Doc, a Notion page). Written by connector-sync
+   * producers when they materialize a connector-ref representation; absent
+   * for blob/dashboard artifacts. No current writer populates it yet — the
+   * field defines the contract consumed by the artifact-service summary
+   * projection (`ArtifactSummary.sourceUrl`), which validates the protocol
+   * before exposing it to UI hrefs.
+   */
+  connectorRef?: { url: string };
 };
