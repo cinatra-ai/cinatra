@@ -182,6 +182,30 @@ export async function readTeamsForUser(
 }
 
 /**
+ * Return EVERY team in an org (no membership filter).
+ *
+ * Admin-widening source for the teams dashboard visibility resolver:
+ * `org_admin` / `org_owner` actors see every team in the active org, not
+ * just direct memberships (`packages/dashboards/src/auth/team-visibility.ts`).
+ * Callers MUST gate this behind a role check — it deliberately ignores the
+ * caller's memberships. Named `listTeamsForOrg` (not `readTeamsForOrg`) to
+ * avoid a near-collision with the singular `readTeamForOrg` below.
+ */
+export async function listTeamsForOrg(
+  orgId: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const rows = await betterAuthDb
+    .select({ id: betterAuthTeams.id, name: betterAuthTeams.name })
+    .from(betterAuthTeams)
+    .where(eq(betterAuthTeams.organizationId, orgId))
+    // Deterministic helper output (name, then id as tiebreaker) — the cube
+    // applies its own ordering, but stable output keeps tests and debugging
+    // sane.
+    .orderBy(betterAuthTeams.name, betterAuthTeams.id);
+  return rows;
+}
+
+/**
  * Return every `organization.id` the user is a member of.
  * Used by `buildSecurityContextWithAccessibleOrgIds` to widen the cube
  * access predicate from active-org-only to multi-org membership.

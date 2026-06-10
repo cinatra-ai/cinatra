@@ -76,7 +76,7 @@ export async function TeamsDashboardPage() {
     <Main className="min-h-screen">
       <PageHeader
         title="Teams"
-        description="Teams you belong to."
+        description="Teams visible to you."
         divider={false}
         actions={
           /* Server-rendered SSR fallback — `dashboard-theme.css` hides
