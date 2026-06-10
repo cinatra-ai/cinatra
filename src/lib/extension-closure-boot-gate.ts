@@ -76,17 +76,18 @@ export function closureBootViolations(report: ClosureBootReport): string[] {
 export async function buildClosureBootReport(
   rows: InstalledExtension[],
 ): Promise<ClosureBootReport> {
-  const { findBrokenClosures, evaluateExecutionClosure } = await import(
-    "@cinatra-ai/extensions/dependency-closure"
-  );
+  const { findBrokenClosures, evaluateExecutionClosure, makeScopedManifestLookup } =
+    await import("@cinatra-ai/extensions/dependency-closure");
   const { verifyRequiredInProdInstalled } = await import(
     "@cinatra-ai/extensions/required-in-prod"
   );
   const live = rows.filter((r) => r.status === "active" || r.status === "locked");
-  const lookup = (name: string) => live.find((r) => r.packageName === name);
   const optionalAdvisories: ClosureBootReport["optionalAdvisories"] = [];
   for (const row of live) {
-    const verdict = evaluateExecutionClosure(row, lookup);
+    // Scope-aware: each row's deps resolve from its own org, then platform —
+    // a foreign org's live row never satisfies the edge (mirrors
+    // findBrokenClosures, which scopes itself the same way).
+    const verdict = evaluateExecutionClosure(row, makeScopedManifestLookup(rows, row.organizationId));
     if (verdict.advisory) {
       optionalAdvisories.push({
         packageName: row.packageName,

@@ -203,6 +203,19 @@ describe("buildClosureBootReport", () => {
     expect(report.brokenClosures).toEqual([]);
     expect(report.optionalAdvisories).toEqual([]);
   });
+
+  it("no cross-org bleed: a dep live ONLY in a foreign org is broken; a platform dep satisfies", async () => {
+    const appB = { ...ext("@x/app", "active", [req("@x/dep")]), organizationId: "org-b" };
+    const depA = { ...ext("@x/dep", "active"), organizationId: "org-a" };
+    const brokenReport = await buildClosureBootReport([appB, depA]);
+    expect(brokenReport.brokenClosures).toEqual([
+      { packageName: "@x/app", missingRequired: ["@x/dep"] },
+    ]);
+
+    const depPlat = ext("@x/dep", "locked"); // organizationId null (platform)
+    const okReport = await buildClosureBootReport([appB, depPlat]);
+    expect(okReport.brokenClosures).toEqual([]);
+  });
 });
 
 describe("enforceExtensionClosureAtBoot", () => {

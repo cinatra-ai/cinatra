@@ -9,6 +9,7 @@ import {
   computeClosure,
   evaluateExecutionClosure,
   findBrokenClosures,
+  makeScopedManifestLookup,
   optionalMissingBehaviorForKind,
 } from "../dependency-closure";
 
@@ -236,5 +237,56 @@ describe("findBrokenClosures (boot diagnostics)", () => {
   it("does not flag optional-missing deps", () => {
     const app = ext("app", "active", [opt("maybe")]);
     expect(findBrokenClosures([app])).toEqual([]);
+  });
+});
+
+describe("makeScopedManifestLookup (no cross-org dependency bleed)", () => {
+  const inOrg = (row: InstalledExtension, org: string | null): InstalledExtension => ({
+    ...row,
+    organizationId: org,
+  });
+
+  it("an org-scoped dependent resolves its own org's row first", () => {
+    const depA = inOrg(ext("dep", "active"), "org-a");
+    const depPlat = inOrg(ext("dep", "active"), null);
+    const lookup = makeScopedManifestLookup([depA, depPlat], "org-a");
+    expect(lookup("dep")?.organizationId).toBe("org-a");
+  });
+
+  it("falls back to the platform-scoped row when the org has none", () => {
+    const depPlat = inOrg(ext("dep", "locked"), null);
+    const lookup = makeScopedManifestLookup([depPlat], "org-b");
+    expect(lookup("dep")?.organizationId).toBeNull();
+  });
+
+  it("a FOREIGN org's live row never satisfies the edge", () => {
+    const depA = inOrg(ext("dep", "active"), "org-a");
+    const lookup = makeScopedManifestLookup([depA], "org-b");
+    expect(lookup("dep")).toBeUndefined();
+  });
+
+  it("a platform-scoped dependent resolves only platform rows", () => {
+    const depA = inOrg(ext("dep", "active"), "org-a");
+    const lookup = makeScopedManifestLookup([depA], null);
+    expect(lookup("dep")).toBeUndefined();
+  });
+
+  it("archived rows are never present at any scope", () => {
+    const dep = inOrg(ext("dep", "archived"), "org-a");
+    const lookup = makeScopedManifestLookup([dep], "org-a");
+    expect(lookup("dep")).toBeUndefined();
+  });
+
+  it("findBrokenClosures flags an org-B dependent whose required dep is live only in org A", () => {
+    const appB = inOrg(ext("app", "active", [req("dep")]), "org-b");
+    const depA = inOrg(ext("dep", "active"), "org-a");
+    const broken = findBrokenClosures([appB, depA]);
+    expect(broken).toEqual([{ packageName: "app", missingRequired: ["dep"] }]);
+  });
+
+  it("findBrokenClosures accepts a platform-scoped dep for an org-scoped dependent", () => {
+    const appB = inOrg(ext("app", "active", [req("dep")]), "org-b");
+    const depPlat = inOrg(ext("dep", "locked"), null);
+    expect(findBrokenClosures([appB, depPlat])).toEqual([]);
   });
 });

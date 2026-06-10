@@ -39,6 +39,31 @@ export type ClosureResult = {
 export type ManifestLookup = (packageName: string) => InstalledExtension | undefined;
 
 /**
+ * Scope-aware manifest lookup over a full snapshot: a dependent at org scope
+ * X resolves a dependency from X's own live (active|locked) row first, then
+ * from the platform-scoped row (organizationId null). A live row in a
+ * FOREIGN org never satisfies the edge — cross-org dependency bleed would be
+ * fail-open (org B's closure "satisfied" by an install org B cannot see).
+ * Platform-scoped dependents (organizationId null) resolve only
+ * platform-scoped rows.
+ */
+export function makeScopedManifestLookup(
+  rows: InstalledExtension[],
+  organizationId: string | null,
+): ManifestLookup {
+  return (name) => {
+    const live = rows.filter(
+      (r) => r.packageName === name && PRESENT_STATUSES.has(r.status),
+    );
+    return (
+      (organizationId != null
+        ? live.find((r) => r.organizationId === organizationId)
+        : undefined) ?? live.find((r) => r.organizationId == null)
+    );
+  };
+}
+
+/**
  * Compute the transitive dependency closure of a root extension over the
  * provided manifest snapshot. Cycles are handled (visited set). The lookup
  * returns the canonical row for a package name, or undefined if not installed.
@@ -197,19 +222,19 @@ export function evaluateExecutionClosure(
 /**
  * Boot diagnostics: scan a full manifest snapshot for any `active | locked` row
  * whose REQUIRED dependency closure is broken (a required dep is archived or
- * missing). PURE + non-throwing — instrumentation calls this at boot and LOGS
- * the result (it does NOT remediate). The lookup is built from the same rows,
- * so only `active | locked` rows count as present (an archived dep is missing).
+ * missing). PURE + non-throwing — the boot gate calls this and decides what to
+ * do with the result (it does NOT remediate). Each row's deps resolve through
+ * the SCOPE-AWARE lookup (own org row, then platform row — a foreign org's
+ * live row never satisfies the edge), and only `active | locked` rows count
+ * as present (an archived dep is missing).
  */
 export function findBrokenClosures(
   rows: InstalledExtension[],
 ): { packageName: string; missingRequired: string[] }[] {
-  const lookup: ManifestLookup = (name) =>
-    rows.find((r) => r.packageName === name && PRESENT_STATUSES.has(r.status));
   const broken: { packageName: string; missingRequired: string[] }[] = [];
   for (const row of rows) {
     if (!PRESENT_STATUSES.has(row.status)) continue;
-    const result = computeClosure(row, lookup);
+    const result = computeClosure(row, makeScopedManifestLookup(rows, row.organizationId));
     if (result.missingRequired.length > 0) {
       broken.push({
         packageName: row.packageName,
