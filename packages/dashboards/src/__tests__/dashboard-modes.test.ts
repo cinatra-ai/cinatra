@@ -65,8 +65,13 @@ describe("dashboardModes reaches the dashboard state machine", () => {
     // The shell's declared modes only gate the toggle if the composition
     // reads them back out of the cube context and hands them to the
     // provider — a directly-mounted provider would otherwise fall back to
-    // upstream's permissive ['rows','grid'] default.
-    expect(COMPOSED).toMatch(/useCubeFeatures\(\)/);
+    // upstream's permissive ['rows','grid'] default. Match the actual call
+    // site (destructure + JSX forward), not prose in comments. The runtime
+    // proof (toggle gated by the shell's modes) lives in
+    // `components/__tests__/composed-dashboard.test.tsx`.
+    expect(COMPOSED).toMatch(
+      /const\s*\{\s*dashboardModes\s*\}\s*=\s*useCubeFeatures\(\)/,
+    );
     expect(COMPOSED).toMatch(/dashboardModes=\{dashboardModes\}/);
   });
 });

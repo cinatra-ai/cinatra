@@ -1,8 +1,9 @@
 /**
  * /agents screen.
  *
- * Renders a real `<DashboardGrid>` from drizzle-cube/client themed to
- * shadcn tokens. The page is a server component that:
+ * Renders a real drizzle-cube dashboard (composable pieces + the
+ * Cinatra-owned toolbar) themed to shadcn tokens. The page is a server
+ * component that:
  *
  *   1. Resolves the better-auth session -> Cinatra SecurityContext.
  *      Unauthenticated callers get a redirect to /sign-in.

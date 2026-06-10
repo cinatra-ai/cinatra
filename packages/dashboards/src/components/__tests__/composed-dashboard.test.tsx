@@ -18,7 +18,7 @@
 import "./jsdom-shims";
 import React, { type ComponentProps } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("drizzle-cube/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("drizzle-cube/client")>();
@@ -97,6 +97,32 @@ describe("ComposedDashboard — assembly gating", () => {
     expect(
       screen.queryByRole("button", { name: "Edit dashboard" }),
     ).toBeNull();
+  });
+});
+
+describe("ComposedDashboard under DashboardsClientShell — dashboardModes seam", () => {
+  test("the shell's default ['grid'] suppresses the Grid/Rows toggle in edit mode", () => {
+    render(
+      <DashboardsClientShell>
+        <ComposedDashboard config={ONE_PORTLET_CONFIG} editable />
+      </DashboardsClientShell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
+    expect(screen.queryByRole("button", { name: "Grid" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rows" })).toBeNull();
+  });
+
+  test("the shell's ['grid','rows'] surfaces the Grid/Rows toggle in edit mode", () => {
+    render(
+      <DashboardsClientShell dashboardModes={["grid", "rows"]}>
+        <ComposedDashboard config={ONE_PORTLET_CONFIG} editable />
+      </DashboardsClientShell>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
+    expect(screen.getByRole("button", { name: "Grid" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Rows" })).toBeTruthy();
   });
 });
 
