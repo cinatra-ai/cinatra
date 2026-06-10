@@ -63,7 +63,11 @@ export function NangoManagedApiCard(props: NangoManagedApiCardProps) {
     }
 
     if (!connectionServiceReady) {
-      router.push("/configuration/environment?tab=connections");
+      // The Environment "Connections" tab is dev-only, so it is NOT a valid
+      // target in production (cinatra#66). /setup/connections is the
+      // canonical, mode-independent connection-service setup page — the
+      // setup wizard surfaces it whenever the service is not connected.
+      router.push("/setup/connections");
       return;
     }
 
