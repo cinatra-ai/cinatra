@@ -1,0 +1,15 @@
+diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
+index 0cc7630..3c88da8 100644
+--- a/src/lib/drizzle-store.ts
++++ b/src/lib/drizzle-store.ts
+@@ -1621,6 +1621,10 @@ END $$` },
+     // graph with LangGraph Server. Nullable — only set for execution_provider='langgraph'
+     // templates.
+     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS lg_graph_id text` },
++    // icon: optional emoji/short glyph shown on the template card. Nullable —
++    // existing templates render the default glyph until one is set.
++    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS icon text` },
++    { text: `CREATE INDEX IF NOT EXISTS agent_templates_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_templates" (org_id) WHERE org_id IS NOT NULL` },
+     // objects table: generic typed-object store for future content types.
+     // Existing content types (blog-post, email-draft, transcript-content) keep their
+     // current storage to avoid a forced migration.
