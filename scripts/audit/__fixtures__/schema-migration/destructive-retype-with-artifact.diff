@@ -1,8 +1,8 @@
-diff --git a/migrations/0001_narrow-usage-events-cost-usd.sql b/migrations/0001_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0002_narrow-usage-events-cost-usd.sql b/migrations/0002_narrow-usage-events-cost-usd.sql
 new file mode 100644
 index 0000000..6e5f1ca
 --- /dev/null
-+++ b/migrations/0001_narrow-usage-events-cost-usd.sql
++++ b/migrations/0002_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -11,29 +11,28 @@ index 0000000..6e5f1ca
 +ALTER TABLE :"schema"."usage_events"
 +  ALTER COLUMN cost_usd TYPE numeric(12,4);
 diff --git a/migrations/manifest.json b/migrations/manifest.json
-index b6216fd..b30522f 100644
+index 87b87d2..4caa14f 100644
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -16,5 +16,13 @@
-     "Never renumber or rewrite an entry once its migration has shipped;",
-     "supersede it with a new sequence number."
-   ],
--  "migrations": []
-+  "migrations": [
+@@ -23,6 +23,13 @@
+       "summary": "Add notifications.dedupe_key + partial unique index (user_id, dedupe_key) for the general per-user notification dedupe (issue #50). Required by the unique-index-on-existing-table rule; cannot collide in practice — the column is new, so every pre-existing row is outside the partial-index predicate.",
+       "destructive": true,
+       "tables": ["notifications"]
++    },
 +    {
-+      "seq": "0001",
-+      "file": "0001_narrow-usage-events-cost-usd.sql",
++      "seq": "0002",
++      "file": "0002_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
-+    }
-+  ]
+     }
+   ]
  }
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
-index 0cc7630..318fae0 100644
+index 63b8b5e..e68e7eb 100644
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
-@@ -848,7 +848,7 @@ END $$` },
+@@ -857,7 +857,7 @@ END $$` },
        cached_input_tokens integer NOT NULL DEFAULT 0,
        reasoning_output_tokens integer NOT NULL DEFAULT 0,
        credits_consumed integer NOT NULL DEFAULT 0,
@@ -42,7 +41,7 @@ index 0cc7630..318fae0 100644
        idempotency_key text NOT NULL
      )` },
      { text: `CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_key_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (idempotency_key)` },
-@@ -876,7 +876,7 @@ END $$` },
+@@ -885,7 +885,7 @@ END $$` },
        ADD COLUMN IF NOT EXISTS cached_input_tokens integer NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS reasoning_output_tokens integer NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS credits_consumed integer NOT NULL DEFAULT 0,
