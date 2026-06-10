@@ -47,15 +47,21 @@ export async function buildWidgetChatTool(
     );
   }
   const tool = (factory as (opts: { context: Record<string, unknown> }) => unknown)({ context });
-  const candidate = tool as { name?: unknown; execute?: unknown } | null;
+  const candidate = tool as
+    | { name?: unknown; description?: unknown; parameters?: unknown; execute?: unknown }
+    | null;
   if (
     !candidate ||
     typeof candidate.name !== "string" ||
     candidate.name.length === 0 ||
+    typeof candidate.description !== "string" ||
+    !candidate.parameters ||
+    typeof candidate.parameters !== "object" ||
     typeof candidate.execute !== "function"
   ) {
     throw new Error(
-      `[widget-stream:${agentSlug}] factory "${entry.factory}" did not return a function tool (name + execute required)`,
+      `[widget-stream:${agentSlug}] factory "${entry.factory}" did not return a function tool ` +
+        "(name + description + parameters + execute required)",
     );
   }
   return tool as LlmFunctionTool;
