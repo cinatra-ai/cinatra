@@ -21,6 +21,13 @@
  * @property {string} setupSubroute - dispatch sub-route segment (always `"setup"`; reserved for future use)
  */
 
+// Every catalog entry's packageId equals `@cinatra-ai/<slug>` (the slug is the
+// extension directory and workspace-package short name). Renamed entries derive
+// their packageId from the slug instead of re-pinning the package-name literal
+// in core (instance-coupling gate: a rename must resolve away from the pinned
+// literal, not re-pin it under the new name).
+const packageIdForSlug = (slug) => `@cinatra-ai/${slug}`;
+
 /** @type {ConnectorDescriptor[]} */
 export const CONNECTOR_DESCRIPTORS = [
   {
@@ -48,11 +55,11 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    // Inbound MCP-client registry for Claude Desktop, Claude.ai, ChatGPT,
+    // Inbound MCP-client connector for Claude Desktop, Claude.ai, ChatGPT,
     // and any MCP-compatible client that connects to Cinatra via OAuth.
-    packageId: "@cinatra-ai/mcp-client-registry-connector",
-    slug: "mcp-client-registry-connector",
-    displayName: "Claude Desktop",
+    packageId: packageIdForSlug("mcp-client-connector"),
+    slug: "mcp-client-connector",
+    displayName: "MCP Client",
     defaultVisibility: "workspace",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",

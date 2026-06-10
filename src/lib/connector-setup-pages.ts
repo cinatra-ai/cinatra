@@ -3,6 +3,7 @@ import "server-only";
 import type { ComponentType } from "react";
 import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions";
 import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+import { GENERATED_CONNECTOR_SETUP_PAGES } from "@/lib/generated/connector-setup-pages";
 
 export type ConnectorSetupPageProps = {
   packageId: string;
@@ -48,12 +49,16 @@ const SETUP_PAGE_LOADERS: Record<string, ConnectorSetupPageLoader> = {
     import("@cinatra-ai/drupal-assistant-connector/setup-page"),
   "twenty-connector": () => import("@cinatra-ai/twenty-connector/setup-page"),
   "github-connector": () => import("@cinatra-ai/github-connector/setup-page"),
-  // Anthropic API setup lives in its own extension package. The MCP-client
-  // registry owns inbound MCP-client OAuth client management.
+  // Anthropic API setup lives in its own extension package. The mcp-client
+  // connector owns inbound MCP-client OAuth client management; its loader
+  // resolves through the GENERATED manifest map instead of a hand-pinned
+  // package import (the rename pilot for the loader-map cutover — renamed
+  // entries must not re-pin the package-name literal in core).
   "anthropic-connector": () =>
     import("@cinatra-ai/anthropic-connector/setup-page"),
-  "mcp-client-registry-connector": () =>
-    import("@cinatra-ai/mcp-client-registry-connector/setup-page"),
+  "mcp-client-connector": GENERATED_CONNECTOR_SETUP_PAGES[
+    "mcp-client-connector"
+  ] as ConnectorSetupPageLoader,
   // Gemini setup-page lives inside the extension package.
   "gemini-connector": () => import("@cinatra-ai/gemini-connector/setup-page"),
   // Google Calendar setup-page subsumes Appointment Schedules. The

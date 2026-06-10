@@ -65,6 +65,16 @@ export const ALLOWED_MODEL_IDS: Record<LlmProvider, readonly string[]> = {
 };
 
 // ---------------------------------------------------------------------------
+// Default OpenAI model for a connection without a saved `defaultModel`. Shared
+// by every default source — the /setup/ai and /configuration/llm default-model
+// pickers plus src/lib/openai-connection-store.ts — so the fallbacks cannot
+// drift apart. A saved, still-selectable `connection.defaultModel` always wins
+// over this fallback. MUST stay a member of ALLOWED_MODEL_IDS.openai above.
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_OPENAI_MODEL_ID = "gpt-5.5";
+
+// ---------------------------------------------------------------------------
 // Reusable Zod schema for the optional `metadata.cinatra.llm` block. The same
 // schema is shared by validate-agent-json.ts and the canonical Flow
 // `metadataSchema` so the two layers cannot drift.
