@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { gateStaticRecordsToLiveRows } from "@/lib/static-bundle-loader";
 
 // Split-brain guard — the StaticBundleLoader lifecycle gate, a STRICT
-// active|locked allow-list (the P707 lifecycle-correctness contract,
+// active|locked allow-list (the static-bundle lifecycle-correctness contract,
 // IOC-34/IOC-35). A serverEntry record activates ONLY when its package's
 // effective canonical status is "active" (>= 1 active|locked row). BOTH an
 // archived tombstone ("archived") AND a hard uninstall ("no row" / absent
@@ -64,9 +64,10 @@ describe("gateStaticRecordsToLiveRows (pure decision function)", () => {
   });
 
   it("NO row (absent from the map) → skipped — hard uninstall does not re-activate", () => {
-    // THE P707 behavior change: pre-P707 absence was kept (fail-open on
-    // absence); with bundled serverEntry packages lifecycle-anchored, absence
-    // means retired (or factory reset) and must NOT activate (IOC-34).
+    // THE behavior change of this contract: previously absence was kept
+    // (fail-open on absence); with bundled serverEntry packages
+    // lifecycle-anchored, absence means retired (or factory reset) and must
+    // NOT activate (IOC-34).
     const { active, skipped } = gateStaticRecordsToLiveRows(
       [entry("@cinatra-ai/uninstalled-ext")],
       new Map(),
