@@ -10,23 +10,29 @@
  *
  * Used by:
  *   - `src/app/api/dashboards/cubejs-api/v1/[...endpoint]/route.ts` —
- *     widens every cube query to the actor's visible-id lists.
- *   - Each of the four dashboard screens — calls the same
- *     resolvers so the initial render and subsequent re-queries see the
- *     same visibility surface.
+ *     widens every cube query to the actor's visible-id lists. This is the
+ *     ONLY current consumer: the dashboard screens build a plain session
+ *     SecurityContext and rely on this route for cube data, so the
+ *     visibility surface is computed in exactly one place.
  */
 import "server-only";
 import type { SecurityContext } from "@cinatra-ai/sdk-dashboard";
 
 import {
+  listTeamsForOrg,
   readProjectGrantsForUser,
   readTeamsForUser,
 } from "@/lib/better-auth-db";
-import { getActorContext, resolveOrgRoleForSession } from "@/lib/auth-session";
+import {
+  getActorContext,
+  resolveOrgRoleForSession,
+  resolveOrgRoleForUser,
+} from "@/lib/auth-session";
 import { getAuthSession } from "@/lib/auth-session";
 import { listArtifacts } from "@/lib/artifacts/artifact-service";
 
 import type { VisibilityResolvers } from "./security-context";
+import { resolveVisibleTeamIds } from "./team-visibility";
 
 /**
  * Compute the actor's accessible project IDs. Resolved via the canonical
@@ -52,17 +58,25 @@ async function getVisibleProjectIds(ctx: SecurityContext): Promise<readonly stri
 }
 
 /**
- * Compute the actor's visible team IDs. Surfaces the
- * direct-membership set returned by `readTeamsForUser` — the same source
- * the `/teams` page consults. Admin-org widening is a deliberate
- * deferral: the spec mentions it as a guardrail but doesn't pin a
- * concrete query path; we surface direct membership today and add admin
- * widening once the role-resolution helper exposes a stable contract.
+ * Compute the actor's visible team IDs. Direct memberships come from
+ * `readTeamsForUser` — the same source the `/teams` page consults.
+ * `org_admin` / `org_owner` actors (resolved via the stable
+ * `resolveOrgRoleForUser` contract, keyed on the SecurityContext's own
+ * `(organizationId, userId)` so the resolver honors the ctx instead of
+ * re-deriving identity from the cookie session) are widened to every team
+ * in the active org via `listTeamsForOrg`. Non-privileged actors keep the
+ * fail-closed direct-membership default; widening-path failures degrade to
+ * direct membership (see `team-visibility.ts` for the policy).
  */
 async function getVisibleTeamIds(ctx: SecurityContext): Promise<readonly string[]> {
-  if (!ctx.userId || !ctx.organizationId) return [];
-  const teams = await readTeamsForUser(ctx.userId, ctx.organizationId);
-  return teams.map((t) => t.id);
+  return resolveVisibleTeamIds(
+    { userId: ctx.userId, organizationId: ctx.organizationId },
+    {
+      readTeamsForUser,
+      listTeamsForOrg,
+      resolveOrgRole: resolveOrgRoleForUser,
+    },
+  );
 }
 
 /**

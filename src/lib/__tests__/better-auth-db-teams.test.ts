@@ -31,6 +31,17 @@ describe("better-auth team helpers", () => {
     expect(mod.readTeamsForUser.length).toBe(2);
   });
 
+  it("exports listTeamsForOrg as an async function with arity 1", async () => {
+    // Admin-widening source for the teams dashboard visibility resolver
+    // (#69): org_admin / org_owner actors see every team in the active org.
+    // Pinned here as part of the public host helper surface; the RBAC
+    // branches live in packages/dashboards/src/auth/team-visibility.ts and
+    // are covered by team-visibility-widening.test.ts.
+    const mod = await import("@/lib/better-auth-db");
+    expect(typeof mod.listTeamsForOrg).toBe("function");
+    expect(mod.listTeamsForOrg.length).toBe(1);
+  });
+
   it("exports readProjectsForUser as an async function with arity 2 and a real query implementation", async () => {
     const mod = await import("../better-auth-db");
     expect(typeof mod.readProjectsForUser).toBe("function");
