@@ -2306,100 +2306,81 @@ async function handleAgentBuilderExport(
     const template = await readAgentTemplateById(templateId);
     if (!template) return { error: `Template not found: ${templateId}` };
 
-    const exportedAt = new Date().toISOString();
-
-    // Guard: ensure compiledPlan is always an array in the ZIP (legacy double-encoded guard)
-    const compiledPlanSafe = Array.isArray(template.compiledPlan)
-      ? template.compiledPlan
-      : (typeof template.compiledPlan === "string"
-          ? (() => { try { const p = JSON.parse(template.compiledPlan as unknown as string); return Array.isArray(p) ? p : []; } catch { return []; } })()
-          : []);
-
-    // Strip UI-only __ fields from inputSchema before export — agent.json is a public capability contract
-    const inputSchemaCopy = JSON.parse(JSON.stringify(template.inputSchema)) as Record<string, unknown>;
-    const props = inputSchemaCopy.properties as Record<string, unknown> | undefined;
-    if (props) {
-      for (const key of Object.keys(props)) {
-        if (key.startsWith("__")) delete props[key];
-      }
-    }
-    if (Array.isArray(inputSchemaCopy.required)) {
-      inputSchemaCopy.required = (inputSchemaCopy.required as string[]).filter((k: string) => !k.startsWith("__"));
+    // Exports read the canonical on-disk OAS Flow document. The DB row is a
+    // derived cache (inputSchema / approvalPolicy / taskSpec are compiler
+    // OUTPUTS) and cannot be inverted into an importable OAS Flow — the old
+    // DB-derived fallback emitted an empty-shell envelope (no nodes, no
+    // $referenced_components) that agent_import's compile step always
+    // rejected (issue #130). Fail explicitly instead of returning a ZIP that
+    // cannot be restored.
+    if (!template.packageName) {
+      return {
+        error:
+          `Export unavailable: template ${template.id} ("${template.name}") has no packageName, ` +
+          "so no canonical on-disk OAS source package exists for it. A DB-derived export would " +
+          "not be importable. Materialize the source package first (agent_source_write + " +
+          "agent_source_compile, or agent_registry_publish), then re-run agent_export.",
+      };
     }
 
-    // exports now read the canonical on-disk OAS Flow agent.json.
-    // The DB row is a derived cache of DB-column values; it cannot round-trip
-    // back to a compact OAS Flow without also shipping $referenced_components
-    // etc. For exports, read the canonical file from the repo when we can.
+    const exportSlug = template.packageName.split("/").pop() ?? "";
+    const resolved = exportSlug ? resolveAgentJsonPathForRead(exportSlug) : null;
+    if (!resolved) {
+      return {
+        error:
+          `Export unavailable: no on-disk OAS definition found for package ${template.packageName}. ` +
+          "The canonical source package is missing from this instance's extensions directory; " +
+          "re-create it (agent_source_write + agent_source_compile) or reinstall the package, " +
+          "then re-run agent_export.",
+      };
+    }
+
     let agentJson: string;
-    const exportSlug = template.packageName ? (template.packageName.split("/").pop() ?? "") : "";
-    const canonicalAgentJsonPath = exportSlug
-      ? (resolveAgentJsonPathForRead(exportSlug)?.path ?? null)
-      : null;
-    if (canonicalAgentJsonPath) {
-      try {
-        agentJson = (await readFile(canonicalAgentJsonPath, "utf8")) as string;
-      } catch {
-        // Fall through to a minimal OAS envelope derived from DB columns.
-        agentJson = JSON.stringify({
-          agentspec_version: "26.1.0",
-          component_type: "Flow",
-          id: template.id,
-          name: template.name,
-          description: template.description ?? null,
-          sourceNl: template.sourceNl,
-          status: template.status,
-          exportedAt,
-          metadata: {
-            cinatra: {
-              type: template.type,
-              hitlScreens: template.hitlScreens ?? [],
-            },
-          },
-          inputs: [],
-          outputs: [],
-          start_node: { $component_ref: "start" },
-          nodes: [],
-          control_flow_connections: [],
-          $referenced_components: {},
-        }, null, 2);
-      }
-    } else {
-      agentJson = JSON.stringify({
-        agentspec_version: "26.1.0",
-        component_type: "Flow",
-        id: template.id,
-        name: template.name,
-        description: template.description ?? null,
-        sourceNl: template.sourceNl,
-        status: template.status,
-        exportedAt,
-        metadata: {
-          cinatra: {
-            type: template.type === "orchestrator" ? "orchestrator" : "leaf",
-            hitlScreens: template.hitlScreens ?? [],
-          },
-        },
-        inputs: [],
-        outputs: [],
-        start_node: { $component_ref: "start" },
-        nodes: [],
-        control_flow_connections: [],
-        $referenced_components: {},
-      }, null, 2);
+    try {
+      agentJson = await readFile(resolved.path, "utf8");
+    } catch (err) {
+      // Sanitized reason only: Node fs error messages embed absolute host
+      // paths (and resolved.relPath is cwd-relative, which can spell out an
+      // out-of-tree install root too). Surface the errno code and point the
+      // caller at agent_source_read for path-level inspection.
+      const code =
+        (err as NodeJS.ErrnoException | null)?.code ??
+        (err instanceof Error ? err.name : "unknown");
+      return {
+        error:
+          `Export unavailable: the canonical OAS definition for ${template.packageName} ` +
+          `could not be read (${code}). Inspect the source package with agent_source_read.`,
+      };
     }
-    void compiledPlanSafe; void inputSchemaCopy; // now sourced from on-disk file
 
+    const exportedAt = new Date().toISOString();
     const manifestJson = JSON.stringify({
       version: 1,
       exportedAt,
       cinatra: "agent-builder-v1",
     }, null, 2);
 
-    const zipBuf = createZipBuffer([
+    // Sidecars: ship the package's REAL on-disk identity + license files so
+    // agent_import's SPDX license gate (detectSpdxLicense) passes and a
+    // restore upserts by packageName. Only files that actually exist on disk
+    // are included — never synthesized. The name list mirrors exactly what
+    // importAgentTemplateCore stages alongside agent.json.
+    const zipEntries: { name: string; content: string }[] = [
       { name: "agent.json", content: agentJson },
       { name: "manifest.json", content: manifestJson },
-    ]);
+    ];
+    for (const sidecar of ["package.json", "LICENSE", "LICENSE.md", "COPYING", ".spdx"]) {
+      try {
+        zipEntries.push({
+          name: sidecar,
+          content: await readFile(join(resolved.rootDir, sidecar), "utf8"),
+        });
+      } catch {
+        // Sidecar absent on disk — skip it.
+      }
+    }
+
+    const zipBuf = createZipBuffer(zipEntries);
 
     const slug = template.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
     const dateStr = exportedAt.slice(0, 10).replace(/-/g, "");
@@ -2567,41 +2548,35 @@ const LEGACY_SLUG_MAP: Record<string, string> = {
 function resolveAgentJsonPathForRead(packageSlug: string): {
   path: string;
   relPath: string;
+  /** Agent package root dir (parent of cinatra/ for rungs 1–3; the file's own
+   *  dir for the flat rung-4 layout). Sibling reads (package.json, LICENSE,
+   *  skills/) resolve against this so they cannot disagree with `path`. */
+  rootDir: string;
 } | null {
   const root = resolveAgentInstallDir();
   // Rung 1 — NEW canonical
-  const rung1 = join(root, "cinatra-ai", packageSlug, "cinatra", "oas.json");
-  if (existsSync(rung1)) return { path: rung1, relPath: relative(process.cwd(), rung1) };
+  const newRoot = join(root, "cinatra-ai", packageSlug);
+  const rung1 = join(newRoot, "cinatra", "oas.json");
+  if (existsSync(rung1)) return { path: rung1, relPath: relative(process.cwd(), rung1), rootDir: newRoot };
   // Rung 2 — transitional (same dir, old filename)
-  const rung2 = join(root, "cinatra-ai", packageSlug, "cinatra", "agent.json");
-  if (existsSync(rung2)) return { path: rung2, relPath: relative(process.cwd(), rung2) };
+  const rung2 = join(newRoot, "cinatra", "agent.json");
+  if (existsSync(rung2)) return { path: rung2, relPath: relative(process.cwd(), rung2), rootDir: newRoot };
   // Rung 3 — legacy: explicit map for renamed slugs, otherwise keep slug as-is
   const legacySlug = LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  const rung3 = join(root, legacySlug, "cinatra", "agent.json");
-  if (existsSync(rung3)) return { path: rung3, relPath: relative(process.cwd(), rung3) };
+  const legacyRoot = join(root, legacySlug);
+  const rung3 = join(legacyRoot, "cinatra", "agent.json");
+  if (existsSync(rung3)) return { path: rung3, relPath: relative(process.cwd(), rung3), rootDir: legacyRoot };
   // Rung 4 — legacy (older layout)
-  const rung4 = join(root, legacySlug, "agent.json");
-  if (existsSync(rung4)) return { path: rung4, relPath: relative(process.cwd(), rung4) };
+  const rung4 = join(legacyRoot, "agent.json");
+  if (existsSync(rung4)) return { path: rung4, relPath: relative(process.cwd(), rung4), rootDir: legacyRoot };
   return null;
 }
 
 // Resolves the on-disk directory that contains the agent (for sibling reads
-// like package.json, skills/). Mirrors the 4-rung probe order in
-// resolveAgentJsonPathForRead but returns the parent agent directory.
+// like package.json, skills/). Delegates to resolveAgentJsonPathForRead so
+// the two resolvers can never disagree about which package a slug maps to.
 function resolveAgentRootDirForRead(packageSlug: string): string | null {
-  const root = resolveAgentInstallDir();
-  // Rung 1/2 — new canonical / transitional: <installDir>/cinatra/<slug>/
-  const newRoot = join(root, "cinatra-ai", packageSlug);
-  if (existsSync(join(newRoot, "cinatra", "oas.json")) || existsSync(join(newRoot, "cinatra", "agent.json"))) {
-    return newRoot;
-  }
-  // Rung 3/4 — legacy: <installDir>/<legacySlug>/
-  const legacySlug = LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  const legacyRoot = join(root, legacySlug);
-  if (existsSync(join(legacyRoot, "cinatra", "agent.json")) || existsSync(join(legacyRoot, "agent.json"))) {
-    return legacyRoot;
-  }
-  return null;
+  return resolveAgentJsonPathForRead(packageSlug)?.rootDir ?? null;
 }
 
 function resolveAgentJsonPathForWrite(packageSlug: string): {
