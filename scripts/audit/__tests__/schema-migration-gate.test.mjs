@@ -459,18 +459,60 @@ test("artifact: the legacy psql artifact form is retired for new migrations", ()
   assert.ok(a.problems.some((p) => p.includes("retired")), a.problems.join("; "));
 });
 
-test("artifact: deleting or renaming a shipped artifact (legacy SQL or core module) is rejected", () => {
+test("artifact: deleting, renaming, or EDITING a shipped artifact is an integrity failure", () => {
   const sqlDeleted = detectMigrationArtifact(
     parseUnifiedDiff(fullReplaceDiff("migrations/0001_first.sql", "ALTER TABLE x;", null)),
     readBase,
   );
-  assert.ok(sqlDeleted.problems.some((p) => p.includes("never be deleted")), sqlDeleted.problems.join("; "));
+  assert.ok(sqlDeleted.integrity.some((p) => p.includes("never be deleted")), sqlDeleted.integrity.join("; "));
+
+  const sqlEdited = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/0001_first.sql", "ALTER TABLE x;", "ALTER TABLE x DROP COLUMN y;")),
+    readBase,
+  );
+  assert.ok(sqlEdited.integrity.some((p) => p.includes("never be edited")), sqlEdited.integrity.join("; "));
 
   const moduleDeleted = detectMigrationArtifact(
     parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, null)),
     readBase,
   );
-  assert.ok(moduleDeleted.problems.some((p) => p.includes("never be deleted")), moduleDeleted.problems.join("; "));
+  assert.ok(moduleDeleted.integrity.some((p) => p.includes("never be deleted")), moduleDeleted.integrity.join("; "));
+
+  const moduleEdited = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, "export function up() {}")),
+    readBase,
+  );
+  assert.ok(moduleEdited.integrity.some((p) => p.includes("never be edited")), moduleEdited.integrity.join("; "));
+});
+
+test("artifact: re-using a shipped seq (non-wrapper) or duplicating a seq in one diff is an integrity failure", () => {
+  // seq 0001 is shipped, and this module is NOT the exact legacy wrapper
+  // (core__0001_first.mjs) — it would trip the runner's duplicate-seq
+  // preflight at boot once the real wrapper exists.
+  const reused = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_other-name.mjs", null, MODULE_0002_SRC)),
+    readBase,
+  );
+  assert.ok(reused.integrity.some((p) => p.includes("already shipped")), reused.integrity.join("; "));
+  assert.deepEqual(reused.artifactFiles, []);
+
+  const duped = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff("migrations/core/core__0002_a.mjs", null, MODULE_0002_SRC) +
+        fullReplaceDiff("migrations/core/core__0002_b.mjs", null, MODULE_0002_SRC),
+    ),
+    readBase,
+  );
+  assert.ok(duped.integrity.some((p) => p.includes("duplicate sequence number")), duped.integrity.join("; "));
+});
+
+test("runGate fails a tamper-only diff (no destructive schema change required)", () => {
+  const r = runGate({
+    diffText: fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, "export function up() {}"),
+    readBaseFile: readBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.artifact.integrity.length > 0);
 });
 
 test("artifact: a runner-form backfill of an already-shipped seq needs no manifest entry (and is not a new artifact)", () => {
@@ -499,7 +541,7 @@ test("artifact: rewriting a shipped ledger entry or regressing the sequence is r
     ),
     readBase,
   );
-  assert.ok(rewritten.problems.some((p) => p.includes("append-only")), rewritten.problems.join("; "));
+  assert.ok(rewritten.integrity.some((p) => p.includes("append-only")), rewritten.integrity.join("; "));
 
   const regressed = detectMigrationArtifact(
     parseUnifiedDiff(
@@ -559,7 +601,9 @@ test("artifact: malformed migration filenames are rejected (legacy dir and core 
     parseUnifiedDiff(fullReplaceDiff("migrations/core/0002_no-namespace.mjs", null, MODULE_0002_SRC)),
     readBase,
   );
-  assert.ok(b.problems.some((p) => p.includes("core__NNNN_short-description.mjs")), b.problems.join("; "));
+  // Malformed core/ filenames are integrity-level: merged, they would brick
+  // the runner's boot preflight on every subsequent boot.
+  assert.ok(b.integrity.some((p) => p.includes("core__NNNN_short-description.mjs")), b.integrity.join("; "));
 });
 
 // ---------------------------------------------------------------------------

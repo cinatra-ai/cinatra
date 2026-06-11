@@ -28,9 +28,13 @@
 //      fixture corpus at scripts/audit/__fixtures__/schema-migration/ is the
 //      executable contract: the companion test runs this gate against every
 //      fixture and asserts its labelled pass/fail outcome.
-//   3. GATE   — exit non-zero ONLY when the change is destructive AND the
-//      same diff ships no complete migration artifact. Additive changes and
-//      destructive changes accompanied by their artifact pass.
+//   3. GATE   — exit non-zero when the change is destructive AND the same
+//      diff ships no complete migration artifact, OR when the diff tampers
+//      with SHIPPED migration state regardless of schema changes (deleting /
+//      renaming / editing a shipped artifact, rewriting a manifest entry, or
+//      adding a migrations/core/ file that would brick the runner's boot
+//      preflight). Additive changes and destructive changes accompanied by
+//      their artifact pass.
 //
 // Classification bias: the destructive rules encode the convention's
 // ENUMERATED destructive list; an in-scope change matching no rule is
@@ -474,51 +478,25 @@ export function classifyDrizzleStoreDiff(fileDiff, baseContent) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Two problem classes come back separately:
+ *   - `integrity` — tampering with SHIPPED migration state (delete / rename /
+ *     edit of a shipped artifact, a rewritten manifest entry) or a
+ *     migrations/core/ addition that would brick the runner's boot preflight
+ *     (malformed filename, duplicate seq). These FAIL the gate on their own,
+ *     destructive schema change or not.
+ *   - `problems` — an incomplete/wrong-form artifact for THIS PR's change.
+ *     These fail the gate only when the PR's schema change is destructive
+ *     and therefore demands a complete artifact.
+ *
  * @param {Array} files parsed diff files
  * @param {(path: string) => string|null} readBaseFile
- * @returns {{complete: boolean, artifactFiles: string[], problems: string[], newEntries: Array}}
+ * @returns {{complete: boolean, artifactFiles: string[], problems: string[], integrity: string[], newEntries: Array}}
  */
 export function detectMigrationArtifact(files, readBaseFile) {
   const problems = [];
+  const integrity = [];
   /** Added runner modules (full paths) — the only artifact form new migrations may ship. */
   const moduleFiles = [];
-  for (const f of files) {
-    const p = f.newPath ?? f.oldPath;
-    if (!p || !p.startsWith("migrations/")) continue;
-
-    if (p.startsWith("migrations/core/")) {
-      const basename = p.slice("migrations/core/".length);
-      if (basename.includes("/") || basename.startsWith(".")) continue; // nested/dotfiles: not artifacts
-      const isModule = MIGRATION_MODULE_RE.test(p) || (f.oldPath !== null && MIGRATION_MODULE_RE.test(f.oldPath));
-      if (f.status === "deleted" || f.status === "renamed") {
-        if (isModule) {
-          problems.push(`${f.oldPath ?? p}: a shipped core migration module must never be ${f.status} (append-only — supersede it with a new sequence number)`);
-        }
-        continue;
-      }
-      if (!MIGRATION_MODULE_RE.test(p)) {
-        problems.push(`${p}: core migration filename must match migrations/core/core__NNNN_short-description.mjs`);
-        continue;
-      }
-      if (f.status === "added") moduleFiles.push(p);
-      continue;
-    }
-
-    if (!p.endsWith(".sql")) continue; // README/manifest and friends
-    if (f.status === "deleted") {
-      problems.push(`${p}: a shipped migration must never be deleted (append-only — supersede it instead)`);
-      continue;
-    }
-    if (!MIGRATION_SQL_RE.test(p)) {
-      problems.push(`${p}: migration filename must match migrations/NNNN_short-description.sql`);
-      continue;
-    }
-    if (f.status === "added") {
-      problems.push(
-        `${p}: the legacy psql artifact form is retired for new migrations — ship a runner module migrations/core/core__NNNN_short-description.mjs instead (the node-pg-migrate runner is what applies migrations now; see migrations/README.md)`,
-      );
-    }
-  }
 
   const baseManifestRaw = readBaseFile(MIGRATION_MANIFEST_PATH);
   let baseEntries = [];
@@ -529,25 +507,90 @@ export function detectMigrationArtifact(files, readBaseFile) {
       problems.push(`${MIGRATION_MANIFEST_PATH} (base) is not parseable JSON`);
     }
   }
-  const baseSeqs = new Set(baseEntries.map((e) => String(e?.seq)));
 
-  // Runner-form backfills of ALREADY-SHIPPED artifacts (e.g. the core__0001/
-  // core__0002 wrappers of the legacy psql files) re-use an existing manifest
-  // seq: they introduce no schema change and need no new manifest entry — and
-  // cannot get one, since the ledger's seqs are strictly increasing.
-  const isBackfill = (p) => baseSeqs.has(p.match(MIGRATION_MODULE_RE)[1]);
-  const artifactFiles = moduleFiles.filter((p) => !isBackfill(p));
+  for (const f of files) {
+    const p = f.newPath ?? f.oldPath;
+    if (!p || !p.startsWith("migrations/")) continue;
+
+    if (p.startsWith("migrations/core/")) {
+      const basename = p.slice("migrations/core/".length);
+      if (basename.includes("/") || basename.startsWith(".")) continue; // nested/dotfiles: not artifacts
+      const isModule = MIGRATION_MODULE_RE.test(p) || (f.oldPath !== null && MIGRATION_MODULE_RE.test(f.oldPath));
+      if (f.status !== "added") {
+        // A shipped module is immutable history backing ledger rows on every
+        // deployed database: deletion, rename, AND edits are all tampering.
+        if (isModule) {
+          integrity.push(`${f.oldPath ?? p}: a shipped core migration module must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
+        }
+        continue;
+      }
+      if (!MIGRATION_MODULE_RE.test(p)) {
+        // The runner's boot preflight rejects out-of-contract filenames — a
+        // merged one would fail EVERY subsequent boot, so the gate must stop
+        // it here regardless of what else the PR does.
+        integrity.push(`${p}: core migration filename must match migrations/core/core__NNNN_short-description.mjs (the runner's preflight refuses anything else at boot)`);
+        continue;
+      }
+      moduleFiles.push(p);
+      continue;
+    }
+
+    if (!p.endsWith(".sql")) continue; // README/manifest and friends
+    if (f.status !== "added") {
+      if (MIGRATION_SQL_RE.test(p) || (f.oldPath !== null && MIGRATION_SQL_RE.test(f.oldPath))) {
+        integrity.push(`${f.oldPath ?? p}: a shipped migration must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it instead)`);
+      }
+      continue;
+    }
+    if (!MIGRATION_SQL_RE.test(p)) {
+      problems.push(`${p}: migration filename must match migrations/NNNN_short-description.sql`);
+      continue;
+    }
+    problems.push(
+      `${p}: the legacy psql artifact form is retired for new migrations — ship a runner module migrations/core/core__NNNN_short-description.mjs instead (the node-pg-migrate runner is what applies migrations now; see migrations/README.md)`,
+    );
+  }
+
+  // Runner-form backfills of ALREADY-SHIPPED legacy artifacts (the core__0001/
+  // core__0002 wrappers of the psql files): they introduce no schema change
+  // and need no new manifest entry — and cannot get one, since the ledger's
+  // seqs are strictly increasing. The exception is EXACT: only the module
+  // whose name is `core__<legacy stem>.mjs` for a base entry that points at a
+  // .sql file qualifies. Anything else re-using a shipped seq would trip the
+  // runner's duplicate-seq preflight at boot — integrity-level rejection.
+  const legacyBackfillPaths = new Set(
+    baseEntries
+      .filter((e) => typeof e?.file === "string" && /^\d{4}_[a-z0-9][a-z0-9-]*\.sql$/.test(e.file))
+      .map((e) => `migrations/core/core__${e.file.replace(/\.sql$/, ".mjs")}`),
+  );
+  const baseSeqs = new Set(baseEntries.map((e) => String(e?.seq).padStart(4, "0")));
+  const artifactFiles = [];
+  const seenSeqs = new Set();
+  for (const p of moduleFiles) {
+    if (legacyBackfillPaths.has(p)) continue;
+    const seq = p.match(MIGRATION_MODULE_RE)[1];
+    if (baseSeqs.has(seq)) {
+      integrity.push(`${p}: sequence number ${seq} is already shipped — a non-wrapper module re-using it would fail the runner's duplicate-seq preflight at boot (use the next free sequence number)`);
+      continue;
+    }
+    if (seenSeqs.has(seq)) {
+      integrity.push(`${p}: duplicate sequence number ${seq} within this diff — the runner's preflight refuses duplicate seqs at boot`);
+      continue;
+    }
+    seenSeqs.add(seq);
+    artifactFiles.push(p);
+  }
 
   const manifestDiff = files.find((f) => (f.newPath ?? f.oldPath) === MIGRATION_MANIFEST_PATH);
   if (artifactFiles.length === 0) {
-    if (manifestDiff && problems.length === 0) {
+    if (manifestDiff && problems.length === 0 && integrity.length === 0) {
       problems.push(`${MIGRATION_MANIFEST_PATH} changed without a new migrations/core/core__NNNN_*.mjs module`);
     }
-    return { complete: false, artifactFiles, problems, newEntries: [] };
+    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
   if (!manifestDiff) {
     problems.push(`new core migration module shipped without the matching ${MIGRATION_MANIFEST_PATH} entry (both pieces are required, in the same PR)`);
-    return { complete: false, artifactFiles, problems, newEntries: [] };
+    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
 
   const finalRaw = applyFileDiff(baseManifestRaw ?? "", manifestDiff);
@@ -561,13 +604,13 @@ export function detectMigrationArtifact(files, readBaseFile) {
   }
   if (!Array.isArray(finalEntries)) {
     problems.push(`${MIGRATION_MANIFEST_PATH}: could not parse the post-change manifest (migrations must stay a JSON array)`);
-    return { complete: false, artifactFiles, problems, newEntries: [] };
+    return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
 
   // Append-only: the base entries must be an untouched prefix.
   for (let i = 0; i < baseEntries.length; i++) {
     if (JSON.stringify(finalEntries[i]) !== JSON.stringify(baseEntries[i])) {
-      problems.push(`${MIGRATION_MANIFEST_PATH}: existing entry ${i + 1} was rewritten — the ledger is append-only (supersede with a new sequence number)`);
+      integrity.push(`${MIGRATION_MANIFEST_PATH}: existing entry ${i + 1} was rewritten — the ledger is append-only (supersede with a new sequence number)`);
     }
   }
   const newEntries = finalEntries.slice(baseEntries.length);
@@ -598,7 +641,13 @@ export function detectMigrationArtifact(files, readBaseFile) {
     }
   }
 
-  return { complete: problems.length === 0 && artifactFiles.length > 0, artifactFiles, problems, newEntries };
+  return {
+    complete: problems.length === 0 && integrity.length === 0 && artifactFiles.length > 0,
+    artifactFiles,
+    problems,
+    integrity,
+    newEntries,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +704,10 @@ export function runGate({ diffText, readBaseFile }) {
 
   const artifact = detectMigrationArtifact(files, readBaseFile);
   let verdict = "pass";
+  // Tampering with shipped migration state (or a core/ addition that would
+  // brick the runner's boot preflight) fails on its own — no destructive
+  // schema change required.
+  if (artifact.integrity.length > 0) verdict = "fail";
   if (destructive.length > 0) {
     if (!artifact.complete) verdict = "fail";
     else if (!artifact.newEntries.some((e) => e?.destructive === true)) {
@@ -739,14 +792,19 @@ function main() {
   }
 
   if (verdict === "fail") {
-    console.error(`[schema-migration-gate] FAIL — destructive core-store schema change without a complete migration artifact.`);
+    console.error(
+      destructive.length > 0
+        ? `[schema-migration-gate] FAIL — destructive core-store schema change without a complete migration artifact.`
+        : `[schema-migration-gate] FAIL — shipped migration state was tampered with (append-only) or a migrations/core/ addition would break the runner's boot preflight.`,
+    );
     for (const d of destructive) {
       console.error(`  [${d.rule}] ${d.doc}`);
       console.error(`      ${d.line.slice(0, 160)}`);
     }
+    for (const p of artifact.integrity) console.error(`  [integrity] ${p}`);
     for (const p of artifact.problems) console.error(`  [artifact] ${p}`);
     console.error(
-      `\nThis change can affect user-land data on deployed databases. Ship the migration artifact in this PR:\n` +
+      `\nShip the migration artifact (and leave shipped history untouched) in this PR:\n` +
         `  1. migrations/core/core__NNNN_short-description.mjs (next sequence number; a node-pg-migrate\n` +
         `     module exporting up/down — see migrations/README.md "Authoring a migration")\n` +
         `  2. the matching entry appended to migrations/manifest.json\n` +

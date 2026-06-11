@@ -203,8 +203,12 @@ This convention is enforced by
 [`scripts/audit/schema-migration-gate.mjs`](../scripts/audit/schema-migration-gate.mjs)
 (the `schema-migration-gate` job in `build-image.yml`): it diffs a PR against
 its base, classifies in-scope schema changes per the definitions above, and
-fails only when a destructive change ships no migration artifact (or ships
-the retired loose-SQL form). The labelled sample diffs its classifier must
+fails when a destructive change ships no migration artifact (or ships the
+retired loose-SQL form). Independently of any schema change, it also fails a
+PR that tampers with shipped migration state — deleting, renaming, or editing
+a shipped artifact, rewriting a manifest entry, or adding a
+`migrations/core/` file (malformed name, re-used sequence number) that would
+break the runner's boot preflight. The labelled sample diffs its classifier must
 reproduce live in
 [`scripts/audit/__fixtures__/schema-migration/`](../scripts/audit/__fixtures__/schema-migration/)
 — they are the executable form of the definitions above, and the gate's test
