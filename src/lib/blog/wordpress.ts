@@ -20,7 +20,10 @@ import {
 // selectors live in the bundled site connector. This file (and
 // `@cinatra-ai/blog-connector`) contain ZERO Elementor-meta references;
 // the grep gate asserts this.
-import { buildBlogDraftPayloadThroughSystem } from "@cinatra-ai/blog-connector";
+// Draft payloads build through the `blog-system` capability the blog-connector
+// registers at activation (lazy/guarded host-access cutover) — absence fails
+// the draft build with a descriptive error through the existing failure path.
+import { requireBlogSystem } from "@/lib/blog-system-provider";
 import { readBlogImageArtifactBytes } from "@/lib/blog-image-materializer";
 
 export async function publishBlogPostDraftToWordPress(input: {
@@ -68,7 +71,7 @@ export async function publishBlogPostDraftToWordPress(input: {
   }
 
   await input.onProgress?.("Preparing the WordPress post payload.", instance.name);
-  const builtDraft = await buildBlogDraftPayloadThroughSystem(
+  const builtDraft = await requireBlogSystem().buildDraftPayload(
     {
       postTitle: input.postTitle,
       postExcerpt: input.postExcerpt,

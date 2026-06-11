@@ -1,16 +1,12 @@
 export * from "./store";
 export * from "./generation";
-// The converter registry lives in @cinatra-ai/blog-connector.
-// Re-exported here so existing `@cinatra-ai/asset-blog` consumers keep
-// their import path while the asset-blog MCP surface remains available.
-export {
-  registerWordPressContentConverter,
-} from "@cinatra-ai/blog-connector";
-export type {
-  WordPressContentConverterInput,
-  WordPressContentConverterOutput,
-  WordPressContentConverterFn,
-} from "@cinatra-ai/blog-connector";
+// The legacy WP content-converter registry lives in the blog-connector; the
+// one remaining core consumer (the blog_wordpress_content_convert primitive in
+// ./mcp/handlers.ts) resolves it through the `blog-system` capability at call
+// time. The old re-exports here had NO core/packages consumers and were
+// removed with the lazy/guarded host-access cutover — a
+// new converter registration belongs in a BlogConnector registered via the
+// `blog-connector` capability, never a host-side re-export.
 export * from "./gemini";
 export { contentBlogPlugin } from "./plugin/definition";
 export { createBlogContentModule } from "./integration/module";

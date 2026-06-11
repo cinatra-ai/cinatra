@@ -29,7 +29,10 @@ import {
   readBlogPostsProjectById,
   updateBlogPostDraftImage,
 } from "@/lib/blog/store";
-import type { BlogProjectStore } from "@cinatra-ai/blog-connector";
+// Structurally identical to the blog facade's `BlogProjectStore` interface;
+// the SDK shape keeps host code free of connector type edges (type imports
+// count toward the required-extensions cover gate).
+import type { HostBlogProjectStore as BlogProjectStore } from "@cinatra-ai/sdk-extensions";
 
 /**
  * Host-side `BlogProjectStore` impl injected into the facade. The shape

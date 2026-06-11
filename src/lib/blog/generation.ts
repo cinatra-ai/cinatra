@@ -39,8 +39,12 @@ import { createInProcessPrimitiveTransport } from "@cinatra-ai/mcp-client";
 // The asset-blog `blog_post_publish_linkedin_*` primitives remain compatibility
 // wrappers: only the actual provider/transport call routes through the facade;
 // project state and HITL lifecycle stay in asset-blog.
-import { publishSocialMediaPostThroughSystem } from "@cinatra-ai/social-media-connector";
-import { materializeBlogImageThroughSystem } from "@cinatra-ai/blog-connector";
+// Both facades resolve through the capability registry at call time
+// (lazy/guarded host-access cutover): `social-media-system` for the LinkedIn
+// publish step, `blog-system` for image materialization. Absence fails the
+// respective pipeline step with a descriptive error (existing failure paths).
+import { requireSocialMediaSystem } from "@/lib/social-media-system-provider";
+import { requireBlogSystem } from "@/lib/blog-system-provider";
 // Post body and idea summary live in semantic artifacts; resolve via the
 // reader helpers when image regeneration, WordPress publishing, or LinkedIn
 // publishing flows need the body string.
@@ -203,7 +207,7 @@ export async function runBlogPostImageRegenerationJob(
     // Regeneration mints a new artifact id because each materialization is a
     // fresh `createSemanticArtifact` call. Post-record refs are swapped to the
     // new pair; the previous artifact remains in `/artifacts` for replay.
-    const imageMaterialization = await materializeBlogImageThroughSystem({
+    const imageMaterialization = await requireBlogSystem().materializeBlogImage({
       imageBase64: image.imageBase64,
       imageMimeType: image.imageMimeType,
       title: post.title,
@@ -691,7 +695,7 @@ export async function runLinkedInDraftPublishJob(input: { projectId: string; pos
           })
         : null;
 
-    const published = await publishSocialMediaPostThroughSystem(
+    const published = await requireSocialMediaSystem().publishPost(
       {
         accountId: draft.linkedinAccountId,
         destinationType: draft.destinationType,

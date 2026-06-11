@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 37,
-      "files": 25
+      "edges": 29,
+      "files": 18
     }
   },
   "edges": {
@@ -51,22 +51,6 @@
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/nango-connector"
     ],
-    "src/lib/blog-project-store.ts": [
-      "@cinatra-ai/blog-connector"
-    ],
-    "src/lib/blog/generation.ts": [
-      "@cinatra-ai/blog-connector",
-      "@cinatra-ai/social-media-connector"
-    ],
-    "src/lib/blog/index.ts": [
-      "@cinatra-ai/blog-connector"
-    ],
-    "src/lib/blog/mcp/handlers.ts": [
-      "@cinatra-ai/blog-connector"
-    ],
-    "src/lib/blog/wordpress.ts": [
-      "@cinatra-ai/blog-connector"
-    ],
     "src/lib/dev-auto-setup.ts": [
       "@cinatra-ai/nango-connector"
     ],
@@ -90,12 +74,6 @@
     "src/lib/setup-wizard.ts": [
       "@cinatra-ai/nango-connector",
       "@cinatra-ai/openai-connector"
-    ],
-    "src/lib/trigger-email-send-use-cases.ts": [
-      "@cinatra-ai/email-connector"
-    ],
-    "src/lib/types.ts": [
-      "@cinatra-ai/email-connector"
     ]
   },
   "note": "True-IoC HOST->EXTENSION import baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36). Each entry is a CURRENT core(src/)->extension import edge; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the one-PR un-exempt seed transition is retired; --write-baseline refuses grown output). Exempt: ONLY the generated manifest tree (the explicit generator-emitted file list) and tests; anthropic-connector is un-exempt and its host->ext edges are counted here. Regenerate (shrink-only) with `node scripts/audit/core-extension-import-ban.mjs --write-baseline`."

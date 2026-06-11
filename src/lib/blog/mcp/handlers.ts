@@ -1,8 +1,11 @@
 import type { PrimitiveInvocationRequest } from "@cinatra-ai/mcp-client";
 import { decodeCursor, buildListPage } from "@/lib/mcp-pagination";
 import { createBlogContentUseCases } from "../application/use-cases";
-// Relocated to @cinatra-ai/blog-connector.
-import { getWordPressContentConverter } from "@cinatra-ai/blog-connector";
+// The legacy WP content-converter lookup resolves through the `blog-system`
+// capability the blog-connector registers at activation (lazy/guarded
+// host-access cutover). Connector ABSENT degrades exactly like "no converter
+// registered": the passthrough result below (converted: false).
+import { resolveBlogSystem } from "@/lib/blog-system-provider";
 import * as schemas from "./schemas";
 
 const useCases = createBlogContentUseCases();
@@ -153,7 +156,9 @@ export function createBlogContentPrimitiveHandlers() {
 
     "blog_wordpress_content_convert": async (request: PrimitiveInvocationRequest<unknown>) => {
       const input = schemas.convertWordPressContentSchema.parse(request.input);
-      const converter = getWordPressContentConverter(input.wordpressInstanceId);
+      const converter = resolveBlogSystem()?.getWordPressContentConverter(
+        input.wordpressInstanceId,
+      );
       if (!converter) {
         return {
           title: input.title,

@@ -120,10 +120,15 @@ async function loadDefaultGetDraftsByIds(): Promise<TriggerEmailSendDeps["getDra
 }
 
 async function loadDefaultSendEmail(): Promise<TriggerEmailSendDeps["sendEmail"]> {
-  // Use the provider-neutral facade so dev-mode recipient override and
-  // provider routing stay centralized in the email connector layer.
-  const mod = await import("@cinatra-ai/email-connector");
-  return mod.sendEmailThroughSystem as unknown as TriggerEmailSendDeps["sendEmail"];
+  // The provider-neutral facade (dev-mode recipient override + provider
+  // routing stay centralized in the email connector layer) resolves through
+  // the `email-system` capability the email-connector registers at activation
+  // (lazy/guarded host-access cutover). Connector absent → the send fails
+  // with a descriptive error (same failure class as "No connected email
+  // connector is available.").
+  const { requireEmailSystemFacade } = await import("@/lib/email-transport-provider");
+  const facade = requireEmailSystemFacade();
+  return facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
 }
 
 function buildLazyDefaultDeps(): TriggerEmailSendDeps {
