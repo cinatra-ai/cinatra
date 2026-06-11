@@ -1,9 +1,10 @@
 import "server-only";
 
-// CRM object types (account / contact / list) register together via the
-// crm-connector; the retired entity-accounts / entity-contacts / lists
-// packages were deleted in the Twenty migration.
-import { registerCrmObjectTypes } from "@cinatra-ai/crm-connector/integration/register-object-types";
+// Extension-shipped object types (the CRM account / contact / list set today)
+// register through the `object-type-registrar` capability their connector
+// registers at activation — resolved generically here, never by importing an
+// extension package by name (lazy/guarded host-access cutover).
+import { runExtensionObjectTypeRegistrars } from "@/lib/extension-object-type-registrars";
 // Blog object types are registered from the host module. The host helper
 // delegates to the asset-blog implementation.
 import { registerBlogObjectTypes } from "@/lib/blog-project-store";
@@ -53,7 +54,7 @@ export const OBJECT_TYPE_NEW_URLS: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 export function registerAllObjectTypes(): void {
-  registerCrmObjectTypes();
+  runExtensionObjectTypeRegistrars();
   registerBlogObjectTypes();
   registerAgentBuilderObjectTypes();
   registerWorkflowObjectTypes();

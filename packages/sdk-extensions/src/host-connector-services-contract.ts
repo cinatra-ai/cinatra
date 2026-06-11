@@ -26,6 +26,9 @@
 // as values when registering the impls. None of these types import host
 // internals — every shape is structural.
 
+import type { ObjectsProvider } from "./objects-provider-contract";
+import type { CrmConnector } from "./crm-connector-contract";
+
 /** Capability ids the HOST registers per-concern service impls under. The
  * `@cinatra-ai/host:` prefix is reserved for host-provided services (it is not
  * an extension package name). */
@@ -39,6 +42,7 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   instanceIdentity: "@cinatra-ai/host:instance-identity",
   emailRouting: "@cinatra-ai/host:email-routing",
   blogRouting: "@cinatra-ai/host:blog-routing",
+  objectsIntegration: "@cinatra-ai/host:objects-integration",
 } as const;
 
 /** The legacy global connector-config KV (raw `connectorId`-keyed rows — NOT
@@ -203,3 +207,75 @@ export const CRM_PROVIDER_CAPABILITY = "crm-provider";
 
 /** The email-send capability id concrete email providers register under. */
 export const EMAIL_SEND_CAPABILITY = "email-send";
+
+// ---------------------------------------------------------------------------
+// Connector-exposed host surfaces (the lazy/guarded host-access cutover): a
+// connector exposes the settings/status/integration readers the HOST needs as
+// capability providers from its own `register(ctx)`, and host consumers
+// resolve them at call time — the host names no connector package. Connectors
+// register with the STRING ids (additive; an old host simply never resolves
+// them); the constants + provider types below are for the host's resolver
+// modules, which structurally guard every impl before trusting it.
+// ---------------------------------------------------------------------------
+
+/**
+ * The host-published OBJECTS INTEGRATION surface (per-concern host service,
+ * `@cinatra-ai/host:objects-integration`): the host-bound objects provider +
+ * the capability-aware CRM provider lookup, as VALUES through the capability
+ * registry — so a connector's serverEntry graph can register object types,
+ * sync adapters, and pointer writers WITHOUT value-importing a host peer
+ * (the host-peer-value-import ban).
+ */
+export type HostObjectsIntegrationService = {
+  /** The host-bound objects provider, or null while unwired (next build). */
+  getObjectsProvider(): ObjectsProvider | null;
+  /** Registry + capability-aware CRM provider lookup (null when absent). */
+  lookupCrmProvider(providerId: string): CrmConnector | null;
+};
+
+/**
+ * An extension that ships object types registers a registrar here; the host's
+ * `registerAllObjectTypes()` invokes every registered provider (idempotent —
+ * replace-by-id on the object registry) instead of importing the extension.
+ */
+export const OBJECT_TYPE_REGISTRAR_CAPABILITY = "object-type-registrar";
+export type ObjectTypeRegistrarProvider = {
+  registerObjectTypes(): void;
+};
+
+/**
+ * Idempotent object-sync registration (CRM sync adapters today) the host's
+ * background repair cycles invoke before processing the projection outbox.
+ */
+export const CRM_SYNC_BOOTSTRAP_CAPABILITY = "crm-sync-bootstrap";
+export type CrmSyncBootstrapProvider = {
+  ensureSyncRegistrations(): void;
+};
+
+/** Payload of a durable CRM pointer write (the twenty-pointer-repair job). */
+export type CrmPointerWritePayload = {
+  type: "account" | "contact";
+  externalId: string;
+  name: string;
+  orgId?: string | null;
+  userId?: string | null;
+};
+
+/**
+ * Durable CRM pointer writes. The impl owns the register-types-before-write
+ * ordering the host previously had to encode around `writePointerByType`.
+ */
+export const CRM_POINTER_WRITER_CAPABILITY = "crm-pointer-writer";
+export type CrmPointerWriterProvider = {
+  writePointer(payload: CrmPointerWritePayload): Promise<void>;
+};
+
+/**
+ * Dev-tunnel (Tailscale today) local status reads for the host's
+ * development/tunnel surface. Absence degrades to "not connected".
+ */
+export const DEV_TUNNEL_STATUS_CAPABILITY = "dev-tunnel-status";
+export type DevTunnelStatusProvider = {
+  getConnectionStatus(): { connected: boolean };
+  getFunnelUrlPreview(): string | null;
+};

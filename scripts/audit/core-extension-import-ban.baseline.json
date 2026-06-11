@@ -5,8 +5,8 @@
       "files": 0
     },
     "runtime-coupling": {
-      "edges": 41,
-      "files": 28
+      "edges": 37,
+      "files": 25
     }
   },
   "edges": {
@@ -27,9 +27,6 @@
       "@cinatra-ai/apollo-connector",
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/openai-connector"
-    ],
-    "src/app/configuration/development/page.tsx": [
-      "@cinatra-ai/tailscale-connector"
     ],
     "src/app/configuration/mcp/llm-access/test/route.ts": [
       "@cinatra-ai/anthropic-connector",
@@ -53,10 +50,6 @@
     "src/lib/a2a-dev-auto-connect.ts": [
       "@cinatra-ai/gemini-connector",
       "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/background-jobs.ts": [
-      "@cinatra-ai/crm-connector",
-      "@cinatra-ai/twenty-connector"
     ],
     "src/lib/blog-project-store.ts": [
       "@cinatra-ai/blog-connector"
@@ -90,9 +83,6 @@
     ],
     "src/lib/nango.ts": [
       "@cinatra-ai/nango-connector"
-    ],
-    "src/lib/register-all-object-types.ts": [
-      "@cinatra-ai/crm-connector"
     ],
     "src/lib/registry-credentials.ts": [
       "@cinatra-ai/nango-connector"
