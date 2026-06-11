@@ -42,9 +42,9 @@ Cinatra talks to PostgreSQL raw via `pg`. Two mechanisms evolve the schema:
   materialized migrations directory to revert its newest rows first.
 - **Existing deployments** (operator upgrade path): nothing to do beyond a
   normal upgrade. The first post-upgrade boot or `cinatra setup …` creates
-  `<schema>.pgmigrations` and applies `core__0001`/`core__0002`; on databases
-  that already carry those changes every statement is an `IF [NOT] EXISTS`
-  no-op, so the run only backfills the ledger. `psql`-applied release-note
+  `<schema>.pgmigrations` and applies the pending chain (`core__0001`…
+  `core__0003`); on databases that already carry those changes every
+  statement is guarded, so the run only backfills the ledger. `psql`-applied release-note
   migrations are retired going forward — new changes auto-apply at boot/setup.
 
 The runner (single implementation:
@@ -90,8 +90,8 @@ here, even when touched in the same pull request:
   (`src/lib/extension-migration-host.ts`) at boot / install / hot-activate.
   Their artifacts live in the extension's own repository — never here — so
   this directory's artifact convention does not apply to them. The authoring
-  contract is documented for extension authors in
-  `packages/sdk-extensions/README.md` (#119).
+  contract for extension authors lands in `packages/sdk-extensions/README.md`
+  with cinatra#119.
 
 ## What counts as a migration artifact
 
