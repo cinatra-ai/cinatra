@@ -79,6 +79,22 @@ describe("computeDevLock", () => {
     ).toThrow(/NO existing pin/);
   });
 
+  it("a kept (unselected) pin whose repo no longer matches the config is refused (retarget needs a re-pin)", () => {
+    expect(() =>
+      computeDevLock({
+        config,
+        requiredLockNames,
+        existingPackages: [
+          // resolved against a DIFFERENT repo than config now names:
+          { packageName: "@cinatra-ai/web-research-agent", repo: "cinatra-ai/old-research-agent", resolvedSha: SHA_OLD },
+          { packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_OLD },
+        ],
+        select: ["resend-connector"],
+        resolveHead: () => SHA_NEW,
+      }),
+    ).toThrow(/must be re-pinned/);
+  });
+
   it("a dropped config entry simply disappears from the lock (prune-by-recompute)", () => {
     const { packages } = computeDevLock({
       config: { "@cinatra-ai/resend-connector": { url: "https://github.com/cinatra-ai/resend-connector.git" } },

@@ -16,6 +16,13 @@ on:
       # lock bump moves the README universe it validates):
       - 'cinatra-required-extensions.lock.json'
       - 'cinatra-dev-extensions.lock.json'
+      # Clone-back implementation closure + the config that owns
+      # cinatraDevExtensions (a clone-back change moves what materializes):
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'packages/cli/src/cinatra-dev-extensions.mjs'
+      - 'packages/cli/src/dev-repo-sync.mjs'
+      - 'package.json'
       - 'scripts/audit/__tests__/**'
       - 'docs/developer/extension-readme.md'
       - '.github/workflows/extension-readme-gate.yml'
@@ -30,6 +37,13 @@ on:
       # lock bump moves the README universe it validates):
       - 'cinatra-required-extensions.lock.json'
       - 'cinatra-dev-extensions.lock.json'
+      # Clone-back implementation closure + the config that owns
+      # cinatraDevExtensions (a clone-back change moves what materializes):
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'packages/cli/src/cinatra-dev-extensions.mjs'
+      - 'packages/cli/src/dev-repo-sync.mjs'
+      - 'package.json'
       - 'scripts/audit/__tests__/**'
       - 'docs/developer/extension-readme.md'
       - '.github/workflows/extension-readme-gate.yml'

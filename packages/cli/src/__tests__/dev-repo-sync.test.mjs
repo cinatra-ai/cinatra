@@ -283,6 +283,20 @@ describe("syncOneRepo — pinned mode (cinatra#141: detached checkout at a lock 
     expect(deps.gitNames.some((g) => g.startsWith("fetch"))).toBe(false);
   });
 
+  it("a warm checkout ATTACHED to a branch at the pin is detached in place (still 'pinned', changed:false)", () => {
+    const state = {
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: URL,
+      abbrev: "main", // attached, branch happens to point at the pin
+      head: SHA,
+      hasCommit: true,
+    };
+    const deps = makePinnedDeps(state);
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r).toMatchObject({ action: "pinned", changed: false, pinnedSha: SHA });
+    expect(deps.gitNames).toContain(`checkout --detach ${SHA}`);
+  });
+
   it("existing clean checkout at a DIFFERENT head → re-pins detached (action 'repinned')", () => {
     const state = {
       existsPaths: new Set([DEST, path.join(DEST, ".git")]),

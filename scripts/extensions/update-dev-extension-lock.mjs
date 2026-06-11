@@ -104,6 +104,16 @@ export function computeDevLock({ config, requiredLockNames, existingPackages = [
           `${t.pkgName}: not selected and has NO existing pin — include it in --select or run without --select.`,
         );
       }
+      // A kept pin must still point at the repo the config names. Silently
+      // rewriting `repo` around an old sha would mask a retarget (the pinned
+      // loader's slug guard would then pass a sha that was never resolved
+      // against the new repo) — a retargeted package must be re-pinned.
+      if (existing.repo.toLowerCase() !== repo.toLowerCase()) {
+        throw new Error(
+          `${t.pkgName}: the config now targets "${repo}" but the kept pin was resolved against ` +
+            `"${existing.repo}" — a retargeted repo must be re-pinned (add it to --select).`,
+        );
+      }
       packages.push({ packageName: t.pkgName, repo, resolvedSha: existing.resolvedSha });
       keptCount++;
       continue;

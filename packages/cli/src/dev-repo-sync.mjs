@@ -259,6 +259,10 @@ export function syncOneRepo({
     }
     const headBefore = git(["rev-parse", "HEAD"], dest).trim();
     if (headBefore === sha) {
+      // The pinned contract is "AT the pin and DETACHED" — a warm checkout
+      // sitting on a branch that happens to point at the pin is still
+      // detached here (cheap; content unchanged, so `changed` stays false).
+      if (curBranch !== "HEAD") git(["checkout", "--detach", sha], dest);
       return { pkgName, action: "pinned", changed: false, pinnedSha: sha };
     }
     log(`  ${pkgName}: re-pinning ${headBefore.slice(0, 12)} -> ${sha.slice(0, 12)} (detached)`);
