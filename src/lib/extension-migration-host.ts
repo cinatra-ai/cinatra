@@ -206,6 +206,7 @@ export type TrustedMigrationRecord = {
   storeDir: string;
   migrationsDir?: string;
   legacyMigrationsDeclared?: boolean;
+  invalidMigrationsDirDeclared?: boolean;
 };
 
 /**

@@ -78,6 +78,8 @@ vi.mock("@/lib/extension-install-anchor", () => ({
 }));
 vi.mock("@/lib/extension-migration-host", () => ({
   applyExtensionMigrationsFromStore: vi.fn(async () => {}),
+  // Validate-only preflight (#118): these fixtures declare no migrations.
+  preflightExtensionMigrationsFromStore: vi.fn(async () => null),
 }));
 
 import {

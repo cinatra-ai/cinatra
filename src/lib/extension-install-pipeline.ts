@@ -133,6 +133,17 @@ export type InstallPipelineDeps = {
    */
   applyMigrations?: (input: { storeDir: string; packageName: string; version: string; orgId: string | null }) => Promise<void>;
   /**
+   * Validate-only migration preflight (#118): returns true when the
+   * materialized package DECLARES host migrations (cinatra.migrationsDir),
+   * throws on a malformed declaration or the RETIRED legacy
+   * `cinatra.migrations` JSON-DSL field. Runs for EVERY install (not just
+   * trusted-signed) so a non-signed package that declares migrations is
+   * REFUSED before finalize — its DDL would never run, and a finalized
+   * install that can never activate is a trap. Optional so existing unit
+   * tests can omit it; the default factory wires the host preflight.
+   */
+  preflightMigrations?: (input: { storeDir: string; packageName: string }) => Promise<boolean>;
+  /**
    * Install-op journal hooks (the saga's idempotency + the anchor's `finalized`
    * trust gate run over these). Optional so existing unit tests can omit them;
    * the default factory wires the journal store.
@@ -556,6 +567,21 @@ export async function installExtensionFromRegistry(
     // (the default factory does); a package that declares no migrationsDir is a
     // no-op (the common case), and the RETIRED legacy `cinatra.migrations`
     // JSON-DSL field throws fail-closed.
+    if (deps.preflightMigrations) {
+      // Validate-only, EVERY install: throws on the retired legacy field or a
+      // malformed declaration; returns whether host migrations are declared.
+      const declaresMigrations = await deps.preflightMigrations({
+        storeDir: mat.storeDir,
+        packageName: input.packageName,
+      });
+      if (declaresMigrations && !autoGrantPrivileged) {
+        throw new Error(
+          `[install-pipeline] ${input.packageName} declares host migrations (cinatra.migrationsDir) but this ` +
+            `install is not trusted-signed — host DDL requires a verified signature (#118). Refusing to finalize: ` +
+            `the migrations would never run and the install could never safely activate.`,
+        );
+      }
+    }
     if (deps.applyMigrations && autoGrantPrivileged) {
       await deps.applyMigrations({
         storeDir: mat.storeDir,
@@ -1017,6 +1043,14 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         packageName: i.packageName,
         packageVersion: i.version,
       });
+    },
+    preflightMigrations: async (i) => {
+      const { preflightExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
+      const pre = await preflightExtensionMigrationsFromStore({
+        storeDir: i.storeDir,
+        packageName: i.packageName,
+      });
+      return pre !== null;
     },
     recordRequestedGrant: (g) =>
       recordRequestedGrant({

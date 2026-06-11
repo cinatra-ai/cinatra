@@ -577,17 +577,30 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         throw new WorkflowInstallRequiresRebuildError(cubeVerdict.reason ?? "extension requires a host rebuild to register cubes", cubeVerdict.offendingCubes ?? []);
       }
 
-      // (d) migration preflight (validate-only; applying migrations is a
-      // separate, trust-gated step). The contract check is fs-only — path
+      // (d) migration preflight (#118): the WORKFLOW install path has no
+      // host-migration APPLY step (declarative BPMN packages run no server
+      // code that needs host tables), so ANY host-migration declaration —
+      // the new `cinatra.migrationsDir` OR the RETIRED legacy
+      // `cinatra.migrations` JSON-DSL field — is REFUSED fail-closed here:
+      // finalizing an install whose declared DDL never runs would be a trap.
+      // A package needing host migrations must ship a serverEntry and ride
+      // the runtime install path (extension-install-pipeline), where the
+      // trusted-signed apply step exists. The check is fs-only (path
       // containment + the `ext_<scope>_<pkg>__NNNN_<desc>.mjs` filename/seq
-      // contract — and never imports a migration module. The RETIRED legacy
-      // `cinatra.migrations` JSON-DSL field is rejected here too (#118).
-      // Dormant for the current cohort (no workflow extension declares
-      // migrations) — wired so a future one is gated.
+      // contract) and never imports a migration module. Dormant for the
+      // current cohort (no workflow extension declares migrations).
+      let migrationPreflight: Awaited<ReturnType<typeof preflightExtensionMigrationsFromStore>>;
       try {
-        await preflightExtensionMigrationsFromStore({ storeDir, packageName });
+        migrationPreflight = await preflightExtensionMigrationsFromStore({ storeDir, packageName });
       } catch (e) {
         throw new WorkflowInstallPreflightError("MIGRATION_INVALID", e instanceof Error ? e.message : String(e));
+      }
+      if (migrationPreflight !== null) {
+        throw new WorkflowInstallPreflightError(
+          "MIGRATION_UNSUPPORTED",
+          `${packageName} declares host migrations (cinatra.migrationsDir) but the workflow install path has no ` +
+            `migration apply step — ship a serverEntry and install through the runtime path instead (#118)`,
+        );
       }
 
       return { manifest: sidecar.manifest, dashboardConfig: parsedConfig };

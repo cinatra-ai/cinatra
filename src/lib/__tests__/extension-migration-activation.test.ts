@@ -220,6 +220,50 @@ describe("extension migration activation — install pipeline call-site", () => 
     expect(applyMigrations).not.toHaveBeenCalled();
     expect(phases).not.toContain("preflighted");
   });
+
+  it("REFUSES to finalize an UNSIGNED (bootstrap) install of a package that DECLARES migrations — its DDL would never run", async () => {
+    const phases: string[] = [];
+    const applyMigrations = vi.fn(async () => {});
+    await expect(
+      installExtensionFromRegistry(
+        // The consumer fixture declares cinatra.migrationsDir; no signature is
+        // configured, so the install is at most trusted-bootstrap.
+        { packageName: "@cinatra-ai/notes-connector", version: "1.3.0", orgId: "org_1" },
+        baseDeps({
+          applyMigrations,
+          preflightMigrations: async (i) => {
+            const { preflightExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
+            return (await preflightExtensionMigrationsFromStore(i)) !== null;
+          },
+          advanceInstallOpPhase: async ({ phase }) => {
+            phases.push(phase);
+          },
+        }),
+      ),
+    ).rejects.toThrow(/declares host migrations[\s\S]*not trusted-signed/);
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(phases).not.toContain("finalized");
+  });
+
+  it("REFUSES to finalize an install whose store manifest still declares the RETIRED legacy field (preflight throws for every tier)", async () => {
+    const phases: string[] = [];
+    await expect(
+      installExtensionFromRegistry(
+        { packageName: "@cinatra-ai/notes-connector", version: "1.2.0", orgId: "org_1" },
+        baseDeps({
+          materialize: async () => ({ storeDir: LEGACY_DIR, digest: "deadbeef", integrity: "sha512-abc", contentHash: "ch" }),
+          preflightMigrations: async (i) => {
+            const { preflightExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
+            return (await preflightExtensionMigrationsFromStore(i)) !== null;
+          },
+          advanceInstallOpPhase: async ({ phase }) => {
+            phases.push(phase);
+          },
+        }),
+      ),
+    ).rejects.toThrow(/cinatra\.migrations\) is retired/);
+    expect(phases).not.toContain("finalized");
+  });
 });
 
 describe("extension migration activation — trusted-record pass (loader-gated)", () => {

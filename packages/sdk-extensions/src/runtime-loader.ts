@@ -46,6 +46,13 @@ export type PackageStoreRecord = LoaderRecord & {
    */
   legacyMigrationsDeclared?: boolean;
   /**
+   * True when `cinatra.migrationsDir` is PRESENT but malformed (non-string /
+   * blank). Carried so a broken declaration still COUNTS as declaring host
+   * migrations — the host preflight then rejects it with a precise error
+   * instead of the package silently activating as "no migrations".
+   */
+  invalidMigrationsDirDeclared?: boolean;
+  /**
    * UI hot-pluggability classification (`cinatra.uiSurface`), if declared. A
    * MARKETPLACE-INSTALLED `schema-config` connector — discovered from the store,
    * not the static manifest — carries its surface here so the dispatch route can
@@ -69,8 +76,13 @@ export type PackageStoreRecord = LoaderRecord & {
 export function recordDeclaresHostMigrations(rec: {
   migrationsDir?: string;
   legacyMigrationsDeclared?: boolean;
+  invalidMigrationsDirDeclared?: boolean;
 }): boolean {
-  return typeof rec.migrationsDir === "string" || rec.legacyMigrationsDeclared === true;
+  return (
+    typeof rec.migrationsDir === "string" ||
+    rec.legacyMigrationsDeclared === true ||
+    rec.invalidMigrationsDirDeclared === true
+  );
 }
 
 /** Minimal injected filesystem surface (so the core is testable with a fake fs). */
@@ -129,6 +141,9 @@ export function recordFromManifest(
     typeof cinatra.migrationsDir === "string" && cinatra.migrationsDir.trim().length > 0
       ? cinatra.migrationsDir
       : undefined;
+  // A PRESENT-but-malformed migrationsDir still counts as a declaration —
+  // fail-closed downstream, never silently "no migrations".
+  const invalidMigrationsDirDeclared = cinatra.migrationsDir !== undefined && migrationsDir === undefined;
   const legacyMigrationsDeclared = cinatra.migrations !== undefined;
   return {
     packageName: name,
@@ -140,6 +155,7 @@ export function recordFromManifest(
     ...(uiSurface ? { uiSurface } : {}),
     ...(configSchema ? { configSchema } : {}),
     ...(migrationsDir ? { migrationsDir } : {}),
+    ...(invalidMigrationsDirDeclared ? { invalidMigrationsDirDeclared } : {}),
     ...(legacyMigrationsDeclared ? { legacyMigrationsDeclared } : {}),
   };
 }

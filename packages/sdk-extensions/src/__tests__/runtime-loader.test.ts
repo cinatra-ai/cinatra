@@ -137,13 +137,16 @@ describe("recordFromManifest", () => {
     expect(recordDeclaresHostMigrations(rec!)).toBe(false);
   });
 
-  it("fail-closes a blank/non-string migrationsDir to undefined (the host preflight rejects it at apply time)", () => {
-    expect(
-      recordFromManifest("/d/blank", manifest("@x/blank", { kind: "connector", migrationsDir: "  " }))?.migrationsDir,
-    ).toBeUndefined();
-    expect(
-      recordFromManifest("/d/num", manifest("@x/num", { kind: "connector", migrationsDir: 7 }))?.migrationsDir,
-    ).toBeUndefined();
+  it("a PRESENT-but-malformed migrationsDir still COUNTS as a declaration (fail-closed downstream, never silent 'no migrations')", () => {
+    for (const bad of ["  ", 7, null, ["a"]]) {
+      const rec = recordFromManifest(
+        "/d/badmig",
+        manifest("@x/badmig", { kind: "connector", migrationsDir: bad }),
+      );
+      expect(rec?.migrationsDir, JSON.stringify(bad)).toBeUndefined();
+      expect(rec?.invalidMigrationsDirDeclared, JSON.stringify(bad)).toBe(true);
+      expect(recordDeclaresHostMigrations(rec!), JSON.stringify(bad)).toBe(true);
+    }
   });
 });
 

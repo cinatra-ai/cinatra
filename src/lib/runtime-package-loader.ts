@@ -190,7 +190,28 @@ export async function loadRuntimePackageExtensions(
   // that still declares the RETIRED legacy `cinatra.migrations` JSON-DSL field,
   // which the host rejects fail-closed — is also refused. Idempotent via the
   // shared ledger; a no-op for the common case (no extension declares migrations).
-  const signedTrusted = trusted.filter((rec) => signedTrustedNames.has(rec.packageName));
+  // FAIL-CLOSED on ambiguous identity BEFORE any DDL: the activation driver
+  // (runRuntimePackageActivation) refuses every record of a packageName that
+  // appears more than once in the store — but it runs AFTER this migration
+  // pass. Running migrations for an ambiguous name could execute DDL from a
+  // record that activation then refuses, so the same refusal applies here,
+  // computed over the full discovered candidate set.
+  const candidateCountByName = new Map<string, number>();
+  for (const rec of candidates) {
+    candidateCountByName.set(rec.packageName, (candidateCountByName.get(rec.packageName) ?? 0) + 1);
+  }
+  const ambiguousNames = new Set(
+    [...candidateCountByName].filter(([, n]) => n > 1).map(([name]) => name),
+  );
+  if (ambiguousNames.size > 0) {
+    console.warn(
+      `[runtime-package-loader] refusing ${ambiguousNames.size} ambiguous package name(s) before the ` +
+        `migration pass (multiple store records; fail-closed): ${[...ambiguousNames].join(", ")}`,
+    );
+  }
+  const signedTrusted = trusted.filter(
+    (rec) => signedTrustedNames.has(rec.packageName) && !ambiguousNames.has(rec.packageName),
+  );
   const bootstrapWithDeclaredMigrations = trusted.filter(
     (rec) => !signedTrustedNames.has(rec.packageName) && recordDeclaresHostMigrations(rec),
   );
