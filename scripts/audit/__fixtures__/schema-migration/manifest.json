@@ -36,6 +36,12 @@
       "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0003_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
     },
     {
+      "file": "destructive-module-no-manifest.diff",
+      "expect": "fail",
+      "category": "unmanifested executable module (gate-bypass attempt)",
+      "description": "Adds a VALID migrations/core/core__0003_*.mjs module carrying destructive SQL with no manifest entry and no in-scope schema-file diff. The runner executes every valid core/ module regardless of the manifest, so migration-state inconsistency must fail standalone — not only when a destructive drizzle-store diff is present."
+    },
+    {
       "file": "additive-nullable-column-no-artifact.diff",
       "expect": "pass",
       "category": "additive, no artifact",

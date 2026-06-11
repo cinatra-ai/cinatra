@@ -734,6 +734,12 @@ export function runGate({ diffText, readBaseFile }) {
   // brick the runner's boot preflight) fails on its own — no destructive
   // schema change required.
   if (artifact.integrity.length > 0) verdict = "fail";
+  // Any migration-state inconsistency also fails on its own: the runner
+  // executes every valid migrations/core/ module regardless of the manifest,
+  // so an unmanifested executable module — or a manifest that lies about its
+  // modules (entry without module, seq drift) — must never pass merely
+  // because no in-scope schema file changed in the same diff.
+  if (artifact.problems.length > 0) verdict = "fail";
   if (destructive.length > 0) {
     if (!artifact.complete) verdict = "fail";
     else if (!artifact.newEntries.some((e) => e?.destructive === true)) {
