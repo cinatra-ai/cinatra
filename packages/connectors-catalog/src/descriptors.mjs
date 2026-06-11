@@ -22,16 +22,16 @@
  */
 
 // Every catalog entry's packageId equals `@cinatra-ai/<slug>` (the slug is the
-// extension directory and workspace-package short name). Renamed entries derive
-// their packageId from the slug instead of re-pinning the package-name literal
-// in core (instance-coupling gate: a rename must resolve away from the pinned
-// literal, not re-pin it under the new name).
-const packageIdForSlug = (slug) => `@cinatra-ai/${slug}`;
+// extension directory and workspace-package short name), so packageIds are
+// DERIVED from the slug for every entry — the catalog pins no package-name
+// literal in core (cinatra#35 / IOC-44; instance-coupling gate). A
+// rename must resolve away from the pinned literal, not re-pin it under the
+// new name.
+export const packageIdForSlug = (slug) => `@cinatra-ai/${slug}`;
 
-/** @type {ConnectorDescriptor[]} */
-export const CONNECTOR_DESCRIPTORS = [
+/** @type {Omit<ConnectorDescriptor, "packageId">[]} */
+const RAW_DESCRIPTORS = [
   {
-    packageId: "@cinatra-ai/openai-connector",
     slug: "openai-connector",
     displayName: "OpenAI",
     defaultVisibility: "admin",
@@ -39,7 +39,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/anthropic-connector",
     slug: "anthropic-connector",
     displayName: "Anthropic",
     defaultVisibility: "admin",
@@ -47,7 +46,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/gemini-connector",
     slug: "gemini-connector",
     displayName: "Gemini",
     defaultVisibility: "admin",
@@ -57,7 +55,6 @@ export const CONNECTOR_DESCRIPTORS = [
   {
     // Inbound MCP-client connector for Claude Desktop, Claude.ai, ChatGPT,
     // and any MCP-compatible client that connects to Cinatra via OAuth.
-    packageId: packageIdForSlug("mcp-client-connector"),
     slug: "mcp-client-connector",
     displayName: "MCP Client",
     defaultVisibility: "workspace",
@@ -65,7 +62,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/gmail-connector",
     slug: "gmail-connector",
     displayName: "Gmail",
     defaultVisibility: "workspace",
@@ -73,7 +69,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/google-calendar-connector",
     slug: "google-calendar-connector",
     displayName: "Google Calendar",
     defaultVisibility: "workspace",
@@ -81,7 +76,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/apollo-connector",
     slug: "apollo-connector",
     displayName: "Apollo",
     defaultVisibility: "workspace",
@@ -89,7 +83,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/apify-connector",
     slug: "apify-connector",
     displayName: "Apify",
     defaultVisibility: "workspace",
@@ -97,7 +90,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/linkedin-connector",
     slug: "linkedin-connector",
     displayName: "LinkedIn",
     defaultVisibility: "workspace",
@@ -105,7 +97,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/youtube-connector",
     slug: "youtube-connector",
     displayName: "YouTube",
     defaultVisibility: "workspace",
@@ -113,7 +104,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/wordpress-mcp-connector",
     slug: "wordpress-mcp-connector",
     displayName: "WordPress MCP",
     defaultVisibility: "admin",
@@ -121,7 +111,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/drupal-mcp-connector",
     slug: "drupal-mcp-connector",
     displayName: "Drupal MCP",
     defaultVisibility: "admin",
@@ -131,7 +120,6 @@ export const CONNECTOR_DESCRIPTORS = [
   {
     // Embeddable assistant chat-widget setup for WordPress (lifted from the
     // retired /configuration/assistants/wordpress-widget admin page).
-    packageId: "@cinatra-ai/wordpress-assistant-connector",
     slug: "wordpress-assistant-connector",
     displayName: "WordPress Assistant",
     defaultVisibility: "admin",
@@ -139,7 +127,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/drupal-assistant-connector",
     slug: "drupal-assistant-connector",
     displayName: "Drupal Assistant",
     defaultVisibility: "admin",
@@ -147,7 +134,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/tailscale-connector",
     slug: "tailscale-connector",
     displayName: "Tailscale",
     defaultVisibility: "admin",
@@ -155,7 +141,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/github-connector",
     slug: "github-connector",
     displayName: "GitHub",
     defaultVisibility: "admin",
@@ -163,7 +148,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/a2a-server-connector",
     slug: "a2a-server-connector",
     displayName: "A2A Servers",
     defaultVisibility: "admin",
@@ -171,7 +155,6 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
   {
-    packageId: "@cinatra-ai/google-oauth-connector",
     slug: "google-oauth-connector",
     displayName: "Google",
     defaultVisibility: "admin",
@@ -182,7 +165,6 @@ export const CONNECTOR_DESCRIPTORS = [
   // facade. Only the provider appears here — crm-connector itself is a
   // facade/dependency, not a setup-discoverable surface.
   {
-    packageId: "@cinatra-ai/twenty-connector",
     slug: "twenty-connector",
     displayName: "Twenty CRM",
     defaultVisibility: "admin",
@@ -190,6 +172,18 @@ export const CONNECTOR_DESCRIPTORS = [
     setupSubroute: "setup",
   },
 ];
+
+/**
+ * The public catalog: RAW entries + the slug-derived packageId. Derivation is
+ * BY CONSTRUCTION (no entry can carry a hand-pinned package-name literal):
+ * the derived packageId is assigned AFTER the spread, so a raw entry can
+ * never override it.
+ * @type {ConnectorDescriptor[]}
+ */
+export const CONNECTOR_DESCRIPTORS = RAW_DESCRIPTORS.map((d) => ({
+  ...d,
+  packageId: packageIdForSlug(d.slug),
+}));
 
 /** @returns {ConnectorDescriptor[]} defensive copy */
 export function listConnectorDescriptors() {

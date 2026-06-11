@@ -107,6 +107,16 @@
         "branch": "main"
       }
     },
+    "systemExtensions": [
+      "@cinatra-ai/nango-connector",
+      "@cinatra-ai/code-reviewer-agent",
+      "@cinatra-ai/planner-agent",
+      "@cinatra-ai/author-agent",
+      "@cinatra-ai/lint-policy-agent",
+      "@cinatra-ai/security-reviewer-agent",
+      "@cinatra-ai/assistant-skills",
+      "@cinatra-ai/default-artifact"
+    ],
     "requiredExtensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
       "@cinatra-ai/code-reviewer-agent@^0.1.0",

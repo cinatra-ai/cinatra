@@ -4,7 +4,10 @@
 // fast at typecheck/test time instead of waiting for a runtime 404.
 
 import { describe, expect, it } from "vitest";
-import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+import {
+  CONNECTOR_DESCRIPTORS,
+  packageIdForSlug,
+} from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import {
   assertSetupPagesParityWithCatalog,
   hasConnectorSetupPage,
@@ -34,6 +37,17 @@ describe("connector setup-page loader map parity", () => {
       expect(catalogSlugs.has(loaderSlug), `orphan loader ${loaderSlug}`).toBe(
         true,
       );
+    }
+  });
+
+  it("every catalog packageId is slug-derived (no hand-pinned package-name literal)", () => {
+    // cinatra#35 / IOC-44: the catalog must never re-pin an extension
+    // package-name literal — packageIds are derived from the slug by
+    // construction, and this pins the invariant against a future raw entry
+    // smuggling its own packageId past the derivation.
+    expect(CONNECTOR_DESCRIPTORS.length).toBeGreaterThan(0);
+    for (const d of CONNECTOR_DESCRIPTORS) {
+      expect(d.packageId, `packageId for ${d.slug}`).toBe(packageIdForSlug(d.slug));
     }
   });
 });
