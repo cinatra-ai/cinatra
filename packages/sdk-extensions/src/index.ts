@@ -327,6 +327,7 @@ export type { BlogConnectorProvider } from "./blog-connector-provider-contract";
 export {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   NANGO_CONNECTION_SAVED_CAPABILITY,
+  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
   LLM_TOOLBOX_CAPABILITY,
   SOCIAL_POST_CAPABILITY,
   CRM_PROVIDER_CAPABILITY,
@@ -351,6 +352,8 @@ export type {
   HostEmailRoutingService,
   HostBlogRoutingService,
   NangoConnectionSavedHook,
+  NangoConnectionMaterializer,
+  NangoConnectionMaterializerInput,
   LlmToolboxProvider,
   HostObjectsIntegrationService,
   ObjectTypeRegistrarProvider,

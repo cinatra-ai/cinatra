@@ -25,6 +25,7 @@ import "server-only";
 import {
   readConnectorConfigFromDatabase,
   writeConnectorConfigToDatabase,
+  deleteConnectorConfig,
   readOpenAIConnectionFromDatabase,
   readAnthropicConnectionFromDatabase,
 } from "@/lib/database";
@@ -44,6 +45,9 @@ import { createNotification } from "@/lib/notifications";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 import {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
+  type NangoConnectionMaterializer,
+  type NangoConnectionMaterializerInput,
   getObjectsProviderOrNull,
   lookupCrmProvider,
   requireExtensionAction,
@@ -101,7 +105,13 @@ import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
 // WordPress instance hard-delete — bound into the wordpress connector's
 // `deps.deleteInstance` so the connector's relocated delete action carries no
 // `@/lib/wordpress-api` edge.
-import { deleteWordPressInstance, getWordPressAPISettings } from "@/lib/wordpress-api";
+import { deleteWordPressInstance, getWordPressAPISettings, saveWordPressInstanceFromNangoConnection } from "@/lib/wordpress-api";
+// LinkedIn/WordPress account materialization for the nango connection-save
+// flow — published as the BLOCKING `nango-connection-materializer` capability
+// so the nango gateway's save path can await the host-side materializers
+// without importing `@/lib/*` (the inline fail-blocking semantics preserved
+// behind a capability the connector resolves at save time).
+import { saveLinkedInAccountFromNangoConnection } from "@/lib/linkedin-api";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
 // are bound into the wordpress/drupal connector deps so their `mcp-toolbox`
@@ -134,7 +144,43 @@ function registerHostConnectorServices(): void {
   register(svc.connectorConfig, {
     read: readConnectorConfigFromDatabase,
     write: writeConnectorConfigToDatabase,
+    // PHYSICAL row delete — the nango legacy-key purge (security-reviewed:
+    // the dead, untrusted key must be REMOVED, never blanked) binds this
+    // member through its injected config store.
+    delete: deleteConnectorConfig,
   });
+
+  // BLOCKING nango connection-save materializers (linkedin account row +
+  // wordpress instance row). One host provider; dispatches by connectorKey and
+  // reports `handled` so the nango save path can fail loud on a key that
+  // requires materialization but finds no handler. Failures propagate — the
+  // save FAILS, exactly the inline semantics the save body carried when it
+  // imported these host modules directly.
+  const hostNangoMaterializer: NangoConnectionMaterializer = {
+    materialize: async (input: NangoConnectionMaterializerInput) => {
+      if (input.connectorKey === "wordpress") {
+        const siteUrl = input.siteUrl?.trim();
+        if (!siteUrl) {
+          throw new Error("Enter the WordPress site domain before connecting with Nango.");
+        }
+        await saveWordPressInstanceFromNangoConnection({
+          siteUrl,
+          providerConfigKey: input.providerConfigKey,
+          connectionId: input.connectionId,
+        });
+        return { handled: true };
+      }
+      if (input.connectorKey === "linkedin") {
+        await saveLinkedInAccountFromNangoConnection({
+          providerConfigKey: input.providerConfigKey,
+          connectionId: input.connectionId,
+        });
+        return { handled: true };
+      }
+      return { handled: false };
+    },
+  };
+  register(NANGO_CONNECTION_MATERIALIZER_CAPABILITY, hostNangoMaterializer);
 
   register(svc.nangoConnectionStorage, {
     isConfigured: isNangoConfigured,

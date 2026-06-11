@@ -53,10 +53,14 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
 } as const;
 
 /** The legacy global connector-config KV (raw `connectorId`-keyed rows — NOT
- * the org-scoped `ctx.settings` namespace; existing rows keep working). */
+ * the org-scoped `ctx.settings` namespace; existing rows keep working).
+ * `delete` PHYSICALLY removes a row — required by consumers whose security
+ * posture forbids blanking a dead key (e.g. the nango legacy-key purge, where
+ * the stale row's values are untrusted and must not survive in any form). */
 export type HostConnectorConfigService = {
   read<T>(connectorId: string, fallback: T): T;
   write(connectorId: string, value: unknown): void;
+  delete(connectorId: string): void;
 };
 
 /** The Nango connection-storage surface (host-bound from the nango gateway).
@@ -190,6 +194,31 @@ export type NangoConnectionSavedHook = {
   connectorKey: string;
   scope?: "app" | "user";
   run(input: { userId?: string }): Promise<void>;
+};
+
+/**
+ * A BLOCKING materializer for the Nango connection-save flow — distinct from
+ * the best-effort `nango-connection-saved` hooks above. The nango gateway's
+ * save path awaits every registered materializer for the saved `connectorKey`
+ * and FOLDS FAILURES INTO ITS RESULT (a materializer failure fails the save —
+ * the inline semantics of the wordpress/linkedin account materialization that
+ * historically ran inside the save body). The host registers one provider
+ * whose `materialize` dispatches by `connectorKey` and reports `handled`; the
+ * save path FAILS LOUD when a connector key that requires materialization
+ * finds no handler (never a silent skip).
+ */
+export const NANGO_CONNECTION_MATERIALIZER_CAPABILITY = "nango-connection-materializer";
+export type NangoConnectionMaterializerInput = {
+  connectorKey: string;
+  providerConfigKey: string;
+  connectionId: string;
+  /** WordPress-style site URL carried by the save request (when present). */
+  siteUrl?: string;
+  scope?: "app" | "user";
+  userId?: string;
+};
+export type NangoConnectionMaterializer = {
+  materialize(input: NangoConnectionMaterializerInput): Promise<{ handled: boolean }>;
 };
 
 /**
