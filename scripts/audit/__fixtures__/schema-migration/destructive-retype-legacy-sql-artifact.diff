@@ -1,8 +1,7 @@
-diff --git a/migrations/0003_narrow-usage-events-cost-usd.sql b/migrations/0003_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0004_narrow-usage-events-cost-usd.sql b/migrations/0004_narrow-usage-events-cost-usd.sql
 new file mode 100644
-index 0000000..6e5f1ca
 --- /dev/null
-+++ b/migrations/0003_narrow-usage-events-cost-usd.sql
++++ b/migrations/0004_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -11,17 +10,16 @@ index 0000000..6e5f1ca
 +ALTER TABLE :"schema"."usage_events"
 +  ALTER COLUMN cost_usd TYPE numeric(12,4);
 diff --git a/migrations/manifest.json b/migrations/manifest.json
-index 87b87d2..4caa14f 100644
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -30,6 +30,13 @@
-       "summary": "Drop the dead agent_templates.durable column (issue #84). No routing/execution code ever read it and every writer only persisted the default false, so no user-land data is lost; required by the drop-column-on-existing-table rule.",
+@@ -42,6 +42,13 @@
+       "summary": "Drop the dormant extension_migrations ledger (issue #118): it backed the RETIRED extension JSON-DSL migration machinery and was empty on every lineage (no extension ever declared cinatra.migrations). Extension migrations now record into the shared node-pg-migrate pgmigrations ledger under ext_<scope>_<pkg>__NNNN names; required by the drop-table rule.",
        "destructive": true,
-       "tables": ["agent_templates"]
+       "tables": ["extension_migrations"]
 +    },
 +    {
-+      "seq": "0003",
-+      "file": "0003_narrow-usage-events-cost-usd.sql",
++      "seq": "0004",
++      "file": "0004_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
@@ -29,7 +27,6 @@ index 87b87d2..4caa14f 100644
    ]
  }
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
-index 63b8b5e..e68e7eb 100644
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
 @@ -857,7 +857,7 @@ END $$` },

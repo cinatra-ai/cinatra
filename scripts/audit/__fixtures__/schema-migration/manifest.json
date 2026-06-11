@@ -27,19 +27,19 @@
       "file": "destructive-retype-with-artifact.diff",
       "expect": "pass",
       "category": "destructive, has artifact",
-      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0003_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0004_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
     },
     {
       "file": "destructive-retype-legacy-sql-artifact.diff",
       "expect": "fail",
       "category": "destructive, legacy artifact form (retired)",
-      "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0003_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
+      "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0004_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
     },
     {
       "file": "destructive-module-no-manifest.diff",
       "expect": "fail",
       "category": "unmanifested executable module (gate-bypass attempt)",
-      "description": "Adds a VALID migrations/core/core__0003_*.mjs module carrying destructive SQL with no manifest entry and no in-scope schema-file diff. The runner executes every valid core/ module regardless of the manifest, so migration-state inconsistency must fail standalone — not only when a destructive drizzle-store diff is present."
+      "description": "Adds a VALID migrations/core/core__0004_*.mjs module carrying destructive SQL with no manifest entry and no in-scope schema-file diff. The runner executes every valid core/ module regardless of the manifest, so migration-state inconsistency must fail standalone — not only when a destructive drizzle-store diff is present."
     },
     {
       "file": "manifest-doc-only-edit.diff",
@@ -63,7 +63,7 @@
       "file": "out-of-scope-extension-ddl-bundled-additive.diff",
       "expect": "pass",
       "category": "out of scope (extension DDL), bundled with in-scope additive",
-      "description": "Adds a dropColumn op to the extension migration JSON-DSL (emits DROP COLUMN, but extension-owned) bundled with an in-scope additive index; the out-of-scope hunks must not trip the gate."
+      "description": "Adds destructive-shaped extension-owned SQL (a DROP COLUMN example in the extension migration host, the #118 out-of-scope surface) bundled with an in-scope additive index; the out-of-scope hunks must not trip the gate. Refreshed in #118 when the JSON-DSL files it originally touched were retired."
     }
   ]
 }

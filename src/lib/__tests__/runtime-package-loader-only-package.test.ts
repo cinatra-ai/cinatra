@@ -23,6 +23,10 @@ vi.mock("@cinatra-ai/sdk-extensions", () => ({
     discoverPackageStoreRecords(...(args as [])),
   runRuntimePackageActivation: (...args: unknown[]) =>
     runRuntimePackageActivation(...args),
+  // Real predicate shape (#118): none of these fixture records declare host
+  // migrations, so the loader's bootstrap-with-migrations refusal stays empty.
+  recordDeclaresHostMigrations: (rec: { migrationsDir?: string; legacyMigrationsDeclared?: boolean }) =>
+    typeof rec.migrationsDir === "string" || rec.legacyMigrationsDeclared === true,
 }));
 
 // Host-side static deps the loader imports — stubbed so no DB / fs / registries

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   discoverPackageStoreRecords,
+  recordDeclaresHostMigrations,
   recordFromManifest,
   resolveServerEntryPath,
   runRuntimePackageActivation,
@@ -101,6 +102,48 @@ describe("recordFromManifest", () => {
       manifest("@x/bad", { kind: "connector", uiSurface: "schema-config", configSchema: [1, 2] }),
     );
     expect(rec?.configSchema).toBeUndefined();
+  });
+
+  it("carries cinatra.migrationsDir (#118) and counts it as a host-migration declaration", () => {
+    const rec = recordFromManifest(
+      "/d/mig",
+      manifest("@x/mig", { kind: "connector", serverEntry: "./register", migrationsDir: "cinatra/migrations" }),
+    );
+    expect(rec?.migrationsDir).toBe("cinatra/migrations");
+    expect(rec?.legacyMigrationsDeclared).toBeUndefined();
+    expect(recordDeclaresHostMigrations(rec!)).toBe(true);
+  });
+
+  it("flags the RETIRED legacy cinatra.migrations field in ANY form (incl. malformed) — it must never vanish into 'no migrations'", () => {
+    for (const legacy of [
+      [{ id: "0001", path: "m/0001.json" }], // well-formed legacy
+      [], // empty array
+      "m", // wrong type
+      null, // null
+    ]) {
+      const rec = recordFromManifest(
+        "/d/legacy",
+        manifest("@x/legacy", { kind: "connector", migrations: legacy }),
+      );
+      expect(rec?.legacyMigrationsDeclared, JSON.stringify(legacy)).toBe(true);
+      expect(recordDeclaresHostMigrations(rec!), JSON.stringify(legacy)).toBe(true);
+    }
+  });
+
+  it("treats a record declaring neither field as no host migrations", () => {
+    const rec = recordFromManifest("/d/none2", manifest("@x/none2", { kind: "connector" }));
+    expect(rec?.migrationsDir).toBeUndefined();
+    expect(rec?.legacyMigrationsDeclared).toBeUndefined();
+    expect(recordDeclaresHostMigrations(rec!)).toBe(false);
+  });
+
+  it("fail-closes a blank/non-string migrationsDir to undefined (the host preflight rejects it at apply time)", () => {
+    expect(
+      recordFromManifest("/d/blank", manifest("@x/blank", { kind: "connector", migrationsDir: "  " }))?.migrationsDir,
+    ).toBeUndefined();
+    expect(
+      recordFromManifest("/d/num", manifest("@x/num", { kind: "connector", migrationsDir: 7 }))?.migrationsDir,
+    ).toBeUndefined();
   });
 });
 

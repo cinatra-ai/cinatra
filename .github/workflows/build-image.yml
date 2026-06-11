@@ -989,7 +989,6 @@ jobs:
           src/lib/__tests__/extension-trust-caller-parity.test.ts
           src/lib/__tests__/runtime-package-loader-parity.test.ts
           src/lib/__tests__/extension-lifecycle-teardown-invariant.test.ts
-          src/lib/__tests__/extension-migration.test.ts
           src/lib/__tests__/extension-host-port-grants.test.ts
           src/lib/__tests__/extension-action-dispatch.test.ts
           src/lib/__tests__/extension-install-pipeline.test.ts

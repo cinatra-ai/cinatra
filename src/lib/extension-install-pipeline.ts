@@ -120,14 +120,16 @@ export type InstallPipelineDeps = {
     approvedBy: string | null;
   }) => Promise<void>;
   /**
-   * Apply the materialized package's declared extension-owned migrations
-   * (host-run constrained DSL, under the `cinatra-schema-init` advisory lock).
+   * Apply the materialized package's declared migrations — its
+   * `cinatra.migrationsDir` node-pg-migrate modules, host-run through the
+   * shared runner under the `cinatra-schema-init` advisory lock (#118).
    * Runs BEFORE finalize so a failed migration aborts the install (no
    * `finalized` journal phase → the anchor refuses the row). Optional so existing
-   * unit tests can omit it; the default factory wires the host activation path.
-   * A package that declares no `cinatra.migrations[]` is a clean no-op. `ctx.db`
-   * stays UNWIRED — the host runs the constrained DSL; the extension never gets a
-   * DB handle.
+   * unit tests can omit it; the default factory wires the host entry point
+   * (`applyExtensionMigrationsFromStore`). A package that declares no
+   * migrationsDir is a clean no-op; the RETIRED legacy `cinatra.migrations`
+   * JSON-DSL field is rejected fail-closed. `ctx.db` stays UNWIRED — the host
+   * runs the modules; the extension never gets a DB handle.
    */
   applyMigrations?: (input: { storeDir: string; packageName: string; version: string; orgId: string | null }) => Promise<void>;
   /**
@@ -541,17 +543,19 @@ export async function installExtensionFromRegistry(
     }
     await deps.advanceInstallOpPhase?.({ installOpId, phase: "granted" });
 
-    // Apply the extension's declared, host-run declarative migrations BEFORE
-    // finalize — a failed migration THROWS here, so the journal never reaches
-    // `finalized` and the trust anchor refuses the row (no partial install looks
-    // trusted). Gated on `autoGrantPrivileged` (the capability split):
-    // running host DDL is a privileged capability, so it requires `trusted-signed`
-    // — never a bootstrap-only or untrusted install. A bootstrap / pending install
+    // Apply the extension's declared, host-run node-pg-migrate migrations
+    // (`cinatra.migrationsDir`, #118) BEFORE finalize — a failed migration
+    // THROWS here, so the journal never reaches `finalized` and the trust
+    // anchor refuses the row (no partial install looks trusted). Gated on
+    // `autoGrantPrivileged` (the capability split): running host DDL is a
+    // privileged capability, so it requires `trusted-signed` — never a
+    // bootstrap-only or untrusted install. A bootstrap / pending install
     // must NOT create extension-owned tables; its migrations run only once it
     // becomes signed-trusted+activated (the loader's trusted boot pass applies DDL
     // ONLY to signed records — see runtime-package-loader.ts). Only runs when wired
-    // (the default factory does); a package that declares no `cinatra.migrations[]`
-    // is a no-op (the dormant common case).
+    // (the default factory does); a package that declares no migrationsDir is a
+    // no-op (the common case), and the RETIRED legacy `cinatra.migrations`
+    // JSON-DSL field throws fail-closed.
     if (deps.applyMigrations && autoGrantPrivileged) {
       await deps.applyMigrations({
         storeDir: mat.storeDir,

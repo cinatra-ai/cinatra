@@ -578,19 +578,6 @@ END $$` },
         END IF;
       END $$;` },
 
-    // Runtime installer — extension-owned declarative-migration ledger.
-    // One row per applied (package, migration); the host-run migration runner
-    // consults migration_hash for idempotency + immutability (a re-declared id
-    // with a different hash is rejected).
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."extension_migrations" (
-      package_name text NOT NULL,
-      migration_id text NOT NULL,
-      migration_hash text NOT NULL,
-      package_version text NOT NULL,
-      applied_at timestamptz NOT NULL DEFAULT now(),
-      PRIMARY KEY (package_name, migration_id)
-    )` },
-
     // Runtime installer — admin-approved host-port grants. The runtime
     // loader/host-context consumes the APPROVED port set from here (NOT the raw
     // manifest's requestedHostPorts). requested_ports_hash detects a manifest

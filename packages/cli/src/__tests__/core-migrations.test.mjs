@@ -4,14 +4,20 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { describe, expect, it, afterAll } from "vitest";
 
+import { symlinkSync } from "node:fs";
 import {
   CORE_MIGRATIONS_DIR,
   CORE_MIGRATIONS_TABLE,
   CORE_MIGRATION_NAMESPACE,
   CORE_MIGRATION_FILE_RE,
   CORE_MIGRATION_LOCK_KEY,
+  EXT_MIGRATION_NAMESPACE_PREFIX,
+  extensionMigrationNamespace,
+  migrationFileReForNamespace,
   validateCoreMigrationsDir,
+  validateNamespacedMigrationsDir,
   assertDownTargetsAreCore,
+  assertDownTargetsInNamespace,
   isFreshCoreSchema,
 } from "../core-migrations.mjs";
 
@@ -119,5 +125,81 @@ describe("isFreshCoreSchema", () => {
     await expect(isFreshCoreSchema(fake, "cinatra_branch")).resolves.toBe(false);
     // The probe must target the WORKTREE schema, quoted.
     expect(queries[0].values).toEqual(['"cinatra_branch".metadata']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #118: the namespaced (extension) generalization of the same runner surface.
+// ---------------------------------------------------------------------------
+
+describe("extensionMigrationNamespace (#118)", () => {
+  it("derives ext_<scope>_<pkg>__ from a scoped kebab-case package name", () => {
+    expect(extensionMigrationNamespace("@cinatra-ai/notes-connector")).toBe(
+      "ext_cinatra-ai_notes-connector__",
+    );
+    expect(extensionMigrationNamespace("@cinatra-ai/crm")).toBe("ext_cinatra-ai_crm__");
+    expect(EXT_MIGRATION_NAMESPACE_PREFIX).toBe("ext_");
+  });
+
+  it("fails closed on unscoped, underscored, dotted, or uppercase names (startsWith-fence ambiguity)", () => {
+    for (const bad of ["lodash", "@scope/has_underscore", "@has_underscore/pkg", "@scope/has.dot", "@Scope/pkg", "", undefined]) {
+      expect(() => extensionMigrationNamespace(bad), String(bad)).toThrow(/cannot derive a migration namespace/);
+    }
+  });
+});
+
+describe("validateNamespacedMigrationsDir (#118)", () => {
+  const NS = "ext_cinatra-ai_notes-connector__";
+
+  it("accepts a conforming extension migrations dir", async () => {
+    const dir = tempMigrationsDir([`${NS}0001_create-notes.mjs`, `${NS}0002_add-index.mjs`]);
+    await expect(validateNamespacedMigrationsDir(dir, { namespace: NS })).resolves.toEqual([
+      `${NS}0001_create-notes.mjs`,
+      `${NS}0002_add-index.mjs`,
+    ]);
+  });
+
+  it("rejects a file under the WRONG namespace (incl. core__ files in an extension dir)", async () => {
+    for (const stray of ["core__0001_x.mjs", "ext_cinatra-ai_other__0001_x.mjs", "0001_x.mjs"]) {
+      const dir = tempMigrationsDir([`${NS}0001_ok.mjs`, stray]);
+      await expect(validateNamespacedMigrationsDir(dir, { namespace: NS }), stray).rejects.toThrow(
+        /filename contract/,
+      );
+    }
+  });
+
+  it("rejects duplicate sequence numbers within the namespace", async () => {
+    const dir = tempMigrationsDir([`${NS}0001_a.mjs`, `${NS}0001_b.mjs`]);
+    await expect(validateNamespacedMigrationsDir(dir, { namespace: NS })).rejects.toThrow(
+      /duplicate ext_cinatra-ai_notes-connector migration sequence/,
+    );
+  });
+
+  it("rejects SYMLINKED migration modules in an extension dir (containment: node-pg-migrate would follow them)", async () => {
+    const dir = tempMigrationsDir([`${NS}0001_ok.mjs`]);
+    symlinkSync(path.join(dir, `${NS}0001_ok.mjs`), path.join(dir, `${NS}0002_link.mjs`));
+    await expect(validateNamespacedMigrationsDir(dir, { namespace: NS })).rejects.toThrow(/symlink/);
+  });
+
+  it("core parity: validateCoreMigrationsDir is the same validator under the core namespace", async () => {
+    const re = migrationFileReForNamespace(CORE_MIGRATION_NAMESPACE);
+    expect(re.test("core__0001_ok.mjs")).toBe(true);
+    expect(re.source).toBe(CORE_MIGRATION_FILE_RE.source.replace(/^\^/, "^"));
+  });
+});
+
+describe("assertDownTargetsInNamespace (#118 per-extension down fence)", () => {
+  const NS = "ext_cinatra-ai_crm__";
+
+  it("passes when every targeted ledger row belongs to the namespace", () => {
+    expect(() => assertDownTargetsInNamespace([`${NS}0002_b`, `${NS}0001_a`], NS)).not.toThrow();
+  });
+
+  it("refuses when the newest rows belong to another source (core or another extension)", () => {
+    for (const foreign of ["core__0003_x", "ext_cinatra-ai_other__0001_x"]) {
+      expect(() => assertDownTargetsInNamespace([foreign, `${NS}0001_a`], NS), foreign).toThrow(
+        /refusing to migrate down/,
+      );
+    }
   });
 });

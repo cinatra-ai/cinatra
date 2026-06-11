@@ -1,8 +1,7 @@
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
-index 0cc7630..dc887e0 100644
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
-@@ -1064,6 +1064,7 @@ END $$`,
+@@ -1050,6 +1050,7 @@
      )` },
      { text: `CREATE INDEX IF NOT EXISTS agent_runs_template_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (template_id)` },
      { text: `CREATE INDEX IF NOT EXISTS agent_runs_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (status)` },
@@ -10,48 +9,19 @@ index 0cc7630..dc887e0 100644
      // planned_actions and review_tasks tables are absent; synthetic IDs are used.
      // audit_events for @cinatra/authz: structured authorization audit log.
      // Full authorization-audit column set, all fields nullable except id (PK) and created_at.
-diff --git a/src/lib/extension-migration-dsl.ts b/src/lib/extension-migration-dsl.ts
-index d5a370c..55b16ce 100644
---- a/src/lib/extension-migration-dsl.ts
-+++ b/src/lib/extension-migration-dsl.ts
-@@ -60,6 +60,9 @@ export type CreateTableOp = {
+diff --git a/src/lib/extension-migration-host.ts b/src/lib/extension-migration-host.ts
+--- a/src/lib/extension-migration-host.ts
++++ b/src/lib/extension-migration-host.ts
+@@ -27,6 +27,11 @@
+ // Rollback: the host never migrates extensions down (install/boot/activate
+ // only need `up`). The shared runner's per-namespace down fence ships, and
+ // `cinatra db migrate --down --dir <abs> --namespace <ns>` is the operator
+ // escape hatch for reverting an extension's newest ledger rows.
++//
++// An extension migration module may carry destructive SQL over its OWN
++// tables, e.g.:
++//
++//   pgm.sql(`ALTER TABLE ext_acme_crm_leads DROP COLUMN legacy_score;`);
  
- export type AddColumnOp = { op: "addColumn"; table: string; column: ColumnSpec };
- 
-+/** Drop a column the extension previously declared on one of its OWN tables. */
-+export type DropColumnOp = { op: "dropColumn"; table: string; column: string };
-+
- export type AddIndexOp = {
-   op: "addIndex";
-   table: string;
-@@ -76,7 +79,7 @@ export type BackfillOp = {
-   whereColumnIsNull: string;
- };
- 
--export type MigrationOp = CreateTableOp | AddColumnOp | AddIndexOp | BackfillOp;
-+export type MigrationOp = CreateTableOp | AddColumnOp | DropColumnOp | AddIndexOp | BackfillOp;
- 
- export type ExtensionMigrationSpec = {
-   /** Migration id, unique within the package (ledger key). */
-@@ -190,6 +193,12 @@ export function validateMigrationSpec(spec: ExtensionMigrationSpec, packageName:
-         validateColumn(op.column, `addColumn ${op.table}`, errors, new Set());
-         break;
-       }
-+      case "dropColumn": {
-+        requireOwned(op.table, "dropColumn");
-+        if (!isValidIdent(op.column)) errors.push(`dropColumn ${op.table}: invalid column "${op.column}"`);
-+        if (op.column === "org_id") errors.push(`dropColumn ${op.table}: "org_id" is host-injected tenancy and cannot be dropped`);
-+        break;
-+      }
-       case "addIndex": {
-         requireOwned(op.table, "addIndex");
-         if (!isValidIdent(op.name) || op.name.length > PG_IDENT_MAX) errors.push(`addIndex: invalid index name "${op.name}"`);
-@@ -263,6 +272,8 @@ export function compileMigrationSpec(spec: ExtensionMigrationSpec, packageName:
-       out.push({ text: `CREATE TABLE IF NOT EXISTS ${t(op.table)} (\n  ${cols.join(",\n  ")}\n)` });
-     } else if (op.op === "addColumn") {
-       out.push({ text: `ALTER TABLE ${t(op.table)} ADD COLUMN IF NOT EXISTS ${columnDdl(op.column)}` });
-+    } else if (op.op === "dropColumn") {
-+      out.push({ text: `ALTER TABLE ${t(op.table)} DROP COLUMN IF EXISTS ${q(op.column)}` });
-     } else if (op.op === "addIndex") {
-       out.push({
-         text: `CREATE ${op.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${q(op.name)} ON ${t(op.table)} (${op.columns.map(q).join(", ")})`,
+ import {
+   extensionMigrationNamespace,

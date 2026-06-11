@@ -28,6 +28,7 @@ import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import {
   runRuntimePackageActivation,
   discoverPackageStoreRecords,
+  recordDeclaresHostMigrations,
   DEFAULT_PACKAGE_STORE_PATH,
   type PackageStoreFs,
   type PackageStoreRecord,
@@ -178,18 +179,20 @@ export async function loadRuntimePackageExtensions(
   }
   if (trusted.length === 0) return [];
 
-  // Apply each TRUSTED-SIGNED package's declared extension-owned migrations BEFORE
-  // activation, under the SAME trust verdict used for in-process import. Capability
-  // split: running host DDL is a PRIVILEGED capability gated on a
-  // verified signature — so only `trusted-signed` records run migrations here. A
-  // `trusted-bootstrap` record that DECLARES migrations is refused for import (its
-  // host-owned tables would never be created, so importing it is unsafe); a
-  // bootstrap record that declares none imports normally. A signed package whose
-  // migration fails is also refused. Idempotent via the ledger; a no-op for the
-  // dormant common case (no extension declares `cinatra.migrations[]`).
+  // Apply each TRUSTED-SIGNED package's declared migrations (the node-pg-migrate
+  // modules under `cinatra.migrationsDir`, #118) BEFORE activation, under the SAME
+  // trust verdict used for in-process import. Capability split: running host DDL
+  // is a PRIVILEGED capability gated on a verified signature — so only
+  // `trusted-signed` records run migrations here. A `trusted-bootstrap` record
+  // that DECLARES migrations is refused for import (its host-owned tables would
+  // never be created, so importing it is unsafe); a bootstrap record that declares
+  // none imports normally. A signed package whose migration fails — including one
+  // that still declares the RETIRED legacy `cinatra.migrations` JSON-DSL field,
+  // which the host rejects fail-closed — is also refused. Idempotent via the
+  // shared ledger; a no-op for the common case (no extension declares migrations).
   const signedTrusted = trusted.filter((rec) => signedTrustedNames.has(rec.packageName));
   const bootstrapWithDeclaredMigrations = trusted.filter(
-    (rec) => !signedTrustedNames.has(rec.packageName) && (rec.migrations?.length ?? 0) > 0,
+    (rec) => !signedTrustedNames.has(rec.packageName) && recordDeclaresHostMigrations(rec),
   );
   if (bootstrapWithDeclaredMigrations.length > 0) {
     console.warn(

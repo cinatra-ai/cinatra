@@ -13,7 +13,6 @@ import {
   type InstallPipelineDeps,
 } from "@/lib/extension-install-pipeline";
 import { applyExtensionMigrationsFromStore } from "@/lib/extension-migration-host";
-import type { MigrationQuery, RunMigrationsResult } from "@/lib/extension-migration-runner";
 
 const REGISTRY = "https://registry.cinatra.ai";
 
@@ -1150,48 +1149,47 @@ export function destroy(ctx) { globalThis.__hotFixtureEvents.push("destroy:v2");
 
 // ===========================================================================
 // 4 (migrations). Re-activation does NOT re-apply an already-applied migration:
-//    the extension_migrations ledger skips it (no duplicate DDL). Uses a real
-//    `cinatra.migrations[]` consumer fixture + an injected in-memory ledger (no
-//    DB) — the migration-runner half of "no duplicate registrations on re-activate".
+//    with the node-pg-migrate engine (#118) the dedupe IS the shared
+//    `pgmigrations` ledger diff inside the runner. Unit half: the host invokes
+//    the SAME injected runner with the SAME dir/namespace on re-activation —
+//    the runner's ledger diff (exercised against a real Postgres in the live
+//    verification) is what skips the applied chain. No DB here.
 // ===========================================================================
-describe("re-activation migration ledger-skip — already-applied migration is not re-run (no dup DDL)", () => {
+describe("re-activation migration pass — the host re-runs the SAME chain through the shared ledger-deduped runner", () => {
   const CONSUMER_DIR = path.join(process.cwd(), "src/lib/__tests__/fixtures/migration-store/notes-connector");
+  const MODULE_NAME = "ext_cinatra-ai_notes-connector__0001_create-notes";
 
-  function makeLedgerRecorder() {
-    const ledger = new Map<string, string>();
-    const ddl: string[] = [];
-    const query: MigrationQuery = async <T = unknown>(text: string, values?: readonly unknown[]) => {
-      if (text.includes("SELECT migration_hash") && text.includes("extension_migrations")) {
-        const key = `${String(values?.[0])}|${String(values?.[1])}`;
-        return (ledger.has(key) ? [{ migration_hash: ledger.get(key)! }] : []) as T[];
-      }
-      if (text.includes("INSERT INTO") && text.includes("extension_migrations")) {
-        const key = `${String(values?.[0])}|${String(values?.[1])}`;
-        ledger.set(key, String(values?.[2]));
-        return [] as T[];
-      }
-      ddl.push(text);
-      return [] as T[];
-    };
-    const runLocked = (run: (q: MigrationQuery) => Promise<RunMigrationsResult>) => run(query);
-    return { ledger, ddl, runLocked };
-  }
+  it("first activation applies; a re-activation invokes the runner identically (ledger-keyed dedupe), reporting no new applies", async () => {
+    const prevDbUrl = process.env.SUPABASE_DB_URL;
+    process.env.SUPABASE_DB_URL = "postgres://unused:0/fake";
+    try {
+      const calls: Array<Record<string, unknown>> = [];
+      let appliedOnce = false;
+      const run = async (input: Record<string, unknown>) => {
+        calls.push(input);
+        // A real runner applies the chain once and no-ops after (the shared
+        // ledger already has the row) — model exactly that.
+        const ranNames = appliedOnce ? [] : [MODULE_NAME];
+        appliedOnce = true;
+        return { ranNames, direction: "up" as const, faked: false };
+      };
 
-  it("first activation applies the migration; a second (re-activation) pass over the SAME ledger skips it with no new DDL", async () => {
-    const rec = makeLedgerRecorder();
-    // First activation: applies the migration once.
-    const first = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { runLocked: rec.runLocked });
-    expect(first.applied).toEqual(["0001-create-notes"]);
-    expect(first.skipped).toEqual([]);
-    const ddlAfterFirst = rec.ddl.length;
-    expect(ddlAfterFirst).toBeGreaterThan(0);
+      const first = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { run: run as never });
+      expect(first.applied).toEqual([MODULE_NAME]);
 
-    // Re-activation: the SAME ledger now records the migration → it is SKIPPED,
-    // and NO new DDL is emitted (idempotent — no duplicate table creation).
-    const second = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { runLocked: rec.runLocked });
-    expect(second.applied).toEqual([]);
-    expect(second.skipped).toEqual(["0001-create-notes"]);
-    expect(rec.ddl.length, "no new DDL on the idempotent re-activation").toBe(ddlAfterFirst);
+      const second = await applyExtensionMigrationsFromStore({ storeDir: CONSUMER_DIR }, { run: run as never });
+      expect(second.applied, "no new applies on the idempotent re-activation").toEqual([]);
+
+      // Both passes hit the SAME runner contract: same dir, same namespace, up.
+      expect(calls).toHaveLength(2);
+      expect(calls[0].namespace).toBe("ext_cinatra-ai_notes-connector__");
+      expect(calls[1].namespace).toBe(calls[0].namespace);
+      expect(calls[1].dirAbs).toBe(calls[0].dirAbs);
+      expect(calls.every((c) => c.direction === "up")).toBe(true);
+    } finally {
+      if (prevDbUrl === undefined) delete process.env.SUPABASE_DB_URL;
+      else process.env.SUPABASE_DB_URL = prevDbUrl;
+    }
   });
 });
 

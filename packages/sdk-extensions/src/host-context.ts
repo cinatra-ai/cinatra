@@ -39,8 +39,8 @@
  * RESERVED — NOT wired yet. The host factory fail-louds on any access
  * (granted-but-not-implemented); no extension may declare
  * `requestedHostPorts: ["db"]` and rely on it yet. The runtime behind this port
- * — the host-run declarative migration runner, the `extension_migrations`
- * ledger, and `org_id` enforcement — is wired by a future release.
+ * — a scoped read surface over the extension's own tables (created by its
+ * host-run node-pg-migrate migrations, #118) — is wired by a future release.
  *
  * The SDK ABI is ALREADY 2.0.0 (the `telemetry` port carries the 2.0 major). So
  * a future scoped `ctx.db` WRITE surface is an additive 2.x capability (a new
@@ -51,7 +51,7 @@
 export type HostDbPort = {
   /** Run a parameterized read within the extension's data scope. Reserved — not wired yet (a future release). */
   query<T = unknown>(sql: string, params?: readonly unknown[]): Promise<T[]>;
-  /** Reserved for extension-owned, declarative, idempotent migrations only. Not wired yet (a future release). */
+  /** The host schema the extension's host-run migrations target. Not wired yet (a future release). */
   readonly schema: string;
 };
 

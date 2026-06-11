@@ -5,19 +5,19 @@ import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 
 // Runtime-installer schema drift guard.
 //
-// The runtime installer adds four tables (the migration ledger, the
-// host-port grant store, the snapshot-lease store, the install-op journal). The
-// migration runner + grant store + lease store + install-op journal all REQUIRE
+// The runtime installer adds three tables (the host-port grant store, the
+// snapshot-lease store, the install-op journal). The grant store + lease store
+// + install-op journal all REQUIRE
 // these to exist in EVERY database — prod, light worktree (`cinatra_<slug>`),
 // and heavy clone (`cinatra_clone_<slug>`). This guard locks the contract that
 // delivers that:
 //
-//   1. all four tables are created by `buildCreateStoreSchemaQueries()` — the
+//   1. all three tables are created by `buildCreateStoreSchemaQueries()` — the
 //      SINGLE source of truth run at every dev-server boot via
 //      `ensurePostgresSchema()`. Because the CLI's worktree/clone setup boots a
 //      dev server, the SSOT creates them everywhere → dev parity. (If a table is
 //      dropped from the SSOT, this fails.)
-//   2. the four tables are NOT duplicated into the CLI's hand-maintained
+//   2. the three tables are NOT duplicated into the CLI's hand-maintained
 //      `RICH_TABLES` / `STORE_TABLES`. Their DDL carries CHECK constraints,
 //      partial-unique indexes, and non-unique indexes that the CLI's
 //      constraint-light `ensureRichSchemas` shape can't express faithfully — a
@@ -30,8 +30,10 @@ import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 // planned_actions / review_tasks) are created/tolerated outside the core SSOT
 // and are out of the runtime installer's scope.
 
+// `extension_migrations` (the retired JSON-DSL migration ledger) was dropped in
+// #118 — extension migrations now record into the shared node-pg-migrate
+// `pgmigrations` ledger, which the runner itself creates.
 const INSTALLER_TABLES = [
-  "extension_migrations",
   "extension_host_port_grant",
   "extension_snapshot_lease",
   "extension_install_ops",
@@ -59,7 +61,7 @@ describe("runtime-installer schema drift guard", () => {
     expect(ssot.size).toBeGreaterThan(20);
   });
 
-  it("creates all four runtime-installer tables in the boot SSOT (dev parity in every DB)", () => {
+  it("creates all three runtime-installer tables in the boot SSOT (dev parity in every DB)", () => {
     const missing = INSTALLER_TABLES.filter((t) => !ssot.has(t));
     expect(missing, `installer tables missing from buildCreateStoreSchemaQueries: ${missing.join(", ")}`).toEqual([]);
   });

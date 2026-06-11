@@ -35,6 +35,13 @@
       "summary": "Drop the dead agent_templates.durable column (issue #84). No routing/execution code ever read it and every writer only persisted the default false, so no user-land data is lost; required by the drop-column-on-existing-table rule.",
       "destructive": true,
       "tables": ["agent_templates"]
+    },
+    {
+      "seq": "0003",
+      "file": "core/core__0003_drop-extension-migrations-ledger.mjs",
+      "summary": "Drop the dormant extension_migrations ledger (issue #118): it backed the RETIRED extension JSON-DSL migration machinery and was empty on every lineage (no extension ever declared cinatra.migrations). Extension migrations now record into the shared node-pg-migrate pgmigrations ledger under ext_<scope>_<pkg>__NNNN names; required by the drop-table rule.",
+      "destructive": true,
+      "tables": ["extension_migrations"]
     }
   ]
 }

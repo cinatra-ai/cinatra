@@ -23,7 +23,7 @@ import "server-only";
 // the typed-portlet registry (closes the legacy "validate-without-registry" gap
 // so the kind/version check fails the install ahead of WRITE 1), (c) the cube
 // guard (unknown cube ⇒ reject; declared cube contributions ⇒ requires-rebuild —
-// a distinct surfaced state, NOT a partial install), (d) migration-spec validate
+// a distinct surfaced state, NOT a partial install), (d) migration preflight
 // (validate-only; applying migrations is a separate step). A throw anywhere
 // triggers an INVERSE-ORDER compensating rollback (archive dashboards → delete the
 // just-created workflow_template — never a pre-existing template on a re-install)
@@ -66,7 +66,7 @@ export class WorkflowInstallRequiresRebuildError extends Error {
 }
 
 /** A fail-closed preflight rejection (bad BPMN, unknown portlet kind, unknown
- *  cube reference, invalid migration spec) — refused BEFORE any write. */
+ *  cube reference, invalid migration declaration) — refused BEFORE any write. */
 export class WorkflowInstallPreflightError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
@@ -117,7 +117,7 @@ export type WorkflowInstallSagaDeps = {
 
   // -- preflight (ALL read from the materialized storeDir) ---------------
   /** Read+compile the BPMN sidecar + dashboard.json from the storeDir, run the
-   *  typed-portlet-registry v1.2 check + the cube guard + the migration-spec
+   *  typed-portlet-registry v1.2 check + the cube guard + the migration
    *  validate. Throws `WorkflowInstallPreflightError` /
    *  `WorkflowInstallRequiresRebuildError` on any fail-closed verdict. */
   preflightFromStore: (input: { storeDir: string; packageName: string; version?: string }) => Promise<WorkflowInstallPreflightResult>;
@@ -481,7 +481,7 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
     registerCorePortletKinds,
   } = await import("@cinatra-ai/dashboards/extension-materialization");
   const { listRegisteredCubeNames } = await import("@cinatra-ai/dashboards/cubes-platform");
-  const { validateMigrationSpec } = await import("@/lib/extension-migration-dsl");
+  const { preflightExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
 
   type HostPortName = Parameters<typeof recordRequestedGrant>[0]["requestedPorts"][number];
 
@@ -577,27 +577,17 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         throw new WorkflowInstallRequiresRebuildError(cubeVerdict.reason ?? "extension requires a host rebuild to register cubes", cubeVerdict.offendingCubes ?? []);
       }
 
-      // (d) migration-spec validate (validate-only; applying migrations is a
-      // separate step). Dormant for the current cohort (no workflow extension
-      // declares cinatra.migrations) — wired so a future one is gated.
-      const migrations = Array.isArray(pkgCinatra.migrations) ? (pkgCinatra.migrations as Array<{ id?: unknown; path?: unknown }>) : [];
-      for (const m of migrations) {
-        if (typeof m?.path !== "string" || typeof m?.id !== "string") continue;
-        const rel = m.path.replace(/^\.\//, "");
-        if (rel.startsWith("/") || rel.split("/").some((seg) => seg === "..")) {
-          throw new WorkflowInstallPreflightError("MIGRATION_INVALID", `unsafe migration path "${m.path}"`);
-        }
-        let parsed: { ops?: unknown };
-        try {
-          parsed = JSON.parse(await readFile(join(storeDir, rel), "utf8")) as { ops?: unknown };
-        } catch {
-          throw new WorkflowInstallPreflightError("MIGRATION_INVALID", `migration "${m.id}" is not valid JSON`);
-        }
-        if (!Array.isArray(parsed.ops)) {
-          throw new WorkflowInstallPreflightError("MIGRATION_INVALID", `migration "${m.id}" has no ops[]`);
-        }
-        const result = validateMigrationSpec({ id: m.id, ops: parsed.ops as never }, packageName);
-        if (!result.ok) throw new WorkflowInstallPreflightError("MIGRATION_INVALID", result.errors.join("; "));
+      // (d) migration preflight (validate-only; applying migrations is a
+      // separate, trust-gated step). The contract check is fs-only — path
+      // containment + the `ext_<scope>_<pkg>__NNNN_<desc>.mjs` filename/seq
+      // contract — and never imports a migration module. The RETIRED legacy
+      // `cinatra.migrations` JSON-DSL field is rejected here too (#118).
+      // Dormant for the current cohort (no workflow extension declares
+      // migrations) — wired so a future one is gated.
+      try {
+        await preflightExtensionMigrationsFromStore({ storeDir, packageName });
+      } catch (e) {
+        throw new WorkflowInstallPreflightError("MIGRATION_INVALID", e instanceof Error ? e.message : String(e));
       }
 
       return { manifest: sidecar.manifest, dashboardConfig: parsedConfig };
