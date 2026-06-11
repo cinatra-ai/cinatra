@@ -134,12 +134,25 @@ The IoC cutover epic (#24) removed the gate's *tolerance* for coupling; it
 deliberately did NOT remove these residual clusters, which are out of the
 epic's scope and tracked elsewhere:
 
-- **The `src/lib/nango.ts` facade + its 18 live consumers** — explicitly
+- **The `src/lib/nango.ts` facade + its 18 live consumers** — originally
   DEFERRED by the owner-ratified mechanical-cleanup ruling (see cinatra-ai/cinatra#35,
-  reconciliation comment): registry/boot-bound resolution would be new
-  runtime architecture and `@cinatra-ai/nango-connector` has no
-  `register(ctx)` hook to bind against; relocating the ~1.8k-line plumbing
-  host-side reverses the SDK-only relocation. Counted, frozen, shrink-only.
+  reconciliation comment): at that time registry/boot-bound resolution would
+  have been new runtime architecture, `@cinatra-ai/nango-connector` had no
+  `register(ctx)` hook to bind against, and relocating the ~1.65k-line
+  plumbing host-side reverses the SDK-only relocation. The bounded design
+  slice on cinatra-ai/cinatra#7 re-evaluated those constraints against the
+  post-cutover architecture and RATIFIED the inverse direction (design
+  review concurring): the connector gains a real `serverEntry`/`register(ctx)`
+  that registers the nango surface as a capability; `ctx.nango` and the
+  facade's consumers resolve through the capability registry; nothing
+  relocates host-side; nango remains a `systemExtension` (the change is how
+  it is accessed, not whether it ships). Implementation is tracked by
+  cinatra-ai/cinatra#151 (staged PR train: additive delete-capable
+  connector-config host service → connector serverEntry → core cutover →
+  companion sweep; expected end-state per its baseline table:
+  `core-extension-import-ban` 10 → 0 edges, root connector deps 1 → 0,
+  declarations 16/16 unchanged). Until that lands: counted, frozen,
+  shrink-only.
 - **The host's eager connector value-import surface** — at the flip, 11
   unique connector packages still value-imported by `src/` (anthropic,
   apollo, blog, crm, email, gemini, nango, openai, social-media, tailscale,
@@ -171,7 +184,8 @@ epic's scope and tracked elsewhere:
   cover gate also adopted the shared lexical stripper
   (`lib/strip-comments.mjs`), closing its `@/lib/*` blind spot: the HONEST
   hard-import surface (src/ + packages/, generated tree excluded) is **9
-  packages** — nango (the #35 facade residual, last in line on cinatra#7) + openai, anthropic,
+  packages** — nango (the #35 facade residual; implementation now tracked by
+  cinatra-ai/cinatra#151) + openai, anthropic,
   gemini (packages/llm provider adapters + the transport DI cluster),
   drupal-mcp, wordpress-mcp (transport DI cluster), crm, gmail,
   google-calendar (packages/agents single-function edges). The bootable
