@@ -7,7 +7,7 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
-import { getNangoCredentials, isNangoConfigured } from "@/lib/nango";
+import { getNangoCredentials, isNangoConfigured } from "@/lib/nango-system";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { LlmMcpServerTool } from "@cinatra-ai/llm";
 

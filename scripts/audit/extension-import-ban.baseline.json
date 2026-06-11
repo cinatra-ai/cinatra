@@ -28,7 +28,6 @@
     ],
     "@cinatra-ai/nango-connector": [
       "@/lib/database",
-      "@/lib/github-api",
       "@/lib/linkedin-api",
       "@/lib/wordpress-api"
     ],

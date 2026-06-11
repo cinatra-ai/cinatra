@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 65,
-      "keys": 100,
-      "occurrences": 135
+      "files": 52,
+      "keys": 85,
+      "occurrences": 120
     },
     "mechanical": {
       "files": 0,
@@ -18,7 +18,6 @@
     "packages/agent-ui-protocol/src/a2ui-adapter.ts :: package :: @cinatra-ai/email-drafting-agent": 1,
     "packages/agent-ui-protocol/src/a2ui-adapter.ts :: package :: @cinatra-ai/email-follow-up-agent": 1,
     "packages/agent-ui-protocol/src/a2ui-adapter.ts :: package :: @cinatra-ai/email-recipient-selection-agent": 1,
-    "packages/agents/src/a2a-actions.ts :: package :: @cinatra-ai/nango-connector": 1,
     "packages/agents/src/agent-creation-review.ts :: package :: @cinatra-ai/code-reviewer-agent": 2,
     "packages/agents/src/agent-creation-review.ts :: package :: @cinatra-ai/planner-agent": 2,
     "packages/agents/src/agent-creation-review.ts :: package :: @cinatra-ai/security-reviewer-agent": 2,
@@ -30,7 +29,6 @@
     "packages/agents/src/cta-actions.ts :: package :: @cinatra-ai/google-calendar-connector": 1,
     "packages/agents/src/cta-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
     "packages/agents/src/email-drafts-review-renderer.tsx :: package :: @cinatra-ai/email-drafting-agent": 2,
-    "packages/agents/src/execution.ts :: package :: @cinatra-ai/nango-connector": 1,
     "packages/agents/src/execution.ts :: package :: @cinatra-ai/reviewer-agent": 1,
     "packages/agents/src/follow-up-cadence-renderer.tsx :: package :: @cinatra-ai/email-drafting-agent": 1,
     "packages/agents/src/follow-up-cadence-renderer.tsx :: package :: @cinatra-ai/email-follow-up-agent": 1,
@@ -65,7 +63,6 @@
     "packages/agents/src/send-confirmation-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
     "packages/agents/src/server-actions.ts :: package :: @cinatra-ai/gmail-connector": 1,
     "packages/agents/src/skill-recommender-agent-renderers.tsx :: package :: @cinatra-ai/email-drafting-agent": 1,
-    "packages/agents/src/store.ts :: package :: @cinatra-ai/nango-connector": 1,
     "packages/agents/src/validate-oas-runtime-invariants.ts :: path :: extensions/cinatra-ai/email-outreach-agent": 1,
     "packages/agents/vitest.config.ts :: package :: @cinatra-ai/anthropic-connector": 1,
     "packages/agents/vitest.config.ts :: package :: @cinatra-ai/mcp-client-connector": 1,
@@ -83,15 +80,9 @@
     "packages/llm/src/telemetry.ts :: package :: @cinatra-ai/gemini-connector": 1,
     "packages/llm/src/telemetry.ts :: package :: @cinatra-ai/openai-connector": 1,
     "packages/llm/src/tools/skills.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "packages/metric-cost-api/src/screens.tsx :: package :: @cinatra-ai/nango-connector": 1,
     "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
     "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
     "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,
-    "src/app/api/nango/connect/session/route.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/app/api/nango/connections/save/route.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/app/api/nango/webhook/route.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/app/setup/connections/page.tsx :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/a2a-dev-auto-connect.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/artifacts/artifact-creation.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/artifact-service.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/mcp.ts :: package :: @cinatra-ai/marketing-icp-artifact": 1,
@@ -104,15 +95,9 @@
     "src/lib/blog/generation.ts :: package :: @cinatra-ai/blog-pipeline-agent": 3,
     "src/lib/blog/mcp/registry.ts :: package :: @cinatra-ai/blog-linkedin-publish-agent": 1,
     "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
-    "src/lib/dev-auto-setup.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/drupal-api.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/nango.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/anthropic-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/drupal-mcp-connector": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 1,
-    "src/lib/registry-credentials.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/nango-connector": 1
+    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 1
   }
 }

@@ -33,7 +33,7 @@ vi.mock("@/lib/database", () => {
   };
 });
 
-vi.mock("@/lib/nango", () => ({
+vi.mock("@/lib/nango-system", () => ({
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS: {
     wordpress: "wordpress-config",
   },

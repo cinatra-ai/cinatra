@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getGitHubAPIStatus, getGitHubOAuthSettings, listGitHubRepositories } from "@/lib/github-api";
-import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango";
+import { getNangoFrontendConfig, getNangoStatus, getPrimarySavedNangoConnection } from "@/lib/nango-system";
 import { NangoUserConnectButton } from "@cinatra-ai/sdk-ui/nango";
 import { StatusPill } from "@/components/ui/status-pill";
 import {

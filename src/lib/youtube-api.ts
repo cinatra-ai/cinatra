@@ -6,7 +6,7 @@ import {
   getNangoConnection,
   getPrimarySavedNangoConnection,
   isNangoConfigured,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 
 export async function getConfiguredYouTubeAccessToken() {
   if (!isNangoConfigured()) {

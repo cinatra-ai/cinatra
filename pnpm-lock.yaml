@@ -52,9 +52,6 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
-      '@cinatra-ai/nango-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/nango-connector
       '@cinatra-ai/notifications':
         specifier: workspace:*
         version: link:packages/notifications
@@ -1364,9 +1361,6 @@ importers:
       '@cinatra-ai/metric-usage-api':
         specifier: workspace:*
         version: link:../metric-usage-api
-      '@cinatra-ai/nango-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/nango-connector
       '@cinatra-ai/registries':
         specifier: workspace:*
         version: link:../registries
@@ -1530,9 +1524,6 @@ importers:
       '@cinatra-ai/mcp-client-connector':
         specifier: workspace:*
         version: link:../../extensions/cinatra-ai/mcp-client-connector
-      '@cinatra-ai/nango-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/nango-connector
       '@cinatra-ai/openai-connector':
         specifier: workspace:*
         version: link:../../extensions/cinatra-ai/openai-connector
@@ -1756,9 +1747,6 @@ importers:
       '@cinatra-ai/metric-usage-api':
         specifier: workspace:*
         version: link:../metric-usage-api
-      '@cinatra-ai/nango-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/nango-connector
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.1

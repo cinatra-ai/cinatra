@@ -14,7 +14,7 @@ import {
   type ExternalA2AClientCredentials,
 } from "@cinatra-ai/a2a";
 import type { TaskState } from "@cinatra-ai/a2a";
-import { getNangoConnection } from "@cinatra-ai/nango-connector";
+import { getNangoConnection } from "@/lib/nango-system";
 import {
   readAgentRunById,
   readAgentRunByTaskId,

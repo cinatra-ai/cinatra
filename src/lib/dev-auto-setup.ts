@@ -18,7 +18,7 @@ import {
   ensureNangoIntegration,
   importNangoConnection,
   getNangoCredentials,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { setExtensionInstallAccess } from "@cinatra-ai/extensions/install-access-contract";
 import { installExtensionManifest } from "@cinatra-ai/extensions/lifecycle-primitive";

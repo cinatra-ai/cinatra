@@ -50,6 +50,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/gmail-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/google-calendar-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/linkedin-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/nango-connector", resolution: "required" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/openai-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/resend-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/social-media-connector", resolution: "guardedOptional" },

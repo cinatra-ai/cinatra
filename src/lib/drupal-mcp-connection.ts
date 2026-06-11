@@ -9,7 +9,7 @@ import "server-only";
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
-import { buildBearerAuthHeaderFromNango } from "@/lib/nango";
+import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
 
 const MCP_TOOLS_PATH = "/_mcp_tools";
 

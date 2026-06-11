@@ -383,3 +383,23 @@ export type {
   ChatUserContextContributor,
   ChatUserContextProviderRecord,
 } from "./chat-user-context-contract";
+
+// The nango-system capability contract (the nango serverEntry cutover): the
+// nango gateway registers its full host-facing surface from `register(ctx)`;
+// the host resolver (src/lib/nango-system.ts) imports the id constant + types
+// — extensions keep this import TYPE-ONLY (host-peer-value-import ban).
+export { NANGO_SYSTEM_CAPABILITY } from "./nango-system-contract";
+export type {
+  NangoConnectorKey,
+  NangoConnectionIdKey,
+  NangoSettings,
+  NangoFrontendConfig,
+  SavedNangoConnection,
+  NangoConnectorDefinition,
+  NangoConfigStore,
+  NangoConnectionScopeOptions,
+  NangoOAuth2IntegrationCredentials,
+  NangoConnectionDetails,
+  NangoRouteResult,
+  NangoSystemSurface,
+} from "./nango-system-contract";

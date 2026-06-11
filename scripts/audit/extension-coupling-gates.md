@@ -118,10 +118,10 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **135 occurrences / 100 keys / 65 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7) | shrink-only, frozen |
-| `core-extension-import-ban` | **10 edges / 10 files** — all runtime-coupling, ALL `@cinatra-ai/nango-connector` (the tracked #35/#7 residual). At the flip, #36: 41/28; −4 Ops (crm/twenty/tailscale), −8 Content (blog/social-media/email), −19 LLM (anthropic/apollo/gemini/openai) — Plan-B lazy/guarded cutover, cinatra#7. The non-nango value-import surface is RETIRED. | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **120 occurrences / 52 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1) | shrink-only, frozen |
+| `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1, closing the #35 facade residual). The committed baseline is EMPTY; the pinned-empty gate flip rides the transport-blind-spot closure (cinatra#151 Stage 3) so the flip is honest under the shared lexer. | shrink-only, frozen |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
-| `extension-import-ban` | **20 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY) | shrink-only |
+| `extension-import-ban` | **19 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's github-api reachback retired by the cinatra#151 companion — its remaining database/linkedin/wordpress fallback edges retire with the companion sweep) | shrink-only |
 | `host-peer-value-import-ban` | **0** | hold at 0 |
 
 "Is the cutover done?" has an exact answer: the gates can no longer move
@@ -134,25 +134,21 @@ The IoC cutover epic (#24) removed the gate's *tolerance* for coupling; it
 deliberately did NOT remove these residual clusters, which are out of the
 epic's scope and tracked elsewhere:
 
-- **The `src/lib/nango.ts` facade + its 18 live consumers** — originally
-  DEFERRED by the owner-ratified mechanical-cleanup ruling (see cinatra-ai/cinatra#35,
-  reconciliation comment): at that time registry/boot-bound resolution would
-  have been new runtime architecture, `@cinatra-ai/nango-connector` had no
-  `register(ctx)` hook to bind against, and relocating the ~1.65k-line
-  plumbing host-side reverses the SDK-only relocation. The bounded design
-  slice on cinatra-ai/cinatra#7 re-evaluated those constraints against the
-  post-cutover architecture and RATIFIED the inverse direction (design
-  review concurring): the connector gains a real `serverEntry`/`register(ctx)`
-  that registers the nango surface as a capability; `ctx.nango` and the
-  facade's consumers resolve through the capability registry; nothing
-  relocates host-side; nango remains a `systemExtension` (the change is how
-  it is accessed, not whether it ships). Implementation is tracked by
-  cinatra-ai/cinatra#151 (staged PR train: additive delete-capable
-  connector-config host service → connector serverEntry → core cutover →
-  companion sweep; expected end-state per its baseline table:
-  `core-extension-import-ban` 10 → 0 edges, root connector deps 1 → 0,
-  declarations 16/16 unchanged). Until that lands: counted, frozen,
-  shrink-only.
+- **The `src/lib/nango.ts` facade — RETIRED (cinatra#151 Stage 1).** The
+  serverEntry cutover landed the ratified inverse direction: the connector's
+  `register(ctx)` registers the full `nango-system` capability surface
+  (config-store + blocking-materializer inversion in the companion); the
+  host resolves it in `src/lib/nango-system.ts` (fail-loud default, the
+  pinned auth boot read degraded per the design's item 9a); the facade is
+  DELETED, all former consumers (routes, pages, `ctx.nango`, packages)
+  re-pointed; `register-transport-connectors.ts` dropped its 15-name nango
+  import block and keeps publishing `@cinatra-ai/host:nango-connection-storage`
+  as a thin delegating adapter (old-id retirement rides the transport-DI
+  cutover, cinatra#151 Stage 3). Floors moved: `core-extension-import-ban`
+  10 → 0 edges, instance-coupling 135 → 120 occ, root connector deps 1 → 0,
+  declarations 16/16 unchanged (nango moved from hard-imported + root-dep to
+  generated-required in the cover gate). The companion sweep (removing the
+  connector's skew-window `@/lib` fallbacks) is the named follow-up.
 - **The host's eager connector value-import surface** — at the flip, 11
   unique connector packages still value-imported by `src/` (anthropic,
   apollo, blog, crm, email, gemini, nango, openai, social-media, tailscale,
@@ -202,7 +198,10 @@ epic's scope and tracked elsewhere:
   KNOWN SCANNER LIMITATION: these edges are currently INVISIBLE to the
   import-ban scanner — the file's header contains a literal `@/lib/*` whose
   `/*` the legacy comment-stripper treats as a block-comment opener, swallowing
-  the import section (the documented stripping-limitation class above). They
+  the import section (the documented stripping-limitation class above).
+  Exactly FOUR hidden edges remain (openai `/deps`, anthropic, drupal-mcp,
+  wordpress-mcp) — the nango edge in this file was REMOVED by the cinatra#151
+  Stage 1 authorship transfer (the 15-name import block is gone). They
   ARE counted by the instance-coupling gate (`package ::` keys for that file
   in the committed baseline), and since the dep-drop slice (cinatra#7) they ARE counted by the
   required-extensions COVER gate (which adopted the shared lexer — it is
@@ -210,7 +209,7 @@ epic's scope and tracked elsewhere:
   removal there and closes a real under-coverage hole the dep drop would
   otherwise have opened). Per the policy above, the IMPORT-BAN stripper
   correction must land WITH these edges removed — i.e. with the
-  LLM-platform/content-editor DI cutover, not before.
+  LLM-platform/content-editor DI cutover (cinatra#151 Stage 3), not before.
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed
