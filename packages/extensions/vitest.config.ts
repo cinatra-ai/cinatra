@@ -46,6 +46,16 @@ export default defineConfig({
         __dirname,
         "../../src/lib/drizzle-store.ts",
       ),
+      // destination credential store (split out of drizzle-store, cinatra#104)
+      // + its postgres-config leaf dependency
+      "@/lib/extension-destinations-store": path.join(
+        __dirname,
+        "../../src/lib/extension-destinations-store.ts",
+      ),
+      "@/lib/postgres-config": path.join(
+        __dirname,
+        "../../src/lib/postgres-config.ts",
+      ),
       "@/lib/instance-identity-store": path.join(
         __dirname,
         "../../src/lib/instance-identity-store.ts",

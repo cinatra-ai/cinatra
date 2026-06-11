@@ -1,4 +1,4 @@
-// Destination credential store unit tests.
+// Destination credential store unit tests (src/lib/extension-destinations-store.ts).
 // Asserts:
 //   1. Round-trip: writeDestinationCredential -> readDestinationCredential returns same row.
 //   2. AAD binding: callers use aad: "destination.<id>.publish-token" for publish token.
@@ -157,7 +157,7 @@ describe("destination credential store — AAD binding", () => {
     };
 
     const { readDestinationCredential, writeDestinationCredential } = await import(
-      "@/lib/drizzle-store"
+      "@/lib/extension-destinations-store"
     );
 
     // Write (no-op in mock; storedRow already set)
@@ -180,7 +180,7 @@ describe("destination credential store — AAD binding", () => {
   it("readDestinationCredential returns null when no row found", async () => {
     storedRow = null;
 
-    const { readDestinationCredential } = await import("@/lib/drizzle-store");
+    const { readDestinationCredential } = await import("@/lib/extension-destinations-store");
     const result = await readDestinationCredential("nonexistent-id");
     expect(result).toBeNull();
   });

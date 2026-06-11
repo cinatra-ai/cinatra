@@ -80,7 +80,7 @@ function setupDevFallbackMocks(overrides?: {
   }));
 
   // Reached only if the fallback does NOT short-circuit — mocked defensively.
-  vi.doMock("@/lib/drizzle-store", () => ({
+  vi.doMock("@/lib/extension-destinations-store", () => ({
     readDestinationCredential: vi.fn(async () => null),
   }));
 }

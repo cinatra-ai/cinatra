@@ -1,11 +1,9 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
-import {
-  getPostgresConnectionString,
-  ensurePostgresSchema,
-  postgresSchema,
-} from "@/lib/database";
+import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import { readChatThreadForClassifier } from "@/lib/database";
 import type {
   ArtifactObjectData,
   ArtifactOriginKind,
@@ -398,12 +396,13 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     };
     let chatContext: ClassifierSignals["chatContext"] | undefined;
     if (input.chatContextSource?.threadId && input.createdBy) {
-      // Defensive dynamic require — keeps the database.ts module out
-      // of the artifact-creation import-time graph (consistent with
-      // the artifact-refs-store pattern used earlier in this file).
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const dbMod = require("@/lib/database") as typeof import("@/lib/database");
-      const resolved = dbMod.readChatThreadForClassifier({
+      // Static import (cinatra#104): this module ALREADY has database.ts in
+      // its static import graph, and database.ts is an ASYNC module under
+      // Turbopack dev — a runtime `require("@/lib/database")` returns the
+      // module's Promise (all exports `undefined`), which made this block
+      // silently drop chatContext on every upload (TypeError swallowed by
+      // the fail-soft catch below).
+      const resolved = readChatThreadForClassifier({
         threadId: input.chatContextSource.threadId,
         actorUserId: input.createdBy,
         activeOrgId: input.orgId,
