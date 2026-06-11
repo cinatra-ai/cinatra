@@ -388,12 +388,28 @@ jobs:
   schema-migration-gate:
     name: Core-store schema migration gate
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    # REQUIRED status check on `main`. Run even when `detect` FAILED, so the
+    # guard step below reports a definitive job FAILURE instead of a SKIP —
+    # GitHub counts a skipped required check as satisfied, so a failed `detect`
+    # merely *skipping* this job would NOT block a merge (same hole the `build`
+    # job closes with this exact pattern). Docs-only and draft PRs (detect
+    # succeeded + skip) still skip this job — the documented skip-as-success
+    # path is unchanged.
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      # Hard-fail (definitive RED, never a non-failing "skip") when detect did
+      # not pass. No-ops on the success path; its failure short-circuits every
+      # later step, so they need no per-step guards.
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # Full history so the merge-base diff can resolve origin/<pr.base.ref>.
@@ -613,10 +629,26 @@ jobs:
   perpetual-loops-invariants:
     name: Perpetual system loops invariants
     needs: detect
-    if: ${{ needs.detect.outputs.skip != 'true' }}
+    # REQUIRED status check on `main`. Run even when `detect` FAILED, so the
+    # guard step below reports a definitive job FAILURE instead of a SKIP —
+    # GitHub counts a skipped required check as satisfied, so a failed `detect`
+    # merely *skipping* this job would NOT block a merge (same hole the `build`
+    # job closes with this exact pattern). Docs-only and draft PRs (detect
+    # succeeded + skip) still skip this job — the documented skip-as-success
+    # path is unchanged.
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      # Hard-fail (definitive RED, never a non-failing "skip") when detect did
+      # not pass. No-ops on the success path; its failure short-circuits every
+      # later step, so they need no per-step guards.
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # Full history so the touch-ratchet diff in admin-route + other
