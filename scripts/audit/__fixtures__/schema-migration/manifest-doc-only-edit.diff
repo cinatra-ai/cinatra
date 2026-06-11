@@ -1,0 +1,12 @@
+diff --git a/migrations/manifest.json b/migrations/manifest.json
+index 963adc1..06d6f6d 100644
+--- a/migrations/manifest.json
++++ b/migrations/manifest.json
+@@ -1,6 +1,6 @@
+ {
+   "_doc": [
+-    "Append-only ledger of versioned migration artifacts for the first-party",
++    "Append-only, audited ledger of versioned migration artifacts for the first-party",
+     "core store schema (buildCreateStoreSchemaQueries / createStoreTables in",
+     "src/lib/drizzle-store.ts). See migrations/README.md for the convention:",
+     "every migrations/core/core__NNNN_short-description.mjs runner module",

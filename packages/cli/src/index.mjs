@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
 import pg from "pg";
 import { resolveTeardownNames } from "./teardown-config.mjs";
+import { runCoreMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
 import { syncDevApps } from "./dev-apps.mjs";
 import { syncCinatraDevExtensions } from "./cinatra-dev-extensions.mjs";
 import { parseDevRefreshFlags, describeDockerDecision } from "./dev-refresh.mjs";
@@ -275,6 +276,7 @@ Usage:
   cinatra clone slug-for-worktree --worktree-path <path>
   cinatra clone prune [--worktree-path <path>] [--slug <slug>] --yes
   cinatra clone list
+  cinatra db migrate [--down] [--count=N]
   cinatra dev refresh [--docker=auto|always|--no-docker]
   cinatra dev tunnel start
   cinatra dev tunnel stop
@@ -308,8 +310,8 @@ Commands:
                                       isolated worktrees/clones + external infra.
                     --docker=always   force docker compose up -d (fatal on failure).
                     --no-docker       skip the docker step entirely.
-                    Applies additive schema only; transformational one-shot
-                    migrations under src/lib/migrations/ stay manual (release notes).
+                    Applies the additive schema bootstrap, then the versioned
+                    core migration chain (migrations/core/, pgmigrations ledger).
   skills reset-repo Force-push the entire local skills store to the connected
                     GitHub skills repository (dev mode only). Replaces all repo
                     content with what is currently in data/skills/.
@@ -2213,7 +2215,27 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       secret: authSecret,
       baseURL: env.BETTER_AUTH_URL,
     });
+    // Probe BEFORE the bootstrap creates base tables: a schema with no
+    // `metadata` table has never been set up or booted, so the core migration
+    // chain below must be ledger-FAKED, not executed — the idempotent
+    // bootstrap DDL produces the current (post-migration) shape on fresh
+    // databases, and executing historical ALTERs against the base tables
+    // `ensureStoreSchema` creates would fail (cinatra#116).
+    const freshCoreSchema = await isFreshCoreSchema(client, schemaName);
     await ensureStoreSchema(client, schemaName);
+    // Versioned core schema migrations (node-pg-migrate; shared ledger
+    // `pgmigrations` in the app schema). Runs on its own short-lived client
+    // under the `cinatra-schema-init` advisory lock — the setup client above
+    // must not inherit the runner's session-level search_path. A failure
+    // aborts setup loudly: continuing would hand later setup steps a
+    // half-migrated schema.
+    const coreMigrations = await runCoreMigrations({
+      connectionString,
+      schemaName,
+      rootDir: repoRoot,
+      direction: "up",
+      fake: freshCoreSchema,
+    });
     const defaultOrg = await ensureDefaultOrganization(client);
     const nangoSettings = await ensureNangoSettings(client, schemaName, bootstrapNangoSettings);
     const mcpSettings = await ensureMcpSettings(client, schemaName, publicBaseUrl);
@@ -2242,6 +2264,13 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     console.log(`- App runtime mode: ${runtimeMode}`);
     console.log(`- Better Auth: ${migration.action} (${migration.reason})`);
     console.log(`- Workspace store schema: ready (${schemaName})`);
+    console.log(
+      `- Core migrations: ${
+        coreMigrations.ranNames.length === 0
+          ? "up to date"
+          : `${coreMigrations.faked ? "ledger-recorded (fresh schema)" : "applied"} ${coreMigrations.ranNames.length} (${coreMigrations.ranNames.join(", ")})`
+      }`,
+    );
     console.log(`- Default organization: ${defaultOrg.created ? 'created' : 'already exists'} (id: ${defaultOrg.id})`);
     console.log(
       `- Nango connection administration: ${
@@ -2339,6 +2368,56 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     }
   } finally {
     await client.end();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Core schema migrations (`cinatra db migrate [--down] [--count=N]`)
+// ---------------------------------------------------------------------------
+//
+// Ops entry point for the node-pg-migrate core runner (cinatra#116): applies
+// pending migrations/core/ modules, or reverts the newest core ledger rows
+// with `--down`. Works in dev checkouts AND inside the standalone production
+// image (packages/cli + migrations/ are both copied into the image):
+//
+//   docker exec <cid> node packages/cli/bin/cinatra.mjs db migrate --down
+//
+// Setup and the app boot pass apply pending migrations automatically; this
+// command exists for manual remediation and rollback.
+
+async function runDbMigrate(rest) {
+  for (const arg of rest) {
+    if (arg === "--down" || arg === "--count" || arg.startsWith("--count=") || !arg.startsWith("--")) {
+      continue;
+    }
+    throw new Error(`Unknown flag "${arg}" for cinatra db migrate. Supported flags: --down, --count=N.`);
+  }
+  const repoRoot = getRepoRoot();
+  const env = collectEnvironment(repoRoot);
+  const connectionString = requiredEnv(env, "SUPABASE_DB_URL");
+  const schemaName = env.SUPABASE_SCHEMA?.trim() || "cinatra";
+  const down = rest.includes("--down");
+  const countRaw = readOptionValue(rest, "--count");
+  let count;
+  if (countRaw !== null) {
+    count = Number(countRaw);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new Error(`Invalid --count=${countRaw}. Expected a positive integer.`);
+    }
+  }
+  const result = await runCoreMigrations({
+    connectionString,
+    schemaName,
+    rootDir: repoRoot,
+    direction: down ? "down" : "up",
+    ...(count !== undefined ? { count } : {}),
+  });
+  if (result.ranNames.length === 0) {
+    console.log(`Core migrations (${schemaName}): ${down ? "nothing to revert" : "up to date"}.`);
+  } else {
+    console.log(
+      `Core migrations (${schemaName}): ${down ? "reverted" : "applied"} ${result.ranNames.length} — ${result.ranNames.join(", ")}`,
+    );
   }
 }
 
@@ -2454,21 +2533,21 @@ async function runDevRefresh(rest) {
     { cwd: repoRoot },
   );
 
-  // 3. Database + settings: the existing idempotent dev setup (additive migrations +
-  //    ensure* settings). Dev app sync is skipped to keep refresh fast.
+  // 3. Database + settings: the existing idempotent dev setup (additive bootstrap +
+  //    ensure* settings) followed by the versioned core migration chain
+  //    (migrations/core/, recorded in the pgmigrations ledger) — both run inside
+  //    runSetup. Dev app sync is skipped to keep refresh fast.
   console.log("- Database + settings: running idempotent dev setup…");
   await runSetup("dev", { skipDevApps: true });
 
-  // 4. Advisory: additive schema is reconciled automatically; transformational
-  //    one-shot migrations are deliberate, manual, release-note-driven steps. There
-  //    is no migration ledger, so we never try to detect "pending" ones.
+  // 4. Advisory: additive schema is reconciled automatically and the versioned
+  //    migration chain has been applied (or ledger-faked on a fresh schema) by
+  //    runSetup above — transformational changes no longer require manual,
+  //    release-note-driven steps.
   console.log(
-    "\n✔ Dev environment refreshed — dependencies and additive schema (new tables/columns/indexes) are in sync.",
+    "\n✔ Dev environment refreshed — dependencies, additive schema, and the versioned core migration chain (pgmigrations ledger) are in sync.",
   );
-  console.log(
-    "  Transformational one-shot migrations under src/lib/migrations/ are NOT run automatically; run them by",
-  );
-  console.log("  hand only when a release's notes call for it. Restart your dev server: make dev");
+  console.log("  Restart your dev server: make dev");
 }
 
 // ---------------------------------------------------------------------------
@@ -2828,7 +2907,23 @@ async function runSetupBranch(argv) {
   const client = createClient(connectionString);
   await client.connect();
   try {
+    // Fresh branch schemas ledger-FAKE the core migration chain (the
+    // bootstrap produces the current shape); a re-run against an existing
+    // branch schema applies real migrations. Probe before base tables exist.
+    // Runs BEFORE the seed copy so the branch ledger reflects the chain the
+    // copied (already-migrated) source rows were produced under.
+    const freshCoreSchema = await isFreshCoreSchema(client, schemaName);
     await ensureStoreSchema(client, schemaName);
+    const coreMigrations = await runCoreMigrations({
+      connectionString,
+      schemaName,
+      rootDir: worktreePath,
+      direction: "up",
+      fake: freshCoreSchema,
+    });
+    console.log(
+      `  Core migrations: ${coreMigrations.ranNames.length === 0 ? "up to date" : `${coreMigrations.faked ? "ledger-recorded" : "applied"} ${coreMigrations.ranNames.length}`}`,
+    );
     // Seed all reference/business-data tables from source schema.
     // Skips operational tables (per-run state, audit trail, metrics) that should
     // start fresh on every branch. Seeds everything else so the branch has full
@@ -2855,6 +2950,13 @@ async function runSetupBranch(argv) {
 
     for (const { table_name } of sourceTables.rows) {
       if (SEED_SKIP_TABLES.has(table_name)) continue;
+      // The migrations ledger is recorded by the runner above, never copied:
+      // copying the source's rows would duplicate names under fresh serial
+      // ids and could import history the branch's migrations/core does not
+      // have. (Deliberately NOT in SEED_SKIP_TABLES — runRefreshSeed uses
+      // that list to TRUNCATE, and truncating a clone's ledger would re-run
+      // the whole chain against already-migrated data.)
+      if (table_name === "pgmigrations") continue;
       const rows = await client.query(
         `SELECT * FROM ${quoteIdentifier(sourceSchemaName)}.${quoteIdentifier(table_name)}`,
       ).catch(() => ({ rows: [] }));
@@ -6928,6 +7030,11 @@ export async function runCli(argv) {
   // Registry lookup for shell hooks.
   if (command === "clone" && mode === "slug-for-worktree") {
     runCloneSlugForWorktree(rest);
+    return;
+  }
+
+  if (command === "db" && mode === "migrate") {
+    await runDbMigrate(rest);
     return;
   }
 

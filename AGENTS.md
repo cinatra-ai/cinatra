@@ -25,7 +25,7 @@ workflows.
 | `packages/` | The workspace packages — the platform's building blocks (see below). Each is a `@cinatra-ai/*` package with its own `README.md`. |
 | `scripts/` | Setup, dev-server, validation, and audit tooling (`setup.sh`, `dev-server.mjs`). |
 | `contracts/` | Cross-surface contract fixtures used by end-to-end tests. |
-| `migrations/` | One-shot migration artifacts for the core store schema (`NNNN_description.sql` + manifest); convention in `migrations/README.md`. |
+| `migrations/` | Versioned migrations for the core store schema: node-pg-migrate code modules under `migrations/core/` (`core__NNNN_description.mjs` + manifest entry, `pgmigrations` ledger); the legacy one-shot `NNNN_description.sql` artifacts are retained append-only. Convention in `migrations/README.md`. |
 | `docs/` | Pointer to the documentation site; the source lives in [`cinatra-ai/docs`](https://github.com/cinatra-ai/docs). |
 | `docker-compose.yml`, `Makefile` | The local development stack (PostgreSQL, Redis, and optional supporting services) and the dev-loop entry points. |
 | `tests/` (Playwright configs under `tests/e2e/config/`) | End-to-end test suites. Unit tests are package-local. |

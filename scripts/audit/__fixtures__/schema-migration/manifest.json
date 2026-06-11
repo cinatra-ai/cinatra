@@ -9,7 +9,9 @@
     "  pass — the gate exits 0 (additive change, artifact shipped, or the",
     "         touched DDL is out of scope: Better Auth / extension-owned)",
     "  fail — the gate exits non-zero (destructive in-scope change with no",
-    "         migrations/NNNN_*.sql + manifest entry in the same diff)",
+    "         migrations/core/core__NNNN_*.mjs runner module + manifest entry",
+    "         in the same diff — the legacy migrations/NNNN_*.sql psql form",
+    "         is retired for new migrations and also fails)",
     "The gate's classifier test must run every fixture and assert its label.",
     "When the convention gains a new destructive/additive case, add a fixture",
     "here in the same PR that documents it."
@@ -25,7 +27,25 @@
       "file": "destructive-retype-with-artifact.diff",
       "expect": "pass",
       "category": "destructive, has artifact",
-      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships migrations/0003_narrow-usage-events-cost-usd.sql plus its manifest entry in the same diff (refreshed against the shipped 0002 agent_templates.durable drop ledger entry)."
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0003_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
+    },
+    {
+      "file": "destructive-retype-legacy-sql-artifact.diff",
+      "expect": "fail",
+      "category": "destructive, legacy artifact form (retired)",
+      "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0003_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
+    },
+    {
+      "file": "destructive-module-no-manifest.diff",
+      "expect": "fail",
+      "category": "unmanifested executable module (gate-bypass attempt)",
+      "description": "Adds a VALID migrations/core/core__0003_*.mjs module carrying destructive SQL with no manifest entry and no in-scope schema-file diff. The runner executes every valid core/ module regardless of the manifest, so migration-state inconsistency must fail standalone — not only when a destructive drizzle-store diff is present."
+    },
+    {
+      "file": "manifest-doc-only-edit.diff",
+      "expect": "pass",
+      "category": "manifest _doc-only edit, no entries gained",
+      "description": "Edits migrations/manifest.json _doc wording without touching the migrations array. Legitimate without a module — the standalone inconsistency rule fires only when the array GAINS entries with no matching module (rewrites/removals of existing entries are integrity failures via the append-only prefix check)."
     },
     {
       "file": "additive-nullable-column-no-artifact.diff",

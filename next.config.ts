@@ -164,6 +164,12 @@ const nextConfig: NextConfig = {
     // keep it external so Turbopack/the standalone build never tries to bundle
     // the compiler into a route chunk — Node resolves it at runtime.
     "typescript",
+    // node-pg-migrate (the core migration runner, cinatra#116) loads
+    // migration modules at runtime via `await import(\`file://...\`)` over
+    // migrations/core/ — that dynamic import must stay native Node, never
+    // bundled. Output tracing still copies the package into the standalone
+    // image (it is statically imported via @cinatra-ai/cli/core-migrations).
+    "node-pg-migrate",
   ],
   transpilePackages: [
     "@cinatra-ai/extension-types",

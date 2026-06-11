@@ -417,13 +417,16 @@ const manifestWith = (entries) => JSON.stringify({ _doc: ["ledger"], migrations:
 const ENTRY_0001 = { seq: "0001", file: "0001_first.sql", summary: "first", destructive: true, tables: ["widgets"] };
 const readBase = (p) => (p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null);
 
-test("artifact: SQL file + appended manifest entry is complete", () => {
+const MODULE_0002 = "migrations/core/core__0002_drop-widgets-label.mjs";
+const MODULE_0002_SRC = "export function up(pgm) { pgm.sql(`ALTER TABLE widgets DROP COLUMN IF EXISTS label;`); }\nexport function down(pgm) {}";
+
+test("artifact: runner module + appended manifest entry is complete", () => {
   const text =
-    fullReplaceDiff("migrations/0002_drop-widgets-label.sql", null, 'ALTER TABLE :"schema"."widgets" DROP COLUMN IF EXISTS label;') +
+    fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
     fullReplaceDiff(
       MIGRATION_MANIFEST_PATH,
       BASE_MANIFEST,
-      manifestWith([ENTRY_0001, { seq: "0002", file: "0002_drop-widgets-label.sql", summary: "drop", destructive: true, tables: ["widgets"] }]),
+      manifestWith([ENTRY_0001, { seq: "0002", file: "core/core__0002_drop-widgets-label.mjs", summary: "drop", destructive: true, tables: ["widgets"] }]),
     );
   const a = detectMigrationArtifact(parseUnifiedDiff(text), readBase);
   assert.deepEqual(a.problems, []);
@@ -431,36 +434,160 @@ test("artifact: SQL file + appended manifest entry is complete", () => {
   assert.equal(a.newEntries.length, 1);
 });
 
-test("artifact: SQL without a manifest entry is incomplete (both pieces, same PR)", () => {
+test("artifact: a runner module without a manifest entry is incomplete (both pieces, same PR)", () => {
   const a = detectMigrationArtifact(
-    parseUnifiedDiff(fullReplaceDiff("migrations/0002_drop.sql", null, "ALTER TABLE x;")),
+    parseUnifiedDiff(fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC)),
     readBase,
   );
   assert.equal(a.complete, false);
   assert.ok(a.problems.some((p) => p.includes("manifest")), a.problems.join("; "));
 });
 
-test("artifact: rewriting a shipped ledger entry or regressing the sequence is rejected", () => {
-  const rewritten = detectMigrationArtifact(
+test("artifact: the legacy psql artifact form is retired for new migrations", () => {
+  const a = detectMigrationArtifact(
     parseUnifiedDiff(
-      fullReplaceDiff("migrations/0002_x.sql", null, "ALTER TABLE x;") +
+      fullReplaceDiff("migrations/0002_drop.sql", null, "ALTER TABLE x;") +
         fullReplaceDiff(
           MIGRATION_MANIFEST_PATH,
           BASE_MANIFEST,
-          manifestWith([{ ...ENTRY_0001, summary: "REWRITTEN" }, { seq: "0002", file: "0002_x.sql", summary: "x", destructive: true, tables: [] }]),
+          manifestWith([ENTRY_0001, { seq: "0002", file: "0002_drop.sql", summary: "drop", destructive: true, tables: [] }]),
         ),
     ),
     readBase,
   );
-  assert.ok(rewritten.problems.some((p) => p.includes("append-only")), rewritten.problems.join("; "));
+  assert.equal(a.complete, false);
+  assert.ok(a.problems.some((p) => p.includes("retired")), a.problems.join("; "));
+});
 
-  const regressed = detectMigrationArtifact(
+test("artifact: deleting, renaming, or EDITING a shipped artifact is an integrity failure", () => {
+  const sqlDeleted = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/0001_first.sql", "ALTER TABLE x;", null)),
+    readBase,
+  );
+  assert.ok(sqlDeleted.integrity.some((p) => p.includes("never be deleted")), sqlDeleted.integrity.join("; "));
+
+  const sqlEdited = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/0001_first.sql", "ALTER TABLE x;", "ALTER TABLE x DROP COLUMN y;")),
+    readBase,
+  );
+  assert.ok(sqlEdited.integrity.some((p) => p.includes("never be edited")), sqlEdited.integrity.join("; "));
+
+  const moduleDeleted = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, null)),
+    readBase,
+  );
+  assert.ok(moduleDeleted.integrity.some((p) => p.includes("never be deleted")), moduleDeleted.integrity.join("; "));
+
+  const moduleEdited = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, "export function up() {}")),
+    readBase,
+  );
+  assert.ok(moduleEdited.integrity.some((p) => p.includes("never be edited")), moduleEdited.integrity.join("; "));
+});
+
+test("artifact: re-using a shipped seq (non-wrapper) or duplicating a seq in one diff is an integrity failure", () => {
+  // seq 0001 is shipped, and this module is NOT the exact legacy wrapper
+  // (core__0001_first.mjs) — it would trip the runner's duplicate-seq
+  // preflight at boot once the real wrapper exists.
+  const reused = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_other-name.mjs", null, MODULE_0002_SRC)),
+    readBase,
+  );
+  assert.ok(reused.integrity.some((p) => p.includes("already shipped")), reused.integrity.join("; "));
+  assert.deepEqual(reused.artifactFiles, []);
+
+  const duped = detectMigrationArtifact(
     parseUnifiedDiff(
-      fullReplaceDiff("migrations/0001_dupe.sql", null, "ALTER TABLE x;") +
+      fullReplaceDiff("migrations/core/core__0002_a.mjs", null, MODULE_0002_SRC) +
+        fullReplaceDiff("migrations/core/core__0002_b.mjs", null, MODULE_0002_SRC),
+    ),
+    readBase,
+  );
+  assert.ok(duped.integrity.some((p) => p.includes("duplicate sequence number")), duped.integrity.join("; "));
+});
+
+test("runGate fails a tamper-only diff (no destructive schema change required)", () => {
+  const r = runGate({
+    diffText: fullReplaceDiff("migrations/core/core__0001_first.mjs", MODULE_0002_SRC, "export function up() {}"),
+    readBaseFile: readBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.artifact.integrity.length > 0);
+});
+
+test("artifact: a manifest-only rewrite (no module in the diff) is an integrity failure", () => {
+  const r = runGate({
+    diffText: fullReplaceDiff(
+      MIGRATION_MANIFEST_PATH,
+      BASE_MANIFEST,
+      manifestWith([{ ...ENTRY_0001, summary: "REWRITTEN" }]),
+    ),
+    readBaseFile: readBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.artifact.integrity.some((p) => p.includes("append-only")), r.artifact.integrity.join("; "));
+
+  const deleted = runGate({
+    diffText: fullReplaceDiff(MIGRATION_MANIFEST_PATH, BASE_MANIFEST, null),
+    readBaseFile: readBase,
+  });
+  assert.equal(deleted.verdict, "fail");
+  assert.ok(deleted.artifact.integrity.some((p) => p.includes("never be deleted")), deleted.artifact.integrity.join("; "));
+});
+
+test("artifact: renaming a shipped artifact OUT of migrations/ is an integrity failure", () => {
+  const renameOut =
+    "diff --git a/migrations/core/core__0001_first.mjs b/docs/core__0001_first.mjs\n" +
+    "similarity index 100%\n" +
+    "rename from migrations/core/core__0001_first.mjs\n" +
+    "rename to docs/core__0001_first.mjs\n";
+  const a = detectMigrationArtifact(parseUnifiedDiff(renameOut), readBase);
+  assert.ok(a.integrity.some((p) => p.includes("renamed or moved")), a.integrity.join("; "));
+
+  const sqlRenameOut =
+    "diff --git a/migrations/0001_first.sql b/archive/0001_first.sql\n" +
+    "similarity index 100%\n" +
+    "rename from migrations/0001_first.sql\n" +
+    "rename to archive/0001_first.sql\n";
+  const b = detectMigrationArtifact(parseUnifiedDiff(sqlRenameOut), readBase);
+  assert.ok(b.integrity.some((p) => p.includes("renamed or moved")), b.integrity.join("; "));
+});
+
+test("artifact: a runner-form backfill of an already-shipped seq needs no manifest entry (and is not a new artifact)", () => {
+  // seq 0001 already exists in the base manifest (the legacy artifact);
+  // adding core/core__0001_first.mjs is the wrapper-backfill case from
+  // cinatra#116 — allowed without a manifest change, but it can never stand
+  // in for the artifact a NEW destructive change must ship.
+  const a = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/core__0001_first.mjs", null, MODULE_0002_SRC)),
+    readBase,
+  );
+  assert.deepEqual(a.problems, []);
+  assert.equal(a.complete, false);
+  assert.deepEqual(a.artifactFiles, []);
+});
+
+test("artifact: rewriting a shipped ledger entry or regressing the sequence is rejected", () => {
+  const rewritten = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
         fullReplaceDiff(
           MIGRATION_MANIFEST_PATH,
           BASE_MANIFEST,
-          manifestWith([ENTRY_0001, { seq: "0001", file: "0001_dupe.sql", summary: "dupe", destructive: true, tables: [] }]),
+          manifestWith([{ ...ENTRY_0001, summary: "REWRITTEN" }, { seq: "0002", file: "core/core__0002_drop-widgets-label.mjs", summary: "x", destructive: true, tables: [] }]),
+        ),
+    ),
+    readBase,
+  );
+  assert.ok(rewritten.integrity.some((p) => p.includes("append-only")), rewritten.integrity.join("; "));
+
+  const regressed = detectMigrationArtifact(
+    parseUnifiedDiff(
+      fullReplaceDiff("migrations/core/core__0002_dupe.mjs", null, MODULE_0002_SRC) +
+        fullReplaceDiff(
+          MIGRATION_MANIFEST_PATH,
+          BASE_MANIFEST,
+          manifestWith([ENTRY_0001, { seq: "0001", file: "core/core__0002_dupe.mjs", summary: "dupe", destructive: true, tables: [] }]),
         ),
     ),
     readBase,
@@ -468,32 +595,32 @@ test("artifact: rewriting a shipped ledger entry or regressing the sequence is r
   assert.ok(regressed.problems.some((p) => p.includes("strictly increasing")), regressed.problems.join("; "));
 });
 
-test("artifact: a manifest-only entry (no SQL file in the diff) and a seq/filename mismatch are rejected", () => {
+test("artifact: a manifest-only entry (no module in the diff) and a seq/filename mismatch are rejected", () => {
   const manifestOnly = detectMigrationArtifact(
     parseUnifiedDiff(
-      fullReplaceDiff("migrations/0002_x.sql", null, "ALTER TABLE x;") +
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
         fullReplaceDiff(
           MIGRATION_MANIFEST_PATH,
           BASE_MANIFEST,
           manifestWith([
             ENTRY_0001,
-            { seq: "0002", file: "0002_x.sql", summary: "x", destructive: false, tables: [] },
-            { seq: "0003", file: "0003_phantom.sql", summary: "phantom", destructive: true, tables: [] },
+            { seq: "0002", file: "core/core__0002_drop-widgets-label.mjs", summary: "x", destructive: false, tables: [] },
+            { seq: "0003", file: "core/core__0003_phantom.mjs", summary: "phantom", destructive: true, tables: [] },
           ]),
         ),
     ),
     readBase,
   );
   assert.equal(manifestOnly.complete, false);
-  assert.ok(manifestOnly.problems.some((p) => p.includes("no matching migrations/ SQL file")), manifestOnly.problems.join("; "));
+  assert.ok(manifestOnly.problems.some((p) => p.includes("no matching migrations/core/ module")), manifestOnly.problems.join("; "));
 
   const mismatched = detectMigrationArtifact(
     parseUnifiedDiff(
-      fullReplaceDiff("migrations/0002_x.sql", null, "ALTER TABLE x;") +
+      fullReplaceDiff(MODULE_0002, null, MODULE_0002_SRC) +
         fullReplaceDiff(
           MIGRATION_MANIFEST_PATH,
           BASE_MANIFEST,
-          manifestWith([ENTRY_0001, { seq: "0003", file: "0002_x.sql", summary: "x", destructive: true, tables: [] }]),
+          manifestWith([ENTRY_0001, { seq: "0003", file: "core/core__0002_drop-widgets-label.mjs", summary: "x", destructive: true, tables: [] }]),
         ),
     ),
     readBase,
@@ -501,12 +628,20 @@ test("artifact: a manifest-only entry (no SQL file in the diff) and a seq/filena
   assert.ok(mismatched.problems.some((p) => p.includes("does not match its filename")), mismatched.problems.join("; "));
 });
 
-test("artifact: malformed migration filenames are rejected", () => {
+test("artifact: malformed migration filenames are rejected (legacy dir and core dir)", () => {
   const a = detectMigrationArtifact(
     parseUnifiedDiff(fullReplaceDiff("migrations/2_Bad_Name.sql", null, "ALTER TABLE x;")),
     readBase,
   );
   assert.ok(a.problems.some((p) => p.includes("NNNN_short-description")), a.problems.join("; "));
+
+  const b = detectMigrationArtifact(
+    parseUnifiedDiff(fullReplaceDiff("migrations/core/0002_no-namespace.mjs", null, MODULE_0002_SRC)),
+    readBase,
+  );
+  // Malformed core/ filenames are integrity-level: merged, they would brick
+  // the runner's boot preflight on every subsequent boot.
+  assert.ok(b.integrity.some((p) => p.includes("core__NNNN_short-description.mjs")), b.integrity.join("; "));
 });
 
 // ---------------------------------------------------------------------------
@@ -519,11 +654,11 @@ test("runGate fails a destructive change whose artifact entry is not labelled de
       `    { text: \`CREATE INDEX IF NOT EXISTS widgets_label_idx ON ${S}."widgets" (label)\` },`,
       `    { text: \`DROP TABLE IF EXISTS ${S}."widgets"\` },`,
     ]) +
-    fullReplaceDiff("migrations/0002_drop-widgets.sql", null, 'DROP TABLE IF EXISTS :"schema"."widgets";') +
+    fullReplaceDiff("migrations/core/core__0002_drop-widgets.mjs", null, "export function up(pgm) { pgm.sql(`DROP TABLE IF EXISTS widgets;`); }\nexport function down(pgm) {}") +
     fullReplaceDiff(
       MIGRATION_MANIFEST_PATH,
       BASE_MANIFEST,
-      manifestWith([ENTRY_0001, { seq: "0002", file: "0002_drop-widgets.sql", summary: "drop", destructive: false, tables: ["widgets"] }]),
+      manifestWith([ENTRY_0001, { seq: "0002", file: "core/core__0002_drop-widgets.mjs", summary: "drop", destructive: false, tables: ["widgets"] }]),
     );
   const readBaseFile = (p) => (p === IN_SCOPE_FILE ? BASE : p === MIGRATION_MANIFEST_PATH ? BASE_MANIFEST : null);
 
