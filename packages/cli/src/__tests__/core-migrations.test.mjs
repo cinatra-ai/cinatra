@@ -6,6 +6,7 @@ import { describe, expect, it, afterAll } from "vitest";
 
 import { symlinkSync } from "node:fs";
 import {
+  assertValidNamespace,
   CORE_MIGRATIONS_DIR,
   CORE_MIGRATIONS_TABLE,
   CORE_MIGRATION_NAMESPACE,
@@ -145,6 +146,37 @@ describe("extensionMigrationNamespace (#118)", () => {
     for (const bad of ["lodash", "@scope/has_underscore", "@has_underscore/pkg", "@scope/has.dot", "@Scope/pkg", "", undefined]) {
       expect(() => extensionMigrationNamespace(bad), String(bad)).toThrow(/cannot derive a migration namespace/);
     }
+  });
+});
+
+describe("assertValidNamespace (#118 — partial keys must never reach prefix fencing)", () => {
+  it("accepts the two complete partition-key shapes", () => {
+    for (const ok of ["core__", "ext_cinatra-ai_notes-connector__", "ext_a_b__"]) {
+      expect(() => assertValidNamespace(ok), ok).not.toThrow();
+    }
+  });
+
+  it("rejects TRUNCATED or malformed namespaces (a partial prefix would fence-match a different package's rows)", () => {
+    for (const bad of [
+      "ext_cinatra-ai_note", // truncated — would startsWith-match notes-connector rows
+      "ext_cinatra-ai_notes-connector", // missing trailing __
+      "ext_cinatra-ai__", // missing pkg segment
+      "core", // truncated core
+      "ext__a__",
+      "",
+      undefined,
+    ]) {
+      expect(() => assertValidNamespace(bad), String(bad)).toThrow(/invalid namespace/);
+    }
+  });
+
+  it("guards the down fence and the dir validator directly", async () => {
+    expect(() => assertDownTargetsInNamespace(["ext_cinatra-ai_notes-connector__0001_x"], "ext_cinatra-ai_note")).toThrow(
+      /invalid namespace/,
+    );
+    await expect(
+      validateNamespacedMigrationsDir(tempMigrationsDir([]), { namespace: "ext_cinatra-ai_note" }),
+    ).rejects.toThrow(/invalid namespace/);
   });
 });
 

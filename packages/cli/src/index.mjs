@@ -2397,18 +2397,20 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
 // boot/install/hot-activate; this flag pair exists for remediation only.
 
 async function runDbMigrate(rest) {
-  for (const arg of rest) {
-    if (
-      arg === "--down" ||
-      arg === "--count" || arg.startsWith("--count=") ||
-      arg === "--dir" || arg.startsWith("--dir=") ||
-      arg === "--namespace" || arg.startsWith("--namespace=") ||
-      !arg.startsWith("--")
-    ) {
+  // Strict argv parse for a DDL-applying command: every token must be a known
+  // flag or the VALUE of a value-taking flag — a stray positional must fail
+  // fast, never silently proceed to apply/revert migrations.
+  const valueTakingFlags = new Set(["--count", "--dir", "--namespace"]);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--down") continue;
+    if (valueTakingFlags.has(arg)) {
+      i++; // the next token is this flag's value (readOptionValue consumes it)
       continue;
     }
+    if ([...valueTakingFlags].some((f) => arg.startsWith(`${f}=`))) continue;
     throw new Error(
-      `Unknown flag "${arg}" for cinatra db migrate. Supported flags: --down, --count=N, --dir <abs> --namespace <ns>.`,
+      `Unexpected argument "${arg}" for cinatra db migrate. Supported: --down, --count=N, --dir <abs> --namespace <ns>.`,
     );
   }
   const repoRoot = getRepoRoot();
@@ -2432,16 +2434,16 @@ async function runDbMigrate(rest) {
   let result;
   let label = "Core";
   if (dirRaw !== null) {
-    if (!/^(core__|ext_[a-z0-9-]+_[a-z0-9-]+__)$/.test(namespaceRaw)) {
-      throw new Error(
-        `Invalid --namespace=${namespaceRaw}. Expected "core__" or "ext_<scope>_<pkg>__" (trailing double underscore included).`,
-      );
+    if (!path.isAbsolute(dirRaw)) {
+      throw new Error("cinatra db migrate: --dir must be an absolute path (the remediation target must not depend on cwd).");
     }
     label = namespaceRaw.replace(/__$/, "");
+    // Namespace shape is validated by the runner itself (assertValidNamespace)
+    // — a malformed/truncated namespace must never reach prefix fencing.
     result = await runNamespacedMigrations({
       connectionString,
       schemaName,
-      dirAbs: path.resolve(dirRaw),
+      dirAbs: dirRaw,
       namespace: namespaceRaw,
       direction: down ? "down" : "up",
       ...(count !== undefined ? { count } : {}),

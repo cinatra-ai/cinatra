@@ -181,7 +181,9 @@ export async function applyExtensionMigrationsFromStore(
   if (!connectionString) {
     throw new Error("SUPABASE_DB_URL is required for @/lib/extension-migration-host");
   }
-  const schemaName = input.schema ?? process.env.SUPABASE_SCHEMA?.trim() ?? DEFAULT_SCHEMA;
+  // `||` (not `??`): a blank input.schema or SUPABASE_SCHEMA must fall
+  // through to the default, never reach the runner as "".
+  const schemaName = input.schema?.trim() || process.env.SUPABASE_SCHEMA?.trim() || DEFAULT_SCHEMA;
 
   const run = deps.run ?? runNamespacedMigrations;
   const result = await run({

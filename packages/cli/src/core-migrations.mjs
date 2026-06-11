@@ -93,6 +93,29 @@ function namespaceLabel(namespace) {
 }
 
 /**
+ * Full ledger-partition shape: `core__` or `ext_<scope>_<pkg>__`.
+ * Fencing is `startsWith`-based, so a TRUNCATED namespace (e.g.
+ * `ext_cinatra-ai_note`) would silently match a DIFFERENT package's rows —
+ * every public entry point must reject a namespace that is not a complete
+ * partition key before any preflight or fence runs.
+ */
+const NAMESPACE_SHAPE_RE = /^(?:core__|ext_[a-z0-9][a-z0-9-]*_[a-z0-9][a-z0-9-]*__)$/;
+
+/**
+ * Assert `namespace` is a complete per-source ledger partition key.
+ * @param {string} namespace
+ */
+export function assertValidNamespace(namespace) {
+  if (typeof namespace !== "string" || !NAMESPACE_SHAPE_RE.test(namespace)) {
+    throw new Error(
+      `[migrations] invalid namespace "${namespace}" — expected the full partition key ` +
+        `"core__" or "ext_<scope>_<pkg>__" (lowercase kebab-case segments, trailing double underscore included). ` +
+        `A partial namespace must never reach prefix-based fencing.`,
+    );
+  }
+}
+
+/**
  * Derive the per-source ledger namespace for an extension package (#115/#118):
  * `@<scope>/<name>` -> `ext_<scope>_<name>__`. Fail closed on anything else:
  * the namespace must be unambiguous under `startsWith` fencing, so both
@@ -142,7 +165,7 @@ export async function validateNamespacedMigrationsDir(
   dirAbs,
   { namespace, allowSymlinks = false, missingDirHint },
 ) {
-  if (!namespace) throw new Error("[migrations] namespace is required");
+  assertValidNamespace(namespace);
   const label = namespaceLabel(namespace);
   let entries;
   try {
@@ -211,6 +234,7 @@ export async function validateCoreMigrationsDir(dirAbs) {
  * @param {string} namespace
  */
 export function assertDownTargetsInNamespace(lastRunNames, namespace) {
+  assertValidNamespace(namespace);
   const label = namespaceLabel(namespace);
   const foreign = lastRunNames.filter((n) => !n.startsWith(namespace));
   if (foreign.length > 0) {
@@ -287,7 +311,7 @@ export async function runNamespacedMigrations({
 }) {
   if (!connectionString) throw new Error("[migrations] connectionString is required");
   if (!schemaName) throw new Error("[migrations] schemaName is required");
-  if (!namespace) throw new Error("[migrations] namespace is required");
+  assertValidNamespace(namespace);
   if (direction !== "up" && direction !== "down") {
     throw new Error(`[migrations] unsupported direction "${direction}"`);
   }
