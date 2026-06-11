@@ -310,8 +310,8 @@ Commands:
                                       isolated worktrees/clones + external infra.
                     --docker=always   force docker compose up -d (fatal on failure).
                     --no-docker       skip the docker step entirely.
-                    Applies additive schema only; transformational one-shot
-                    migrations under src/lib/migrations/ stay manual (release notes).
+                    Applies the additive schema bootstrap, then the versioned
+                    core migration chain (migrations/core/, pgmigrations ledger).
   skills reset-repo Force-push the entire local skills store to the connected
                     GitHub skills repository (dev mode only). Replaces all repo
                     content with what is currently in data/skills/.
