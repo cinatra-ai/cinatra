@@ -2088,6 +2088,77 @@ function installAfterExtensionSync(repoRoot, syncResult, { failHard = false } = 
   }
 }
 
+// Regenerate src/lib/generated/* against the extension tree actually on disk
+// (presence-aware emission: the generator only emits a literal import for a
+// module whose source file exists). Runs after the dev extension sync so the
+// maps can never reference a module the synced set does not ship — the
+// committed maps track the maintainer-synced set and go stale the moment a
+// companion repo's main moves (the cinatra#109/#110 fresh-clone failure
+// class). Loud-but-non-fatal, like the sync itself: a regeneration failure
+// must not abort an otherwise-complete dev setup. Dev-only by call site — the
+// prod path acquires the lock-pinned set, which CI keeps consistent with the
+// committed maps.
+// Gate shared by every syncCinatraDevExtensions call site: regenerate ONLY
+// after a successful, non-skipped sync that actually reconciled at least one
+// extension. Regenerating from a tree the sync did not reconcile (throw,
+// skip, or empty filter match) would presence-drop map entries for extensions
+// that are merely missing, not absent.
+function regenerateExtensionManifestAfterSync(repoRoot, syncResult, { failed = false } = {}) {
+  const reconciled =
+    !failed &&
+    syncResult &&
+    syncResult.skipped !== true &&
+    Array.isArray(syncResult.results) &&
+    syncResult.results.length > 0;
+  if (!reconciled) {
+    console.log(
+      "- Skipping extension-manifest regeneration (extension sync failed, was skipped, or matched nothing) — the committed generated maps stay as-is.",
+    );
+    return;
+  }
+  regenerateExtensionManifest(repoRoot);
+}
+
+// NOTE: the generator roots itself via import.meta.url (relative .mjs imports
+// only, no workspace install needed), so spawning the WORKTREE's copy of the
+// script — relative path + cwd — regenerates that worktree's maps.
+function regenerateExtensionManifest(repoRoot) {
+  console.log("- Regenerating the extension manifest against the on-disk extension set…");
+  const generator = path.join("scripts", "extensions", "generate-extension-manifest.mjs");
+  const regen = spawnSync(process.execPath, [generator], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (regen.status !== 0) {
+    console.error(
+      `\n⚠ Extension-manifest regeneration FAILED (exit ${regen.status}) — the generated maps may reference ` +
+        `modules your synced extensions do not ship. Re-run \`node ${generator}\` ` +
+        `in ${repoRoot}, then start the app.\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  // The generator's write mode logs catalog-parity issues but exits 0; the
+  // fail-closed verdict lives in `--check` (drift trivially passes right after
+  // a write, so this is purely the parity gate). A parity break means a
+  // catalog descriptor lost its loader coverage — surface it loudly instead of
+  // calling the regeneration a success.
+  const check = spawnSync(process.execPath, [generator, "--check"], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (check.status !== 0) {
+    console.error(
+      `\n⚠ Extension-manifest parity check FAILED after regeneration (exit ${check.status}) — a connector-catalog ` +
+        `descriptor is not covered by the regenerated maps (see lines above). The app may render that connector ` +
+        `degraded until the extension set is fixed.\n`,
+    );
+    process.exitCode = 1;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Agent skill auto-registration at setup time
 // ---------------------------------------------------------------------------
@@ -2234,6 +2305,7 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       // (post-cutover); a no-op when `cinatraDevExtensions` is empty.
       // Loud-but-non-fatal, like the dev-app sync above.
       let extensionSync;
+      let extensionSyncFailed = false;
       try {
         extensionSync = await syncCinatraDevExtensions({
           repoRoot,
@@ -2241,12 +2313,26 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
           argv: skipDevApps ? ["--skip-dev-apps"] : process.argv.slice(2),
         });
       } catch (err) {
+        extensionSyncFailed = true;
         console.error(`\n⚠ Dev extension sync FAILED:\n  ${err && err.message ? err.message : err}\n`);
         process.exitCode = 1;
       }
       // Re-link the freshly-cloned extensions into the workspace so their host
       // value-imports resolve at `pnpm dev` (guarded no-op on warm checkouts).
       installAfterExtensionSync(repoRoot, extensionSync);
+      // Presence-aware regeneration of the generated extension maps
+      // (cinatra#109/#110): the committed src/lib/generated/* maps are
+      // byte-checked in CI against the synced extension set, but the companion
+      // repos move independently of this tree — a fresh clone can sync
+      // extension mains that drifted past the committed maps, leaving literal
+      // `import("...")` specifiers that no longer resolve (Turbopack
+      // module-not-found on /connectors). Regenerating right after the sync
+      // keeps the maps matching the extension set actually on disk.
+      // Gated on a successful, non-skipped, non-empty sync — see
+      // regenerateExtensionManifestAfterSync.
+      regenerateExtensionManifestAfterSync(repoRoot, extensionSync, {
+        failed: extensionSyncFailed,
+      });
       console.log(
         "- Dev auto-setup: local docker Drupal + WordPress will be auto-wired on next `pnpm dev` boot (idempotent; see src/lib/dev-auto-setup.ts).",
       );
@@ -2864,16 +2950,24 @@ async function runSetupBranch(argv) {
 
   // 6c. Sync the companion extension repos into THIS worktree (no-op until
   // `cinatraDevExtensions` is populated). Same loud-but-non-fatal posture.
+  let branchExtensionSync;
+  let branchExtensionSyncFailed = false;
   try {
-    await syncCinatraDevExtensions({
+    branchExtensionSync = await syncCinatraDevExtensions({
       repoRoot: resolveMainRepoRoot(worktreePath),
       targetRoot: worktreePath,
       argv,
     });
   } catch (err) {
+    branchExtensionSyncFailed = true;
     console.error(`⚠ Dev extension sync FAILED: ${err && err.message ? err.message : err}`);
     process.exitCode = 1;
   }
+  // Keep THIS worktree's generated maps matching the extension set the sync
+  // just put on its disk (cinatra#109/#110) — same gating as `setup dev`.
+  regenerateExtensionManifestAfterSync(worktreePath, branchExtensionSync, {
+    failed: branchExtensionSyncFailed,
+  });
 
   // 7. Print summary
   console.log(`Branch isolation configured for worktree ${worktreePath}`);
@@ -3821,6 +3915,7 @@ async function runSetupClone(argv) {
   // Sync the companion extension repos into THIS clone worktree (no-op until
   // `cinatraDevExtensions` is populated). Same loud-but-non-fatal posture.
   let extensionSync;
+  let extensionSyncFailed = false;
   try {
     extensionSync = await syncCinatraDevExtensions({
       repoRoot: resolveMainRepoRoot(worktreePath),
@@ -3828,12 +3923,18 @@ async function runSetupClone(argv) {
       argv,
     });
   } catch (err) {
+    extensionSyncFailed = true;
     console.error(`⚠ Dev extension sync FAILED: ${err && err.message ? err.message : err}`);
     process.exitCode = 1;
   }
   // The deps install above runs BEFORE this sync, so the freshly-cloned
   // extensions would be unlinked — re-link them now (guarded no-op on warm runs).
   installAfterExtensionSync(worktreePath, extensionSync);
+  // Keep THIS worktree's generated maps matching the extension set the sync
+  // just put on its disk (cinatra#109/#110) — same gating as `setup dev`.
+  regenerateExtensionManifestAfterSync(worktreePath, extensionSync, {
+    failed: extensionSyncFailed,
+  });
 
   // Summary.
   console.log(`Clone provisioned (dormant) for worktree ${worktreePath}`);
