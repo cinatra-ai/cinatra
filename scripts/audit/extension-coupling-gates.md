@@ -121,7 +121,7 @@ pinned it.
 | `core-extension-instance-coupling-ban` | **120 occurrences / 52 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1) | shrink-only, frozen |
 | `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1, closing the #35 facade residual). The committed baseline is EMPTY; the pinned-empty gate flip rides the transport-blind-spot closure (cinatra#151 Stage 3) so the flip is honest under the shared lexer. | shrink-only, frozen |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
-| `extension-import-ban` | **19 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's github-api reachback retired by the cinatra#151 companion — its remaining database/linkedin/wordpress fallback edges retire with the companion sweep) | shrink-only |
+| `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
 | `host-peer-value-import-ban` | **0** | hold at 0 |
 
 "Is the cutover done?" has an exact answer: the gates can no longer move

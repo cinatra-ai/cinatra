@@ -26,11 +26,6 @@
     "@cinatra-ai/media-feeds-connector": [
       "@/lib/youtube-api"
     ],
-    "@cinatra-ai/nango-connector": [
-      "@/lib/database",
-      "@/lib/linkedin-api",
-      "@/lib/wordpress-api"
-    ],
     "@cinatra-ai/twenty-connector": [
       "@/lib/external-mcp-registry",
       "@/lib/external-mcp/twenty-execute-tool-proxy"
