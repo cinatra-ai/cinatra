@@ -81,9 +81,13 @@ const GENERATED_TREE_PREFIX = "src/lib/generated/";
 const GENERATED_TEST_FILE = "src/lib/generated/__tests__/guarded-optional-loaders.test.ts";
 
 // Same capture as the import-ban gates: the BASE package of any scoped import
-// (any subpath), across `from` / dynamic `import()` / `require()` — and, by
-// substring, `guardedExtensionImport("...")`.
+// (any subpath), across `from` / dynamic `import()` / `require()`.
 const PKG_IMPORT_RE = /(?:from|import|require)\s*\(?\s*["'](@[a-z0-9-]+\/[a-z0-9-]+)(?:\/[^"']*)?["']/g;
+// Full-specifier variant for the generated-tree fail-closed net: every
+// import-position SPECIFIER must be accounted for by a classified loader
+// entry — per specifier, not per package, so a classified entry can never
+// mask an unclassified sibling import of the same package.
+const FULL_SPEC_IMPORT_RE = /(?:from|import|require)\s*\(?\s*["'](@[a-z0-9-]+\/[a-z0-9-]+(?:\/[^"']*)?)["']/g;
 
 function isTestPath(rel) {
   return (
@@ -199,13 +203,13 @@ export function classifyGeneratedReferences({ generatedSources, generatedTestSou
   }
 
   const basePkg = (spec) => spec.split("/").slice(0, 2).join("/");
-  // Tracks every import-position reference so unparsed/unclassified ones can
-  // be forced bootable at the end.
-  const referenced = new Map(); // pkg -> { classified: boolean }
-  const markReferenced = (pkg, classified) => {
-    const prev = referenced.get(pkg);
-    referenced.set(pkg, { classified: classified || prev?.classified === true });
-  };
+  // Tracks every import-position SPECIFIER a classified loader entry
+  // accounted for, so the fail-closed net below can force any UNACCOUNTED
+  // specifier bootable — per specifier, never per package (a classified entry
+  // must not mask an unclassified sibling import of the same package).
+  const classifiedSpecs = new Set();
+  // Every import-position specifier seen anywhere in the generated tree.
+  const rawSpecs = new Set();
 
   for (const { source } of generatedSources) {
     // 1) STATIC_EXTENSION_MANIFEST records — single-line JSON values, the
@@ -244,7 +248,7 @@ export function classifyGeneratedReferences({ generatedSources, generatedTestSou
         const spec = guardedSpec ?? plainSpec;
         const pkg = basePkg(spec);
         if (!extensionNames.has(pkg)) continue;
-        markReferenced(pkg, true);
+        classifiedSpecs.add(spec);
         if (resolution === "guardedOptional") {
           if (guardedSpec === undefined) {
             forceBootable(pkg, `${mapName}["${key}"] guardedOptional but NOT routed through guardedExtensionImport (fail-closed)`);
@@ -262,20 +266,27 @@ export function classifyGeneratedReferences({ generatedSources, generatedTestSou
       }
     }
 
-    // 3) Fail-closed net: ANY import-position extension reference in the
-    //    generated tree that no classified entry accounted for ⇒ required.
+    // 3) Fail-closed net: ANY import-position SPECIFIER in the generated
+    //    tree that no classified entry accounted for ⇒ its package is
+    //    required. Runs per source AFTER that source's entry pass, but the
+    //    classifiedSpecs set spans all sources; collect first, check after
+    //    the loop so cross-file entries still count.
     let im;
-    PKG_IMPORT_RE.lastIndex = 0;
-    while ((im = PKG_IMPORT_RE.exec(source)) !== null) {
-      const pkg = im[1];
+    FULL_SPEC_IMPORT_RE.lastIndex = 0;
+    while ((im = FULL_SPEC_IMPORT_RE.exec(source)) !== null) {
+      const spec = im[1];
+      const pkg = basePkg(spec);
       if (!extensionNames.has(pkg)) continue;
-      if (!referenced.has(pkg)) markReferenced(pkg, false);
+      rawSpecs.add(spec);
     }
   }
 
-  for (const [pkg, { classified }] of referenced) {
-    if (!classified && !bootable.has(pkg) && !acquirable.has(pkg)) {
-      forceBootable(pkg, "generated-tree import without a classified loader entry (fail-closed)");
+  for (const spec of rawSpecs) {
+    if (!classifiedSpecs.has(spec)) {
+      forceBootable(
+        basePkg(spec),
+        `generated-tree import "${spec}" without a classified loader entry (fail-closed)`,
+      );
     }
   }
 

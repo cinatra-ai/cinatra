@@ -278,6 +278,26 @@ describe("classifyGeneratedReferences (generator-owned resolution metadata)", ()
     expect([...bootable]).toEqual(["@scope/raw-connector"]);
   });
 
+  it("a classified guarded entry does NOT mask an unclassified sibling import of the SAME package (per-specifier net)", () => {
+    const source = [
+      loaderMap([
+        '  "opt-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@scope/opt-connector/register", () => import("@scope/opt-connector/register")) },',
+      ]),
+      // A future unsupported emission shape: raw import of ANOTHER subpath of
+      // the same package, outside any classified entry — must force required.
+      'export const RAW = { x: weirdWrapper(() => import("@scope/opt-connector/extra")) };',
+    ].join("\n");
+    const test = 'const EXPECTED = [{ map: "GENERATED_TEST_MAP", key: "opt-connector", resolution: "guardedOptional" }];';
+    const { bootable, acquirable, reasons } = classifyGeneratedReferences({
+      generatedSources: [{ rel: "g.ts", source }],
+      generatedTestSource: test,
+      extensionNames,
+    });
+    expect(bootable.has("@scope/opt-connector")).toBe(true);
+    expect(acquirable.has("@scope/opt-connector")).toBe(false);
+    expect(reasons["@scope/opt-connector"].some((r) => r.includes("@scope/opt-connector/extra"))).toBe(true);
+  });
+
   it("required anywhere wins over guardedOptional elsewhere for the same package", () => {
     const source = [
       loaderMap([
