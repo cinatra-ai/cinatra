@@ -992,13 +992,18 @@ jobs:
           cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts --no-coverage && cd ../..
           cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
 
-      # Apollo connector verified write-then-read-back security
-      # behavior (import WITHOUT connectorKey → forceRefresh readback → compare
-      # to the submitted key → saveConnectionRecord only after verify). Lives in
-      # the connector tree (not covered by the root vitest include), so it is run
-      # explicitly here from the package dir, like the mcp-server auth step above.
-      - name: Apollo connector verified-write test
-        run: cd extensions/cinatra-ai/apollo-connector && pnpm exec vitest run src/__tests__/sync-and-readback.test.ts --no-coverage
+      # Apollo connector suite. Lives in the extension tree (not covered by the
+      # root vitest include), so it is run explicitly here from the package dir.
+      # Whole-dir (same shape as the nango/twenty steps below) — previously
+      # pinned to sync-and-readback.test.ts only, which silently left newer
+      # apollo tests (e.g. the save-apollo-form toast suite from
+      # apollo-connector#7) un-enforced by host CI (flagged on
+      # cinatra-engineering#67). Covers the verified write-then-read-back
+      # security behavior (import WITHOUT connectorKey → forceRefresh readback →
+      # compare to the submitted key → saveConnectionRecord only after verify)
+      # plus everything added since.
+      - name: Apollo connector tests
+        run: cd extensions/cinatra-ai/apollo-connector && pnpm exec vitest run --no-coverage
 
       # Nango connector lives in the extension tree (not covered by the root
       # vitest include), so its suite is run explicitly here from the package
