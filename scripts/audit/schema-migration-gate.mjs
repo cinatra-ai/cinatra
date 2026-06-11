@@ -509,18 +509,31 @@ export function detectMigrationArtifact(files, readBaseFile) {
   }
 
   for (const f of files) {
+    // Renames are checked on BOTH sides first: `newPath ?? oldPath` alone
+    // would let a shipped artifact be renamed OUT of migrations/ (new path
+    // elsewhere) without ever entering the branches below.
+    if (f.status === "renamed") {
+      const touchesShippedState = [f.oldPath, f.newPath].some(
+        (side) => side && (MIGRATION_MODULE_RE.test(side) || MIGRATION_SQL_RE.test(side) || side === MIGRATION_MANIFEST_PATH),
+      );
+      if (touchesShippedState) {
+        integrity.push(`${f.oldPath} -> ${f.newPath}: shipped migration state must never be renamed or moved (append-only — supersede it with a new sequence number)`);
+      }
+      continue;
+    }
     const p = f.newPath ?? f.oldPath;
     if (!p || !p.startsWith("migrations/")) continue;
 
     if (p.startsWith("migrations/core/")) {
       const basename = p.slice("migrations/core/".length);
       if (basename.includes("/") || basename.startsWith(".")) continue; // nested/dotfiles: not artifacts
-      const isModule = MIGRATION_MODULE_RE.test(p) || (f.oldPath !== null && MIGRATION_MODULE_RE.test(f.oldPath));
+      const isModule = MIGRATION_MODULE_RE.test(p);
       if (f.status !== "added") {
         // A shipped module is immutable history backing ledger rows on every
-        // deployed database: deletion, rename, AND edits are all tampering.
+        // deployed database: deletion AND edits are tampering (renames were
+        // handled above).
         if (isModule) {
-          integrity.push(`${f.oldPath ?? p}: a shipped core migration module must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
+          integrity.push(`${p}: a shipped core migration module must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it with a new sequence number)`);
         }
         continue;
       }
@@ -537,8 +550,8 @@ export function detectMigrationArtifact(files, readBaseFile) {
 
     if (!p.endsWith(".sql")) continue; // README/manifest and friends
     if (f.status !== "added") {
-      if (MIGRATION_SQL_RE.test(p) || (f.oldPath !== null && MIGRATION_SQL_RE.test(f.oldPath))) {
-        integrity.push(`${f.oldPath ?? p}: a shipped migration must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it instead)`);
+      if (MIGRATION_SQL_RE.test(p)) {
+        integrity.push(`${p}: a shipped migration must never be ${f.status === "modified" ? "edited" : f.status} (append-only — supersede it instead)`);
       }
       continue;
     }
@@ -581,7 +594,37 @@ export function detectMigrationArtifact(files, readBaseFile) {
     artifactFiles.push(p);
   }
 
+  // The manifest's append-only contract is checked WHENEVER the manifest
+  // changed — a manifest-only rewrite (no module in the diff) is tampering
+  // with shipped state and must not slide past on an early return.
   const manifestDiff = files.find((f) => (f.newPath ?? f.oldPath) === MIGRATION_MANIFEST_PATH);
+  let finalEntries = null;
+  if (manifestDiff) {
+    if (manifestDiff.status === "deleted") {
+      integrity.push(`${MIGRATION_MANIFEST_PATH}: the migration manifest must never be deleted`);
+    } else {
+      const finalRaw = applyFileDiff(baseManifestRaw ?? "", manifestDiff);
+      if (finalRaw !== null) {
+        try {
+          finalEntries = JSON.parse(finalRaw)?.migrations;
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!Array.isArray(finalEntries)) {
+        problems.push(`${MIGRATION_MANIFEST_PATH}: could not parse the post-change manifest (migrations must stay a JSON array)`);
+        finalEntries = null;
+      } else {
+        // Append-only: the base entries must be an untouched prefix.
+        for (let i = 0; i < baseEntries.length; i++) {
+          if (JSON.stringify(finalEntries[i]) !== JSON.stringify(baseEntries[i])) {
+            integrity.push(`${MIGRATION_MANIFEST_PATH}: existing entry ${i + 1} was rewritten — the ledger is append-only (supersede with a new sequence number)`);
+          }
+        }
+      }
+    }
+  }
+
   if (artifactFiles.length === 0) {
     if (manifestDiff && problems.length === 0 && integrity.length === 0) {
       problems.push(`${MIGRATION_MANIFEST_PATH} changed without a new migrations/core/core__NNNN_*.mjs module`);
@@ -592,27 +635,10 @@ export function detectMigrationArtifact(files, readBaseFile) {
     problems.push(`new core migration module shipped without the matching ${MIGRATION_MANIFEST_PATH} entry (both pieces are required, in the same PR)`);
     return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
-
-  const finalRaw = applyFileDiff(baseManifestRaw ?? "", manifestDiff);
-  let finalEntries = null;
-  if (finalRaw !== null) {
-    try {
-      finalEntries = JSON.parse(finalRaw)?.migrations;
-    } catch {
-      /* fall through */
-    }
-  }
-  if (!Array.isArray(finalEntries)) {
-    problems.push(`${MIGRATION_MANIFEST_PATH}: could not parse the post-change manifest (migrations must stay a JSON array)`);
+  if (finalEntries === null) {
     return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
 
-  // Append-only: the base entries must be an untouched prefix.
-  for (let i = 0; i < baseEntries.length; i++) {
-    if (JSON.stringify(finalEntries[i]) !== JSON.stringify(baseEntries[i])) {
-      integrity.push(`${MIGRATION_MANIFEST_PATH}: existing entry ${i + 1} was rewritten — the ledger is append-only (supersede with a new sequence number)`);
-    }
-  }
   const newEntries = finalEntries.slice(baseEntries.length);
   const maxBaseSeq = baseEntries.reduce((m, e) => Math.max(m, Number(e?.seq) || 0), 0);
   // entry.file is relative to migrations/ (e.g. "core/core__0003_x.mjs").
