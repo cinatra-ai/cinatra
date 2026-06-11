@@ -17,11 +17,19 @@
 //
 // FAIL-CLOSED, by design — the whole point is to keep the extension gates
 // HONEST. If the `cinatraDevExtensions` manifest is empty, or fewer than the
-// declared number of extension dirs materialize, it exits non-zero. Without this
-// the IoC gates would scan an empty tree and pass VACUOUSLY (a silent protection
-// regression).
+// declared number of extension dirs materialize (or a materialized
+// package.json names a different package), it exits non-zero. Without this
+// the IoC gates would scan an empty tree and pass VACUOUSLY (a silent
+// protection regression).
+//
+// Modes (cinatra#141): `--pinned` (what CI runs via
+// .github/actions/clone-extensions) checks every repo out DETACHED at the sha
+// committed in cinatra-required-extensions.lock.json /
+// cinatra-dev-extensions.lock.json, so host CI validates a reproducible,
+// committed extension universe. Without the flag (local `make setup`, the
+// floating-HEAD canary) it tracks branch tips as before.
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 import {
   syncCinatraDevExtensions,
@@ -53,7 +61,9 @@ if (res?.skipped) {
   process.exit(1);
 }
 
-// Verify every declared extension actually materialized with a package.json.
+// Verify every declared extension actually materialized with a package.json
+// whose `name` matches the declared key — presence alone would let a
+// mis-pinned/mis-targeted repo count as the package it isn't.
 const extRoot = path.join(repoRoot, "extensions");
 const missing = [];
 for (const name of Object.keys(config)) {
@@ -62,8 +72,19 @@ for (const name of Object.keys(config)) {
     missing.push(`${name} (unparseable scoped name)`);
     continue;
   }
-  const dir = path.join(extRoot, m[1], m[2]);
-  if (!existsSync(path.join(dir, "package.json"))) missing.push(name);
+  const manifestPath = path.join(extRoot, m[1], m[2], "package.json");
+  if (!existsSync(manifestPath)) {
+    missing.push(name);
+    continue;
+  }
+  let manifestName;
+  try {
+    manifestName = JSON.parse(readFileSync(manifestPath, "utf8")).name;
+  } catch {
+    missing.push(`${name} (unreadable package.json)`);
+    continue;
+  }
+  if (manifestName !== name) missing.push(`${name} (materialized package.json names "${manifestName}")`);
 }
 
 const present = expected - missing.length;

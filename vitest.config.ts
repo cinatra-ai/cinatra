@@ -282,6 +282,8 @@ export default defineConfig({
       "packages/sdk-ui/src/**/__tests__/**/*.test.{ts,tsx}",
       // Extension inventory + dependency-graph generator (pure; reads repo).
       "scripts/extensions/__tests__/**/*.test.{ts,mjs}",
+      // CI clone-back pinning helpers (pure cores; dependency-injected IO).
+      "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
     ],

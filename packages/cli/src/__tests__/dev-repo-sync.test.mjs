@@ -203,3 +203,155 @@ describe("syncOneRepo — five explicit states", () => {
     expect(deps.gitNames).toContain("reset --hard origin/main");
   });
 });
+
+describe("syncOneRepo — pinned mode (cinatra#141: detached checkout at a lock sha)", () => {
+  const SHA = "a".repeat(40);
+  const OTHER_HEAD = "b".repeat(40);
+
+  /** Stateful deps double for the pinned flows: tracks the simulated checkout
+   * HEAD, whether the pinned commit is locally present, and every git call. */
+  function makePinnedDeps(state) {
+    const gitNames = [];
+    return {
+      gitNames,
+      exists: (p) => state.existsPaths.has(p),
+      readdir: (p) => state.dirEntries?.[p] ?? [],
+      mkdirp: () => {},
+      git: (args) => {
+        const j = args.join(" ");
+        gitNames.push(j);
+        if (args[0] === "clone") return "";
+        if (j === "remote get-url origin") return state.origin ?? "";
+        if (j === "rev-parse --abbrev-ref HEAD") return state.abbrev ?? "HEAD";
+        if (j === "status --porcelain") return state.dirty ? " M somefile\n" : "";
+        if (j === "rev-parse HEAD") return state.head ?? "";
+        if (args[0] === "cat-file") {
+          if (!state.hasCommit) throw new Error("not a valid object name");
+          return "";
+        }
+        if (args[0] === "fetch") {
+          state.hasCommit = true;
+          return "";
+        }
+        if (args[0] === "checkout") {
+          state.head = state.checkoutLandsOn ?? args[2];
+          return "";
+        }
+        return "";
+      },
+    };
+  }
+
+  it("refuses anything but a full lowercase 40-hex sha BEFORE any git call", () => {
+    for (const bad of ["main", "abc123", SHA.toUpperCase(), `--upload-pack=evil`, ""]) {
+      const deps = makePinnedDeps({ existsPaths: new Set() });
+      expect(() => syncOneRepo({ ...baseArgs, sha: bad, deps })).toThrow(/40-hex/);
+      expect(deps.gitNames).toEqual([]);
+    }
+  });
+
+  it("ABSENT → clone, detach at the pin, verify HEAD (no sha fetch when the clone already has it)", () => {
+    const state = { existsPaths: new Set(), hasCommit: true };
+    const deps = makePinnedDeps(state);
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r).toMatchObject({ action: "cloned", changed: true, pinnedSha: SHA });
+    expect(deps.gitNames.some((g) => g.startsWith("clone --branch main --single-branch"))).toBe(true);
+    expect(deps.gitNames).toContain(`checkout --detach ${SHA}`);
+    expect(deps.gitNames.some((g) => g.startsWith("fetch"))).toBe(false);
+    expect(state.head).toBe(SHA);
+  });
+
+  it("ABSENT, pin not on the cloned branch → fetches the EXACT sha, then detaches", () => {
+    const state = { existsPaths: new Set(), hasCommit: false };
+    const deps = makePinnedDeps(state);
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r.action).toBe("cloned");
+    expect(deps.gitNames).toContain(`fetch origin ${SHA}`);
+    expect(deps.gitNames).toContain(`checkout --detach ${SHA}`);
+  });
+
+  it("existing checkout already AT the pin → no-op (action 'pinned', changed:false)", () => {
+    const deps = makePinnedDeps({
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: URL,
+      head: SHA,
+      hasCommit: true,
+    });
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r).toMatchObject({ action: "pinned", changed: false, pinnedSha: SHA });
+    expect(deps.gitNames.some((g) => g.startsWith("checkout"))).toBe(false);
+    expect(deps.gitNames.some((g) => g.startsWith("fetch"))).toBe(false);
+  });
+
+  it("a warm checkout ATTACHED to a branch at the pin is detached in place (still 'pinned', changed:false)", () => {
+    const state = {
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: URL,
+      abbrev: "main", // attached, branch happens to point at the pin
+      head: SHA,
+      hasCommit: true,
+    };
+    const deps = makePinnedDeps(state);
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r).toMatchObject({ action: "pinned", changed: false, pinnedSha: SHA });
+    expect(deps.gitNames).toContain(`checkout --detach ${SHA}`);
+  });
+
+  it("existing clean checkout at a DIFFERENT head → re-pins detached (action 'repinned')", () => {
+    const state = {
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: URL,
+      head: OTHER_HEAD,
+      hasCommit: true,
+    };
+    const deps = makePinnedDeps(state);
+    const r = syncOneRepo({ ...baseArgs, sha: SHA, deps });
+    expect(r).toMatchObject({ action: "repinned", changed: true, pinnedSha: SHA });
+    expect(deps.gitNames).toContain(`checkout --detach ${SHA}`);
+    expect(state.head).toBe(SHA);
+  });
+
+  it("a DETACHED existing checkout does not trip the branch check (pinned mode skips it)", () => {
+    const deps = makePinnedDeps({
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: URL,
+      abbrev: "HEAD", // detached
+      head: OTHER_HEAD,
+      hasCommit: true,
+    });
+    expect(syncOneRepo({ ...baseArgs, sha: SHA, deps }).action).toBe("repinned");
+  });
+
+  it("DIRTY tree → hard fail, never stash/reset (even with force:true)", () => {
+    for (const force of [false, true]) {
+      const deps = makePinnedDeps({
+        existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+        origin: URL,
+        head: OTHER_HEAD,
+        dirty: true,
+      });
+      expect(() => syncOneRepo({ ...baseArgs, sha: SHA, force, deps })).toThrow(/never stashes or resets/);
+      expect(deps.gitNames.some((g) => g.startsWith("stash"))).toBe(false);
+      expect(deps.gitNames.some((g) => g.startsWith("reset"))).toBe(false);
+      expect(deps.gitNames.some((g) => g.startsWith("checkout"))).toBe(false);
+    }
+  });
+
+  it("wrong origin still hard-fails in pinned mode", () => {
+    const deps = makePinnedDeps({
+      existsPaths: new Set([DEST, path.join(DEST, ".git")]),
+      origin: "https://github.com/cinatra-ai/some-other-repo.git",
+      head: OTHER_HEAD,
+    });
+    expect(() => syncOneRepo({ ...baseArgs, sha: SHA, deps })).toThrow(/never auto-reset/);
+  });
+
+  it("post-checkout verification: HEAD != pin → throws (fail-closed, no silent tip)", () => {
+    const deps = makePinnedDeps({
+      existsPaths: new Set(),
+      hasCommit: true,
+      checkoutLandsOn: OTHER_HEAD, // simulate a checkout that did not land on the pin
+    });
+    expect(() => syncOneRepo({ ...baseArgs, sha: SHA, deps })).toThrow(/verification failed/);
+  });
+});

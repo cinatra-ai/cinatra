@@ -100,15 +100,38 @@ function dirIsEmpty(dir, deps) {
   }
 }
 
+const COMMIT_SHA_RE = /^[0-9a-f]{40}$/;
+
 /**
  * Sync a single target repo. `deps` is injectable for tests. Returns
  * { pkgName, action } or throws on a fail-state. `forceFlagHint` / `stashLabel`
  * let each caller surface the right force-flag advice (dev-apps vs extensions).
+ *
+ * Pinned mode (`sha` set): the target is checked out DETACHED at exactly that
+ * commit instead of tracking `origin/<branch>`. Used by CI so the validated
+ * extension universe is the COMMITTED lock state, not whatever the companion
+ * repos' tips say at run time (cinatra#141). Pinned semantics per state:
+ *   - absent/empty            -> clone (delegates partial-state cleanup to
+ *                                `git clone`), ensure the commit is present
+ *                                (fetch the exact sha only when the cloned
+ *                                branch does not already contain it), then
+ *                                `checkout --detach <sha>` + assert HEAD==sha.
+ *                                A failure after the clone leaves a valid
+ *                                branch-mode checkout that the existing-git
+ *                                path below re-pins on retry.
+ *   - existing git, clean     -> verify origin (branch-name check does NOT
+ *                                apply — detached HEAD is the expected state),
+ *                                no-op when HEAD already equals the pin,
+ *                                otherwise fetch-if-missing + re-detach.
+ *   - existing git, dirty     -> HARD FAIL. Pinned mode never stashes or
+ *                                resets local work (no --force semantics).
+ *   - wrong origin / non-git  -> hard fail (unchanged from branch mode).
  */
 export function syncOneRepo({
   pkgName,
   url,
   branch,
+  sha,
   dest,
   force,
   deps,
@@ -117,6 +140,14 @@ export function syncOneRepo({
   stashLabel = "cinatra setup --force",
 }) {
   const { git } = deps;
+  // Pinned mode accepts ONLY a full lowercase 40-hex commit sha — anything
+  // else (branch name, short sha, flag-like string) is refused before any git
+  // invocation. The regex also subsumes the leading-dash argument guard.
+  if (sha !== undefined && (typeof sha !== "string" || !COMMIT_SHA_RE.test(sha))) {
+    throw new Error(
+      `${pkgName}: pinned sync requires a full lowercase 40-hex commit sha (got "${sha}").`,
+    );
+  }
   // Git argument-injection defense-in-depth: a `url`/`branch` (from package.json
   // config or a CINATRA_*_REPO_URL env override) that begins with "-" would be
   // parsed by git as an option, not a positional. execFileSync already blocks
@@ -138,11 +169,42 @@ export function syncOneRepo({
   const exists = deps.exists(dest);
   const isGit = deps.exists(path.join(dest, ".git"));
 
+  // Ensure the pinned commit exists locally, fetching the EXACT sha only when
+  // the checkout does not already contain it (the common case — a recorded
+  // branch head — is already present after a branch clone/earlier fetch, so
+  // this avoids a per-repo network round-trip). GitHub serves reachable-sha
+  // fetches; an unreachable pin (force-pushed companion history) fails loud
+  // here — that is the bump-the-lock signal, never a silent fallback to tip.
+  const ensurePinnedCommit = () => {
+    let present = true;
+    try {
+      git(["cat-file", "-e", `${sha}^{commit}`], dest);
+    } catch {
+      present = false;
+    }
+    if (!present) git(["fetch", "origin", sha], dest);
+    git(["checkout", "--detach", sha], dest);
+    const head = git(["rev-parse", "HEAD"], dest).trim();
+    if (head !== sha) {
+      throw new Error(
+        `${pkgName}: pinned checkout verification failed — HEAD is ${head}, expected ${sha}.`,
+      );
+    }
+  };
+
   // absent OR empty non-git dir -> clone
   if (!exists || (!isGit && dirIsEmpty(dest, deps))) {
-    log(`  ${pkgName}: cloning ${redactGitUrl(url)} (${branch}) -> ${dest}`);
+    log(
+      sha
+        ? `  ${pkgName}: cloning ${redactGitUrl(url)} (pinned ${sha.slice(0, 12)}) -> ${dest}`
+        : `  ${pkgName}: cloning ${redactGitUrl(url)} (${branch}) -> ${dest}`,
+    );
     deps.mkdirp(path.dirname(dest));
     git(["clone", "--branch", branch, "--single-branch", "--", url, dest], path.dirname(dest));
+    if (sha) {
+      ensurePinnedCommit();
+      return { pkgName, action: "cloned", changed: true, pinnedSha: sha };
+    }
     return { pkgName, action: "cloned" };
   }
 
@@ -170,7 +232,10 @@ export function syncOneRepo({
       ? haveRemote === wantRemote
       : isLocalGitRemote(url) && isLocalGitRemote(originRaw) && path.resolve(originRaw) === path.resolve(url);
 
-  if (!originMatches || curBranch !== branch) {
+  // Pinned mode skips the branch-name check (a detached HEAD reports "HEAD",
+  // and a pre-existing branch checkout is simply re-pinned below) — the origin
+  // check still applies in full.
+  if (!originMatches || (sha === undefined && curBranch !== branch)) {
     // Wrong origin or branch is NEVER auto-reset, even with --force.
     throw new Error(
       `${pkgName}: "${dest}" tracks ${redactGitUrl(originRaw) || "(no origin)"} on branch "${curBranch}", ` +
@@ -182,6 +247,28 @@ export function syncOneRepo({
 
   // clean+correct origin+branch: check dirty
   const dirty = git(["status", "--porcelain"], dest).trim() !== "";
+
+  if (sha) {
+    // Pinned mode has NO stash/reset path: a dirty tree is a hard fail (CI
+    // checkouts are always fresh; a local pinned run must never destroy work).
+    if (dirty) {
+      throw new Error(
+        `${pkgName}: "${dest}" has uncommitted changes — pinned sync never stashes or resets local work. ` +
+          `Clean the tree (or move the directory aside), then re-run.`,
+      );
+    }
+    const headBefore = git(["rev-parse", "HEAD"], dest).trim();
+    if (headBefore === sha) {
+      // The pinned contract is "AT the pin and DETACHED" — a warm checkout
+      // sitting on a branch that happens to point at the pin is still
+      // detached here (cheap; content unchanged, so `changed` stays false).
+      if (curBranch !== "HEAD") git(["checkout", "--detach", sha], dest);
+      return { pkgName, action: "pinned", changed: false, pinnedSha: sha };
+    }
+    log(`  ${pkgName}: re-pinning ${headBefore.slice(0, 12)} -> ${sha.slice(0, 12)} (detached)`);
+    ensurePinnedCommit();
+    return { pkgName, action: "repinned", changed: true, pinnedSha: sha };
+  }
   if (dirty) {
     if (!force) {
       log(
