@@ -95,6 +95,21 @@ describe("computeDevLock", () => {
     ).toThrow(/must be re-pinned/);
   });
 
+  it("a kept (unselected) pin with a corrupt sha is refused (never copied forward)", () => {
+    expect(() =>
+      computeDevLock({
+        config,
+        requiredLockNames,
+        existingPackages: [
+          { packageName: "@cinatra-ai/web-research-agent", repo: "cinatra-ai/web-research-agent", resolvedSha: "garbage" },
+          { packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_OLD },
+        ],
+        select: ["resend-connector"],
+        resolveHead: () => SHA_NEW,
+      }),
+    ).toThrow(/not a 40-hex commit sha/);
+  });
+
   it("a dropped config entry simply disappears from the lock (prune-by-recompute)", () => {
     const { packages } = computeDevLock({
       config: { "@cinatra-ai/resend-connector": { url: "https://github.com/cinatra-ai/resend-connector.git" } },

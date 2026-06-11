@@ -108,10 +108,17 @@ export function computeDevLock({ config, requiredLockNames, existingPackages = [
       // rewriting `repo` around an old sha would mask a retarget (the pinned
       // loader's slug guard would then pass a sha that was never resolved
       // against the new repo) — a retargeted package must be re-pinned.
-      if (existing.repo.toLowerCase() !== repo.toLowerCase()) {
+      if (typeof existing.repo !== "string" || existing.repo.toLowerCase() !== repo.toLowerCase()) {
         throw new Error(
           `${t.pkgName}: the config now targets "${repo}" but the kept pin was resolved against ` +
             `"${existing.repo}" — a retargeted repo must be re-pinned (add it to --select).`,
+        );
+      }
+      // A kept pin must also be shape-valid — never copy a corrupt sha forward.
+      if (typeof existing.resolvedSha !== "string" || !COMMIT_SHA_RE.test(existing.resolvedSha)) {
+        throw new Error(
+          `${t.pkgName}: the existing pin "${existing.resolvedSha}" is not a 40-hex commit sha — ` +
+            `re-resolve it (add it to --select or run without --select).`,
         );
       }
       packages.push({ packageName: t.pkgName, repo, resolvedSha: existing.resolvedSha });

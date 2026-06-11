@@ -295,6 +295,13 @@ describe("loadDevExtensionPins — fail-closed lock partition", () => {
     expect(pins.get("@cinatra-ai/resend-connector").sha).toBe(SHA_B);
   });
 
+  it("a DUPLICATE pin within one lock is refused (the merge must never be order-dependent)", () => {
+    const dev = { packages: [...baseDev.packages, { ...baseDev.packages[0], resolvedSha: SHA_A }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /duplicate pin/,
+    );
+  });
+
   it("a malformed resolvedSha is refused at lock-read time", () => {
     const dev = { packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: "deadbeef" }] };
     expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(

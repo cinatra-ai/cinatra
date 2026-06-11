@@ -145,6 +145,7 @@ function readPinLock(repoRoot, filename, readFile, { allowEmpty = false } = {}) 
   if (!packages || (packages.length === 0 && !allowEmpty)) {
     throw new Error(`[cinatra dev-extensions] ${filename} has no "packages" entries — refusing pinned sync.`);
   }
+  const seen = new Set();
   for (const [i, p] of packages.entries()) {
     const tag = `${filename} packages[${i}]`;
     if (!p || typeof p !== "object" || typeof p.packageName !== "string") {
@@ -156,6 +157,12 @@ function readPinLock(repoRoot, filename, readFile, { allowEmpty = false } = {}) 
     if (typeof p.repo !== "string" || !REPO_SLUG_RE.test(p.repo) || p.repo.includes("..")) {
       throw new Error(`[cinatra dev-extensions] ${tag} (${p.packageName}): repo must be an "owner/name" GitHub slug.`);
     }
+    // Duplicates WITHIN one lock would make the later merge order-dependent
+    // (last entry silently wins) — refuse them here, fail-closed.
+    if (seen.has(p.packageName)) {
+      throw new Error(`[cinatra dev-extensions] ${tag}: duplicate pin for "${p.packageName}" in ${filename}.`);
+    }
+    seen.add(p.packageName);
   }
   return packages;
 }
