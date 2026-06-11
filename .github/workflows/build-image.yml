@@ -1908,24 +1908,27 @@ jobs:
             -d "$(jq -nc --arg tag "$TAG" --arg digest "$DIGEST" --arg sha "$SHA" \
                   '{event_type:"cinatra-release-published",client_payload:{tag:$tag,digest:$digest,sha:$sha}}')"
 
-  # Presence-degraded build check (cinatra#7, scoped). Proves the
-  # presence-aware contract of the generated maps against the PUBLICLY
-  # RESOLVABLE extension universe (dev shape — the same clone-back the other
-  # jobs use): with a deliberately-removed probe connector, the regenerated
-  # maps must OMIT every reference to it (per-file assertion below), the
-  # generated per-entry classification test must hold against the SHRUNK maps,
-  # the consuming-surface degradation suites must pass, and `next build` must
-  # compile cleanly — the #109 class is a BUILD error, so build success IS the
-  # subpath-omission proof. The probe (media-feeds-connector) is deliberately
-  # one of the guardedOptional connectors with real loader entries
-  # (entry-module + MCP module/handlers) and NO hard src/ value-import edge
-  # (the frozen 41-edge floor is out of scope here — removing one of THOSE
-  # still breaks the build by design until the lazy/guarded host-access slice of cinatra#7). The FULL
-  # fresh-public-clone build gate (no clone-back at all) graduates with the dep-drop slice of cinatra#7
-  # once the root workspace:* connector deps are gone — `pnpm install` itself
-  # still needs the dep universe satisfied today, hence this scoped shape.
+  # Fresh-clone build gate over the REQUIRED-ONLY universe (cinatra#7, dep-drop slice —
+  # the FULL gate that graduated from the one-probe shape, now that the
+  # root workspace:* connector deps are gone and `pnpm install` no longer
+  # needs the optional dep universe). Presence shape = a fresh public clone
+  # that materialized ONLY the declared bootable set
+  # (cinatra.requiredExtensions, data-driven — no name literals): every other
+  # extension package is PRUNED BEFORE `pnpm install`, the frozen install
+  # must succeed against that partial universe, the regenerated maps must
+  # OMIT every pruned package (per-file assertion below), the generated
+  # per-entry classification test must hold against the SHRUNK maps, the
+  # consuming-surface degradation suites must pass, and `next build` must
+  # compile cleanly — the #109 class is a BUILD error, so build success IS
+  # the subpath-omission proof. This is the dev-surface twin of the prod
+  # image build (acquire-lock-set → regenerate → build).
+  # The media-feeds probe assertions are KEPT on top of the prune
+  # (anti-vacuity continuity with the one-probe shape): the pre-prune assertion runs against
+  # the COMMITTED maps before anything is deleted; the explicit probe removal
+  # is idempotent whether or not the prune already dropped it (it leaves the
+  # universe when requiredExtensions shrinks (the follow-up slice of cinatra#7)).
   presence-degraded-build:
-    name: Presence-degraded build (dev shape)
+    name: Presence-degraded build (required-only universe)
     needs: detect
     if: ${{ needs.detect.outputs.skip != 'true' }}
     runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
@@ -1946,33 +1949,38 @@ jobs:
       - name: Clone companion extension repos
         uses: ./.github/actions/clone-extensions
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      # Probe removal AFTER install: the root workspace:* deps still need the
-      # full universe at install time (the cinatra#7 dep-drop boundary); the build below
-      # then runs against the shrunk on-disk presence universe, which is the
-      # post-install reality a fresh clone hits when a companion repo drifts.
-      # Anti-vacuity: the probe must have REAL loader presence in the maps
-      # BEFORE removal — if the probe ever loses its entries upstream, this
-      # step fails instead of the job silently degenerating into "assert
-      # nothing, build anything".
-      - name: Assert the probe is referenced by the committed maps (pre-removal)
+      # Anti-vacuity FIRST, against the COMMITTED maps and BEFORE any
+      # deletion (the prune may legitimately remove the probe once it leaves
+      # requiredExtensions): the probe must have REAL loader presence — if it
+      # ever loses its entries upstream, this step fails instead of the job
+      # silently degenerating into "assert nothing, build anything".
+      - name: Assert the probe is referenced by the committed maps (pre-prune)
         run: node scripts/ci/assert-generated-maps-omit.mjs --expect-present @cinatra-ai/media-feeds-connector
 
-      - name: Remove the probe connector (shrink the presence universe)
+      # Prune BEFORE install — the load-bearing difference from the one-probe
+      # shape: with the root workspace:* connector deps dropped, the frozen
+      # install itself must succeed against the required-only universe (the
+      # fresh-public-clone reality). Data-driven from requiredExtensions;
+      # fail-closed (nothing pruned / required package missing ⇒ red).
+      - name: Prune the presence universe to the declared bootable set
+        run: node scripts/ci/prune-extensions-to-required.mjs --out /tmp/pruned-extensions.txt
+
+      - name: Remove the probe connector (idempotent once it leaves the required set)
         run: rm -rf extensions/cinatra-ai/media-feeds-connector
 
+      - name: Install dependencies (frozen, against the pruned universe)
+        run: pnpm install --frozen-lockfile
+
       # Write mode (NOT --check): this check pins presence-aware EMISSION +
-      # build, not catalog parity — a probe that carries a catalog descriptor
-      # would legitimately fail the parity half of a check run, so the check
-      # step is deliberately not run here (the canonical --check still gates
-      # the full tree in the invariants job above).
-      - name: Regenerate the maps against the shrunk presence universe
+      # build, not catalog parity — a pruned package that carries a catalog
+      # descriptor would legitimately fail the parity half of a check run, so
+      # the check step is deliberately not run here (the canonical --check
+      # still gates the full tree in the invariants job above).
+      - name: Regenerate the maps against the pruned presence universe
         run: node scripts/extensions/generate-extension-manifest.mjs
 
-      - name: Assert the emitted maps omit the absent package (explicit file list)
-        run: node scripts/ci/assert-generated-maps-omit.mjs @cinatra-ai/media-feeds-connector
+      - name: Assert the emitted maps omit EVERY pruned package + the probe (explicit file list)
+        run: node scripts/ci/assert-generated-maps-omit.mjs @cinatra-ai/media-feeds-connector $(cat /tmp/pruned-extensions.txt)
 
       # Consuming-surface degradation, against the SHRUNK maps: the guard's
       # absent-only boundary, every consumer's per-entry degraded path, the

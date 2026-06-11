@@ -25,21 +25,9 @@ importers:
       '@cfworker/json-schema':
         specifier: ^4.1.1
         version: 4.1.1
-      '@cinatra-ai/a2a-server-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/a2a-server-connector
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:packages/agents
-      '@cinatra-ai/anthropic-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/anthropic-connector
-      '@cinatra-ai/apify-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/apify-connector
-      '@cinatra-ai/apollo-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/apollo-connector
       '@cinatra-ai/cli':
         specifier: workspace:*
         version: link:packages/cli
@@ -52,42 +40,15 @@ importers:
       '@cinatra-ai/dashboards':
         specifier: workspace:*
         version: link:packages/dashboards
-      '@cinatra-ai/drupal-assistant-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/drupal-assistant-connector
-      '@cinatra-ai/drupal-mcp-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/drupal-mcp-connector
       '@cinatra-ai/errors':
         specifier: workspace:*
         version: link:packages/errors
-      '@cinatra-ai/gemini-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/gemini-connector
-      '@cinatra-ai/github-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/github-connector
-      '@cinatra-ai/gmail-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/gmail-connector
-      '@cinatra-ai/google-calendar-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/google-calendar-connector
       '@cinatra-ai/google-oauth-connection':
         specifier: workspace:*
         version: link:packages/google-oauth-connection
-      '@cinatra-ai/google-oauth-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/google-oauth-connector
-      '@cinatra-ai/linkedin-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/linkedin-connector
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:packages/llm
-      '@cinatra-ai/mcp-client-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/mcp-client-connector
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
@@ -97,15 +58,9 @@ importers:
       '@cinatra-ai/notifications':
         specifier: workspace:*
         version: link:packages/notifications
-      '@cinatra-ai/openai-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/openai-connector
       '@cinatra-ai/permissions':
         specifier: workspace:*
         version: link:packages/permissions
-      '@cinatra-ai/resend-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/resend-connector
       '@cinatra-ai/sdk-dashboard':
         specifier: workspace:*
         version: link:packages/sdk-dashboard
@@ -118,18 +73,6 @@ importers:
       '@cinatra-ai/skills':
         specifier: workspace:*
         version: link:packages/skills
-      '@cinatra-ai/tailscale-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/tailscale-connector
-      '@cinatra-ai/wordpress-assistant-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/wordpress-assistant-connector
-      '@cinatra-ai/wordpress-mcp-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/wordpress-mcp-connector
-      '@cinatra-ai/youtube-connector':
-        specifier: workspace:*
-        version: link:extensions/cinatra-ai/youtube-connector
       '@daveyplate/better-auth-ui':
         specifier: ^3.4.0
         version: 3.4.0(fe67f698231fb13663128af8882dcc03)
@@ -13815,7 +13758,7 @@ snapshots:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)
-      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
+      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
       '@trpc/server': 11.15.1(typescript@6.0.3)
       clsx: 2.1.1
       cronstrue: 3.14.0
@@ -16679,7 +16622,7 @@ snapshots:
       '@trpc/server': 11.15.1(typescript@6.0.3)
       typescript: 6.0.3
 
-  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
+  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
     dependencies:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)

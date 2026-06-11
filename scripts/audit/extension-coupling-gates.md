@@ -159,9 +159,26 @@ epic's scope and tracked elsewhere:
   and the maps are regenerated at every consuming surface (`make setup`
   dev path + the prod image build stage, with `--check --self` as the
   non-canonical self-check mode). Floors UNCHANGED by that slice (enabler; the
-  generated tree is the exempt class). The 41-edge value-import floor is
-  the lazy/guarded host-access slice's target; the dep drop + 33→8 shrink follows it, keyed EXCLUSIVELY
-  on the emitted `resolution` metadata.
+  generated tree is the exempt class). The 41→10-edge shrink retired
+  the non-nango `src/` value-import surface (cinatra#7); the dep-drop slice then (a) taught the cover
+  gate (`required-extensions-cover-host-imports.mjs`) the guarded-optional
+  class — a generated-map package classified `guardedOptional` (and proven
+  degradable by the generated test) is ACQUIRABLE-ON-DEMAND, no longer
+  bootable; missing/unknown classification stays required, fail-closed — and
+  (b) DROPPED the 19 non-nango root `workspace:*` connector deps (20 → 1;
+  resolution rides the tsconfig path aliases, the mechanism the six already
+  root-dep-free connectors proved through dev + prod-image builds). The
+  cover gate also adopted the shared lexical stripper
+  (`lib/strip-comments.mjs`), closing its `@/lib/*` blind spot: the HONEST
+  hard-import surface (src/ + packages/, generated tree excluded) is **9
+  packages** — nango (the #35 facade residual, last in line on cinatra#7) + openai, anthropic,
+  gemini (packages/llm provider adapters + the transport DI cluster),
+  drupal-mcp, wordpress-mcp (transport DI cluster), crm, gmail,
+  google-calendar (packages/agents single-function edges). The bootable
+  floor is therefore **16** (8 `systemExtensions` + those 8 hard-wired
+  packages), not ~8: the 16→8 tail is exactly the three deferred cutovers
+  (LLM-provider extensibility; the drupal/wordpress content-editor MCP DI;
+  the packages/agents picker/action edges) — tracked on cinatra#7.
 - **The statically-wired transport DI cluster** —
   `src/lib/register-transport-connectors.ts` still value-imports the
   LLM-platform connectors (openai `/deps`, anthropic) and the
@@ -173,9 +190,13 @@ epic's scope and tracked elsewhere:
   `/*` the legacy comment-stripper treats as a block-comment opener, swallowing
   the import section (the documented stripping-limitation class above). They
   ARE counted by the instance-coupling gate (`package ::` keys for that file
-  in the committed baseline). Per the policy above, a stripper correction must
-  land WITH these edges removed — i.e. with the LLM-platform/content-editor
-  DI cutover, not before.
+  in the committed baseline), and since the dep-drop slice (cinatra#7) they ARE counted by the
+  required-extensions COVER gate (which adopted the shared lexer — it is
+  live-coverage, not baseline-ratcheted, so the correction needed no edge
+  removal there and closes a real under-coverage hole the dep drop would
+  otherwise have opened). Per the policy above, the IMPORT-BAN stripper
+  correction must land WITH these edges removed — i.e. with the
+  LLM-platform/content-editor DI cutover, not before.
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed
