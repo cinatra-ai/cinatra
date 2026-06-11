@@ -137,6 +137,19 @@ info "Nango is ready."
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
+if [ "$RESOLVED_MODE" != "production" ]; then
+  # Dev clone-back MUST run before the first `pnpm install`: the root
+  # package.json declares `workspace:*` dependencies on the companion extension
+  # packages (extensions/<scope>/<name>), so on a fresh clone — where the
+  # gitignored extensions/ tree does not exist yet — `pnpm install` fails with
+  # ERR_PNPM_WORKSPACE_PKG_NOT_FOUND before `pnpm setup:dev` (which used to own
+  # the clone-back) ever runs (cinatra#109/#110). The sync script is
+  # deliberately pre-install-safe (node builtins + git only); CI runs the same
+  # script before its own install for the same reason.
+  info "Cloning companion extension repos (pre-install)..."
+  node scripts/ci/sync-dev-extensions.mjs
+fi
+
 info "Installing dependencies..."
 pnpm install
 
