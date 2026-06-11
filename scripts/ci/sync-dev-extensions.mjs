@@ -75,3 +75,6 @@ if (missing.length > 0) {
 }
 
 console.log(`[ci sync-dev-extensions] OK: ${present}/${expected} extension repos cloned into extensions/.`);
+
+// ci-proof marker (PR #137 post-merge verification): non-docs change to force the
+// detect success + skip=false path on a sacrificial PR; closed unmerged.
