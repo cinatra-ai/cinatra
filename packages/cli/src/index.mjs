@@ -2100,16 +2100,36 @@ function installAfterExtensionSync(repoRoot, syncResult, { failHard = false } = 
 // committed maps.
 function regenerateExtensionManifest(repoRoot) {
   console.log("- Regenerating the extension manifest against the on-disk extension set…");
-  const regen = spawnSync(
-    process.execPath,
-    [path.join("scripts", "extensions", "generate-extension-manifest.mjs")],
-    { cwd: repoRoot, stdio: "inherit", env: process.env },
-  );
+  const generator = path.join("scripts", "extensions", "generate-extension-manifest.mjs");
+  const regen = spawnSync(process.execPath, [generator], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
   if (regen.status !== 0) {
     console.error(
       `\n⚠ Extension-manifest regeneration FAILED (exit ${regen.status}) — the generated maps may reference ` +
-        `modules your synced extensions do not ship. Re-run \`node scripts/extensions/generate-extension-manifest.mjs\` ` +
+        `modules your synced extensions do not ship. Re-run \`node ${generator}\` ` +
         `in ${repoRoot}, then start the app.\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  // The generator's write mode logs catalog-parity issues but exits 0; the
+  // fail-closed verdict lives in `--check` (drift trivially passes right after
+  // a write, so this is purely the parity gate). A parity break means a
+  // catalog descriptor lost its loader coverage — surface it loudly instead of
+  // calling the regeneration a success.
+  const check = spawnSync(process.execPath, [generator, "--check"], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (check.status !== 0) {
+    console.error(
+      `\n⚠ Extension-manifest parity check FAILED after regeneration (exit ${check.status}) — a connector-catalog ` +
+        `descriptor is not covered by the regenerated maps (see lines above). The app may render that connector ` +
+        `degraded until the extension set is fixed.\n`,
     );
     process.exitCode = 1;
   }
@@ -2261,6 +2281,7 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       // (post-cutover); a no-op when `cinatraDevExtensions` is empty.
       // Loud-but-non-fatal, like the dev-app sync above.
       let extensionSync;
+      let extensionSyncFailed = false;
       try {
         extensionSync = await syncCinatraDevExtensions({
           repoRoot,
@@ -2268,6 +2289,7 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
           argv: skipDevApps ? ["--skip-dev-apps"] : process.argv.slice(2),
         });
       } catch (err) {
+        extensionSyncFailed = true;
         console.error(`\n⚠ Dev extension sync FAILED:\n  ${err && err.message ? err.message : err}\n`);
         process.exitCode = 1;
       }
@@ -2282,7 +2304,16 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       // `import("...")` specifiers that no longer resolve (Turbopack
       // module-not-found on /connectors). Regenerating right after the sync
       // keeps the maps matching the extension set actually on disk.
-      regenerateExtensionManifest(repoRoot);
+      // ONLY after a successful, non-skipped sync: regenerating from a tree
+      // the sync did not reconcile (partial clone, skip) would presence-drop
+      // map entries for extensions that are merely missing, not absent.
+      if (!extensionSyncFailed && extensionSync && !extensionSync.skipped) {
+        regenerateExtensionManifest(repoRoot);
+      } else {
+        console.log(
+          "- Skipping extension-manifest regeneration (extension sync failed or was skipped) — the committed generated maps stay as-is.",
+        );
+      }
       console.log(
         "- Dev auto-setup: local docker Drupal + WordPress will be auto-wired on next `pnpm dev` boot (idempotent; see src/lib/dev-auto-setup.ts).",
       );
