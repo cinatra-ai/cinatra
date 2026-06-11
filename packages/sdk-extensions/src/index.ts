@@ -141,8 +141,8 @@ export type {
   ExtensionMcpOAuthClientStore,
 } from "./mcp-oauth-clients";
 
-export { UI_SURFACE_KINDS, isUiSurfaceKind } from "./manifest";
-export type { UiSurfaceKind, ExtensionMigration, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
+export { UI_SURFACE_KINDS, isUiSurfaceKind, EXTENSION_RESOLUTIONS } from "./manifest";
+export type { UiSurfaceKind, ExtensionResolution, ExtensionMigration, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
 export type {
   ExtensionExternalMcpTool,
   ExtensionExternalMcpToolbox,

@@ -25,6 +25,7 @@ import {
   GENERATED_EXTERNAL_MCP_TOOLBOXES,
   type GeneratedConnectorFactoryEntry,
 } from "@/lib/generated/extensions.server";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 
 /**
  * Validate one toolbox-produced tool entry. Toolbox modules are extension
@@ -73,8 +74,20 @@ export function sanitizeExternalMcpToolboxTools(
 async function resolveToolboxFactory(
   slug: string,
   entry: GeneratedConnectorFactoryEntry,
-): Promise<() => unknown> {
-  const ns = (await entry.load()) as Record<string, unknown>;
+): Promise<(() => unknown) | null> {
+  const loaded = await entry.load();
+  if (isDegradedExtensionLoad(loaded)) {
+    // cinatra#7: an absent optional toolbox module degrades to "no
+    // first-party builder" per entry (loud warn) — same observable outcome as
+    // an extension without a toolbox entry, never a thrown 500 in the
+    // injection path.
+    console.warn(
+      `[external-mcp-toolbox-loader] "${slug}": optional toolbox module is absent post-build — ` +
+        `degrading to no-toolbox (${loaded.reason})`,
+    );
+    return null;
+  }
+  const ns = loaded as Record<string, unknown>;
   const factory = ns[entry.factory];
   if (typeof factory !== "function") {
     throw new Error(
@@ -96,6 +109,7 @@ export async function loadExternalMcpToolboxBySlug(
   const entry = GENERATED_EXTERNAL_MCP_TOOLBOXES[slug];
   if (!entry) return null;
   const factory = await resolveToolboxFactory(slug, entry);
+  if (!factory) return null; // absent optional module — degraded per entry above
   const toolbox = factory() as ExtensionExternalMcpToolbox | null;
   if (!toolbox || typeof toolbox.buildTools !== "function") {
     throw new Error(

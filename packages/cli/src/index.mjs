@@ -2142,11 +2142,15 @@ function regenerateExtensionManifest(repoRoot) {
     return;
   }
   // The generator's write mode logs catalog-parity issues but exits 0; the
-  // fail-closed verdict lives in `--check` (drift trivially passes right after
-  // a write, so this is purely the parity gate). A parity break means a
-  // catalog descriptor lost its loader coverage — surface it loudly instead of
-  // calling the regeneration a success.
-  const check = spawnSync(process.execPath, [generator, "--check"], {
+  // fail-closed verdict lives in the check (drift trivially passes right after
+  // a write, so this is purely the parity + self-consistency gate). A parity
+  // break means a catalog descriptor lost its loader coverage — surface it
+  // loudly instead of calling the regeneration a success. `--self` is the
+  // NON-CANONICAL check mode (cinatra#7): this tree's presence universe
+  // is whatever the sync materialized, so the check verifies the REGENERATED
+  // output against a fresh emission for this tree and never binds the
+  // committed maps (which track the canonical clone-back universe).
+  const check = spawnSync(process.execPath, [generator, "--check", "--self"], {
     cwd: repoRoot,
     stdio: "inherit",
     env: process.env,

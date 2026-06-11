@@ -11,6 +11,7 @@ import {
   resolveWidgetStreamAgent,
   buildWidgetChatTool,
 } from "@/lib/widget-stream-agents.server";
+import { ExtensionModuleAbsentError } from "@/lib/extension-load-guard";
 import {
   resolveWidgetStreamOrigin,
   validateWidgetStreamToken,
@@ -136,11 +137,25 @@ export async function POST(
 
   // Build the extension's widget-chat function tool from the manifest loader
   // entry. FAIL LOUD pre-SSE (import/factory/shape errors are host wiring
-  // bugs, not user errors — surface them as a clean 500).
+  // bugs, not user errors — surface them as a clean 500). ONE deliberate
+  // exception (cinatra#7): an ABSENT optional widget module (typed
+  // ExtensionModuleAbsentError from the guarded loader) is a legitimate
+  // post-build state, not a wiring bug — degrade to a defined 503 so the
+  // embedding CMS widget sees "temporarily unavailable", never a generic 500.
   let tool;
   try {
     tool = await buildWidgetChatTool(agentSlug, entry, context);
   } catch (err) {
+    if (err instanceof ExtensionModuleAbsentError) {
+      console.warn(
+        `[agent-stream:${agentSlug}] widget-chat tool module is absent post-build — degrading to 503:`,
+        err.message,
+      );
+      return NextResponse.json(
+        { error: "This widget's extension is not available on this deployment" },
+        { status: 503, headers: corsHeaders },
+      );
+    }
     console.error(`[agent-stream:${agentSlug}] widget-chat tool build failed:`, err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to build widget tool" },

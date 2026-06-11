@@ -20,6 +20,30 @@ import type { ExtensionDependency } from "./dependencies";
 export const UI_SURFACE_KINDS = ["schema-config", "bundled-react"] as const;
 export type UiSurfaceKind = (typeof UI_SURFACE_KINDS)[number];
 
+/**
+ * Generator-owned presence classification (cinatra#7) — assigned by
+ * `scripts/extensions/generate-extension-manifest.mjs` on every emitted record
+ * and loader-map entry, never inferred from source shape:
+ *
+ *  - `"required"`       — member of the host-owned `cinatra.systemExtensions`
+ *    locked set (root package.json). Its generated loaders import UNGUARDED:
+ *    absence fails loudly (build error / thrown import), exactly like today.
+ *    Deliberately keyed on `systemExtensions`, NOT on
+ *    `cinatra.requiredExtensions` (the prod-acquisition bootable set) — keying
+ *    on the acquisition set would be circular for the planned
+ *    33→systemExtensions shrink (cinatra#7).
+ *  - `"guardedOptional"` — every other extension. Its generated loaders route
+ *    through the standardized degraded-result guard
+ *    (`src/lib/extension-load-guard.ts`): post-build absence of the target
+ *    module resolves to a degraded `absent` result the consuming surface
+ *    degrades on per entry (never a crashed aggregate surface).
+ *
+ * Downstream gates MUST key on this classification only and treat a missing
+ * or unknown value as `"required"` (fail-closed).
+ */
+export const EXTENSION_RESOLUTIONS = ["required", "guardedOptional"] as const;
+export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
+
 /** A declarative, idempotent, extension-owned migration descriptor. */
 export type ExtensionMigration = {
   id: string;
@@ -147,6 +171,14 @@ export type NormalizedExtensionRecord = {
    */
   displayName: string | null;
   logo: string | null;
+  /**
+   * Generator-owned presence classification (see `ExtensionResolution`).
+   * OPTIONAL on the type (the record shape is ABI-frozen, so the field is
+   * strictly additive); the manifest generator emits it on EVERY record.
+   * Consumers and downstream gates MUST treat a missing or unknown value as
+   * `"required"` (fail-closed).
+   */
+  resolution?: ExtensionResolution;
 };
 
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {

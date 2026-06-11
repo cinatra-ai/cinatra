@@ -11,6 +11,7 @@ import {
 } from "@/lib/connector-policy";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 import { chooseConnectorUiRender } from "@/lib/connector-ui-render";
 import {
   resolveActiveInstallIdForActor,
@@ -150,6 +151,12 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       throw new Error("no setup-page loader");
     }
     mod = await loadSetupPage();
+    if (isDegradedExtensionLoad(mod)) {
+      // cinatra#7: a guardedOptional page loader RESOLVES the
+      // standardized degraded result when its module is absent post-build —
+      // route it into the same "requires rebuild" state as a thrown load.
+      throw new Error(`setup-page module absent: ${mod.reason}`);
+    }
   } catch {
     // No loadable React module means the connector's bundled-react setup page is
     // not in this base image — surface the "requires rebuild" state rather than

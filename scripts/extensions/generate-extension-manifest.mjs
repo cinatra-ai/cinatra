@@ -8,6 +8,9 @@
 //   - src/lib/generated/connector-setup-pages.ts      — literal dynamic-import map (Turbopack-safe)
 //   - src/lib/generated/extensions.client.tsx         — true client widgets (scaffold)
 //   - src/lib/generated/widget-stream-public-paths.ts — widget-stream public path list
+//   - src/lib/generated/__tests__/guarded-optional-loaders.test.ts
+//                                                      — generated test pinning the
+//                                                        per-entry resolution classification
 //
 // POSTURE — CONSUMED: the generated maps are the host's runtime source of
 // truth for the connector surfaces. `src/lib/connector-setup-pages.ts` and
@@ -24,9 +27,21 @@
 // SAME list the gates exempt, so generator and exemption cannot drift apart.
 //
 // Usage:
-//   node scripts/extensions/generate-extension-manifest.mjs           # (re)write generated files
-//   node scripts/extensions/generate-extension-manifest.mjs --check   # drift + parity check (exit 1 on either)
-//   node scripts/extensions/generate-extension-manifest.mjs --print   # print the manifest, write nothing
+//   node scripts/extensions/generate-extension-manifest.mjs                # (re)write generated files
+//   node scripts/extensions/generate-extension-manifest.mjs --check        # CANONICAL drift + parity check (exit 1 on either)
+//   node scripts/extensions/generate-extension-manifest.mjs --check --self # NON-CANONICAL self-check (regenerated tree only)
+//   node scripts/extensions/generate-extension-manifest.mjs --print        # print the manifest, write nothing
+//
+// `--check` MODES (cinatra#7): plain `--check` is the CANONICAL mode for
+// the full clone-back CI tree — there the on-disk src/lib/generated/* IS the
+// committed artifact, so the byte-exact comparison pins the committed maps
+// (fail-closed, unchanged contract). `--check --self` is for NON-CANONICAL
+// presence universes (fresh public clone after regeneration, the prod image
+// build stage after lock acquisition): it verifies the regenerated on-disk
+// tree against a fresh in-memory emission for THIS tree (self-consistency:
+// catches partial regeneration / post-regen hand edits) plus catalog parity —
+// and deliberately NEVER binds or mentions the committed tree, whose presence
+// universe may legitimately differ.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join, relative, dirname, resolve, sep } from "node:path";
@@ -530,6 +545,25 @@ export function classifyConnectorUiSurfaceErrors(rec, cin = {}) {
 
 export async function buildManifest() {
   const inv = await buildInventory();
+  // Generator-owned presence classification (cinatra#7): `"required"` =
+  // member of the host-owned `cinatra.systemExtensions` locked set (its
+  // loaders import UNGUARDED — absence stays a loud failure);
+  // `"guardedOptional"` = everything else (its loaders route through the
+  // standardized degraded-result guard, src/lib/extension-load-guard.ts).
+  // Deliberately keyed on `systemExtensions`, NOT `requiredExtensions` (the
+  // prod-acquisition set) — keying on the acquisition set would be circular
+  // for the planned 33→systemExtensions shrink (cinatra#7). Downstream gates key
+  // EXCLUSIVELY on this emitted field (missing/unknown ⇒ required,
+  // fail-closed) — never on source-shape inference.
+  const rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+  const declaredSystem = rootPkg?.cinatra?.systemExtensions;
+  if (!Array.isArray(declaredSystem) || declaredSystem.length === 0) {
+    throw new Error(
+      "[extension-manifest] root package.json must declare a non-empty cinatra.systemExtensions array (host-owned locked system set)",
+    );
+  }
+  const systemSet = new Set(declaredSystem);
+  const resolutionOf = (packageName) => (systemSet.has(packageName) ? "required" : "guardedOptional");
   const records = inv.extensions.map((x) => {
     const flags = entryFlags(x);
     const cin = readCinatraManifest(x.dir);
@@ -576,18 +610,20 @@ export async function buildManifest() {
       // Self-describing card identity (null → host catalog/icon fallback).
       displayName: resolveDisplayName(cin),
       logo: sanitizeLogoDataUri(x.dir, cin.logo),
+      // Generator-owned presence classification (see resolutionOf above).
+      resolution: resolutionOf(x.name),
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
 
   const connectorSetupPages = records
     .filter((r) => r.kind === "connector" && r.hasSetupPage)
-    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName, resolution: r.resolution }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
   const connectorSettingsPages = records
     .filter((r) => r.kind === "connector" && r.hasSettingsPage)
-    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName, resolution: r.resolution }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
   // Connector entry modules: the package root (src/index.ts) of every workspace
@@ -596,7 +632,7 @@ export async function buildManifest() {
   // package by name.
   const connectorEntryModules = records
     .filter((r) => r.kind === "connector" && fileExists(join(r.sourceDir, "src/index.ts")))
-    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName }))
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName, resolution: r.resolution }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
   // Connector MCP capability modules: every connector that ships src/mcp/module.ts
@@ -617,7 +653,7 @@ export async function buildManifest() {
           `[extension-manifest] ${r.packageName} ships src/mcp/module.ts but exports no create*Module() factory`,
         );
       }
-      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory };
+      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory, resolution: r.resolution };
     })
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
@@ -640,7 +676,7 @@ export async function buildManifest() {
         `${r.packageName} src/mcp/handlers.ts`,
       );
       return factory
-        ? { slug: r.packageName.split("/")[1], packageName: r.packageName, factory }
+        ? { slug: r.packageName.split("/")[1], packageName: r.packageName, factory, resolution: r.resolution }
         : null;
     })
     .filter(Boolean)
@@ -677,7 +713,7 @@ export async function buildManifest() {
           `[extension-manifest] ${r.packageName} ships src/mcp/toolbox.ts but exports no create*ExternalMcpToolbox() factory`,
         );
       }
-      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory };
+      return { slug: r.packageName.split("/")[1], packageName: r.packageName, factory, resolution: r.resolution };
     })
     .filter(Boolean)
     .sort((a, b) => a.slug.localeCompare(b.slug));
@@ -732,6 +768,7 @@ export async function buildManifest() {
         agentSlug: ws.agentSlug,
         packageName: r.packageName,
         factory,
+        resolution: r.resolution,
         label: ws.label,
         subjectNoun: ws.subjectNoun,
         skillCapability: ws.skillCapability,
@@ -784,7 +821,7 @@ export async function buildManifest() {
         readFileSync(join(REPO_ROOT, r.sourceDir, "src/widgets/index.ts"), "utf8"),
         `${r.packageName} src/widgets`,
       );
-      return { packageName: r.packageName };
+      return { packageName: r.packageName, resolution: r.resolution };
     })
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
 
@@ -795,13 +832,8 @@ export async function buildManifest() {
   // entry must resolve to a generated-manifest record — a typo'd or removed
   // package would otherwise silently never boot-lock. The declaration itself
   // is required (the lock set must never be implicitly empty).
-  const rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
-  const declaredSystem = rootPkg?.cinatra?.systemExtensions;
-  if (!Array.isArray(declaredSystem) || declaredSystem.length === 0) {
-    throw new Error(
-      "[extension-manifest] root package.json must declare a non-empty cinatra.systemExtensions array (host-owned locked system set)",
-    );
-  }
+  // (declaredSystem is read + validated at the top of this function — it also
+  // keys the generator-owned `resolution` classification.)
   const recordNames = new Set(records.map((r) => r.packageName));
   const unknownSystem = declaredSystem.filter((name) => !recordNames.has(name));
   if (unknownSystem.length > 0) {
@@ -834,6 +866,33 @@ const HEADER = (script) =>
   `// remains the registration source for filesystem-loaded extension kinds;\n` +
   `// parity is checked against the connector catalog descriptors.\n`;
 
+// Emit one `{ resolution, load, ... }` loader entry. The import specifier is a
+// LITERAL string in BOTH branches (Turbopack only statically bundles literal
+// dynamic imports — this helper never computes a specifier):
+//   - guardedOptional → the loader routes through guardedExtensionImport (the
+//     standardized degraded-result path: post-build absence resolves to a
+//     degraded `absent` result the consuming surface degrades on per entry);
+//   - required        → a plain unguarded import (absence stays a loud throw,
+//     preserving the required-extension fail-loud contract).
+// `extra` (e.g. `factory: "createXModule"`) is spliced verbatim after `load`.
+function emitLoaderEntry(resolution, spec, extra = "") {
+  const load =
+    resolution === "guardedOptional"
+      ? `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`
+      : `() => import(${JSON.stringify(spec)})`;
+  return `{ resolution: ${JSON.stringify(resolution)}, load: ${load}${extra} }`;
+}
+
+// Prepend the guard import ONLY when at least one emitted loader is guarded —
+// an unused value import would trip noUnusedLocals in presence universes
+// where every emitted extension is a system (required) one.
+function guardImportFor(body) {
+  return body.includes("guardedExtensionImport(")
+    ? `import { guardedExtensionImport } from "../extension-load-guard";
+`
+    : "";
+}
+
 function emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules) {  const script = "scripts/extensions/generate-extension-manifest.mjs";
   const body = records
     .map(
@@ -858,6 +917,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             dependencies: r.dependencies,
             displayName: r.displayName,
             logo: r.logo,
+            resolution: r.resolution,
           },
         )},`,
     )
@@ -872,7 +932,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     .map((r) => {
       // serverEntry "./register" → import specifier "<pkg>/register"
       const spec = r.packageName + r.serverEntry.replace(/^\./, "");
-      return `  ${JSON.stringify(r.packageName)}: () => import(${JSON.stringify(spec)}),`;
+      return `  ${JSON.stringify(r.packageName)}: ${emitLoaderEntry(r.resolution, spec)},`;
     })
     .join("\n");
   // Connector entry-module loader map: slug → dynamic import of the connector
@@ -880,7 +940,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
   // resolves bundled-connector server modules (status/config/action exports)
   // through this map, keyed by slug, instead of naming connector packages.
   const entryModules = connectorEntryModules
-    .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(p.packageName)}),`)
+    .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, p.packageName)},`)
     .join("\n");
   // Connector MCP capability-module loader map: slug → { literal dynamic import
   // of <pkg>/mcp-module, factory export name }. Consumed by
@@ -889,7 +949,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
   const mcpModules = connectorMcpModules
     .map(
       (p) =>
-        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-module`)}), factory: ${JSON.stringify(p.factory)} },`,
+        `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/mcp-module`, `, factory: ${JSON.stringify(p.factory)}`)},`,
     )
     .join("\n");
   // Connector primitive-handler loader map: slug → { literal dynamic import of
@@ -899,7 +959,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
   const primitiveHandlers = connectorPrimitiveHandlers
     .map(
       (p) =>
-        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-handlers`)}), factory: ${JSON.stringify(p.factory)} },`,
+        `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/mcp-handlers`, `, factory: ${JSON.stringify(p.factory)}`)},`,
     )
     .join("\n");
   // External-MCP toolbox loader map: slug → { literal dynamic import of
@@ -910,7 +970,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
   const mcpToolboxes = externalMcpToolboxes
     .map(
       (p) =>
-        `  ${JSON.stringify(p.slug)}: { load: () => import(${JSON.stringify(`${p.packageName}/mcp-toolbox`)}), factory: ${JSON.stringify(p.factory)} },`,
+        `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/mcp-toolbox`, `, factory: ${JSON.stringify(p.factory)}`)},`,
     )
     .join("\n");
   // Widget-stream agent map: agentSlug → { literal dynamic import of
@@ -929,8 +989,13 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
         contextFields: w.contextFields,
         auth: w.auth,
       };
-      const metaJson = JSON.stringify(meta).slice(1, -1); // splice load into the object literal
-      return `  ${JSON.stringify(w.agentSlug)}: { load: () => import(${JSON.stringify(`${w.packageName}/widget-chat-tool`)}), ${metaJson} },`;
+      const metaJson = JSON.stringify(meta).slice(1, -1); // splice resolution/load into the object literal
+      const spec = `${w.packageName}/widget-chat-tool`;
+      const load =
+        w.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`
+          : `() => import(${JSON.stringify(spec)})`;
+      return `  ${JSON.stringify(w.agentSlug)}: { resolution: ${JSON.stringify(w.resolution)}, load: ${load}, ${metaJson} },`;
     })
     .join("\n");
   // Chat-widget loader maps: packageName → literal dynamic import of the
@@ -941,31 +1006,57 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
   // by src/lib/chat-widget-catalog.server.ts, keyed by packageName so the
   // extension lifecycle (archived-tombstone gate) applies directly.
   const chatWidgets = chatWidgetModules
-    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets`)}),`)
+    .map((p) => `  ${JSON.stringify(p.packageName)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/widgets`)},`)
     .join("\n");
   const chatWidgetManifests = chatWidgetModules
-    .map((p) => `  ${JSON.stringify(p.packageName)}: () => import(${JSON.stringify(`${p.packageName}/widgets/manifest`)}),`)    .join("\n");
+    .map((p) => `  ${JSON.stringify(p.packageName)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/widgets/manifest`)},`)    .join("\n");
+  const loaderBodies = [
+    serverEntries,
+    entryModules,
+    mcpModules,
+    primitiveHandlers,
+    mcpToolboxes,
+    widgetAgents,
+    chatWidgets,
+    chatWidgetManifests,
+  ].join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
-    `import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";\n\n` +
+    guardImportFor(loaderBodies) +
+    `import type { NormalizedExtensionRecord, ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
     `export const STATIC_EXTENSION_MANIFEST: Record<string, NormalizedExtensionRecord> = {\n` +
     `${body}\n};\n\n` +
     `export const STATIC_EXTENSION_RECORDS: NormalizedExtensionRecord[] =\n` +
     `  Object.values(STATIC_EXTENSION_MANIFEST);\n\n` +
-    `// package → dynamic import of its server entry (register(ctx) module).\n` +
+    `// Every loader-map entry below carries the generator-owned presence\n` +
+    `// classification: resolution "required" (cinatra.systemExtensions member —\n` +
+    `// unguarded import, absence fails loudly) | "guardedOptional" (loader\n` +
+    `// routes through the standardized degraded-result guard,\n` +
+    `// src/lib/extension-load-guard.ts — post-build absence degrades per entry).\n` +
+    `// Downstream gates key EXCLUSIVELY on this field (missing/unknown ⇒\n` +
+    `// required, fail-closed).\n` +
+    `export type GeneratedExtensionLoaderEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `};\n\n` +
+    `// package → { resolution, server-entry loader } (register(ctx) module).\n` +
     `// Literal specifiers only (Turbopack-safe). Populated for extensions that\n` +
     `// declare cinatra.serverEntry.\n` +
-    `export const GENERATED_EXTENSION_SERVER_ENTRIES: Record<string, () => Promise<unknown>> = {\n` +
+    `export const GENERATED_EXTENSION_SERVER_ENTRIES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
     `${serverEntries}\n};\n\n` +
-    `// connector slug → dynamic import of the connector package root module.\n` +
-    `// Literal specifiers only (Turbopack-safe). Consumed by\n` +
+    `// connector slug → { resolution, loader } of the connector package root\n` +
+    `// module. Literal specifiers only (Turbopack-safe). Consumed by\n` +
     `// src/lib/connector-modules.server.ts.\n` +
-    `export const GENERATED_CONNECTOR_ENTRY_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `export const GENERATED_CONNECTOR_ENTRY_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
     `${entryModules}\n};\n\n` +
-    `// slug → { loader, factory export name } for connector MCP surfaces.\n` +
-    `// Literal specifiers only (Turbopack-safe). Consumed by\n` +
+    `// slug → { resolution, loader, factory export name } for connector MCP\n` +
+    `// surfaces. Literal specifiers only (Turbopack-safe). Consumed by\n` +
     `// src/lib/connector-mcp-registration.server.ts.\n` +
-    `export type GeneratedConnectorFactoryEntry = { load: () => Promise<unknown>; factory: string };\n\n` +
+    `export type GeneratedConnectorFactoryEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  factory: string;\n` +
+    `};\n\n` +
     `export const GENERATED_CONNECTOR_MCP_MODULES: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
     `${mcpModules}\n};\n\n` +
     `export const GENERATED_CONNECTOR_PRIMITIVE_HANDLERS: Record<string, GeneratedConnectorFactoryEntry> = {\n` +
@@ -987,6 +1078,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  requiredInstanceFields: string[];\n` +
     `};\n` +
     `export type GeneratedWidgetStreamAgentEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
     `  load: () => Promise<unknown>;\n` +
     `  packageName: string;\n` +
     `  factory: string;\n` +
@@ -999,17 +1091,17 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `export const GENERATED_WIDGET_STREAM_AGENTS: Record<string, GeneratedWidgetStreamAgentEntry> = {\n` +
     `${widgetAgents}\n};\n` +
     `\n` +
-    `// packageName → dynamic import of the chat-widget COMPONENT module\n` +
+    `// packageName → { resolution, loader } of the chat-widget COMPONENT module\n` +
     `// (src/widgets/index.ts). Literal specifiers only (Turbopack-safe). RSC\n` +
     `// consumers only (the chat mount) — the module graph includes "use client"\n` +
     `// components. Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
-    `export const GENERATED_CHAT_WIDGET_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `export const GENERATED_CHAT_WIDGET_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
     `${chatWidgets}\n};\n\n` +
-    `// packageName → dynamic import of the chat-widget MANIFEST module\n` +
+    `// packageName → { resolution, loader } of the chat-widget MANIFEST module\n` +
     `// (src/widgets/manifest.ts — pure data, no React). Safe in ANY server\n` +
     `// bundle, including route handlers (the chat runner's wizard-manifest\n` +
     `// registry). Consumed by src/lib/chat-widget-catalog.server.ts.\n` +
-    `export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, () => Promise<unknown>> = {\n` +
+    `export const GENERATED_CHAT_WIDGET_MANIFEST_MODULES: Record<string, GeneratedExtensionLoaderEntry> = {\n` +
     `${chatWidgetManifests}\n};\n`
   );
 }
@@ -1038,20 +1130,141 @@ function emitWidgetStreamPublicPaths(widgetStreamAgents) {
 function emitConnectorSetupPages(setupPages, settingsPages) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const setupBody = setupPages
-    .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(`${p.packageName}/setup-page`)}),`)
+    .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/setup-page`)},`)
     .join("\n");
   const settingsBody = settingsPages
-    .map((p) => `  ${JSON.stringify(p.slug)}: () => import(${JSON.stringify(`${p.packageName}/settings-page`)}),`)
+    .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/settings-page`)},`)
     .join("\n");
   return (
-    `${HEADER(script)}import "server-only";\n\n` +
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(`${setupBody}\n${settingsBody}`) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
     `// Literal dynamic-import maps (Turbopack rejects computed import templates).\n` +
     `// Consumed by src/lib/connector-setup-pages.ts as the loader source of truth.\n` +
+    `// Each entry carries the generator-owned presence classification\n` +
+    `// (resolution; see src/lib/extension-load-guard.ts) — guardedOptional page\n` +
+    `// loaders resolve a standardized degraded result on post-build absence,\n` +
+    `// which the dispatch surface renders as its "requires rebuild" state.\n` +
     `export type GeneratedPageLoader = () => Promise<unknown>;\n\n` +
-    `export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageLoader> = {\n` +
+    `export type GeneratedPageEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: GeneratedPageLoader;\n` +
+    `};\n\n` +
+    `export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry> = {\n` +
     `${setupBody}\n};\n\n` +
-    `export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageLoader> = {\n` +
+    `export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEntry> = {\n` +
     `${settingsBody}\n};\n`
+  );
+}
+
+// The GENERATED guarded-optional-loaders test (cinatra#7). Emitted
+// alongside the maps so the concrete entry list below can never drift from
+// the emitted set (`--check` pins this file byte-exact with the maps; the
+// completeness assertion inside additionally fails if any map gains an entry
+// the list does not cover). It proves, per emitted entry, that the
+// generator-owned classification holds at RUNTIME shape level:
+//   - every `guardedOptional` loader routes through the standardized
+//     degraded-result guard (brand check — guard-owned marking, never
+//     source-shape inference);
+//   - every `required` loader is UNGUARDED (absence must stay a loud failure).
+// The guard's degradation behavior itself (absent → degraded result; broken
+// present module → rethrow) is pinned by the hand-written unit test
+// src/lib/__tests__/extension-load-guard.test.ts.
+function emitGuardedOptionalLoadersTest({
+  records,
+  connectorEntryModules,
+  connectorMcpModules,
+  connectorPrimitiveHandlers,
+  externalMcpToolboxes,
+  widgetStreamAgents,
+  chatWidgetModules,
+  connectorSetupPages,
+  connectorSettingsPages,
+}) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const expected = [];
+  for (const r of records) {
+    if (typeof r.serverEntry === "string" && r.serverEntry.length > 0) {
+      expected.push(["GENERATED_EXTENSION_SERVER_ENTRIES", r.packageName, r.resolution]);
+    }
+  }
+  for (const p of connectorEntryModules) expected.push(["GENERATED_CONNECTOR_ENTRY_MODULES", p.slug, p.resolution]);
+  for (const p of connectorMcpModules) expected.push(["GENERATED_CONNECTOR_MCP_MODULES", p.slug, p.resolution]);
+  for (const p of connectorPrimitiveHandlers) expected.push(["GENERATED_CONNECTOR_PRIMITIVE_HANDLERS", p.slug, p.resolution]);
+  for (const p of externalMcpToolboxes) expected.push(["GENERATED_EXTERNAL_MCP_TOOLBOXES", p.slug, p.resolution]);
+  for (const w of widgetStreamAgents) expected.push(["GENERATED_WIDGET_STREAM_AGENTS", w.agentSlug, w.resolution]);
+  for (const p of chatWidgetModules) {
+    expected.push(["GENERATED_CHAT_WIDGET_MODULES", p.packageName, p.resolution]);
+    expected.push(["GENERATED_CHAT_WIDGET_MANIFEST_MODULES", p.packageName, p.resolution]);
+  }
+  for (const p of connectorSetupPages) expected.push(["GENERATED_CONNECTOR_SETUP_PAGES", p.slug, p.resolution]);
+  for (const p of connectorSettingsPages) expected.push(["GENERATED_CONNECTOR_SETTINGS_PAGES", p.slug, p.resolution]);
+  const expectedBody = expected
+    .map(([map, key, resolution]) => `  { map: ${JSON.stringify(map)}, key: ${JSON.stringify(key)}, resolution: ${JSON.stringify(resolution)} },`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Generated TEST: pins the generator-owned per-entry resolution\n` +
+    `// classification of every loader map entry. guardedOptional loaders MUST\n` +
+    `// route through the standardized degraded-result guard\n` +
+    `// (src/lib/extension-load-guard.ts brand); required loaders MUST stay\n` +
+    `// unguarded. Downstream gates trust ONLY this generator-owned\n` +
+    `// classification (missing/unknown ⇒ required, fail-closed).\n` +
+    `import { describe, expect, it } from "vitest";\n\n` +
+    `import { isGuardedExtensionLoader } from "../../extension-load-guard";\n` +
+    `import {\n` +
+    `  GENERATED_EXTENSION_SERVER_ENTRIES,\n` +
+    `  GENERATED_CONNECTOR_ENTRY_MODULES,\n` +
+    `  GENERATED_CONNECTOR_MCP_MODULES,\n` +
+    `  GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,\n` +
+    `  GENERATED_EXTERNAL_MCP_TOOLBOXES,\n` +
+    `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
+    `  GENERATED_CHAT_WIDGET_MODULES,\n` +
+    `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
+    `} from "../extensions.server";\n` +
+    `import {\n` +
+    `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
+    `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
+    `} from "../connector-setup-pages";\n\n` +
+    `const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {\n` +
+    `  GENERATED_EXTENSION_SERVER_ENTRIES,\n` +
+    `  GENERATED_CONNECTOR_ENTRY_MODULES,\n` +
+    `  GENERATED_CONNECTOR_MCP_MODULES,\n` +
+    `  GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,\n` +
+    `  GENERATED_EXTERNAL_MCP_TOOLBOXES,\n` +
+    `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
+    `  GENERATED_CHAT_WIDGET_MODULES,\n` +
+    `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
+    `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
+    `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
+    `};\n\n` +
+    `const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [\n` +
+    `${expectedBody}\n];\n\n` +
+    `describe("generated guarded-optional loaders", () => {\n` +
+    `  it("is non-vacuous — the presence universe yields at least one pinned loader entry", () => {\n` +
+    `    // Anti-vacuity (fail-closed): an emission with ZERO loader entries can\n` +
+    `    // never satisfy this suite. Every supported presence universe ships at\n` +
+    `    // least the system (required) connector surface, so an empty EXPECTED\n` +
+    `    // list means a gutted emission, not a legitimate universe.\n` +
+    `    expect(EXPECTED.length).toBeGreaterThan(0);\n` +
+    `  });\n\n` +
+    `  it("covers every emitted loader entry (completeness)", () => {\n` +
+    `    for (const [name, map] of Object.entries(MAPS)) {\n` +
+    `      const expectedKeys = EXPECTED.filter((e) => e.map === name).map((e) => e.key).sort();\n` +
+    `      expect(Object.keys(map).sort(), name).toEqual(expectedKeys);\n` +
+    `    }\n` +
+    `  });\n\n` +
+    `  it("routes every guardedOptional loader through the standardized guard and leaves required loaders unguarded", () => {\n` +
+    `    for (const e of EXPECTED) {\n` +
+    `      const entry = MAPS[e.map][e.key];\n` +
+    `      const at = \`\${e.map}[\"\${e.key}\"]\`;\n` +
+    `      expect(entry, at).toBeTruthy();\n` +
+    `      expect(entry.resolution, at).toBe(e.resolution);\n` +
+    `      expect(isGuardedExtensionLoader(entry.load), at).toBe(e.resolution === "guardedOptional");\n` +
+    `    }\n` +
+    `  });\n` +
+    `});\n`
   );
 }
 
@@ -1143,6 +1356,7 @@ const OUT_SERVER = generatedOutPath("extensions.server.ts");
 const OUT_SETUP = generatedOutPath("connector-setup-pages.ts");
 const OUT_CLIENT = generatedOutPath("extensions.client.tsx");
 const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
+const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 
 /**
  * Fail-closed verdict for `--check` (cinatra#36): any drift/missing
@@ -1172,6 +1386,20 @@ async function main() {
     [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
     [OUT_CLIENT, emitClient()],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
+    [
+      OUT_GUARDED_TEST,
+      emitGuardedOptionalLoadersTest({
+        records,
+        connectorEntryModules,
+        connectorMcpModules,
+        connectorPrimitiveHandlers,
+        externalMcpToolboxes,
+        widgetStreamAgents,
+        chatWidgetModules,
+        connectorSetupPages,
+        connectorSettingsPages,
+      }),
+    ],
   ];
 
   if (args.includes("--print")) {
@@ -1180,15 +1408,37 @@ async function main() {
   }
 
   if (args.includes("--check")) {
+    // --check MODES (cinatra#7):
+    //   canonical (default) — for the full clone-back CI tree, where the
+    //     on-disk generated files ARE the committed artifact: the byte-exact
+    //     comparison pins the COMMITTED maps (fail-closed, cinatra#36).
+    //   --self (non-canonical) — for presence universes that legitimately
+    //     differ from the committed one (fresh public clone after
+    //     regeneration, the prod image build after lock acquisition): verifies
+    //     the regenerated on-disk tree against a fresh in-memory emission for
+    //     THIS tree (catches partial regeneration / post-regen hand edits) +
+    //     catalog parity. It NEVER binds the committed tree — its failure
+    //     remedy is always "re-run the generator here", never "match the
+    //     committed artifact".
+    const self = args.includes("--self");
+    const mode = self ? "self" : "canonical";
     let drift = false;
     for (const [path, content] of files) {
       if (!existsSync(path)) {
-        console.error(`[extension-manifest] MISSING ${relative(REPO_ROOT, path)} — regenerate: node scripts/extensions/generate-extension-manifest.mjs`);
+        console.error(
+          self
+            ? `[extension-manifest] SELF-CHECK MISSING ${relative(REPO_ROOT, path)} — the regeneration did not produce this file; re-run: node scripts/extensions/generate-extension-manifest.mjs`
+            : `[extension-manifest] MISSING ${relative(REPO_ROOT, path)} — regenerate: node scripts/extensions/generate-extension-manifest.mjs`,
+        );
         drift = true;
         continue;
       }
       if (readFileSync(path, "utf8") !== content) {
-        console.error(`[extension-manifest] DRIFT ${relative(REPO_ROOT, path)} — file differs from generator output (hand-edit or stale; regenerate, never hand-edit)`);
+        console.error(
+          self
+            ? `[extension-manifest] SELF-CHECK DRIFT ${relative(REPO_ROOT, path)} — on-disk file differs from a fresh emission for THIS tree (partial regeneration or post-regen hand edit; re-run: node scripts/extensions/generate-extension-manifest.mjs)`
+            : `[extension-manifest] DRIFT ${relative(REPO_ROOT, path)} — file differs from generator output (hand-edit or stale; regenerate, never hand-edit)`,
+        );
         drift = true;
       }
     }
@@ -1196,18 +1446,26 @@ async function main() {
     for (const p of parity) console.error(`[extension-manifest] PARITY ${p}`);
     const exit = checkExitCode({ driftOrMissing: drift, parityIssueCount: parity.length });
     if (exit === 0) {
-      console.log("[extension-manifest] OK — generated files current + parity holds.");
+      console.log(
+        self
+          ? "[extension-manifest] OK (self mode) — regenerated tree self-consistent + parity holds (non-canonical presence universe; committed tree deliberately NOT consulted)."
+          : "[extension-manifest] OK — generated files current + parity holds.",
+      );
     } else {
-      // FAIL-CLOSED (cinatra#36): the generated tree is the coupling
-      // gates' permanent-exempt class — drift or parity break fails CI.
-      console.error("[extension-manifest] FAIL — generated-tree drift and/or catalog parity break (see lines above).");
+      // FAIL-CLOSED in BOTH modes (cinatra#36): the generated tree is the
+      // coupling gates' permanent-exempt class — drift or parity break fails.
+      console.error(`[extension-manifest] FAIL (${mode} mode) — generated-tree drift and/or catalog parity break (see lines above).`);
       process.exit(exit);
     }
     return;
   }
 
   if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });
-  for (const [path, content] of files) writeFileSync(path, content);
+  for (const [path, content] of files) {
+    // Nested outputs (the generated __tests__ file) need their dir created.
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
   const parity = await checkParity();
   console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");

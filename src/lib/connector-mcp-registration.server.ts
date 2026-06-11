@@ -9,10 +9,14 @@ import "server-only";
 // src/lib/connector-modules.server.ts (the connector entry-module loader): the
 // manifest is the single place a connector is named; the host consumes shapes.
 //
-// FAIL LOUDLY: a loader entry that exists but cannot be imported, or whose
-// recorded factory is missing/not a function, throws — exactly like the static
-// import it replaces. A silently skipped module would drop tools off the MCP
-// surface with no failure signal.
+// FAIL LOUDLY: a loader entry whose PRESENT module cannot be imported, or
+// whose recorded factory is missing/not a function, throws — exactly like the
+// static import it replaces. A silently skipped module would drop tools off
+// the MCP surface with no failure signal. ONE deliberate exception
+// (cinatra#7): a `guardedOptional` entry whose target module is ABSENT
+// post-build (marketplace uninstall) resolves the standardized degraded
+// result and is skipped per entry with a loud warn — absence is a legitimate
+// state for an optional connector, not a broken one.
 
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import {
@@ -20,6 +24,7 @@ import {
   GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,
   type GeneratedConnectorFactoryEntry,
 } from "@/lib/generated/extensions.server";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 
 /**
  * Host-provided actor resolution for connector tools that must derive the
@@ -49,8 +54,16 @@ export type ConnectorPrimitiveHandler = (request: unknown) => Promise<unknown>;
 async function resolveFactory(
   slug: string,
   entry: GeneratedConnectorFactoryEntry,
-): Promise<(...args: unknown[]) => unknown> {
-  const ns = (await entry.load()) as Record<string, unknown>;
+): Promise<((...args: unknown[]) => unknown) | null> {
+  const loaded = await entry.load();
+  if (isDegradedExtensionLoad(loaded)) {
+    console.warn(
+      `[connector-mcp-registration] "${slug}": optional connector module is absent post-build — ` +
+        `skipping this MCP surface entry (${loaded.reason})`,
+    );
+    return null;
+  }
+  const ns = loaded as Record<string, unknown>;
   const factory = ns[entry.factory];
   if (typeof factory !== "function") {
     throw new Error(
@@ -72,6 +85,7 @@ export async function loadConnectorMcpModules(
   const modules: ConnectorCapabilityModule[] = [];
   for (const [slug, entry] of Object.entries(GENERATED_CONNECTOR_MCP_MODULES)) {
     const factory = await resolveFactory(slug, entry);
+    if (!factory) continue; // absent optional module — degraded per entry above
     const mod = factory(options) as ConnectorCapabilityModule | null;
     if (!mod || typeof mod.registerCapabilities !== "function") {
       throw new Error(
@@ -94,6 +108,7 @@ export async function loadConnectorPrimitiveHandlers(): Promise<
   const all: Record<string, ConnectorPrimitiveHandler> = {};
   for (const [slug, entry] of Object.entries(GENERATED_CONNECTOR_PRIMITIVE_HANDLERS)) {
     const factory = await resolveFactory(slug, entry);
+    if (!factory) continue; // absent optional module — degraded per entry above
     const handlers = factory() as Record<string, ConnectorPrimitiveHandler> | null;
     if (!handlers || typeof handlers !== "object") {
       throw new Error(

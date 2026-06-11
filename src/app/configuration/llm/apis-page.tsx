@@ -25,6 +25,7 @@ import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connec
 // export shapes this surface consumes (its host↔connector data contract).
 import { loadConnectorModule } from "@/lib/connector-modules.server";
 import { getConnectorSettingsPageLoader } from "@/lib/connector-setup-pages";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 
 type ProviderStatus = { status: string };
 
@@ -71,7 +72,15 @@ async function loadSettingsComponent(
 ): Promise<ComponentType<SettingsContentProps> | null> {
   const loader = getConnectorSettingsPageLoader(slug);
   if (!loader) return null;
-  const mod = (await loader()) as Record<string, unknown>;
+  const ns = await loader();
+  if (isDegradedExtensionLoad(ns)) {
+    // cinatra#7: absent optional settings module — degrade to "no page".
+    console.warn(
+      `[llm-apis] settings module for "${slug}" is absent post-build — skipping (${ns.reason})`,
+    );
+    return null;
+  }
+  const mod = ns as Record<string, unknown>;
   const component = mod[exportName];
   return typeof component === "function"
     ? (component as ComponentType<SettingsContentProps>)
