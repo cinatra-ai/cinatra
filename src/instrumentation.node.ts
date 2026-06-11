@@ -123,6 +123,19 @@ export async function register() {
   // install). Without it the dispatcher fail-closes the connector install.
   await import("@/lib/extension-activate-hook-wiring");
 
+  // Versioned core schema migrations (node-pg-migrate, cinatra#116). Runs the
+  // idempotent bootstrap DDL first, then the migrations/core/ chain — BEFORE
+  // the cache warm, extension activation, and queue workers below, so nothing
+  // observes a half-migrated schema. Policy lives in runCoreMigrationsAtBoot:
+  // unconfigured/unreachable database -> skip (parity with today's
+  // lazy-tolerant boot); a FAILED migration -> dev: loud error + keep booting,
+  // prod: rethrow (abort boot — serving this code against a half-migrated
+  // schema is worse than not serving).
+  {
+    const { runCoreMigrationsAtBoot } = await import("@/lib/core-migrations");
+    await runCoreMigrationsAtBoot();
+  }
+
   // Pre-warm all version-based globalThis caches before the first navigation
   // arrives. Without this, the first 1-5 route visits hit cold caches and
   // spawn many Worker threads (Atomics.wait), each blocking the event loop.
