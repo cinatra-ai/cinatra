@@ -60,6 +60,10 @@ modules:
 > The pre-#118 declarative JSON-DSL field (`cinatra.migrations`) is **retired**
 > and rejected fail-closed at install, boot, and hot-activate.
 
+The host pins identity before any DDL: the materialized `package.json`'s
+`name` must match the trusted package identity of the install/loader record
+exactly, or the migration preflight refuses the package.
+
 ### Naming — the per-source ledger namespace
 
 Every module in the directory must be named
@@ -75,9 +79,15 @@ ext_<scope>_<pkg>__NNNN_<short-description>.mjs
 - `NNNN` is a zero-padded, strictly increasing 4-digit sequence (`0001`, …),
   unique within your package. Shipped migrations are immutable — never
   renumber, edit, or delete one; supersede it with a new sequence number.
-- Ledger names are the filenames without `.mjs`, recorded in the host's
-  shared `pgmigrations` ledger alongside `core__…` rows — the namespace is
-  what keeps independently versioned sources from colliding.
+- `<short-description>` is lowercase `[a-z0-9-]` (hyphens, no underscores),
+  starting with a letter or digit.
+- The host validates **every visible entry** in the directory against this
+  contract — a stray `README.md`, helper module, or subdirectory fails the
+  preflight (dotfiles are ignored). Keep the directory migrations-only.
+- Ledger names are the filenames without `.mjs`, capped at 255 characters,
+  recorded in the host's shared `pgmigrations` ledger alongside `core__…`
+  rows — the namespace is what keeps independently versioned sources from
+  colliding.
 
 ### Module shape
 
