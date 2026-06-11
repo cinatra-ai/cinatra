@@ -140,13 +140,17 @@ epic's scope and tracked elsewhere:
   runtime architecture and `@cinatra-ai/nango-connector` has no
   `register(ctx)` hook to bind against; relocating the ~1.8k-line plumbing
   host-side reverses the SDK-only relocation. Counted, frozen, shrink-only.
-- **The host's eager connector value-import surface** (~26 connector
-  packages: campaign actions, configuration/setup pages, transport
-  registration legacy cluster, background jobs, blog/email surfaces, …) —
-  this is prod-bootability **Plan B** territory (cinatra-ai/cinatra#7 and its
-  successors): making these imports lazy/guarded so `requiredExtensions` can
-  shrink from the 33-package bootable set toward the ~8 true system packages.
-  Explicitly out of epic #24's scope (its scope boundary says so).
+- **The host's eager connector value-import surface** — at the flip, 11
+  unique connector packages still value-imported by `src/` (anthropic,
+  apollo, blog, crm, email, gemini, nango, openai, social-media, tailscale,
+  twenty: campaign actions, configuration/setup pages, the transport
+  registration legacy cluster, background jobs, blog/email surfaces), with
+  ~20 concrete connector packages still hard `workspace:*` deps of the root
+  package.json — this is prod-bootability **Plan B** territory
+  (cinatra-ai/cinatra#7): making these imports lazy/guarded and the generated
+  maps presence-aware so `requiredExtensions` can shrink from the 33-package
+  bootable set toward the ~8 true system packages. Explicitly out of epic
+  #24's scope (its scope boundary says so).
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed
