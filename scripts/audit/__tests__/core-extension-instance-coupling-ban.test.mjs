@@ -62,13 +62,13 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(fp).toEqual([]);
   });
 
-  it("does NOT scan the extensions/ tree, the generated manifest TREE, or tests (P711 unified exempt set)", () => {
+  it("does NOT scan the extensions/ tree, the generated manifest TREE, or tests (unified exempt set, #36)", () => {
     const occ = scanInstanceCoupling();
     const files = new Set(Object.keys(occ).map((k) => k.split(" :: ")[0]));
     for (const f of files) {
       expect(f.startsWith("extensions/")).toBe(false);
       // The whole generator-emitted set is the ONE permanent-exempt class
-      // (P711 owner ruling) — none of its files may appear in the scan.
+      // (owner ruling on #36) — none of its files may appear in the scan.
       expect(GENERATED_MANIFEST_FILES, f).not.toContain(f);
       expect(/\.(test|spec)\.|\/__tests__\/|\/__mocks__\//.test(f)).toBe(false);
     }
@@ -221,7 +221,7 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(m2).not.toContain("@scope/y:a.b(c)");
   });
 
-  it("growthAllowance NEVER permits growth — the P711 zero-tolerance flip retired the epoch recompute path", () => {
+  it("growthAllowance NEVER permits growth — the zero-tolerance flip (#36) retired the epoch recompute path", () => {
     // THE bypass-resistance pin: the formerly sanctioned one-step epoch
     // advance (base N, committed N+1 == script epoch) no longer allows growth
     // — it is now a hard ERROR (the epoch is frozen; a scanner change must

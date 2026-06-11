@@ -16,7 +16,7 @@
 // `serverEntry` extensions from here. The `extensions-dev-watcher` readdir
 // boot scan remains the registration source for filesystem-loaded extension
 // kinds (agents/skills/artifacts/workflows). Parity is checked against the
-// connector catalog descriptors. `--check` is FAIL-CLOSED (P711, cinatra#36):
+// connector catalog descriptors. `--check` is FAIL-CLOSED (cinatra#36):
 // the generated tree is the coupling gates' one permanent-exempt class, so a
 // generated file drifting from the generator's byte-exact output — or a
 // catalog parity break — fails CI (exit 1). The emitted file set is the
@@ -1145,7 +1145,7 @@ const OUT_CLIENT = generatedOutPath("extensions.client.tsx");
 const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
 
 /**
- * Fail-closed verdict for `--check` (P711, cinatra#36): any drift/missing
+ * Fail-closed verdict for `--check` (cinatra#36): any drift/missing
  * generated file or any catalog parity issue must fail CI — the generated
  * tree is the coupling gates' permanent-exempt class, so its integrity is
  * load-bearing. Pure + exported for unit testing. Returns the process exit
@@ -1198,7 +1198,7 @@ async function main() {
     if (exit === 0) {
       console.log("[extension-manifest] OK — generated files current + parity holds.");
     } else {
-      // FAIL-CLOSED (P711, cinatra#36): the generated tree is the coupling
+      // FAIL-CLOSED (cinatra#36): the generated tree is the coupling
       // gates' permanent-exempt class — drift or parity break fails CI.
       console.error("[extension-manifest] FAIL — generated-tree drift and/or catalog parity break (see lines above).");
       process.exit(exit);

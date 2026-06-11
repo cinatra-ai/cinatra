@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-describe("P711 fail-closed --check + the shared generated-file list", () => {
+describe("the zero-tolerance flip (#36) fail-closed --check + the shared generated-file list", () => {
   it("checkExitCode fails (1) on drift/missing OR parity issues; clean is 0 (the gates' exempt-tree integrity is load-bearing)", () => {
     expect(checkExitCode({ driftOrMissing: false, parityIssueCount: 0 })).toBe(0);
     expect(checkExitCode({ driftOrMissing: true, parityIssueCount: 0 })).toBe(1);

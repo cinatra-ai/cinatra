@@ -2,7 +2,7 @@
 // True-IoC boundary gate — the HOST(core) -> EXTENSION direction.
 //
 // The merged `extension-import-ban` gate bans extensions importing `@/`. This is
-// its mirror: ZERO-TOLERANCE (P711, cinatra-ai/cinatra#36) on cinatra CORE
+// its mirror: ZERO-TOLERANCE (cinatra-ai/cinatra#36) on cinatra CORE
 // (`src/`) importing a named extension package
 // (`@cinatra-ai/<x>-{connector,agent,artifact,skill,workflow}`).
 // Every such edge is static coupling that makes the system LESS extensible (core
@@ -28,7 +28,7 @@
 // classified `runtime-coupling` (default) or `mechanical` (facade/inventory/
 // dev-list files); both are counted and ratcheted identically. The exempt
 // set is UNIFIED with the instance-coupling gate's (same explicit
-// generated-file list) since the P711 flip.
+// generated-file list) since the zero-tolerance flip (#36).
 //
 // Usage:
 //   node scripts/audit/core-extension-import-ban.mjs            # --check (default)
@@ -54,7 +54,7 @@ const BASELINE_PATH = join(__dirname, "core-extension-import-ban.baseline.json")
 // (empty) so discoverExtensionNames + the scan are unchanged.
 const EXEMPT_EXTENSIONS = new Set([]);
 
-// P711 NOTE: the one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition mechanism
+// ZERO-TOLERANCE NOTE (#36): the one-PR NEWLY_UNEXEMPTED_BASELINE_SEED transition mechanism
 // (which let a just-un-exempted connector's pre-existing edges be seeded into
 // the baseline, i.e. the gate's only growth path) is RETIRED — under
 // zero-tolerance the committed baseline may never grow vs the base ref, for
@@ -93,7 +93,7 @@ export function discoverExtensionNames(extRoot = EXTENSIONS_ROOT) {
 // The generated-tree exemption is the EXPLICIT generator-emitted file list
 // (paths here are src/-relative — this gate scans src/ only), never a
 // directory prefix: a hand-added extra file under src/lib/generated/ is
-// counted like any other source file (P711 integrity guard).
+// counted like any other source file (zero-tolerance integrity guard, #36).
 const EXEMPT_GENERATED_FILES = new Set(
   GENERATED_MANIFEST_FILES.map((p) => p.replace(/^src\//, "")),
 );
@@ -191,7 +191,7 @@ export function diffEdges(baselineMap, currentMap) {
 
 /**
  * committed baseline must be a STRICT SUBSET of the base-branch baseline (no
- * regenerate-to-pass). Since the P711 zero-tolerance flip there is NO seed
+ * regenerate-to-pass). Since the zero-tolerance flip (#36) there is NO seed
  * exception — the committed baseline may never grow vs the base ref, for any
  * reason. Pure + exported for unit testing.
  */
@@ -210,7 +210,7 @@ function main() {
   const count = flatten(current).size;
 
   if (args.includes("--write-baseline")) {
-    // FAIL-CLOSED write (P711 zero-tolerance): the baseline is the frozen
+    // FAIL-CLOSED write (zero-tolerance, #36): the baseline is the frozen
     // residual floor — regeneration may only ever SHRINK it. Refuse to write
     // any NEW edge vs the committed baseline (remove the new import instead).
     if (existsSync(BASELINE_PATH)) {
@@ -226,7 +226,7 @@ function main() {
     }
     const doc = {
       note:
-        "True-IoC HOST->EXTENSION import baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the P711 zero-tolerance flip (#36). Each entry is a CURRENT core(src/)->extension import edge; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the one-PR un-exempt seed transition is retired; --write-baseline refuses grown output). Exempt: ONLY the generated manifest tree (the explicit generator-emitted file list) and tests; anthropic-connector is un-exempt and its host->ext edges are counted here. Regenerate (shrink-only) with `node scripts/audit/core-extension-import-ban.mjs --write-baseline`.",
+        "True-IoC HOST->EXTENSION import baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36) (#36). Each entry is a CURRENT core(src/)->extension import edge; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the one-PR un-exempt seed transition is retired; --write-baseline refuses grown output). Exempt: ONLY the generated manifest tree (the explicit generator-emitted file list) and tests; anthropic-connector is un-exempt and its host->ext edges are counted here. Regenerate (shrink-only) with `node scripts/audit/core-extension-import-ban.mjs --write-baseline`.",
       classificationSummary: summarizeEdgeClassification(current),
       edges: current,
     };

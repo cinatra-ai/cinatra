@@ -61,10 +61,10 @@ describe("core-extension-import-ban gate", () => {
     expect(names.has("@cinatra-ai/anthropic-connector")).toBe(true); // un-exempt
   });
 
-  it("baselineGrowth is STRICT subset-only — the un-exempt seed transition (the gate's only growth path) is retired (P711 zero-tolerance)", () => {
-    // Pre-P711, a NEWLY_UNEXEMPTED_BASELINE_SEED member could seed its
+  it("baselineGrowth is STRICT subset-only — the un-exempt seed transition (the gate's only growth path) is retired (zero-tolerance, #36)", () => {
+    // Before the flip (#36), a NEWLY_UNEXEMPTED_BASELINE_SEED member could seed its
     // pre-existing edges into the baseline (a sanctioned one-PR growth). The
-    // P711 flip removed the mechanism entirely: baselineGrowth takes NO seed
+    // the flip (#36) removed the mechanism entirely: baselineGrowth takes NO seed
     // parameter and flags EVERY edge not present in the base — there is no
     // data path that can grow this baseline.
     expect(baselineGrowth.length).toBe(2); // (base, committed) — no seed param
@@ -80,7 +80,7 @@ describe("core-extension-import-ban gate", () => {
     expect(baselineGrowth(committed, base)).toEqual([]);
   });
 
-  it("exempts ONLY the explicit generator-emitted files under lib/generated/ — a hand-added sibling file is counted (P711 smuggling guard)", () => {
+  it("exempts ONLY the explicit generator-emitted files under lib/generated/ — a hand-added sibling file is counted (smuggling guard, #36)", () => {
     const dir = mkdtempSync(join(tmpdir(), "core-ext-gate-gen-"));
     mkdirSync(join(dir, "lib", "generated"), { recursive: true });
     // Generator-emitted manifest file: exempt (its names are generator data).

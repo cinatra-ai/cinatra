@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// True-IoC discovery-dispatcher bypass gate — ZERO-TOLERANCE (P711, cinatra-ai/cinatra#36).
+// True-IoC discovery-dispatcher bypass gate — ZERO-TOLERANCE (cinatra-ai/cinatra#36).
 //
 // The runtime-discovery dispatcher (`discoverActiveExtensionCapabilities`) is the
 // ONE sanctioned way a surface discovers active extension capabilities: it routes
@@ -9,7 +9,7 @@
 // bypasses the gate — it can show uninstalled capabilities (no lifecycle gate) or
 // the wrong actor's rows (no scope).
 //
-// Since the P711 flip the tolerated-bypass BASELINE is pinned EMPTY: any direct
+// Since the zero-tolerance flip (#36) the tolerated-bypass BASELINE is pinned EMPTY: any direct
 // reference to a gated reader outside the documented SANCTIONED_READERS
 // allowlist fails CI immediately, a committed non-empty baseline is itself a
 // hard failure, and `--write-baseline` refuses to write a non-empty baseline.
@@ -67,11 +67,11 @@ export const SANCTIONED_READERS = new Map([
   ],
   [
     "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
-    "marketplace install-state read model, NOT capability discovery: active+archived templates keyed by packageName to resolve the Install/Update/Installed/Restore CTA; lifecycle (installed_extension) reconciliation happens INSIDE the readers and the read is vendor-scope guarded; the dispatcher has no archived/install-state surface (P711 owner ruling on cinatra-ai/cinatra#36)",
+    "marketplace install-state read model, NOT capability discovery: active+archived templates keyed by packageName to resolve the Install/Update/Installed/Restore CTA; lifecycle (installed_extension) reconciliation happens INSIDE the readers and the read is vendor-scope guarded; the dispatcher has no archived/install-state surface (owner ruling on cinatra-ai/cinatra#36)",
   ],
   [
     "packages/extensions/src/screens/registry-catalog-screen.tsx",
-    "routes ACTIVE discovery through discoverActiveExtensionCapabilities (the sanctioned path) and reads ONLY archived templates directly for install-state display — archived templates are not active capabilities and the dispatcher has no archived surface (P711 owner ruling on cinatra-ai/cinatra#36)",
+    "routes ACTIVE discovery through discoverActiveExtensionCapabilities (the sanctioned path) and reads ONLY archived templates directly for install-state display — archived templates are not active capabilities and the dispatcher has no archived surface (owner ruling on cinatra-ai/cinatra#36)",
   ],
 ]);
 
@@ -222,7 +222,7 @@ function main() {
     }
     const doc = {
       note:
-        "True-IoC discovery-dispatcher bypass baseline — PINNED EMPTY by the P711 zero-tolerance flip (cinatra-ai/cinatra#36). Any direct reference to a native discovery reader (GATED_SYMBOLS) outside the documented SANCTIONED_READERS allowlist fails CI immediately; a non-empty committed baseline is itself a failure and --write-baseline refuses to produce one. The sanctioned readers (definition/barrel/dispatcher facet + the two justified install-state screens) live in the gate script, each with a written justification, defect-checked and staleness-self-policed.",
+        "True-IoC discovery-dispatcher bypass baseline — PINNED EMPTY by the zero-tolerance flip (cinatra-ai/cinatra#36). Any direct reference to a native discovery reader (GATED_SYMBOLS) outside the documented SANCTIONED_READERS allowlist fails CI immediately; a non-empty committed baseline is itself a failure and --write-baseline refuses to produce one. The sanctioned readers (definition/barrel/dispatcher facet + the two justified install-state screens) live in the gate script, each with a written justification, defect-checked and staleness-self-policed.",
       gatedSymbols: GATED_SYMBOLS,
       files: current,
     };
@@ -241,7 +241,7 @@ function main() {
   // baseline file is a bypass attempt regardless of the tree's state.
   if (baseline.length) {
     console.error(
-      `[discovery-dispatcher-bypass-ban] FAIL — committed baseline is NON-EMPTY (${baseline.length} file(s)); the floor is pinned at zero since the P711 flip:`,
+      `[discovery-dispatcher-bypass-ban] FAIL — committed baseline is NON-EMPTY (${baseline.length} file(s)); the floor is pinned at zero since the zero-tolerance flip (#36):`,
     );
     baseline.forEach((f) => console.error("  + " + f));
     process.exit(1);

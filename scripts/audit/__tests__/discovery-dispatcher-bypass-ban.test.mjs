@@ -22,7 +22,7 @@ function runGate(extraEnv = {}) {
   return spawnSync("node", [GATE], { cwd: REPO_ROOT, env: { ...process.env, ...extraEnv }, encoding: "utf8" });
 }
 
-describe("discovery-dispatcher-bypass-ban gate (P711 zero-tolerance)", () => {
+describe("discovery-dispatcher-bypass-ban gate (zero-tolerance, #36)", () => {
   it("gates BOTH native readers — lifecycle-active AND archived (a direct archived read is still a native-store read)", () => {
     expect(GATED_SYMBOLS).toContain("readActiveExtensionTemplates");
     expect(GATED_SYMBOLS).toContain("readArchivedExtensionTemplates");

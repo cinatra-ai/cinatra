@@ -2,7 +2,7 @@
 // generator (`generate-extension-manifest.mjs`, which emits exactly these
 // files) and the extension-coupling gate taxonomy
 // (`scripts/audit/lib/extension-reference-classification.mjs`, which
-// permanently exempts exactly these files per the P711 owner ruling on
+// permanently exempts exactly these files per the owner ruling on
 // cinatra-ai/cinatra#36: the generated `src/lib/generated/**` tree is the ONE
 // permanent-exempt class).
 //

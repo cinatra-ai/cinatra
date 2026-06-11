@@ -11,7 +11,7 @@
 // knowing a specific extension by name, which a true IoC system must not do —
 // capabilities come from the manifest/registry, not hardcoded references.
 //
-// ZERO-TOLERANCE (P711, cinatra-ai/cinatra#36 — flipped at the end of the
+// ZERO-TOLERANCE (cinatra-ai/cinatra#36 — flipped at the end of the
 // IoC cutover epic #24): every current occurrence is recorded in the baseline
 // as `file :: kind :: value -> count`; the gate fails if any count GROWS or a
 // NEW occurrence appears, and (with a base ref) if the committed baseline
@@ -76,7 +76,7 @@ const REPO_ROOT = join(__dirname, "..", "..");
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
 const BASELINE_PATH = join(__dirname, "core-extension-instance-coupling-ban.baseline.json");
 
-// Scanner-correctness epoch — FROZEN at 2 by the P711 zero-tolerance flip.
+// Scanner-correctness epoch — FROZEN at 2 by the zero-tolerance flip (#36).
 // The epoch is now purely a TAMPER CHECK (committed baseline epoch must equal
 // this constant AND the base ref's epoch); it can no longer sanction baseline
 // growth (`growthAllowance` never allows growth — see there). A future
@@ -89,8 +89,8 @@ const BASELINE_PATH = join(__dirname, "core-extension-instance-coupling-ban.base
 //       static import cluster of src/lib/register-transport-connectors.ts and
 //       the live loader map of src/lib/connector-setup-pages.ts).
 //   2 — lexical stripper (lib/strip-comments.mjs) + strict exempt set
-//       (one-time corrected-baseline recompute, sanctioned pre-P711) + the
-//       P711 freeze.
+//       (one-time corrected-baseline recompute, sanctioned before the
+//       flip) + the zero-tolerance freeze (#36).
 export const SCANNER_EPOCH = 2;
 
 const SCAN_ROOTS = ["src", "packages"];
@@ -134,7 +134,7 @@ export function discoverExtensions(extRoot = EXTENSIONS_ROOT) {
 
 // STRICT file exemption: tests + the permanent-exempt set ONLY. The
 // permanent-exempt set is the EXPLICIT generator-emitted file list (the one
-// owner-ruled generated-tree class, P711) — never a directory prefix, so a
+// owner-ruled generated-tree class — #36) — never a directory prefix, so a
 // hand-added extra file under `src/lib/generated/` is still counted.
 function isExemptFile(rel) {
   return (
@@ -290,7 +290,7 @@ export function baselineGrowth(baseBaseline, committed) {
 
 /**
  * Decide whether baseline growth vs the base ref is sanctioned. Since the
- * P711 zero-tolerance flip (cinatra-ai/cinatra#36): growth is NEVER
+ * the zero-tolerance flip (#36) zero-tolerance flip (cinatra-ai/cinatra#36): growth is NEVER
  * sanctioned. The epoch survives purely as a tamper check — the committed
  * baseline's epoch must equal the script's SCANNER_EPOCH AND the base ref's
  * epoch; ANY mismatch (including the formerly sanctioned base+1 advance) is a
@@ -308,7 +308,7 @@ export function growthAllowance(baseEpoch, committedEpoch, scannerEpoch = SCANNE
   if (committedEpoch !== baseEpoch) {
     return {
       allowGrowth: false,
-      error: `committed baseline scannerEpoch=${committedEpoch} vs base scannerEpoch=${baseEpoch} — the epoch is FROZEN since the P711 zero-tolerance flip; an epoch change can no longer sanction baseline growth (fix the revealed references in the same PR instead)`,
+      error: `committed baseline scannerEpoch=${committedEpoch} vs base scannerEpoch=${baseEpoch} — the epoch is FROZEN since the zero-tolerance flip (#36); an epoch change can no longer sanction baseline growth (fix the revealed references in the same PR instead)`,
     };
   }
   return { allowGrowth: false, error: null };
@@ -351,7 +351,7 @@ function main() {
   }
 
   if (args.includes("--write-baseline")) {
-    // FAIL-CLOSED write (P711 zero-tolerance): the baseline is the frozen
+    // FAIL-CLOSED write (zero-tolerance, #36): the baseline is the frozen
     // residual floor of the IoC cutover — regeneration may only ever SHRINK
     // it. Refuse to write a baseline with any NEW or GROWN key vs the
     // committed one (remove the new coupling instead). First write (no
@@ -371,7 +371,7 @@ function main() {
       BASELINE_PATH,
       stable({
         note:
-          "true-IoC hardcoded-extension-INSTANCE coupling baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the P711 zero-tolerance flip (#36). Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the scanner-epoch allowance is retired; --write-baseline refuses grown output). The ONLY sanctioned named-extension references are the generated manifest tree (the explicit generator-emitted file list), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate (shrink-only) with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
+          "true-IoC hardcoded-extension-INSTANCE coupling baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36) (#36). Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the scanner-epoch allowance is retired; --write-baseline refuses grown output). The ONLY sanctioned named-extension references are the generated manifest tree (the explicit generator-emitted file list), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate (shrink-only) with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
         scannerEpoch: SCANNER_EPOCH,
         classificationSummary: summary,
         occurrences: current,
@@ -437,7 +437,7 @@ function main() {
     if (baseText) {
       const baseDoc = JSON.parse(baseText);
       const baseEpoch = baseDoc.scannerEpoch ?? 1;
-      // P711: growthAllowance NEVER allows growth — it is purely the epoch
+      // the zero-tolerance flip (#36): growthAllowance NEVER allows growth — it is purely the epoch
       // tamper check now (any epoch mismatch is a hard failure).
       const { error } = growthAllowance(baseEpoch, committedEpoch);
       if (error) {

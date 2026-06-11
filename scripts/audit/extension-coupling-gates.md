@@ -2,7 +2,7 @@
 
 This document is the reference the three extension-coupling gates point at. It
 defines the shared reference taxonomy, the strict exemption policy, the
-zero-tolerance enforcement model (P711, cinatra-ai/cinatra#36 — the closing
+zero-tolerance enforcement model (cinatra-ai/cinatra#36 — the closing
 phase of the IoC Runtime Cutover epic #24), and the pinned per-gate floors.
 Update the floor table whenever a baseline legitimately shrinks.
 
@@ -16,9 +16,9 @@ Update the floor table whenever a baseline legitimately shrinks.
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
-distinct from the baseline, which is pinned EMPTY since P711).
+distinct from the baseline, which is pinned EMPTY since the flip — cinatra#36).
 
-## Enforcement model — ZERO-TOLERANCE (since P711)
+## Enforcement model — ZERO-TOLERANCE (cinatra#36)
 
 All baselines are FROZEN RESIDUAL FLOORS: they may only ever SHRINK, by any
 mechanism. Concretely, for the coupling gates:
@@ -39,8 +39,7 @@ mechanism. Concretely, for the coupling gates:
 - the discovery-bypass baseline is PINNED EMPTY: a non-empty committed
   baseline is itself a failure, and any non-sanctioned direct-reader
   reference fails immediately;
-- `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the v6.22.1
-  zero-tolerance flip for the `sdkOnly` dimension; its
+- `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the precedent zero-tolerance flip for the `sdkOnly` dimension; its
   `STRICT_SDK_ONLY_ALLOWLIST` is EMPTY); its `hostInternal`/`crossExtension`
   dimensions remain shrink-only floors.
 
@@ -59,7 +58,7 @@ by all three gates:
   in this class (see the residual floor register below).
 - **mechanical** — re-export facades, hand-written inventories/catalogs, and
   dev-name lists. Counted and ratcheted exactly like runtime-coupling — never
-  exempt. P710 drove this class to ZERO occurrences; any reappearance is a
+  exempt. The mechanical-cleanup phase (#35) drove this class to ZERO occurrences; any reappearance is a
   NEW key and hard-fails.
 - **permanent-exempt** — never counted. Strict, owner-ruled set; see below.
 
@@ -73,7 +72,7 @@ Permanently exempt are ONLY:
    `connector-setup-pages.ts`, `extensions.client.tsx`,
    `widget-stream-public-paths.ts` under `src/lib/generated/`). Names there
    are generator output — the legitimate data-driven install list, not
-   hand-coupling. The P711 owner ruling (#36) made the whole generated tree
+   hand-coupling. The owner ruling on #36 made the whole generated tree
    the ONE permanent-exempt class (the sibling generated maps are part of it,
    not a separate concession), unifying the instance-coupling and import-ban
    exempt sets. Two integrity guards keep the exemption honest:
@@ -94,7 +93,7 @@ Permanently exempt are ONLY:
    enforced as a structural defect — so the exact-ID masking can never
    prefix-mask a longer ID past a non-alphabet character. Currently EMPTY —
    nothing in the residual floor is a data-contract ID (the nango facade is
-   an import, not an ID), so no entry was minted for the P711 flip.
+   an import, not an ID), so no entry was minted for the zero-tolerance flip (#36).
 3. Test files (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `tests/`)
    and the `extensions/` tree itself (an extension naming itself is fine).
 
@@ -104,20 +103,20 @@ No facades, no inventories, no dev-name lists are exempt — they are counted
 Known, documented residual lexer limitation: JSX TEXT is not modeled by
 `lib/strip-comments.mjs` (that needs a JSX-aware parser), so a named-extension
 reference appearing in JSX text AFTER a bare non-URL `//` on the same line
-would be under-counted. No such case exists in the tree. Since P711 there is
+would be under-counted. No such case exists in the tree. Since the zero-tolerance flip (#36) there is
 no epoch-recompute path: if a future JSX-aware lexer reveals references, they
 must be fixed in the same PR that lands the lexer (the floor cannot rise).
 The same applies to the sibling scanners' older comment-stripping: a stripping
 correction that would reveal edges must land with those edges removed.
 
-## Pinned floors (the P711 end-state)
+## Pinned floors (the #36 end-state)
 
-Recorded at the P711 flip (verify with the commands below); floors may only
+Recorded at the flip (#36; verify with the commands below); floors may only
 move DOWN. The epic's journey: the corrected epoch-2 baseline started at 349
-occurrences / 96 import edges; P702–P710 drove it to the floor below; P711
+occurrences / 96 import edges; the decoupling phases (#27–#35) drove it to the floor below; the flip (#36)
 pinned it.
 
-| Gate | Pinned floor (P711) | Direction |
+| Gate | Pinned floor (at the flip, #36) | Direction |
 | --- | --- | --- |
 | `core-extension-instance-coupling-ban` | **166 occurrences / 128 keys / 81 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 | shrink-only, frozen |
 | `core-extension-import-ban` | **41 edges / 28 files** — all runtime-coupling | shrink-only, frozen |
@@ -136,7 +135,7 @@ deliberately did NOT remove these residual clusters, which are out of the
 epic's scope and tracked elsewhere:
 
 - **The `src/lib/nango.ts` facade + its 18 live consumers** — explicitly
-  DEFERRED by the owner-ratified P710 ruling (see cinatra-ai/cinatra#35,
+  DEFERRED by the owner-ratified mechanical-cleanup ruling (see cinatra-ai/cinatra#35,
   reconciliation comment): registry/boot-bound resolution would be new
   runtime architecture and `@cinatra-ai/nango-connector` has no
   `register(ctx)` hook to bind against; relocating the ~1.8k-line plumbing
@@ -165,7 +164,7 @@ that was not lexical-context aware; the shared single-pass lexer
 real references (a `/*` inside a line comment swallowing following code; a
 `//` inside a string swallowing the line). The recomputed baseline after the
 fix was a one-time RISE sanctioned by bumping `SCANNER_EPOCH` 1 → 2 in the
-same PR. P711 FROZE the epoch at 2 and retired the growth allowance: from the
+same PR. The zero-tolerance flip (#36) FROZE the epoch at 2 and retired the growth allowance: from the
 flip onward, shrink-only holds unconditionally and the epoch is a pure tamper
 check.
 

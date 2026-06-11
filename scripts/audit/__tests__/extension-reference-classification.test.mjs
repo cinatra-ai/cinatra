@@ -17,7 +17,7 @@ describe("extension-reference classification taxonomy", () => {
     expect([...CLASSIFICATIONS]).toEqual(["runtime-coupling", "mechanical", "permanent-exempt"]);
   });
 
-  it("the permanent-exempt FILE set is EXACTLY the generator-emitted list (P711 owner ruling: one generated-tree class)", () => {
+  it("the permanent-exempt FILE set is EXACTLY the generator-emitted list (owner ruling on #36: one generated-tree class)", () => {
     // Pinned EQUALITY with the shared GENERATED_MANIFEST_FILES list the
     // generator emits from — the exempt set and the emitted set cannot drift.
     expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([...GENERATED_MANIFEST_FILES].sort());

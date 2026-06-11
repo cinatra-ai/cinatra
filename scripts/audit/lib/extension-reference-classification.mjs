@@ -18,12 +18,12 @@
 //   - "mechanical"        — re-export facades, hand-written inventories/
 //     catalogs, and dev-name lists. Not runtime selection, but still
 //     named-instance coupling; removed or consolidated by the
-//     mechanical-cleanup pass (P710 drove every counted mechanical occurrence
+//     mechanical-cleanup pass (#35 drove every counted mechanical occurrence
 //     to ZERO — the class is kept so any reappearance is classified honestly,
 //     and it fails the gates like everything else). Counted and ratcheted
 //     exactly like runtime-coupling — NEVER exempt.
 //
-//   - "permanent-exempt"  — never counted. STRICT, owner-ruled set (P711,
+//   - "permanent-exempt"  — never counted. STRICT, owner-ruled set (the flip on
 //     cinatra-ai/cinatra#36): the generated manifest tree — the
 //     generator-emitted `src/lib/generated/**` files as ONE class — plus the
 //     documented data-contract-ID allowlist below. Nothing else: no facades,
@@ -42,7 +42,7 @@ export const CLASSIFICATIONS = Object.freeze([
 // `scripts/extensions/generate-extension-manifest.mjs` emits (the shared
 // GENERATED_MANIFEST_FILES list; a test pins set == emitted set). Names there
 // are generator output — the legitimate data-driven install list — not
-// hand-coupling. The P711 owner ruling (cinatra-ai/cinatra#36) made the whole
+// hand-coupling. The owner ruling on cinatra-ai/cinatra#36 made the whole
 // generated tree the ONE permanent-exempt class (the sibling generated maps
 // are part of it, not a separate concession). Two integrity guards keep the
 // exemption honest:
@@ -78,7 +78,7 @@ export const PERMANENT_EXEMPT_FILES = new Set(GENERATED_MANIFEST_FILES);
 //
 // Shape: Map<contractId, justification>. Currently EMPTY — no contract ID has
 // been ruled exempt yet; the mechanism ships ahead of its first entry. NOTE
-// (P711): the residual frozen-floor coupling (the nango facade deferral per
+// (the zero-tolerance flip (#36)): the residual frozen-floor coupling (the nango facade deferral per
 // the #35 ruling, the host's eager connector import surface) is NOT
 // allowlisted here — none of it is a data-contract ID. It stays COUNTED in
 // the pinned, shrink-only baselines.
@@ -91,12 +91,12 @@ export const DATA_CONTRACT_ID_ALLOWLIST = new Map([]);
 // Facades / inventories / catalogs / dev-lists. These are COUNTED in the
 // baselines (never exempt); the class only tells the cleanup work apart from
 // runtime-coupling work. Default for any file NOT listed here is
-// "runtime-coupling". P710 drove every counted mechanical occurrence to zero;
+// "runtime-coupling". The mechanical-cleanup phase (#35) drove every counted mechanical occurrence to zero;
 // the entries below are kept as classification metadata (each names a real
 // inventory/catalog site that would be mechanical if it ever referenced an
 // extension again — and would hard-fail the zero-tolerance gates as a NEW
 // key). The generated manifest derivatives that used to be listed here are
-// now part of the permanent-exempt generated tree (P711 owner ruling).
+// now part of the permanent-exempt generated tree (owner ruling on #36).
 // ---------------------------------------------------------------------------
 export const MECHANICAL_FILES = new Map([
   [
