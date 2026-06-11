@@ -157,6 +157,17 @@ const PREVIEW_INLINE_MIME_ALLOWLIST: ReadonlySet<string> = new Set([
  * private-by-convention). */
 export const PREVIEW_INLINE_MIME_ALLOWLIST_FOR_TESTS = PREVIEW_INLINE_MIME_ALLOWLIST;
 
+/**
+ * True when `mime` may be served inline by the preview route. Server-side
+ * consumers (e.g. the dashboard portlet loaders) use this to decide whether
+ * to hand a client a `/preview` href at all. The route itself stays the
+ * enforcement point (415 short-circuit + `previewDispositionFor` fallback);
+ * this predicate only avoids minting hrefs that would 415.
+ */
+export function isPreviewInlineMime(mime: string): boolean {
+  return PREVIEW_INLINE_MIME_ALLOWLIST.has(mime);
+}
+
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "artifact";
 }

@@ -9,10 +9,21 @@
 // (never the MCP/store directly).
 import { listObjectsByFilter, getObjectById, type ObjectRecord } from "@/lib/objects-store";
 import { listArtifacts, getArtifact } from "@/lib/artifacts/artifact-service";
+import { isPreviewInlineMime } from "@/lib/artifacts/artifact-read";
 import { listEventsForObject } from "@/lib/object-history/eligibility";
 import { readWorkflow, listWorkflows } from "@cinatra-ai/workflows/store";
+import { readBlogPostsProjectById } from "@/lib/blog/store";
+import { isBackgroundJobActive } from "@/lib/background-jobs";
 import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 import { resolvePortletAuthz, objectResourceCheck, canReadObject, type PortletAuthz } from "@/lib/dashboards/portlet-authz";
+import {
+  BINARY_GENERATION_PRIMITIVE_PAIRS,
+  BINARY_GENERATION_STATUS_MESSAGES,
+  deriveBlogPostRefs,
+  normalizeBinaryGenerationStatus,
+  pairedRevisionField,
+  type BinaryGenerationStatusValue,
+} from "@/lib/dashboards/portlet-binary-regen-shared";
 
 export type PortletObjectSummary = { id: string; label: string };
 export type PortletObjectDetail = { id: string; label: string; type: string; fields: Array<{ key: string; value: string }> };
@@ -201,12 +212,21 @@ export async function loadWorkflowStatusList(args: { projectId: string }): Promi
 }
 
 // ---------------------------------------------------------------------------
-// Artifact-edit-binary-prompt — read-only baseline preview. Interactive
-// prompt-driven regeneration is deferred (the concrete binary-generation
-// primitive is blog-specific). Returns the parent object's CURRENT artifact
-// (read-gated) so the portlet renders a real baseline.
+// Artifact-edit-binary-prompt — baseline preview of the parent object's
+// CURRENT artifact (read-gated). `previewHref` points at the preview-safe
+// serving route and is minted server-side ONLY for preview-inline-allowlisted
+// MIMEs (the route remains the 415/disposition enforcement point). The
+// revision is the object's PAIRED `…RepresentationRevisionId` ref when
+// present (the pinned pair manual-mode revert needs), else the artifact's
+// latest representation (same fallback as the artifact detail page).
 // ---------------------------------------------------------------------------
-export type PortletArtifactBaseline = { artifactId: string; title: string | null; mime: string };
+export type PortletArtifactBaseline = {
+  artifactId: string;
+  title: string | null;
+  mime: string;
+  representationRevisionId: string | null;
+  previewHref: string | null;
+};
 
 export async function loadArtifactBaselinePortlet(args: {
   objectId: string;
@@ -226,5 +246,84 @@ export async function loadArtifactBaselinePortlet(args: {
   if (!artifactId) return null;
   const current = getArtifact({ artifactId, orgId: authz.orgId, actor: authz.actorContext });
   if (!current) return null;
-  return { artifactId: current.artifactId, title: current.title, mime: current.mime };
+  const revisionField = pairedRevisionField(args.parentObjectField);
+  const pinnedRevision =
+    revisionField && typeof data[revisionField] === "string" && data[revisionField]
+      ? (data[revisionField] as string)
+      : null;
+  const representationRevisionId = pinnedRevision ?? current.latestRepresentationRevisionId;
+  const previewHref =
+    representationRevisionId && isPreviewInlineMime(current.mime)
+      ? `/api/artifacts/${current.artifactId}/versions/${representationRevisionId}/preview`
+      : null;
+  return {
+    artifactId: current.artifactId,
+    title: current.title,
+    mime: current.mime,
+    representationRevisionId,
+    previewHref,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Artifact-edit-binary-prompt — generation progress. The blog image pipeline's
+// state is a PER-PROJECT singleton, so this loader (a) gates object.read on
+// the parent, (b) derives projectId/postId from the GATED row (never the
+// client), and (c) projects the state down to a minimal post-scoped DTO:
+// canned messages only — raw pipeline messages (which can carry provider
+// error text), jobIds, and foreign-post titles never cross this boundary.
+// A run for a DIFFERENT post in the same project surfaces ONLY as
+// `busyWithOtherPost`.
+// ---------------------------------------------------------------------------
+export type PortletBinaryGenerationStatus = {
+  status: BinaryGenerationStatusValue;
+  message: string;
+  updatedAt: string | null;
+  busyWithOtherPost: boolean;
+};
+
+export async function loadBinaryGenerationStatusPortlet(args: {
+  objectId: string;
+  generationPrimitive: string;
+}): Promise<PortletBinaryGenerationStatus | null> {
+  const authz = await resolvePortletAuthz();
+  if (!authz.orgId || !authz.actorContext) return null;
+  // Same server-side allow-list as the actions: unknown primitives read nothing.
+  if (!BINARY_GENERATION_PRIMITIVE_PAIRS[args.generationPrimitive]) return null;
+  const row = getObjectById(args.objectId, { orgId: authz.orgId });
+  if (!row) return null;
+  try {
+    await enforceResourceAccess(objectResourceCheck(row), authz.primitiveActor, "object.read", authz.roleHints);
+  } catch {
+    return null;
+  }
+  const { projectId, postId } = deriveBlogPostRefs((row.data ?? {}) as Record<string, unknown>);
+  if (!projectId || !postId) return null;
+  const project = await readBlogPostsProjectById(projectId);
+  if (!project || !project.posts.some((p) => p.id === postId)) return null;
+  // Defensive: assembled store rows may predate the imageGeneration field
+  // (generation.ts itself null-coalesces it to the idle default).
+  const state = project.imageGeneration ?? { status: "idle", message: "", updatedAt: "", postId: undefined };
+  if (state.postId === postId) {
+    const status = normalizeBinaryGenerationStatus(state.status);
+    return {
+      status,
+      message: BINARY_GENERATION_STATUS_MESSAGES[status],
+      updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
+      busyWithOtherPost: false,
+    };
+  }
+  // Foreign-post state: expose only the running/blocked bit, nothing else.
+  // Same active-job check as startBinaryRegenerationAction: a STALE foreign
+  // "running" row (job gone) must not block the UI — the start primitive
+  // self-heals it.
+  const jobId = typeof state.jobId === "string" ? state.jobId : null;
+  const busyWithOtherPost =
+    state.status === "running" && (jobId ? await isBackgroundJobActive(jobId) : false);
+  return {
+    status: "idle",
+    message: "",
+    updatedAt: null,
+    busyWithOtherPost,
+  };
 }
