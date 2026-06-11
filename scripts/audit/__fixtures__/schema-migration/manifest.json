@@ -42,6 +42,12 @@
       "description": "Adds a VALID migrations/core/core__0003_*.mjs module carrying destructive SQL with no manifest entry and no in-scope schema-file diff. The runner executes every valid core/ module regardless of the manifest, so migration-state inconsistency must fail standalone — not only when a destructive drizzle-store diff is present."
     },
     {
+      "file": "manifest-doc-only-edit.diff",
+      "expect": "pass",
+      "category": "manifest _doc-only edit, no entries gained",
+      "description": "Edits migrations/manifest.json _doc wording without touching the migrations array. Legitimate without a module — the standalone inconsistency rule fires only when the array GAINS entries with no matching module (rewrites/removals of existing entries are integrity failures via the append-only prefix check)."
+    },
+    {
       "file": "additive-nullable-column-no-artifact.diff",
       "expect": "pass",
       "category": "additive, no artifact",
