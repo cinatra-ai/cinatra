@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 // Host-owned readiness signals — mocked so the probe module imports stay light.
-vi.mock("@/lib/nango", () => ({
+vi.mock("@/lib/nango-system", () => ({
   getPrimarySavedNangoConnections: vi.fn(() => ({
     gmail: { connectionId: "c1" },
     googleCalendar: null,

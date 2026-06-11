@@ -10,7 +10,7 @@ import {
   readLegacyCosts,
   readModelPricing,
 } from "./store";
-import { getPrimarySavedNangoConnections, NANGO_CONNECTOR_DEFINITIONS } from "@cinatra-ai/nango-connector";
+import { getPrimarySavedNangoConnections, NANGO_CONNECTOR_DEFINITIONS } from "@/lib/nango-system";
 import { CostSummaryCards } from "./components/cost-summary-cards";
 import { CostTimeSeriesChart } from "./components/cost-time-series-chart";
 import { CostBreakdownTabs } from "./components/cost-breakdown-tabs";

@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
 
 export const metadata: Metadata = { title: "Setup: Connections" };
-import { getNangoSettings, getNangoStatus } from "@cinatra-ai/nango-connector";
+import { getNangoSettings, getNangoStatus } from "@/lib/nango-system";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 
 type SetupNangoPageProps = {

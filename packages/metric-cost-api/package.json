@@ -9,7 +9,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@cinatra-ai/nango-connector": "workspace:*",
     "@cinatra-ai/metric-usage-api": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^1.30.0",

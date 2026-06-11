@@ -27,7 +27,7 @@ import {
   getGoogleOAuthStatus,
   saveGoogleOAuthSettings,
 } from "@cinatra-ai/google-oauth-connection";
-import { getNangoOAuthCallbackUrl } from "@/lib/nango";
+import { getNangoOAuthCallbackUrl } from "@/lib/nango-system";
 
 // The single host-side Google-OAuth facade, delegating to the google-oauth-connection
 // host module. The connector resolves it via requireGoogleOAuthConnectionProvider()

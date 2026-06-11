@@ -62,7 +62,7 @@ vi.mock("../db", () => ({
   db: mockDb,
   agentBuilderPool: {} as unknown,
 }));
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   listSavedNangoConnections: vi.fn(),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({

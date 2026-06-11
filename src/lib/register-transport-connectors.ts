@@ -78,26 +78,16 @@ import { registerOpenAIConnector } from "@cinatra-ai/openai-connector/deps";
 import { registerAnthropicConnector } from "@cinatra-ai/anthropic-connector";
 import { registerDrupalConnector } from "@cinatra-ai/drupal-mcp-connector";
 import { registerWordPressConnector } from "@cinatra-ai/wordpress-mcp-connector";
-// Nango connection-storage surface — host-owned impls bound into the remaining
-// statically-wired connectors' `deps` slots AND published once as the
-// per-concern nango host-service capability the serverEntry transports resolve.
-import {
-  buildBearerAuthHeaderFromNango,
-  CINATRA_NANGO_CONNECTION_IDS,
-  CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-  clearNangoConnectionRecords,
-  deleteNangoConnection,
-  ensureNangoConnectorIntegration,
-  ensureNangoIntegration,
-  getNangoCredentials,
-  getNangoFrontendConfig,
-  getNangoStatus,
-  getPrimarySavedNangoConnection,
-  importNangoConnection,
-  isNangoConfigured,
-  removeNangoConnectionRecord,
-  saveNangoConnectionRecord,
-} from "@cinatra-ai/nango-connector";
+// Nango connection-storage surface — AUTHORSHIP TRANSFERRED (cinatra#151
+// Stage 1): the nango gateway registers its own `nango-system` surface from
+// `register(ctx)`; this module no longer value-imports the package. The
+// legacy `@cinatra-ai/host:nango-connection-storage` id KEEPS being published
+// as a THIN DELEGATING ADAPTER over the resolved nango-system surface (every
+// member resolves at CALL time — activation order never matters), so the
+// drupal/wordpress/anthropic/openai transports keep resolving unchanged.
+// Old-id retirement rides the (already-deferred) transport-DI cutover.
+import { requireNangoSystem } from "@/lib/nango-system";
+import type { NangoSystemSurface } from "@cinatra-ai/sdk-extensions";
 // Shared host-side A2A content-editor dispatch helper (drupal + wordpress
 // content-editor connectors). Carries the @cinatra-ai/llm + @cinatra-ai/a2a
 // runtime edges host-side so neither connector imports them.
@@ -182,22 +172,46 @@ function registerHostConnectorServices(): void {
   };
   register(NANGO_CONNECTION_MATERIALIZER_CAPABILITY, hostNangoMaterializer);
 
+  // Thin delegating adapter over the connector-authored nango-system surface
+  // (the old per-concern id, kept for the statically-wired transports + the
+  // serverEntry transports that already resolve it). Every member resolves
+  // the surface at CALL time; the const key maps are getters for the same
+  // reason (this module evaluates at boot, BEFORE activation).
   register(svc.nangoConnectionStorage, {
-    isConfigured: isNangoConfigured,
-    getStatus: getNangoStatus,
-    getFrontendConfig: getNangoFrontendConfig,
-    getPrimarySavedConnection: getPrimarySavedNangoConnection,
-    ensureIntegration: ensureNangoIntegration,
-    ensureConnectorIntegration: ensureNangoConnectorIntegration,
-    importConnection: importNangoConnection,
-    getCredentials: getNangoCredentials,
-    saveConnectionRecord: saveNangoConnectionRecord,
-    removeConnectionRecord: removeNangoConnectionRecord,
-    deleteConnection: deleteNangoConnection,
-    clearConnectionRecords: clearNangoConnectionRecords,
-    buildBearerAuthHeader: buildBearerAuthHeaderFromNango,
-    providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-    connectionIds: CINATRA_NANGO_CONNECTION_IDS,
+    isConfigured: () => requireNangoSystem().isNangoConfigured(),
+    getStatus: () => requireNangoSystem().getNangoStatus(),
+    getFrontendConfig: () => requireNangoSystem().getNangoFrontendConfig(),
+    getPrimarySavedConnection: (
+      ...args: Parameters<NangoSystemSurface["getPrimarySavedNangoConnection"]>
+    ) => requireNangoSystem().getPrimarySavedNangoConnection(...args),
+    ensureIntegration: (...args: Parameters<NangoSystemSurface["ensureNangoIntegration"]>) =>
+      requireNangoSystem().ensureNangoIntegration(...args),
+    ensureConnectorIntegration: (
+      ...args: Parameters<NangoSystemSurface["ensureNangoConnectorIntegration"]>
+    ) => requireNangoSystem().ensureNangoConnectorIntegration(...args),
+    importConnection: (...args: Parameters<NangoSystemSurface["importNangoConnection"]>) =>
+      requireNangoSystem().importNangoConnection(...args),
+    getCredentials: (...args: Parameters<NangoSystemSurface["getNangoCredentials"]>) =>
+      requireNangoSystem().getNangoCredentials(...args),
+    saveConnectionRecord: (...args: Parameters<NangoSystemSurface["saveNangoConnectionRecord"]>) =>
+      requireNangoSystem().saveNangoConnectionRecord(...args),
+    removeConnectionRecord: (
+      ...args: Parameters<NangoSystemSurface["removeNangoConnectionRecord"]>
+    ) => requireNangoSystem().removeNangoConnectionRecord(...args),
+    deleteConnection: (...args: Parameters<NangoSystemSurface["deleteNangoConnection"]>) =>
+      requireNangoSystem().deleteNangoConnection(...args),
+    clearConnectionRecords: (
+      ...args: Parameters<NangoSystemSurface["clearNangoConnectionRecords"]>
+    ) => requireNangoSystem().clearNangoConnectionRecords(...args),
+    buildBearerAuthHeader: (
+      ...args: Parameters<NangoSystemSurface["buildBearerAuthHeaderFromNango"]>
+    ) => requireNangoSystem().buildBearerAuthHeaderFromNango(...args),
+    get providerConfigKeys() {
+      return requireNangoSystem().providerConfigKeys;
+    },
+    get connectionIds() {
+      return requireNangoSystem().connectionIds;
+    },
   });
 
   register(svc.googleOAuth, {
@@ -267,23 +281,38 @@ export function registerTransportConnectors(): void {
     createNotification,
     // Nango connection-storage surface (SDK-only decouple): the connector
     // carries no `@cinatra-ai/nango-connector` import and resolves these via
-    // `getOpenAIDeps().nango.*`.
+    // `getOpenAIDeps().nango.*`. Members delegate to the connector-authored
+    // nango-system surface at CALL time (this deps object binds at boot,
+    // before nango's activation); the key maps are getters for the same reason.
     nango: {
-      isConfigured: isNangoConfigured,
-      getStatus: getNangoStatus,
-      getFrontendConfig: getNangoFrontendConfig,
-      getPrimarySavedConnection: getPrimarySavedNangoConnection,
-      getCredentials: getNangoCredentials,
-      ensureIntegration: ensureNangoIntegration,
+      isConfigured: () => requireNangoSystem().isNangoConfigured(),
+      getStatus: () => requireNangoSystem().getNangoStatus(),
+      getFrontendConfig: () => requireNangoSystem().getNangoFrontendConfig(),
+      getPrimarySavedConnection: (
+        ...args: Parameters<NangoSystemSurface["getPrimarySavedNangoConnection"]>
+      ) => requireNangoSystem().getPrimarySavedNangoConnection(...args),
+      getCredentials: (...args: Parameters<NangoSystemSurface["getNangoCredentials"]>) =>
+        requireNangoSystem().getNangoCredentials(...args),
+      ensureIntegration: (...args: Parameters<NangoSystemSurface["ensureNangoIntegration"]>) =>
+        requireNangoSystem().ensureNangoIntegration(...args),
       // Connector's structural deps type widens the nested `connectorKey`; the
-      // host owns the real NangoConnectorKey union and the connector only ever
-      // passes a valid key, so cast at this boundary.
+      // surface owns the real NangoConnectorKey union and the connector only
+      // ever passes a valid key, so cast at this boundary.
       importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      deleteConnection: deleteNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-      connectionIds: CINATRA_NANGO_CONNECTION_IDS,
+        requireNangoSystem().importNangoConnection(
+          input as Parameters<NangoSystemSurface["importNangoConnection"]>[0],
+        ),
+      deleteConnection: (...args: Parameters<NangoSystemSurface["deleteNangoConnection"]>) =>
+        requireNangoSystem().deleteNangoConnection(...args),
+      clearConnectionRecords: (
+        ...args: Parameters<NangoSystemSurface["clearNangoConnectionRecords"]>
+      ) => requireNangoSystem().clearNangoConnectionRecords(...args),
+      get providerConfigKeys() {
+        return requireNangoSystem().providerConfigKeys;
+      },
+      get connectionIds() {
+        return requireNangoSystem().connectionIds;
+      },
     },
     // Skills catalog read for shell-tool skill delivery. Lazy `import()` to avoid
     // the openai-index → @cinatra-ai/skills → @cinatra-ai/agents → host boot cycle:
@@ -304,20 +333,34 @@ export function registerTransportConnectors(): void {
     readAnthropicConnectionFromDatabase,
     isAppDevelopmentMode,
     nango: {
-      isConfigured: isNangoConfigured,
-      getStatus: getNangoStatus,
-      getFrontendConfig: getNangoFrontendConfig,
-      getPrimarySavedConnection: getPrimarySavedNangoConnection,
-      getCredentials: getNangoCredentials,
-      ensureIntegration: ensureNangoIntegration,
-      // Connector's structural deps type widens the nested `connectorKey`; the host
-      // owns the real NangoConnectorKey union (same note as the openai block).
+      isConfigured: () => requireNangoSystem().isNangoConfigured(),
+      getStatus: () => requireNangoSystem().getNangoStatus(),
+      getFrontendConfig: () => requireNangoSystem().getNangoFrontendConfig(),
+      getPrimarySavedConnection: (
+        ...args: Parameters<NangoSystemSurface["getPrimarySavedNangoConnection"]>
+      ) => requireNangoSystem().getPrimarySavedNangoConnection(...args),
+      getCredentials: (...args: Parameters<NangoSystemSurface["getNangoCredentials"]>) =>
+        requireNangoSystem().getNangoCredentials(...args),
+      ensureIntegration: (...args: Parameters<NangoSystemSurface["ensureNangoIntegration"]>) =>
+        requireNangoSystem().ensureNangoIntegration(...args),
+      // Connector's structural deps type widens the nested `connectorKey`; the
+      // surface owns the real NangoConnectorKey union (same note as the openai
+      // block).
       importConnection: (input) =>
-        importNangoConnection(input as Parameters<typeof importNangoConnection>[0]),
-      deleteConnection: deleteNangoConnection,
-      clearConnectionRecords: clearNangoConnectionRecords,
-      providerConfigKeys: CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-      connectionIds: CINATRA_NANGO_CONNECTION_IDS,
+        requireNangoSystem().importNangoConnection(
+          input as Parameters<NangoSystemSurface["importNangoConnection"]>[0],
+        ),
+      deleteConnection: (...args: Parameters<NangoSystemSurface["deleteNangoConnection"]>) =>
+        requireNangoSystem().deleteNangoConnection(...args),
+      clearConnectionRecords: (
+        ...args: Parameters<NangoSystemSurface["clearNangoConnectionRecords"]>
+      ) => requireNangoSystem().clearNangoConnectionRecords(...args),
+      get providerConfigKeys() {
+        return requireNangoSystem().providerConfigKeys;
+      },
+      get connectionIds() {
+        return requireNangoSystem().connectionIds;
+      },
     },
   });
 
@@ -327,15 +370,18 @@ export function registerTransportConnectors(): void {
     // A2A blocking dispatch to wayflow-drupal-content-editor (host-side bearer
     // mint + external A2A client + history-walk → reply text).
     dispatchContentEditor: dispatchContentEditorViaA2A,
-    // Nango-vault bearer header for the Drupal MCP HTTP client.
-    buildNangoBearerHeader: buildBearerAuthHeaderFromNango,
+    // Nango-vault bearer header for the Drupal MCP HTTP client (call-time
+    // delegation to the connector-authored nango-system surface).
+    buildNangoBearerHeader: (
+      ...args: Parameters<NangoSystemSurface["buildBearerAuthHeaderFromNango"]>
+    ) => requireNangoSystem().buildBearerAuthHeaderFromNango(...args),
     // External-MCP toolbox surfaces (consumed by the connector's mcp-toolbox
     // module): instance settings + cached probe + endpoint/URL policy.
     listMcpInstances: () => getDrupalAPISettings().instances,
     probeMcp: probeDrupalMcp,
     resolveMcpServerUrl: resolveDrupalMcpServerUrl,
     isPrivateUrl,
-    isNangoConfigured,
+    isNangoConfigured: () => requireNangoSystem().isNangoConfigured(),
   });
 
   registerWordPressConnector({

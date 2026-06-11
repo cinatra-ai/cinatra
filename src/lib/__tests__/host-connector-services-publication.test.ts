@@ -53,7 +53,7 @@ vi.mock("@cinatra-ai/openai-connector/deps", () => ({ registerOpenAIConnector: (
 vi.mock("@cinatra-ai/anthropic-connector", () => ({ registerAnthropicConnector: () => {} }));
 vi.mock("@cinatra-ai/drupal-mcp-connector", () => ({ registerDrupalConnector: () => {} }));
 vi.mock("@cinatra-ai/wordpress-mcp-connector", () => ({ registerWordPressConnector: () => {} }));
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   buildBearerAuthHeaderFromNango: async () => null,
   CINATRA_NANGO_CONNECTION_IDS: {},
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS: {},

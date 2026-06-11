@@ -7,7 +7,7 @@ import { PageContent } from "@/components/page-content";
 import type { ComponentType } from "react";
 import { Button } from "@/components/ui/button";
 import { listWordPressInstances, getWordPressAPIStatus } from "@/lib/wordpress-api";
-import { getNangoFrontendConfig, getNangoStatus } from "@/lib/nango";
+import { getNangoFrontendConfig, getNangoStatus } from "@/lib/nango-system";
 import { setWordPressBlogConnectorAction } from "@/app/campaigns/actions";
 // The connection UI exposes the per-instance blog-connector selector.
 // The registered set comes from the blog-connector facade registry

@@ -3,7 +3,7 @@
 // absent → the AI step reads as not-ready (the wizard keeps prompting —
 // correct on a host without the openai connector).
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import { getNangoStatus } from "@cinatra-ai/nango-connector";
+import { getNangoStatus } from "@/lib/nango-system";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Instance identity presence determines whether the name step is ready.
 // The setup wizard uses /setup/key, /setup/name, and /setup/ai route segments.

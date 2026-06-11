@@ -14,7 +14,7 @@ import {
   isNangoConfigured,
   removeNangoConnectionRecord,
   saveNangoConnectionRecord,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 
 export type DrupalInstanceSettings = {
   id: string;

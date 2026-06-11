@@ -238,7 +238,6 @@
     "@cinatra-ai/google-oauth-connection": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
-    "@cinatra-ai/nango-connector": "workspace:*",
     "@cinatra-ai/notifications": "workspace:*",
     "@cinatra-ai/permissions": "workspace:*",
     "@cinatra-ai/sdk-dashboard": "workspace:*",

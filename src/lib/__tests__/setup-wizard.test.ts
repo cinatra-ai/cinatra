@@ -20,7 +20,7 @@ vi.mock("@cinatra-ai/openai-connector", () => ({
   isOpenAIConnectionReady: () => false,
   getConfiguredOpenAIConnection: async () => undefined,
 }));
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   getNangoStatus: () => ({ status: "connected" }),
 }));
 vi.mock("@/lib/openai-connection-store", () => ({
