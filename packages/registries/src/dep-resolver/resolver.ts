@@ -1,12 +1,18 @@
 // Pure dependency resolver over Verdaccio packuments. No network I/O here:
-// callers inject a `fetchPackument` implementation. Enforces a configurable scope
-// prefix (dependency-confusion mitigation), caps traversal at 500 nodes / depth 20,
-// and rejects pre-release ranges.
+// callers inject a `fetchPackument` implementation. Enforces a configurable
+// scope-prefix allowlist (dependency-confusion mitigation), caps traversal at
+// 500 nodes / depth 20, and rejects pre-release ranges.
+//
+// The scope allowlist is NOT the root authorization boundary: whether the root
+// package may be installed at all is decided upstream by the marketplace/broker
+// install grant and the caller's authz gates. The allowlist only confines which
+// scopes the resolved tree may pull from (the root's own vendor scope + the
+// first-party base scope — see ../scope.ts).
 //
 // The resolver is package-type agnostic: typeConfig supplies both the allowed
-// scope prefix and the cinatra packument dependency key. `conflictPolicy` controls
-// whether version disagreements are rejected or upgraded when every live consumer
-// range remains satisfied.
+// scope prefixes and the cinatra packument dependency key. `conflictPolicy`
+// controls whether version disagreements are rejected or upgraded when every
+// live consumer range remains satisfied.
 
 import * as semver from "semver";
 import type {
@@ -71,7 +77,22 @@ export async function resolveDependencyTree(input: {
   const maxNodes = input.maxNodes ?? 500;
   const maxDepth = input.maxDepth ?? 20;
   const conflictPolicy = input.conflictPolicy ?? "strict-reject";
-  const { scopePrefix, packumentDepKey } = input.typeConfig;
+  const { scopePrefixes, packumentDepKey } = input.typeConfig;
+
+  // Fail closed on a malformed allowlist: an empty list would reject
+  // everything cryptically, and a prefix that does not look like "@scope/"
+  // signals a caller bug (e.g. a missing trailing slash would let
+  // "@cinatra-ai" admit "@cinatra-ai-evil/x").
+  if (scopePrefixes.length === 0) {
+    throw new Error("typeConfig.scopePrefixes must not be empty");
+  }
+  for (const prefix of scopePrefixes) {
+    if (!/^@[^/@]+\/$/.test(prefix)) {
+      throw new Error(
+        `Malformed scope prefix in typeConfig.scopePrefixes (expected "@scope/"): ${prefix}`,
+      );
+    }
+  }
 
   const resolved = new Map<string, ResolvedNode>();
   // Keep the requested ranges per-node so a second pass can populate the
@@ -101,8 +122,8 @@ export async function resolveDependencyTree(input: {
     const entry = queue.shift()!;
     const { name, range, path, depth } = entry;
 
-    if (!name.startsWith(scopePrefix)) {
-      throw new PluginDependencyScopeError(name, scopePrefix);
+    if (!scopePrefixes.some((prefix) => name.startsWith(prefix))) {
+      throw new PluginDependencyScopeError(name, scopePrefixes);
     }
 
     if (isPrereleaseRange(range)) {

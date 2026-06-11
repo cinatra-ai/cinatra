@@ -25,7 +25,7 @@ import type {
   MarketplaceExtensionInstallAuthorizeOutput,
   MarketplaceMcpClient,
 } from "@cinatra-ai/marketplace-mcp-client";
-import type { VerdaccioConfig } from "@cinatra-ai/registries";
+import { vendorScopeOfPackage, type VerdaccioConfig } from "@cinatra-ai/registries";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { resolveConsumerOrVendorMarketplaceToken } from "@/lib/marketplace-credentials";
 
@@ -78,15 +78,10 @@ export interface GatekeptInstallResolution {
  * Derive the npm scope (e.g. "@cinatra-ai") from a scoped package name. Returns
  * an empty string for an unscoped name (the broker proxy keys on the grant, not
  * the scope; `packageScope` is informational for the install plumbing).
+ * Delegates to the shared registries parser so scope parsing cannot drift.
  */
 function packageScopeFromName(packageName: string): string {
-  if (packageName.startsWith("@")) {
-    const slash = packageName.indexOf("/");
-    if (slash > 0) {
-      return packageName.slice(0, slash);
-    }
-  }
-  return "";
+  return vendorScopeOfPackage(packageName) ?? "";
 }
 
 /**

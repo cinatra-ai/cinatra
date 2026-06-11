@@ -21,13 +21,14 @@ import {
   cleanupForAgent,
 } from "@cinatra-ai/skills";
 import {
+  FIRST_PARTY_PACKAGE_SCOPE,
   InstanceNamespaceNotConfiguredError,
+  vendorScopeOfPackage,
   type VerdaccioConfig,
 } from "@cinatra-ai/registries";
 import type { ExtensionTypeHandler, PackageRef, Actor } from "@cinatra-ai/extension-types";
 // resolveInstallEnvironment routes to the correct registry based on extension origin.
 import { resolveInstallEnvironment } from "@cinatra-ai/extensions/destination-resolver";
-import { readInstanceIdentity } from "@/lib/instance-identity-store";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -156,14 +157,16 @@ async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "pub
         `[resolveInstallEnvironment] No _authToken arg found in install args for ${ref.packageName}`,
       );
     }
-    const extIdentity = readInstanceIdentity();
-    const extVendorName = extIdentity
-      ? ((extIdentity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
-         (extIdentity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace)
-      : undefined;
+    // packageScope is keyed on the PACKAGE BEING INSTALLED, never on the
+    // instance identity: the instance namespace is a publish-time concept, and
+    // keying the install path on it broke first-party installs on any instance
+    // whose namespace isn't "cinatra-ai" (issue #103). The dependency-scope
+    // gate itself derives its allowlist from the root package name inside
+    // installAgentPackageWithDependencies; this field is informational install
+    // plumbing (registryUrl + token carry the actual routing/auth).
     config = {
       registryUrl: installEnv.registryUrl,
-      packageScope: extVendorName ? `@${extVendorName}` : "@cinatra-ai",
+      packageScope: vendorScopeOfPackage(ref.packageName) ?? FIRST_PARTY_PACKAGE_SCOPE,
       token: extToken,
       uiUrl: installEnv.registryUrl,
     };

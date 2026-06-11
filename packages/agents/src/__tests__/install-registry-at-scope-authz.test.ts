@@ -125,9 +125,18 @@ vi.mock("@/lib/background-jobs", () => ({
 vi.mock("@/lib/primitive-handlers", () => ({
   collectAllPrimitiveHandlers: vi.fn(() => []),
 }));
-vi.mock("@cinatra-ai/registries", () => ({
-  InstanceNamespaceNotConfiguredError: class extends Error {},
-}));
+vi.mock("@cinatra-ai/registries", async () => {
+  // Real (pure, dependency-free) vendor-scope helpers — the install action
+  // keys the install config's packageScope on the PACKAGE's own scope, never
+  // on the instance identity (issue #103).
+  const scope = await vi.importActual<typeof import("../../../registries/src/scope")>(
+    "../../../registries/src/scope",
+  );
+  return {
+    ...scope,
+    InstanceNamespaceNotConfiguredError: class extends Error {},
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const destinationResolverMock = vi.hoisted(() => ({
@@ -139,7 +148,9 @@ const destinationResolverMock = vi.hoisted(() => ({
 }));
 vi.mock("@cinatra-ai/extensions/destination-resolver", () => destinationResolverMock);
 
-// Stub instance-identity-store used by installRegistryPackageAtScope.
+// Stub instance-identity-store. The install action no longer reads the
+// instance identity (packageScope is keyed on the package's own scope —
+// issue #103); the stub stays so transitive imports never hit the real DB.
 vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(() => ({ vendorName: "cinatra" })),
 }));

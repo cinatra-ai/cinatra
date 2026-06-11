@@ -8,7 +8,7 @@ import {
 
 const TYPE_CONFIG: PluginTypeConfig = {
   type: "agent",
-  scopePrefix: "@cinatra/",
+  scopePrefixes: ["@cinatra/"],
   packumentDepKey: "agentDependencies",
 };
 

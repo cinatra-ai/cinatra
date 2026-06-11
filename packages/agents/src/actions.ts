@@ -62,7 +62,11 @@ import { derivePublishMetadataFromSnapshot } from "./verdaccio/publish-metadata"
 // InstanceNamespaceNotConfiguredError is the typed signal the loader throws when
 // the instance has no vendor-name set; publishToRegistry catches it and
 // returns a structured failure.
-import { InstanceNamespaceNotConfiguredError } from "@cinatra-ai/registries";
+import {
+  FIRST_PARTY_PACKAGE_SCOPE,
+  InstanceNamespaceNotConfiguredError,
+  vendorScopeOfPackage,
+} from "@cinatra-ai/registries";
 import { readEffectivePublishScopeOverride } from "@/lib/dev-extensions";
 import type { VerdaccioConfig } from "@cinatra-ai/registries";
 // Gated-loader helpers for publish + install destination routing.
@@ -75,7 +79,6 @@ import {
 import {
   updateAgentTemplateOrigin,
 } from "./store";
-import { readInstanceIdentity } from "@/lib/instance-identity-store";
 
 // Accept any valid scoped npm name. Agents share package scopes with platform
 // packages and use their own package.json names as canonical identifiers, so
@@ -759,14 +762,16 @@ export async function installRegistryPackageAtScope(input: {
         `[resolveInstallEnvironment] No _authToken arg found in install args for ${parsed.packageName}`,
       );
     }
-    const installIdentity = readInstanceIdentity();
-    const vendorName = installIdentity
-      ? ((installIdentity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
-         (installIdentity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace)
-      : undefined;
+    // packageScope is keyed on the PACKAGE BEING INSTALLED, never on the
+    // instance identity (a publish-time concept) — instance-keyed install
+    // scoping broke first-party installs on any instance whose namespace
+    // isn't "cinatra-ai" (issue #103). The dependency-scope gate derives its
+    // allowlist from the root package name inside
+    // installAgentPackageWithDependencies; this field is informational
+    // install plumbing (registryUrl + token carry the routing/auth).
     installConfig = {
       registryUrl: installEnv.registryUrl,
-      packageScope: vendorName ? `@${vendorName}` : "@cinatra-ai",
+      packageScope: vendorScopeOfPackage(parsed.packageName) ?? FIRST_PARTY_PACKAGE_SCOPE,
       token,
       uiUrl: installEnv.registryUrl,
     };
@@ -946,14 +951,13 @@ export async function updateRegistryPackage(input: {
         `[resolveInstallEnvironment] No _authToken arg found in update args for ${parsed.packageName}`,
       );
     }
-    const updateIdentity = readInstanceIdentity();
-    const updateVendorName = updateIdentity
-      ? ((updateIdentity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
-         (updateIdentity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace)
-      : undefined;
+    // Same rule as the install path: packageScope is keyed on the PACKAGE
+    // BEING UPDATED, never on the instance identity — updates run through the
+    // same dependency-scope gate and hit the same issue #103 failure when
+    // keyed on the instance namespace.
     updateConfig = {
       registryUrl: updateEnv.registryUrl,
-      packageScope: updateVendorName ? `@${updateVendorName}` : "@cinatra-ai",
+      packageScope: vendorScopeOfPackage(parsed.packageName) ?? FIRST_PARTY_PACKAGE_SCOPE,
       token: updateToken,
       uiUrl: updateEnv.registryUrl,
     };

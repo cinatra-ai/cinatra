@@ -8,6 +8,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   cleanupExtractedAgentPackage,
+  dependencyScopePrefixesFor,
   ensureConfig,
   extractAgentPackage,
   installPackageWithDependencies,
@@ -38,14 +39,6 @@ import {
   type ApprovalPolicy,
 } from "./store";
 import { compileOasAgentJson } from "./oas-compiler";
-// Dev-only publish-scope override propagation. Honor the publish-scope
-// override on the install dep-scope gate too, so a package published under
-// @<override> can be installed on the SAME dev instance (publish/install
-// parity, mirroring the dev-local-Verdaccio destination fallback).
-// readEffectivePublishScopeOverride() returns null unless
-// CINATRA_RUNTIME_MODE === "development", so prod is unchanged (install
-// keeps validating against the instance-namespace scope).
-import { readEffectivePublishScopeOverride } from "@/lib/dev-extensions";
 import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { resolveAgentInstallDir } from "./agent-install-path";
@@ -534,23 +527,20 @@ async function _installAgentPackageWithDependenciesImpl(
   // shell-out can splice these args directly without re-reading config.
   const _installAuthArgs = buildRegistryAuthArgs(resolvedConfig);
   void _installAuthArgs;
-  // Default: validate dependencies against the instance-namespace scope.
-  const defaultScopePrefix = `${resolvedConfig.packageScope}/`;
-  // Dev-only override-aware scope: if a publish-scope override is configured AND
-  // the ROOT package being installed is actually under that override scope, use
-  // the override prefix instead. The root-scope guard keeps instance-scoped
-  // installs on the instance prefix even while an override is set, so we never
-  // widen to two scopes at once and never admit an arbitrary scope (the dep
-  // gate stays a single-prefix allowlist per install). Null outside dev mode.
-  const publishScopeOverride = readEffectivePublishScopeOverride();
-  const overrideScopePrefix = publishScopeOverride ? `@${publishScopeOverride}/` : null;
-  const scopePrefix =
-    overrideScopePrefix && input.packageName.startsWith(overrideScopePrefix)
-      ? overrideScopePrefix
-      : defaultScopePrefix;
+  // Dependency-confusion gate: confine the resolved tree to the ROOT package's
+  // own vendor scope + the first-party base scope. Keying this on the root —
+  // not on the installing instance's namespace (resolvedConfig.packageScope) —
+  // is what lets ANY instance install first-party @cinatra-ai/* packages and
+  // lets a vendor package depend on the first-party base layer (issue #103).
+  // The instance namespace remains a publish-time concept only. Root
+  // authorization (which packages may be installed at all) stays with the
+  // marketplace/broker install grant + the callers' authz gates, which run
+  // before this resolver. This also subsumes the previous dev-only
+  // publish-scope-override branch: a dev-published @<override>/* root is
+  // allowed via its own scope.
   const typeConfig: PluginTypeConfig = {
     type: "agent",
-    scopePrefix,
+    scopePrefixes: dependencyScopePrefixesFor(input.packageName),
     packumentDepKey: "agentDependencies",
   };
   const { tree, results } = await installPackageWithDependencies<string>({
