@@ -33,3 +33,141 @@ the host ABI does not satisfy.
 A Cinatra extension's only permitted `@cinatra-ai/*` **code** dependencies are
 the SDK packages: this package and `@cinatra-ai/sdk-ui` (visual primitives).
 Everything else is reached through a `ctx` port.
+
+## Schema migrations (`cinatra.migrationsDir`)
+
+A **trusted-signed** extension that owns Postgres tables ships **standard
+[node-pg-migrate](https://github.com/salsita/node-pg-migrate) migrations** —
+the same engine, options, and shared ledger the host core uses (cinatra#115/#118).
+The HOST runs them; the extension never receives a DB handle.
+
+### Declaring
+
+Point `cinatra.migrationsDir` at a package-relative directory of migration
+modules:
+
+```jsonc
+{
+  "name": "@acme/crm-connector",
+  "cinatra": {
+    "kind": "connector",
+    "serverEntry": "./register",
+    "migrationsDir": "cinatra/migrations"
+  }
+}
+```
+
+> The pre-#118 declarative JSON-DSL field (`cinatra.migrations`) is **retired**
+> and rejected fail-closed at install, boot, and hot-activate.
+
+The host pins identity before any DDL: the materialized `package.json`'s
+`name` must match the trusted package identity of the install/loader record
+exactly, or the migration preflight refuses the package.
+
+### Naming — the per-source ledger namespace
+
+Every module in the directory must be named
+
+```
+ext_<scope>_<pkg>__NNNN_<short-description>.mjs
+```
+
+- `ext_<scope>_<pkg>__` derives from the package name: `@acme/crm-connector`
+  → `ext_acme_crm-connector__`. The package name MUST be scoped and
+  lowercase kebab-case (`[a-z0-9-]` segments — no underscores or dots);
+  anything else has no derivable namespace and is refused.
+- `NNNN` is a zero-padded, strictly increasing 4-digit sequence (`0001`, …),
+  unique within your package. Shipped migrations are immutable — never
+  renumber, edit, or delete one; supersede it with a new sequence number.
+- `<short-description>` is lowercase `[a-z0-9-]` (hyphens, no underscores),
+  starting with a letter or digit.
+- The host validates **every visible entry** in the directory against this
+  contract — a stray `README.md`, helper module, or subdirectory fails the
+  preflight (dotfiles are ignored). Keep the directory migrations-only.
+- Ledger names are the filenames without `.mjs`, capped at 255 characters,
+  recorded in the host's shared `pgmigrations` ledger alongside `core__…`
+  rows — the namespace is what keeps independently versioned sources from
+  colliding.
+
+### Module shape
+
+A migration is a plain **runtime ESM** module exporting `up(pgm)` and
+`down(pgm)` (node-pg-migrate's `MigrationBuilder`):
+
+```js
+// cinatra/migrations/ext_acme_crm-connector__0001_create-leads.mjs
+/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
+export function up(pgm) {
+  pgm.sql(`CREATE TABLE IF NOT EXISTS ext_acme_crm_connector_leads (
+  org_id text NOT NULL,
+  id text PRIMARY KEY,
+  email text
+);`);
+  pgm.sql(`CREATE INDEX IF NOT EXISTS ext_acme_crm_connector_leads_org_idx
+  ON ext_acme_crm_connector_leads (org_id);`);
+}
+
+/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
+export function down(pgm) {
+  pgm.sql(`DROP TABLE IF EXISTS ext_acme_crm_connector_leads;`);
+}
+```
+
+Rules (the host enforces the mechanical ones; the rest are the contract you
+sign up to by being trusted):
+
+- **Raw SQL via `pgm.sql`** is the default; the full `pgm.*` builder API and
+  arbitrary async work are available. Use `pgm.noTransaction()` for
+  statements that cannot run inside a transaction (e.g.
+  `CREATE INDEX CONCURRENTLY`); otherwise each migration runs in its own
+  transaction.
+- **Unqualified table names** — the runner sets `search_path` to the host
+  app schema.
+- **Safe to re-run** on a schema already at target shape (`IF EXISTS` /
+  `IF NOT EXISTS` guards): branch/clone flows can re-encounter applied
+  states.
+- **Write a real `down()`** (or document why it is irreversible).
+- **Plain runtime ESM only** — no TypeScript, no build step. The host
+  imports the module in-process; relative imports within your package work,
+  but bare-specifier dependencies are NOT guaranteed to resolve (the store
+  does not materialize your `node_modules`) — `pgm` already carries the full
+  builder/SQL surface. No symlinks: the host refuses symlinked migration
+  modules.
+- One migration per concern; append-only.
+
+### When migrations run, and the trust gate
+
+The host applies your chain (always **up**, oldest pending first):
+
+- at **install** — *before* the install is finalized: a failed migration
+  aborts the install (it never becomes trusted/activatable);
+- at **boot** and **hot-activate** — before your `register(ctx)` runs; a
+  failed migration excludes the extension from activation.
+
+Migrations run **only for `trusted-signed` packages** — the same Ed25519
+signature gate that authorizes importing your server code in-process. An
+unsigned or bootstrap-trusted package that declares `migrationsDir` is
+**refused** (install refuses to finalize; the loader refuses to import).
+Workflow-kind packages installed through the workflow path cannot declare
+host migrations at all — ship a `serverEntry` and use the runtime install
+path.
+
+### Responsibility on the shared schema
+
+Your migration is arbitrary SQL on the **shared multi-tenant app schema** —
+the host does not sandbox it (the trust boundary is the signature + review,
+cinatra#118). The contract:
+
+- touch **only your own tables** — prefix them `ext_<scope>_<pkg>_…`;
+- carry **`org_id text NOT NULL`** on every table and filter by it in your
+  queries (host-side tenancy convention);
+- never touch `core` tables, other extensions' tables, or the
+  `pgmigrations` ledger itself.
+
+### Rollback
+
+The host never migrates an extension down. Operators can revert your newest
+ledger rows with
+`cinatra db migrate --down --dir <abs migrations dir> --namespace ext_<scope>_<pkg>__`;
+rolling back is fenced per namespace (your rows only). Prefer shipping a
+superseding forward migration.

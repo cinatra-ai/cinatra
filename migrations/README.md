@@ -90,8 +90,9 @@ here, even when touched in the same pull request:
   (`src/lib/extension-migration-host.ts`) at boot / install / hot-activate.
   Their artifacts live in the extension's own repository — never here — so
   this directory's artifact convention does not apply to them. The authoring
-  contract for extension authors lands in `packages/sdk-extensions/README.md`
-  with cinatra#119.
+  contract for extension authors is documented in
+  [`packages/sdk-extensions/README.md`](../packages/sdk-extensions/README.md)
+  ("Schema migrations").
 
 ## What counts as a migration artifact
 
