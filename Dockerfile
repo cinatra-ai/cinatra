@@ -88,6 +88,11 @@ COPY --from=build /app/public ./public
 #   docker exec <cid> node packages/cli/bin/cinatra.mjs setup prod
 COPY --from=build /app/packages/cli ./packages/cli
 
+# Core schema migrations (node-pg-migrate modules, cinatra#116). The boot pass
+# and `cinatra db migrate` resolve migrations/core/ relative to /app; the
+# node-pg-migrate package itself rides the traced standalone node_modules.
+COPY --from=build /app/migrations ./migrations
+
 # Self-contained Better Auth migration runner (see build stage). The CLI prefers
 # this bundle over the loose .mts when present; without it, `setup prod` on a
 # fresh database cannot resolve better-auth in the standalone image.
