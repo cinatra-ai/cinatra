@@ -2088,6 +2088,33 @@ function installAfterExtensionSync(repoRoot, syncResult, { failHard = false } = 
   }
 }
 
+// Regenerate src/lib/generated/* against the extension tree actually on disk
+// (presence-aware emission: the generator only emits a literal import for a
+// module whose source file exists). Runs after the dev extension sync so the
+// maps can never reference a module the synced set does not ship — the
+// committed maps track the maintainer-synced set and go stale the moment a
+// companion repo's main moves (the cinatra#109/#110 fresh-clone failure
+// class). Loud-but-non-fatal, like the sync itself: a regeneration failure
+// must not abort an otherwise-complete dev setup. Dev-only by call site — the
+// prod path acquires the lock-pinned set, which CI keeps consistent with the
+// committed maps.
+function regenerateExtensionManifest(repoRoot) {
+  console.log("- Regenerating the extension manifest against the on-disk extension set…");
+  const regen = spawnSync(
+    process.execPath,
+    [path.join("scripts", "extensions", "generate-extension-manifest.mjs")],
+    { cwd: repoRoot, stdio: "inherit", env: process.env },
+  );
+  if (regen.status !== 0) {
+    console.error(
+      `\n⚠ Extension-manifest regeneration FAILED (exit ${regen.status}) — the generated maps may reference ` +
+        `modules your synced extensions do not ship. Re-run \`node scripts/extensions/generate-extension-manifest.mjs\` ` +
+        `in ${repoRoot}, then start the app.\n`,
+    );
+    process.exitCode = 1;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Agent skill auto-registration at setup time
 // ---------------------------------------------------------------------------
@@ -2247,6 +2274,15 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       // Re-link the freshly-cloned extensions into the workspace so their host
       // value-imports resolve at `pnpm dev` (guarded no-op on warm checkouts).
       installAfterExtensionSync(repoRoot, extensionSync);
+      // Presence-aware regeneration of the generated extension maps
+      // (cinatra#109/#110): the committed src/lib/generated/* maps are
+      // byte-checked in CI against the synced extension set, but the companion
+      // repos move independently of this tree — a fresh clone can sync
+      // extension mains that drifted past the committed maps, leaving literal
+      // `import("...")` specifiers that no longer resolve (Turbopack
+      // module-not-found on /connectors). Regenerating right after the sync
+      // keeps the maps matching the extension set actually on disk.
+      regenerateExtensionManifest(repoRoot);
       console.log(
         "- Dev auto-setup: local docker Drupal + WordPress will be auto-wired on next `pnpm dev` boot (idempotent; see src/lib/dev-auto-setup.ts).",
       );

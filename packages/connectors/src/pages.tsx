@@ -26,13 +26,13 @@ import "@/lib/connector-readiness.server";
 import { listConnectorRegistryEntries } from "@/lib/connectors-registry.server";
 import { isConnectorVisibleToActor } from "@/lib/connector-policy";
 
+import {
+  resolveReadinessFailSoft,
+  type ReadinessSnapshot,
+} from "./readiness-fail-soft";
+
 type ConnectorsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
-};
-
-type ReadinessSnapshot = {
-  connected: boolean;
-  connectedLabel?: string;
 };
 
 // Scope tag per connector slug. Today, connector "scope" is a
@@ -128,7 +128,11 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
     );
   const cards: ConnectorCardData[] = await Promise.all(
     visibleEntries.map(async (entry) => {
-      const readiness: ReadinessSnapshot = await entry.readinessProbe(readinessContext);
+      // FAIL-SOFT per connector (cinatra#110): one throwing probe degrades its
+      // own card to "not connected" instead of 500-ing the whole index.
+      const readiness: ReadinessSnapshot = await resolveReadinessFailSoft(entry.slug, () =>
+        entry.readinessProbe(readinessContext),
+      );
       // Prefer the extension's own self-describing identity (manifest
       // displayName + sanitized logo data URI) over the static host catalog, so
       // a connector renders its own card. Falls back to the catalog displayName

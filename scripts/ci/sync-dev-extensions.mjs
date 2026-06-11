@@ -1,12 +1,15 @@
 #!/usr/bin/env node
-// CI clone-back for the companion extension repos.
+// Pre-install clone-back for the companion extension repos (CI + `make setup`).
 //
 // The bundled `extensions/<scope>/<name>/` source tree is not committed to this
 // tree — it lives in the companion per-extension
 // repos (cinatra-ai/<slug>). The host build/typecheck and the IoC gates still
 // need that source on disk (tsconfig path aliases, next transpilePackages, and
 // the extension-import-ban inventory scan). This script clones it back BEFORE
-// `pnpm install` in CI.
+// `pnpm install` — in CI and in the dev path of `scripts/setup.sh` — because
+// the root package.json declares `workspace:*` deps on the extension packages,
+// so a fresh clone's install without the tree fails resolution outright
+// (ERR_PNPM_WORKSPACE_PKG_NOT_FOUND; cinatra#109/#110).
 //
 // It is deliberately FOCUSED and pre-install-safe: pure git/fs (reuses
 // `syncCinatraDevExtensions`), no DB / Nango / dev-app work (that's `setup dev`),
