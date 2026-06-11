@@ -117,8 +117,8 @@ export type WorkflowInstallSagaDeps = {
 
   // -- preflight (ALL read from the materialized storeDir) ---------------
   /** Read+compile the BPMN sidecar + dashboard.json from the storeDir, run the
-   *  typed-portlet-registry v1.2 check + the cube guard + the migration
-   *  validate. Throws `WorkflowInstallPreflightError` /
+   *  typed-portlet-registry version check + the cube guard + the migration
+   *  preflight. Throws `WorkflowInstallPreflightError` /
    *  `WorkflowInstallRequiresRebuildError` on any fail-closed verdict. */
   preflightFromStore: (input: { storeDir: string; packageName: string; version?: string }) => Promise<WorkflowInstallPreflightResult>;
 
