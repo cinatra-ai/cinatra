@@ -134,7 +134,7 @@ describe("core__0004 demotion artifact shape (no DB needed)", () => {
     for (const sys of systemNames) expect(DEMOTED_PACKAGES).not.toContain(sys);
   });
 
-  it("up() demotes flag+lock only for required rows of the frozen list; down() re-promotes without force-locking", () => {
+  it("up() demotes flag+lock only for required rows of the frozen list; down() re-promotes and re-locks live rows", () => {
     const [upSql] = migrationStatements(demoteUp);
     expect(upSql).toContain("required_in_prod = false");
     expect(upSql).toContain("WHEN status = 'locked' THEN 'active'");
