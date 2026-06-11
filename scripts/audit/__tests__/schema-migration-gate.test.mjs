@@ -515,6 +515,44 @@ test("runGate fails a tamper-only diff (no destructive schema change required)",
   assert.ok(r.artifact.integrity.length > 0);
 });
 
+test("artifact: a manifest-only rewrite (no module in the diff) is an integrity failure", () => {
+  const r = runGate({
+    diffText: fullReplaceDiff(
+      MIGRATION_MANIFEST_PATH,
+      BASE_MANIFEST,
+      manifestWith([{ ...ENTRY_0001, summary: "REWRITTEN" }]),
+    ),
+    readBaseFile: readBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.artifact.integrity.some((p) => p.includes("append-only")), r.artifact.integrity.join("; "));
+
+  const deleted = runGate({
+    diffText: fullReplaceDiff(MIGRATION_MANIFEST_PATH, BASE_MANIFEST, null),
+    readBaseFile: readBase,
+  });
+  assert.equal(deleted.verdict, "fail");
+  assert.ok(deleted.artifact.integrity.some((p) => p.includes("never be deleted")), deleted.artifact.integrity.join("; "));
+});
+
+test("artifact: renaming a shipped artifact OUT of migrations/ is an integrity failure", () => {
+  const renameOut =
+    "diff --git a/migrations/core/core__0001_first.mjs b/docs/core__0001_first.mjs\n" +
+    "similarity index 100%\n" +
+    "rename from migrations/core/core__0001_first.mjs\n" +
+    "rename to docs/core__0001_first.mjs\n";
+  const a = detectMigrationArtifact(parseUnifiedDiff(renameOut), readBase);
+  assert.ok(a.integrity.some((p) => p.includes("renamed or moved")), a.integrity.join("; "));
+
+  const sqlRenameOut =
+    "diff --git a/migrations/0001_first.sql b/archive/0001_first.sql\n" +
+    "similarity index 100%\n" +
+    "rename from migrations/0001_first.sql\n" +
+    "rename to archive/0001_first.sql\n";
+  const b = detectMigrationArtifact(parseUnifiedDiff(sqlRenameOut), readBase);
+  assert.ok(b.integrity.some((p) => p.includes("renamed or moved")), b.integrity.join("; "));
+});
+
 test("artifact: a runner-form backfill of an already-shipped seq needs no manifest entry (and is not a new artifact)", () => {
   // seq 0001 already exists in the base manifest (the legacy artifact);
   // adding core/core__0001_first.mjs is the wrapper-backfill case from
