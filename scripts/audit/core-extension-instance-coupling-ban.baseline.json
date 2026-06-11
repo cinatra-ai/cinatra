@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 78,
-      "keys": 124,
-      "occurrences": 161
+      "files": 72,
+      "keys": 116,
+      "occurrences": 152
     },
     "mechanical": {
       "files": 0,
@@ -111,16 +111,10 @@
     "src/lib/blog-idea-artifact-materializer.ts :: package :: @cinatra-ai/blog-idea-artifact": 1,
     "src/lib/blog-image-materializer.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
     "src/lib/blog-post-artifact-materializer.ts :: package :: @cinatra-ai/blog-post-artifact": 1,
-    "src/lib/blog-project-store.ts :: package :: @cinatra-ai/blog-connector": 1,
     "src/lib/blog/dashboard-url.ts :: package :: @cinatra-ai/blog-content-workflow": 1,
-    "src/lib/blog/generation.ts :: package :: @cinatra-ai/blog-connector": 1,
     "src/lib/blog/generation.ts :: package :: @cinatra-ai/blog-pipeline-agent": 3,
-    "src/lib/blog/generation.ts :: package :: @cinatra-ai/social-media-connector": 1,
-    "src/lib/blog/index.ts :: package :: @cinatra-ai/blog-connector": 2,
-    "src/lib/blog/mcp/handlers.ts :: package :: @cinatra-ai/blog-connector": 1,
     "src/lib/blog/mcp/registry.ts :: package :: @cinatra-ai/blog-linkedin-publish-agent": 1,
     "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
-    "src/lib/blog/wordpress.ts :: package :: @cinatra-ai/blog-connector": 1,
     "src/lib/dev-auto-setup.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/drupal-api.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/host-required-packages.ts :: package :: @cinatra-ai/openai-connector": 1,
@@ -135,8 +129,6 @@
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 1,
     "src/lib/registry-credentials.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/setup-wizard.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "src/lib/trigger-email-send-use-cases.ts :: package :: @cinatra-ai/email-connector": 1,
-    "src/lib/types.ts :: package :: @cinatra-ai/email-connector": 1
+    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/openai-connector": 1
   }
 }

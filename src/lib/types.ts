@@ -145,11 +145,13 @@ export type AnthropicConnection = {
   lastValidatedAt?: string;
 };
 
-// Generic email transport types live in the types-only
-// `@cinatra-ai/email-connector` package so workspace packages (which can't
-// reach `@/` aliases) can consume them. Re-exported here as a back-compat
-// shim so existing `@/lib/types` importers continue to work without churn.
-// `EmailConnectorId` is provider-neutral (`string`) in the contract package.
+// Generic email transport types live in the SDK
+// (`@cinatra-ai/sdk-extensions`, the provider-neutral email contract — the
+// email-connector facade re-exports the same types). Re-exported here as a
+// back-compat shim so existing `@/lib/types` importers continue to work
+// without churn — and so HOST code carries no type edge on the connector
+// package (type imports count toward the required-extensions cover gate).
+// `EmailConnectorId` is provider-neutral (`string`) in the contract.
 // `EmailConnectorStatus` stays here (host-side enum used by
 // `InstalledEmailConnectorStatus` UI).
 export type {
@@ -157,7 +159,7 @@ export type {
   EmailSystemMessage,
   EmailSendReceipt,
   EmailReplyMatch,
-} from "@cinatra-ai/email-connector";
+} from "@cinatra-ai/sdk-extensions";
 
 export type EmailConnectorStatus = "connected" | "incomplete" | "not_connected";
 

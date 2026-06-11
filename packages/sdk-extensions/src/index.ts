@@ -335,6 +335,9 @@ export {
   CRM_SYNC_BOOTSTRAP_CAPABILITY,
   CRM_POINTER_WRITER_CAPABILITY,
   DEV_TUNNEL_STATUS_CAPABILITY,
+  BLOG_SYSTEM_CAPABILITY,
+  SOCIAL_MEDIA_SYSTEM_CAPABILITY,
+  EMAIL_SYSTEM_CAPABILITY,
 } from "./host-connector-services-contract";
 export type {
   HostConnectorConfigService,
@@ -354,6 +357,15 @@ export type {
   CrmPointerWritePayload,
   CrmPointerWriterProvider,
   DevTunnelStatusProvider,
+  HostBlogProjectSummary,
+  HostBlogProjectStore,
+  BlogImageMaterializeInputShape,
+  BlogImageMaterializeResultShape,
+  WordPressContentConverterInputShape,
+  WordPressContentConverterOutputShape,
+  BlogSystemProvider,
+  SocialMediaSystemProvider,
+  EmailSystemProvider,
 } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat

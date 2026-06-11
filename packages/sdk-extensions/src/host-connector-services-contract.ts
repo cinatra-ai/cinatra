@@ -28,6 +28,12 @@
 
 import type { ObjectsProvider } from "./objects-provider-contract";
 import type { CrmConnector } from "./crm-connector-contract";
+import type { BlogDraftBuildInput, BlogDraftPayload } from "./blog-connector-contract";
+import type {
+  SocialMediaPost,
+  SocialMediaPublishReceipt,
+} from "./social-media-connector-contract";
+import type { EmailSystemMessage, EmailSendReceipt } from "./email-connector-contract";
 
 /** Capability ids the HOST registers per-concern service impls under. The
  * `@cinatra-ai/host:` prefix is reserved for host-provided services (it is not
@@ -278,4 +284,106 @@ export const DEV_TUNNEL_STATUS_CAPABILITY = "dev-tunnel-status";
 export type DevTunnelStatusProvider = {
   getConnectionStatus(): { connected: boolean };
   getFunnelUrlPreview(): string | null;
+};
+
+/** Blog project summary the host's project store exposes to the blog facade. */
+export type HostBlogProjectSummary = {
+  id: string;
+  name: string;
+  companyUrl: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * The host-side blog project store the host injects behind
+ * `HOST_CONNECTOR_SERVICE_CAPABILITIES.blogRouting` (`projectStore`).
+ * Structurally identical to the blog facade's own `BlogProjectStore` interface
+ * — kept as an SDK type so HOST code never type-imports the facade package
+ * (type imports count toward the required-extensions cover gate).
+ */
+export type HostBlogProjectStore = {
+  listProjects(): Promise<HostBlogProjectSummary[]>;
+  getProject(projectId: string): Promise<HostBlogProjectSummary | null>;
+  updatePostImageArtifactRefs(input: {
+    projectId: string;
+    postId: string;
+    imageArtifactId?: string;
+    imageRepresentationRevisionId?: string;
+    imagePrompt?: string;
+  }): Promise<void>;
+};
+
+/** Input/result of the blog facade's image materialization (structural). */
+export type BlogImageMaterializeInputShape = {
+  imageBase64: string;
+  imageMimeType: string;
+  title?: string;
+  createdByRunId?: string | null;
+};
+export type BlogImageMaterializeResultShape = {
+  artifactId: string;
+  representationRevisionId: string;
+};
+
+/** WordPress content-converter shapes (the dormant convert primitive). */
+export type WordPressContentConverterInputShape = {
+  wordpressInstanceId: string;
+  title: string;
+  excerpt: string;
+  content: string;
+};
+export type WordPressContentConverterOutputShape = {
+  title?: string;
+  excerpt?: string;
+  content: string;
+  contentIsHtml?: boolean;
+};
+
+/**
+ * The blog facade surface the blog-connector registers for HOST consumers
+ * (src/lib/blog/*): draft-payload build, image materialization, and the
+ * legacy WP content-converter lookup. Absence degrades the host's blog
+ * features per call.
+ */
+export const BLOG_SYSTEM_CAPABILITY = "blog-system";
+export type BlogSystemProvider = {
+  buildDraftPayload(
+    input: BlogDraftBuildInput,
+    opts?: { connectorId?: string; instanceBlogConnectorId?: string },
+  ): Promise<BlogDraftPayload>;
+  materializeBlogImage(
+    input: BlogImageMaterializeInputShape,
+  ): Promise<BlogImageMaterializeResultShape>;
+  getWordPressContentConverter(
+    wordpressInstanceId: string,
+  ):
+    | ((input: WordPressContentConverterInputShape) => Promise<WordPressContentConverterOutputShape>)
+    | null;
+};
+
+/**
+ * The provider-neutral social-media publish facade the social-media-connector
+ * registers for HOST consumers (the blog LinkedIn publish step today).
+ */
+export const SOCIAL_MEDIA_SYSTEM_CAPABILITY = "social-media-system";
+export type SocialMediaSystemProvider = {
+  publishPost(
+    post: SocialMediaPost,
+    opts?: { connectorId?: string; userId?: string; orgId?: string },
+  ): Promise<SocialMediaPublishReceipt>;
+};
+
+/**
+ * The provider-neutral email send facade the email-connector registers for
+ * HOST consumers (the trigger email-send path today). Routing chain +
+ * dev-mode recipient override live connector-side, exactly as the facade
+ * the host previously dynamic-imported.
+ */
+export const EMAIL_SYSTEM_CAPABILITY = "email-system";
+export type EmailSystemProvider = {
+  sendEmail(
+    message: EmailSystemMessage,
+    opts?: { connectorId?: string; userId?: string; orgId?: string; senderIdentityId?: string },
+  ): Promise<EmailSendReceipt>;
 };
