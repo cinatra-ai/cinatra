@@ -28,6 +28,10 @@ import {
   GENERATED_EXTENSION_SERVER_ENTRIES,
 } from "@/lib/generated/extensions.server";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
+import {
+  ExtensionModuleAbsentError,
+  isDegradedExtensionLoad,
+} from "@/lib/extension-load-guard";
 
 /**
  * Split-brain guard — the StaticBundleLoader lifecycle gate, now a STRICT
@@ -123,7 +127,23 @@ export async function loadStaticBundleExtensions(): Promise<ActivationResult[]> 
   }
 
   return runStaticBundleActivation(records, {
-    importServerEntry: (packageName) => GENERATED_EXTENSION_SERVER_ENTRIES[packageName]?.(),
+    // A `guardedOptional` server entry whose module is absent post-build
+    // resolves the standardized degraded result — convert it to a THROWN
+    // typed error so the shared driver records a failure-isolated
+    // per-extension ActivationResult ("failed"/"register-threw") instead of
+    // normalizing a degraded sentinel as an entry-less module. Required
+    // entries are emitted UNGUARDED, so their absence throws natively and the
+    // post-boot required-set assertion keeps its loud contract (cinatra#7).
+    importServerEntry: (packageName) => {
+      const entry = GENERATED_EXTENSION_SERVER_ENTRIES[packageName];
+      if (!entry) return undefined;
+      return entry.load().then((ns) => {
+        if (isDegradedExtensionLoad(ns)) {
+          throw new ExtensionModuleAbsentError(ns.specifier, ns.reason);
+        }
+        return ns;
+      });
+    },
     // grantedPorts is passed straight through by the loader from each record's
     // requestedHostPorts — no side-map needed. Each ctx exposes only those ports.
     makeContext: (packageName, grantedPorts) => createExtensionHostContext(packageName, grantedPorts),

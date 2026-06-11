@@ -27,11 +27,51 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
 
   it("GENERATED_MANIFEST_FILES pins the exact emitted set (it is also the coupling gates' permanent-exempt list)", () => {
     expect([...GENERATED_MANIFEST_FILES].sort()).toEqual([
+      "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
       "src/lib/generated/widget-stream-public-paths.ts",
     ]);
+  });
+});
+
+describe("generator-owned resolution classification + guarded emission (cinatra#7)", () => {
+  // Real-tree assertions (the cloned-back extension universe): the
+  // classification is keyed EXCLUSIVELY on the host-owned
+  // cinatra.systemExtensions declaration — never on requiredExtensions and
+  // never inferred from source shape.
+  it("classifies every record: systemExtensions ⇒ required, everything else ⇒ guardedOptional", async () => {
+    const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const { readFileSync } = await import("node:fs");
+    const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    const systemSet = new Set(rootPkg.cinatra.systemExtensions);
+    const { records } = await buildManifest();
+    expect(records.length).toBeGreaterThan(0);
+    for (const r of records) {
+      expect(["required", "guardedOptional"], r.packageName).toContain(r.resolution);
+      expect(r.resolution, r.packageName).toBe(systemSet.has(r.packageName) ? "required" : "guardedOptional");
+    }
+  });
+
+  it("every derived loader list carries the owning record's resolution", async () => {
+    const m = await buildManifest();
+    const byName = new Map(m.records.map((r) => [r.packageName, r.resolution]));
+    const lists = [
+      m.connectorSetupPages,
+      m.connectorSettingsPages,
+      m.connectorEntryModules,
+      m.connectorMcpModules,
+      m.connectorPrimitiveHandlers,
+      m.externalMcpToolboxes,
+      m.widgetStreamAgents,
+      m.chatWidgetModules,
+    ];
+    for (const list of lists) {
+      for (const entry of list) {
+        expect(entry.resolution, entry.packageName).toBe(byName.get(entry.packageName));
+      }
+    }
   });
 });
 

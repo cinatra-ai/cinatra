@@ -41,6 +41,7 @@ import {
   STATIC_EXTENSION_MANIFEST,
 } from "@/lib/generated/extensions.server";
 import { gateStaticRecordsToLiveRows } from "@/lib/static-bundle-loader";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 
 export type ChatWidgetCatalog = {
   widgets: WidgetDefinition[];
@@ -227,27 +228,41 @@ async function liveChatWidgetPackages(): Promise<string[]> {
  * status is re-read per call so an archive is reflected on the next chat turn.
  */
 export async function resolveChatWidgetManifests(): Promise<WidgetManifest[]> {
-  const packages = await liveChatWidgetPackages();
-  const manifests = await Promise.all(
-    packages.map(async (packageName) => {
-      const ns = (await GENERATED_CHAT_WIDGET_MANIFEST_MODULES[packageName]()) as Record<
-        string,
-        unknown
-      >;
-      return pickChatWidgetManifest(ns, `${packageName} widgets/manifest`);
+  const packageNames = await liveChatWidgetPackages();
+  const loaded = await Promise.all(
+    packageNames.map(async (packageName) => {
+      const ns = await GENERATED_CHAT_WIDGET_MANIFEST_MODULES[packageName].load();
+      if (isDegradedExtensionLoad(ns)) {
+        // cinatra#7: an absent optional widget package degrades to "no
+        // widgets from this package" per entry (loud warn), never a crashed
+        // chat surface.
+        console.warn(
+          `[chat-widget-catalog] widget manifest module for "${packageName}" is absent post-build — ` +
+            `skipping (${ns.reason})`,
+        );
+        return null;
+      }
+      return {
+        packageName,
+        manifest: pickChatWidgetManifest(
+          ns as Record<string, unknown>,
+          `${packageName} widgets/manifest`,
+        ),
+      };
     }),
   );
+  const present = loaded.filter((p): p is NonNullable<typeof p> => p !== null);
   const seen = new Map<string, string>();
-  manifests.forEach((m, i) => {
-    const prev = seen.get(m.id);
+  for (const { packageName, manifest } of present) {
+    const prev = seen.get(manifest.id);
     if (prev) {
       throw new Error(
-        `[chat-widget-catalog] duplicate widget-manifest id "${m.id}" (${prev} and ${packages[i]})`,
+        `[chat-widget-catalog] duplicate widget-manifest id "${manifest.id}" (${prev} and ${packageName})`,
       );
     }
-    seen.set(m.id, packages[i]);
-  });
-  return manifests;
+    seen.set(manifest.id, packageName);
+  }
+  return present.map((p) => p.manifest);
 }
 
 /**
@@ -257,21 +272,35 @@ export async function resolveChatWidgetManifests(): Promise<WidgetManifest[]> {
  */
 export async function resolveChatWidgetCatalog(): Promise<ChatWidgetCatalog> {
   const packageNames = await liveChatWidgetPackages();
-  const packages = await Promise.all(
+  const loaded = await Promise.all(
     packageNames.map(async (packageName) => {
       const [widgetNs, manifestNs] = await Promise.all([
-        GENERATED_CHAT_WIDGET_MODULES[packageName]() as Promise<Record<string, unknown>>,
-        GENERATED_CHAT_WIDGET_MANIFEST_MODULES[packageName]() as Promise<
-          Record<string, unknown>
-        >,
+        GENERATED_CHAT_WIDGET_MODULES[packageName].load(),
+        GENERATED_CHAT_WIDGET_MANIFEST_MODULES[packageName].load(),
       ]);
+      if (isDegradedExtensionLoad(widgetNs) || isDegradedExtensionLoad(manifestNs)) {
+        // cinatra#7: absent optional widget package — degrade per entry.
+        const degraded = isDegradedExtensionLoad(widgetNs) ? widgetNs : (manifestNs as never);
+        console.warn(
+          `[chat-widget-catalog] widget module(s) for "${packageName}" are absent post-build — ` +
+            `skipping (${(degraded as { reason: string }).reason})`,
+        );
+        return null;
+      }
       return {
         packageName,
-        widgets: pickChatWidgetDefinitions(widgetNs, `${packageName} widgets`),
-        manifest: pickChatWidgetManifest(manifestNs, `${packageName} widgets/manifest`),
+        widgets: pickChatWidgetDefinitions(
+          widgetNs as Record<string, unknown>,
+          `${packageName} widgets`,
+        ),
+        manifest: pickChatWidgetManifest(
+          manifestNs as Record<string, unknown>,
+          `${packageName} widgets/manifest`,
+        ),
       };
     }),
   );
+  const packages = loaded.filter((p): p is NonNullable<typeof p> => p !== null);
   assertChatWidgetCatalogInvariants(packages);
   return {
     widgets: packages.flatMap((p) => p.widgets),

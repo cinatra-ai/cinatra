@@ -27,9 +27,18 @@ export async function getAPIPluginPage(slug: string): Promise<APIPluginPageCompo
   };
   const loadSettingsModule = async <T,>(connectorSlug: string): Promise<T | null> => {
     const { getConnectorSettingsPageLoader } = await import("@/lib/connector-setup-pages");
+    const { isDegradedExtensionLoad } = await import("@/lib/extension-load-guard");
     const loader = getConnectorSettingsPageLoader(connectorSlug);
     if (!loader) return null;
-    return (await loader()) as T;
+    const ns = await loader();
+    if (isDegradedExtensionLoad(ns)) {
+      // cinatra#7: absent optional settings module — degrade to "no page".
+      console.warn(
+        `[plugins-registry] settings module for "${connectorSlug}" is absent post-build — skipping (${ns.reason})`,
+      );
+      return null;
+    }
+    return ns as T;
   };
 
   switch (slug) {

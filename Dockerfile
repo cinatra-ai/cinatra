@@ -39,6 +39,20 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
+# Presence-aware map regeneration (cinatra#7). `COPY . .` restored the
+# COMMITTED src/lib/generated/* maps — the dev/CI-canonical artifact generated
+# against the full clone-back extension universe. THIS image's presence
+# universe is the lock-acquired required set (the acquire step above), so the
+# maps are regenerated here against the extension tree actually in the image:
+# `next build` can then never compile a literal import the acquired set does
+# not ship (the #109/#110 fresh-clone failure class, structurally removed for
+# the image surface). The follow-up `--check --self` is the NON-CANONICAL
+# self-check mode: it verifies the regenerated output + catalog parity for
+# THIS tree and deliberately never binds the committed maps. Both steps fail
+# the image build loudly on any error (fail-closed).
+RUN node scripts/extensions/generate-extension-manifest.mjs \
+ && node scripts/extensions/generate-extension-manifest.mjs --check --self
+
 # Bundle the Better Auth migration runner into a SELF-CONTAINED .mjs (better-auth
 # + pg + the shared plugin factory inlined). The Next standalone runtime image
 # only ships server-traced node_modules, which excludes better-auth (used by the

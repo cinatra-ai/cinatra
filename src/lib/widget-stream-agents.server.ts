@@ -20,6 +20,10 @@ import {
   GENERATED_WIDGET_STREAM_AGENTS,
   type GeneratedWidgetStreamAgentEntry,
 } from "@/lib/generated/extensions.server";
+import {
+  ExtensionModuleAbsentError,
+  isDegradedExtensionLoad,
+} from "@/lib/extension-load-guard";
 
 export type WidgetStreamAgent = GeneratedWidgetStreamAgentEntry;
 
@@ -39,7 +43,14 @@ export async function buildWidgetChatTool(
   entry: WidgetStreamAgent,
   context: Record<string, unknown>,
 ): Promise<LlmFunctionTool> {
-  const ns = (await entry.load()) as Record<string, unknown>;
+  const loaded = await entry.load();
+  if (isDegradedExtensionLoad(loaded)) {
+    // cinatra#7: an absent optional widget-chat-tool module throws the
+    // TYPED absent error — the stream route catches it and responds with a
+    // defined degraded status (not a generic 500).
+    throw new ExtensionModuleAbsentError(loaded.specifier, loaded.reason);
+  }
+  const ns = loaded as Record<string, unknown>;
   const factory = ns[entry.factory];
   if (typeof factory !== "function") {
     throw new Error(

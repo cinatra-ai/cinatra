@@ -9,6 +9,12 @@ import {
   type GeneratedPageLoader,
 } from "@/lib/generated/connector-setup-pages";
 
+// Page-map entries carry the generator-owned `resolution` classification
+// (cinatra#7); a guardedOptional page loader RESOLVES the standardized
+// degraded result (src/lib/extension-load-guard.ts) when its module is absent
+// post-build — the dispatch route detects it (isDegradedExtensionLoad) and
+// renders its existing "requires rebuild" state.
+
 export type ConnectorSetupPageProps = {
   packageId: string;
   slug: string;
@@ -45,7 +51,7 @@ export type ConnectorSettingsPageLoader = GeneratedPageLoader;
 export function getConnectorSetupPageLoader(
   slug: string,
 ): ConnectorSetupPageLoader | null {
-  return (GENERATED_CONNECTOR_SETUP_PAGES[slug] as ConnectorSetupPageLoader | undefined) ?? null;
+  return (GENERATED_CONNECTOR_SETUP_PAGES[slug]?.load as ConnectorSetupPageLoader | undefined) ?? null;
 }
 
 /**
@@ -79,7 +85,7 @@ export function listConnectorSetupPageSlugs(): string[] {
 export function getConnectorSettingsPageLoader(
   slug: string,
 ): ConnectorSettingsPageLoader | null {
-  return GENERATED_CONNECTOR_SETTINGS_PAGES[slug] ?? null;
+  return GENERATED_CONNECTOR_SETTINGS_PAGES[slug]?.load ?? null;
 }
 
 export function hasConnectorSettingsPage(slug: string): boolean {

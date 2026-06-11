@@ -22,4 +22,9 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   "src/lib/generated/connector-setup-pages.ts",
   "src/lib/generated/extensions.client.tsx",
   "src/lib/generated/widget-stream-public-paths.ts",
+  // The generated guarded-optional-loaders test (cinatra#7). A test file
+  // is ALREADY exempt from the coupling gates by path (__tests__), so listing
+  // it here adds no exemption surface — it puts the file under the same
+  // fail-closed `--check` byte-exact integrity pin as the maps it asserts.
+  "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
 ]);

@@ -150,7 +150,18 @@ epic's scope and tracked elsewhere:
   (cinatra-ai/cinatra#7): making these imports lazy/guarded and the generated
   maps presence-aware so `requiredExtensions` can shrink from the 33-package
   bootable set toward the ~8 true system packages. Explicitly out of epic
-  #24's scope (its scope boundary says so).
+  #24's scope (its scope boundary says so). Plan B's presence-aware
+  generated-maps slice is LANDED: the generated tree now carries generator-owned
+  `resolution: "required" | "guardedOptional"` metadata on every loader
+  entry (keyed on `cinatra.systemExtensions`; missing/unknown counts as
+  required, fail-closed), guardedOptional loaders route through the
+  standardized degraded-result guard (`src/lib/extension-load-guard.ts`),
+  and the maps are regenerated at every consuming surface (`make setup`
+  dev path + the prod image build stage, with `--check --self` as the
+  non-canonical self-check mode). Floors UNCHANGED by that slice (enabler; the
+  generated tree is the exempt class). The 41-edge value-import floor is
+  the lazy/guarded host-access slice's target; the dep drop + 33→8 shrink follows it, keyed EXCLUSIVELY
+  on the emitted `resolution` metadata.
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed

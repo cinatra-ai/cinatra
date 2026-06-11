@@ -11,6 +11,7 @@ import "server-only";
 // package-name coupling.
 
 import { GENERATED_CONNECTOR_ENTRY_MODULES } from "@/lib/generated/extensions.server";
+import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
 
 /**
  * Whether the manifest carries an entry-module loader for this connector slug.
@@ -22,13 +23,24 @@ export function hasConnectorModule(slug: string): boolean {
 /**
  * Load a bundled connector's root server module by slug, or `null` when the
  * manifest has no entry-module loader for the slug (connector not bundled in
- * this image). A loader that EXISTS but fails to import throws — a broken
- * bundled module must fail loudly, exactly like the static import it replaces.
+ * this image). A BROKEN present module still fails loudly, exactly like the
+ * static import it replaces — but a `guardedOptional` entry whose target
+ * module is ABSENT post-build (marketplace uninstall) resolves the
+ * standardized degraded result and degrades to the same `null` as "not
+ * bundled in this image" (cinatra#7).
  */
 export async function loadConnectorModule<T>(slug: string): Promise<T | null> {
-  const loader = GENERATED_CONNECTOR_ENTRY_MODULES[slug];
-  if (!loader) return null;
-  return (await loader()) as T;
+  const entry = GENERATED_CONNECTOR_ENTRY_MODULES[slug];
+  if (!entry) return null;
+  const ns = await entry.load();
+  if (isDegradedExtensionLoad(ns)) {
+    console.warn(
+      `[connector-modules] bundled entry module for "${slug}" is absent post-build — ` +
+        `degrading to "not bundled" (${ns.reason})`,
+    );
+    return null;
+  }
+  return ns as T;
 }
 
 /**

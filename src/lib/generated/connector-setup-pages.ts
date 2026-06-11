@@ -6,42 +6,53 @@
 // remains the registration source for filesystem-loaded extension kinds;
 // parity is checked against the connector catalog descriptors.
 import "server-only";
+import { guardedExtensionImport } from "../extension-load-guard";
+import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";
 
 // Literal dynamic-import maps (Turbopack rejects computed import templates).
 // Consumed by src/lib/connector-setup-pages.ts as the loader source of truth.
+// Each entry carries the generator-owned presence classification
+// (resolution; see src/lib/extension-load-guard.ts) — guardedOptional page
+// loaders resolve a standardized degraded result on post-build absence,
+// which the dispatch surface renders as its "requires rebuild" state.
 export type GeneratedPageLoader = () => Promise<unknown>;
 
-export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageLoader> = {
-  "a2a-server-connector": () => import("@cinatra-ai/a2a-server-connector/setup-page"),
-  "anthropic-connector": () => import("@cinatra-ai/anthropic-connector/setup-page"),
-  "apify-connector": () => import("@cinatra-ai/apify-connector/setup-page"),
-  "apollo-connector": () => import("@cinatra-ai/apollo-connector/setup-page"),
-  "drupal-assistant-connector": () => import("@cinatra-ai/drupal-assistant-connector/setup-page"),
-  "drupal-mcp-connector": () => import("@cinatra-ai/drupal-mcp-connector/setup-page"),
-  "gemini-connector": () => import("@cinatra-ai/gemini-connector/setup-page"),
-  "github-connector": () => import("@cinatra-ai/github-connector/setup-page"),
-  "gmail-connector": () => import("@cinatra-ai/gmail-connector/setup-page"),
-  "google-calendar-connector": () => import("@cinatra-ai/google-calendar-connector/setup-page"),
-  "google-oauth-connector": () => import("@cinatra-ai/google-oauth-connector/setup-page"),
-  "linkedin-connector": () => import("@cinatra-ai/linkedin-connector/setup-page"),
-  "mcp-client-connector": () => import("@cinatra-ai/mcp-client-connector/setup-page"),
-  "openai-connector": () => import("@cinatra-ai/openai-connector/setup-page"),
-  "tailscale-connector": () => import("@cinatra-ai/tailscale-connector/setup-page"),
-  "twenty-connector": () => import("@cinatra-ai/twenty-connector/setup-page"),
-  "wordpress-assistant-connector": () => import("@cinatra-ai/wordpress-assistant-connector/setup-page"),
-  "wordpress-mcp-connector": () => import("@cinatra-ai/wordpress-mcp-connector/setup-page"),
-  "youtube-connector": () => import("@cinatra-ai/youtube-connector/setup-page"),
+export type GeneratedPageEntry = {
+  resolution: ExtensionResolution;
+  load: GeneratedPageLoader;
 };
 
-export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageLoader> = {
-  "anthropic-connector": () => import("@cinatra-ai/anthropic-connector/settings-page"),
-  "apollo-connector": () => import("@cinatra-ai/apollo-connector/settings-page"),
-  "drupal-assistant-connector": () => import("@cinatra-ai/drupal-assistant-connector/settings-page"),
-  "drupal-mcp-connector": () => import("@cinatra-ai/drupal-mcp-connector/settings-page"),
-  "github-connector": () => import("@cinatra-ai/github-connector/settings-page"),
-  "linkedin-connector": () => import("@cinatra-ai/linkedin-connector/settings-page"),
-  "openai-connector": () => import("@cinatra-ai/openai-connector/settings-page"),
-  "wordpress-assistant-connector": () => import("@cinatra-ai/wordpress-assistant-connector/settings-page"),
-  "wordpress-mcp-connector": () => import("@cinatra-ai/wordpress-mcp-connector/settings-page"),
-  "youtube-connector": () => import("@cinatra-ai/youtube-connector/settings-page"),
+export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry> = {
+  "a2a-server-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/a2a-server-connector/setup-page", () => import("@cinatra-ai/a2a-server-connector/setup-page")) },
+  "anthropic-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/anthropic-connector/setup-page", () => import("@cinatra-ai/anthropic-connector/setup-page")) },
+  "apify-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apify-connector/setup-page", () => import("@cinatra-ai/apify-connector/setup-page")) },
+  "apollo-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apollo-connector/setup-page", () => import("@cinatra-ai/apollo-connector/setup-page")) },
+  "drupal-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-assistant-connector/setup-page", () => import("@cinatra-ai/drupal-assistant-connector/setup-page")) },
+  "drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/setup-page", () => import("@cinatra-ai/drupal-mcp-connector/setup-page")) },
+  "gemini-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/gemini-connector/setup-page", () => import("@cinatra-ai/gemini-connector/setup-page")) },
+  "github-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/github-connector/setup-page", () => import("@cinatra-ai/github-connector/setup-page")) },
+  "gmail-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/gmail-connector/setup-page", () => import("@cinatra-ai/gmail-connector/setup-page")) },
+  "google-calendar-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/google-calendar-connector/setup-page", () => import("@cinatra-ai/google-calendar-connector/setup-page")) },
+  "google-oauth-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/google-oauth-connector/setup-page", () => import("@cinatra-ai/google-oauth-connector/setup-page")) },
+  "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/setup-page", () => import("@cinatra-ai/linkedin-connector/setup-page")) },
+  "mcp-client-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/mcp-client-connector/setup-page", () => import("@cinatra-ai/mcp-client-connector/setup-page")) },
+  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/setup-page", () => import("@cinatra-ai/openai-connector/setup-page")) },
+  "tailscale-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/tailscale-connector/setup-page", () => import("@cinatra-ai/tailscale-connector/setup-page")) },
+  "twenty-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/twenty-connector/setup-page", () => import("@cinatra-ai/twenty-connector/setup-page")) },
+  "wordpress-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-assistant-connector/setup-page", () => import("@cinatra-ai/wordpress-assistant-connector/setup-page")) },
+  "wordpress-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/setup-page", () => import("@cinatra-ai/wordpress-mcp-connector/setup-page")) },
+  "youtube-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/youtube-connector/setup-page", () => import("@cinatra-ai/youtube-connector/setup-page")) },
+};
+
+export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEntry> = {
+  "anthropic-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/anthropic-connector/settings-page", () => import("@cinatra-ai/anthropic-connector/settings-page")) },
+  "apollo-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apollo-connector/settings-page", () => import("@cinatra-ai/apollo-connector/settings-page")) },
+  "drupal-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-assistant-connector/settings-page", () => import("@cinatra-ai/drupal-assistant-connector/settings-page")) },
+  "drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/settings-page", () => import("@cinatra-ai/drupal-mcp-connector/settings-page")) },
+  "github-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/github-connector/settings-page", () => import("@cinatra-ai/github-connector/settings-page")) },
+  "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/settings-page", () => import("@cinatra-ai/linkedin-connector/settings-page")) },
+  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/settings-page", () => import("@cinatra-ai/openai-connector/settings-page")) },
+  "wordpress-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-assistant-connector/settings-page", () => import("@cinatra-ai/wordpress-assistant-connector/settings-page")) },
+  "wordpress-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/settings-page", () => import("@cinatra-ai/wordpress-mcp-connector/settings-page")) },
+  "youtube-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/youtube-connector/settings-page", () => import("@cinatra-ai/youtube-connector/settings-page")) },
 };

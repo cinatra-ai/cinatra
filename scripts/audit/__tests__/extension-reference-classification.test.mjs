@@ -22,6 +22,11 @@ describe("extension-reference classification taxonomy", () => {
     // generator emits from — the exempt set and the emitted set cannot drift.
     expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([...GENERATED_MANIFEST_FILES].sort());
     expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([
+      // The generated guarded-optional-loaders test (cinatra#7): a
+      // __tests__ path was ALREADY gate-exempt by classification, so listing
+      // it adds no exemption surface — it puts the file under the same
+      // fail-closed --check integrity pin as the maps it asserts.
+      "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
