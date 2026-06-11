@@ -27,8 +27,6 @@ import { isUiSurfaceKind, type UiSurfaceKind } from "./manifest";
 /** Default on-disk package store inside the container's `/data` volume. */
 export const DEFAULT_PACKAGE_STORE_PATH = "/data/extensions/packages";
 
-/** A declarative, extension-owned migration descriptor (within-package path). */
-export type PackageStoreMigration = { id: string; path: string };
 
 /** A materialized package discovered in the store. */
 export type PackageStoreRecord = LoaderRecord & {
@@ -36,8 +34,24 @@ export type PackageStoreRecord = LoaderRecord & {
   storeDir: string;
   /** Digest segment from a digest-pinned store layout (`<pkg>/<digest>/`), if any. */
   declaredDigest?: string;
-  /** Declarative extension-owned migrations (`cinatra.migrations[]`), if any. */
-  migrations?: PackageStoreMigration[];
+  /**
+   * Declared node-pg-migrate migrations directory (`cinatra.migrationsDir`),
+   * if any (#118). Host-run for `trusted-signed` records only.
+   */
+  migrationsDir?: string;
+  /**
+   * True when the RETIRED legacy `cinatra.migrations` JSON-DSL field is
+   * present in the manifest. Carried so the host can reject it fail-closed
+   * (a legacy declaration must never silently activate as "no migrations").
+   */
+  legacyMigrationsDeclared?: boolean;
+  /**
+   * True when `cinatra.migrationsDir` is PRESENT but malformed (non-string /
+   * blank). Carried so a broken declaration still COUNTS as declaring host
+   * migrations — the host preflight then rejects it with a precise error
+   * instead of the package silently activating as "no migrations".
+   */
+  invalidMigrationsDirDeclared?: boolean;
   /**
    * UI hot-pluggability classification (`cinatra.uiSurface`), if declared. A
    * MARKETPLACE-INSTALLED `schema-config` connector — discovered from the store,
@@ -52,6 +66,24 @@ export type PackageStoreRecord = LoaderRecord & {
    */
   configSchema?: Record<string, unknown> | null;
 };
+
+/**
+ * Does a store record declare host migrations at all — the NEW
+ * `migrationsDir` field OR the RETIRED legacy `cinatra.migrations` field
+ * (which the host rejects fail-closed, so it must still COUNT as a
+ * declaration and can never silently activate as "no migrations")?
+ */
+export function recordDeclaresHostMigrations(rec: {
+  migrationsDir?: string;
+  legacyMigrationsDeclared?: boolean;
+  invalidMigrationsDirDeclared?: boolean;
+}): boolean {
+  return (
+    typeof rec.migrationsDir === "string" ||
+    rec.legacyMigrationsDeclared === true ||
+    rec.invalidMigrationsDirDeclared === true
+  );
+}
 
 /** Minimal injected filesystem surface (so the core is testable with a fake fs). */
 export type PackageStoreFs = {
@@ -105,13 +137,14 @@ export function recordFromManifest(
     !Array.isArray(cinatra.configSchema)
       ? (cinatra.configSchema as Record<string, unknown>)
       : undefined;
-  const migrations = Array.isArray(cinatra.migrations)
-    ? (cinatra.migrations as unknown[]).flatMap((m) =>
-        m && typeof m === "object" && typeof (m as { id?: unknown }).id === "string" && typeof (m as { path?: unknown }).path === "string"
-          ? [{ id: (m as { id: string }).id, path: (m as { path: string }).path }]
-          : [],
-      )
-    : undefined;
+  const migrationsDir =
+    typeof cinatra.migrationsDir === "string" && cinatra.migrationsDir.trim().length > 0
+      ? cinatra.migrationsDir
+      : undefined;
+  // A PRESENT-but-malformed migrationsDir still counts as a declaration —
+  // fail-closed downstream, never silently "no migrations".
+  const invalidMigrationsDirDeclared = cinatra.migrationsDir !== undefined && migrationsDir === undefined;
+  const legacyMigrationsDeclared = cinatra.migrations !== undefined;
   return {
     packageName: name,
     serverEntry,
@@ -121,7 +154,9 @@ export function recordFromManifest(
     declaredDigest,
     ...(uiSurface ? { uiSurface } : {}),
     ...(configSchema ? { configSchema } : {}),
-    ...(migrations && migrations.length > 0 ? { migrations } : {}),
+    ...(migrationsDir ? { migrationsDir } : {}),
+    ...(invalidMigrationsDirDeclared ? { invalidMigrationsDirDeclared } : {}),
+    ...(legacyMigrationsDeclared ? { legacyMigrationsDeclared } : {}),
   };
 }
 

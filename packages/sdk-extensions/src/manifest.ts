@@ -5,7 +5,7 @@
 // These fields live under the `cinatra` key of an extension's package.json.
 // `kind`, `apiVersion`, and the dependency fields already ship today; the
 // loader/ABI fields below are additive (`serverEntry`, `configSchema`,
-// `requestedHostPorts`, `sdkAbiRange`, `migrations`, `uiSurface`).
+// `requestedHostPorts`, `sdkAbiRange`, `migrationsDir`, `uiSurface`).
 
 import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
@@ -44,12 +44,6 @@ export type UiSurfaceKind = (typeof UI_SURFACE_KINDS)[number];
 export const EXTENSION_RESOLUTIONS = ["required", "guardedOptional"] as const;
 export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
 
-/** A declarative, idempotent, extension-owned migration descriptor. */
-export type ExtensionMigration = {
-  id: string;
-  /** Path (within the package) to the migration's declarative spec. */
-  path: string;
-};
 
 /** The `cinatra` manifest block (additive fields marked). */
 export type CinatraManifest = {
@@ -65,8 +59,19 @@ export type CinatraManifest = {
   requestedHostPorts?: HostPortName[];
   /** SDK ABI compatibility range this extension was built against. */
   sdkAbiRange?: string;
-  /** Declarative extension-owned migrations. */
-  migrations?: ExtensionMigration[];
+  /**
+   * RETIRED (#118): the legacy declarative JSON-DSL migration descriptors.
+   * Declaring `cinatra.migrations` is rejected fail-closed at install
+   * preflight, boot, and hot-activate — use `migrationsDir`.
+   */
+  migrations?: never;
+  /**
+   * Package-relative directory of STANDARD node-pg-migrate migration modules
+   * (`ext_<scope>_<pkg>__NNNN_<short-description>.mjs`, ESM `up(pgm)`/`down(pgm)`).
+   * The HOST runs them — only for `trusted-signed` installs — through the shared
+   * runner into the shared `pgmigrations` ledger (#115/#118).
+   */
+  migrationsDir?: string;
   // ---- self-describing card identity (additive) ----
   /** User-facing card label. Falls back to the host catalog when absent. */
   displayName?: string;

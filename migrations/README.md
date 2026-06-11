@@ -36,12 +36,15 @@ Cinatra talks to PostgreSQL raw via `pg`. Two mechanisms evolve the schema:
   `node packages/cli/bin/cinatra.mjs db migrate [--down] [--count=N]`, which
   also works inside the production image via `docker exec`). `--down` calls
   the migration's `down()` and pops its ledger row; it refuses to run if the
-  newest ledger rows belong to another source (see "One ledger" below).
+  newest ledger rows belong to another source (see "One ledger" below). For a
+  NON-core source, `cinatra db migrate --down --dir <abs> --namespace <ns>`
+  is the operator escape hatch — point it at the owning extension's
+  materialized migrations directory to revert its newest rows first.
 - **Existing deployments** (operator upgrade path): nothing to do beyond a
   normal upgrade. The first post-upgrade boot or `cinatra setup …` creates
-  `<schema>.pgmigrations` and applies `core__0001`/`core__0002`; on databases
-  that already carry those changes every statement is an `IF [NOT] EXISTS`
-  no-op, so the run only backfills the ledger. `psql`-applied release-note
+  `<schema>.pgmigrations` and applies the pending chain (`core__0001`…
+  `core__0003`); on databases that already carry those changes every
+  statement is guarded, so the run only backfills the ledger. `psql`-applied release-note
   migrations are retired going forward — new changes auto-apply at boot/setup.
 
 The runner (single implementation:
@@ -55,12 +58,13 @@ with node-pg-migrate's own lock disabled via `noLock`).
 ### One ledger, namespaced sources (#115)
 
 The `pgmigrations` ledger is shared org-wide: core migrations are named
-`core__NNNN_…`; extension migrations (#118) will use
-`ext_<scope>_<pkg>__NNNN_…`. node-pg-migrate's `checkOrder` is disabled
+`core__NNNN_…`; extension migrations (#118) use `ext_<scope>_<pkg>__NNNN_…`
+(the namespace derives from the package name: `@cinatra-ai/foo-connector` →
+`ext_cinatra-ai_foo-connector__`). node-pg-migrate's `checkOrder` is disabled
 because it assumes a single-source ledger; its safety is replaced by the
-runner's filename/seq preflight and this convention's CI gate
-(append-only, strictly increasing seqs). Rolling back (`--down`) is fenced to
-core-owned ledger rows for the same reason.
+runner's per-namespace filename/seq preflight and, for core, this
+convention's CI gate (append-only, strictly increasing seqs). Rolling back
+(`--down`) is fenced per namespace for the same reason.
 
 ## Scope
 
@@ -78,10 +82,16 @@ here, even when touched in the same pull request:
   `src/lib/better-auth-plugins.ts`, `scripts/better-auth-migrate.mts`).
   Owned by Better Auth's `getMigrations()` and guarded by the
   `auth-schema-drift` CI job.
-- **Extension-owned DDL** (`src/lib/extension-migration-dsl.ts`,
-  `src/lib/extension-migration-runner.ts`). Extensions declare their own
-  constrained JSON migration specs; the host-side runner ledger applies them.
-  (#118 moves these onto the same node-pg-migrate engine.)
+- **Extension-shipped migrations** (#118). Trusted-signed extensions ship
+  standard node-pg-migrate modules INSIDE their own package (a directory
+  declared via `cinatra.migrationsDir`, modules named
+  `ext_<scope>_<pkg>__NNNN_<short-description>.mjs`); the host applies them
+  through the same shared runner into the same `pgmigrations` ledger
+  (`src/lib/extension-migration-host.ts`) at boot / install / hot-activate.
+  Their artifacts live in the extension's own repository — never here — so
+  this directory's artifact convention does not apply to them. The authoring
+  contract for extension authors lands in `packages/sdk-extensions/README.md`
+  with cinatra#119.
 
 ## What counts as a migration artifact
 

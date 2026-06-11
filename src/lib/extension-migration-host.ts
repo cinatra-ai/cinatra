@@ -1,104 +1,145 @@
 import "server-only";
 
-// Host-side ACTIVATION of the declarative extension-migration runner (the
-// runtime installer). The runner + DSL + ledger are pure/unit-tested
-// (`extension-migration-runner.ts`); THIS module is the production wiring that
-// the install pipeline + the boot pass call:
+// Host-side application of EXTENSION migrations through the SHARED
+// node-pg-migrate runner (#118; engine decision #115).
 //
-//   1. read a materialized package's `cinatra.migrations[]` from the store,
-//   2. load + validate the declarative specs (host-owned, constrained DSL),
-//   3. apply them via `runExtensionMigrations` inside a single transaction that
-//      holds the `cinatra-schema-init` advisory lock — so extension DDL is
-//      serialized against `ensurePostgresSchema`'s schema-init DDL
-//      (over-serialization is acceptable for DDL correctness).
+// Contract: a trusted-signed extension declares `cinatra.migrationsDir` — a
+// package-relative directory of STANDARD node-pg-migrate ESM modules named
+// `ext_<scope>_<pkg>__NNNN_<short-description>.mjs` (the per-source namespace
+// for the shared `pgmigrations` ledger). The HOST runs them through
+// `runNamespacedMigrations` (`@cinatra-ai/cli/core-migrations`): dedicated
+// short-lived pg client, the database-global `cinatra-schema-init` advisory
+// lock, `noLock`, `checkOrder: false` — exactly the core runner's options, so
+// core and extension migrations can never drift apart.
 //
-// `ctx.db` stays UNWIRED: the extension never receives a DB handle. Owned-table
-// migrations + backfills are declared and run HOST-SIDE here (the host injects
-// `org_id`), which is the architecturally-correct reflection of the model-B rule
-// (a runtime-loaded extension — even across an isolation boundary — could not
-// carry a DB handle). DORMANT until a real consumer: no extension declares
-// `cinatra.migrations`, so every call is a clean no-op.
+// TRUST BOUNDARY (#118, on the record): a migration module is arbitrary code
+// running raw SQL on the shared multi-tenant app schema. That is a PRIVILEGED
+// capability gated on `trusted-signed` — the same signature gate that already
+// authorizes dynamically importing the extension's server code in-process.
+// Callers enforce the gate (the loader's signed-only pass, the install
+// pipeline's `autoGrantPrivileged`); this module enforces the mechanical
+// contract: manifest-driven discovery only (never static imports — IoC),
+// path containment inside the verified store dir, no symlinked modules, the
+// namespace filename contract, and up-only application. The legacy JSON-DSL
+// (`cinatra.migrations`, retired in #118) is rejected fail-closed — it must
+// never silently activate as "no migrations".
+//
+// Rollback: the host never migrates extensions down (install/boot/activate
+// only need `up`). The shared runner's per-namespace down fence ships, and
+// `cinatra db migrate --down --dir <abs> --namespace <ns>` is the operator
+// escape hatch for reverting an extension's newest ledger rows.
 
 import {
-  loadMigrationSpecsFromStore,
-  runExtensionMigrations,
-  type MigrationQuery,
-  type RunMigrationsResult,
-} from "@/lib/extension-migration-runner";
+  extensionMigrationNamespace,
+  runNamespacedMigrations,
+  validateNamespacedMigrationsDir,
+} from "@cinatra-ai/cli/core-migrations";
+import { recordDeclaresHostMigrations } from "@cinatra-ai/sdk-extensions";
 
-const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
+const DEFAULT_SCHEMA = "cinatra";
 
-// ---------------------------------------------------------------------------
-// Lazy default DB pool (globalThis-cached — never a top-level pool, to keep
-// `next build` page-data collection from throwing without a DB URL). Mirrors
-// the pattern in `extension-install-ops.ts`.
-// ---------------------------------------------------------------------------
+export type ExtensionMigrationsResult = {
+  /** Ledger names applied by this run (empty when up to date / none declared). */
+  applied: string[];
+};
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __cinatraExtMigrationPool: import("pg").Pool | undefined;
-}
-
-let migrationPoolInstance: import("pg").Pool | undefined;
-async function getMigrationPool(): Promise<import("pg").Pool> {
-  if (migrationPoolInstance) return migrationPoolInstance;
-  if (globalThis.__cinatraExtMigrationPool) {
-    return (migrationPoolInstance = globalThis.__cinatraExtMigrationPool);
-  }
-  const connectionString = process.env.SUPABASE_DB_URL;
-  if (!connectionString) {
-    throw new Error("SUPABASE_DB_URL is required for @/lib/extension-migration-host");
-  }
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString });
-  if (!pool.listenerCount("error")) {
-    pool.on("error", (err) => {
-      // eslint-disable-next-line no-console
-      console.error("[extension-migration-host] pg pool idle client error:", err.message);
-    });
-  }
-  migrationPoolInstance = pool;
-  if (process.env.NODE_ENV !== "production") {
-    globalThis.__cinatraExtMigrationPool = pool;
-  }
-  return pool;
-}
+export type ExtensionMigrationsPreflight = {
+  packageName: string;
+  /** Absolute, containment-checked migrations directory. */
+  dirAbs: string;
+  /** Per-source ledger namespace (`ext_<scope>_<pkg>__`). */
+  namespace: string;
+  /** The validated migration module filenames, sorted. */
+  files: string[];
+} | null;
 
 /**
- * Default locked-transaction runner: a pooled client opens a transaction, takes
- * the SAME `cinatra-schema-init` advisory lock `ensurePostgresSchema` uses (so
- * extension DDL never races schema-init DDL), runs the migration batch, and
- * commits — rolling back (and rethrowing) on any failure so a bad migration
- * leaves no partial DDL. Tests inject their own `runLocked` (no DB, no lock).
+ * Validate-only preflight of a materialized package's declared migrations
+ * (NO database, NO module import — safe for install preflights):
+ *
+ *   1. read the store manifest; no `cinatra.migrationsDir` -> null (the
+ *      common case). The RETIRED `cinatra.migrations` JSON-DSL field is a
+ *      hard error (fail closed, never "no migrations").
+ *   2. containment: the declared dir must stay INSIDE the verified store dir
+ *      even after following filesystem links (realpath-bound, the same
+ *      defense the loader applies to `serverEntry`).
+ *   3. the namespace filename contract (`ext_<scope>_<pkg>__NNNN_<desc>.mjs`,
+ *      unique seqs, no symlinked modules) via the shared runner's validator.
+ *
+ * An unreadable/unparsable store manifest is treated as "no migrations" —
+ * the loader/installer already validated manifest structure upstream; this
+ * mirrors the pre-#118 defensive behavior.
  */
-async function defaultRunLocked(
-  run: (query: MigrationQuery) => Promise<RunMigrationsResult>,
-): Promise<RunMigrationsResult> {
-  const pool = await getMigrationPool();
-  const client = await pool.connect();
+export async function preflightExtensionMigrationsFromStore(input: {
+  storeDir: string;
+  packageName?: string;
+}): Promise<ExtensionMigrationsPreflight> {
+  const { readFile, realpath, stat } = await import("node:fs/promises");
+  const path = await import("node:path");
+
+  let manifest: { name?: unknown; cinatra?: { migrations?: unknown; migrationsDir?: unknown } };
   try {
-    await client.query("BEGIN");
-    // xact-scoped advisory lock on the same key as ensurePostgresSchema's
-    // session-scoped lock — they contend on the same advisory-lock space, so
-    // extension DDL is serialized against schema-init DDL. Auto-released on
-    // COMMIT/ROLLBACK.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["cinatra-schema-init"]);
-    const result = await run(async <T = unknown>(text: string, values?: readonly unknown[]) => {
-      const r = await client.query(text, values ? [...values] : undefined);
-      return r.rows as T[];
-    });
-    await client.query("COMMIT");
-    return result;
-  } catch (e) {
-    try {
-      await client.query("ROLLBACK");
-    } catch {
-      /* ignore rollback failure — surface the original error */
-    }
-    throw e;
-  } finally {
-    client.release();
+    manifest = JSON.parse(await readFile(path.join(input.storeDir, "package.json"), "utf8")) as typeof manifest;
+  } catch {
+    return null;
   }
+
+  const packageName =
+    input.packageName ?? (typeof manifest.name === "string" ? manifest.name : null);
+
+  if (manifest.cinatra?.migrations !== undefined) {
+    throw new Error(
+      `[ext-migration] ${packageName ?? input.storeDir}: the declarative JSON-DSL migration field ` +
+        `(cinatra.migrations) is retired (#118) — ship standard node-pg-migrate modules in a directory ` +
+        `declared via cinatra.migrationsDir instead`,
+    );
+  }
+
+  const rawDir = manifest.cinatra?.migrationsDir;
+  if (rawDir === undefined) return null;
+  if (typeof rawDir !== "string" || rawDir.trim().length === 0) {
+    throw new Error(`[ext-migration] ${packageName ?? input.storeDir}: cinatra.migrationsDir must be a non-empty package-relative path`);
+  }
+  if (!packageName) {
+    throw new Error("[ext-migration] cannot resolve package name from store manifest");
+  }
+  // Identity pinning: the namespace derives from the TRUSTED identity the
+  // caller verified (loader record / install-pipeline input). A store
+  // manifest whose `name` disagrees with it is refused — mismatched content
+  // must never run DDL under another package's namespace.
+  if (input.packageName && typeof manifest.name === "string" && manifest.name !== input.packageName) {
+    throw new Error(
+      `[ext-migration] store manifest name "${manifest.name}" does not match the trusted package name "${input.packageName}" — refusing to apply migrations`,
+    );
+  }
+
+  const rel = rawDir.replace(/^\.\//, "");
+  if (path.isAbsolute(rel) || rel.split("/").some((seg) => seg === "..")) {
+    throw new Error(`[ext-migration] ${packageName}: unsafe migrationsDir "${rawDir}"`);
+  }
+
+  // Realpath-bound containment: the resolved dir must stay INSIDE the
+  // verified store dir even after following filesystem links.
+  const [realDir, realStore] = await Promise.all([
+    realpath(path.join(input.storeDir, rel)).catch(() => null),
+    realpath(input.storeDir),
+  ]);
+  if (!realDir || (realDir !== realStore && !realDir.startsWith(realStore + path.sep))) {
+    throw new Error(
+      `[ext-migration] ${packageName}: migrationsDir "${rawDir}" resolves outside the package store dir — refusing`,
+    );
+  }
+  if (!(await stat(realDir)).isDirectory()) {
+    throw new Error(`[ext-migration] ${packageName}: migrationsDir "${rawDir}" is not a directory`);
+  }
+
+  const namespace = extensionMigrationNamespace(packageName);
+  const files = await validateNamespacedMigrationsDir(realDir, {
+    namespace,
+    allowSymlinks: false,
+    missingDirHint: `declared by ${packageName}'s cinatra.migrationsDir`,
+  });
+  return { packageName, dirAbs: realDir, namespace, files };
 }
 
 export type ApplyMigrationsInput = {
@@ -106,103 +147,81 @@ export type ApplyMigrationsInput = {
   storeDir: string;
   /** Resolved package name (defaults to the store manifest's `name`). */
   packageName?: string;
-  /** Resolved package version (defaults to the store manifest's `version`). */
+  /** Resolved package version (informational logging only — the ledger is name-keyed). */
   packageVersion?: string;
-  /** Host schema the migrations run against (default `cinatra`). */
+  /** Host schema the migrations run against (default SUPABASE_SCHEMA / `cinatra`). */
   schema?: string;
 };
 
 export type ApplyMigrationsDeps = {
-  /** Read a file as utf8 (default: `node:fs/promises`). */
-  readFile?: (absPath: string) => Promise<string>;
-  /**
-   * Run the migration batch inside a locked transaction (default: pooled client
-   * + BEGIN + `pg_advisory_xact_lock('cinatra-schema-init')` + COMMIT/ROLLBACK).
-   * Tests inject a fake that just calls `run(fakeQuery)` — no DB, no lock.
-   */
-  runLocked?: (run: (query: MigrationQuery) => Promise<RunMigrationsResult>) => Promise<RunMigrationsResult>;
+  /** The shared runner (injected -> unit-testable without a database). */
+  run?: typeof runNamespacedMigrations;
 };
 
 /**
- * Apply a materialized package's declared `cinatra.migrations[]` (the host-run
- * activation entry point). Resolves the descriptors from the store manifest,
- * loads + validates the specs, and applies them idempotently under the schema
- * advisory lock. A package that declares none is a clean no-op (the dormant
- * common case). An unreadable/invalid manifest is treated as "no migrations"
- * (the loader/installer already validated structure; this is defensive).
+ * THE host-owned entry point (#118 consolidation): BOTH runner call sites —
+ * the trusted boot/hot-activate pass (`runtime-package-loader.ts`) and the
+ * install pipeline's pre-finalize step (`extension-install-pipeline.ts`) —
+ * apply a package's migrations through this one function. Preflights
+ * (validate-only), then runs the chain UP through the shared runner. A
+ * package that declares no migrationsDir is a clean no-op; idempotent via
+ * the shared ledger (a re-run applies nothing).
  */
 export async function applyExtensionMigrationsFromStore(
   input: ApplyMigrationsInput,
   deps: ApplyMigrationsDeps = {},
-): Promise<RunMigrationsResult> {
-  const schema = input.schema ?? schemaName;
-  const readFile =
-    deps.readFile ?? (async (p: string) => (await import("node:fs/promises")).readFile(p, "utf8"));
-  const path = await import("node:path");
+): Promise<ExtensionMigrationsResult> {
+  const preflight = await preflightExtensionMigrationsFromStore({
+    storeDir: input.storeDir,
+    ...(input.packageName ? { packageName: input.packageName } : {}),
+  });
+  if (!preflight) return { applied: [] };
 
-  let manifestRaw: string;
-  try {
-    manifestRaw = await readFile(path.join(input.storeDir, "package.json"));
-  } catch {
-    return { applied: [], skipped: [] };
+  const connectionString = process.env.SUPABASE_DB_URL;
+  if (!connectionString) {
+    throw new Error("SUPABASE_DB_URL is required for @/lib/extension-migration-host");
   }
-  let manifest: { name?: unknown; version?: unknown; cinatra?: { migrations?: unknown } };
-  try {
-    manifest = JSON.parse(manifestRaw) as typeof manifest;
-  } catch {
-    return { applied: [], skipped: [] };
-  }
+  // `||` (not `??`): a blank input.schema or SUPABASE_SCHEMA must fall
+  // through to the default, never reach the runner as "".
+  const schemaName = input.schema?.trim() || process.env.SUPABASE_SCHEMA?.trim() || DEFAULT_SCHEMA;
 
-  const rawMigrations = manifest.cinatra?.migrations;
-  const migrations = Array.isArray(rawMigrations)
-    ? rawMigrations.flatMap((m) =>
-        m &&
-        typeof m === "object" &&
-        typeof (m as { id?: unknown }).id === "string" &&
-        typeof (m as { path?: unknown }).path === "string"
-          ? [{ id: (m as { id: string }).id, path: (m as { path: string }).path }]
-          : [],
-      )
-    : [];
-  if (migrations.length === 0) return { applied: [], skipped: [] };
-
-  const packageName = input.packageName ?? (typeof manifest.name === "string" ? manifest.name : null);
-  if (!packageName) {
-    throw new Error("[ext-migration] cannot resolve package name from store manifest");
-  }
-  const packageVersion =
-    input.packageVersion ?? (typeof manifest.version === "string" ? manifest.version : "0.0.0");
-
-  const specs = await loadMigrationSpecsFromStore(
-    { packageName, storeDir: input.storeDir, migrations },
-    { readFile },
-  );
-
-  const runLocked = deps.runLocked ?? defaultRunLocked;
-  return runLocked((query) => runExtensionMigrations({ packageName, packageVersion, specs }, { query, schema }));
+  const run = deps.run ?? runNamespacedMigrations;
+  const result = await run({
+    connectionString,
+    schemaName,
+    dirAbs: preflight.dirAbs,
+    namespace: preflight.namespace,
+    direction: "up",
+    log: (msg: string) => console.log(msg),
+  });
+  return { applied: result.ranNames };
 }
 
 export type DiscoveredMigrationResult = {
   packageName: string;
-  result: RunMigrationsResult;
+  result: ExtensionMigrationsResult;
 };
 
 /** A materialized record the caller has ALREADY established as trusted. */
 export type TrustedMigrationRecord = {
   packageName: string;
   storeDir: string;
-  migrations?: readonly { id: string; path: string }[];
+  migrationsDir?: string;
+  legacyMigrationsDeclared?: boolean;
+  invalidMigrationsDirDeclared?: boolean;
 };
 
 /**
  * Apply declared migrations for a set of records the caller has ALREADY
- * trust-gated (the runtime loader's `trusted[]` set — verified materialized
- * integrity + `classifyExtensionTrust(...).trusted`). This helper deliberately
- * carries NO trust logic of its own: migrations must run under the EXACT same
- * verdict used for in-process import, so the loader passes its trusted records
- * here. A record whose migration FAILS is reported in `refused` (the loader then
- * excludes it from activation — its tables would be missing, so importing it is
- * unsafe). Idempotent via the ledger; a record that declares none is skipped.
+ * trust-gated (the runtime loader's signed-trusted set — verified materialized
+ * integrity + `classifyExtensionTrust(...).trusted` + tier `trusted-signed`).
+ * This helper deliberately carries NO trust logic of its own: migrations must
+ * run under the EXACT same verdict used for in-process import, so the loader
+ * passes its trusted records here. Each record funnels through the single
+ * entry point above. A record whose migration FAILS — including one that
+ * still declares the retired legacy field — is reported in `refused` (the
+ * loader then excludes it from activation: its tables would be missing, so
+ * importing it is unsafe). A record that declares nothing is skipped.
  */
 export async function applyMigrationsForTrustedRecords(
   records: readonly TrustedMigrationRecord[],
@@ -212,11 +231,10 @@ export async function applyMigrationsForTrustedRecords(
   const applied: DiscoveredMigrationResult[] = [];
   const refused: { packageName: string; error: string }[] = [];
   for (const rec of records) {
-    if (!rec.migrations || rec.migrations.length === 0) continue;
+    if (!recordDeclaresHostMigrations(rec)) continue;
     try {
       const result = await applyOne({ storeDir: rec.storeDir, packageName: rec.packageName });
       if (result.applied.length > 0) {
-        // eslint-disable-next-line no-console
         console.log(`[ext-migration] ${rec.packageName}: applied ${result.applied.length} migration(s)`);
       }
       applied.push({ packageName: rec.packageName, result });

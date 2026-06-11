@@ -64,12 +64,12 @@ export {
   runRuntimePackageActivation,
   discoverPackageStoreRecords,
   recordFromManifest,
+  recordDeclaresHostMigrations,
   resolveServerEntryPath,
   DEFAULT_PACKAGE_STORE_PATH,
 } from "./runtime-loader";
 export type {
   PackageStoreRecord,
-  PackageStoreMigration,
   PackageStoreFs,
   RuntimeLoaderDeps,
 } from "./runtime-loader";
@@ -142,7 +142,7 @@ export type {
 } from "./mcp-oauth-clients";
 
 export { UI_SURFACE_KINDS, isUiSurfaceKind, EXTENSION_RESOLUTIONS } from "./manifest";
-export type { UiSurfaceKind, ExtensionResolution, ExtensionMigration, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
+export type { UiSurfaceKind, ExtensionResolution, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
 export type {
   ExtensionExternalMcpTool,
   ExtensionExternalMcpToolbox,

@@ -71,13 +71,17 @@ const REPO_ROOT = resolve(__dirname, "..", "..");
 
 export const IN_SCOPE_FILE = "src/lib/drizzle-store.ts";
 
-/** Out of scope per the convention — ignored even when in the same PR. */
+/**
+ * Out of scope per the convention — ignored even when in the same PR.
+ * (The retired extension JSON-DSL files — extension-migration-dsl/runner —
+ * were deleted in #118; the extension migration host is host wiring, not
+ * executed core-store DDL.)
+ */
 export const OUT_OF_SCOPE_FILES = new Set([
   "src/lib/better-auth-schema.ts",
   "src/lib/better-auth-plugins.ts",
   "scripts/better-auth-migrate.mts",
-  "src/lib/extension-migration-dsl.ts",
-  "src/lib/extension-migration-runner.ts",
+  "src/lib/extension-migration-host.ts",
 ]);
 
 export const MIGRATION_MANIFEST_PATH = "migrations/manifest.json";

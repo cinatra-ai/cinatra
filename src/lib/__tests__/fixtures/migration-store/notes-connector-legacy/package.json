@@ -1,11 +1,13 @@
 {
   "name": "@cinatra-ai/notes-connector",
-  "version": "1.3.0",
+  "version": "1.2.0",
   "private": true,
   "cinatra": {
     "kind": "connector",
     "serverEntry": "dist/register.js",
     "sdkAbiRange": "^2.0.0",
-    "migrationsDir": "cinatra/migrations"
+    "migrations": [
+      { "id": "0001-create-notes", "path": "cinatra/migrations/0001-create-notes.json" }
+    ]
   }
 }

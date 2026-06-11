@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
 import pg from "pg";
 import { resolveTeardownNames } from "./teardown-config.mjs";
-import { runCoreMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
+import { runCoreMigrations, runNamespacedMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
 import { syncDevApps } from "./dev-apps.mjs";
 import { syncCinatraDevExtensions } from "./cinatra-dev-extensions.mjs";
 import { parseDevRefreshFlags, describeDockerDecision } from "./dev-refresh.mjs";
@@ -276,7 +276,7 @@ Usage:
   cinatra clone slug-for-worktree --worktree-path <path>
   cinatra clone prune [--worktree-path <path>] [--slug <slug>] --yes
   cinatra clone list
-  cinatra db migrate [--down] [--count=N]
+  cinatra db migrate [--down] [--count=N] [--dir <abs> --namespace <ns>]
   cinatra dev refresh [--docker=auto|always|--no-docker]
   cinatra dev tunnel start
   cinatra dev tunnel stop
@@ -2379,7 +2379,7 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
 // Core schema migrations (`cinatra db migrate [--down] [--count=N]`)
 // ---------------------------------------------------------------------------
 //
-// Ops entry point for the node-pg-migrate core runner (cinatra#116): applies
+// Ops entry point for the node-pg-migrate runner (cinatra#116/#118): applies
 // pending migrations/core/ modules, or reverts the newest core ledger rows
 // with `--down`. Works in dev checkouts AND inside the standalone production
 // image (packages/cli + migrations/ are both copied into the image):
@@ -2388,13 +2388,30 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
 //
 // Setup and the app boot pass apply pending migrations automatically; this
 // command exists for manual remediation and rollback.
+//
+// `--dir <abs> --namespace <ns>` (always together) is the OPERATOR ESCAPE
+// HATCH for a NON-core source (#118): point it at an extension's materialized
+// migrations directory to revert (or re-apply) that extension's newest ledger
+// rows — e.g. when a core `--down` is fenced off because an `ext_…` row is
+// newest. The host applies extension migrations automatically at
+// boot/install/hot-activate; this flag pair exists for remediation only.
 
 async function runDbMigrate(rest) {
-  for (const arg of rest) {
-    if (arg === "--down" || arg === "--count" || arg.startsWith("--count=") || !arg.startsWith("--")) {
+  // Strict argv parse for a DDL-applying command: every token must be a known
+  // flag or the VALUE of a value-taking flag — a stray positional must fail
+  // fast, never silently proceed to apply/revert migrations.
+  const valueTakingFlags = new Set(["--count", "--dir", "--namespace"]);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--down") continue;
+    if (valueTakingFlags.has(arg)) {
+      i++; // the next token is this flag's value (readOptionValue consumes it)
       continue;
     }
-    throw new Error(`Unknown flag "${arg}" for cinatra db migrate. Supported flags: --down, --count=N.`);
+    if ([...valueTakingFlags].some((f) => arg.startsWith(`${f}=`))) continue;
+    throw new Error(
+      `Unexpected argument "${arg}" for cinatra db migrate. Supported: --down, --count=N, --dir <abs> --namespace <ns>.`,
+    );
   }
   const repoRoot = getRepoRoot();
   const env = collectEnvironment(repoRoot);
@@ -2409,18 +2426,42 @@ async function runDbMigrate(rest) {
       throw new Error(`Invalid --count=${countRaw}. Expected a positive integer.`);
     }
   }
-  const result = await runCoreMigrations({
-    connectionString,
-    schemaName,
-    rootDir: repoRoot,
-    direction: down ? "down" : "up",
-    ...(count !== undefined ? { count } : {}),
-  });
+  const dirRaw = readOptionValue(rest, "--dir");
+  const namespaceRaw = readOptionValue(rest, "--namespace");
+  if ((dirRaw === null) !== (namespaceRaw === null)) {
+    throw new Error("cinatra db migrate: --dir and --namespace must be provided together.");
+  }
+  let result;
+  let label = "Core";
+  if (dirRaw !== null) {
+    if (!path.isAbsolute(dirRaw)) {
+      throw new Error("cinatra db migrate: --dir must be an absolute path (the remediation target must not depend on cwd).");
+    }
+    label = namespaceRaw.replace(/__$/, "");
+    // Namespace shape is validated by the runner itself (assertValidNamespace)
+    // — a malformed/truncated namespace must never reach prefix fencing.
+    result = await runNamespacedMigrations({
+      connectionString,
+      schemaName,
+      dirAbs: dirRaw,
+      namespace: namespaceRaw,
+      direction: down ? "down" : "up",
+      ...(count !== undefined ? { count } : {}),
+    });
+  } else {
+    result = await runCoreMigrations({
+      connectionString,
+      schemaName,
+      rootDir: repoRoot,
+      direction: down ? "down" : "up",
+      ...(count !== undefined ? { count } : {}),
+    });
+  }
   if (result.ranNames.length === 0) {
-    console.log(`Core migrations (${schemaName}): ${down ? "nothing to revert" : "up to date"}.`);
+    console.log(`${label} migrations (${schemaName}): ${down ? "nothing to revert" : "up to date"}.`);
   } else {
     console.log(
-      `Core migrations (${schemaName}): ${down ? "reverted" : "applied"} ${result.ranNames.length} — ${result.ranNames.join(", ")}`,
+      `${label} migrations (${schemaName}): ${down ? "reverted" : "applied"} ${result.ranNames.length} — ${result.ranNames.join(", ")}`,
     );
   }
 }

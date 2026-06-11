@@ -574,6 +574,19 @@ export async function buildManifest() {
     if (uiErrors.length > 0) {
       throw new Error(`[extension-manifest] invalid schema-config declaration:\n  - ${uiErrors.join("\n  - ")}`);
     }
+    // FAIL-CLOSED (#118): host migrations are a STORE-install capability — the
+    // host applies `cinatra.migrationsDir` modules only for trusted-signed
+    // store records (runtime loader / install pipeline). A bundled workspace
+    // extension never takes that path, so a declaration here would silently
+    // never run; refuse at generation instead. The retired JSON-DSL field
+    // (`cinatra.migrations`) is refused everywhere.
+    if (cin.migrations !== undefined || cin.migrationsDir !== undefined) {
+      throw new Error(
+        `[extension-manifest] ${x.name} declares ${cin.migrations !== undefined ? "the retired cinatra.migrations JSON-DSL field" : "cinatra.migrationsDir"} — ` +
+          `bundled workspace extensions cannot ship host migrations (they run only for trusted-signed STORE installs, cinatra#118); ` +
+          `move the schema change into the marketplace-installed package or the core migration chain`,
+      );
+    }
     return {
       packageName: x.name,
       scope: x.scope,
