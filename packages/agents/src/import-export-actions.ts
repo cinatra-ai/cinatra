@@ -13,7 +13,13 @@
 //   - manifest.json : { version: 1, ... } — importAgentTemplateCore rejects
 //                     any other version.
 //   - package.json  : optional sibling carrying packageName/packageVersion +
-//                     cinatra.agentDependencies.
+//                     cinatra.agentDependencies (and the SPDX `license` field
+//                     consumed by detectSpdxLicense).
+//   - LICENSE / LICENSE.md / COPYING / .spdx : optional license sidecars,
+//                     staged for the SPDX detection gate. The MCP
+//                     agent_export handler ships the real on-disk
+//                     package.json + license files so its archives pass this
+//                     gate and upsert by packageName on restore.
 // The round trip is guarded by the manifest-version check plus full OAS
 // compilation/validation on import. (A former exportAgentTemplate server
 // action emitted a different, incompatible envelope — componentType "Agent"

@@ -185,13 +185,13 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   "agent_export": {
-    description: "Export an agent template as a portable ZIP archive (base64-encoded). The ZIP contains oas.json (the OAS Flow 26.1.0 agent definition with all template fields) and manifest.json with format metadata. Use agent_import to restore the agent on any Cinatra instance.",
+    description: "Export an agent template's canonical on-disk OAS source package as a portable ZIP archive (base64-encoded). The ZIP contains agent.json (the OAS Flow 26.1.0 agent definition), manifest.json with format metadata, and — when present on disk — the package's real sidecar files: package.json (package identity + SPDX license) and LICENSE/LICENSE.md/COPYING/.spdx (required by agent_import's license gate). Use agent_import to restore the agent on any Cinatra instance. Fails with an explicit error (no ZIP) when the template has no canonical on-disk OAS source (e.g. a DB-only template without a packageName): the DB row is a derived cache and cannot be inverted into an importable definition — materialize the source package first via agent_source_write + agent_source_compile.",
     inputSchema: z.object({
       templateId: z.string().describe("ID of the agent template to export."),
     }),
   },
   "agent_import": {
-    description: "Import an agent template from a ZIP archive created by agent_export. Creates a new template with a fresh ID (original ID preserved in oas.json for provenance). The imported template starts in 'draft' status.",
+    description: "Import an agent template from a ZIP archive created by agent_export. When the archive carries a package.json whose name matches an existing template's packageName, that template is updated in place (upsert); otherwise a new template is created with a fresh ID (the original OAS Flow id is preserved inside agent.json for provenance). Newly created templates start in 'draft' status.",
     inputSchema: z.object({
       zipBase64: z.string().describe("Base64-encoded ZIP archive produced by agent_export."),
       name: z.string().optional().describe("Override the agent name on import. If omitted, the original name from the archive is used."),
