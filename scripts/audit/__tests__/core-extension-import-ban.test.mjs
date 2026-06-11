@@ -26,8 +26,12 @@ describe("core-extension-import-ban gate", () => {
     // (the decoupling sweep shrinks this set toward zero).
     const flat = Object.values(edges).flat();
     expect(flat.some((e) => e.endsWith("-connector"))).toBe(true);
-    // anthropic-connector is un-exempt → its host->ext edges ARE scanned.
-    expect(flat).toContain("@cinatra-ai/anthropic-connector");
+    // The remaining residual is the nango cluster (the lazy/guarded
+    // host-access cutover retired every other connector's value-import edges,
+    // including the un-exempt anthropic-connector's — cinatra#7); nango stays
+    // scanned.
+    expect(flat).toContain("@cinatra-ai/nango-connector");
+    expect(flat).not.toContain("@cinatra-ai/anthropic-connector");
     // The MCP module + primitive-handler registration surfaces resolve through
     // the generated manifest now — no static connector import may reappear.
     expect(edges["src/lib/mcp-server.ts"]).toBeUndefined();

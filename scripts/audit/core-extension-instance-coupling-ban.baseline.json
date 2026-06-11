@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 72,
-      "keys": 116,
-      "occurrences": 152
+      "files": 65,
+      "keys": 100,
+      "occurrences": 135
     },
     "mechanical": {
       "files": 0,
@@ -90,18 +90,7 @@
     "src/app/api/nango/connect/session/route.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/app/api/nango/connections/save/route.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/app/api/nango/webhook/route.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/app/api/openai/connection-status/route.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "src/app/campaigns/actions.ts :: package :: @cinatra-ai/anthropic-connector": 1,
-    "src/app/campaigns/actions.ts :: package :: @cinatra-ai/apollo-connector": 1,
-    "src/app/campaigns/actions.ts :: package :: @cinatra-ai/gemini-connector": 1,
-    "src/app/campaigns/actions.ts :: package :: @cinatra-ai/openai-connector": 2,
-    "src/app/configuration/skills/page.tsx :: package :: @cinatra-ai/openai-connector": 1,
-    "src/app/configuration/telemetry/page.tsx :: package :: @cinatra-ai/apollo-connector": 1,
-    "src/app/configuration/telemetry/page.tsx :: package :: @cinatra-ai/gemini-connector": 1,
-    "src/app/configuration/telemetry/page.tsx :: package :: @cinatra-ai/openai-connector": 1,
-    "src/app/setup/ai/page.tsx :: package :: @cinatra-ai/openai-connector": 1,
     "src/app/setup/connections/page.tsx :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/a2a-dev-auto-connect.ts :: package :: @cinatra-ai/gemini-connector": 1,
     "src/lib/a2a-dev-auto-connect.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/artifacts/artifact-creation.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/artifact-service.ts :: package :: @cinatra-ai/default-artifact": 1,
@@ -117,10 +106,6 @@
     "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
     "src/lib/dev-auto-setup.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/drupal-api.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/host-required-packages.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "src/lib/logging.ts :: package :: @cinatra-ai/apollo-connector": 1,
-    "src/lib/logging.ts :: package :: @cinatra-ai/gemini-connector": 1,
-    "src/lib/logging.ts :: package :: @cinatra-ai/openai-connector": 1,
     "src/lib/nango.ts :: package :: @cinatra-ai/nango-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/anthropic-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/drupal-mcp-connector": 1,
@@ -128,7 +113,6 @@
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/openai-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 1,
     "src/lib/registry-credentials.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/openai-connector": 1
+    "src/lib/setup-wizard.ts :: package :: @cinatra-ai/nango-connector": 1
   }
 }

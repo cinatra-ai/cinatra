@@ -238,9 +238,12 @@ export default defineConfig({
         root,
         "extensions/cinatra-ai/mcp-client-connector/src/index.ts",
       ),
+      // src-dir form (mirrors openai below) so subpath imports — the
+      // serverEntry loader's /register in the generated maps — resolve via
+      // vite's natural extension resolution; bare imports resolve to index.
       "@cinatra-ai/anthropic-connector": path.join(
         root,
-        "extensions/cinatra-ai/anthropic-connector/src/index.ts",
+        "extensions/cinatra-ai/anthropic-connector/src",
       ),
       "@cinatra-ai/a2a": path.join(root, "packages/a2a/src/index.ts"),
       "@cinatra-ai/metric-cost-api": path.join(

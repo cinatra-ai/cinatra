@@ -118,8 +118,8 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **152 occurrences / 116 keys / 72 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops slice, −9 occ Content slice — Plan-B lazy/guarded cutover, cinatra#7) | shrink-only, frozen |
-| `core-extension-import-ban` | **29 edges / 18 files** — all runtime-coupling (at the flip, #36: 41/28; −4 edges Ops slice (crm/twenty/tailscale), −8 edges Content slice (blog/social-media/email) — Plan-B lazy/guarded cutover, cinatra#7) | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **135 occurrences / 100 keys / 65 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7) | shrink-only, frozen |
+| `core-extension-import-ban` | **10 edges / 10 files** — all runtime-coupling, ALL `@cinatra-ai/nango-connector` (the tracked #35/#7 residual). At the flip, #36: 41/28; −4 Ops (crm/twenty/tailscale), −8 Content (blog/social-media/email), −19 LLM (anthropic/apollo/gemini/openai) — Plan-B lazy/guarded cutover, cinatra#7. The non-nango value-import surface is RETIRED. | shrink-only, frozen |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **20 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY) | shrink-only |
 | `host-peer-value-import-ban` | **0** | hold at 0 |
@@ -162,6 +162,20 @@ epic's scope and tracked elsewhere:
   generated tree is the exempt class). The 41-edge value-import floor is
   the lazy/guarded host-access slice's target; the dep drop + 33→8 shrink follows it, keyed EXCLUSIVELY
   on the emitted `resolution` metadata.
+- **The statically-wired transport DI cluster** —
+  `src/lib/register-transport-connectors.ts` still value-imports the
+  LLM-platform connectors (openai `/deps`, anthropic) and the
+  drupal/wordpress content-editor MCP connectors for `register<X>Connector(deps)`
+  binding; its header documents this as explicitly out of the
+  transport-registration cutover's scope ("until their own cutover phase").
+  KNOWN SCANNER LIMITATION: these edges are currently INVISIBLE to the
+  import-ban scanner — the file's header contains a literal `@/lib/*` whose
+  `/*` the legacy comment-stripper treats as a block-comment opener, swallowing
+  the import section (the documented stripping-limitation class above). They
+  ARE counted by the instance-coupling gate (`package ::` keys for that file
+  in the committed baseline). Per the policy above, a stripper correction must
+  land WITH these edges removed — i.e. with the LLM-platform/content-editor
+  DI cutover, not before.
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed
