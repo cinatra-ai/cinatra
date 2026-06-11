@@ -1,9 +1,8 @@
 {
-  "note": "True-IoC discovery-dispatcher bypass baseline. Each file directly references a native discovery reader (GATED_SYMBOLS) instead of routing through discoverActiveExtensionCapabilities. Tolerated until migrated; the set may only ever SHRINK. Regenerate with `node scripts/audit/discovery-dispatcher-bypass-ban.mjs --write-baseline`. The reader definition/barrel + the per-kind handler facet are allowlisted (sanctioned), not baseline.",
+  "note": "True-IoC discovery-dispatcher bypass baseline — PINNED EMPTY by the zero-tolerance flip (cinatra-ai/cinatra#36). Any direct reference to a native discovery reader (GATED_SYMBOLS) outside the documented SANCTIONED_READERS allowlist fails CI immediately; a non-empty committed baseline is itself a failure and --write-baseline refuses to produce one. The sanctioned readers (definition/barrel/dispatcher facet + the two justified install-state screens) live in the gate script, each with a written justification, defect-checked and staleness-self-policed.",
   "gatedSymbols": [
-    "readActiveExtensionTemplates"
+    "readActiveExtensionTemplates",
+    "readArchivedExtensionTemplates"
   ],
-  "files": [
-    "packages/extensions/src/screens/extensions-marketplace-screen.tsx"
-  ]
+  "files": []
 }

@@ -8,7 +8,6 @@ import {
   scanCoreExtensionEdges,
   diffEdges,
   baselineGrowth,
-  staleUnexemptedSeed,
   discoverExtensionNames,
 } from "../core-extension-import-ban.mjs";
 
@@ -62,36 +61,43 @@ describe("core-extension-import-ban gate", () => {
     expect(names.has("@cinatra-ai/anthropic-connector")).toBe(true); // un-exempt
   });
 
-  it("baselineGrowth ALLOWS growth for a NEWLY_UNEXEMPTED target (the un-exempt seed transition mechanism)", () => {
-    // The live NEWLY_UNEXEMPTED_BASELINE_SEED is now EMPTY — the anthropic-connector
-    // transition completed and its host->ext edges landed in the baseline. This pins
-    // the MECHANISM with an explicit seed (like the staleUnexemptedSeed test below),
-    // independent of the current — empty — constant value.
-    const seed = new Set(["@cinatra-ai/anthropic-connector"]);
+  it("baselineGrowth is STRICT subset-only — the un-exempt seed transition (the gate's only growth path) is retired (zero-tolerance, #36)", () => {
+    // Before the flip (#36), a NEWLY_UNEXEMPTED_BASELINE_SEED member could seed its
+    // pre-existing edges into the baseline (a sanctioned one-PR growth). The
+    // the flip (#36) removed the mechanism entirely: baselineGrowth takes NO seed
+    // parameter and flags EVERY edge not present in the base — there is no
+    // data path that can grow this baseline.
+    expect(baselineGrowth.length).toBe(2); // (base, committed) — no seed param
     const base = { "src/a.ts": ["@cinatra-ai/x-connector"] };
     const committed = {
       "src/a.ts": ["@cinatra-ai/x-connector"],
-      "src/apis-page.tsx": ["@cinatra-ai/anthropic-connector"], // seeded — allowed
+      "src/apis-page.tsx": ["@cinatra-ai/anthropic-connector"], // formerly seedable — now flagged
     };
-    expect(baselineGrowth(base, committed, seed)).toEqual([]);
-    // …but a NON-seed target growing alongside it STILL fails.
-    const committed2 = { ...committed, "src/sneaky.ts": ["@cinatra-ai/sneaky-agent"] };
-    expect(baselineGrowth(base, committed2, seed)).toEqual(["src/sneaky.ts -> @cinatra-ai/sneaky-agent"]);
-    // An explicit EMPTY seed (the CURRENT live state) restores strict growth — the
-    // anthropic edge now fails too, proving the allowance is scoped to the seed.
-    expect(baselineGrowth(base, committed, new Set())).toEqual([
+    expect(baselineGrowth(base, committed)).toEqual([
       "src/apis-page.tsx -> @cinatra-ai/anthropic-connector",
     ]);
+    // shrink-only is allowed
+    expect(baselineGrowth(committed, base)).toEqual([]);
   });
 
-  it("staleUnexemptedSeed self-polices: a member whose edges are ALREADY in base is stale (one-PR-only)", () => {
-    const seed = new Set(["@cinatra-ai/anthropic-connector"]);
-    // Edges NOT yet in base (this IS the seed PR) → not stale.
-    expect(staleUnexemptedSeed({ "src/a.ts": ["@cinatra-ai/x-connector"] }, seed)).toEqual([]);
-    // Edges already in base (the seed PR merged) → STALE → the member must be removed.
-    expect(
-      staleUnexemptedSeed({ "src/apis-page.tsx": ["@cinatra-ai/anthropic-connector"] }, seed),
-    ).toEqual(["@cinatra-ai/anthropic-connector"]);
+  it("exempts ONLY the explicit generator-emitted files under lib/generated/ — a hand-added sibling file is counted (smuggling guard, #36)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "core-ext-gate-gen-"));
+    mkdirSync(join(dir, "lib", "generated"), { recursive: true });
+    // Generator-emitted manifest file: exempt (its names are generator data).
+    writeFileSync(
+      join(dir, "lib", "generated", "extensions.server.ts"),
+      'import "@cinatra-ai/blog-skills/register";\n',
+    );
+    // Hand-added file in the SAME dir: counted (the exemption is the explicit
+    // emitted list, never a directory prefix).
+    writeFileSync(
+      join(dir, "lib", "generated", "hand-added-smuggle.ts"),
+      'import "@cinatra-ai/blog-skills/register";\n',
+    );
+    const extNames = new Set(["@cinatra-ai/blog-skills"]);
+    const edges = scanCoreExtensionEdges(dir, extNames);
+    expect(edges["src/lib/generated/extensions.server.ts"]).toBeUndefined();
+    expect(edges["src/lib/generated/hand-added-smuggle.ts"]).toEqual(["@cinatra-ai/blog-skills"]);
   });
 
   it("CATCHES a *-skills extension import and does NOT flag the host glue pkg @cinatra-ai/connectors", () => {

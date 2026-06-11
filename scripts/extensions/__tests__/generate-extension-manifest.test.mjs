@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   buildManifest,
   checkParity,
+  checkExitCode,
   resolveDisplayName,
   sanitizeSvgToDataUri,
   sanitizeLogoDataUri,
@@ -10,10 +11,29 @@ import {
   assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
+import { GENERATED_MANIFEST_FILES } from "../generated-manifest-files.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+describe("the zero-tolerance flip (#36) fail-closed --check + the shared generated-file list", () => {
+  it("checkExitCode fails (1) on drift/missing OR parity issues; clean is 0 (the gates' exempt-tree integrity is load-bearing)", () => {
+    expect(checkExitCode({ driftOrMissing: false, parityIssueCount: 0 })).toBe(0);
+    expect(checkExitCode({ driftOrMissing: true, parityIssueCount: 0 })).toBe(1);
+    expect(checkExitCode({ driftOrMissing: false, parityIssueCount: 3 })).toBe(1);
+    expect(checkExitCode({ driftOrMissing: true, parityIssueCount: 1 })).toBe(1);
+  });
+
+  it("GENERATED_MANIFEST_FILES pins the exact emitted set (it is also the coupling gates' permanent-exempt list)", () => {
+    expect([...GENERATED_MANIFEST_FILES].sort()).toEqual([
+      "src/lib/generated/connector-setup-pages.ts",
+      "src/lib/generated/extensions.client.tsx",
+      "src/lib/generated/extensions.server.ts",
+      "src/lib/generated/widget-stream-public-paths.ts",
+    ]);
+  });
+});
 
 describe("D10 logo path containment (symlink-safe)", () => {
   // sanitizeLogoDataUri resolves against the generator's REPO_ROOT (../..), so

@@ -14,6 +14,7 @@ import {
   discoverExtensionNames,
   SCANNER_EPOCH,
 } from "../core-extension-instance-coupling-ban.mjs";
+import { GENERATED_MANIFEST_FILES } from "../../extensions/generated-manifest-files.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -61,17 +62,44 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(fp).toEqual([]);
   });
 
-  it("does NOT scan the extensions/ tree, the generated MANIFEST, or tests — but DOES count the generated derivatives (strict exempt set)", () => {
+  it("does NOT scan the extensions/ tree, the generated manifest TREE, or tests (unified exempt set, #36)", () => {
     const occ = scanInstanceCoupling();
     const files = new Set(Object.keys(occ).map((k) => k.split(" :: ")[0]));
     for (const f of files) {
       expect(f.startsWith("extensions/")).toBe(false);
-      expect(f).not.toBe("src/lib/generated/extensions.server.ts");
+      // The whole generator-emitted set is the ONE permanent-exempt class
+      // (owner ruling on #36) — none of its files may appear in the scan.
+      expect(GENERATED_MANIFEST_FILES, f).not.toContain(f);
       expect(/\.(test|spec)\.|\/__tests__\/|\/__mocks__\//.test(f)).toBe(false);
     }
-    // The generated loader map is a DERIVATIVE of the manifest, not the
-    // manifest — it is counted (classified mechanical), never exempt.
-    expect(files.has("src/lib/generated/connector-setup-pages.ts")).toBe(true);
+  });
+
+  it("the generated-tree exemption is the EXPLICIT emitted list, not a prefix — a hand-added file under src/lib/generated/ IS counted", () => {
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-genexempt-"));
+    try {
+      mkdirSync(join(root, "src/lib/generated"), { recursive: true });
+      // A generator-emitted file naming an extension: EXEMPT (generator output).
+      writeFileSync(
+        join(root, "src/lib/generated/extensions.server.ts"),
+        'export const M = { "@scope/sample-connector": {} };\n',
+      );
+      writeFileSync(
+        join(root, "src/lib/generated/connector-setup-pages.ts"),
+        'export const L = { "sample-connector": () => import("@scope/sample-connector/setup-page") };\n',
+      );
+      // A NON-emitted, hand-added file in the same dir: COUNTED (smuggling guard).
+      writeFileSync(
+        join(root, "src/lib/generated/hand-added-smuggle.ts"),
+        'import { x } from "@scope/sample-connector";\nexport const y = x;\n',
+      );
+      const extensions = { names: new Set(["@scope/sample-connector"]), dirPaths: new Set() };
+      const occ = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      expect(occ["src/lib/generated/extensions.server.ts :: package :: @scope/sample-connector"]).toBeUndefined();
+      expect(occ["src/lib/generated/connector-setup-pages.ts :: package :: @scope/sample-connector"]).toBeUndefined();
+      expect(occ["src/lib/generated/hand-added-smuggle.ts :: package :: @scope/sample-connector"]).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("scanner-correctness regression: real imports adjacent to comments are counted", () => {
@@ -193,16 +221,27 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(m2).not.toContain("@scope/y:a.b(c)");
   });
 
-  it("growthAllowance permits a rise ONLY for a one-step epoch advance carried by the scanner itself", () => {
-    // The sanctioned recompute: base epoch N, committed epoch N+1 == script epoch.
-    expect(growthAllowance(SCANNER_EPOCH - 1, SCANNER_EPOCH)).toEqual({ allowGrowth: true, error: null });
-    // Steady state: no allowance.
+  it("growthAllowance NEVER permits growth — the zero-tolerance flip (#36) retired the epoch recompute path", () => {
+    // THE bypass-resistance pin: the formerly sanctioned one-step epoch
+    // advance (base N, committed N+1 == script epoch) no longer allows growth
+    // — it is now a hard ERROR (the epoch is frozen; a scanner change must
+    // land with the revealed references fixed, never via re-baselining).
+    const formerlySanctioned = growthAllowance(SCANNER_EPOCH - 1, SCANNER_EPOCH);
+    expect(formerlySanctioned.allowGrowth).toBe(false);
+    expect(formerlySanctioned.error).toMatch(/FROZEN|can no longer sanction/);
+    // Steady state: epochs equal — no error, and STILL no allowance.
     expect(growthAllowance(SCANNER_EPOCH, SCANNER_EPOCH)).toEqual({ allowGrowth: false, error: null });
     // A committed baseline whose epoch does not match the script must fail.
     expect(growthAllowance(SCANNER_EPOCH, SCANNER_EPOCH - 1).error).toMatch(/does not match/);
-    // Skipping epochs / regressing vs base must fail.
-    expect(growthAllowance(SCANNER_EPOCH - 2, SCANNER_EPOCH).error).toMatch(/advance by 1/);
-    expect(growthAllowance(SCANNER_EPOCH + 1, SCANNER_EPOCH).error).toMatch(/advance by 1|never regress/);
+    // ANY base/committed epoch mismatch is tampering and must fail.
+    expect(growthAllowance(SCANNER_EPOCH - 2, SCANNER_EPOCH).error).toMatch(/FROZEN|can no longer sanction/);
+    expect(growthAllowance(SCANNER_EPOCH + 1, SCANNER_EPOCH).error).toMatch(/FROZEN|can no longer sanction/);
+    // Exhaustive: NO epoch pair, in any direction, yields allowGrowth=true.
+    for (let base = SCANNER_EPOCH - 2; base <= SCANNER_EPOCH + 2; base++) {
+      for (let committed = SCANNER_EPOCH - 2; committed <= SCANNER_EPOCH + 2; committed++) {
+        expect(growthAllowance(base, committed).allowGrowth, `base=${base} committed=${committed}`).toBe(false);
+      }
+    }
   });
 
   it("diffGrown flags a NEW occurrence and a GROWN count; diffShrunk flags a reduced count", () => {

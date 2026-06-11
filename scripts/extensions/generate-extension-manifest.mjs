@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// Build-time 3-file extension manifest generator.
+// Build-time extension manifest generator (the GENERATED_MANIFEST_FILES set).
 //
 // Emits the StaticBundleLoader's input — the SAME normalized records the future
-// RuntimePackageLoader will consume — split into three files so server
+// RuntimePackageLoader will consume — split into files so server
 // registrars never drag `server-only`/DB across the React "use client" boundary:
-//   - src/lib/generated/extensions.server.ts        — server-side static manifest (data)
-//   - src/lib/generated/connector-setup-pages.ts     — literal dynamic-import map (Turbopack-safe)
-//   - src/lib/generated/extensions.client.tsx        — true client widgets (scaffold)
+//   - src/lib/generated/extensions.server.ts          — server-side static manifest (data)
+//   - src/lib/generated/connector-setup-pages.ts      — literal dynamic-import map (Turbopack-safe)
+//   - src/lib/generated/extensions.client.tsx         — true client widgets (scaffold)
+//   - src/lib/generated/widget-stream-public-paths.ts — widget-stream public path list
 //
 // POSTURE — CONSUMED: the generated maps are the host's runtime source of
 // truth for the connector surfaces. `src/lib/connector-setup-pages.ts` and
@@ -15,17 +16,23 @@
 // `serverEntry` extensions from here. The `extensions-dev-watcher` readdir
 // boot scan remains the registration source for filesystem-loaded extension
 // kinds (agents/skills/artifacts/workflows). Parity is checked against the
-// connector catalog descriptors. `--check` is non-failing for now.
+// connector catalog descriptors. `--check` is FAIL-CLOSED (cinatra#36):
+// the generated tree is the coupling gates' one permanent-exempt class, so a
+// generated file drifting from the generator's byte-exact output — or a
+// catalog parity break — fails CI (exit 1). The emitted file set is the
+// shared GENERATED_MANIFEST_FILES list (generated-manifest-files.mjs) — the
+// SAME list the gates exempt, so generator and exemption cannot drift apart.
 //
 // Usage:
 //   node scripts/extensions/generate-extension-manifest.mjs           # (re)write generated files
-//   node scripts/extensions/generate-extension-manifest.mjs --check   # drift + parity report (currently exit 0)
+//   node scripts/extensions/generate-extension-manifest.mjs --check   # drift + parity check (exit 1 on either)
 //   node scripts/extensions/generate-extension-manifest.mjs --print   # print the manifest, write nothing
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildInventory } from "./inventory.mjs";
+import { GENERATED_MANIFEST_FILES } from "./generated-manifest-files.mjs";
 import { CONNECTOR_DESCRIPTORS } from "../../packages/connectors-catalog/src/descriptors.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1121,12 +1128,32 @@ export async function checkParity() {
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
-// Generated output file names, under src/lib/generated/ (no collision with the
-// hand-maintained src/lib/connector-setup-pages.ts — different dir).
-const OUT_SERVER = join(GEN_DIR, "extensions.server.ts");
-const OUT_SETUP = join(GEN_DIR, "connector-setup-pages.ts");
-const OUT_CLIENT = join(GEN_DIR, "extensions.client.tsx");
-const OUT_WIDGET_PATHS = join(GEN_DIR, "widget-stream-public-paths.ts");
+// Generated output file names — resolved from the SHARED GENERATED_MANIFEST_FILES
+// list (generated-manifest-files.mjs), the same list the extension-coupling
+// gates permanently exempt. Resolving (not re-declaring) the paths here keeps
+// the emitted set and the exempt set structurally identical; a gate test pins
+// the equality. (No collision with the hand-maintained
+// src/lib/connector-setup-pages.ts — different dir.)
+function generatedOutPath(basename) {
+  const rel = GENERATED_MANIFEST_FILES.find((p) => p.endsWith(`/${basename}`));
+  if (!rel) throw new Error(`generated-manifest-files.mjs does not list ${basename} — emitted set and exempt set would drift`);
+  return join(REPO_ROOT, rel);
+}
+const OUT_SERVER = generatedOutPath("extensions.server.ts");
+const OUT_SETUP = generatedOutPath("connector-setup-pages.ts");
+const OUT_CLIENT = generatedOutPath("extensions.client.tsx");
+const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
+
+/**
+ * Fail-closed verdict for `--check` (cinatra#36): any drift/missing
+ * generated file or any catalog parity issue must fail CI — the generated
+ * tree is the coupling gates' permanent-exempt class, so its integrity is
+ * load-bearing. Pure + exported for unit testing. Returns the process exit
+ * code (0 = clean, 1 = fail).
+ */
+export function checkExitCode({ driftOrMissing, parityIssueCount }) {
+  return driftOrMissing || parityIssueCount > 0 ? 1 : 0;
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -1156,20 +1183,27 @@ async function main() {
     let drift = false;
     for (const [path, content] of files) {
       if (!existsSync(path)) {
-        console.log(`[extension-manifest] MISSING ${relative(REPO_ROOT, path)}`);
+        console.error(`[extension-manifest] MISSING ${relative(REPO_ROOT, path)} — regenerate: node scripts/extensions/generate-extension-manifest.mjs`);
         drift = true;
         continue;
       }
       if (readFileSync(path, "utf8") !== content) {
-        console.log(`[extension-manifest] DRIFT ${relative(REPO_ROOT, path)}`);
+        console.error(`[extension-manifest] DRIFT ${relative(REPO_ROOT, path)} — file differs from generator output (hand-edit or stale; regenerate, never hand-edit)`);
         drift = true;
       }
     }
     const parity = await checkParity();
-    for (const p of parity) console.log(`[extension-manifest] PARITY ${p}`);
-    if (!drift && parity.length === 0) console.log("[extension-manifest] OK — generated files current + parity holds.");
-    else console.log("[extension-manifest] NOTE: --check is non-failing for now (the cutover gate enforces it later).");
-    return; // non-failing exit 0
+    for (const p of parity) console.error(`[extension-manifest] PARITY ${p}`);
+    const exit = checkExitCode({ driftOrMissing: drift, parityIssueCount: parity.length });
+    if (exit === 0) {
+      console.log("[extension-manifest] OK — generated files current + parity holds.");
+    } else {
+      // FAIL-CLOSED (cinatra#36): the generated tree is the coupling
+      // gates' permanent-exempt class — drift or parity break fails CI.
+      console.error("[extension-manifest] FAIL — generated-tree drift and/or catalog parity break (see lines above).");
+      process.exit(exit);
+    }
+    return;
   }
 
   if (!existsSync(GEN_DIR)) mkdirSync(GEN_DIR, { recursive: true });

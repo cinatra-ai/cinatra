@@ -10,20 +10,34 @@ import {
   summarizeByClassification,
   DATA_CONTRACT_ID_ALPHABET_RE,
 } from "../lib/extension-reference-classification.mjs";
+import { GENERATED_MANIFEST_FILES } from "../../extensions/generated-manifest-files.mjs";
 
 describe("extension-reference classification taxonomy", () => {
   it("exposes exactly the three classes", () => {
     expect([...CLASSIFICATIONS]).toEqual(["runtime-coupling", "mechanical", "permanent-exempt"]);
   });
 
-  it("the permanent-exempt FILE set is ONLY the generated manifest (strict policy)", () => {
-    expect([...PERMANENT_EXEMPT_FILES]).toEqual(["src/lib/generated/extensions.server.ts"]);
+  it("the permanent-exempt FILE set is EXACTLY the generator-emitted list (owner ruling on #36: one generated-tree class)", () => {
+    // Pinned EQUALITY with the shared GENERATED_MANIFEST_FILES list the
+    // generator emits from — the exempt set and the emitted set cannot drift.
+    expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([...GENERATED_MANIFEST_FILES].sort());
+    expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([
+      "src/lib/generated/connector-setup-pages.ts",
+      "src/lib/generated/extensions.client.tsx",
+      "src/lib/generated/extensions.server.ts",
+      "src/lib/generated/widget-stream-public-paths.ts",
+    ]);
   });
 
-  it("the generated DERIVATIVES are mechanical, not exempt (strict reading: only the manifest is exempt)", () => {
-    expect(classifyFile("src/lib/generated/connector-setup-pages.ts")).toBe("mechanical");
-    expect(classifyFile("src/lib/generated/extensions.client.tsx")).toBe("mechanical");
+  it("the generated tree is permanent-exempt — but ONLY the explicit emitted files (a hand-added file under src/lib/generated/ stays counted)", () => {
+    expect(classifyFile("src/lib/generated/connector-setup-pages.ts")).toBe("permanent-exempt");
+    expect(classifyFile("src/lib/generated/extensions.client.tsx")).toBe("permanent-exempt");
     expect(classifyFile("src/lib/generated/extensions.server.ts")).toBe("permanent-exempt");
+    expect(classifyFile("src/lib/generated/widget-stream-public-paths.ts")).toBe("permanent-exempt");
+    // NOT a prefix exemption: an extra (non-generator-emitted) file under the
+    // generated dir defaults to runtime-coupling — counted, hard-fails as a
+    // NEW key under zero-tolerance.
+    expect(classifyFile("src/lib/generated/hand-added-smuggle.ts")).toBe("runtime-coupling");
   });
 
   it("inventories/catalogs are mechanical; everything else defaults to runtime-coupling", () => {
@@ -83,7 +97,7 @@ describe("extension-reference classification taxonomy", () => {
     const occ = {
       "src/lib/foo.ts :: package :: @scope/a": 2,
       "src/lib/foo.ts :: path :: extensions/s/a": 1,
-      "src/lib/generated/connector-setup-pages.ts :: package :: @scope/a": 4,
+      "packages/connectors-catalog/src/descriptors.mjs :: package :: @scope/a": 4,
     };
     expect(summarizeByClassification(occ)).toEqual({
       "runtime-coupling": { files: 1, keys: 2, occurrences: 3 },

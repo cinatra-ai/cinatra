@@ -16,15 +16,18 @@
 //     cutover removes; the DEFAULT class for any counted reference.
 //
 //   - "mechanical"        — re-export facades, hand-written inventories/
-//     catalogs, dev-name lists, and generated DERIVATIVES of the manifest.
-//     Not runtime selection, but still named-instance coupling; removed or
-//     consolidated by the mechanical-cleanup pass. Counted and ratcheted
+//     catalogs, and dev-name lists. Not runtime selection, but still
+//     named-instance coupling; removed or consolidated by the
+//     mechanical-cleanup pass (#35 drove every counted mechanical occurrence
+//     to ZERO — the class is kept so any reappearance is classified honestly,
+//     and it fails the gates like everything else). Counted and ratcheted
 //     exactly like runtime-coupling — NEVER exempt.
 //
-//   - "permanent-exempt"  — never counted. STRICT, owner-ruled set:
-//     the generated extension manifest (`src/lib/generated/extensions.server.ts`)
-//     plus the documented data-contract-ID allowlist below. Nothing else: no
-//     facades, no inventories, no dev-lists.
+//   - "permanent-exempt"  — never counted. STRICT, owner-ruled set (the flip on
+//     cinatra-ai/cinatra#36): the generated manifest tree — the
+//     generator-emitted `src/lib/generated/**` files as ONE class — plus the
+//     documented data-contract-ID allowlist below. Nothing else: no facades,
+//     no inventories, no dev-lists.
 
 export const CLASSIFICATIONS = Object.freeze([
   "runtime-coupling",
@@ -35,17 +38,25 @@ export const CLASSIFICATIONS = Object.freeze([
 // ---------------------------------------------------------------------------
 // The STRICT permanent-exempt FILE set.
 //
-// ONLY the generated extension manifest. It is the legitimate data-driven
-// install list — names there are data produced by
-// `scripts/extensions/generate-extension-manifest.mjs`, not hand-coupling.
-// NOTE the deliberate narrowness: the OTHER generated files
-// (`src/lib/generated/connector-setup-pages.ts`, `extensions.client.tsx`) are
-// derivatives, NOT the manifest — they are counted and classified
-// "mechanical" below. Growing this set requires an owner ruling.
+// ONLY the generated manifest tree — the exact files
+// `scripts/extensions/generate-extension-manifest.mjs` emits (the shared
+// GENERATED_MANIFEST_FILES list; a test pins set == emitted set). Names there
+// are generator output — the legitimate data-driven install list — not
+// hand-coupling. The owner ruling on cinatra-ai/cinatra#36 made the whole
+// generated tree the ONE permanent-exempt class (the sibling generated maps
+// are part of it, not a separate concession). Two integrity guards keep the
+// exemption honest:
+//   - it is an EXPLICIT file list, never a directory prefix — a hand-added
+//     extra file under src/lib/generated/ is counted (default class
+//     runtime-coupling → NEW key → hard fail);
+//   - the listed files themselves are pinned to the generator's byte-exact
+//     output by the FAIL-CLOSED `generate-extension-manifest.mjs --check` CI
+//     step (a hand-edit of a generated file fails CI).
+// Growing this set requires an owner ruling.
 // ---------------------------------------------------------------------------
-export const PERMANENT_EXEMPT_FILES = new Set([
-  "src/lib/generated/extensions.server.ts",
-]);
+import { GENERATED_MANIFEST_FILES } from "../../extensions/generated-manifest-files.mjs";
+
+export const PERMANENT_EXEMPT_FILES = new Set(GENERATED_MANIFEST_FILES);
 
 // ---------------------------------------------------------------------------
 // The documented data-contract-ID allowlist.
@@ -66,27 +77,28 @@ export const PERMANENT_EXEMPT_FILES = new Set([
 //     so they are always distinguishable from baseline coupling.
 //
 // Shape: Map<contractId, justification>. Currently EMPTY — no contract ID has
-// been ruled exempt yet; the mechanism ships ahead of its first entry.
+// been ruled exempt yet; the mechanism ships ahead of its first entry. NOTE
+// (the zero-tolerance flip (#36)): the residual frozen-floor coupling (the nango facade deferral per
+// the #35 ruling, the host's eager connector import surface) is NOT
+// allowlisted here — none of it is a data-contract ID. It stays COUNTED in
+// the pinned, shrink-only baselines.
 // ---------------------------------------------------------------------------
 export const DATA_CONTRACT_ID_ALLOWLIST = new Map([]);
 
 // ---------------------------------------------------------------------------
 // Mechanical reference sites (repo-relative path -> rationale).
 //
-// Facades / inventories / catalogs / dev-lists and generated derivatives of
-// the manifest. These are COUNTED in the baselines (never exempt); the class
-// only tells the cleanup work apart from runtime-coupling work. Default for
-// any file NOT listed here is "runtime-coupling".
+// Facades / inventories / catalogs / dev-lists. These are COUNTED in the
+// baselines (never exempt); the class only tells the cleanup work apart from
+// runtime-coupling work. Default for any file NOT listed here is
+// "runtime-coupling". The mechanical-cleanup phase (#35) drove every counted mechanical occurrence to zero;
+// the entries below are kept as classification metadata (each names a real
+// inventory/catalog site that would be mechanical if it ever referenced an
+// extension again — and would hard-fail the zero-tolerance gates as a NEW
+// key). The generated manifest derivatives that used to be listed here are
+// now part of the permanent-exempt generated tree (owner ruling on #36).
 // ---------------------------------------------------------------------------
 export const MECHANICAL_FILES = new Map([
-  [
-    "src/lib/generated/connector-setup-pages.ts",
-    "generated DERIVATIVE of the manifest (literal setup-page loader map for the bundler) — not the manifest itself, so counted; consolidated by the mechanical-cleanup pass",
-  ],
-  [
-    "src/lib/generated/extensions.client.tsx",
-    "generated DERIVATIVE of the manifest (client widget map) — not the manifest itself, so counted",
-  ],
   [
     "packages/extensions/src/system-extension-inventory.ts",
     "hand-written inventory of locked system packages",

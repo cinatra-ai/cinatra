@@ -11,13 +11,21 @@
 // knowing a specific extension by name, which a true IoC system must not do —
 // capabilities come from the manifest/registry, not hardcoded references.
 //
-// NO-NEW-ROT ratchet (mirrors core-extension-import-ban): every current
-// occurrence is recorded in the baseline as `file :: kind :: value -> count`;
-// CI fails if any count GROWS or a NEW occurrence appears, and (with a base ref)
-// if the committed baseline grew vs the base branch. The baseline can only
-// SHRINK — the IoC cutover drives it to the strict end-state (manifest +
-// documented data-contract-ID allowlist ONLY) — EXCEPT a sanctioned scanner
-// recompute (see SCANNER_EPOCH below).
+// ZERO-TOLERANCE (cinatra-ai/cinatra#36 — flipped at the end of the
+// IoC cutover epic #24): every current occurrence is recorded in the baseline
+// as `file :: kind :: value -> count`; the gate fails if any count GROWS or a
+// NEW occurrence appears, and (with a base ref) if the committed baseline
+// grew vs the base branch. The baseline is the FROZEN RESIDUAL FLOOR of the
+// cutover — it may only ever SHRINK, by ANY mechanism: the scanner-epoch
+// growth allowance is permanently retired (an epoch mismatch is now a hard
+// failure, never a growth sanction) and `--write-baseline` refuses to write a
+// grown baseline. The ONLY sanctioned named-extension references are the
+// strict exempt set: the generated manifest tree + the documented
+// data-contract-ID allowlist. A scanner fix that reveals previously hidden
+// references must land WITH the references removed (or, if they are genuine
+// data-contract IDs, owner-ruled allowlist entries) in the same PR —
+// re-baselining upward is impossible by data; only a reviewed change to this
+// gate and its tests could alter the semantics.
 //
 // Counts ALL non-comment occurrences INCLUDING imports — the src-only
 // import-ban gate does not scan `packages/`, so a package-side
@@ -32,9 +40,11 @@
 //     `mechanical` (facades/inventories/dev-lists/generated derivatives) —
 //     BOTH are counted and ratcheted identically;
 //   - permanently exempt (never scanned/counted) are ONLY:
-//       * the generated manifest `src/lib/generated/extensions.server.ts`
-//         (PERMANENT_EXEMPT_FILES — strict: the OTHER generated files are
-//         counted as `mechanical`),
+//       * the generated manifest tree (PERMANENT_EXEMPT_FILES — the exact
+//         generator-emitted files, one owner-ruled class; integrity held by
+//         the fail-closed `generate-extension-manifest.mjs --check` CI step,
+//         and the list is explicit, so a hand-added file under
+//         src/lib/generated/ is still counted),
 //       * occurrences inside a documented DATA_CONTRACT_ID_ALLOWLIST entry —
 //         each entry carries a written justification and is reported
 //         separately + self-policed for staleness,
@@ -66,17 +76,21 @@ const REPO_ROOT = join(__dirname, "..", "..");
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
 const BASELINE_PATH = join(__dirname, "core-extension-instance-coupling-ban.baseline.json");
 
-// Scanner-correctness epoch. Bump ONLY when a scanner fix legitimately changes
-// what is counted (owner sign-off required — a bump is the documented one-time
-// recompute path that permits the committed baseline to RISE vs the base ref
-// in exactly the PR that carries the fix). History:
+// Scanner-correctness epoch — FROZEN at 2 by the zero-tolerance flip (#36).
+// The epoch is now purely a TAMPER CHECK (committed baseline epoch must equal
+// this constant AND the base ref's epoch); it can no longer sanction baseline
+// growth (`growthAllowance` never allows growth — see there). A future
+// scanner fix that changes what is counted must land with the revealed
+// references REMOVED (or owner-ruled into the data-contract-ID allowlist) in
+// the same PR; changing this constant requires editing this gate and its
+// tests in a reviewed PR and still cannot un-freeze growth. History:
 //   1 — original regex-based comment stripping (mis-lexed `/*` inside line
 //       comments / `//` inside strings; HID real references — e.g. the whole
 //       static import cluster of src/lib/register-transport-connectors.ts and
 //       the live loader map of src/lib/connector-setup-pages.ts).
-//   2 — lexical stripper (lib/strip-comments.mjs) + strict exempt set: only
-//       the generated manifest file is exempt; other generated files are
-//       counted as `mechanical`. One-time corrected-baseline recompute.
+//   2 — lexical stripper (lib/strip-comments.mjs) + strict exempt set
+//       (one-time corrected-baseline recompute, sanctioned before the
+//       flip) + the zero-tolerance freeze (#36).
 export const SCANNER_EPOCH = 2;
 
 const SCAN_ROOTS = ["src", "packages"];
@@ -118,10 +132,10 @@ export function discoverExtensions(extRoot = EXTENSIONS_ROOT) {
   return { names, dirPaths };
 }
 
-// STRICT file exemption: tests + the permanent-exempt set ONLY. The broad
-// `src/lib/generated/**` carve-out is gone — of the generated files, only the
-// manifest itself (`extensions.server.ts`) is exempt; the generated
-// DERIVATIVES (loader map, client widget map) are counted as `mechanical`.
+// STRICT file exemption: tests + the permanent-exempt set ONLY. The
+// permanent-exempt set is the EXPLICIT generator-emitted file list (the one
+// owner-ruled generated-tree class — #36) — never a directory prefix, so a
+// hand-added extra file under `src/lib/generated/` is still counted.
 function isExemptFile(rel) {
   return (
     PERMANENT_EXEMPT_FILES.has(rel) ||
@@ -275,27 +289,29 @@ export function baselineGrowth(baseBaseline, committed) {
 }
 
 /**
- * Decide whether baseline growth vs the base ref is sanctioned. Growth is
- * allowed ONLY in the single PR that carries a scanner-correctness recompute:
- * the committed baseline's epoch must be EXACTLY base+1 AND equal to the
- * script's SCANNER_EPOCH (so the allowance self-expires the moment the
- * recompute merges — afterwards base epoch == script epoch, and a future
- * allowance requires a reviewed SCANNER_EPOCH bump in code). Pure + exported
- * for unit testing. Returns { allowGrowth, error }.
+ * Decide whether baseline growth vs the base ref is sanctioned. Since the
+ * the zero-tolerance flip (#36) zero-tolerance flip (cinatra-ai/cinatra#36): growth is NEVER
+ * sanctioned. The epoch survives purely as a tamper check — the committed
+ * baseline's epoch must equal the script's SCANNER_EPOCH AND the base ref's
+ * epoch; ANY mismatch (including the formerly sanctioned base+1 advance) is a
+ * hard failure. A scanner change that reveals references must land with the
+ * references fixed in the same PR — the baseline floor cannot rise by data.
+ * Pure + exported for unit testing. Returns { allowGrowth: false, error }.
  */
 export function growthAllowance(baseEpoch, committedEpoch, scannerEpoch = SCANNER_EPOCH) {
   if (committedEpoch !== scannerEpoch) {
     return {
       allowGrowth: false,
-      error: `committed baseline scannerEpoch=${committedEpoch} does not match the scanner's SCANNER_EPOCH=${scannerEpoch} — regenerate with --write-baseline`,
+      error: `committed baseline scannerEpoch=${committedEpoch} does not match the scanner's SCANNER_EPOCH=${scannerEpoch} — regenerate with --write-baseline (shrink-only)`,
     };
   }
-  if (committedEpoch === baseEpoch) return { allowGrowth: false, error: null };
-  if (committedEpoch === baseEpoch + 1) return { allowGrowth: true, error: null };
-  return {
-    allowGrowth: false,
-    error: `committed baseline scannerEpoch=${committedEpoch} vs base scannerEpoch=${baseEpoch} — an epoch may only advance by 1 (one sanctioned recompute per epoch) and never regress`,
-  };
+  if (committedEpoch !== baseEpoch) {
+    return {
+      allowGrowth: false,
+      error: `committed baseline scannerEpoch=${committedEpoch} vs base scannerEpoch=${baseEpoch} — the epoch is FROZEN since the zero-tolerance flip (#36); an epoch change can no longer sanction baseline growth (fix the revealed references in the same PR instead)`,
+    };
+  }
+  return { allowGrowth: false, error: null };
 }
 
 function main() {
@@ -335,11 +351,27 @@ function main() {
   }
 
   if (args.includes("--write-baseline")) {
+    // FAIL-CLOSED write (zero-tolerance, #36): the baseline is the frozen
+    // residual floor of the IoC cutover — regeneration may only ever SHRINK
+    // it. Refuse to write a baseline with any NEW or GROWN key vs the
+    // committed one (remove the new coupling instead). First write (no
+    // committed baseline) is the introducing exception.
+    if (existsSync(BASELINE_PATH)) {
+      const committed = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).occurrences ?? {};
+      const grownVsCommitted = diffGrown(committed, current);
+      if (grownVsCommitted.length) {
+        console.error(
+          `[core-extension-instance-coupling-ban] FAIL — refusing to write a GROWN baseline (zero-tolerance: the floor only shrinks; remove the new coupling instead of re-baselining it):`,
+        );
+        grownVsCommitted.forEach((e) => console.error("  + " + e));
+        process.exit(1);
+      }
+    }
     writeFileSync(
       BASELINE_PATH,
       stable({
         note:
-          "true-IoC hardcoded-extension-INSTANCE coupling baseline. Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md); BOTH classes are tolerated only until the IoC cutover de-couples them, and the count may only ever SHRINK (a rise requires a sanctioned SCANNER_EPOCH recompute). Permanently exempt: ONLY the generated manifest (src/lib/generated/extensions.server.ts), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
+          "true-IoC hardcoded-extension-INSTANCE coupling baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36). Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the scanner-epoch allowance is retired; --write-baseline refuses grown output). The ONLY sanctioned named-extension references are the generated manifest tree (the explicit generator-emitted file list), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate (shrink-only) with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
         scannerEpoch: SCANNER_EPOCH,
         classificationSummary: summary,
         occurrences: current,
@@ -405,19 +437,19 @@ function main() {
     if (baseText) {
       const baseDoc = JSON.parse(baseText);
       const baseEpoch = baseDoc.scannerEpoch ?? 1;
-      const { allowGrowth, error } = growthAllowance(baseEpoch, committedEpoch);
+      // the zero-tolerance flip (#36): growthAllowance NEVER allows growth — it is purely the epoch
+      // tamper check now (any epoch mismatch is a hard failure).
+      const { error } = growthAllowance(baseEpoch, committedEpoch);
       if (error) {
         console.error(`[core-extension-instance-coupling-ban] FAIL — ${error}.`);
         process.exit(1);
       }
       const grew = baselineGrowth(baseDoc.occurrences ?? {}, baseline);
-      if (grew.length && allowGrowth) {
-        console.log(
-          `[core-extension-instance-coupling-ban] NOTE — committed baseline grew vs ${baseRef} (${grew.length} entr${grew.length === 1 ? "y" : "ies"}) ` +
-            `under the SANCTIONED scanner recompute (epoch ${baseEpoch} -> ${committedEpoch}). This allowance self-expires on merge.`,
+      if (grew.length) {
+        console.error(
+          `[core-extension-instance-coupling-ban] FAIL — committed baseline GREW vs ${baseRef} ` +
+            `(zero-tolerance: the frozen floor only shrinks — no recompute, epoch bump, or regenerate can raise it):`,
         );
-      } else if (grew.length) {
-        console.error(`[core-extension-instance-coupling-ban] FAIL — committed baseline GREW vs ${baseRef} (regenerate-to-pass bypass):`);
         grew.forEach((e) => console.error("  + " + e));
         process.exit(1);
       }
@@ -431,16 +463,20 @@ function main() {
   }
   const grown = diffGrown(baseline, current);
   if (grown.length) {
-    console.error(`[core-extension-instance-coupling-ban] FAIL — ${grown.length} NEW/GROWN hardcoded extension-instance reference(s) in core (route through the manifest/registry, do not name a specific extension):`);
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — ${grown.length} NEW/GROWN hardcoded extension-instance reference(s) in core ` +
+        `(ZERO-TOLERANCE: the only sanctioned named-extension references are the generated manifest tree and the documented ` +
+        `data-contract-ID allowlist — route through the manifest/registry, never name a specific extension):`,
+    );
     grown.forEach((e) => console.error("  + " + e));
     process.exit(1);
   }
   console.log(
-    `[core-extension-instance-coupling-ban] OK — no NEW instance coupling. Baseline: ${totalOcc} occurrence(s) across ${totalFiles} file(s) ` +
+    `[core-extension-instance-coupling-ban] OK — no NEW instance coupling (zero-tolerance holds). Frozen floor: ${totalOcc} occurrence(s) across ${totalFiles} file(s) ` +
       `[runtime-coupling: ${summary["runtime-coupling"].occurrences} occ / ${summary["runtime-coupling"].files} file(s); ` +
       `mechanical: ${summary.mechanical.occurrences} occ / ${summary.mechanical.files} file(s); ` +
       `data-contract allowlisted (sanctioned, not counted): ${allowlistedOcc}] ` +
-      `(strict end-state: manifest + documented data-contract-ID allowlist ONLY — drive both classes to 0).`,
+      `(exempt set: generated manifest tree + documented data-contract-ID allowlist ONLY; the floor only shrinks — see scripts/audit/extension-coupling-gates.md).`,
   );
 }
 

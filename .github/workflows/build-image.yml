@@ -735,13 +735,14 @@ jobs:
         run: pnpm exec vitest run scripts/audit/__tests__/host-peer-value-import-ban.test.mjs
 
       # The MIRROR gate: core(src/) -> extension import ban.
-      # No NEW hand-coded core->extension coupling (core knowing a specific
-      # extension by name). The IoC cutover drives the baseline
-      # to 0 via the runtime-discovery dispatcher. Same no-new-rot + monotonic
-      # ratchet shape as extension-import-ban (reverse direction).
-      - name: Core -> extension import-ban gate (no-new-rot)
+      # ZERO-TOLERANCE (cinatra#36): no new hand-coded core->extension edge
+      # may land — this gate exempts ONLY the explicit generator-emitted
+      # file list and tests. The committed baseline is the FROZEN
+      # residual floor of the IoC cutover: it may only ever shrink (the
+      # un-exempt seed transition is retired; --write-baseline refuses growth).
+      - name: Core -> extension import-ban gate (zero-tolerance)
         env:
-          # Monotonic ratchet: the committed baseline must be a subset of the
+          # Monotonic guard: the committed baseline must be a subset of the
           # base-branch baseline (it may only shrink). Same base ref the
           # extension-import-ban + administration-route gates use.
           CORE_EXT_BAN_BASE: ${{ steps.base.outputs.base }}
@@ -752,15 +753,16 @@ jobs:
 
       # Discovery-dispatcher bypass gate. The runtime-discovery
       # dispatcher (discoverActiveExtensionCapabilities) is the ONE sanctioned way
-      # a surface discovers active extension capabilities. This freezes the
-      # CURRENT direct native-reader callers as a baseline and fails CI on any NEW
-      # one, so discovery coupling can only SHRINK as surfaces migrate. Same
-      # no-new-rot + monotonic ratchet shape as the import-ban gates.
-      - name: Discovery-dispatcher bypass gate (no-new-rot)
+      # a surface discovers active extension capabilities. ZERO-TOLERANCE
+      # (cinatra#36): the tolerated-bypass baseline is PINNED EMPTY — any
+      # direct native-reader reference outside the gate's documented, justified
+      # SANCTIONED_READERS allowlist fails CI immediately (a non-empty committed
+      # baseline is itself a failure; --write-baseline refuses to produce one).
+      - name: Discovery-dispatcher bypass gate (zero-tolerance)
         env:
-          # Monotonic ratchet: the committed baseline must be a subset of the
-          # base-branch baseline (it may only shrink). Same base ref the other
-          # no-new-rot gates use.
+          # Monotonic guard: the committed baseline must be a subset of the
+          # base-branch baseline (it stays empty). Same base ref the other
+          # gates use.
           DISCOVERY_BYPASS_BASE: ${{ steps.base.outputs.base }}
         run: node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 
@@ -770,19 +772,32 @@ jobs:
       # Hardcoded extension-INSTANCE coupling gate. Catches the
       # OTHER way core hardcodes a specific extension (the way blog/openai.ts
       # slipped past the import-ban): string-literal / path references to an exact
-      # extension package name or `extensions/<scope>/<name>/` path. Occurrence-
-      # counted, shrink-only (one-time scanner-correctness recomputes are
-      # sanctioned via SCANNER_EPOCH); the IoC cutover drives the baseline to 0.
-      # Counts + targets: scripts/audit/extension-coupling-gates.md.
-      - name: Core -> extension instance-coupling gate (no-new-rot)
+      # extension package name or `extensions/<scope>/<name>/` path.
+      # ZERO-TOLERANCE (cinatra#36): the committed baseline is the
+      # FROZEN residual floor of the IoC cutover — it may only ever shrink, by
+      # any mechanism (the SCANNER_EPOCH growth allowance is retired and now a
+      # pure tamper check; --write-baseline refuses grown output). The only
+      # sanctioned named-extension references are the generated manifest tree +
+      # the documented data-contract-ID allowlist.
+      # Counts + end-state: scripts/audit/extension-coupling-gates.md.
+      - name: Core -> extension instance-coupling gate (zero-tolerance)
         env:
-          # Monotonic ratchet: committed baseline counts must not exceed the base
-          # ref's. Same base ref the other no-new-rot gates use.
+          # Monotonic guard: committed baseline counts must not exceed the base
+          # ref's. Same base ref the other gates use.
           CORE_EXT_INSTANCE_BAN_BASE: ${{ steps.base.outputs.base }}
         run: node scripts/audit/core-extension-instance-coupling-ban.mjs
 
       - name: Core -> extension instance-coupling gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
+
+      # Generated-manifest integrity gate (cinatra#36). The generated
+      # src/lib/generated/** tree is the coupling gates' ONE permanent-exempt
+      # class, so its integrity is load-bearing: this step fails CI when any
+      # generated file drifts from the generator's byte-exact output (hand-edit
+      # or stale regeneration) or the catalog parity check breaks. Requires the
+      # cloned-back extension tree (this job clones it above).
+      - name: Generated extension-manifest drift + parity gate (fail-closed)
+        run: node scripts/extensions/generate-extension-manifest.mjs --check
 
       # Required-extensions coverage gate. The prod base image acquires the
       # bootable set from cinatra-required-extensions.lock.json; this fails CI
