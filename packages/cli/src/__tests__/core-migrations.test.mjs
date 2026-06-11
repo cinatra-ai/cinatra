@@ -184,7 +184,7 @@ describe("validateNamespacedMigrationsDir (#118)", () => {
   it("core parity: validateCoreMigrationsDir is the same validator under the core namespace", async () => {
     const re = migrationFileReForNamespace(CORE_MIGRATION_NAMESPACE);
     expect(re.test("core__0001_ok.mjs")).toBe(true);
-    expect(re.source).toBe(CORE_MIGRATION_FILE_RE.source.replace(/^\^/, "^"));
+    expect(re.source).toBe(CORE_MIGRATION_FILE_RE.source);
   });
 });
 
