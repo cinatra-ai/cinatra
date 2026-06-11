@@ -37,6 +37,12 @@ Cinatra talks to PostgreSQL raw via `pg`. Two mechanisms evolve the schema:
   also works inside the production image via `docker exec`). `--down` calls
   the migration's `down()` and pops its ledger row; it refuses to run if the
   newest ledger rows belong to another source (see "One ledger" below).
+- **Existing deployments** (operator upgrade path): nothing to do beyond a
+  normal upgrade. The first post-upgrade boot or `cinatra setup …` creates
+  `<schema>.pgmigrations` and applies `core__0001`/`core__0002`; on databases
+  that already carry those changes every statement is an `IF [NOT] EXISTS`
+  no-op, so the run only backfills the ledger. `psql`-applied release-note
+  migrations are retired going forward — new changes auto-apply at boot/setup.
 
 The runner (single implementation:
 [`packages/cli/src/core-migrations.mjs`](../packages/cli/src/core-migrations.mjs))

@@ -374,8 +374,10 @@ jobs:
   # defs in src/lib/drizzle-store.ts) applied by an idempotent bootstrap — so
   # a DESTRUCTIVE schema change (drop/rename/retype/NOT NULL/unique index on
   # existing tables, data rewrites) silently strands deployed user data unless
-  # the PR ships the one-shot migration artifact migrations/README.md
-  # requires (migrations/NNNN_*.sql + its manifest entry, in the same PR).
+  # the PR ships the migration artifact migrations/README.md requires (a
+  # runner migration module migrations/core/core__NNNN_*.mjs + its manifest
+  # entry `file: "core/core__NNNN_…"`, in the same PR; the legacy loose-SQL
+  # form is rejected for new migrations).
   # The gate diffs the PR against its base, classifies in-scope schema changes
   # per that convention, and fails ONLY when a user-land-affecting change
   # ships no artifact. Better Auth schema (guarded by auth-schema-drift above)

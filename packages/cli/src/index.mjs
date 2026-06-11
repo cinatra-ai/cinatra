@@ -2533,21 +2533,21 @@ async function runDevRefresh(rest) {
     { cwd: repoRoot },
   );
 
-  // 3. Database + settings: the existing idempotent dev setup (additive migrations +
-  //    ensure* settings). Dev app sync is skipped to keep refresh fast.
+  // 3. Database + settings: the existing idempotent dev setup (additive bootstrap +
+  //    ensure* settings) followed by the versioned core migration chain
+  //    (migrations/core/, recorded in the pgmigrations ledger) — both run inside
+  //    runSetup. Dev app sync is skipped to keep refresh fast.
   console.log("- Database + settings: running idempotent dev setup…");
   await runSetup("dev", { skipDevApps: true });
 
-  // 4. Advisory: additive schema is reconciled automatically; transformational
-  //    one-shot migrations are deliberate, manual, release-note-driven steps. There
-  //    is no migration ledger, so we never try to detect "pending" ones.
+  // 4. Advisory: additive schema is reconciled automatically and the versioned
+  //    migration chain has been applied (or ledger-faked on a fresh schema) by
+  //    runSetup above — transformational changes no longer require manual,
+  //    release-note-driven steps.
   console.log(
-    "\n✔ Dev environment refreshed — dependencies and additive schema (new tables/columns/indexes) are in sync.",
+    "\n✔ Dev environment refreshed — dependencies, additive schema, and the versioned core migration chain (pgmigrations ledger) are in sync.",
   );
-  console.log(
-    "  Transformational one-shot migrations under src/lib/migrations/ are NOT run automatically; run them by",
-  );
-  console.log("  hand only when a release's notes call for it. Restart your dev server: make dev");
+  console.log("  Restart your dev server: make dev");
 }
 
 // ---------------------------------------------------------------------------
