@@ -21,6 +21,12 @@ function buildActorFromMcpContext(): Record<string, unknown> {
   const userId = a2a?.userId ?? ctx?.userId ?? null;
   const orgId = a2a?.orgId ?? ctx?.orgId ?? null;
   const platformRole = ctx?.platformRole;
+  // Transport-resolved org-membership role (carried natively on the request
+  // context). Stamped on the MODEL branch only: it was resolved for the
+  // transport identity (ctx.userId/ctx.orgId), while the a2a branch identity
+  // comes from a2aActorContext (potentially a different user/org) — stamping
+  // it there would cross identities.
+  const orgRole = ctx?.orgRole;
   if (a2a) {
     return {
       actorType: "a2a",
@@ -38,6 +44,7 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     ...(userId ? { userId } : {}),
     ...(orgId ? { orgId } : {}),
     ...(platformRole ? { platformRole } : {}),
+    ...(orgRole ? { orgRole } : {}),
   };
 }
 

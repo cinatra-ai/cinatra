@@ -281,4 +281,83 @@ describe("enforceResourceAccess — registry resourceType", () => {
       enforceResourceAccess(orgRegistryResource, orgAdmin, "registry.install"),
     ).resolves.toBeUndefined();
   });
+
+  // ---------------------------------------------------------------------------
+  // Direct envelope orgRole fallback (issue #83): MCP registries stamp the
+  // transport-resolved membership role on the envelope (`actor.orgRole`)
+  // instead of encoding it in `roles[]`. deriveRoleHints must pick it up —
+  // but ONLY when the envelope also carries its own org id (coherence gate).
+  // ---------------------------------------------------------------------------
+  describe("direct envelope orgRole fallback (MCP-stamped actors)", () => {
+    const mcpOrgAdmin = {
+      actorType: "model",
+      source: "agent",
+      userId: "user-mcp-admin",
+      orgId: ORG_ID,
+      orgRole: "org_admin",
+    } as unknown as PrimitiveActorContext;
+
+    const mcpOrgAdminNoOrg = {
+      actorType: "model",
+      source: "agent",
+      userId: "user-mcp-admin",
+      // no orgId/organizationId on the envelope → the stamped role has no
+      // org to be coherent with → must be ignored.
+      orgRole: "org_admin",
+    } as unknown as PrimitiveActorContext;
+
+    const mcpMember = {
+      actorType: "model",
+      source: "agent",
+      userId: "user-mcp-member",
+      orgId: ORG_ID,
+      orgRole: "member",
+    } as unknown as PrimitiveActorContext;
+
+    it("envelope orgRole org_admin is honored on an org-owned admin op", async () => {
+      await expect(
+        enforceResourceAccess(orgRegistryResource, mcpOrgAdmin, "registry.install"),
+      ).resolves.toBeUndefined();
+    });
+
+    it("envelope orgRole member stays denied on an org-owned admin op (no widening)", async () => {
+      await expect(
+        enforceResourceAccess(orgRegistryResource, mcpMember, "registry.install"),
+      ).rejects.toBeInstanceOf(AuthzError);
+    });
+
+    it("envelope orgRole WITHOUT an envelope org id is ignored (coherence gate)", async () => {
+      await expect(
+        enforceResourceAccess(orgRegistryResource, mcpOrgAdminNoOrg, "registry.install"),
+      ).rejects.toBeInstanceOf(AuthzError);
+    });
+
+    it("cross-org envelope orgRole cannot reach another org's resource (kernel cross-org guard)", async () => {
+      const crossOrgMcpAdmin = {
+        actorType: "model",
+        source: "agent",
+        userId: "user-cross-mcp",
+        orgId: OTHER_ORG_ID,
+        orgRole: "org_owner",
+      } as unknown as PrimitiveActorContext;
+      await expect(
+        enforceResourceAccess(orgRegistryResource, crossOrgMcpAdmin, "registry.install"),
+      ).rejects.toBeInstanceOf(AuthzError);
+    });
+
+    it("roles[]-derived orgRole wins over the direct envelope field (no override)", async () => {
+      const rolesWinActor = {
+        actorType: "model",
+        source: "agent",
+        userId: "user-roles-win",
+        orgId: ORG_ID,
+        roles: ["member"],
+        orgRole: "org_admin",
+      } as unknown as PrimitiveActorContext;
+      // roles[] yields orgRole "member"; the direct field must NOT upgrade it.
+      await expect(
+        enforceResourceAccess(orgRegistryResource, rolesWinActor, "registry.install"),
+      ).rejects.toBeInstanceOf(AuthzError);
+    });
+  });
 });

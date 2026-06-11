@@ -34,6 +34,14 @@ function buildActorFromMcpContext(): Record<string, unknown> {
   // token reaches handleAgentBuilderRun with no org (no cookie session
   // either) and fails with "Active organization required.".
   const orgId = requestCtx?.orgId ?? null;
+  // Forward the transport-resolved org-membership role alongside orgId so
+  // org-admin-gated decisions (e.g. connector `manage` authority via
+  // checkConnectorAccess) evaluate natively instead of re-resolving the
+  // membership row inside each gate. Stamped on the MODEL branch only: the
+  // transport resolved it for ITS identity pair (requestCtx.userId/orgId),
+  // while the a2a branch's identity comes from a2aActorContext — potentially
+  // a different user/org — so stamping it there would cross identities.
+  const orgRole = requestCtx?.orgRole;
 
   if (a2a) {
     return {
@@ -61,6 +69,9 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     ...(userId ? { userId } : {}),
     ...(orgId ? { orgId } : {}),
     ...(platformRole ? { platformRole } : {}),
+    // Coherent with the orgId spread above by construction — both come from
+    // the same transport-written store frame.
+    ...(orgRole ? { orgRole } : {}),
   };
 }
 

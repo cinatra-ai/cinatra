@@ -137,6 +137,12 @@ export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
         // is present, otherwise keep "model" for in-process agent calls
         // (no session).
         const platformRole = requestCtx?.platformRole;
+        // Also forward the transport-resolved org-membership role (carried
+        // natively on the request context, coherent with the orgId/userId
+        // read from the same frame above) so org-admin-gated decisions in
+        // the generic authz path (deriveRoleHints direct fallback in
+        // src/lib/authz/enforce-resource-access.ts) evaluate natively.
+        const orgRole = requestCtx?.orgRole;
         const actorBase: Record<string, unknown> = {
           actorType: platformRole ? "human" : "model",
           source: "agent",
@@ -144,6 +150,7 @@ export function registerObjectsPrimitives(server: McpRuntimeToolServer) {
         if (userId) actorBase.userId = userId;
         if (orgId) actorBase.orgId = orgId;
         if (platformRole) actorBase.platformRole = platformRole;
+        if (orgRole) actorBase.orgRole = orgRole;
 
         const result = await handler({
           primitiveName: name,

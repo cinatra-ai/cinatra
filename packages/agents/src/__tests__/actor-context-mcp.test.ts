@@ -96,4 +96,55 @@ describe("actorContextFromMcpRequest", () => {
     expect(result.teamIds).toEqual([]);
     expect(result.projectIds).toEqual([]);
   });
+
+  // -------------------------------------------------------------------------
+  // orgRole carried natively on the MCP request context (issue #83).
+  // The adapter may only attach the store's orgRole when the store's
+  // (orgId, userId) pair matches the org being attached AND the envelope's
+  // actor — otherwise it must stay undefined (fail closed; on-demand
+  // per-gate resolution still covers).
+  // -------------------------------------------------------------------------
+
+  const inStore = async <T,>(
+    store: Record<string, unknown>,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server");
+    return (mcpRequestContextStorage as {
+      run: (s: unknown, cb: () => Promise<T>) => Promise<T>;
+    }).run(store, fn);
+  };
+
+  it("attaches store orgRole when store org and user BOTH match (org-match guard pass)", async () => {
+    const actor = { userId: "user-1", source: "mcp" } as unknown as PrimitiveActorContext;
+    const result = await inStore(
+      { orgId: "org-1", userId: "user-1", orgRole: "org_admin" },
+      () => actorContextFromMcpRequest(actor, "org-1"),
+    );
+    expect(result.orgRole).toBe("org_admin");
+  });
+
+  it("does NOT attach store orgRole when the orgId param is a DIFFERENT (resource) org", async () => {
+    const actor = { userId: "user-1", source: "mcp" } as unknown as PrimitiveActorContext;
+    const result = await inStore(
+      { orgId: "org-1", userId: "user-1", orgRole: "org_admin" },
+      () => actorContextFromMcpRequest(actor, "other-org"),
+    );
+    expect(result.orgRole).toBeUndefined();
+  });
+
+  it("does NOT attach store orgRole when the envelope userId differs from the store userId", async () => {
+    const actor = { userId: "someone-else", source: "mcp" } as unknown as PrimitiveActorContext;
+    const result = await inStore(
+      { orgId: "org-1", userId: "user-1", orgRole: "org_owner" },
+      () => actorContextFromMcpRequest(actor, "org-1"),
+    );
+    expect(result.orgRole).toBeUndefined();
+  });
+
+  it("leaves orgRole undefined outside any MCP request frame (no store)", async () => {
+    const actor = { userId: "user-1", source: "mcp" } as unknown as PrimitiveActorContext;
+    const result = await actorContextFromMcpRequest(actor, "org-1");
+    expect(result.orgRole).toBeUndefined();
+  });
 });

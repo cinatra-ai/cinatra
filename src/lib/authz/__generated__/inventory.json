@@ -250,62 +250,62 @@
     {
       "primitiveName": "artifact_assertion_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 299
+      "line": 304
     },
     {
       "primitiveName": "artifact_assertion_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 284
+      "line": 289
     },
     {
       "primitiveName": "artifact_authoring_chain_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 479
+      "line": 484
     },
     {
       "primitiveName": "artifact_authoring_emit",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 431
+      "line": 436
     },
     {
       "primitiveName": "artifact_extension_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 412
+      "line": 417
     },
     {
       "primitiveName": "artifact_extension_search",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 395
+      "line": 400
     },
     {
       "primitiveName": "artifact_representation_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 340
+      "line": 345
     },
     {
       "primitiveName": "artifact_representation_latest",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 370
+      "line": 375
     },
     {
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 322
+      "line": 327
     },
     {
       "primitiveName": "artifacts_get",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 245
+      "line": 250
     },
     {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 217
+      "line": 222
     },
     {
       "primitiveName": "artifacts_tombstone",
       "file": "src/lib/artifacts/mcp.ts",
-      "line": 257
+      "line": 262
     },
     {
       "primitiveName": "blog_connector_list",
@@ -315,122 +315,122 @@
     {
       "primitiveName": "blog_image_generate_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 59
+      "line": 62
     },
     {
       "primitiveName": "blog_image_generate_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 55
+      "line": 58
     },
     {
       "primitiveName": "blog_media_image_save",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 100
+      "line": 103
     },
     {
       "primitiveName": "blog_media_list",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 104
+      "line": 107
     },
     {
       "primitiveName": "blog_personal_skill_create",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 108
+      "line": 111
     },
     {
       "primitiveName": "blog_post_generate_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 46
+      "line": 49
     },
     {
       "primitiveName": "blog_post_generate_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 42
+      "line": 45
     },
     {
       "primitiveName": "blog_post_ideas_generate_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 38
+      "line": 41
     },
     {
       "primitiveName": "blog_post_ideas_generate_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 34
+      "line": 37
     },
     {
       "primitiveName": "blog_post_publish_linkedin_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 83
+      "line": 86
     },
     {
       "primitiveName": "blog_post_publish_linkedin_publish",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 92
+      "line": 95
     },
     {
       "primitiveName": "blog_post_publish_linkedin_publish_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 96
+      "line": 99
     },
     {
       "primitiveName": "blog_post_publish_linkedin_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 79
+      "line": 82
     },
     {
       "primitiveName": "blog_post_publish_linkedin_update",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 87
+      "line": 90
     },
     {
       "primitiveName": "blog_post_publish_wordpress_cancel",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 67
+      "line": 70
     },
     {
       "primitiveName": "blog_post_publish_wordpress_delete",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 71
+      "line": 74
     },
     {
       "primitiveName": "blog_post_publish_wordpress_start",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 63
+      "line": 66
     },
     {
       "primitiveName": "blog_post_publish_wordpress_status",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 75
+      "line": 78
     },
     {
       "primitiveName": "blog_post_update",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 50
+      "line": 53
     },
     {
       "primitiveName": "blog_project_create",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 30
+      "line": 33
     },
     {
       "primitiveName": "blog_project_get",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 26
+      "line": 29
     },
     {
       "primitiveName": "blog_project_list",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 21
+      "line": 24
     },
     {
       "primitiveName": "blog_transcripts_list",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 112
+      "line": 115
     },
     {
       "primitiveName": "blog_wordpress_content_convert",
       "file": "src/lib/blog/mcp/registry.ts",
-      "line": 116
+      "line": 119
     },
     {
       "primitiveName": "change_set_eligibility_get",
@@ -480,12 +480,12 @@
     {
       "primitiveName": "context_list_eligible_assertions",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 264
+      "line": 268
     },
     {
       "primitiveName": "context_resolve",
       "file": "src/lib/artifacts/context-mcp.ts",
-      "line": 242
+      "line": 246
     },
     {
       "primitiveName": "crm_account_create",
@@ -1095,17 +1095,17 @@
     {
       "primitiveName": "trigger_config_delete",
       "file": "packages/trigger/src/mcp/registry.ts",
-      "line": 43
+      "line": 46
     },
     {
       "primitiveName": "trigger_config_get",
       "file": "packages/trigger/src/mcp/registry.ts",
-      "line": 31
+      "line": 34
     },
     {
       "primitiveName": "trigger_config_set",
       "file": "packages/trigger/src/mcp/registry.ts",
-      "line": 37
+      "line": 40
     },
     {
       "primitiveName": "twenty_instances_list",

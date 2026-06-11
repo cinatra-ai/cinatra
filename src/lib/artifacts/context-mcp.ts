@@ -108,6 +108,10 @@ function resolveActorAndOrg(): {
   } as Parameters<typeof buildActorContextFromPrimitive>[0];
   const actor = buildActorContextFromPrimitive(primitive, orgId, {
     platformRole,
+    // Transport-resolved org-membership role — non-A2A only (the A2A
+    // branch's identity comes from a2aActorContext, potentially a
+    // different user/org; see src/lib/artifacts/mcp.ts).
+    orgRole: a2a ? undefined : ctx?.orgRole,
     actorOrganizationId: orgId,
     teamIds: a2a?.teamIds,
     projectIds: a2a?.projectIds,

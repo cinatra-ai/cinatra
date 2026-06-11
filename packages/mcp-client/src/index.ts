@@ -32,6 +32,16 @@ export type PrimitiveActorContext = {
   // (e.g. agent_template upsert during publish) can attribute the new record to
   // the caller's active organization without re-reading the cookie session.
   orgId?: string | null;
+  // Trusted org-membership role for `orgId` above, stamped the same way as
+  // platformRole (the MCP transport resolves it once from the better-auth
+  // membership row and registries forward it). Lets org-admin-gated decisions
+  // (e.g. connector `manage` authority) evaluate natively instead of
+  // re-resolving membership inside each gate. Only meaningful together with
+  // the `orgId` stamped in the SAME envelope — consumers must not pair it
+  // with an org id from any other source. Trust boundary: only upstream
+  // server-only code may stamp this — no path lets a downstream MCP client
+  // forge it.
+  orgRole?: "org_owner" | "org_admin" | "member";
 };
 
 export type PrimitiveErrorShape = {

@@ -158,6 +158,14 @@ export function registerChatPrimitives(server: McpRuntimeToolServer): void {
             ...(actorUserId && !selfAssertedClientId ? { userId: actorUserId } : {}),
             ...(actorOrgId ? { orgId: actorOrgId } : {}),
             ...(actorPlatformRole ? { platformRole: actorPlatformRole } : {}),
+            // Transport-resolved org-membership role. Only stamped when the
+            // transport userId is stamped too (i.e. NOT under the
+            // self-asserted assistant identity override) — the role belongs
+            // to the human caller's (userId, orgId) pair, and pairing it
+            // with an assistant identity would cross identities.
+            ...(actorUserId && !selfAssertedClientId && requestCtx?.orgRole
+              ? { orgRole: requestCtx.orgRole }
+              : {}),
             ...(projectGrantsAxis ? { projectGrants: projectGrantsAxis } : {}),
           },
           mode: "agentic",

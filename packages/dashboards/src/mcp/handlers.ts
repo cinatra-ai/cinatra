@@ -48,6 +48,20 @@ import {
 // ─────────────────────────────────────────────────────────────────────────
 // Actor envelope extraction. Mirrors the lists handler pattern.
 // ─────────────────────────────────────────────────────────────────────────
+
+// The dashboards owner resolver only recognizes owner/admin/member, while the
+// MCP registry stamps the transport-resolved KERNEL vocabulary
+// (`org_owner`/`org_admin`/`member`, see PrimitiveActorContext.orgRole).
+// Normalize both vocabularies — mirroring normalizeOrgRole in
+// src/lib/dashboards/authz.ts — so a carried org_admin/org_owner role is not
+// silently demoted to member here. Unknown / absent values stay "member"
+// (existing default; never widens). Exported for unit tests only.
+export function normalizeOrgRole(role: unknown): "owner" | "admin" | "member" {
+  if (role === "owner" || role === "org_owner") return "owner";
+  if (role === "admin" || role === "org_admin") return "admin";
+  return "member";
+}
+
 function getActor(actor: PrimitiveActorContext): DashboardActor | null {
   const ext = actor as unknown as Record<string, unknown>;
   const orgId = (ext["orgId"] as string | null | undefined) ?? null;
@@ -56,7 +70,7 @@ function getActor(actor: PrimitiveActorContext): DashboardActor | null {
   // teamIds / roles are populated by the route layer. The resolver tolerates
   // empty teamIds + member role when only basic actor context is available.
   const teamIds = ((ext["teamIds"] as string[] | undefined) ?? []) as readonly string[];
-  const orgRole = (ext["orgRole"] as "owner" | "admin" | "member" | undefined) ?? "member";
+  const orgRole = normalizeOrgRole(ext["orgRole"]);
   const teamRoles =
     (ext["teamRoles"] as Record<string, "admin" | "member"> | undefined) ?? {};
   return { userId, organizationId: orgId, teamIds, orgRole, teamRoles };
