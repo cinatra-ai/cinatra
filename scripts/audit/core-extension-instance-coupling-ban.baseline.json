@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 81,
-      "keys": 128,
-      "occurrences": 166
+      "files": 78,
+      "keys": 124,
+      "occurrences": 161
     },
     "mechanical": {
       "files": 0,
@@ -95,7 +95,6 @@
     "src/app/campaigns/actions.ts :: package :: @cinatra-ai/apollo-connector": 1,
     "src/app/campaigns/actions.ts :: package :: @cinatra-ai/gemini-connector": 1,
     "src/app/campaigns/actions.ts :: package :: @cinatra-ai/openai-connector": 2,
-    "src/app/configuration/development/page.tsx :: package :: @cinatra-ai/tailscale-connector": 1,
     "src/app/configuration/skills/page.tsx :: package :: @cinatra-ai/openai-connector": 1,
     "src/app/configuration/telemetry/page.tsx :: package :: @cinatra-ai/apollo-connector": 1,
     "src/app/configuration/telemetry/page.tsx :: package :: @cinatra-ai/gemini-connector": 1,
@@ -109,8 +108,6 @@
     "src/lib/artifacts/mcp.ts :: package :: @cinatra-ai/marketing-icp-artifact": 1,
     "src/lib/artifacts/producer-assertions.ts :: package :: @cinatra-ai/default-artifact": 1,
     "src/lib/artifacts/semantic-assertion-store.ts :: package :: @cinatra-ai/default-artifact": 2,
-    "src/lib/background-jobs.ts :: package :: @cinatra-ai/crm-connector": 2,
-    "src/lib/background-jobs.ts :: package :: @cinatra-ai/twenty-connector": 1,
     "src/lib/blog-idea-artifact-materializer.ts :: package :: @cinatra-ai/blog-idea-artifact": 1,
     "src/lib/blog-image-materializer.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
     "src/lib/blog-post-artifact-materializer.ts :: package :: @cinatra-ai/blog-post-artifact": 1,
@@ -131,7 +128,6 @@
     "src/lib/logging.ts :: package :: @cinatra-ai/gemini-connector": 1,
     "src/lib/logging.ts :: package :: @cinatra-ai/openai-connector": 1,
     "src/lib/nango.ts :: package :: @cinatra-ai/nango-connector": 1,
-    "src/lib/register-all-object-types.ts :: package :: @cinatra-ai/crm-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/anthropic-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/drupal-mcp-connector": 1,
     "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/nango-connector": 1,

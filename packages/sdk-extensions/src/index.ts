@@ -331,6 +331,10 @@ export {
   SOCIAL_POST_CAPABILITY,
   CRM_PROVIDER_CAPABILITY,
   EMAIL_SEND_CAPABILITY,
+  OBJECT_TYPE_REGISTRAR_CAPABILITY,
+  CRM_SYNC_BOOTSTRAP_CAPABILITY,
+  CRM_POINTER_WRITER_CAPABILITY,
+  DEV_TUNNEL_STATUS_CAPABILITY,
 } from "./host-connector-services-contract";
 export type {
   HostConnectorConfigService,
@@ -344,6 +348,12 @@ export type {
   HostBlogRoutingService,
   NangoConnectionSavedHook,
   LlmToolboxProvider,
+  HostObjectsIntegrationService,
+  ObjectTypeRegistrarProvider,
+  CrmSyncBootstrapProvider,
+  CrmPointerWritePayload,
+  CrmPointerWriterProvider,
+  DevTunnelStatusProvider,
 } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat

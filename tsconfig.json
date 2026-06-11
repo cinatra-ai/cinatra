@@ -189,6 +189,7 @@
       "@cinatra-ai/blog-connector/register": ["./extensions/cinatra-ai/blog-connector/src/register.ts"],
       "@cinatra-ai/blog-connector/mcp-module": ["./extensions/cinatra-ai/blog-connector/src/mcp/module.ts"],
       "@cinatra-ai/crm-connector": ["./extensions/cinatra-ai/crm-connector/src/index.ts"],
+      "@cinatra-ai/crm-connector/register": ["./extensions/cinatra-ai/crm-connector/src/register.ts"],
       "@cinatra-ai/crm-connector/integration/register-object-types": ["./extensions/cinatra-ai/crm-connector/src/integration/register-object-types.ts"],
       "@cinatra-ai/crm-connector/mcp-module": ["./extensions/cinatra-ai/crm-connector/src/mcp/module.ts"],
       "@cinatra-ai/crm-connector/widgets": ["./extensions/cinatra-ai/crm-connector/src/widgets/index.ts"],

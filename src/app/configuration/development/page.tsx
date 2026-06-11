@@ -14,10 +14,10 @@ import { SettingsTabNav } from "@/components/settings-tab-nav";
 import Link from "next/link";
 import { SaveEmailSafetyForm } from "./save-development-form";
 import { PublicBaseUrlForm } from "./public-base-url-form";
-import {
-  getTailscaleConnectionStatus,
-  getTailscaleFunnelUrlPreview,
-} from "@cinatra-ai/tailscale-connector";
+// Dev-tunnel status resolves through the `dev-tunnel-status` capability the
+// tailscale connector registers at activation (lazy/guarded host-access
+// cutover) — absence degrades to the "connect Tailscale" state below.
+import { getDevTunnelStatus } from "@/lib/dev-tunnel-status";
 import { ExtensionsTabContent } from "./extensions-tab";
 
 export const metadata: Metadata = { title: "Development" };
@@ -127,15 +127,15 @@ function EmailTabContent({ isDevMode }: { isDevMode: boolean }) {
 
 function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
   const { publicBaseUrl } = getMcpPublicBaseUrl();
-  const tailscaleStatus = getTailscaleConnectionStatus();
 
   // The dedicated Tailscale Funnel URL is deterministic — derived from
   // this dev instance's schema-based hostname + the resolved tailnet.
   // It's shown in the flyout as a pickable option REGARDLESS of whether
   // a sidecar has been provisioned yet (the provisioning path registers
   // the node under exactly this hostname, so picking + saving it now is
-  // safe). `null` only when Tailscale isn't connected (no tailnet).
-  const tailscaleUrl = getTailscaleFunnelUrlPreview();
+  // safe). `null` only when Tailscale isn't connected (no tailnet) — or
+  // when the connector is absent (degraded mode of the capability read).
+  const { connected: tailscaleConnected, funnelUrlPreview: tailscaleUrl } = getDevTunnelStatus();
 
   return (
     <div className="flex flex-col gap-6">
@@ -148,7 +148,7 @@ function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
             (hosted ChatGPT connectors, remote Claude Code instances, A2A
             peers) connect through this URL. Leave empty to disable
             external reachability.
-            {tailscaleStatus.connected ? (
+            {tailscaleConnected ? (
               <>
                 {" "}Tailscale is connected — click the field below to pick
                 its Funnel URL, or{" "}
@@ -183,7 +183,7 @@ function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
         </CardHeader>
         <PublicBaseUrlForm
           initialUrl={publicBaseUrl ?? ""}
-          tailscaleConnected={tailscaleStatus.connected}
+          tailscaleConnected={tailscaleConnected}
           tailscaleUrl={tailscaleUrl}
         />
       </Card>

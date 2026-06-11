@@ -116,10 +116,10 @@ move DOWN. The epic's journey: the corrected epoch-2 baseline started at 349
 occurrences / 96 import edges; the decoupling phases (#27–#35) drove it to the floor below; the flip (#36)
 pinned it.
 
-| Gate | Pinned floor (at the flip, #36) | Direction |
+| Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **166 occurrences / 128 keys / 81 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 | shrink-only, frozen |
-| `core-extension-import-ban` | **41 edges / 28 files** — all runtime-coupling | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **161 occurrences / 124 keys / 78 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ via the Plan-B lazy/guarded Ops slice, cinatra#7) | shrink-only, frozen |
+| `core-extension-import-ban` | **37 edges / 25 files** — all runtime-coupling (at the flip, #36: 41/28; −4 edges via the Plan-B lazy/guarded Ops slice — crm/twenty/tailscale value-imports retired, cinatra#7) | shrink-only, frozen |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **20 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY) | shrink-only |
 | `host-peer-value-import-ban` | **0** | hold at 0 |

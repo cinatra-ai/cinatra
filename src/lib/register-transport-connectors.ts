@@ -42,7 +42,11 @@ import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { createNotification } from "@/lib/notifications";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
-import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
+import {
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  getObjectsProviderOrNull,
+  lookupCrmProvider,
+} from "@cinatra-ai/sdk-extensions";
 import {
   getGoogleOAuthStatus,
   googleApiFetch,
@@ -165,6 +169,19 @@ function registerHostConnectorServices(): void {
   register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
 
   register(svc.instanceIdentity, { read: readInstanceIdentity });
+
+  // Objects-integration surface (lazy/guarded host-access cutover): the
+  // host-bound objects provider + the capability-aware CRM provider lookup,
+  // published as VALUES so a connector's serverEntry graph (which must keep
+  // SDK peers type-only — host-peer-value-import ban) can register object
+  // types / sync adapters / pointer writers through `ctx.capabilities`.
+  register(svc.objectsIntegration, {
+    getObjectsProvider: () => getObjectsProviderOrNull(),
+    // `lookupCrmProvider` consults the SDK registry AND the external resolver
+    // bound by src/lib/register-crm-providers.ts (capability-registered CRM
+    // providers), so activation order never matters.
+    lookupCrmProvider: (providerId: string) => lookupCrmProvider(providerId) ?? null,
+  });
 }
 
 /**

@@ -16,6 +16,12 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // existing dynamic await import("@cinatra-ai/notifications/server") calls.
 import "@/lib/notifications-host";
 import { getActorContext, withActorContext } from "@cinatra-ai/llm/actor-context";
+// CRM integration surfaces resolve through the capability registry at job
+// time (lazy/guarded host-access cutover) — never a named connector import.
+import {
+  ensureCrmSyncRegistrations,
+  resolveCrmPointerWriter,
+} from "@/lib/crm-integration-providers";
 
 export const BACKGROUND_JOB_NAMES = {
   // Text jobs 1, 2, and 5 are retired:
@@ -435,19 +441,24 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
         // loop goes anonymous, so every server restart seeded ANOTHER independent
         // loop -> ~450-job queue storm. Anonymous duplicates run once + die below.
         //
-        // Register the Twenty provider + CRM sync adapter on every cycle
-        // so the projector can route adapter-owned CRM types
-        // (account/contact) to TwentyToGraphitiAdapter.export(), which
-        // hydrates via the crm_* facade before composing the episode. Both
-        // registrations are idempotent (replace-by-id on the registries);
-        // the MCP-server boot path registers the same pair via
-        // createCrmModule(), but the BullMQ worker is a separate process
-        // and imports `graphiti-projector` directly, so it needs its own
-        // registration pass here.
-        const { registerTwentyProvider } = await import("@cinatra-ai/twenty-connector");
-        const { registerCrmObjectSyncAdapters } = await import("@cinatra-ai/crm-connector");
-        registerTwentyProvider();
-        registerCrmObjectSyncAdapters();
+        // Ensure the CRM object-sync adapters are registered before the
+        // outbox runs so the projector can route adapter-owned CRM types
+        // (account/contact) to the Twenty→Graphiti adapter, which hydrates
+        // via the crm_* facade before composing the episode. Resolved through
+        // the `crm-sync-bootstrap` capability the crm-connector registers at
+        // activation (idempotent connector-side; the MCP-server boot path
+        // registers the same adapters via createCrmModule()) — the dispatcher
+        // names no connector package (lazy/guarded host-access cutover). The
+        // Twenty CRM provider needs no bootstrap call here: it registers
+        // behind the `crm-provider` capability at its own activation and
+        // resolves through the SDK registry's external resolver. With no
+        // provider registered (crm-connector genuinely absent/inactive) this
+        // is a no-op and adapter-owned rows FALL THROUGH to the projector's
+        // GENERIC projection (terminal episodes without Twenty hydration —
+        // the accepted degraded mode for an absent connector; rows that DID
+        // route through a registered adapter keep the per-entry retry/failure
+        // semantics). Never a worker crash either way.
+        ensureCrmSyncRegistrations();
         const { processProjectionOutbox } = await import("@cinatra-ai/objects/graphiti-projector");
         try {
           const result = await processProjectionOutbox({ batchSize: 20, maxAttempts: 5 });
@@ -481,28 +492,29 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
         // Durable-repair handler. One-shot per enqueue (NOT
         // self-rescheduling). BullMQ's `attempts`/`backoff` cover transient
         // retries — see the enqueue site in extensions/cinatra-ai/crm-connector/
-        // src/mcp/module.ts. Dynamic import keeps the host process bundle off
-        // the synchronous-graph of crm-connector at boot.
+        // src/mcp/module.ts. The write resolves through the
+        // `crm-pointer-writer` capability the crm-connector registers at
+        // activation (lazy/guarded host-access cutover) — the impl owns the
+        // register-types-before-write ordering (the objects_save classifier
+        // fast-path) and loads the heavy MCP module at write time, so the
+        // dispatcher names no connector package and the host bundle stays off
+        // crm-connector's synchronous graph at boot.
         //
         // Payload MUST carry orgId/userId because the worker process has
-        // no `mcpRequestContextStorage` frame. Without them,
-        // `writePointerByType` would synthesise an actor with
-        // `orgId === null`, which `objects_save` rejects on entry, causing
-        // every retry to fail deterministically.
-        //
-        // CRM object types MUST be registered before invoking
-        // `writePointerByType` — `objects_save`'s classifier fast-path
-        // (`objectTypeRegistry.resolve(typeHint)`) hits the static entry
-        // instead of falling through to the LLM classification path. The
-        // MCP-server boot path registers them via `createCrmModule()`; this
-        // worker process boots independently and must do its own
-        // registration. `registerCrmObjectTypes()` is idempotent
-        // (replace-by-id on the registry) so calling it on every job
-        // dispatch is safe.
-        const { writePointerByType, registerCrmObjectTypes } = await import(
-          "@cinatra-ai/crm-connector"
-        );
-        registerCrmObjectTypes();
+        // no `mcpRequestContextStorage` frame. Without them, the pointer
+        // write would synthesise an actor with `orgId === null`, which
+        // `objects_save` rejects on entry, causing every retry to fail
+        // deterministically.
+        const writer = resolveCrmPointerWriter();
+        if (!writer) {
+          // Degraded mode: connector absent/inactive. Complete the job (a
+          // structurally-absent connector must not become a retry storm).
+          console.warn(
+            "[twenty-pointer-repair] no crm-pointer-writer capability registered " +
+              "(crm-connector absent or not activated) — skipping pointer write.",
+          );
+          return;
+        }
         const payload = job.data as {
           type: "account" | "contact";
           externalId: string;
@@ -510,7 +522,7 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
           orgId: string | null;
           userId: string | null;
         };
-        await writePointerByType(payload);
+        await writer.writePointer(payload);
         return;
       }
       case BACKGROUND_JOB_NAMES.REGISTRY_POLL: {
