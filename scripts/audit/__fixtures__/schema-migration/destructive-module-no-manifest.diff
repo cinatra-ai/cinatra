@@ -1,0 +1,21 @@
+diff --git a/migrations/core/core__0003_drop-agent-label.mjs b/migrations/core/core__0003_drop-agent-label.mjs
+new file mode 100644
+index 0000000..3f1c2aa
+--- /dev/null
++++ b/migrations/core/core__0003_drop-agent-label.mjs
+@@ -0,0 +1,14 @@
++/**
++ * Gate-bypass attempt fixture: a VALID runner module (name passes the boot
++ * preflight, so the runner would execute it on the next boot/setup) shipping
++ * destructive SQL — with NO manifest entry and NO in-scope schema-file diff
++ * in the same PR. The gate must fail this on migration-state inconsistency
++ * alone: an unmanifested executable module must never ride a "no schema
++ * change" PR past the audit.
++ */
++export async function up(pgm) {
++  pgm.sql(`ALTER TABLE usage_events DROP COLUMN IF EXISTS agent_label;`);
++}
++
++export async function down(pgm) {
++  pgm.sql(`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS agent_label text;`);
++}

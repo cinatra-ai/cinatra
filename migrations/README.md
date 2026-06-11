@@ -214,7 +214,10 @@ retired loose-SQL form). Independently of any schema change, it also fails a
 PR that tampers with shipped migration state — deleting, renaming, or editing
 a shipped artifact, rewriting a manifest entry, or adding a
 `migrations/core/` file (malformed name, re-used sequence number) that would
-break the runner's boot preflight. The labelled sample diffs its classifier must
+break the runner's boot preflight — and any migration-state inconsistency in
+the diff itself: a valid executable `migrations/core/` module without its
+manifest entry (the runner executes every valid module regardless of the
+manifest), a manifest entry without its module, or sequence drift. The labelled sample diffs its classifier must
 reproduce live in
 [`scripts/audit/__fixtures__/schema-migration/`](../scripts/audit/__fixtures__/schema-migration/)
 — they are the executable form of the definitions above, and the gate's test
