@@ -233,6 +233,10 @@ export async function loadRuntimePackageExtensions(
   const migrationRefused = new Set<string>([
     ...migration.refused.map((r) => r.packageName),
     ...bootstrapWithDeclaredMigrations.map((r) => r.packageName),
+    // Ambiguous names skipped the migration pass above, so they must not
+    // activate either — and the activation driver's own duplicate fence only
+    // fires when BOTH records reach it, which trust refusals can prevent.
+    ...ambiguousNames,
   ]);
   const activatable = trusted.filter((rec) => !migrationRefused.has(rec.packageName));
   if (activatable.length === 0) return [];
