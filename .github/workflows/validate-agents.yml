@@ -15,6 +15,10 @@ on:
       - 'packages/cli/src/cinatra-dev-extensions.mjs'
       - 'packages/cli/src/dev-repo-sync.mjs'
       - '.github/actions/clone-extensions/**'
+      # Pinned clone-back inputs: CI checks the companion repos out at these
+      # committed shas, so a lock bump changes the validated agent universe.
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
       # Root package.json owns `cinatraDevExtensions` — the clone set AND the
       # fail-closed assert floor — so a manifest-only repo add/remove/retarget
       # must re-run validation (assert-extensions-cloned reads it).
@@ -51,6 +55,10 @@ on:
       - 'packages/cli/src/cinatra-dev-extensions.mjs'
       - 'packages/cli/src/dev-repo-sync.mjs'
       - '.github/actions/clone-extensions/**'
+      # Pinned clone-back inputs: CI checks the companion repos out at these
+      # committed shas, so a lock bump changes the validated agent universe.
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
       # Root package.json owns `cinatraDevExtensions` — the clone set AND the
       # fail-closed assert floor — so a manifest-only repo add/remove/retarget
       # must re-run validation (assert-extensions-cloned reads it).

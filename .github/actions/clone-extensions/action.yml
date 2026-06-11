@@ -8,9 +8,31 @@ description: >-
   or fewer dirs than declared materialize, so the gates can't pass vacuously).
   Assumes a prior actions/setup-node step (uses plain `node` + `git`); the
   companion repos are PUBLIC, so no token is required.
+inputs:
+  mode:
+    description: >-
+      "pinned" (default) checks every repo out DETACHED at the sha committed
+      in cinatra-required-extensions.lock.json / cinatra-dev-extensions.lock.json,
+      so a companion-repo merge can never change what a host CI run validates
+      (cinatra#141 — the mutable-HEAD clone-back let companion repos break
+      host main with zero host commits). "head" tracks each repo's branch tip —
+      ONLY for the non-gating floating-HEAD canary; no merge-gating job may
+      use it.
+    required: false
+    default: pinned
 runs:
   using: composite
   steps:
     - name: Clone companion extension repos into extensions/
       shell: bash
-      run: node scripts/ci/sync-dev-extensions.mjs
+      env:
+        CLONE_EXTENSIONS_MODE: ${{ inputs.mode }}
+      run: |
+        case "$CLONE_EXTENSIONS_MODE" in
+          pinned) node scripts/ci/sync-dev-extensions.mjs --pinned ;;
+          head)   node scripts/ci/sync-dev-extensions.mjs ;;
+          *)
+            echo "::error::clone-extensions: unknown mode '$CLONE_EXTENSIONS_MODE' (expected 'pinned' or 'head')."
+            exit 1
+            ;;
+        esac

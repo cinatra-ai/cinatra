@@ -12,6 +12,10 @@ on:
       - 'extensions/**/.readme-pending'
       - 'extensions/**/package.json'
       - 'scripts/audit/extension-readme-gate*.mjs'
+      # Pinned clone-back inputs (the gate scans the cloned-back tree, so a
+      # lock bump moves the README universe it validates):
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
       - 'scripts/audit/__tests__/**'
       - 'docs/developer/extension-readme.md'
       - '.github/workflows/extension-readme-gate.yml'
@@ -22,6 +26,10 @@ on:
       - 'extensions/**/.readme-pending'
       - 'extensions/**/package.json'
       - 'scripts/audit/extension-readme-gate*.mjs'
+      # Pinned clone-back inputs (the gate scans the cloned-back tree, so a
+      # lock bump moves the README universe it validates):
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
       - 'scripts/audit/__tests__/**'
       - 'docs/developer/extension-readme.md'
       - '.github/workflows/extension-readme-gate.yml'

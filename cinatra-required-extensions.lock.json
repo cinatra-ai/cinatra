@@ -61,9 +61,9 @@
     {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "4da9d6ccdc84213716a86f66651cdd92d2b0ea20",
+      "resolvedSha": "3f1dc8023e2be1ca9e3988f63762fcab6751b062",
       "packageVersion": "0.1.0",
-      "treeSha256": "2f94ce73608aa99a9169e1e2331fbae2e5754b583b250aec2a73b2158746d52a"
+      "treeSha256": "dfd4b733eb9e31a6d9ca932200fad55db4af69cd445aa6dca545ed82b321a676"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
