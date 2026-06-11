@@ -142,7 +142,7 @@ describe("core__0004 demotion artifact shape (no DB needed)", () => {
     for (const pkg of DEMOTED_PACKAGES) expect(upSql).toContain(`'${pkg}'`);
     const [downSql] = migrationStatements(demoteDown);
     expect(downSql).toContain("required_in_prod = true");
-    expect(downSql).not.toContain("'locked'"); // status untouched on down
+    expect(downSql).toContain("WHEN status = 'active' THEN 'locked'"); // symmetric re-lock
   });
 
   it("ships its append-only ledger entry (migrations/manifest.json seq 0004)", () => {
@@ -296,13 +296,17 @@ describe.skipIf(!hasDb)("upgraded existing DB — demotion preserves installed s
     for (const [key, row] of again) expect(row).toEqual(after.get(key)!);
   });
 
-  it("down() re-promotes the demoted rows without force-locking", async () => {
+  it("down() is the symmetric inverse: re-promotes AND re-locks live rows; tombstones stay archived", async () => {
     await runMigration(demoteDown);
     const after = await rowsByName();
-    expect(after.get("@cinatra-ai/twenty-connector::platform")!.required_in_prod).toBe(true);
-    // status NOT coerced by the migration (prod boot inventory owns the re-lock)
-    expect(after.get("@cinatra-ai/twenty-connector::platform")!.status).toBe("active");
-    expect(after.get("@cinatra-ai/media-feeds-connector::platform")!.status).toBe("archived");
+    const twenty = after.get("@cinatra-ai/twenty-connector::platform")!;
+    expect(twenty.required_in_prod).toBe(true);
+    // required-implies-locked restored by the rollback itself (there is no
+    // boot-time re-lock pass for pre-existing rows — INSERT-time coercion only)
+    expect(twenty.status).toBe("locked");
+    const media = after.get("@cinatra-ai/media-feeds-connector::platform")!;
+    expect(media.required_in_prod).toBe(true);
+    expect(media.status).toBe("archived"); // operator decision never resurrected
   });
 });
 

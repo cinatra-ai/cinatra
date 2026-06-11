@@ -75,13 +75,17 @@ export function up(pgm) {
 
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function down(pgm) {
-  // Re-promote the rows to required-in-prod. Status is left UNTOUCHED:
-  // the production boot inventory pass re-locks every required-in-prod
-  // package (packages/extensions/src/system-extension-inventory.ts), and
-  // the lifecycle primitive re-coerces `locked` at the next write — never
-  // force-lock from a migration (dev rows are deliberately unlocked).
+  // Exact symmetric inverse: re-promote to required-in-prod AND restore the
+  // required-implies-locked shape for live rows (`active` -> `locked`).
+  // There is NO boot-time re-lock pass for pre-existing rows (the lifecycle
+  // primitive coerces `locked` only at INSERT time), so leaving re-promoted
+  // rows `active` would make required packages archivable — the rollback
+  // must restore the invariant itself. Archived tombstones stay archived
+  // (never resurrect an operator decision); in dev the resulting lock
+  // matches the required-in-prod advisory and is operator-reversible.
   pgm.sql(`UPDATE installed_extension
   SET required_in_prod = true,
+      status = CASE WHEN status = 'active' THEN 'locked' ELSE status END,
       updated_at = now()
   WHERE package_name IN (
     ${NAME_LIST}
