@@ -6,27 +6,21 @@
 // The file intentionally stays at `src/app/campaigns/actions.ts` so existing
 // importers across src/ and packages/ continue to work without path churn.
 //
-// The OpenAI save/clear actions live inside @cinatra-ai/openai-connector/actions;
-// this file re-exports them so existing callers keep working.
+// The OpenAI save/clear actions are connector-owned; this file wraps the
+// impls resolved from the openai `llm-provider-surface` capability at
+// invocation time so existing callers keep working.
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
+// Every LLM-connector reader/writer/action below resolves through the
+// `llm-provider-surface` capability the connectors register at activation
+// (lazy/guarded host-access cutover) — never a named import.
+// An absent connector degrades the specific setting with a descriptive error
+// (require*) or a silent skip where the legacy behavior was already optional.
 import {
-  saveApolloLoggingSettings,
-} from "@cinatra-ai/apollo-connector";
-import {
-  saveGeminiLoggingSettings,
-} from "@cinatra-ai/gemini-connector";
-import {
-  clearAnthropicAPISettings,
-  saveAnthropicAPISettings,
-  saveDefaultClaudeModel,
-  CLAUDE_MODELS,
-  type ClaudeModel,
-} from "@cinatra-ai/anthropic-connector";
-import {
-  saveOpenAILoggingSettings,
-} from "@cinatra-ai/openai-connector";
+  getLlmProviderSurface,
+  requireLlmProviderSurface,
+} from "@/lib/llm-provider-surfaces";
 import { requireAuthSession, requireAdminSession } from "@/lib/auth-session";
 import {
   upsertExternalMcpServer,
@@ -64,17 +58,13 @@ import {
 } from "@/lib/database";
 import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
 
-// Forward to the OpenAI save/clear actions in @cinatra-ai/openai-connector/actions.
-// Re-exports are not allowed in "use server" files (Turbopack constraint) so we
-// use async wrapper functions instead.
-import {
-  saveOpenAIConnectionAction as _saveOpenAIConnectionAction,
-  clearOpenAIConnectionAction as _clearOpenAIConnectionAction,
-  // Owned by the connector; reached through the connector's
-  // `@cinatra-ai/openai-connector/actions` subpath (same base package as the
-  // connection actions → no new core→extension edge).
-  saveOpenAISkillsSettingsAction as _saveOpenAISkillsSettingsAction,
-} from "@cinatra-ai/openai-connector/actions";
+// The OpenAI save/clear/skills actions are connector-owned impls resolved
+// from the openai surface's `actions` member at INVOCATION time (the
+// connector's register(ctx) builds them on the same gated action cores its
+// "use server" exports wrap — permission gating identical). Re-exports are
+// not allowed in "use server" files (Turbopack constraint) so we use async
+// wrapper functions either way; the wrappers below are the stable action
+// references client forms bind.
 // Setup-wizard cache invalidation stays host-side; the connector's Nango action
 // is reached through the `@/lib/nango` shim (it re-exports the
 // connector index), so core never names the extension directly.
@@ -87,12 +77,16 @@ export async function saveOpenAIConnectionAction(formData: FormData) {
   // `@/lib`). Belt-and-suspenders with isSetupWizardComplete() no longer caching
   // INCOMPLETE results — together they close the /setup redirect loop.
   invalidateSetupWizardCache();
-  return _saveOpenAIConnectionAction(formData);
+  const save = requireLlmProviderSurface("openai").actions?.saveConnection;
+  if (!save) throw new Error("The OpenAI connector exposes no save-connection action.");
+  await save(formData);
 }
 
 export async function clearOpenAIConnectionAction() {
   invalidateSetupWizardCache();
-  return _clearOpenAIConnectionAction();
+  const clear = requireLlmProviderSurface("openai").actions?.clearConnection;
+  if (!clear) throw new Error("The OpenAI connector exposes no clear-connection action.");
+  await clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +141,9 @@ export async function saveAnthropicConnectionAction(formData: FormData) {
     apiKey: formData.get("apiKey") ?? undefined,
   });
   try {
-    await saveAnthropicAPISettings({ apiKey: parsed.apiKey });
+    const save = requireLlmProviderSurface("anthropic").saveAPISettings;
+    if (!save) throw new Error("The Anthropic connector exposes no API-settings writer.");
+    await save({ apiKey: parsed.apiKey });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save the Anthropic API connection.";
     throw new Error(message);
@@ -155,7 +151,7 @@ export async function saveAnthropicConnectionAction(formData: FormData) {
 }
 
 export async function clearAnthropicConnectionAction() {
-  await clearAnthropicAPISettings();
+  await requireLlmProviderSurface("anthropic").clearAPISettings?.();
   redirect("/configuration/llm/initial-setup");
 }
 
@@ -243,9 +239,12 @@ export async function setDefaultProvidersAction(formData: FormData) {
     writeObjectsClassificationModelToDatabase(classificationModel);
   }
   // Connector-default Claude model: distinct scope from the agent-creation
-  // per-purpose model below. Validated against the connector allow-list.
-  if (anthropicDefaultModel && (CLAUDE_MODELS as readonly string[]).includes(anthropicDefaultModel)) {
-    saveDefaultClaudeModel(anthropicDefaultModel as ClaudeModel);
+  // per-purpose model below. Validated against the connector's surface
+  // allow-list (absent connector → empty list → no save, degraded).
+  const anthropicSurface = getLlmProviderSurface("anthropic");
+  const claudeModels: readonly string[] = anthropicSurface?.models ?? [];
+  if (anthropicDefaultModel && claudeModels.includes(anthropicDefaultModel)) {
+    anthropicSurface?.saveDefaultModel?.(anthropicDefaultModel);
   }
   // Explicit per-purpose agent-creation override. Validate the provider and
   // that the model belongs to the chosen provider's family so we never persist
@@ -268,7 +267,7 @@ export async function setDefaultProvidersAction(formData: FormData) {
     // (provider, model) pair.
     const allowed: readonly string[] =
       validAgentCreationProvider === "anthropic"
-        ? (CLAUDE_MODELS as readonly string[])
+        ? claudeModels
         : AGENT_CREATION_OPENAI_MODELS;
     if (agentCreationModel && allowed.includes(agentCreationModel)) {
       writeAgentCreationModelToDatabase(agentCreationModel);
@@ -500,12 +499,15 @@ export async function saveDevelopmentLoggingAction(formData: FormData) {
     formData.get("apolloLoggingEnabled") === "on" ||
     formData.get("apolloLoggingEnabled") === "true";
 
+  // Connector logging writers resolve from the live surfaces; an absent
+  // connector's toggle is skipped (its row is not rendered on the telemetry
+  // page either — degraded symmetrically).
   await Promise.all([
     saveAnthropicLoggingSettings(anthropicLoggingEnabled),
-    saveOpenAILoggingSettings(openAiLoggingEnabled),
+    getLlmProviderSurface("openai")?.saveLoggingSettings?.(openAiLoggingEnabled),
     saveMcpLoggingSettings({ serverEnabled: mcpLoggingEnabled, clientEnabled: mcpLoggingEnabled }),
-    saveGeminiLoggingSettings(geminiLoggingEnabled),
-    saveApolloLoggingSettings(apolloLoggingEnabled),
+    getLlmProviderSurface("gemini")?.saveLoggingSettings?.(geminiLoggingEnabled),
+    getLlmProviderSurface("apollo")?.saveLoggingSettings?.(apolloLoggingEnabled),
   ]);
   redirect("/configuration/development");
 }
@@ -551,7 +553,9 @@ export async function saveDevExtensionsSettingsAction(formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function saveOpenAISkillsSettingsAction(formData: FormData) {
-  return _saveOpenAISkillsSettingsAction(formData);
+  const save = requireLlmProviderSurface("openai").actions?.saveSkillsSettings;
+  if (!save) throw new Error("The OpenAI connector exposes no skills-settings action.");
+  await save(formData);
 }
 
 // Gmail send-as refresh/clear + Google Calendar appointment-schedule mutations

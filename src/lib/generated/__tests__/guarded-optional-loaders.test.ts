@@ -22,6 +22,7 @@ import {
 import {
   GENERATED_CONNECTOR_SETUP_PAGES,
   GENERATED_CONNECTOR_SETTINGS_PAGES,
+  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,
 } from "../connector-setup-pages";
 
 const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {
@@ -35,9 +36,11 @@ const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>
   GENERATED_CHAT_WIDGET_MANIFEST_MODULES,
   GENERATED_CONNECTOR_SETUP_PAGES,
   GENERATED_CONNECTOR_SETTINGS_PAGES,
+  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,
 };
 
 const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/anthropic-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/apify-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/blog-connector", resolution: "guardedOptional" },
@@ -47,6 +50,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/gmail-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/google-calendar-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/linkedin-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/openai-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/resend-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/social-media-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/tailscale-connector", resolution: "guardedOptional" },
@@ -134,6 +138,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-assistant-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "youtube-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS", key: "openai-connector", resolution: "guardedOptional" },
 ];
 
 describe("generated guarded-optional loaders", () => {

@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { getOpenAILoggingSettings } from "@cinatra-ai/openai-connector";
 import { getAnthropicLoggingSettings } from "@/lib/logging";
-import { getApolloLoggingSettings } from "@cinatra-ai/apollo-connector";
-import { getGeminiLoggingSettings } from "@cinatra-ai/gemini-connector";
+// LLM-connector logging settings resolve through the `llm-provider-surface`
+// capability each connector registers at activation (lazy/guarded host-access
+// cutover). An absent connector's row is simply omitted (degraded).
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { getWordPressLoggingSettings } from "@/lib/wordpress-api";
 import { getLinkedInLoggingSettings } from "@/lib/linkedin-api";
 import { getMcpLoggingSettings } from "@/lib/mcp-logging";
@@ -31,10 +32,10 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
   const tab = (Array.isArray(resolved.tab) ? resolved.tab[0] : resolved.tab) ?? "logs";
   const logsCleared = pickSearchParam(resolved.logsCleared) === "1";
 
-  const openAI = getOpenAILoggingSettings();
   const anthropic = getAnthropicLoggingSettings();
-  const apollo = getApolloLoggingSettings();
-  const gemini = getGeminiLoggingSettings();
+  const apollo = getLlmProviderSurface("apollo")?.getLoggingSettings?.() ?? null;
+  const gemini = getLlmProviderSurface("gemini")?.getLoggingSettings?.() ?? null;
+  const openAI = getLlmProviderSurface("openai")?.getLoggingSettings?.() ?? null;
   const wordpress = getWordPressLoggingSettings();
   const linkedin = getLinkedInLoggingSettings();
   const mcp = getMcpLoggingSettings();
@@ -53,20 +54,24 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
           <>
             <DevelopmentLoggingForm
               providers={[
-                {
-                  id: "apollo",
-                  label: "Apollo",
-                  description: "Persist Apollo request and response payloads for connection checks and Apollo-backed workflows.",
-                  enabled: apollo.enabled,
-                  directory: apollo.directory,
-                },
-                {
-                  id: "gemini",
-                  label: "Gemini API",
-                  description: "Persist Gemini request and response payloads for transcript generation and other Gemini workflows.",
-                  enabled: gemini.enabled,
-                  directory: gemini.directory,
-                },
+                ...(apollo
+                  ? [{
+                      id: "apollo" as const,
+                      label: "Apollo",
+                      description: "Persist Apollo request and response payloads for connection checks and Apollo-backed workflows.",
+                      enabled: apollo.enabled,
+                      directory: apollo.directory,
+                    }]
+                  : []),
+                ...(gemini
+                  ? [{
+                      id: "gemini" as const,
+                      label: "Gemini API",
+                      description: "Persist Gemini request and response payloads for transcript generation and other Gemini workflows.",
+                      enabled: gemini.enabled,
+                      directory: gemini.directory,
+                    }]
+                  : []),
                 {
                   id: "linkedin",
                   label: "LinkedIn API",
@@ -88,13 +93,15 @@ export default async function SettingsTelemetryPage({ searchParams }: Props) {
                   enabled: mcp.clientEnabled,
                   directory: mcp.clientDirectory,
                 },
-                {
-                  id: "openai",
-                  label: "OpenAI API",
-                  description: "Persist OpenAI request and response payloads for model calls and related API operations.",
-                  enabled: openAI.enabled,
-                  directory: openAI.directory,
-                },
+                ...(openAI
+                  ? [{
+                      id: "openai" as const,
+                      label: "OpenAI API",
+                      description: "Persist OpenAI request and response payloads for model calls and related API operations.",
+                      enabled: openAI.enabled,
+                      directory: openAI.directory,
+                    }]
+                  : []),
                 {
                   id: "anthropic",
                   label: "Anthropic API",

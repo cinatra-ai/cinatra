@@ -5,9 +5,11 @@ import { getAuthSession } from "@/lib/auth-session";
 import { auth } from "@/lib/auth";
 import { getLlmMcpCredentials, getPublicMcpServerUrl } from "@cinatra-ai/llm";
 import { getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
-import { getConfiguredOpenAIConnection } from "@cinatra-ai/openai-connector";
-import { getConfiguredGeminiAPIKey } from "@cinatra-ai/gemini-connector";
-import { getConfiguredAnthropicConnection, getDefaultClaudeModel } from "@cinatra-ai/anthropic-connector";
+// Provider connection reads resolve through the `llm-provider-surface`
+// capability each LLM connector registers at activation (lazy/guarded
+// host-access cutover). An absent connector degrades to a
+// 400 ("connector not installed"), never a 500.
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import type { LlmProvider } from "@cinatra-ai/llm";
 
 const VALID_PROVIDERS: LlmProvider[] = ["openai", "gemini", "anthropic"];
@@ -90,7 +92,14 @@ export async function POST(request: Request) {
   const mcpToolHeaders = { "Authorization": `Bearer ${accessToken}` };
 
   if (provider === "openai") {
-    const conn = await getConfiguredOpenAIConnection();
+    const surface = getLlmProviderSurface("openai");
+    if (!surface?.getConfiguredConnection) {
+      return NextResponse.json({ error: "The OpenAI connector is not installed." }, { status: 400 });
+    }
+    const conn = (await surface.getConfiguredConnection()) as
+      | { apiKey?: string; defaultModel?: string; organizationId?: string; projectId?: string }
+      | null
+      | undefined;
     if (!conn?.apiKey) {
       return NextResponse.json({ error: "OpenAI API key not configured." }, { status: 400 });
     }
@@ -138,7 +147,11 @@ export async function POST(request: Request) {
   }
 
   if (provider === "gemini") {
-    const apiKey = await getConfiguredGeminiAPIKey();
+    const surface = getLlmProviderSurface("gemini");
+    if (!surface?.getConfiguredAPIKey) {
+      return NextResponse.json({ error: "The Gemini connector is not installed." }, { status: 400 });
+    }
+    const apiKey = await surface.getConfiguredAPIKey();
     if (!apiKey) {
       return NextResponse.json({ error: "Gemini API key not configured." }, { status: 400 });
     }
@@ -205,12 +218,19 @@ export async function POST(request: Request) {
   }
 
   if (provider === "anthropic") {
-    const conn = await getConfiguredAnthropicConnection();
+    const surface = getLlmProviderSurface("anthropic");
+    if (!surface?.getConfiguredConnection || !surface.getDefaultModel) {
+      return NextResponse.json({ error: "The Anthropic connector is not installed." }, { status: 400 });
+    }
+    const conn = (await surface.getConfiguredConnection()) as
+      | { apiKey?: string; mcpMode?: string }
+      | null
+      | undefined;
     if (!conn?.apiKey) {
       return NextResponse.json({ error: "Anthropic API key not configured." }, { status: 400 });
     }
 
-    const model = getDefaultClaudeModel();
+    const model = surface.getDefaultModel();
     const mcpMode = conn.mcpMode ?? "function-tools";
     const anthropicHeaders = {
       "Content-Type": "application/json",

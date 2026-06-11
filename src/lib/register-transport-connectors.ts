@@ -46,6 +46,7 @@ import {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   getObjectsProviderOrNull,
   lookupCrmProvider,
+  requireExtensionAction,
 } from "@cinatra-ai/sdk-extensions";
 import {
   getGoogleOAuthStatus,
@@ -181,6 +182,17 @@ function registerHostConnectorServices(): void {
     // bound by src/lib/register-crm-providers.ts (capability-registered CRM
     // providers), so activation order never matters.
     lookupCrmProvider: (providerId: string) => lookupCrmProvider(providerId) ?? null,
+  });
+
+  // Extension-action permission gate as a per-concern service: the SAME
+  // enforcement the SDK `requireExtensionAction` slot binds
+  // (src/lib/register-extension-action-guard.ts), published as a VALUE so a
+  // serverEntry-built action impl can gate without an SDK value import
+  // (host-peer-value-import ban). Fail-closed: the SDK slot throws until the
+  // guard module has bound it (instrumentation imports it before activation).
+  register(svc.extensionActionGuard, {
+    require: (packageId: string, mode: "read" | "manage") =>
+      requireExtensionAction(packageId, mode),
   });
 }
 

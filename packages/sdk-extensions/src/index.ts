@@ -338,6 +338,7 @@ export {
   BLOG_SYSTEM_CAPABILITY,
   SOCIAL_MEDIA_SYSTEM_CAPABILITY,
   EMAIL_SYSTEM_CAPABILITY,
+  LLM_PROVIDER_SURFACE_CAPABILITY,
 } from "./host-connector-services-contract";
 export type {
   HostConnectorConfigService,
@@ -366,6 +367,8 @@ export type {
   BlogSystemProvider,
   SocialMediaSystemProvider,
   EmailSystemProvider,
+  HostExtensionActionGuardService,
+  LlmProviderSurface,
 } from "./host-connector-services-contract";
 
 // Chat user-context contribution: a connector contributes pre-formatted chat

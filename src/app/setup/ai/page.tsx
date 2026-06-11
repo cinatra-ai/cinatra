@@ -14,14 +14,11 @@ import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
-import {
-  getConfiguredOpenAIConnection,
-  isOpenAIConnectionReady,
-  listAvailableOpenAIModels,
-  filterVisibleOpenAIModels,
-  filterSelectableOpenAIModels,
-  OPENAI_SERVICE_TIER_OPTIONS,
-} from "@cinatra-ai/openai-connector";
+// Every OpenAI reader resolves through the `llm-provider-surface` capability
+// the openai connector registers at activation (lazy/guarded host-access
+// cutover). Connector absent → the degraded info state below
+// replaces the connection form.
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 
 export const metadata: Metadata = { title: "Setup: AI" };
 
@@ -38,9 +35,33 @@ function pickSearchParam(value: string | string[] | undefined) {
 
 export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageProps) {
   const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
+  const openAISurface = getLlmProviderSurface("openai");
+  if (!openAISurface) {
+    // Degraded mode: the openai connector is not installed/active on this
+    // host. Render an explanatory state instead of a connection form that
+    // could never validate or save.
+    return (
+      <div className="flex flex-col gap-6">
+        <div>
+          <p className="text-base font-semibold text-foreground">OpenAI credentials</p>
+        </div>
+        <Alert>
+          <AlertTitle>OpenAI connector unavailable</AlertTitle>
+          <AlertDescription>
+            The OpenAI connector extension is not installed or active on this instance, so the
+            default LLM provider cannot be configured here. Install/activate it (or configure a
+            different provider in Administration) and reload this step.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
   const connection = readOpenAIConnection();
-  const configuredConnection = await getConfiguredOpenAIConnection(connection ?? undefined);
-  const isConnected = isOpenAIConnectionReady(configuredConnection ?? connection ?? undefined);
+  const configuredConnection = (await openAISurface.getConfiguredConnection?.(
+    connection ?? undefined,
+  )) as { apiKey?: string; projectId?: string; organizationId?: string; availableModels?: string[]; serviceTier?: string; defaultModel?: string } | null | undefined;
+  const isConnected =
+    openAISurface.isConnectionReady?.(configuredConnection ?? connection ?? undefined) === true;
   const hasApiKey = Boolean(configuredConnection?.apiKey || connection?.apiKey);
   const errorMessage = pickSearchParam(resolvedSearchParams.error);
   const stay = pickSearchParam(resolvedSearchParams.stay) === "1";
@@ -48,19 +69,21 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
   let availableModels = connection?.availableModels ?? configuredConnection?.availableModels ?? [];
   if (configuredConnection?.apiKey) {
     try {
-      const fetchedModels = await listAvailableOpenAIModels({
+      const fetchedModels = await openAISurface.listAvailableModels?.({
         projectId: configuredConnection.projectId,
         organizationId: configuredConnection.organizationId,
       });
-      if (fetchedModels.length > 0) {
+      if (fetchedModels && fetchedModels.length > 0) {
         availableModels = fetchedModels;
       }
     } catch {
       // Keep the last validated model list if the live refresh fails.
     }
   }
-  availableModels = filterVisibleOpenAIModels(availableModels);
-  const selectableModels = new Set(filterSelectableOpenAIModels(availableModels));
+  availableModels = openAISurface.filterVisibleModels?.(availableModels) ?? availableModels;
+  const selectableModels = new Set(
+    openAISurface.filterSelectableModels?.(availableModels) ?? availableModels,
+  );
 
   // Auto-forward to next incomplete step unless the operator explicitly came
   // back here via the stepper (?stay=1) or there's an error to surface.
@@ -154,7 +177,7 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
                   <SelectValue placeholder="Standard" />
                 </SelectTrigger>
                 <SelectContent>
-                  {OPENAI_SERVICE_TIER_OPTIONS.map((option) => (
+                  {(openAISurface.serviceTierOptions ?? []).map((option) => (
                     <SelectItem
                       key={option.value}
                       value={option.value}

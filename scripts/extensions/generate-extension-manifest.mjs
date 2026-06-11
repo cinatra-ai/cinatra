@@ -203,6 +203,11 @@ function entryFlags(rec) {
     hasMcpModule: has("src/mcp/module.ts"),
     hasSetupPage: has("src/setup-page.tsx"),
     hasSettingsPage: has("src/settings-page.tsx"),
+    // Conventional skills-settings tab module: a connector that contributes a
+    // tab to the host's /configuration/skills page ships
+    // `src/skills-settings-page.tsx` exporting `SkillsSettingsTabContent`
+    // (openai today). Presence-aware like every other surface.
+    hasSkillsSettingsPage: has("src/skills-settings-page.tsx"),
   };
 }
 
@@ -602,6 +607,7 @@ export async function buildManifest() {
       hasMcpModule: flags.hasMcpModule,
       hasSetupPage: flags.hasSetupPage,
       hasSettingsPage: flags.hasSettingsPage,
+      hasSkillsSettingsPage: flags.hasSkillsSettingsPage,
       uiSurface: classifyUiSurface(x, flags, cin),
       // The declared schema-config DATA the host renders the setup surface from
       // (validated above). null for bundled-react / no-UI extensions.
@@ -636,6 +642,11 @@ export async function buildManifest() {
 
   const connectorSettingsPages = records
     .filter((r) => r.kind === "connector" && r.hasSettingsPage)
+    .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName, resolution: r.resolution }))
+    .sort((a, b) => a.slug.localeCompare(b.slug));
+
+  const connectorSkillsSettingsTabs = records
+    .filter((r) => r.kind === "connector" && r.hasSkillsSettingsPage)
     .map((r) => ({ slug: r.packageName.split("/")[1], packageName: r.packageName, resolution: r.resolution }))
     .sort((a, b) => a.slug.localeCompare(b.slug));
 
@@ -859,6 +870,7 @@ export async function buildManifest() {
     records,
     connectorSetupPages,
     connectorSettingsPages,
+    connectorSkillsSettingsTabs,
     connectorEntryModules,
     connectorMcpModules,
     connectorPrimitiveHandlers,
@@ -1140,7 +1152,7 @@ function emitWidgetStreamPublicPaths(widgetStreamAgents) {
     `${body}\n];\n`  );
 }
 
-function emitConnectorSetupPages(setupPages, settingsPages) {
+function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs = []) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const setupBody = setupPages
     .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/setup-page`)},`)
@@ -1148,9 +1160,12 @@ function emitConnectorSetupPages(setupPages, settingsPages) {
   const settingsBody = settingsPages
     .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/settings-page`)},`)
     .join("\n");
+  const skillsTabsBody = skillsSettingsTabs
+    .map((p) => `  ${JSON.stringify(p.slug)}: ${emitLoaderEntry(p.resolution, `${p.packageName}/skills-settings-page`)},`)
+    .join("\n");
   return (
     `${HEADER(script)}import "server-only";\n` +
-    guardImportFor(`${setupBody}\n${settingsBody}`) +
+    guardImportFor(`${setupBody}\n${settingsBody}\n${skillsTabsBody}`) +
     `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
     `// Literal dynamic-import maps (Turbopack rejects computed import templates).\n` +
     `// Consumed by src/lib/connector-setup-pages.ts as the loader source of truth.\n` +
@@ -1166,7 +1181,13 @@ function emitConnectorSetupPages(setupPages, settingsPages) {
     `export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry> = {\n` +
     `${setupBody}\n};\n\n` +
     `export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEntry> = {\n` +
-    `${settingsBody}\n};\n`
+    `${settingsBody}\n};\n\n` +
+    `// Conventional skills-settings tab modules (a connector contributing a tab\n` +
+    `// to /configuration/skills ships src/skills-settings-page.tsx exporting\n` +
+    `// SkillsSettingsTabContent). Consumed generically by the host skills page;\n` +
+    `// an absent/degraded entry renders its "extension unavailable" note.\n` +
+    `export const GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS: Record<string, GeneratedPageEntry> = {\n` +
+    `${skillsTabsBody}\n};\n`
   );
 }
 
@@ -1193,6 +1214,7 @@ function emitGuardedOptionalLoadersTest({
   chatWidgetModules,
   connectorSetupPages,
   connectorSettingsPages,
+  connectorSkillsSettingsTabs,
 }) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const expected = [];
@@ -1212,6 +1234,7 @@ function emitGuardedOptionalLoadersTest({
   }
   for (const p of connectorSetupPages) expected.push(["GENERATED_CONNECTOR_SETUP_PAGES", p.slug, p.resolution]);
   for (const p of connectorSettingsPages) expected.push(["GENERATED_CONNECTOR_SETTINGS_PAGES", p.slug, p.resolution]);
+  for (const p of connectorSkillsSettingsTabs) expected.push(["GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS", p.slug, p.resolution]);
   const expectedBody = expected
     .map(([map, key, resolution]) => `  { map: ${JSON.stringify(map)}, key: ${JSON.stringify(key)}, resolution: ${JSON.stringify(resolution)} },`)
     .join("\n");
@@ -1239,6 +1262,7 @@ function emitGuardedOptionalLoadersTest({
     `import {\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
+    `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
     `} from "../connector-setup-pages";\n\n` +
     `const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>> = {\n` +
     `  GENERATED_EXTENSION_SERVER_ENTRIES,\n` +
@@ -1251,6 +1275,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
+    `  GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS,\n` +
     `};\n\n` +
     `const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [\n` +
     `${expectedBody}\n];\n\n` +
@@ -1388,6 +1413,7 @@ async function main() {
     records,
     connectorSetupPages,
     connectorSettingsPages,
+    connectorSkillsSettingsTabs,
     connectorEntryModules,
     connectorMcpModules,
     connectorPrimitiveHandlers,
@@ -1396,7 +1422,7 @@ async function main() {
     chatWidgetModules,
   } = await buildManifest();
   const files = [
-    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages)],
+    [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
     [OUT_CLIENT, emitClient()],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
     [
@@ -1411,6 +1437,7 @@ async function main() {
         chatWidgetModules,
         connectorSetupPages,
         connectorSettingsPages,
+        connectorSkillsSettingsTabs,
       }),
     ],
   ];

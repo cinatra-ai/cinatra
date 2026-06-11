@@ -49,6 +49,7 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   emailRouting: "@cinatra-ai/host:email-routing",
   blogRouting: "@cinatra-ai/host:blog-routing",
   objectsIntegration: "@cinatra-ai/host:objects-integration",
+  extensionActionGuard: "@cinatra-ai/host:extension-action-guard",
 } as const;
 
 /** The legacy global connector-config KV (raw `connectorId`-keyed rows — NOT
@@ -372,6 +373,63 @@ export type SocialMediaSystemProvider = {
     post: SocialMediaPost,
     opts?: { connectorId?: string; userId?: string; orgId?: string },
   ): Promise<SocialMediaPublishReceipt>;
+};
+
+/**
+ * The host's extension-action permission gate as a per-concern service —
+ * the SAME enforcement the SDK `requireExtensionAction` slot binds, published
+ * as a VALUE so a serverEntry-built action impl can gate without an SDK value
+ * import (host-peer-value-import ban). MUST fail closed.
+ */
+export type HostExtensionActionGuardService = {
+  require(packageId: string, mode: "read" | "manage"): Promise<void>;
+};
+
+/**
+ * The per-LLM-provider settings/status/catalog surface an LLM connector
+ * registers for HOST consumers (campaign actions, setup/telemetry/logging
+ * pages, the connection-status + llm-access test routes, the setup wizard).
+ * One provider per connector, discriminated by `providerId`; every member is
+ * optional — the host's resolver structurally guards what it uses, and an
+ * absent provider degrades the host feature per call.
+ *
+ * TRUST BOUNDARY: this surface is HOST-INTERNAL in-process wiring — it is
+ * resolvable only via the server-side capability registry, never by clients.
+ * AUTHORIZATION therefore lives at the HOST CALL SITES (the server actions /
+ * routes that resolve a surface carry their own gating, unchanged from the
+ * static imports they replaced); a member that was itself a GATED action
+ * before the cutover (the openai save/clear/skills actions) must keep its
+ * own fail-closed gate inside the impl (the extension-action-guard service).
+ * Plain readers/writers (logging toggles, model selection) follow their host
+ * call sites' existing gating exactly as before.
+ */
+export const LLM_PROVIDER_SURFACE_CAPABILITY = "llm-provider-surface";
+export type LlmProviderSurface = {
+  /** The LLM vendor id ("openai" | "anthropic" | "gemini" | "apollo" | ...). */
+  providerId: string;
+  isConnectionReady?(connection?: unknown): boolean;
+  getConfiguredConnection?(connection?: unknown): Promise<unknown>;
+  listAvailableModels?(input: {
+    projectId?: string;
+    organizationId?: string;
+  }): Promise<string[]>;
+  filterVisibleModels?(models: string[]): string[];
+  filterSelectableModels?(models: string[]): string[];
+  serviceTierOptions?: Array<{ value: string; label: string }>;
+  getDefaultModel?(): string;
+  saveDefaultModel?(model: string): void;
+  saveAPISettings?(input: { apiKey?: string }): Promise<unknown>;
+  clearAPISettings?(): Promise<unknown>;
+  models?: readonly string[];
+  getConfiguredAPIKey?(): Promise<string | null>;
+  getLoggingSettings?(): { enabled: boolean; directory: string };
+  saveLoggingSettings?(enabled: boolean): Promise<void>;
+  logDirectory?: string;
+  actions?: {
+    saveConnection?(formData: FormData): Promise<unknown>;
+    clearConnection?(): Promise<unknown>;
+    saveSkillsSettings?(formData: FormData): Promise<unknown>;
+  };
 };
 
 /**

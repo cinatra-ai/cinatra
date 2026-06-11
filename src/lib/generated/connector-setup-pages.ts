@@ -56,3 +56,11 @@ export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEnt
   "wordpress-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/settings-page", () => import("@cinatra-ai/wordpress-mcp-connector/settings-page")) },
   "youtube-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/youtube-connector/settings-page", () => import("@cinatra-ai/youtube-connector/settings-page")) },
 };
+
+// Conventional skills-settings tab modules (a connector contributing a tab
+// to /configuration/skills ships src/skills-settings-page.tsx exporting
+// SkillsSettingsTabContent). Consumed generically by the host skills page;
+// an absent/degraded entry renders its "extension unavailable" note.
+export const GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS: Record<string, GeneratedPageEntry> = {
+  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/skills-settings-page", () => import("@cinatra-ai/openai-connector/skills-settings-page")) },
+};

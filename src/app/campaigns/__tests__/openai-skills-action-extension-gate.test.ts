@@ -1,14 +1,21 @@
 /**
- * Security regression: the OpenAI connector server actions MUST gate on
- * requireExtensionAction("@cinatra-ai/openai-connector", "manage") as the FIRST
- * executable statement. These actions write workspace-wide OpenAI credentials +
- * shell/skills runtime settings, so an unprivileged caller must not be able to
- * overwrite them.
+ * Security regression: the OpenAI connector server actions MUST gate on the
+ * manage permission as the FIRST executable statement. These actions write
+ * workspace-wide OpenAI credentials + shell/skills runtime settings, so an
+ * unprivileged caller must not be able to overwrite them.
  *
- * saveOpenAISkillsSettingsAction lives in the connector and gates on the SDK
- * manage gate. The connector actions saveOpenAIConnectionAction +
- * clearOpenAIConnectionAction carry the same gate. The connector actions are
- * THE security boundary (openai IS a catalog connector).
+ * Post lazy/guarded host-access cutover the action BODIES live
+ * in the connector's actions-core factory, parameterized by the manage guard;
+ * the two build sites are (a) the "use server" actions.ts binding the SDK
+ * `requireExtensionAction(OPENAI_PACKAGE_ID, "manage")` slot and (b) the
+ * serverEntry register.ts binding the host's
+ * `@cinatra-ai/host:extension-action-guard` service with the same fail-closed
+ * semantics. This test pins ALL THREE layers against the source text:
+ *   1. actions.ts binds the factory to the SDK manage gate (and the const
+ *      resolves to the right package id);
+ *   2. every actions-core body gates FIRST on `await requireManage();`;
+ *   3. register.ts's injected guard calls `guard.require(PACKAGE_NAME,
+ *      "manage")` and THROWS when the host service is absent (fail-closed).
  *
  * This test lives under src/ (root-vitest-covered, CI-pinned) and asserts against
  * the connector source text by repo-relative path, using the stronger
@@ -52,29 +59,62 @@ function firstExecutableStatement(body: string): string {
   return s;
 }
 
-const SOURCE = readFileSync(
+const ACTIONS_SOURCE = readFileSync(
   join(process.cwd(), "extensions/cinatra-ai/openai-connector/src/actions.ts"),
   "utf-8",
 );
-// The connector references its package id via an OPENAI_PACKAGE_ID constant
-// (apollo precedent). Assert both the gate-call shape AND that the constant
-// resolves to the correct package id, so the gate can't be silently weakened by
-// pointing the const at a different (or unknown) package.
-const GATE = `requireExtensionAction(OPENAI_PACKAGE_ID, "manage")`;
+const CORE_SOURCE = readFileSync(
+  join(process.cwd(), "extensions/cinatra-ai/openai-connector/src/actions-core.ts"),
+  "utf-8",
+);
+const REGISTER_SOURCE = readFileSync(
+  join(process.cwd(), "extensions/cinatra-ai/openai-connector/src/register.ts"),
+  "utf-8",
+);
+
+function extractCoreFunctionBody(source: string, fnName: string): string {
+  const marker = `async function ${fnName}`;
+  const start = source.indexOf(marker);
+  if (start === -1) throw new Error(`fn ${fnName} not found`);
+  let i = source.indexOf("{", start);
+  const bodyStart = i;
+  let depth = 0;
+  for (; i < source.length; i++) {
+    if (source[i] === "{") depth++;
+    else if (source[i] === "}") {
+      depth--;
+      if (depth === 0) break;
+    }
+  }
+  return source.slice(bodyStart + 1, i);
+}
 
 describe("openai connector actions — extension manage gate", () => {
   it("OPENAI_PACKAGE_ID resolves to the openai-connector package id", () => {
-    expect(SOURCE).toContain(`const OPENAI_PACKAGE_ID = "@cinatra-ai/openai-connector"`);
+    expect(ACTIONS_SOURCE).toContain(`const OPENAI_PACKAGE_ID = "@cinatra-ai/openai-connector"`);
   });
 
-  for (const fnName of [
-    "saveOpenAISkillsSettingsAction",
-    "saveOpenAIConnectionAction",
-    "clearOpenAIConnectionAction",
-  ]) {
-    it(`${fnName}: the FIRST executable statement is the requireExtensionAction manage gate`, () => {
-      const body = extractFunctionBody(SOURCE, fnName);
-      expect(firstExecutableStatement(body).startsWith(`await ${GATE};`)).toBe(true);
+  it('the "use server" build site binds the factory to the SDK manage gate', () => {
+    expect(ACTIONS_SOURCE).toContain(
+      `makeOpenAIConnectionActions(() =>
+  requireExtensionAction(OPENAI_PACKAGE_ID, "manage"),
+)`,
+    );
+  });
+
+  for (const fnName of ["saveConnection", "clearConnection", "saveSkillsSettings"]) {
+    it(`actions-core ${fnName}: the FIRST executable statement is the injected manage gate`, () => {
+      const body = extractCoreFunctionBody(CORE_SOURCE, fnName);
+      expect(firstExecutableStatement(body).startsWith("await requireManage();")).toBe(true);
     });
   }
+
+  it("the serverEntry build site's guard requires manage on the right package and fails closed when absent", () => {
+    expect(REGISTER_SOURCE).toContain('await guard.require(PACKAGE_NAME, "manage");');
+    expect(REGISTER_SOURCE).toContain('const PACKAGE_NAME = "@cinatra-ai/openai-connector"');
+    // Fail-closed branch: a missing host guard service throws BEFORE any body runs.
+    expect(REGISTER_SOURCE).toMatch(
+      /if \(!guard \|\| typeof guard\.require !== "function"\) \{[\s\S]{0,40}?throw new Error\(/,
+    );
+  });
 });

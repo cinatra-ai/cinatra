@@ -8,7 +8,10 @@ import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
 } from "@cinatra-ai/nango-connector";
 import { upsertExternalAgentTemplate, renameExternalAgentTemplateRemoteId, readAgentTemplateByConnectorAndRemoteId } from "@cinatra-ai/agents";
-import { getConfiguredGeminiAPIKey } from "@cinatra-ai/gemini-connector";
+// The Gemini key read resolves through the `llm-provider-surface` capability
+// (lazy/guarded host-access cutover). Connector absent → the
+// gemini auto-connect step is skipped (dev-only surface).
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 
 /**
  * Normalize a base URL to its canonical form for idempotency key generation.
@@ -322,7 +325,7 @@ export async function ensureA2ADevPeerConnections(): Promise<void> {
     // in .env.local. Runs async/fire-and-forget; failures are non-fatal.
     void (async () => {
       try {
-        const geminiKey = await getConfiguredGeminiAPIKey();
+        const geminiKey = (await getLlmProviderSurface("gemini")?.getConfiguredAPIKey?.()) ?? null;
         if (geminiKey) {
           const envPath = path.join(process.cwd(), ".env");
           let content = "";

@@ -1,4 +1,8 @@
-import { isOpenAIConnectionReady, getConfiguredOpenAIConnection } from "@cinatra-ai/openai-connector";
+// The OpenAI readiness read resolves through the `llm-provider-surface`
+// capability (lazy/guarded host-access cutover). Connector
+// absent → the AI step reads as not-ready (the wizard keeps prompting —
+// correct on a host without the openai connector).
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { getNangoStatus } from "@cinatra-ai/nango-connector";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Instance identity presence determines whether the name step is ready.
@@ -16,8 +20,13 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
   const identity = readInstanceIdentity();
   const nangoStatus = getNangoStatus();
   const openAIConnection = readOpenAIConnection();
-  const configuredConnection = await getConfiguredOpenAIConnection(openAIConnection ?? undefined);
-  const openAIReady = isOpenAIConnectionReady(configuredConnection ?? openAIConnection ?? undefined);
+  const openAISurface = getLlmProviderSurface("openai");
+  const configuredConnection = await openAISurface?.getConfiguredConnection?.(
+    openAIConnection ?? undefined,
+  );
+  const openAIReady =
+    openAISurface?.isConnectionReady?.(configuredConnection ?? openAIConnection ?? undefined) ===
+    true;
 
   const steps: SetupWizardStep[] = [];
 
