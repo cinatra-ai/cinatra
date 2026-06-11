@@ -151,6 +151,12 @@ describe("canonical lifecycle status reachability guard", () => {
         // Seed script — idempotent seed-marker wipe + re-insert (dev seeding).
         "scripts/seed.mjs",
         "packages/extensions/src/__tests__/drift-canonical-gate-reach.test.ts",
+        // Demotion-migration lifecycle test (cinatra#7 required-set shrink):
+        // its FIXTURE seeds pre-upgrade rows with raw INSERTs on purpose — the
+        // point is to reproduce the legacy DB state the canonical primitive
+        // would refuse to recreate under CURRENT semantics, then prove the
+        // demotion migration preserves it. Confined to its own per-test schema.
+        "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
       ]);
       const offenders = hits.filter((f) => !allowed.has(f));
       expect(

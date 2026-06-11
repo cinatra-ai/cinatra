@@ -1,8 +1,8 @@
-diff --git a/migrations/core/core__0004_drop-agent-label.mjs b/migrations/core/core__0004_drop-agent-label.mjs
+diff --git a/migrations/core/core__0005_drop-agent-label.mjs b/migrations/core/core__0005_drop-agent-label.mjs
 new file mode 100644
 index 0000000..3f1c2aa
 --- /dev/null
-+++ b/migrations/core/core__0004_drop-agent-label.mjs
++++ b/migrations/core/core__0005_drop-agent-label.mjs
 @@ -0,0 +1,14 @@
 +/**
 + * Gate-bypass attempt fixture: a VALID runner module (name passes the boot

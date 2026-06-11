@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   buildManifest,
   checkParity,
+  readPresentExtensionNames,
   checkExitCode,
   resolveDisplayName,
   sanitizeSvgToDataUri,
@@ -244,6 +245,34 @@ describe("manifest generator", () => {
   it("generated connector setup-pages match the hand-maintained map (parity)", async () => {
     const problems = await checkParity();
     expect(problems).toEqual([]);
+  });
+
+  it("presence-aware parity (self mode) equals strict parity on the FULL tree", async () => {
+    // On the canonical clone-back tree every catalog package is present, so
+    // presence-awareness must change nothing — it only ever SKIPS descriptors
+    // whose package is absent from a partial universe (prod image = the
+    // lock-acquired required set; fresh public clone). The partial-universe
+    // behavior itself is exercised end to end by the in-image
+    // `--check --self` (Dockerfile) and the required-only fresh-clone job.
+    const problems = await checkParity({ presenceAware: true });
+    expect(problems).toEqual([]);
+  });
+
+  it("readPresentExtensionNames reads package names from disk (pure presence probe)", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "present-names-"));
+    try {
+      mkdirSync(path.join(root, "extensions", "some-scope", "alpha-connector"), { recursive: true });
+      writeFileSync(
+        path.join(root, "extensions", "some-scope", "alpha-connector", "package.json"),
+        JSON.stringify({ name: "@some-scope/alpha-connector" }),
+      );
+      mkdirSync(path.join(root, "extensions", "some-scope", "not-a-package"), { recursive: true });
+      const present = readPresentExtensionNames(root);
+      expect([...present]).toEqual(["@some-scope/alpha-connector"]);
+      expect(readPresentExtensionNames(path.join(root, "nope")).size).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("classifies a connector with a UI page as bundled-react, facades as null", async () => {

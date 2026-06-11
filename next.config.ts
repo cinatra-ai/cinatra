@@ -172,6 +172,12 @@ const nextConfig: NextConfig = {
     "node-pg-migrate",
   ],
   transpilePackages: [
+    // NOTE on connector entries (cinatra#7): a connector needs an entry here
+    // only when it is node_modules-RESOLVED somewhere in the build graph
+    // (workspace deps of packages/llm / packages/agents, or the root nango
+    // dep). Connectors resolved purely via tsconfig path aliases compile as
+    // sources and need no entry; entries for packages outside the declared
+    // bootable set (cinatra.requiredExtensions) were pruned with the shrink.
     "@cinatra-ai/extension-types",
     "@cinatra-ai/extensions",
     "@cinatra-ai/agents",
@@ -179,12 +185,8 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/errors",
     "@cinatra-ai/connectors",
     "@cinatra-ai/connectors-catalog",
-    "@cinatra-ai/a2a-server-connector",
     "@cinatra-ai/anthropic-connector",
-    "@cinatra-ai/apollo-connector",
-    "@cinatra-ai/apify-connector",
     "@cinatra-ai/dashboards",
-    "@cinatra-ai/mcp-client-connector",
     "@cinatra-ai/design",
     "@cinatra-ai/marketplace-mcp-client",
     "@cinatra-ai/marketplace-sync",
@@ -193,19 +195,13 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/sdk-extensions",
     "@cinatra-ai/gemini-connector",
     "@cinatra-ai/gmail-connector",
-    "@cinatra-ai/github-connector",
     "@cinatra-ai/google-calendar-connector",
-    "@cinatra-ai/linkedin-connector",
     "@cinatra-ai/nango-connector",
     "@cinatra-ai/google-oauth-connection",
-    "@cinatra-ai/google-oauth-connector",
     "@cinatra-ai/mcp-server",
     "@cinatra-ai/openai-connector",
-    "@cinatra-ai/resend-connector",
     "@cinatra-ai/wordpress-mcp-connector",
     "@cinatra-ai/crm-connector",
-    "@cinatra-ai/twenty-connector",
-    "@cinatra-ai/youtube-connector",
     "@cinatra-ai/a2a",
     "@cinatra-ai/agent-ui-protocol",
     "@cinatra-ai/chat",

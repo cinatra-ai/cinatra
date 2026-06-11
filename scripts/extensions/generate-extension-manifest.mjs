@@ -43,7 +43,7 @@
 // and deliberately NEVER binds or mentions the committed tree, whose presence
 // universe may legitimately differ.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildInventory } from "./inventory.mjs";
@@ -1321,7 +1321,29 @@ function emitClient() {
 // ---------------------------------------------------------------------------
 // Parity (the catalog safety net)
 // ---------------------------------------------------------------------------
-export async function checkParity() {
+
+/** Package names with an on-disk extension directory (any scope/kind). The
+ * presence probe for presence-aware parity — independent of the inventory so
+ * it stays a pure disk fact. */
+export function readPresentExtensionNames(repoRoot = REPO_ROOT) {
+  const present = new Set();
+  const extRoot = join(repoRoot, "extensions");
+  if (!existsSync(extRoot)) return present;
+  for (const scope of readdirSync(extRoot)) {
+    const scopeDir = join(extRoot, scope);
+    let entries;
+    try { entries = readdirSync(scopeDir); } catch { continue; }
+    for (const dir of entries) {
+      try {
+        const name = JSON.parse(readFileSync(join(scopeDir, dir, "package.json"), "utf8")).name;
+        if (typeof name === "string" && name.length > 0) present.add(name);
+      } catch { /* not a package dir */ }
+    }
+  }
+  return present;
+}
+
+export async function checkParity({ presenceAware = false } = {}) {
   const { records, connectorSetupPages } = await buildManifest();
   const problems = [];
 
@@ -1330,11 +1352,26 @@ export async function checkParity() {
   //    (anything but a declared schema-config surface) must have a generated
   //    setup-page loader entry. The host loader map is the generated map, so a
   //    missing entry here is a runtime 404 waiting to happen.
+  //
+  //    presenceAware (self mode ONLY — non-canonical universes, cinatra#7):
+  //    the catalog legitimately describes the FULL acquirable universe, but a
+  //    partial presence universe (prod image = the lock-acquired required
+  //    set; a fresh public clone) carries records only for the packages on
+  //    disk. A descriptor whose package is ABSENT from disk is presence
+  //    filtering, not drift — skipped with a note. A descriptor whose package
+  //    IS present but has no record stays a hard parity break in every mode.
+  const presentNames = presenceAware ? readPresentExtensionNames() : null;
   const generated = new Set(connectorSetupPages.map((p) => p.slug));
   const recordByPackage = new Map(records.map((r) => [r.packageName, r]));
   for (const d of CONNECTOR_DESCRIPTORS) {
     const rec = recordByPackage.get(d.packageId);
     if (!rec) {
+      if (presentNames !== null && !presentNames.has(d.packageId)) {
+        console.log(
+          `[extension-manifest] note (self mode): catalog descriptor "${d.slug}" (${d.packageId}) is absent from this presence universe — parity skipped (acquirable-on-demand).`,
+        );
+        continue;
+      }
       problems.push(`catalog descriptor "${d.slug}" (${d.packageId}) has no manifest record`);
       continue;
     }
@@ -1482,7 +1519,7 @@ async function main() {
         drift = true;
       }
     }
-    const parity = await checkParity();
+    const parity = await checkParity({ presenceAware: self });
     for (const p of parity) console.error(`[extension-manifest] PARITY ${p}`);
     const exit = checkExitCode({ driftOrMissing: drift, parityIssueCount: parity.length });
     if (exit === 0) {

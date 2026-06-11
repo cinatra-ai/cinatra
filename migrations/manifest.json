@@ -42,6 +42,13 @@
       "summary": "Drop the dormant extension_migrations ledger (issue #118): it backed the RETIRED extension JSON-DSL migration machinery and was empty on every lineage (no extension ever declared cinatra.migrations). Extension migrations now record into the shared node-pg-migrate pgmigrations ledger under ext_<scope>_<pkg>__NNNN names; required by the drop-table rule.",
       "destructive": true,
       "tables": ["extension_migrations"]
+    },
+    {
+      "seq": "0004",
+      "file": "core/core__0004_demote-optional-extension-anchors.mjs",
+      "summary": "Demote the 17 anchor rows the requiredExtensions shrink (cinatra#7) removed from the prod bootable set (33 -> 16): required_in_prod -> false and locked -> active for exactly those rows; archived tombstones stay archived; nothing is uninstalled and all provenance/dependency/owner state is preserved. Fresh databases seed from the current declaration and ledger-fake the chain; idempotent on re-run.",
+      "destructive": true,
+      "tables": ["installed_extension"]
     }
   ]
 }
