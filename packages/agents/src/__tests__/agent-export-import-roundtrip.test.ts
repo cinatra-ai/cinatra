@@ -481,6 +481,10 @@ describe("agent_export fail-explicit fallback (no DB-derived shell)", () => {
     expect(result.zipBase64).toBeUndefined();
     expect(result.error).toMatch(/Export unavailable/);
     expect(result.error).toMatch(/could not be read/);
+    // Sanitized reason: errno code only — the raw Node fs message (which
+    // embeds the absolute host path) must not leak into the MCP error.
+    expect(result.error).toContain("(EISDIR)");
+    expect(result.error).not.toContain(state.installDir);
   });
 });
 

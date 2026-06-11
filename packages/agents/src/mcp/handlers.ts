@@ -2339,11 +2339,17 @@ async function handleAgentBuilderExport(
     try {
       agentJson = await readFile(resolved.path, "utf8");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Sanitized reason only: Node fs error messages embed absolute host
+      // paths (and resolved.relPath is cwd-relative, which can spell out an
+      // out-of-tree install root too). Surface the errno code and point the
+      // caller at agent_source_read for path-level inspection.
+      const code =
+        (err as NodeJS.ErrnoException | null)?.code ??
+        (err instanceof Error ? err.name : "unknown");
       return {
         error:
           `Export unavailable: the canonical OAS definition for ${template.packageName} ` +
-          `(${resolved.relPath}) could not be read: ${message}`,
+          `could not be read (${code}). Inspect the source package with agent_source_read.`,
       };
     }
 
