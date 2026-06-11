@@ -626,8 +626,19 @@ export function detectMigrationArtifact(files, readBaseFile) {
   }
 
   if (artifactFiles.length === 0) {
-    if (manifestDiff && problems.length === 0 && integrity.length === 0) {
-      problems.push(`${MIGRATION_MANIFEST_PATH} changed without a new migrations/core/core__NNNN_*.mjs module`);
+    // A manifest edit that leaves the migrations array untouched (e.g. _doc
+    // wording) is legitimate without a module. Appending entries is not:
+    // every new entry must bind to a module shipped in the same diff.
+    // (Rewriting or removing existing entries is already an integrity
+    // failure via the append-only prefix check above.)
+    if (
+      manifestDiff &&
+      problems.length === 0 &&
+      integrity.length === 0 &&
+      Array.isArray(finalEntries) &&
+      finalEntries.length > baseEntries.length
+    ) {
+      problems.push(`${MIGRATION_MANIFEST_PATH} gained entries without a new migrations/core/core__NNNN_*.mjs module`);
     }
     return { complete: false, artifactFiles, problems, integrity, newEntries: [] };
   }
