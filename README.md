@@ -106,9 +106,10 @@ make refresh
 ```
 
 `make refresh` is dev-only and never touches git: you manage branches, it brings dependencies and
-the dev database in sync with the code on disk. It applies **additive** schema changes automatically;
-transformational one-shot migrations (renames/backfills) are run by hand only when a release's notes
-say so. Restart with `make dev` afterwards.
+the dev database in sync with the code on disk. It applies **additive** schema changes automatically
+and then runs the versioned migration chain (`migrations/core/`, recorded in the `pgmigrations`
+ledger), so transformational changes (renames/backfills) apply automatically too — hand-run
+release-note migrations are retired. Restart with `make dev` afterwards.
 
 Full walkthrough with prerequisites, services, and first-time configuration: see [Installation](https://docs.cinatra.ai/guides/hosting/installation/) and [Quickstart](https://docs.cinatra.ai/guides/hosting/quickstart/) in the Hosting Guide.
 
