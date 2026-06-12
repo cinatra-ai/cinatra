@@ -392,6 +392,22 @@ export type {
   ChatUserContextProviderRecord,
 } from "./chat-user-context-contract";
 
+// Structured per-connector contribution surfaces (cinatra#151 Stage 4): the
+// packages/agents consumers resolve these capability ids instead of
+// value-importing crm/gmail/google-calendar connector packages by name.
+export { CRM_LIST_READER_CAPABILITY_ID } from "./crm-list-reader-contract";
+export type { CrmListReader } from "./crm-list-reader-contract";
+export { EMAIL_SENDER_IDENTITIES_CAPABILITY_ID } from "./email-sender-identities-contract";
+export type {
+  EmailSenderIdentity,
+  EmailSenderIdentitiesProvider,
+} from "./email-sender-identities-contract";
+export { APPOINTMENT_SCHEDULES_CAPABILITY_ID } from "./appointment-schedules-contract";
+export type {
+  AppointmentScheduleEntry,
+  AppointmentSchedulesProvider,
+} from "./appointment-schedules-contract";
+
 // The nango-system capability contract (the nango serverEntry cutover): the
 // nango gateway registers its full host-facing surface from `register(ctx)`;
 // the host resolver (src/lib/nango-system.ts) imports the id constant + types

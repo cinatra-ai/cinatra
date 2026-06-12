@@ -1343,18 +1343,12 @@ importers:
       '@cinatra-ai/extension-types':
         specifier: workspace:*
         version: link:../extension-types
-      '@cinatra-ai/gemini-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/gemini-connector
       '@cinatra-ai/llm':
         specifier: workspace:*
         version: link:../llm
       '@cinatra-ai/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
-      '@cinatra-ai/mcp-client-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/mcp-client-connector
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -1497,36 +1491,12 @@ importers:
 
   packages/connectors:
     dependencies:
-      '@cinatra-ai/anthropic-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/anthropic-connector
-      '@cinatra-ai/apify-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/apify-connector
-      '@cinatra-ai/apollo-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/apollo-connector
       '@cinatra-ai/connectors-catalog':
         specifier: workspace:*
         version: link:../connectors-catalog
-      '@cinatra-ai/gemini-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/gemini-connector
-      '@cinatra-ai/gmail-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/gmail-connector
-      '@cinatra-ai/google-calendar-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/google-calendar-connector
       '@cinatra-ai/google-oauth-connection':
         specifier: workspace:*
         version: link:../google-oauth-connection
-      '@cinatra-ai/mcp-client-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/mcp-client-connector
-      '@cinatra-ai/openai-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/openai-connector
 
   packages/connectors-catalog:
     devDependencies:

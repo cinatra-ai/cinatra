@@ -1,14 +1,13 @@
 {
   "name": "@cinatra-ai/connectors-catalog",
-  "description": "CLI-safe, dependency-free catalog of built-in connector descriptors and facade-primitive provider overrides.",
+  "description": "CLI-safe, dependency-free catalog of built-in connector descriptors.",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "./src/descriptors.mjs",
   "exports": {
     ".": "./src/descriptors.mjs",
-    "./descriptors.mjs": "./src/descriptors.mjs",
-    "./overrides.mjs": "./src/overrides.mjs"
+    "./descriptors.mjs": "./src/descriptors.mjs"
   },
   "scripts": {
     "test": "vitest"

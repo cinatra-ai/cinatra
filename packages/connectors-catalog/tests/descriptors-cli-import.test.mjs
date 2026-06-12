@@ -11,10 +11,6 @@ import {
   getConnectorDescriptorBySlug,
   listConnectorDescriptors,
 } from "../src/descriptors.mjs";
-import {
-  PRIMITIVE_TO_CONNECTOR_OVERRIDES,
-  lookupPrimitiveOverride,
-} from "../src/overrides.mjs";
 
 // Connectors that legitimately expose NO outbound MCP primitives, so their
 // mcpPrimitivePrefixes array is intentionally empty: the inbound MCP-client
@@ -90,26 +86,8 @@ describe("connector descriptors (CLI-safe surface)", () => {
   });
 });
 
-describe("primitive overrides (CLI-safe surface)", () => {
-  it("has the required email_send → gmail-connector entry", () => {
-    expect(PRIMITIVE_TO_CONNECTOR_OVERRIDES.email_send).toBe(
-      "@cinatra-ai/gmail-connector",
-    );
-  });
-
-  it("every override target resolves to a known descriptor", () => {
-    const ids = new Set(CONNECTOR_DESCRIPTORS.map((d) => d.packageId));
-    for (const [primitive, packageId] of Object.entries(
-      PRIMITIVE_TO_CONNECTOR_OVERRIDES,
-    )) {
-      expect(ids.has(packageId), `${primitive} → ${packageId}`).toBe(true);
-    }
-  });
-
-  it("lookupPrimitiveOverride returns the target or undefined", () => {
-    expect(lookupPrimitiveOverride("email_send")).toBe(
-      "@cinatra-ai/gmail-connector",
-    );
-    expect(lookupPrimitiveOverride("nonexistent_primitive")).toBeUndefined();
-  });
-});
+// Facade-primitive overrides moved OUT of the catalog (cinatra#151 Stage 4):
+// the owning connector declares `cinatra.facadePrimitives` in its own
+// manifest and `scripts/extensions/inventory.mjs` derives the override map
+// from the extension manifests (deriveFacadePrimitiveOverrides — unit-tested
+// in scripts/extensions/__tests__). The catalog names no concrete package.

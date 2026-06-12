@@ -34,8 +34,6 @@
   },
   "dependencies": {
     "@cinatra-ai/a2a": "workspace:*",
-    "@cinatra-ai/mcp-client-connector": "workspace:*",
-    "@cinatra-ai/gemini-connector": "workspace:*",
     "@cinatra-ai/extension-types": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/metric-usage-api": "workspace:*",

@@ -6,15 +6,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "dependencies": {
-    "@cinatra-ai/anthropic-connector": "workspace:*",
-    "@cinatra-ai/apify-connector": "workspace:*",
-    "@cinatra-ai/apollo-connector": "workspace:*",
     "@cinatra-ai/connectors-catalog": "workspace:*",
-    "@cinatra-ai/gemini-connector": "workspace:*",
-    "@cinatra-ai/gmail-connector": "workspace:*",
-    "@cinatra-ai/google-calendar-connector": "workspace:*",
-    "@cinatra-ai/google-oauth-connection": "workspace:*",
-    "@cinatra-ai/mcp-client-connector": "workspace:*",
-    "@cinatra-ai/openai-connector": "workspace:*"
+    "@cinatra-ai/google-oauth-connection": "workspace:*"
   }
 }

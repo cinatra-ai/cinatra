@@ -24,32 +24,11 @@
       "treeSha256": "650589f6a92fb5b1be47b5c01921128d5d22d7f75b1fc671bcd291f98ecdc125"
     },
     {
-      "packageName": "@cinatra-ai/crm-connector",
-      "repo": "cinatra-ai/crm-connector",
-      "resolvedSha": "b1d830928638b0231c7c1125d9f1f79b8ef356e5",
-      "packageVersion": "0.1.0",
-      "treeSha256": "e0c1594ba422b5f71ed7cc69322fd8f8ef043642786096cf841cf2fdbeffc640"
-    },
-    {
       "packageName": "@cinatra-ai/default-artifact",
       "repo": "cinatra-ai/default-artifact",
       "resolvedSha": "15d24544d32d6c01231b64fc3dcfdc25f83b24c3",
       "packageVersion": "0.1.0",
       "treeSha256": "ce2376d980de18527a8f6bdd45121e335015d1be2844df3a6c26f56d34d4ab5b"
-    },
-    {
-      "packageName": "@cinatra-ai/gmail-connector",
-      "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "47b3cddf524682b7d4c541ee5baa1dd1557a56e6",
-      "packageVersion": "0.1.0",
-      "treeSha256": "3824fbde0104831c529fc4aae18b6fc3dbc78b301534ea5d22285e207cf0557c"
-    },
-    {
-      "packageName": "@cinatra-ai/google-calendar-connector",
-      "repo": "cinatra-ai/google-calendar-connector",
-      "resolvedSha": "146be9b0c1b26b59fb431b2639358fb8c0023979",
-      "packageVersion": "0.1.0",
-      "treeSha256": "c95bdaacbdc94a048045a8e3282ccbc3eee18fcd6731db52fcfb646860e371d0"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
@@ -61,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "8da4bf4b0355c52b4dae1701b1f145c9c4b8ed9f",
+      "resolvedSha": "df787b3410239e3fe97785a39ead83d8d230fe17",
       "packageVersion": "0.1.0",
-      "treeSha256": "4c3cb47e23b45b8336e7e45391bcbcc4b7bf31b165659d42540f249c2723fdaa"
+      "treeSha256": "c8f3550e7f67880817a76496bda45f3f83f8b6d7f0c855afeb079e271618b35b"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",

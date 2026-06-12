@@ -87,7 +87,6 @@
       "@cinatra-ai/connectors/connectors-client": ["./packages/connectors/src/connectors-client.tsx"],
       "@cinatra-ai/connectors-catalog": ["./packages/connectors-catalog/src/descriptors.mjs"],
       "@cinatra-ai/connectors-catalog/descriptors.mjs": ["./packages/connectors-catalog/src/descriptors.mjs"],
-      "@cinatra-ai/connectors-catalog/overrides.mjs": ["./packages/connectors-catalog/src/overrides.mjs"],
       "@cinatra-ai/apollo-connector": ["./extensions/cinatra-ai/apollo-connector/src/index.ts"],
       "@cinatra-ai/apollo-connector/register": ["./extensions/cinatra-ai/apollo-connector/src/register.ts"],
       "@cinatra-ai/apollo-connector/log-directory": ["./extensions/cinatra-ai/apollo-connector/src/log-directory.ts"],

@@ -2,15 +2,16 @@
 
 import "server-only";
 
-import { crmFacade } from "@cinatra-ai/crm-connector";
+import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 import { requireAdminSession } from "@/lib/auth-session";
 
 // The picker still exposes the legacy `AvailableListSummary` shape so its
 // downstream consumers (orchestrator panels, list-curator scrape renderer,
 // agent-builder steppers) don't need to migrate in the same slice. The
-// source of truth swaps from the in-process lists-package handlers to the
-// CRM facade — Twenty Views via the twenty-connector provider — but the
-// outward shape is preserved.
+// source of truth is the CRM list-read capability surface — registered by the
+// crm-connector's `register(ctx)` over the Twenty Views provider — resolved
+// at call time instead of value-importing the connector package
+// (cinatra#151 Stage 4); the outward shape is preserved.
 //
 // Field mapping from CrmList -> AvailableListSummary:
 //   id          : CrmList.id
@@ -39,16 +40,23 @@ export async function fetchAvailableLists(): Promise<AvailableListSummary[]> {
   // Auth gate FIRST — no CRM read before this resolves.
   await requireAdminSession();
 
+  // Capability absent (crm-connector not installed/active — it is
+  // acquirable-on-demand, not required) degrades to "no lists available",
+  // exactly like the error path below.
+  const reader = resolveCrmListReader();
+  if (!reader) return [];
+
   let lists;
   try {
     // Picker shows contact-eligible lists. Twenty's `get_views` is
-    // workspace-scoped; the crm-connector facade post-filters by objectType
+    // workspace-scoped; the crm-connector surface post-filters by objectType
     // when the per-type object-metadata cache has resolved (lazy-loaded by
     // the connector on first call).
-    lists = await crmFacade.list.search({ query: "", objectType: "contact" });
+    lists = await reader.searchLists({ query: "", objectType: "contact" });
   } catch {
-    // No Twenty row yet, no bearer attached, or upstream unreachable —
-    // degrade to "no lists available" rather than 500-ing the picker UI.
+    // No CRM provider registered, no Twenty row yet, no bearer attached, or
+    // upstream unreachable — degrade to "no lists available" rather than
+    // 500-ing the picker UI.
     return [];
   }
 

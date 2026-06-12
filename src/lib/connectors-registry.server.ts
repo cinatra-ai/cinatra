@@ -6,7 +6,6 @@ import {
   getConnectorDescriptorBySlug,
   listConnectorDescriptors,
 } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
-import { PRIMITIVE_TO_CONNECTOR_OVERRIDES } from "@cinatra-ai/connectors-catalog/overrides.mjs";
 import {
   getConnectorSetupPageLoader,
   type ConnectorSetupPageLoader,
@@ -162,5 +161,3 @@ export function getConnectorRegistryEntryByPackageId(
   if (!descriptor) return undefined;
   return toRegistryEntry(descriptor);
 }
-
-export { PRIMITIVE_TO_CONNECTOR_OVERRIDES };

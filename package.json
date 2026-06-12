@@ -125,10 +125,7 @@
       "@cinatra-ai/lint-policy-agent@^0.1.0",
       "@cinatra-ai/security-reviewer-agent@^0.1.0",
       "@cinatra-ai/assistant-skills@^0.1.0",
-      "@cinatra-ai/default-artifact@^0.1.0",
-      "@cinatra-ai/crm-connector@^0.1.0",
-      "@cinatra-ai/gmail-connector@^0.1.0",
-      "@cinatra-ai/google-calendar-connector@^0.1.0"
+      "@cinatra-ai/default-artifact@^0.1.0"
     ],
     "vendoredSkillBundles": [
       {
