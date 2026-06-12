@@ -65,6 +65,20 @@ const quarantineMock2 = vi.fn(async () => {
   regCalls.push("quarantine");
   return { quarantineDir: "/tmp/q", tarballs: ["t"], missingTarballs: [] as string[] };
 });
+// extensions_install dispatches through the DEPENDENCY-BATCH entry (#180);
+// the handler no longer calls extensionRegistry.install directly.
+const installBatchMock = vi.fn(async () => ({
+  rootPackage: "",
+  rootVersion: "",
+  installed: [],
+  alreadyInstalled: [],
+  batchId: null,
+}));
+vi.mock("@/lib/extension-install-batch", () => ({
+  installExtensionWithDependencies: (...a: unknown[]) =>
+    (installBatchMock as (...x: unknown[]) => unknown)(...a),
+}));
+
 vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForServer: vi.fn(async () => ({
     registryUrl: "http://localhost:4873",
@@ -170,11 +184,10 @@ describe("extensions MCP tool handlers", () => {
     expect(result).toEqual({ packages: mockPackages });
   });
 
-  it("extensions_install calls extensionRegistry.install with correct typeId for agent kind", async () => {
+  it("extensions_install dispatches through the dependency-batch entry (#180) with the resolved version", async () => {
     // The resolver returns the SAME concrete version that was requested
     // (exact-version input), so dispatch + record carry it through unchanged.
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "2.0.0", manifest: { cinatra: { kind: "agent" } } });
-    extensionRegistry.install.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -183,11 +196,13 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.install).toHaveBeenCalledWith(
-      "agent",
-      { registryUrl: "", packageName: "@cinatra/my-agent", version: "2.0.0" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-agent",
+      version: "2.0.0",
       actor,
-    );
+    });
+    // The dispatcher itself is NOT called directly anymore — the batch owns it.
+    expect(extensionRegistry.install).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: true,
       packageName: "@cinatra/my-agent",
@@ -204,7 +219,6 @@ describe("extensions MCP tool handlers", () => {
     // tag — otherwise the canonical manifest persists a tag that drifts from
     // what was actually fetched.
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: "3.4.5", manifest: { cinatra: { kind: "agent" } } });
-    extensionRegistry.install.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -213,11 +227,11 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.install).toHaveBeenCalledWith(
-      "agent",
-      { registryUrl: "", packageName: "@cinatra/my-agent", version: "3.4.5" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-agent",
+      version: "3.4.5",
       actor,
-    );
+    });
     expect(result).toEqual({
       success: true,
       packageName: "@cinatra/my-agent",
@@ -230,7 +244,6 @@ describe("extensions MCP tool handlers", () => {
     // (e.g. a packument with no versions on the flag-OFF legacy path), dispatch
     // + record the raw input version rather than a null/undefined.
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "agent", resolvedVersion: null, manifest: { cinatra: { kind: "agent" } } });
-    extensionRegistry.install.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -239,11 +252,11 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.install).toHaveBeenCalledWith(
-      "agent",
-      { registryUrl: "", packageName: "@cinatra/my-agent", version: "2.0.0" },
+    expect(installBatchMock).toHaveBeenCalledWith({
+      packageName: "@cinatra/my-agent",
+      version: "2.0.0",
       actor,
-    );
+    });
     expect(result.packageVersion).toBe("2.0.0");
   });
 
@@ -333,7 +346,7 @@ describe("extensions MCP tool handlers", () => {
   it("extensions_install surfaces a REQUIRES_REBUILD throw as a { requiresRebuild:true } result (not a 500)", async () => {
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "connector", resolvedVersion: "1.0.0", manifest: { cinatra: { kind: "connector" } } });
     const reqRebuild = Object.assign(new Error("ships a bundled React setup page"), { code: "REQUIRES_REBUILD" });
-    extensionRegistry.install.mockRejectedValueOnce(reqRebuild);
+    installBatchMock.mockRejectedValueOnce(reqRebuild);
     const handlers = createExtensionsPrimitiveHandlers();
     const result = await handlers.extensions_install(
       { packageName: "@cinatra/react-connector", packageVersion: "1.0.0" },
@@ -349,7 +362,7 @@ describe("extensions MCP tool handlers", () => {
 
   it("extensions_install re-throws a NON-rebuild error (no false success)", async () => {
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: "connector", resolvedVersion: "1.0.0", manifest: { cinatra: { kind: "connector" } } });
-    extensionRegistry.install.mockRejectedValueOnce(new Error("pipeline did not finalize"));
+    installBatchMock.mockRejectedValueOnce(new Error("pipeline did not finalize"));
     const handlers = createExtensionsPrimitiveHandlers();
     await expect(
       handlers.extensions_install({ packageName: "@cinatra/broken-connector", packageVersion: "1.0.0" }, makeActor()),
@@ -378,9 +391,8 @@ describe("extensions MCP tool handlers", () => {
     });
   });
 
-  it("extensions_install falls back to 'agent' typeId when kind is null", async () => {
+  it("extensions_install tolerates a null kind (legacy package) — the batch entry still dispatches", async () => {
     getPublishedExtensionSummary.mockResolvedValueOnce({ kind: null, resolvedVersion: "1.0.0", manifest: { cinatra: {} } });
-    extensionRegistry.install.mockResolvedValueOnce(undefined);
 
     const handlers = createExtensionsPrimitiveHandlers();
     const actor = makeActor();
@@ -389,10 +401,8 @@ describe("extensions MCP tool handlers", () => {
       actor,
     );
 
-    expect(extensionRegistry.install).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({ packageName: "@cinatra/legacy-pkg" }),
-      actor,
+    expect(installBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: "@cinatra/legacy-pkg", version: "1.0.0" }),
     );
   });
 

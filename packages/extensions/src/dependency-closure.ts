@@ -375,11 +375,13 @@ export function assertArchiveDoesNotBreakClosure(
  * checks the platform-scoped row; a string checks that org's row — the same
  * scope the install pipeline finalized.
  *
- * TEMPORARY refusal copy: dependency AUTO-INSTALL is the next stage of #180
- * (the dependency phase / batch saga). Until it lands, this gate is
- * deliberately fail-LOUD with an actionable instruction instead of the
- * pre-#180 silent success that left a broken closure for the boot gate to
- * find. The copy is updated when the dependency phase ships.
+ * With the dependency phase live (#180 PR-2), the batch installer satisfies
+ * install-blocking edges DEPENDENCIES-FIRST before the root reaches this
+ * gate — so a refusal here means the edge was NOT auto-installable into
+ * place (the dependency phase only auto-installs required runtime/
+ * install-time edges; a plan/manifest drift mid-install can also land here).
+ * The copy stays actionable: name the missing deps, instruct an explicit
+ * install + retry.
  */
 export function assertForwardInstallClosureForPackage(
   packageName: string,
@@ -400,9 +402,10 @@ export function assertForwardInstallClosureForPackage(
       const names = result.missingRequired.map((d) => d.packageName);
       throw new DependencyClosureError(
         "REQUIRED_MISSING",
-        `Cannot install ${packageName} — it requires ${missing.join(", ")}. ` +
-          `Dependency auto-install lands in the next stage of #180; install ` +
-          `${names.join(", ")} first, then retry.`,
+        `Cannot install ${packageName} — it requires ${missing.join(", ")}, which ` +
+          `dependency auto-install did not put in place (only required runtime/` +
+          `install-time edges auto-install; the plan may also have drifted ` +
+          `mid-install). Install ${names.join(", ")} first, then retry.`,
         names,
       );
     }

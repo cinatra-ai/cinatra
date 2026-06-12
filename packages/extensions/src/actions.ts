@@ -38,12 +38,18 @@ export async function installExtensionPackage(
   "use server";
   await requireAdminSession();
   try {
-    const typeId = await resolveExtensionTypeId(packageName, packageVersion);
-    await extensionRegistry.install(
-      typeId,
-      { registryUrl: "", packageName, version: packageVersion },
-      actor,
+    // DEPENDENCY-BATCH entry (#180): authorize-once → plan (manifest-edge
+    // walk, auto-installable edges only) → install missing dependencies
+    // DEPENDENCIES-FIRST through this same registry → the requested root
+    // LAST — with a persisted batch ledger + inverse-order compensation.
+    // A depless root takes the unchanged single-install fast path inside.
+    // typeId resolution happens in the planner (one packument read per
+    // member, under the root grant on the gatekept path). Dynamic import:
+    // @/lib is the host; same pattern utils.ts uses for gatekept-install.
+    const { installExtensionWithDependencies } = await import(
+      "@/lib/extension-install-batch"
     );
+    await installExtensionWithDependencies({ packageName, version: packageVersion, actor });
     return { success: true };
   } catch (err) {
     return {

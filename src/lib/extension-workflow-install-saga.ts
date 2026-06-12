@@ -675,17 +675,59 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
     failInstallOp: (id) => failInstallOp(id).then(() => undefined),
     readInstallOp: (pkg, oid) => readInstallOp(pkg, oid),
 
+    // GATEKEPT-AWARE reads (#180): when the master flag is ON, packument +
+    // tarball reads route through the broker via resolveGatekeptInstallConfig
+    // — which, inside a dependency batch, DERIVES from the ROOT grant (no
+    // per-member authorize). Provenance/trust still see the FINAL registry
+    // identity, never the broker URL (the same rule the runtime pipeline
+    // factory enforces). Flag OFF: the legacy server-config path, unchanged.
     resolveIntegrity: async (packageName, version) => {
+      const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import(
+        "@/lib/gatekept-install"
+      );
+      if (isGatekeptInstallEnabled()) {
+        const { loadDeploymentRegistryConfig } = await import("@/lib/deployment-registry-config");
+        const finalRegistryUrl = loadDeploymentRegistryConfig().publicRegistryUrl;
+        const { config } = await resolveGatekeptInstallConfig(packageName, version);
+        const resolved = await resolveExtensionDistIntegrity(
+          { packageName, packageVersion: version },
+          config,
+        );
+        return { ...resolved, registryUrl: finalRegistryUrl };
+      }
       const config = await loadVerdaccioConfigForServer();
       return resolveExtensionDistIntegrity({ packageName, packageVersion: version }, config);
     },
     materialize: async (i) => {
-      const mat = await materializePackageToStore({
-        packageName: i.packageName,
-        version: i.version,
-        expectedIntegrity: i.expectedIntegrity,
-        registryUrl: i.registryUrl,
-      });
+      const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import(
+        "@/lib/gatekept-install"
+      );
+      let fetchTarball: import("@/lib/extension-package-store").FetchTarball | undefined;
+      let persistRegistryUrl = i.registryUrl;
+      if (isGatekeptInstallEnabled()) {
+        const { config } = await resolveGatekeptInstallConfig(i.packageName, i.version);
+        const { fetchExtensionTarballBytes } = await import("@cinatra-ai/registries");
+        const { loadDeploymentRegistryConfig } = await import("@/lib/deployment-registry-config");
+        fetchTarball = (input) =>
+          fetchExtensionTarballBytes(
+            {
+              packageName: input.packageName,
+              packageVersion: input.packageVersion,
+              expectedIntegrity: input.expectedIntegrity,
+            },
+            config,
+          );
+        persistRegistryUrl = loadDeploymentRegistryConfig().publicRegistryUrl;
+      }
+      const mat = await materializePackageToStore(
+        {
+          packageName: i.packageName,
+          version: i.version,
+          expectedIntegrity: i.expectedIntegrity,
+          registryUrl: persistRegistryUrl,
+        },
+        fetchTarball ? { fetchTarball } : {},
+      );
       return { storeDir: mat.storeDir, digest: mat.digest, integrity: mat.integrity, contentHash: mat.contentHash };
     },
 

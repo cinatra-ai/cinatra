@@ -35,7 +35,7 @@ export {
   lockfileShapeSchema,
 } from "./lockfile/lockfile";
 
-export { comparePluginVersions } from "./version-compare";
+export { comparePluginVersions, satisfiesVersionRange, isExactVersion } from "./version-compare";
 export type { VersionComparisonResult } from "./version-compare";
 
 export {

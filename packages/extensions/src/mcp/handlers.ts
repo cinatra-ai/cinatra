@@ -44,6 +44,71 @@ function surfaceRequiresRebuild(
   };
 }
 
+/**
+ * The extensions_install body — runs INSIDE the grant context on the gatekept
+ * path (the handler wrapper authorized the root exactly once). Module-level
+ * (NOT a key on the handlers object) so it never surfaces as an MCP tool.
+ */
+type ExtensionsInstallResult =
+  | { success: true; packageName: string; packageVersion: string }
+  | {
+      success: false;
+      requiresRebuild: true;
+      packageName: string;
+      packageVersion: string;
+      message: string;
+    };
+
+async function extensionsInstallBody(
+  input: { packageName: string; packageVersion: string },
+  actor: Actor,
+): Promise<ExtensionsInstallResult> {
+  // Kind-agnostic resolution plus uniform visibility checking. Inside the
+  // grant context this DERIVES from the root grant (no second authorize).
+  const resolution = await resolveExtensionPackageForLifecycle(
+    input.packageName,
+    input.packageVersion,
+  );
+  enforceVisibility(resolution, input.packageName);
+  // Dispatch + record the EXACT resolved version, not the raw input. The
+  // authorize/resolution step already pins a concrete version: gatekept ON
+  // → the exact authorized storefront version; OFF → the legacy packument
+  // resolution (an exact version even when input was "latest"). Recording
+  // the raw input would persist a moving tag ("latest") that drifts from
+  // what was actually authorized/fetched. Fall back to the raw input only
+  // if resolution did not yield a concrete version (defensive — keeps the
+  // flag-OFF path non-breaking when a packument has no versions).
+  // (typeId stays resolved above for the visibility gate; the BATCH entry
+  // re-derives member typeIds itself — one packument read per member.)
+  const dispatchVersion = resolution.resolvedVersion ?? input.packageVersion;
+  try {
+    // DEPENDENCY-BATCH entry (#180): missing required runtime/install-time
+    // dependencies install DEPENDENCIES-FIRST (persisted ledger,
+    // inverse-order compensation); the requested root installs LAST. A
+    // depless root takes the unchanged single-install fast path inside.
+    const { installExtensionWithDependencies } = await import(
+      "@/lib/extension-install-batch"
+    );
+    await installExtensionWithDependencies({
+      packageName: input.packageName,
+      version: dispatchVersion,
+      actor,
+    });
+  } catch (err) {
+    // Connector model-B / hot-install: a `requires-rebuild` outcome is a
+    // structured refusal (host rebuild needed; the batch already compensated
+    // any newly-installed dependencies) — surface it instead of throwing.
+    const surfaced = surfaceRequiresRebuild(err, input);
+    if (surfaced) return surfaced;
+    throw err;
+  }
+  return {
+    success: true,
+    packageName: input.packageName,
+    packageVersion: dispatchVersion,
+  };
+}
+
 function enforceVisibility(
   resolution: LifecycleResolution,
   packageName: string,
@@ -104,45 +169,33 @@ export function createExtensionsPrimitiveHandlers() {
       input: { packageName: string; packageVersion: string },
       actor: Actor,
     ) {
-      // Kind-agnostic resolution plus uniform visibility checking.
-      const resolution = await resolveExtensionPackageForLifecycle(
-        input.packageName,
-        input.packageVersion,
+      // AUTHORIZE-ONCE (#180): on the gatekept path, authorize the ROOT here
+      // — BEFORE the lifecycle/kind resolution — and run the ENTIRE install
+      // body inside the grant context: the lifecycle resolution below then
+      // DERIVES from this grant (no second authorize), and the dependency
+      // batch ADOPTS the same context (its planner fills memberKinds). One
+      // marketplace authorize per install surface, total.
+      const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import(
+        "@/lib/gatekept-install"
       );
-      enforceVisibility(resolution, input.packageName);
-      const typeId = resolution.typeId;
-      // Dispatch + record the EXACT resolved version, not the raw input. The
-      // authorize/resolution step already pins a concrete version: gatekept ON
-      // → the exact authorized storefront version; OFF → the legacy packument
-      // resolution (an exact version even when input was "latest"). Recording
-      // the raw input would persist a moving tag ("latest") that drifts from
-      // what was actually authorized/fetched. Fall back to the raw input only
-      // if resolution did not yield a concrete version (defensive — keeps the
-      // flag-OFF path non-breaking when a packument has no versions).
-      const dispatchVersion = resolution.resolvedVersion ?? input.packageVersion;
-      try {
-        await extensionRegistry.install(
-          typeId,
-          {
-            registryUrl: "",
-            packageName: input.packageName,
-            version: dispatchVersion,
-          },
-          actor,
+      if (isGatekeptInstallEnabled()) {
+        const rootResolution = await resolveGatekeptInstallConfig(
+          input.packageName,
+          input.packageVersion,
         );
-      } catch (err) {
-        // Connector model-B / hot-install: a `requires-rebuild` failure is
-        // a structured, non-fatal install outcome (the package activated but its UI
-        // needs a host rebuild) — surface it to the caller instead of throwing.
-        const surfaced = surfaceRequiresRebuild(err, input);
-        if (surfaced) return surfaced;
-        throw err;
+        const { withInstallGrantContext } = await import(
+          "@/lib/extension-install-grant-context"
+        );
+        return withInstallGrantContext(
+          {
+            rootPackageName: input.packageName,
+            resolution: rootResolution,
+            memberKinds: new Map(),
+          },
+          () => extensionsInstallBody(input, actor),
+        );
       }
-      return {
-        success: true,
-        packageName: input.packageName,
-        packageVersion: dispatchVersion,
-      };
+      return extensionsInstallBody(input, actor);
     },
 
     async extensions_update(

@@ -20,6 +20,7 @@ import "server-only";
  * credential. It is NEVER parsed, decoded, or logged.
  */
 
+import { createHash } from "node:crypto";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 import type {
   MarketplaceExtensionInstallAuthorizeOutput,
@@ -155,6 +156,18 @@ export async function resolveGatekeptInstallConfig(
   version?: string,
   client?: MarketplaceMcpClient,
 ): Promise<GatekeptInstallResolution> {
+  // BATCH GRANT CONTEXT (#180 PR-2, P2-4): inside a dependency batch the ROOT
+  // was authorized ONCE and every package read rides that grant. When the
+  // context is active this seam DERIVES the resolution instead of calling
+  // authorize — per-member (re-)authorize inside the dependency queue is
+  // forbidden by construction. Outside a batch, behavior is unchanged.
+  {
+    const { getActiveInstallGrantContext } = await import(
+      "@/lib/extension-install-grant-context"
+    );
+    const ctx = getActiveInstallGrantContext();
+    if (ctx) return deriveResolutionFromContext(ctx, packageName, version);
+  }
   const mcpClient = client ?? buildDefaultClient();
   const exactVersion = isUnspecifiedVersion(version)
     ? await resolveListedVersion(mcpClient, packageName)
@@ -191,4 +204,133 @@ export async function resolveGatekeptInstallConfig(
 function buildDefaultClient(): MarketplaceMcpClient {
   const token = resolveConsumerOrVendorMarketplaceToken(readInstanceIdentity());
   return createHttpMarketplaceMcpClient({ token });
+}
+
+/**
+ * Derive a package's resolution from the ACTIVE batch grant context — the
+ * root's own reads reuse the root resolution verbatim; a closure MEMBER gets
+ * the broker config with the ROOT grant + its own scope, and authorize
+ * metadata carrying ITS pinned version and ITS kind (planner-resolved).
+ * A package that is neither the root nor a closure member is an
+ * AUTHORIZATION MISMATCH — fail-loud, never a fresh authorize (that would
+ * silently bypass the entitlement model mid-batch).
+ */
+async function deriveResolutionFromContext(
+  ctx: import("@/lib/extension-install-grant-context").InstallGrantContext,
+  packageName: string,
+  version?: string,
+): Promise<GatekeptInstallResolution> {
+  const { resolution, rootPackageName, memberKinds } = ctx;
+  if (packageName === rootPackageName) {
+    if (!isUnspecifiedVersion(version) && version !== resolution.authorize.resolvedVersion) {
+      throw new Error(
+        `[gatekept-install] the active batch grant authorizes ${rootPackageName}@` +
+          `${resolution.authorize.resolvedVersion}, but ${version} was requested — refusing ` +
+          `(the grant binds the exact authorized root version).`,
+      );
+    }
+    return resolution;
+  }
+  const member = resolution.authorize.closure.find((c) => c.name === packageName);
+  if (!member) {
+    throw new Error(
+      `[gatekept-install] ${packageName} requested a read under the root grant for ` +
+        `${rootPackageName}, but it is not a member of the authorized closure — ` +
+        `refusing (per-member authorize inside a dependency batch is forbidden; a ` +
+        `package outside the closure is not entitled by this grant).`,
+    );
+  }
+  if (!isUnspecifiedVersion(version) && version !== member.version) {
+    throw new Error(
+      `[gatekept-install] closure member ${packageName} is pinned at ${member.version} ` +
+        `by the root authorization, but ${version} was requested — refusing (exact ` +
+        `pins are the authorization set; silent drift would install an unentitled artifact).`,
+    );
+  }
+  const { deriveMemberInstallConfig } = await import("@/lib/extension-install-grant-context");
+  return {
+    config: deriveMemberInstallConfig(resolution, packageName),
+    authorize: {
+      // The member's own kind (planner-resolved: canonical row for installed
+      // members, manifest-under-root-grant for to-install members). Falls back
+      // to the root's kind only if the planner did not record one — callers
+      // inside a batch pass explicit typeIds, so this fallback is advisory.
+      kind: memberKinds.get(packageName) ?? resolution.authorize.kind,
+      resolvedVersion: member.version,
+      closure: resolution.authorize.closure,
+      expiresAt: resolution.authorize.expiresAt,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Grant refresh (#180 PR-2; PLAN P2-5)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a grant refresh is needed but the marketplace ability is not
+ * yet available. The batch saga treats this as ABORT + COMPENSATE — it never
+ * proceeds into (or resumes) a batch under an expired root grant.
+ */
+export class GrantRefreshUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GrantRefreshUnavailableError";
+  }
+}
+
+/**
+ * The injectable refresh seam the batch saga consumes (tests stub this).
+ * Binding (P2-5): `sub` and the original grant `jti` travel INSIDE the
+ * presented opaque grant (`current.config.token` — the marketplace reads its
+ * own claims; the host never parses the token); the HOST-side bindings are
+ * the root coordinates and the `closureHash` (stable hash over the sorted
+ * name@version closure) the marketplace cross-checks before extending.
+ */
+export type GatekeptGrantRefresh = (
+  current: GatekeptInstallResolution,
+  root: { packageName: string; version: string; closureHash: string },
+) => Promise<GatekeptInstallResolution>;
+
+/**
+ * Stable hash basis of an authorize closure: sorted `name@version`,
+ * newline-joined, sha256-hex. The refresh ability binds to this — a refresh
+ * whose closure differs is refused on BOTH sides (the marketplace's check +
+ * the batch saga's own drift comparison).
+ */
+export function computeClosureHash(
+  closure: readonly { name: string; version: string }[],
+): string {
+  const basis = [...closure]
+    .map((c) => `${c.name}@${c.version}`)
+    .sort()
+    .join("\n");
+  return createHash("sha256").update(basis).digest("hex");
+}
+
+/**
+ * Refresh the root install grant per the P2-5 contract: the marketplace
+ * exposes a rate-limited grant-REFRESH ability bound to {subject, root
+ * package, closure-hash, original grant jti} — it extends an in-progress
+ * batch's read window WITHOUT enlarging any single token's replay window and
+ * WITHOUT re-running entitlement (the closure must be byte-identical; a
+ * changed closure refuses the refresh).
+ *
+ * The ability is NOT yet live on the marketplace side (tracked as an
+ * integration-proof obligation on the host issue): this default
+ * implementation fails closed with {@link GrantRefreshUnavailableError}, and
+ * the batch saga compensates. The seam is injectable so the batch's refresh
+ * behavior (refresh-when-near-expiry, refuse-on-closure-drift) is test-pinned
+ * against the contract today and binds to the real ability when it ships.
+ */
+export async function refreshGatekeptInstallGrant(
+  _current: GatekeptInstallResolution,
+  root: { packageName: string; version: string; closureHash: string },
+): Promise<GatekeptInstallResolution> {
+  throw new GrantRefreshUnavailableError(
+    `[gatekept-install] the root grant for ${root.packageName}@${root.version} needs a ` +
+      `refresh to continue this batch, but the marketplace grant-refresh ability is not ` +
+      `yet available on this host — aborting the batch (newly-installed members are ` +
+      `compensated; retry the install to authorize a fresh grant).`,
+  );
 }

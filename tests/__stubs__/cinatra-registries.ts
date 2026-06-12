@@ -49,3 +49,11 @@ export {
   vendorScopeOfPackage,
   dependencyScopePrefixesFor,
 } from "../../packages/registries/src/scope";
+
+// Version primitives for the dependency planner (#180). Pure semver wrappers
+// — re-export the real implementations (no pacote/native chain).
+export {
+  comparePluginVersions,
+  satisfiesVersionRange,
+  isExactVersion,
+} from "../../packages/registries/src/version-compare";

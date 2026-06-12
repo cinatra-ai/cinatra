@@ -674,6 +674,41 @@ END $$` },
         END IF;
       END $$;` },
 
+    // Runtime installer — install-BATCH ledger (#180). One row per dependency-
+    // batch install: the root + the ordered exact-pinned member set, per-member
+    // status + PRE-STATE (present-before-batch vs installed-by-this-batch).
+    // Wraps the per-member install-op journal rows; the boot batch-sweeper
+    // compensates stale active batches from THIS ledger (finalized members of
+    // an incomplete batch are invisible to the per-op orphan cleanup, which
+    // skips batch-owned ops). Active-batch uniqueness per (root, org) via the
+    // partial unique indexes below; member-overlap refusal is the saga's
+    // pre-begin guard under the global lifecycle lock.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."extension_install_batches" (
+      batch_id text PRIMARY KEY,
+      root_package text NOT NULL,
+      org_id text,
+      phase text NOT NULL,
+      members jsonb NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
+            AND table_name = 'extension_install_batches'
+            AND constraint_name = 'extension_install_batches_phase_check'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_install_batches"
+            ADD CONSTRAINT extension_install_batches_phase_check
+            CHECK (phase IN ('planning', 'installing', 'finalized', 'failed', 'compensated'));
+        END IF;
+      END $$;` },
+    { text: `CREATE INDEX IF NOT EXISTS extension_install_batches_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_batches" (phase)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_batches_active_root_org_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_batches" (root_package, org_id) WHERE phase IN ('planning', 'installing')` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_batches_active_root_global_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_batches" (root_package) WHERE phase IN ('planning', 'installing') AND org_id IS NULL` },
+
     // One-shot backfill from legacy tables + JSON payloads.
     // Idempotent via ON CONFLICT DO NOTHING. Re-runs are no-ops on already-
     // migrated deployments. The legacy tables are NOT dropped here — Wave F

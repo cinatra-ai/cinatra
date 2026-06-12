@@ -405,10 +405,10 @@ describe("assertForwardInstallClosureForPackage (#180 item 5 — the fresh-insta
       expect(e).toBeInstanceOf(DependencyClosureError);
       expect((e as DependencyClosureError).code).toBe("REQUIRED_MISSING");
       expect((e as Error).message).toContain("b (missing)");
-      expect((e as Error).message).toContain("auto-install lands in the next stage");
+      expect((e as Error).message).toContain("auto-install did not put in place");
       // The actionable instruction is part of the contract: name the deps and
       // tell the operator to install them first.
-      expect((e as Error).message).toContain("install b first, then retry");
+      expect((e as Error).message).toContain("Install b first, then retry");
       expect((e as DependencyClosureError).dependents).toEqual(["b"]);
     }
   });

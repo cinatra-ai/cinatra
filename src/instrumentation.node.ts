@@ -333,7 +333,41 @@ export async function register() {
       // Only sweep ops idle for ≥5 minutes so an install in-flight in another
       // worker is never compensated out from under it.
       const STALE_MS = 5 * 60 * 1000;
-      const orphans = await listUnfinalizedInstallOps(STALE_MS);
+
+      // ── dependency-BATCH sweep FIRST (#180) ──────────────────────────
+      // A crashed dependency batch leaves an ACTIVE ledger row whose already-
+      // installed members have FINALIZED ops — invisible to the per-op orphan
+      // sweep below. The batch sweeper compensates stale batches from the
+      // LEDGER (compensate-never-resume: no root grant survives a restart).
+      // Ordering contract: the batch sweeper OWNS batch-member ops; the
+      // per-op cleanup below SKIPS ops owned by STILL-ACTIVE batches.
+      const { sweepStaleInstallBatches, collectActiveBatchMemberKeys } = await import(
+        "@/lib/extension-install-batch"
+      );
+      // Collect the batch-owned (package, org) keys BEFORE sweeping: a batch
+      // the sweeper terminalizes THIS boot pass had its member ops handled by
+      // the sweeper — the per-op cleanup below must skip them in the SAME
+      // pass (collecting after the sweep would un-hide a just-swept member's
+      // op and double-compensate it).
+      let activeBatchKeys: Set<string>;
+      try {
+        activeBatchKeys = await collectActiveBatchMemberKeys();
+      } catch {
+        activeBatchKeys = new Set();
+      }
+      try {
+        const { swept } = await sweepStaleInstallBatches({ olderThanMs: STALE_MS });
+        if (swept > 0) {
+          console.info(`[boot] compensated ${swept} stale dependency install batch(es) from the ledger`);
+        }
+      } catch (err) {
+        console.warn("[boot] install-batch sweep failed (non-fatal):", err);
+      }
+
+      const orphansAll = await listUnfinalizedInstallOps(STALE_MS);
+      const orphans = orphansAll.filter(
+        (op) => !activeBatchKeys.has(`${op.packageName}::${op.orgId ?? "(global)"}`),
+      );
       if (orphans.length) {
         const deps = await makeDefaultWorkflowInstallSagaDeps();
         for (const op of orphans) {
