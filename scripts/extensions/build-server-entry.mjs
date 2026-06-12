@@ -147,7 +147,7 @@ export const HOST_PROVIDED_PEERS = Object.freeze([
 ]);
 
 /**
- * EXACT builtin recognition (codex PR-1 r3 finding 1): `node:module`'s
+ * EXACT builtin recognition (review r3 finding 1): `node:module`'s
  * `isBuiltin` matches only real builtin specifiers (`fs`, `fs/promises`,
  * `node:fs`, …) — never first-segment lookalikes like `fs/../left-pad`, which
  * Node resolves as PACKAGE `fs` with a traversing subpath. Strictly
@@ -212,7 +212,7 @@ export function resolveDependencyMode(cinatra, modeOverride, packageName) {
  *    resolve them INTO the scanned graph (esbuild's native self-reference
  *    resolution in bundle mode; the pinned exports-map trace in the
  *    passthrough scan), so an unresolvable one is a build/scan error, never a
- *    silent allowance (codex PR-1 r0 finding 1).
+ *    silent allowance (review r0 finding 1).
  */
 function classifyClosureResidualImport(specifier, { declaredDeps }) {
   if (isNodeBuiltin(specifier)) return null;
@@ -224,7 +224,7 @@ function classifyClosureResidualImport(specifier, { declaredDeps }) {
     );
   }
   if (base !== null && declaredDeps.has(base)) {
-    // Subpath-safety (codex PR-1 r2 finding 1): `dep/../left-pad/...` shares
+    // Subpath-safety (review r2 finding 1): `dep/../left-pad/...` shares
     // the `dep` base but Node-resolves OUTSIDE the declared package. The
     // remainder after the base must be clean path segments — no `.`/`..`,
     // no empties, no backslashes, no percent-encoding (Node refuses encoded
@@ -254,7 +254,7 @@ function classifyClosureResidualImport(specifier, { declaredDeps }) {
 const NPM_PACKAGE_NAME_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
 
 /**
- * ALLOWLIST test for a registry version spec (codex PR-1 r1 finding 1): a
+ * ALLOWLIST test for a registry version spec (review r1 finding 1): a
  * semver range / x-range / hyphen range / `||` union / dist-tag. Every
  * non-registry source npm understands carries a protocol marker (`file:`,
  * `link:`, `workspace:`, `portal:`, `patch:`, `catalog:`, `git+…:`, `ssh:`,
@@ -267,7 +267,7 @@ function isRegistryRangeOrTag(spec) {
 }
 
 /**
- * Closure-mode dependency-spec gate (codex PR-1 r0 finding 2, allowlisted per
+ * Closure-mode dependency-spec gate (review r0 finding 2, allowlisted per
  * r1 finding 1): the declared `dependencies` are the basis of the
  * publish-time SIGNED materialization plan, so in closure mode every spec
  * must be a registry spec — an explicit range/tag, or an `npm:` alias whose
@@ -721,8 +721,8 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
  * traversed (a missing local file fails the scan loudly), and SELF-references
  * (`<self>` / `<self>/sub`) are resolved INTO the scanned graph through the
  * pinned exports-map resolver — never blanket-allowed — so a self-referenced
- * file cannot smuggle a host-peer or undeclared import past the scan (codex
- * PR-1 r0 finding 1). An unresolvable self-reference fails the scan loudly.
+ * file cannot smuggle a host-peer or undeclared import past the scan (review
+ * r0 finding 1). An unresolvable self-reference fails the scan loudly.
  *
  * Residual blind spot (shared with every sibling host gate —
  * `parseModuleImports` documents the same class): a VARIABLE-indirected

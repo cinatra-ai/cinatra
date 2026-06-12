@@ -644,10 +644,10 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
 });
 
 // ---------------------------------------------------------------------------
-// Codex PR-1 r0 findings — fail-closed pins.
+// Review-round fail-closed pins.
 // ---------------------------------------------------------------------------
 
-describe("closure mode — codex r0 refusal pins", () => {
+describe("closure mode — review r0 refusal pins", () => {
   it("F1: a SELF-REFERENCED file cannot smuggle a host peer past the passthrough scan (traced, not allowed)", async () => {
     const src = path.join(await tempDir("bse-self-smuggle-"), "pkg");
     await writeFixture(
@@ -765,7 +765,7 @@ describe("closure mode — codex r0 refusal pins", () => {
   });
 });
 
-describe("closure mode — codex r2: traversal-unsafe declared-dep subpaths", () => {
+describe("closure mode — review r2: traversal-unsafe declared-dep subpaths", () => {
   it("PASSTHROUGH refuses `dep/../undeclared` (Node resolves it outside the declared package)", async () => {
     const src = path.join(await tempDir("bse-trav-pass-"), "pkg");
     await writeFixture(
@@ -803,7 +803,7 @@ describe("closure mode — codex r2: traversal-unsafe declared-dep subpaths", ()
   });
 });
 
-describe("closure mode — codex r3: builtin recognition is EXACT", () => {
+describe("closure mode — review r3: builtin recognition is EXACT", () => {
   it('refuses `fs/../left-pad` (a PACKAGE named fs with a traversing subpath, NOT a builtin)', async () => {
     const src = path.join(await tempDir("bse-fakefs-"), "pkg");
     await writeFixture(
