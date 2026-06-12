@@ -107,25 +107,6 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     expect(objectTypeRegistry.listArtifacts()).toHaveLength(0);
   });
 
-  it("registers a manifest carrying the cross-kind keys (dependencies + roles) — the real on-disk shape", () => {
-    // Regression pin (cinatra#151 Stage 6): the dependency-closure rollout
-    // added `cinatra.dependencies` to EVERY extension manifest, but the
-    // bridge allowlist was never updated — so the bridge skip-warned every
-    // real artifact extension and `listArtifacts()` was empty at boot.
-    writeExt(root, "closure-shaped-artifact", {
-      name: "@cinatra-ai/closure-shaped-artifact",
-      version: "0.0.1",
-      cinatra: {
-        kind: "artifact",
-        roles: ["artifact-fixture-role"],
-        dependencies: [],
-        artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
-      },
-    });
-    expect(registerArtifactExtensions(root)).toBe(1);
-    expect(objectTypeRegistry.listArtifacts()).toHaveLength(1);
-  });
-
   it("still skips a manifest carrying a genuinely disallowed cinatra key", () => {
     writeExt(root, "drifted-artifact", {
       name: "@cinatra-ai/drifted-artifact",

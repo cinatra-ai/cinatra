@@ -56,11 +56,16 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/trigger-agent:confirm", kind: "trigger-confirm", priority: 60, declaredBy: "@cinatra-ai/trigger-agent" },
 ];
 
-// Agent ROLE bindings: role name -> the single claimant package
-// (global uniqueness enforced at generation). Roles are how host code
-// selects an agent for a lane/duty (e.g. the creation-review lanes)
-// WITHOUT naming a package: packages/agents/src/agent-roles.ts resolves
-// fail-loud for the systemExtension-backed roles.
+// Extension ROLE bindings: role name -> the single claimant package
+// (global uniqueness enforced at generation; kind-agnostic — agents,
+// artifacts, and workflow extensions all claim roles the same way).
+// Roles are how host code selects an extension for a duty (the
+// creation-review lanes, the semantic-floor artifact type, the blog
+// artifact surfaces, the blog operator dashboard) WITHOUT naming a
+// package: packages/agents/src/agent-roles.ts resolves fail-loud for
+// the systemExtension-backed agent roles; src/lib/extension-roles.ts
+// resolves the optional-surface roles (absence = a normal degraded
+// state in reduced universes).
 export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
   "agent-author": "@cinatra-ai/author-agent",
   "agent-code-reviewer": "@cinatra-ai/code-reviewer-agent",
@@ -69,5 +74,6 @@ export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
   "artifact-blog-idea-summary": "@cinatra-ai/blog-idea-artifact",
   "artifact-blog-image": "@cinatra-ai/blog-image-artifact",
   "artifact-blog-post-body": "@cinatra-ai/blog-post-artifact",
+  "artifact-default-floor": "@cinatra-ai/default-artifact",
   "blog-operator-dashboard": "@cinatra-ai/blog-content-workflow",
 };
