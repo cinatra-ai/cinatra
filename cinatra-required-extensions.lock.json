@@ -12,16 +12,16 @@
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "9818e7daaf804688b181e3333f314868bed909ff",
+      "resolvedSha": "aded0620b5b2a004be8825fbcaff32e7a40e460b",
       "packageVersion": "0.1.0",
-      "treeSha256": "27976c3bef2ea9ed9da28e17b10970b5be3904b144002bc50bd1c7d6d5fa148a"
+      "treeSha256": "8a3abfacc6bff60078ccda6f7e2cdccdafac1a5753b7f7605072c37fa1390fe7"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
-      "resolvedSha": "ad903b06604a647e21b8bc497f3511c7c2e60344",
+      "resolvedSha": "b8b9c7dc8d02725dc17498b944bbfd5c7f04733f",
       "packageVersion": "0.1.0",
-      "treeSha256": "598ef15322e929fa866a534e7ed5c8604729d065021092a28265256b157fc498"
+      "treeSha256": "4f289b35b542ba0b834907152487a23148bc68c7ecfbb5d33aab7a64ad130804"
     },
     {
       "packageName": "@cinatra-ai/default-artifact",
@@ -47,16 +47,16 @@
     {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
-      "resolvedSha": "588527661fb7d97e6d09e0564b3513975832ac9f",
+      "resolvedSha": "eb8dbff9930bc97d85edde6b0aac43839899c8df",
       "packageVersion": "0.1.0",
-      "treeSha256": "74f3da30a4fb1bc6818cca98f52b20c7857d3f62a69e31df1ac588e5c62ef678"
+      "treeSha256": "4dd3b301cf939a105055dacbbd7d20304dfcc53a7b8f8d486e413e427ec04767"
     },
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "e5e4a37e9cf7d5e4829850a46918e2b417bb53dc",
+      "resolvedSha": "e147adc37a4b1a4ca9765caece29927239a1532c",
       "packageVersion": "0.1.0",
-      "treeSha256": "812724df96bb270ab565ed45951ef41925835bcbf6b48884acaa35665a3acc06"
+      "treeSha256": "b98d1f5998f8861edbfc6fcffe6fd5fd1aa333efb3ca195e3ca359ad4f0e69ea"
     }
   ]
 }
