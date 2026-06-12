@@ -37,3 +37,8 @@ export function satisfiesVersionRange(version: string, range: string): boolean {
 export function isExactVersion(v: string): boolean {
   return semver.valid(v) !== null;
 }
+
+/** True when `r` parses as a semver RANGE (dist-tags like "beta" do not). */
+export function isValidVersionRange(r: string): boolean {
+  return semver.validRange(r) !== null;
+}

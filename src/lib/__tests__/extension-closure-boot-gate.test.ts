@@ -84,9 +84,25 @@ describe("closureBootViolations", () => {
     expect(closureBootViolations(cleanReport())).toEqual([]);
   });
 
+  it("RANGE VIOLATIONS (#180 item 6) print with constraint + via in the boot violation", () => {
+    const v = closureBootViolations(
+      cleanReport({
+        brokenClosures: [
+          {
+            packageName: "@x/app",
+            missingRequired: [],
+            rangeViolations: ['@x/lib@1.4.0 violates "^2.0.0" required by @x/app'],
+          },
+        ],
+      }),
+    );
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain('@x/lib@1.4.0 violates "^2.0.0"');
+  });
+
   it("broken required closure → violation naming the dependent and its missing deps", () => {
     const v = closureBootViolations(
-      cleanReport({ brokenClosures: [{ packageName: "@x/app", missingRequired: ["@x/lib"] }] }),
+      cleanReport({ brokenClosures: [{ packageName: "@x/app", missingRequired: ["@x/lib"], rangeViolations: [] }] }),
     );
     expect(v).toHaveLength(1);
     expect(v[0]).toContain("@x/app");
@@ -124,7 +140,7 @@ describe("closureBootViolations", () => {
 
 describe("assertClosureBootReport (prod-throw vs dev-advisory)", () => {
   const broken = cleanReport({
-    brokenClosures: [{ packageName: "@x/app", missingRequired: ["@x/lib"] }],
+    brokenClosures: [{ packageName: "@x/app", missingRequired: ["@x/lib"], rangeViolations: [] }],
   });
 
   it("throws outside development on a violation", () => {
@@ -182,7 +198,7 @@ describe("buildClosureBootReport", () => {
     const report = await buildClosureBootReport(rows);
 
     expect(report.brokenClosures).toEqual([
-      { packageName: "@x/app", missingRequired: ["@x/ghost"] },
+      { packageName: "@x/app", missingRequired: ["@x/ghost"], rangeViolations: [] },
     ]);
     expect(report.optionalAdvisories).toEqual([
       {
@@ -209,7 +225,7 @@ describe("buildClosureBootReport", () => {
     const depA = { ...ext("@x/dep", "active"), organizationId: "org-a" };
     const brokenReport = await buildClosureBootReport([appB, depA]);
     expect(brokenReport.brokenClosures).toEqual([
-      { packageName: "@x/app", missingRequired: ["@x/dep"] },
+      { packageName: "@x/app", missingRequired: ["@x/dep"], rangeViolations: [] },
     ]);
 
     const depPlat = ext("@x/dep", "locked"); // organizationId null (platform)

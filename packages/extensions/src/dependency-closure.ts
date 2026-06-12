@@ -8,6 +8,7 @@
 // declared behavior.
 import "server-only";
 
+import { satisfiesVersionRange } from "@cinatra-ai/registries";
 import type {
   ExtensionDependency,
   ExtensionKind,
@@ -74,9 +75,56 @@ export type ClosureResult = {
   /** PEER deps that are missing or archived — never install-blocking, never
    *  auto-installed; surfaced to the activation-time per-kind behaviors. */
   missingPeer: ClosureNode[];
+  /** PRESENT install-blocking deps whose installed version VIOLATES the
+   *  declared constraint (#180 item 6). `ok` stays presence-based (the
+   *  execution-closure surfaces keep their presence semantics); the
+   *  install/restore/boot gates consume this bucket explicitly. */
+  rangeViolations: RangeViolation[];
   /** Full visited set, for diagnostics. */
   visited: string[];
 };
+
+/** A PRESENT dependency whose installed version violates the edge's constraint (#180 item 6). */
+export type RangeViolation = {
+  packageName: string;
+  /** The dependent that declared the violated edge. */
+  via: string;
+  installedVersion: string;
+  constraint: string;
+};
+
+/** The installed (verdaccio-sourced) version of a canonical row, or null
+ *  (dev/local/github sources carry no registry version → presence-only). */
+export function installedVersionOfRow(row: InstalledExtension): string | null {
+  const src = row.source as { type?: string; version?: string } | null | undefined;
+  return src && src.type === "verdaccio" && typeof src.version === "string" && src.version
+    ? src.version
+    : null;
+}
+
+/**
+ * Evaluate ONE edge's versionConstraint against an installed version (#180
+ * item 6 — the closure engine's version awareness). Returns the violated
+ * constraint as a display string, or null when satisfied / not evaluable:
+ *  - `*` ranges and rows without a registry version are presence-only;
+ *  - `git-ref` constraints are not evaluable against a registry version (the
+ *    planner refuses them at install time; here they stay presence-only).
+ */
+export function edgeVersionViolation(
+  dep: ExtensionDependency,
+  installedVersion: string | null,
+): string | null {
+  if (installedVersion === null) return null;
+  const vc = dep.versionConstraint;
+  if (vc.kind === "semver-range") {
+    if (vc.range === "*" || satisfiesVersionRange(installedVersion, vc.range)) return null;
+    return `"${vc.range}"`;
+  }
+  if (vc.kind === "exact") {
+    return vc.version === installedVersion ? null : `=${vc.version}`;
+  }
+  return null; // git-ref: not evaluable here
+}
 
 export type ManifestLookup = (packageName: string) => InstalledExtension | undefined;
 
@@ -118,12 +166,15 @@ export function computeClosure(
   const missingRequired: ClosureNode[] = [];
   const missingOptional: ClosureNode[] = [];
   const missingPeer: ClosureNode[] = [];
+  const rangeViolations: RangeViolation[] = [];
 
-  const stack: { deps: ExtensionDependency[] }[] = [{ deps: root.dependencies }];
+  const stack: { from: string; deps: ExtensionDependency[] }[] = [
+    { from: root.packageName, deps: root.dependencies },
+  ];
   visited.add(root.packageName);
 
   while (stack.length > 0) {
-    const { deps } = stack.pop()!;
+    const { from, deps } = stack.pop()!;
     for (const dep of deps) {
       const installed = lookup(dep.packageName);
       const present = installed && PRESENT_STATUSES.has(installed.status);
@@ -145,9 +196,25 @@ export function computeClosure(
         continue;
       }
 
+      // VERSION AWARENESS (#180 item 6): a PRESENT target of an
+      // install-blocking edge must also SATISFY the edge's constraint.
+      // Peer/optional edges stay presence-only (their semantics are
+      // activation-time / per-kind, never blocking).
+      if (isInstallBlockingEdge(dep)) {
+        const violated = edgeVersionViolation(dep, installedVersionOfRow(installed!));
+        if (violated !== null) {
+          rangeViolations.push({
+            packageName: dep.packageName,
+            via: from,
+            installedVersion: installedVersionOfRow(installed!) ?? "(unknown)",
+            constraint: violated,
+          });
+        }
+      }
+
       if (!visited.has(dep.packageName)) {
         visited.add(dep.packageName);
-        stack.push({ deps: installed!.dependencies });
+        stack.push({ from: dep.packageName, deps: installed!.dependencies });
       }
     }
   }
@@ -157,6 +224,7 @@ export function computeClosure(
     missingRequired,
     missingOptional,
     missingPeer,
+    rangeViolations,
     visited: [...visited],
   };
 }
@@ -286,15 +354,21 @@ export function evaluateExecutionClosure(
  */
 export function findBrokenClosures(
   rows: InstalledExtension[],
-): { packageName: string; missingRequired: string[] }[] {
-  const broken: { packageName: string; missingRequired: string[] }[] = [];
+): { packageName: string; missingRequired: string[]; rangeViolations: string[] }[] {
+  const broken: { packageName: string; missingRequired: string[]; rangeViolations: string[] }[] = [];
   for (const row of rows) {
     if (!PRESENT_STATUSES.has(row.status)) continue;
     const result = computeClosure(row, makeScopedManifestLookup(rows, row.organizationId));
-    if (result.missingRequired.length > 0) {
+    if (result.missingRequired.length > 0 || result.rangeViolations.length > 0) {
       broken.push({
         packageName: row.packageName,
         missingRequired: result.missingRequired.map((d) => d.packageName),
+        // VERSION AWARENESS (#180 item 6): a present-but-range-violating
+        // install-blocking dep breaks the closure the same way a missing one
+        // does — boot/restore gates consume both.
+        rangeViolations: result.rangeViolations.map(
+          (v) => `${v.packageName}@${v.installedVersion} violates ${v.constraint} required by ${v.via}`,
+        ),
       });
     }
   }
@@ -303,13 +377,123 @@ export function findBrokenClosures(
 
 export class DependencyClosureError extends Error {
   constructor(
-    public readonly code: "REQUIRED_MISSING" | "ARCHIVE_BREAKS_CLOSURE",
+    public readonly code: "REQUIRED_MISSING" | "ARCHIVE_BREAKS_CLOSURE" | "UPDATE_BREAKS_DEPENDENTS" | "RANGE_VIOLATION",
     message: string,
     public readonly dependents: string[],
   ) {
     super(message);
     this.name = "DependencyClosureError";
   }
+}
+
+/**
+ * UPDATE GATE (#180 item 6): refuse updating `packageName` to `newVersion`
+ * when any LIVE dependent's install-blocking edge on it would be violated —
+ * NAMING the dependents and their constraints. Scope-aware: a dependent's
+ * edge counts only when its scoped lookup resolves to the row being updated
+ * (own-org row first, then platform row). `*` ranges and git-ref constraints
+ * are not evaluable → never block. PURE over the snapshot — wire it BEFORE
+ * any durable mutation.
+ */
+export function assertUpdateDoesNotBreakDependents(
+  packageName: string,
+  newVersion: string,
+  allRows: InstalledExtension[],
+  opts?: { organizationId?: string | null },
+): void {
+  // The TARGET row(s) of this update: at an explicit scope, exactly the live
+  // row(s) at that (package, org); with NO scope given (the direct agent
+  // writer carries none), conservatively every live row of the package.
+  const targetIds = new Set(
+    allRows
+      .filter(
+        (r) =>
+          r.packageName === packageName &&
+          PRESENT_STATUSES.has(r.status) &&
+          (opts?.organizationId === undefined ||
+            (r.organizationId ?? null) === (opts.organizationId ?? null)),
+      )
+      .map((r) => r.id),
+  );
+  if (targetIds.size === 0) return; // nothing live is being updated → nothing can break
+
+  const violations: { dependent: string; constraint: string }[] = [];
+  for (const row of allRows) {
+    if (row.packageName === packageName) continue;
+    if (!PRESENT_STATUSES.has(row.status)) continue;
+    // A dependent binds IFF its OWN scoped lookup resolves THE row being
+    // updated (row identity, not just name): an org-scoped dependent falling
+    // back to the platform row blocks a platform update; a platform dependent
+    // resolving the platform row never blocks an ORG-scoped update.
+    const resolved = makeScopedManifestLookup(allRows, row.organizationId)(packageName);
+    if (!resolved || !targetIds.has(resolved.id)) continue;
+    for (const dep of row.dependencies) {
+      if (dep.packageName !== packageName) continue;
+      if (!isInstallBlockingEdge(dep)) continue;
+      const violated = edgeVersionViolation(dep, newVersion);
+      if (violated !== null) violations.push({ dependent: row.packageName, constraint: violated });
+    }
+  }
+  if (violations.length > 0) {
+    const names = [...new Set(violations.map((v) => v.dependent))];
+    throw new DependencyClosureError(
+      "UPDATE_BREAKS_DEPENDENTS",
+      `Cannot update ${packageName} to ${newVersion} — it would break ` +
+        `${names.length} installed dependent(s): ` +
+        violations.map((v) => `${v.dependent} requires ${packageName}@${v.constraint}`).join("; ") +
+        `. Update the dependent(s) to versions whose declared ranges admit ` +
+        `${newVersion}, or keep ${packageName} at a satisfying version.`,
+      names,
+    );
+  }
+}
+
+/**
+ * Topological DEPENDENCIES-FIRST order over package names (#180 item 8 — the
+ * runtime loader's activation order). Kahn with a DETERMINISTIC lexicographic
+ * tie-break; a cycle (which publish-side induction cannot create) falls back
+ * to lexicographic order for the cyclic remainder with a LOUD warning. Edges
+ * to packages outside `names` are ignored (activation order is only
+ * meaningful among the packages being activated).
+ */
+export function orderPackagesByDependencyFirst(
+  names: readonly string[],
+  edgesByPackage: ReadonlyMap<string, readonly ExtensionDependency[]>,
+): string[] {
+  const inSet = new Set(names);
+  const dependsOn = new Map<string, Set<string>>();
+  for (const name of names) {
+    dependsOn.set(
+      name,
+      new Set(
+        (edgesByPackage.get(name) ?? [])
+          .filter((d) => d.edgeType !== "peer" && inSet.has(d.packageName))
+          .map((d) => d.packageName),
+      ),
+    );
+  }
+  const ordered: string[] = [];
+  const placed = new Set<string>();
+  let remaining = [...names].sort();
+  while (remaining.length > 0) {
+    const ready = remaining.filter((n) => [...dependsOn.get(n)!].every((d) => placed.has(d)));
+    if (ready.length === 0) {
+      console.warn(
+        `[dependency-closure] dependency CYCLE among ${remaining.join(", ")} — activating in ` +
+          `lexicographic order (deterministic fallback; publish-side induction cannot create cycles).`,
+      );
+      for (const n of remaining) {
+        ordered.push(n);
+        placed.add(n);
+      }
+      break;
+    }
+    const next = ready[0]!; // lexicographic tie-break (remaining stays sorted)
+    ordered.push(next);
+    placed.add(next);
+    remaining = remaining.filter((n) => n !== next);
+  }
+  return ordered;
 }
 
 /**
@@ -321,6 +505,18 @@ export function assertInstallClosure(
   lookup: ManifestLookup,
 ): ClosureResult {
   const result = computeClosure(candidate, lookup);
+  // VERSION AWARENESS (#180 item 6): a restore whose install-blocking deps
+  // are present at VIOLATING versions is as broken as one with missing deps.
+  if (result.ok && result.rangeViolations.length > 0) {
+    throw new DependencyClosureError(
+      "RANGE_VIOLATION",
+      `Cannot install ${candidate.packageName} — installed dependency versions violate its declared constraints: ` +
+        result.rangeViolations
+          .map((v) => `${v.packageName}@${v.installedVersion} violates ${v.constraint} (required by ${v.via})`)
+          .join("; "),
+      result.rangeViolations.map((v) => v.packageName),
+    );
+  }
   if (!result.ok) {
     throw new DependencyClosureError(
       "REQUIRED_MISSING",
@@ -350,6 +546,13 @@ export function assertArchiveDoesNotBreakClosure(
     // (required runtime/install-time) blocks the archive — a peer edge is a
     // coexistence constraint, not a presence requirement, so it never holds
     // its target hostage.
+    //
+    // DELIBERATELY PRESENCE-BASED (#180 item 6 reconciliation): archiving the
+    // target removes it ENTIRELY, so any install-blocking edge breaks —
+    // version evaluation could only WEAKEN this gate (skipping a dependent
+    // whose edge the current version already violates would let the archive
+    // orphan it further). A version-violating dependent therefore still
+    // blocks; the violation itself is surfaced by the boot/forward gates.
     const requiresTarget = row.dependencies.some(
       (d) => d.packageName === target.packageName && isInstallBlockingEdge(d),
     );
@@ -397,6 +600,19 @@ export function assertForwardInstallClosureForPackage(
   );
   for (const target of targets) {
     const result = computeClosure(target, makeScopedManifestLookup(allRows, target.organizationId));
+    // VERSION AWARENESS (#180 item 6): present-but-violating install-blocking
+    // deps refuse the fresh install exactly like missing ones.
+    if (result.rangeViolations.length > 0) {
+      throw new DependencyClosureError(
+        "RANGE_VIOLATION",
+        `Cannot install ${packageName} — installed dependency versions violate its declared constraints: ` +
+          result.rangeViolations
+            .map((v) => `${v.packageName}@${v.installedVersion} violates ${v.constraint} (required by ${v.via})`)
+            .join("; ") +
+          `. Update the violating dependencies to satisfying versions first, then retry.`,
+        result.rangeViolations.map((v) => v.packageName),
+      );
+    }
     if (result.missingRequired.length > 0) {
       const missing = result.missingRequired.map((d) => `${d.packageName} (${d.status})`);
       const names = result.missingRequired.map((d) => d.packageName);

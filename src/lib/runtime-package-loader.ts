@@ -87,7 +87,40 @@ export type RuntimeLoaderHostDeps = {
    * signature/migration/activation gate is reused unchanged.
    */
   onlyPackage?: string;
+  /**
+   * DEPENDENCY-ORDERED ACTIVATION (#180 item 8): the persisted dependency
+   * edges per package name. When provided (or resolved by the default reader
+   * below), activatable records are TOPO-SORTED dependencies-first before
+   * activation — a dependency's `register(ctx)` runs before its dependents'.
+   * Deterministic lexicographic tie-break; a cycle falls back to
+   * lexicographic order with a loud warning. Optional: unit harnesses may
+   * omit it AND the default read is best-effort (an unreachable canonical
+   * store degrades to discovery order with a warning — boot must not gain a
+   * new hard DB dependency from ordering alone).
+   */
+  readDependencyEdgesByPackage?: () => Promise<
+    Map<string, import("@cinatra-ai/extensions/canonical-types").ExtensionDependency[]>
+  >;
 };
+
+/** Default edge reader for dependency-ordered activation: the LIVE canonical
+ *  rows' persisted edges (platform row preferred — boot activates
+ *  platform-scoped installs; an org row only fills a gap). Best-effort. */
+async function readLiveDependencyEdgesByPackage(): Promise<
+  Map<string, import("@cinatra-ai/extensions/canonical-types").ExtensionDependency[]>
+> {
+  const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+  const rows = await listInstalledExtensions({});
+  const byName = new Map<string, import("@cinatra-ai/extensions/canonical-types").ExtensionDependency[]>();
+  for (const row of rows) {
+    if (row.status !== "active" && row.status !== "locked") continue;
+    const existing = byName.get(row.packageName);
+    if (existing === undefined || (row.organizationId ?? null) === null) {
+      byName.set(row.packageName, row.dependencies);
+    }
+  }
+  return byName;
+}
 
 /**
  * Discover + activate trusted runtime-installed packages from the store through
@@ -241,9 +274,39 @@ export async function loadRuntimePackageExtensions(
   const activatable = trusted.filter((rec) => !migrationRefused.has(rec.packageName));
   if (activatable.length === 0) return [];
 
+  // DEPENDENCY-ORDERED ACTIVATION (#180 item 8): topo-sort the activatable
+  // records DEPENDENCIES-FIRST over the persisted canonical edges, so a
+  // dependency's `register(ctx)` (capability/provider registrations) commits
+  // before any dependent's. Best-effort: an unreadable edge map degrades to
+  // the previous discovery order with a loud warning — ordering must never
+  // turn a bootable store into a non-bootable one.
+  let orderedActivatable = activatable;
+  if (activatable.length > 1) {
+    try {
+      const edgesByPackage = await (hostDeps.readDependencyEdgesByPackage ??
+        readLiveDependencyEdgesByPackage)();
+      const { orderPackagesByDependencyFirst } = await import(
+        "@cinatra-ai/extensions/dependency-closure"
+      );
+      const order = orderPackagesByDependencyFirst(
+        activatable.map((r) => r.packageName),
+        edgesByPackage,
+      );
+      const rank = new Map(order.map((name, i) => [name, i]));
+      orderedActivatable = [...activatable].sort(
+        (a, b) => (rank.get(a.packageName) ?? 0) - (rank.get(b.packageName) ?? 0),
+      );
+    } catch (err) {
+      console.warn(
+        `[runtime-package-loader] dependency-ordered activation degraded to discovery order ` +
+          `(edge read failed): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   return runRuntimePackageActivation(storeRoot, {
     fs: realFs,
-    records: activatable,
+    records: orderedActivatable,
     importModule: async (abs, rec) => {
       // realpath-bound: the resolved server entry must stay INSIDE the verified
       // package dir even after following filesystem links (defense beyond the

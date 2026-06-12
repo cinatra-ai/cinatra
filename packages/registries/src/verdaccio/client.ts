@@ -742,6 +742,26 @@ export async function getPublishedExtensionSummary(
   };
 }
 
+/**
+ * Resolve the highest version satisfying a semver RANGE from the packument
+ * (#180 dev-path dependency resolution — live-verify finding):
+ * `resolveExtensionDistIntegrity` / pacote resolve exact versions and
+ * dist-tags but NOT ranges against Verdaccio. Prereleases are excluded
+ * unless the range itself carries one.
+ */
+export async function resolveMaxSatisfyingVersion(
+  input: { packageName: string; range: string },
+  config?: VerdaccioConfig,
+): Promise<string | null> {
+  const resolvedConfig = ensureConfig(config, "resolveMaxSatisfyingVersion");
+  const packument = (await pacote.packument(
+    input.packageName,
+    pacoteOptions(resolvedConfig, { fullMetadata: false }),
+  )) as RegistryPackument;
+  const versions = Object.keys(packument.versions ?? {});
+  return semver.maxSatisfying(versions, input.range, { includePrerelease: false });
+}
+
 export async function getPublishedExtensionKind(
   input: { packageName: string; packageVersion?: string },
   config?: VerdaccioConfig,

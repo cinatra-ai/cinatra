@@ -1,5 +1,5 @@
 // Dependency closure tests.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ExtensionDependency, InstalledExtension } from "../canonical-types";
 import {
@@ -281,7 +281,7 @@ describe("makeScopedManifestLookup (no cross-org dependency bleed)", () => {
     const appB = inOrg(ext("app", "active", [req("dep")]), "org-b");
     const depA = inOrg(ext("dep", "active"), "org-a");
     const broken = findBrokenClosures([appB, depA]);
-    expect(broken).toEqual([{ packageName: "app", missingRequired: ["dep"] }]);
+    expect(broken).toEqual([{ packageName: "app", missingRequired: ["dep"], rangeViolations: [] }]);
   });
 
   it("findBrokenClosures accepts a platform-scoped dep for an org-scoped dependent", () => {
@@ -442,5 +442,216 @@ describe("assertForwardInstallClosureForPackage (#180 item 5 — the fresh-insta
     // The scope-aware lookup resolves LIVE rows only, so an archived dep
     // surfaces as "missing" — either way the gate refuses.
     expect(() => assertForwardInstallClosureForPackage("a", [a, b])).toThrowError(/b \(missing\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #180 item 6 — VERSION AWARENESS (durable version constraints)
+// ---------------------------------------------------------------------------
+
+import {
+  assertUpdateDoesNotBreakDependents,
+  edgeVersionViolation,
+  installedVersionOfRow,
+  orderPackagesByDependencyFirst,
+  assertForwardInstallClosureForPackage as fwdGate,
+} from "../dependency-closure";
+
+function vext(
+  packageName: string,
+  version: string,
+  deps: ExtensionDependency[] = [],
+  over: Partial<InstalledExtension> = {},
+): InstalledExtension {
+  return {
+    ...ext(packageName, "active", deps),
+    source: {
+      type: "verdaccio",
+      registryUrl: "https://registry.cinatra.ai",
+      packageName,
+      version,
+      integrity: "sha512-x",
+    } as InstalledExtension["source"],
+    ...over,
+  };
+}
+
+function reqRange(packageName: string, range: string): ExtensionDependency {
+  return { ...req(packageName), versionConstraint: { kind: "semver-range", range } };
+}
+
+describe("edgeVersionViolation / installedVersionOfRow (#180 item 6)", () => {
+  it("matrix: star + git-ref + versionless rows are presence-only; range/exact evaluate", () => {
+    expect(edgeVersionViolation(reqRange("b", "*"), "1.0.0")).toBeNull();
+    expect(edgeVersionViolation(reqRange("b", "^1.0.0"), "1.4.0")).toBeNull();
+    expect(edgeVersionViolation(reqRange("b", "^2.0.0"), "1.4.0")).toBe('"^2.0.0"');
+    expect(
+      edgeVersionViolation({ ...req("b"), versionConstraint: { kind: "exact", version: "1.0.0" } }, "1.0.0"),
+    ).toBeNull();
+    expect(
+      edgeVersionViolation({ ...req("b"), versionConstraint: { kind: "exact", version: "1.0.0" } }, "1.0.1"),
+    ).toBe("=1.0.0");
+    expect(
+      edgeVersionViolation({ ...req("b"), versionConstraint: { kind: "git-ref", ref: "main" } }, "1.0.0"),
+    ).toBeNull();
+    expect(edgeVersionViolation(reqRange("b", "^2.0.0"), null)).toBeNull();
+    // local/dev sources have no registry version → presence-only.
+    expect(installedVersionOfRow(ext("a", "active"))).toBeNull();
+    expect(installedVersionOfRow(vext("a", "1.2.3"))).toBe("1.2.3");
+  });
+});
+
+describe("computeClosure — rangeViolations bucket (#180 item 6)", () => {
+  it("a PRESENT install-blocking dep at a violating version lands in rangeViolations (ok stays presence-based)", () => {
+    const a = vext("a", "1.0.0", [reqRange("b", "^2.0.0")]);
+    const b = vext("b", "1.4.0");
+    const result = computeClosure(a, makeScopedManifestLookup([a, b], null));
+    expect(result.ok).toBe(true); // presence holds
+    expect(result.rangeViolations).toEqual([
+      { packageName: "b", via: "a", installedVersion: "1.4.0", constraint: '"^2.0.0"' },
+    ]);
+  });
+
+  it("violating PEER/OPTIONAL edges never enter rangeViolations (blocking semantics only)", () => {
+    const a = vext("a", "1.0.0", [
+      { ...reqRange("b", "^2.0.0"), edgeType: "peer" },
+      { ...reqRange("c", "^2.0.0"), requirement: "optional" },
+    ]);
+    const b = vext("b", "1.0.0");
+    const c = vext("c", "1.0.0");
+    const result = computeClosure(a, makeScopedManifestLookup([a, b, c], null));
+    expect(result.rangeViolations).toEqual([]);
+  });
+
+  it("findBrokenClosures surfaces range violations alongside missing deps; assertInstallClosure + the forward gate refuse on them", () => {
+    const a = vext("a", "1.0.0", [reqRange("b", "^2.0.0")]);
+    const b = vext("b", "1.4.0");
+    const broken = findBrokenClosures([a, b]);
+    expect(broken).toHaveLength(1);
+    expect(broken[0]!.rangeViolations[0]).toContain('b@1.4.0 violates "^2.0.0" required by a');
+
+    expect(() => assertInstallClosure(a, makeScopedManifestLookup([a, b], null))).toThrowError(
+      /violate/,
+    );
+    try {
+      fwdGate("a", [a, b]);
+      expect.unreachable("forward gate must refuse");
+    } catch (e) {
+      expect((e as DependencyClosureError).code).toBe("RANGE_VIOLATION");
+      expect((e as Error).message).toContain("Update the violating dependencies");
+    }
+  });
+});
+
+describe("assertUpdateDoesNotBreakDependents (#180 item 6 — the update gate)", () => {
+  it("REFUSES a breaking-range update NAMING the dependents and their constraints, with the actionable instruction", () => {
+    const dependent1 = vext("dep1", "1.0.0", [reqRange("lib", "^1.0.0")]);
+    const dependent2 = vext("dep2", "1.0.0", [reqRange("lib", ">=1.2.0 <2.0.0")]);
+    const lib = vext("lib", "1.4.0");
+    try {
+      assertUpdateDoesNotBreakDependents("lib", "2.0.0", [dependent1, dependent2, lib]);
+      expect.unreachable("must refuse");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DependencyClosureError);
+      expect((e as DependencyClosureError).code).toBe("UPDATE_BREAKS_DEPENDENTS");
+      expect((e as DependencyClosureError).dependents.sort()).toEqual(["dep1", "dep2"]);
+      expect((e as Error).message).toContain('dep1 requires lib@"^1.0.0"');
+      expect((e as Error).message).toContain("Update the dependent(s)");
+    }
+  });
+
+  it("PASSES a satisfying update; '*' ranges and archived/peer/optional dependents never block", () => {
+    const star = vext("star-dep", "1.0.0", [reqRange("lib", "*")]);
+    const archived = vext("old-dep", "1.0.0", [reqRange("lib", "^1.0.0")], { status: "archived" } as never);
+    const peer = vext("peer-dep", "1.0.0", [{ ...reqRange("lib", "^1.0.0"), edgeType: "peer" }]);
+    const satisfied = vext("ok-dep", "1.0.0", [reqRange("lib", "^1.0.0")]);
+    const lib = vext("lib", "1.4.0");
+    expect(() =>
+      assertUpdateDoesNotBreakDependents("lib", "1.9.0", [star, archived, peer, satisfied, lib]),
+    ).not.toThrow();
+    expect(() =>
+      assertUpdateDoesNotBreakDependents("lib", "2.0.0", [star, archived, peer, lib]),
+    ).not.toThrow();
+  });
+
+  it("scope-aware (row identity): an ORG dependent FALLING BACK to the platform row BLOCKS a platform update", () => {
+    const orgDep = {
+      ...vext("org-dep", "1.0.0", [reqRange("lib", "^1.0.0")]),
+      organizationId: "org-1",
+    };
+    const platformLib = vext("lib", "1.4.0"); // organizationId null
+    expect(() =>
+      assertUpdateDoesNotBreakDependents("lib", "2.0.0", [orgDep, platformLib], {
+        organizationId: null,
+      }),
+    ).toThrowError(/org-dep requires lib/);
+  });
+
+  it("scope-aware (row identity): a PLATFORM dependent resolving the PLATFORM row never blocks an ORG-scoped update", () => {
+    const platformDep = vext("plat-dep", "1.0.0", [reqRange("lib", "^1.0.0")]);
+    const platformLib = vext("lib", "1.4.0");
+    const orgLib = { ...vext("lib", "1.4.0"), id: "id-lib-org", organizationId: "org-1" };
+    expect(() =>
+      assertUpdateDoesNotBreakDependents("lib", "2.0.0", [platformDep, platformLib, orgLib], {
+        organizationId: "org-1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("scope-aware (row identity): an org dependent with its OWN org row of the dep never blocks the platform update", () => {
+    const orgDep = {
+      ...vext("org-dep", "1.0.0", [reqRange("lib", "^1.0.0")]),
+      organizationId: "org-1",
+    };
+    const orgLib = { ...vext("lib", "1.4.0"), id: "id-lib-org", organizationId: "org-1" };
+    const platformLib = vext("lib", "1.4.0");
+    // org-dep resolves ITS OWN org row — the platform update touches a row it
+    // does not consume.
+    expect(() =>
+      assertUpdateDoesNotBreakDependents("lib", "2.0.0", [orgDep, orgLib, platformLib], {
+        organizationId: null,
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("assertArchiveDoesNotBreakClosure — version posture (#180 item 6 reconciliation)", () => {
+  it("a dependent whose edge the CURRENT version already violates STILL blocks the archive (presence-based is strictly stronger)", () => {
+    const dependent = vext("dep1", "1.0.0", [reqRange("lib", "^2.0.0")]); // violated today
+    const lib = vext("lib", "1.4.0");
+    expect(() => assertArchiveDoesNotBreakClosure(lib, [dependent, lib])).toThrowError(
+      /required by active dependents: dep1/,
+    );
+  });
+});
+
+describe("orderPackagesByDependencyFirst (#180 item 8 — activation order)", () => {
+  it("dependencies place FIRST; lexicographic tie-break (test-pinned direction)", () => {
+    const edges = new Map<string, ExtensionDependency[]>([
+      ["a", [req("c")]],
+      ["b", []],
+      ["c", []],
+    ]);
+    expect(orderPackagesByDependencyFirst(["a", "b", "c"], edges)).toEqual(["b", "c", "a"]);
+  });
+
+  it("peer edges and out-of-set edges never affect the order", () => {
+    const edges = new Map<string, ExtensionDependency[]>([
+      ["a", [{ ...req("b"), edgeType: "peer" }, req("@outside/pkg")]],
+      ["b", []],
+    ]);
+    expect(orderPackagesByDependencyFirst(["a", "b"], edges)).toEqual(["a", "b"]);
+  });
+
+  it("a cycle falls back to DETERMINISTIC lexicographic order with a LOUD warning (never a hang)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const edges = new Map<string, ExtensionDependency[]>([
+      ["a", [req("b")]],
+      ["b", [req("a")]],
+      ["z", []],
+    ]);
+    expect(orderPackagesByDependencyFirst(["z", "b", "a"], edges)).toEqual(["z", "a", "b"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dependency CYCLE among a, b"));
+    warn.mockRestore();
   });
 });

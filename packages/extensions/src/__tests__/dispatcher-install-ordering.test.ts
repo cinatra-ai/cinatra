@@ -254,6 +254,58 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(rows.find((r) => r.id === "iext_v1")).toBeDefined();
   });
 
+  it("UPDATE GATE (#180 item 6): a breaking-range update is REFUSED pre-mutation, NAMING the dependents (no row ensure, no handler, no pipeline)", async () => {
+    extensionRegistry.register(makeHandler("connector"));
+    // A live dependent declares lib@^1.0.0; updating lib to 2.0.0 must refuse.
+    listInstalledExtensions.mockResolvedValue([
+      {
+        id: "iext_dep",
+        packageName: "@v/dependent",
+        status: "active",
+        organizationId: "org-1",
+        kind: "connector",
+        source: { type: "verdaccio", integrity: "sha512-d", version: "1.0.0", registryUrl: "r", packageName: "@v/dependent" },
+        dependencies: [
+          {
+            packageName: "@v/lib",
+            edgeType: "runtime",
+            requirement: "required",
+            versionConstraint: { kind: "semver-range", range: "^1.0.0" },
+          },
+        ],
+      },
+      {
+        id: "iext_lib",
+        packageName: "@v/lib",
+        status: "active",
+        organizationId: "org-1",
+        kind: "connector",
+        source: { type: "verdaccio", integrity: "sha512-l", version: "1.4.0", registryUrl: "r", packageName: "@v/lib" },
+        dependencies: [],
+      },
+    ] as never);
+    await expect(
+      extensionRegistry.update("connector", { ...makeRef("@v/lib"), version: "2.0.0" }, orgActor),
+    ).rejects.toThrow(/Cannot update @v\/lib to 2\.0\.0 .*@v\/dependent requires @v\/lib@"\^1\.0\.0"/);
+    // Fully inert: nothing ensured/mutated, no handler call, no pipeline fire.
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(fireExtensionActivate).not.toHaveBeenCalled();
+
+    // The SAME update at a SATISFYING version proceeds (gate passes).
+    fireExtensionActivate.mockResolvedValueOnce({ finalized: true, activated: true });
+    rows = [
+      {
+        id: "iext_lib",
+        packageName: "@v/lib",
+        status: "active",
+        organizationId: "org-1",
+        source: { type: "verdaccio", integrity: "sha512-l" },
+      },
+    ];
+    await extensionRegistry.update("connector", { ...makeRef("@v/lib"), version: "1.9.0" }, orgActor);
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/lib", "org-1", "1.9.0");
+  });
+
   it("Design B: a CLEAN durable rollback (rolledBack:true, rollbackComplete:true) → calm 'previous version retained' error; old row NOT deleted", async () => {
     rows = [
       {

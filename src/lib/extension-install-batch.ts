@@ -151,9 +151,13 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
 
   const planDeps: DependencyPlanDeps = {
     fetchSummary: async (packageName, versionOrRange) => {
-      const { getPublishedExtensionSummary, resolveExtensionDistIntegrity, isExactVersion } = await import(
-        "@cinatra-ai/registries"
-      );
+      const {
+        getPublishedExtensionSummary,
+        resolveExtensionDistIntegrity,
+        resolveMaxSatisfyingVersion,
+        isExactVersion,
+        isValidVersionRange,
+      } = await import("@cinatra-ai/registries");
       // Config: gatekept ON → the grant-context-aware resolver (derives the
       // broker config under the root grant inside a batch); OFF → the
       // server read config (legacy direct read).
@@ -168,12 +172,29 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
       const isExact = isExactVersion(versionOrRange);
       let exact = isExact ? versionOrRange : undefined;
       if (!isExact && versionOrRange !== "latest" && versionOrRange !== "") {
-        // A RANGE (dev path): resolve to the concrete satisfying version.
-        const resolved = await resolveExtensionDistIntegrity(
-          { packageName, packageVersion: versionOrRange },
-          config,
-        );
-        exact = resolved.resolvedVersion ?? undefined;
+        if (isValidVersionRange(versionOrRange)) {
+          // A RANGE (dev path): pacote resolves exact versions and dist-tags
+          // but NOT ranges against Verdaccio — resolve via the packument's
+          // version list (highest satisfying; live-verify finding).
+          const resolved = await resolveMaxSatisfyingVersion(
+            { packageName, range: versionOrRange },
+            config,
+          );
+          if (!resolved) {
+            throw new Error(
+              `[extension-install-batch] no published version of ${packageName} satisfies "${versionOrRange}"`,
+            );
+          }
+          exact = resolved;
+        } else {
+          // A DIST-TAG (e.g. "beta"/"next") — keep the original pacote
+          // resolution semantics (merge-gate finding: tags are not ranges).
+          const resolved = await resolveExtensionDistIntegrity(
+            { packageName, packageVersion: versionOrRange },
+            config,
+          );
+          exact = resolved.resolvedVersion ?? undefined;
+        }
       }
       const summary = await getPublishedExtensionSummary(
         { packageName, ...(exact ? { packageVersion: exact } : {}) },

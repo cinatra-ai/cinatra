@@ -36,8 +36,10 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 import type { RequiredVerificationResult } from "@cinatra-ai/extensions/required-in-prod";
 
 export type ClosureBootReport = {
-  /** active|locked rows whose REQUIRED transitive closure is broken. */
-  brokenClosures: { packageName: string; missingRequired: string[] }[];
+  /** active|locked rows whose REQUIRED transitive closure is broken —
+   *  missing/archived install-blocking deps AND (#180 item 6) present deps
+   *  whose installed version violates the declared constraint. */
+  brokenClosures: { packageName: string; missingRequired: string[]; rangeViolations: string[] }[];
   /** Required-in-prod presence + version-pin verification (same snapshot). */
   verification: RequiredVerificationResult;
   /** Behavior-tagged optional-missing advisories (never boot-fatal). */
@@ -59,7 +61,15 @@ export function closureBootViolations(report: ClosureBootReport): string[] {
     violations.push(
       `${report.brokenClosures.length} installed extension(s) have a broken REQUIRED dependency closure: ` +
         report.brokenClosures
-          .map((b) => `${b.packageName} → [${b.missingRequired.join(", ")}]`)
+          .map((b) => {
+            const parts = [
+              ...b.missingRequired,
+              // VERSION AWARENESS (#180 item 6): a violating installed
+              // version is named with its constraint, not just the package.
+              ...b.rangeViolations,
+            ];
+            return `${b.packageName} → [${parts.join(", ")}]`;
+          })
           .join("; "),
     );
   }

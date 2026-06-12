@@ -681,6 +681,22 @@ class ExtensionRegistryImpl {
       if (!pin.ok) throw new Error(pin.reason);
     }
 
+    // 0.6 UPDATE GATE (#180 item 6): an UPDATE may not move a package to a
+    //    version that VIOLATES any live dependent's install-blocking edge —
+    //    refused HERE, before the row-ensure/handler/pipeline mutations, so
+    //    the refusal is fully inert on EVERY kind's path. Pure read over the
+    //    canonical snapshot; the error NAMES the dependents + constraints.
+    if (op === "update" && ref.version) {
+      // (The MCP/action surfaces always dispatch a registry-RESOLVED concrete
+      // version; a versionless ref has nothing to evaluate.)
+      const { listInstalledExtensions } = await import("./canonical-store");
+      const { assertUpdateDoesNotBreakDependents } = await import("./dependency-closure");
+      const allRows = await listInstalledExtensions({});
+      assertUpdateDoesNotBreakDependents(ref.packageName, ref.version, allRows, {
+        organizationId: actor.orgId ?? null,
+      });
+    }
+
     // 1. Ensure exactly one canonical row BEFORE the native handler (so the
     //    workflow saga's recordProvenance + the pipeline both resolve it — the
     //    Finding-4 ordering fix). Scoped to the actor's org so the saga (org-

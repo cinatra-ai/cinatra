@@ -56,4 +56,13 @@ export {
   comparePluginVersions,
   satisfiesVersionRange,
   isExactVersion,
+  isValidVersionRange,
 } from "../../packages/registries/src/version-compare";
+
+// Range resolution for the dependency planner (#180) — tests mock at call
+// sites; the stub only needs the symbol resolvable.
+export async function resolveMaxSatisfyingVersion(
+  _input: { packageName: string; range: string },
+): Promise<string | null> {
+  return null;
+}

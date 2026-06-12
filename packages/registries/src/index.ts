@@ -35,7 +35,7 @@ export {
   lockfileShapeSchema,
 } from "./lockfile/lockfile";
 
-export { comparePluginVersions, satisfiesVersionRange, isExactVersion } from "./version-compare";
+export { comparePluginVersions, satisfiesVersionRange, isExactVersion, isValidVersionRange } from "./version-compare";
 export type { VersionComparisonResult } from "./version-compare";
 
 export {
@@ -69,6 +69,9 @@ export { fetchExtensionTarballBytes } from "./verdaccio/client";
 // Resolve the published tarball's sha512 dist
 // integrity (+ optional additive sha256 attestation) for the install pipeline.
 export { resolveExtensionDistIntegrity } from "./verdaccio/client";
+
+// Range resolution for the dev-path dependency planner (#180).
+export { resolveMaxSatisfyingVersion } from "./verdaccio/client";
 
 // Kind-agnostic packument summary for lifecycle dispatch.
 export { getPublishedExtensionSummary } from "./verdaccio/client";

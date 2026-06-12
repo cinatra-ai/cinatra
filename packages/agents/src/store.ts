@@ -907,7 +907,18 @@ export async function deleteAgentTemplate(id: string): Promise<boolean> {
       err instanceof Error ? err.message : err,
     );
   }
-  const result = await db.delete(agentTemplates).where(eq(agentTemplates.id, id));
+  // Delete the template's SUBORDINATE version rows + the template in ONE
+  // TRANSACTION — agent_versions.template_id carries a plain FK (no cascade),
+  // so removing a registry-installed agent (whose install always writes a
+  // version row) violated the constraint; surfaced by the #180 dependency-
+  // batch compensation (the first path that systematically uninstalls
+  // just-installed agents). The transaction keeps the pair atomic: if the
+  // template delete is REFUSED by another RESTRICT FK (agent_runs etc. — the
+  // in-use protections, which stay intact), the version rows survive with it.
+  const result = await db.transaction(async (tx) => {
+    await tx.delete(agentVersions).where(eq(agentVersions.templateId, id));
+    return tx.delete(agentTemplates).where(eq(agentTemplates.id, id));
+  });
   const deleted = (result.rowCount ?? 0) > 0;
   if (deleted) shadowDeleteObject(id);
   return deleted;

@@ -41,6 +41,13 @@ vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   checkRequiredExtensionVersionPin: () => ({ ok: true }),
 }));
 
+// The #180 UPDATE GATE (PR-3) reads the canonical snapshot in the same inert
+// window — mock it empty so the gate is a clean no-op here (its semantics are
+// pinned in packages/extensions dependency-closure + dispatcher tests).
+vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
+  listInstalledExtensions: vi.fn(async () => []),
+}));
+
 vi.mock("@cinatra-ai/registries", () => ({
   ensureConfig: (c: unknown) => c ?? { registryUrl: "https://registry.cinatra.ai", packageScope: "@cinatra-ai", token: "t", uiUrl: null },
   extractAgentPackage: async () => ({

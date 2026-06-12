@@ -144,15 +144,38 @@ async function _installAgentFromPackageImpl(
       const { checkRequiredExtensionVersionPin } = await import(
         "@cinatra-ai/extensions/required-in-prod"
       );
+      const isUpdateRoute = (await readAgentTemplateByPackageName(extracted.packageName)) !== null;
       const pin = checkRequiredExtensionVersionPin({
         packageName: extracted.packageName,
         version: extracted.packageVersion,
         // Accurate op label for the refusal copy: an existing template row
         // means this is the upsert/update route. Read-only; the upsert branch
         // below re-reads its own snapshot after materialize as before.
-        op: (await readAgentTemplateByPackageName(extracted.packageName)) ? "update" : "install",
+        op: isUpdateRoute ? "update" : "install",
       });
       if (!pin.ok) throw new Error(pin.reason);
+
+      // UPDATE GATE (#180 item 6) on the agent path too — the registry-package
+      // server actions and the dependency-tree installer dispatch HERE
+      // directly (not through the extension-registry dispatcher that gates
+      // the other kinds), so the dependent-range check must run at this
+      // per-package writer as well. Same inert window as the pin gate: a
+      // refusal mutates nothing. The canonical store may legitimately have no
+      // rows for a dispatcher-less agent install — the gate is a no-op then.
+      if (isUpdateRoute) {
+        const { listInstalledExtensions } = await import(
+          "@cinatra-ai/extensions/canonical-store"
+        );
+        const { assertUpdateDoesNotBreakDependents } = await import(
+          "@cinatra-ai/extensions/dependency-closure"
+        );
+        const allRows = await listInstalledExtensions({});
+        assertUpdateDoesNotBreakDependents(
+          extracted.packageName,
+          extracted.packageVersion,
+          allRows,
+        );
+      }
     }
 
     const rawDeps = (manifest.cinatra as { agentDependencies?: Record<string, string> })
