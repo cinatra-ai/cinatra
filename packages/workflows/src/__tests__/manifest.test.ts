@@ -39,6 +39,14 @@ describe("workflow extension package validation (BPMN sidecar shape)", () => {
     ).toBe(false);
   });
 
+  it("permits the cross-kind cinatra.roles declaration (cinatra#151 Stage 5 — shape is the agent-bindings generator's job)", () => {
+    const r = validateWorkflowExtensionPackage({
+      name: "@cinatra-ai/x-workflow",
+      cinatra: { kind: "workflow", workflowVersion: 1, roles: ["x-operator-dashboard"] },
+    });
+    expect(r.valid, r.errors.join("; ")).toBe(true);
+  });
+
   it("rejects a non-suffixed package name + wrong kind", () => {
     expect(
       validateWorkflowExtensionPackage({ name: "@cinatra-ai/not-suffixed", cinatra: { kind: "workflow", workflowVersion: 1 } }).valid,

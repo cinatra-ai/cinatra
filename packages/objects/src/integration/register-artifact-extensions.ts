@@ -32,7 +32,12 @@ import {
 // The bridge ingests the semantic artifact manifest. Canonical schema/parser
 // lives in ../semantic-manifest; artifact-handler.ts keeps a byte-mirrored copy
 // (objects↔extensions cycle forbids sharing — same lock-step constraint).
-const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact"]);
+// `dependencies` (cross-kind ExtensionDependency[], extension-deps gate) and
+// `roles` (cinatra#151 Stage 5 role bindings, validated fail-closed by the
+// agent-bindings generator) are permitted CROSS-KIND metadata on any
+// extension manifest — not agent-package drift; keep in lock-step with
+// artifact-handler.ts ALLOWED_CINATRA_KEYS.
+const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact", "dependencies", "roles"]);
 
 function registerOneArtifactDir(dir: string): boolean {
   const pkgPath = path.join(dir, "package.json");

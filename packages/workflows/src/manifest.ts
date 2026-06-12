@@ -79,7 +79,12 @@ export function validateWorkflowExtensionPackage(pkg: {
   // `dependencies` is the canonical cross-kind ExtensionDependency[] declaration
   // every extension manifest carries (validated by the extension-deps gate); it
   // is a permitted key on a workflow package, not unexpected drift.
-  const allowed = new Set(["kind", "apiVersion", "workflowVersion", "dependencies"]);
+  // `roles` is likewise cross-kind (cinatra#151 Stage 5): a package of ANY
+  // kind may claim extension roles; shape + global per-role uniqueness are
+  // validated fail-closed by the agent-bindings generator
+  // (mergeRoleDeclarations in scripts/extensions/agent-binding-kinds.mjs), so
+  // this validator only needs to permit the key.
+  const allowed = new Set(["kind", "apiVersion", "workflowVersion", "dependencies", "roles"]);
   for (const k of Object.keys(cinatra)) {
     if (!allowed.has(k)) errors.push(`unexpected cinatra key "${k}"`);
   }

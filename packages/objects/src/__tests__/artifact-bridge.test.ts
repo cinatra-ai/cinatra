@@ -73,6 +73,25 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     ).not.toBeNull();
   });
 
+  it("registers a manifest carrying the cross-kind dependencies + roles keys (cinatra#151 Stage 5)", () => {
+    writeExt(root, "roled-artifact", {
+      name: "@cinatra-ai/roled-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        roles: ["artifact-roled-summary"],
+        dependencies: [],
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/roled-artifact:artifact"),
+    ).not.toBeNull();
+  });
+
   it("skips a kind:'artifact' package with an invalid/missing descriptor", () => {
     writeExt(root, "broken-artifact", {
       name: "@cinatra-ai/broken-artifact",

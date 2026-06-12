@@ -74,8 +74,12 @@ const artifactDescriptorSchema = z
 // Allowlist the whole `cinatra` block — an artifact extension's manifest may
 // ONLY carry these keys. Anything else (any agent-package field:
 // manifestVersion, riskLevel, toolAccess, type, sourceVersionId, uiAdapter,
-// …) is rejected outright.
-const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact"]);
+// …) is rejected outright. `dependencies` (cross-kind ExtensionDependency[],
+// extension-deps gate) and `roles` (cinatra#151 Stage 5 role bindings,
+// validated fail-closed by the agent-bindings generator) are permitted
+// CROSS-KIND metadata on any extension manifest; keep in lock-step with
+// register-artifact-extensions.ts ALLOWED_CINATRA_KEYS.
+const ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact", "dependencies", "roles"]);
 
 // ---------------------------------------------------------------------------
 // ArtifactExtensionTypeHandler.
@@ -229,7 +233,7 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
         );
         if (extraneous.length > 0) {
           errors.push(
-            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact}; ` +
+            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles}; ` +
               `unexpected key(s): ${extraneous.join(", ")}`,
           );
         }
