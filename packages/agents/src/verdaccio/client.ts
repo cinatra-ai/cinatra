@@ -25,7 +25,7 @@ import path from "node:path";
 import * as pacote from "pacote";
 import { c as tarCreate } from "tar";
 import { requireVerdaccioToken, type VerdaccioConfig } from "./config";
-import { ensureConfig } from "@cinatra-ai/registries";
+import { ensureConfig, registryScopedAuthOptions } from "@cinatra-ai/registries";
 import { buildRegistryAuthArgs } from "./cli-flags";
 import { buildAgentPackageFiles, type BuildAgentPackageInput } from "./package-files";
 import { compileOasAgentJson } from "../oas-compiler";
@@ -77,10 +77,16 @@ function redactToken(value: string, token: string | null): string {
   return value.replaceAll(token, "[redacted]");
 }
 
+/**
+ * Options for the pacote calls in this module. Credentials MUST be passed as
+ * a registry-scoped `'//<host>/:_authToken'` key — npm-registry-fetch ignores
+ * a flat `token` option entirely (#179; see registryScopedAuthOptions in
+ * @cinatra-ai/registries, where the regression is pinned by tests).
+ */
 function pacoteOptions(config: VerdaccioConfig, extra: Record<string, unknown> = {}) {
   return {
     registry: ensureTrailingSlash(config.registryUrl),
-    token: config.token ?? undefined,
+    ...registryScopedAuthOptions(config.registryUrl, config.token),
     ...extra,
   };
 }
@@ -163,8 +169,12 @@ export async function publishAgentPackage(
         .on("end", () => resolve(Buffer.concat(chunks)))
         .on("error", (err: unknown) => reject(err));
     });
-    // Publish directly via the npm registry HTTP protocol — avoids libnpmpublish's
-    // npm-registry-fetch auth resolution which doesn't pick up our Bearer token.
+    // Publish directly via the npm registry HTTP protocol with an explicit
+    // Bearer header (registryJson) instead of adding a libnpmpublish
+    // dependency. NOTE: npm-registry-fetch DOES send credentials when given
+    // registry-scoped '//<host>/:_authToken' option keys (see
+    // registryScopedAuthOptions); the historical "doesn't pick up our token"
+    // rationale described the flat `token` option shape, which it ignores (#179).
     const tarballBase64 = tarballData.toString("base64");
     const tarballName = `${packageFiles.packageName}-${packageFiles.packageVersion}.tgz`;
     const { createHash } = await import("node:crypto");

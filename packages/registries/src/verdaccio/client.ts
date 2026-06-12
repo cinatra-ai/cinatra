@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as pacote from "pacote";
 import * as semver from "semver";
+import { registryScopedAuthOptions } from "./registry-auth";
 import type {
   AgentPackageDetail,
   AgentPackageOrigin,
@@ -86,10 +87,20 @@ function redactToken(value: string, token: string | null): string {
   return value.replaceAll(token, "[redacted]");
 }
 
+/**
+ * Options for every pacote call in this module.
+ *
+ * Credentials MUST be passed as a registry-scoped `'//<host>/:_authToken'`
+ * key (see registryScopedAuthOptions) — npm-registry-fetch ignores a flat
+ * `token` option entirely, which made every "authenticated" pacote read in
+ * this module send no Authorization header (#179). Pinned by
+ * tests/registry-auth-options.test.ts (options shape) and
+ * tests/registry-auth.integration.test.ts (live 401/200 proof).
+ */
 function pacoteOptions(config: VerdaccioConfig, extra: Record<string, unknown> = {}) {
   return {
     registry: ensureTrailingSlash(config.registryUrl),
-    token: config.token ?? undefined,
+    ...registryScopedAuthOptions(config.registryUrl, config.token),
     ...extra,
   };
 }

@@ -3,6 +3,7 @@
 // pacote-based fetchPackument when none is injected.
 
 import * as pacote from "pacote";
+import { registryScopedAuthOptions } from "../verdaccio/registry-auth";
 import { resolveDependencyTree } from "../dep-resolver/resolver";
 import { installResolvedTree } from "./install-tree";
 import type {
@@ -18,7 +19,9 @@ function defaultFetchPackument(config: VerdaccioConfig): FetchPackument {
   return async (name) =>
     (await pacote.packument(name, {
       registry: config.registryUrl,
-      token: config.token ?? undefined,
+      // Registry-scoped auth key — npm-registry-fetch ignores a flat `token`
+      // option (#179), so credentials must be nerf-dart-scoped.
+      ...registryScopedAuthOptions(config.registryUrl, config.token),
       fullMetadata: true,
     })) as unknown as Packument;
 }

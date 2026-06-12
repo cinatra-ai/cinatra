@@ -6,6 +6,9 @@ import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as pacote from "pacote";
+// Barrel import is CLI-safe: @cinatra-ai/registries intentionally ships no
+// Next.js server-guard (pinned by its no-server-only-chain test).
+import { registryScopedAuthOptions } from "@cinatra-ai/registries";
 import {
   requireVerdaccioConfig,
   type VerdaccioConfig,
@@ -26,6 +29,11 @@ export type ExtractedAgentPackageCli = {
   tempDir: string;
 };
 
+/**
+ * Credentials MUST be passed as a registry-scoped `'//<host>/:_authToken'`
+ * key — npm-registry-fetch ignores a flat `token` option entirely (#179; see
+ * registryScopedAuthOptions in @cinatra-ai/registries).
+ */
 function pacoteOptions(
   config: VerdaccioConfig,
   extra: Record<string, unknown> = {},
@@ -35,7 +43,7 @@ function pacoteOptions(
     : `${config.registryUrl}/`;
   return {
     registry: base,
-    token: config.token ?? undefined,
+    ...registryScopedAuthOptions(config.registryUrl, config.token),
     ...extra,
   };
 }

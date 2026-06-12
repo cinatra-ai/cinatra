@@ -1089,7 +1089,7 @@ jobs:
           cd packages/objects && pnpm exec vitest run src/__tests__/registry-package-provenance.test.ts --no-coverage && cd ../..
           cd packages/workflows && pnpm exec vitest run src/__tests__/workflow-archive-in-use-guard.test.ts --no-coverage && cd ../..
           cd packages/dashboards && pnpm exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage && cd ../..
-          cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts --no-coverage && cd ../..
+          cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage && cd ../..
           cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
 
       # Apollo connector suite. Lives in the extension tree (not covered by the
