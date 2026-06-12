@@ -1901,9 +1901,6 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
-      '@cinatra-ai/openai-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/openai-connector
       '@cinatra-ai/registries':
         specifier: workspace:*
         version: link:../registries

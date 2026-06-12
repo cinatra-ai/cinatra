@@ -206,6 +206,44 @@ export function maskAllowlistedIds(code, allowlist, allowlistHits) {
 }
 
 /**
+ * Structural SHAPE defects of the data-contract-ID allowlist (cinatra#151
+ * Stage 7 — closes the last data path that could re-grow the pinned-empty
+ * floor): an allowlist entry whose masking would hide EXACTLY the coupling
+ * shapes this gate bans is rejected outright, justification or not:
+ *   - an entry that IS a bare extension package name;
+ *   - an entry containing `<extensionName>/` (import-specifier shaped — it
+ *     would mask `"@scope/x/register"`-style references);
+ *   - an entry containing a REAL `extensions/<scope>/<name>` dir path (it
+ *     would mask a path-literal reference).
+ * A legitimate contract ID embeds a package name behind a NON-specifier
+ * boundary (e.g. `@scope/x-skills:capability-key`). Pure + exported for unit
+ * testing. Returns sorted human-readable defect strings.
+ */
+export function allowlistShapeDefects(allowlist, { names, dirPaths }) {
+  const defects = [];
+  for (const id of allowlist.keys()) {
+    if (!id) continue;
+    if (names.has(id)) {
+      defects.push(`${id} — IS a bare extension package name (masking it would hide the exact coupling this gate bans)`);
+      continue;
+    }
+    for (const name of names) {
+      if (id.includes(`${name}/`)) {
+        defects.push(`${id} — import-specifier shaped (contains extension package name ${name} followed by "/")`);
+        break;
+      }
+    }
+    for (const p of dirPaths) {
+      if (id.includes(p)) {
+        defects.push(`${id} — contains the real extension dir path ${p} (masking it would hide a path-literal reference)`);
+        break;
+      }
+    }
+  }
+  return defects.sort();
+}
+
+/**
  * Scan core for hardcoded extension-instance coupling.
  * Returns { [`<file> :: package :: <name>` | `<file> :: path :: <prefix>`]: count }.
  * Counts ALL non-comment occurrences INCLUDING imports — the src-only
@@ -336,8 +374,22 @@ function main() {
     process.exit(1);
   }
 
+  // Structural SHAPE policy (cinatra#151 Stage 7): an allowlist entry whose
+  // masking would hide a banned coupling shape (bare package name,
+  // import-specifier, real extension dir path) is rejected outright — the
+  // allowlist cannot become a data path that re-grows the pinned-empty floor.
+  const extensions = discoverExtensions();
+  const shapeDefects = allowlistShapeDefects(DATA_CONTRACT_ID_ALLOWLIST, extensions);
+  if (shapeDefects.length) {
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — DATA_CONTRACT_ID_ALLOWLIST entr${shapeDefects.length === 1 ? "y" : "ies"} with a banned SHAPE (a contract ID may embed a package name only behind a non-specifier boundary):`,
+    );
+    shapeDefects.forEach((d) => console.error("  + " + d));
+    process.exit(1);
+  }
+
   const allowlistHits = new Map();
-  const current = scanInstanceCoupling(REPO_ROOT, undefined, { allowlistHits });
+  const current = scanInstanceCoupling(REPO_ROOT, extensions, { allowlistHits });
   const totalFiles = new Set(Object.keys(current).map((k) => k.split(" :: ")[0])).size;
   const totalOcc = Object.values(current).reduce((a, b) => a + b, 0);
   const summary = summarizeByClassification(current);

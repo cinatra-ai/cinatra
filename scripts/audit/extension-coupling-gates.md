@@ -127,8 +127,12 @@ must be fixed in the same PR that lands the lexer (the floor cannot rise).
 That policy was exercised by the import-ban scanner itself: its legacy regex
 stripper (blind after a line comment containing a literal `/*`) was replaced
 by the shared lexer in the SAME PR that removed the four transport-DI edges
-it had been hiding (cinatra#151 Stage 3) — every coupling scanner now runs
-the shared lexer.
+it had been hiding (cinatra#151 Stage 3) — every CORE-side coupling scanner
+(instance-coupling, import-ban, the cover gate's hard-import scan) now runs
+the shared lexer. (`extension-import-ban` — the reverse direction — still
+strips comments via its own inventory tooling; its floors are shrink-only
+ratcheted, so a stripper correction there lands under the same
+fix-with-the-reveal policy.)
 
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7)
 

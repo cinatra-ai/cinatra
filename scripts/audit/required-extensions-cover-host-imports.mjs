@@ -459,8 +459,11 @@ function main() {
     );
     for (const d of defects) console.error("  - " + d);
     // Remediation branches by defect class (the equality guard's fix is the
-    // OPPOSITE direction of the coverage fix — never "add to required").
-    if (defects.some((d) => d.includes("equality guard"))) {
+    // OPPOSITE direction of the coverage fix — never "add to required"), and
+    // each section prints ONLY when its class is present.
+    const equalityDefects = defects.filter((d) => d.includes("equality guard"));
+    const coverageDefectsPresent = defects.length > equalityDefects.length;
+    if (equalityDefects.length) {
       console.error(
         "\nEquality-guard remediation: requiredExtensions == systemExtensions is the zero-floor end-state " +
           "(cinatra#151 Stage 7). Either REMOVE the package from cinatra.requiredExtensions (and regenerate the " +
@@ -468,17 +471,19 @@ function main() {
           "declare it in cinatra.systemExtensions too (then regenerate the generated maps AND the lock).",
       );
     }
-    console.error(
-      "\nCoverage remediation: add the package to cinatra.requiredExtensions (with its version range), run " +
-        "`node scripts/extensions/update-required-extension-lock.mjs`, and commit both. Hard import sites:",
-    );
-    for (const [file, names] of Object.entries(byFile)) {
-      const offending = names.filter((n) => !required.has(n) || !locked.has(n));
-      if (offending.length) console.error(`    ${file} -> ${offending.join(", ")}`);
-    }
-    for (const [pkg, why] of Object.entries(generated.reasons)) {
-      if (!required.has(pkg) || !locked.has(pkg)) {
-        console.error(`    [generated] ${pkg}: ${why.join("; ")}`);
+    if (coverageDefectsPresent) {
+      console.error(
+        "\nCoverage remediation: add the package to cinatra.requiredExtensions (with its version range), run " +
+          "`node scripts/extensions/update-required-extension-lock.mjs`, and commit both. Hard import sites:",
+      );
+      for (const [file, names] of Object.entries(byFile)) {
+        const offending = names.filter((n) => !required.has(n) || !locked.has(n));
+        if (offending.length) console.error(`    ${file} -> ${offending.join(", ")}`);
+      }
+      for (const [pkg, why] of Object.entries(generated.reasons)) {
+        if (!required.has(pkg) || !locked.has(pkg)) {
+          console.error(`    [generated] ${pkg}: ${why.join("; ")}`);
+        }
       }
     }
     process.exit(1);
