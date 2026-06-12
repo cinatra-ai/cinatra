@@ -227,7 +227,7 @@ export type HostPeerValueImportHit = {
  * `@scope/name`, `pkg/sub` → `pkg`. Returns null for a relative/absolute
  * specifier. Mirrors `scripts/extensions/inventory.mjs#basePackageOf`.
  */
-function basePackageOfSpecifier(spec: string): string | null {
+export function basePackageOfSpecifier(spec: string): string | null {
   if (typeof spec !== "string" || spec.length === 0) return null;
   if (spec.startsWith(".") || spec.startsWith("/")) return null;
   if (spec.startsWith("@")) {
@@ -487,7 +487,23 @@ export function scanHostPeerValueImports(
 
 export type BundledDepsVerdict =
   | { ok: true }
-  | { ok: false; missing: string[]; hostProvidedInDeps: string[] };
+  | {
+      ok: false;
+      missing: string[];
+      hostProvidedInDeps: string[];
+      /**
+       * Declared deps that are BOTH bundled AND covered by the signed
+       * materialization plan's roots (cinatra#181) — refused: one source of
+       * truth per dependency, never two competing copies.
+       */
+      bundledAndPlanned?: string[];
+      /**
+       * Plan-root names NOT declared in `dependencies` — refused: the plan and
+       * the manifest must reconcile in BOTH directions (a plan covering an
+       * undeclared package would smuggle code past the declaration surface).
+       */
+      planOnlyUndeclared?: string[];
+    };
 
 /**
  * The materializer NEVER runs `npm`/`pnpm install` (no lifecycle scripts,
@@ -511,17 +527,47 @@ export type BundledDepsVerdict =
 export function validateBundledDependencies(
   pkgJson: Record<string, unknown>,
   presentInNodeModules: ReadonlySet<string>,
+  planRootDeps: ReadonlySet<string> | null = null,
 ): BundledDepsVerdict {
   const deps = pkgJson.dependencies;
-  if (!deps || typeof deps !== "object") return { ok: true };
-  const declared = Object.keys(deps as Record<string, unknown>);
+  const declared = deps && typeof deps === "object" ? Object.keys(deps as Record<string, unknown>) : [];
+  const declaredSet = new Set(declared);
+  // Plan↔manifest reconciliation, plan→manifest direction (cinatra#181): every
+  // plan ROOT must be a declared dependency. Checked even when the manifest
+  // declares NO dependencies (a plan covering anything is then undeclared).
+  const planOnlyUndeclared = planRootDeps ? [...planRootDeps].filter((name) => !declaredSet.has(name)) : [];
+  if (declared.length === 0) {
+    return planOnlyUndeclared.length === 0
+      ? { ok: true }
+      : { ok: false, missing: [], hostProvidedInDeps: [], planOnlyUndeclared };
+  }
   const hostProvidedInDeps = declared.filter((name) => HOST_PROVIDED_PACKAGES.has(name));
+  // cinatra#181 gate evolution: a declared (non-host) dep must be bundled XOR
+  // covered by the signed plan's roots. `planRootDeps === null` (closure-less)
+  // keeps today's behavior byte-for-byte: bundled is the only satisfier.
   const missing = declared.filter(
-    (name) => !HOST_PROVIDED_PACKAGES.has(name) && !presentInNodeModules.has(name),
+    (name) =>
+      !HOST_PROVIDED_PACKAGES.has(name) &&
+      !presentInNodeModules.has(name) &&
+      !(planRootDeps?.has(name) ?? false),
   );
-  return missing.length === 0 && hostProvidedInDeps.length === 0
+  const bundledAndPlanned = planRootDeps
+    ? declared.filter(
+        (name) => !HOST_PROVIDED_PACKAGES.has(name) && presentInNodeModules.has(name) && planRootDeps.has(name),
+      )
+    : [];
+  return missing.length === 0 &&
+    hostProvidedInDeps.length === 0 &&
+    bundledAndPlanned.length === 0 &&
+    planOnlyUndeclared.length === 0
     ? { ok: true }
-    : { ok: false, missing, hostProvidedInDeps };
+    : {
+        ok: false,
+        missing,
+        hostProvidedInDeps,
+        ...(bundledAndPlanned.length > 0 ? { bundledAndPlanned } : {}),
+        ...(planOnlyUndeclared.length > 0 ? { planOnlyUndeclared } : {}),
+      };
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +610,15 @@ export type StoreSidecar = {
   version: string;
   /** Registry the tarball was resolved from (drives boot-time trust). */
   registryUrl?: string;
+  /**
+   * The 128-hex sha512 over the canonical MATERIALIZATION-PLAN bytes when the
+   * package was materialized WITH a library-dependency closure (cinatra#181).
+   * Absent = closure-less. The REUSE path compares this against the expected
+   * plan's hash and FAILS LOUD on mismatch (a signed plan is immutable per
+   * (name, version, integrity) — never silently reuse a dir materialized
+   * under a different/absent plan, and never destroy a possibly-live dir).
+   */
+  closureHash?: string;
   /** ISO timestamp (host-supplied, not from the package). */
   materializedAt: string;
 };

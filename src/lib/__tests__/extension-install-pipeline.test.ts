@@ -28,6 +28,7 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
       approvedPorts: ["settings"],
       version: null,
       signature: null,
+      closureHash: null,
     });
   });
 

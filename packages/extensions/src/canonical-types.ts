@@ -56,6 +56,15 @@ export type ExtensionSourceVerdaccio = {
    * still validate. See `src/lib/extension-signature.ts`.
    */
   signature?: string;
+  /**
+   * The 128-hex sha512 over the canonical MATERIALIZATION-PLAN bytes
+   * (cinatra#181 — library dependency closure), recorded at install when the
+   * package carried a signed plan. The boot trust gate threads it into the v2
+   * signature verdict (a closure package can never activate on a v1/absent
+   * signature). Absent = closure-less (v1 semantics unchanged). ADDITIVE JSONB
+   * field — no SQL migration; legacy rows still validate.
+   */
+  closureHash?: string;
 };
 
 export type ExtensionSourceGithub = {

@@ -62,7 +62,7 @@ export type SignatureBackfillDeps = {
    * integrity}; anything else (false/undefined) → skip (never write).
    */
   verifySignature: (
-    fields: { packageName: string; version: string; integrity: string },
+    fields: { packageName: string; version: string; integrity: string; closureHash?: string | null },
     signature: string,
   ) => boolean | undefined;
   /**
@@ -159,6 +159,11 @@ export async function runExtensionSignatureBackfill(
 
     for (const row of rows) {
       const { packageName, version, integrity } = row.source;
+      // cinatra#181: thread the row's recorded closureHash (if any) so a
+      // closure row can NEVER be backfilled with a v1 / closure-less signature
+      // — the verdict is hard-false unless the served signature is a v2
+      // binding this exact hash.
+      const closureHash = (row.source as { closureHash?: string }).closureHash ?? null;
       try {
         const served = await withTimeout(deps.resolveServedSignature({ packageName, version }), timeoutMs);
         if (!served) {
@@ -168,7 +173,7 @@ export async function runExtensionSignatureBackfill(
         // FAIL-CLOSED: verify the served signature against the row's STORED
         // {packageName, version, integrity}. Never trust a signature that doesn't
         // bind the bytes we actually installed; never replace `integrity`.
-        const verdict = deps.verifySignature({ packageName, version, integrity }, served);
+        const verdict = deps.verifySignature({ packageName, version, integrity, closureHash }, served);
         if (verdict !== true) {
           skipped++;
           deps.log?.(`[signature-backfill] skip ${packageName}@${version}: served signature did not verify against the stored integrity`);

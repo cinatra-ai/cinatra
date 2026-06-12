@@ -17,6 +17,11 @@ import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types
 
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
+import {
+  computeClosureHash,
+  parseMaterializationPlan,
+  type MaterializationPlan,
+} from "@/lib/extension-materialization-plan-core";
 import { computeRequestedPortsHash } from "@/lib/extension-host-port-grants";
 import {
   trustedActivationHosts,
@@ -47,9 +52,9 @@ export type InstallPipelineDeps = {
    * Resolve the published tarball's sha512 SRI (the root of trust) + the registry
    * it lives on, plus an optional additive sha256 attestation.
    */
-  resolveIntegrity: (packageName: string, version: string) => Promise<{ integrity: string; registryUrl: string; sha256?: string; signature?: string | null; resolvedVersion?: string }>;
+  resolveIntegrity: (packageName: string, version: string) => Promise<{ integrity: string; registryUrl: string; sha256?: string; signature?: string | null; resolvedVersion?: string; materializationPlan?: unknown }>;
   /** Materialize the verified tarball into the store (SRI-checked before write). */
-  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; storeRoot?: string }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
+  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; storeRoot?: string; plan?: MaterializationPlan | null; expectedClosureHash?: string | null }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
   /** Read the materialized package's declared requestedHostPorts. */
   readRequestedPorts: (storeDir: string) => Promise<string[]>;
   /**
@@ -80,6 +85,8 @@ export type InstallPipelineDeps = {
     attestedSha256?: string;
     /** base64 Ed25519 signature over the tarball, if the producer signed it. */
     signature?: string | null;
+    /** The verified materialization-plan closureHash (cinatra#181), if the package carried a plan. */
+    closureHash?: string | null;
   }) => Promise<void>;
   /** Record the pending host-port grant request. */
   recordRequestedGrant: (input: { packageName: string; orgId: string | null; requestedPorts: string[] }) => Promise<void>;
@@ -180,6 +187,7 @@ export type InstallPipelineDeps = {
     contentHash?: string;
     attestedSha256?: string;
     signature?: string | null;
+    closureHash?: string | null;
   } | null>;
   /**
    * Capture the CURRENT canonical row's persisted dependency edges for the
@@ -369,17 +377,42 @@ export async function installExtensionFromRegistry(
     input.installOpId ??
     `${input.packageName}@${input.version}:${Math.random().toString(36).slice(2, 10)}`;
 
-  const { integrity, registryUrl, sha256, signature, resolvedVersion: resolvedFromRegistry } = await deps.resolveIntegrity(input.packageName, input.version);
+  const { integrity, registryUrl, sha256, signature, resolvedVersion: resolvedFromRegistry, materializationPlan } = await deps.resolveIntegrity(input.packageName, input.version);
   // The signature payload + provenance MUST bind the RESOLVED concrete version, not
   // the caller's input (which may be a dist-tag). Fall back to the input only when
   // the resolver doesn't surface one (legacy/test deps).
   const resolvedVersion = resolvedFromRegistry ?? input.version;
+
+  // cinatra#181 — SIGNED MATERIALIZATION PLAN (library dependency closure).
+  // Parse the raw packument transport FAIL-CLOSED (any malformed plan throws —
+  // normalizing to "no plan" would silently downgrade the package to v1
+  // semantics), bind the plan's self-declared identity to the RESOLVED
+  // (name, version), and recompute the closureHash the v2 signature must bind.
+  let plan: MaterializationPlan | null = null;
+  let closureHash: string | null = null;
+  if (materializationPlan !== null && materializationPlan !== undefined) {
+    plan = parseMaterializationPlan(materializationPlan);
+    if (plan.package.name !== input.packageName || plan.package.version !== resolvedVersion) {
+      throw new Error(
+        `[install-pipeline] ${input.packageName}@${resolvedVersion}: the served materialization plan ` +
+          `identifies as ${plan.package.name}@${plan.package.version} — a plan must bind the exact ` +
+          `resolved package; refusing`,
+      );
+    }
+    closureHash = computeClosureHash(plan);
+  }
+
   const mat = await deps.materialize({
     packageName: input.packageName,
-    version: input.version,
+    // The RESOLVED concrete version (a dist-tag input would otherwise name the
+    // store dir + sidecar + plan-identity check against the tag, while the
+    // signature/provenance bind the resolved version — codex round-0 finding 6).
+    version: resolvedVersion,
     expectedIntegrity: integrity,
     registryUrl,
     storeRoot: input.storeRoot,
+    plan,
+    expectedClosureHash: closureHash,
   });
 
   const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
@@ -471,6 +504,10 @@ export async function installExtensionFromRegistry(
       version: resolvedVersion,
       integrity,
       signature,
+      // cinatra#181 downgrade refusal: when the package carries a plan, the
+      // verdict is NEVER undefined — only a v2 signature binding this exact
+      // host-recomputed hash verifies (v1/absent/invalid are hard false).
+      closureHash,
     }),
     trustedActivationHosts: trustedActivationHosts(),
     allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
@@ -697,6 +734,7 @@ export async function installExtensionFromRegistry(
       contentHash: mat.contentHash,
       ...(sha256 ? { attestedSha256: sha256 } : {}),
       ...(signature ? { signature } : {}),
+      ...(closureHash ? { closureHash } : {}),
     });
 
     // EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
@@ -891,6 +929,7 @@ export async function installExtensionFromRegistry(
             contentHash: priorSource.contentHash ?? "",
             ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
             ...(priorSource.signature ? { signature: priorSource.signature } : {}),
+            ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
           });
         } catch (e) {
           failedSteps.push("provenance");
@@ -1168,6 +1207,12 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
           expectedIntegrity: i.expectedIntegrity,
           registryUrl: persistRegistryUrl,
           storeRoot: i.storeRoot,
+          // cinatra#181: the parsed plan + verified closureHash thread into the
+          // materializer (step 4.7); per-node fetches ride the SAME fetchTarball
+          // seam built above, so a gatekept install's plan nodes keep the broker
+          // grant/identity (codex round-0 finding 7).
+          plan: i.plan ?? null,
+          expectedClosureHash: i.expectedClosureHash ?? null,
         },
         fetchTarball ? { fetchTarball } : {},
       );
@@ -1254,6 +1299,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
           contentHash: p.contentHash,
           ...(p.attestedSha256 ? { attestedSha256: p.attestedSha256 } : {}),
           ...(p.signature ? { signature: p.signature } : {}),
+          ...(p.closureHash ? { closureHash: p.closureHash } : {}),
         },
         { actor: { source: "runtime-installer" }, reason: `runtime install provenance @ ${p.version}` },
       );
@@ -1332,6 +1378,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         contentHash?: string;
         attestedSha256?: string;
         signature?: string;
+        closureHash?: string;
       };
       return {
         registryUrl: v.registryUrl,
@@ -1340,6 +1387,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         ...(v.contentHash ? { contentHash: v.contentHash } : {}),
         ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
         ...(v.signature ? { signature: v.signature } : {}),
+        ...(v.closureHash ? { closureHash: v.closureHash } : {}),
       };
     },
     // CAPTURE (#180): the prior canonical row's persisted dependency edges —

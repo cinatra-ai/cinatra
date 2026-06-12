@@ -399,13 +399,24 @@ export async function resolveExtensionDistIntegrity(
    * input — a dist-tag install would otherwise verify against the wrong version.
    */
   resolvedVersion: string;
+  /**
+   * The RAW `versions[ver].cinatraMaterializationPlan` packument value
+   * (cinatra#181 — the publish-time signed materialization plan), passed
+   * through UNVALIDATED — this is the transport layer; the host's
+   * `extension-materialization-plan-core.ts` owns parse/refusal decisions.
+   * `null` when the version carries no plan (the closure-less default).
+   */
+  materializationPlan: unknown;
 }> {
   const resolvedConfig = ensureConfig(config, "resolveExtensionDistIntegrity");
   const packument = (await pacote.packument(
     input.packageName,
     pacoteOptions(resolvedConfig, { fullMetadata: true }),
   )) as {
-    versions?: Record<string, { dist?: { integrity?: string; cinatraSignature?: string } }>;
+    versions?: Record<
+      string,
+      { dist?: { integrity?: string; cinatraSignature?: string }; cinatraMaterializationPlan?: unknown }
+    >;
     "dist-tags"?: Record<string, string>;
   };
   const versions = packument.versions ?? {};
@@ -433,7 +444,8 @@ export async function resolveExtensionDistIntegrity(
       semverSorted[0] ??
       keys.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0];
   }
-  const dist = resolvedVersion ? versions[resolvedVersion]?.dist : undefined;
+  const versionDoc = resolvedVersion ? versions[resolvedVersion] : undefined;
+  const dist = versionDoc?.dist;
   const rawIntegrity = dist?.integrity;
   if (!rawIntegrity || !resolvedVersion) {
     throw new Error(
@@ -462,12 +474,20 @@ export async function resolveExtensionDistIntegrity(
   // transition). A non-string value is normalized to null (defensive).
   const rawSignature = dist?.cinatraSignature;
   const signature = typeof rawSignature === "string" && rawSignature.trim() ? rawSignature : null;
+  // The signed materialization plan travels in the packument's per-version
+  // `cinatraMaterializationPlan` (next to dist.cinatraSignature). Transport
+  // pass-through only: undefined/null normalize to null; ANY other value is
+  // handed to the host verifier verbatim (it refuses malformed plans there —
+  // normalizing a malformed plan to null HERE would silently downgrade a
+  // closure package to closure-less v1 semantics).
+  const materializationPlan = versionDoc?.cinatraMaterializationPlan ?? null;
   return {
     integrity: sha512Sri,
     registryUrl: resolvedConfig.registryUrl,
     ...(sha256 ? { sha256 } : {}),
     signature,
     resolvedVersion,
+    materializationPlan,
   };
 }
 

@@ -26,6 +26,8 @@ export type InstallAnchorRow = {
     version?: string;
     /** base64 Ed25519 signature over the tarball, if the producer signed it. */
     signature?: string;
+    /** The recorded materialization-plan closureHash (cinatra#181), if the package carried a plan. */
+    closureHash?: string;
   } | null;
 };
 
@@ -147,6 +149,12 @@ export async function resolveInstallAnchor(
     approvedPorts: portsApproved ? grantForScope!.approvedPorts : [],
     version: row.source.version ?? null,
     signature: row.source.signature ?? null,
+    // cinatra#181: the recorded closureHash rides the anchor into the boot/
+    // activation v2 signature verdict. The recorded SIGNATURE authenticates it:
+    // a tampered hash fails v2 verification, and a NULLED hash flips the
+    // verdict to closure-less semantics where the recorded v2 signature (which
+    // binds the real hash, never `none`) also fails — fail-closed either way.
+    closureHash: row.source.closureHash ?? null,
   };
 }
 

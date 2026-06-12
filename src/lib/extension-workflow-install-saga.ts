@@ -42,6 +42,11 @@ import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
+  computeClosureHash,
+  parseMaterializationPlan,
+  type MaterializationPlan,
+} from "@/lib/extension-materialization-plan-core";
+import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
@@ -116,9 +121,9 @@ export type WorkflowInstallSagaDeps = {
 
   // -- materialize -------------------------------------------------------
   /** Resolve the tarball SRI + the registry it lives on (root of trust) + the optional signature. */
-  resolveIntegrity: (packageName: string, version: string) => Promise<{ integrity: string; registryUrl: string; sha256?: string; signature?: string | null; resolvedVersion?: string }>;
+  resolveIntegrity: (packageName: string, version: string) => Promise<{ integrity: string; registryUrl: string; sha256?: string; signature?: string | null; resolvedVersion?: string; materializationPlan?: unknown }>;
   /** Materialize the SRI-verified tarball into the on-disk store. */
-  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
+  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; plan?: MaterializationPlan | null; expectedClosureHash?: string | null }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
 
   // -- preflight (ALL read from the materialized storeDir) ---------------
   /** Read+compile the BPMN sidecar + dashboard.json from the storeDir, run the
@@ -159,7 +164,7 @@ export type WorkflowInstallSagaDeps = {
   approveGrant: (input: { packageName: string; orgId: string | null; approvedPorts: string[]; requestedPorts: string[]; approvedBy: string }) => Promise<void>;
   /** Persist the REAL provenance (sha512 integrity + content hash + the additive
    *  sha256 attestation) on the canonical row — LATE, just before finalize. */
-  recordProvenance: (input: { packageName: string; orgId: string | null; version: string; registryUrl: string; integrity: string; contentHash: string; attestedSha256?: string; signature?: string | null }) => Promise<void>;
+  recordProvenance: (input: { packageName: string; orgId: string | null; version: string; registryUrl: string; integrity: string; contentHash: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null }) => Promise<void>;
   /** Read the materialized manifest's dependency edges (#180) — the DUAL-READ
    *  helper (`cinatra.dependencies` canonical-wins; legacy
    *  `cinatra.agentDependencies` projected; conflict/malformed = THROW,
@@ -184,7 +189,7 @@ export type WorkflowInstallSagaDeps = {
    *  the catch block re-records it so the canonical row keeps pointing at the
    *  still-live OLD install. Optional (omitted → no provenance restore); the
    *  default factory wires the canonical-store read. */
-  readCurrentSource?: (packageName: string, orgId: string | null) => Promise<{ registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string | null } | null>;
+  readCurrentSource?: (packageName: string, orgId: string | null) => Promise<{ registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null } | null>;
   /** Capture the CURRENT canonical row's persisted dependency edges (#180)
    *  BEFORE the finalize seam overwrites them — on a failed UPDATE the catch
    *  block re-persists them (closure gates must read the live OLD install's
@@ -243,9 +248,27 @@ export async function installWorkflowExtensionSaga(
     // dist-tag) input would let a re-pointed tag wrongly short-circuit idempotency
     // or verify a signature against the wrong version. A resolveIntegrity failure
     // throws here, before any journal row exists (nothing to compensate).
-    const { integrity, registryUrl, sha256, signature, resolvedVersion: resolvedFromRegistry } =
+    const { integrity, registryUrl, sha256, signature, resolvedVersion: resolvedFromRegistry, materializationPlan } =
       await deps.resolveIntegrity(packageName, requestedVersion);
     const version = resolvedFromRegistry ?? requestedVersion;
+
+    // cinatra#181 — SIGNED MATERIALIZATION PLAN (same contract as the registry
+    // install pipeline; this saga is the SECOND install/materialize/provenance
+    // path and must never lag it — codex round-0 finding 2). Fail-closed parse,
+    // identity binding against the RESOLVED version, host-recomputed hash.
+    let plan: MaterializationPlan | null = null;
+    let closureHash: string | null = null;
+    if (materializationPlan !== null && materializationPlan !== undefined) {
+      plan = parseMaterializationPlan(materializationPlan);
+      if (plan.package.name !== packageName || plan.package.version !== version) {
+        throw new WorkflowInstallPreflightError(
+          "UNTRUSTED",
+          `${packageName}@${version}: the served materialization plan identifies as ` +
+            `${plan.package.name}@${plan.package.version} — a plan must bind the exact resolved package`,
+        );
+      }
+      closureHash = computeClosureHash(plan);
+    }
 
     const installOpId = `${packageName}@${version}:wf:${orgId}`;
 
@@ -277,7 +300,7 @@ export async function installWorkflowExtensionSaga(
     // (package, org) journal row, so a refused UPDATE would destroy the
     // previous install's `finalized` op (the trust anchor's requirement) even
     // though its template/dashboards/provenance were never touched.
-    const mat = await deps.materialize({ packageName, version, expectedIntegrity: integrity, registryUrl });
+    const mat = await deps.materialize({ packageName, version, expectedIntegrity: integrity, registryUrl, plan, expectedClosureHash: closureHash });
 
     // 1.5 HOST-COMPAT GATE — the extension → host/SDK half of the
     // compatibility contract, at the EARLIEST point the verified manifest
@@ -337,6 +360,47 @@ export async function installWorkflowExtensionSaga(
       }
     }
 
+    // 1.7 TRUST GATE (incl signature) — classify ONCE, BEFORE the journal
+    // begin. A workflow install must REFUSE here when the package is not
+    // trusted (e.g. unsigned / invalid signature under
+    // CINATRA_EXTENSION_REQUIRE_SIGNATURES, or a closure package whose
+    // v1/absent signature the cinatra#181 downgrade-refusal matrix
+    // hard-refused). The ORDER is load-bearing (#181 review rounds 0+1):
+    //   - BEFORE `beginInstallOp`: the journal is one row per (package, org)
+    //     that begin UPSERTs — journaling this refused attempt would destroy
+    //     the PREVIOUS install's `finalized` op and break its boot anchor
+    //     (`resolveInstallAnchor` requires phase === "finalized");
+    //   - BEFORE `recordRequestedGrant` (which now runs AFTER this gate,
+    //     inside the journaled region): a CHANGED port request resets an
+    //     existing APPROVED grant to pending — a refused update must never
+    //     mutate the prior install's grant.
+    // Same pre-journal inertness contract as the gates above: only the
+    // just-materialized dir is GC'd (never the live install's dir — a
+    // finalized op at the SAME resolved version already short-circuited).
+    const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
+    const verdict = classifyExtensionTrust({
+      packageName,
+      registryUrl,
+      integrityVerified: true,
+      persistedTrustDecision: true,
+      signatureVerified: resolveSignatureVerdict({ packageName, version, integrity, signature, closureHash }),
+      trustedActivationHosts: trustedActivationHosts(),
+      allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
+    });
+    if (!verdict.trusted) {
+      if (deps.gcStoreDir) {
+        try {
+          await deps.gcStoreDir(mat.storeDir);
+        } catch {
+          /* best-effort GC — a leftover dir is recovered by a later retry. */
+        }
+      }
+      throw new WorkflowInstallPreflightError(
+        "UNTRUSTED",
+        `${packageName}@${version}: refused by the trust/signature gate before any writes`,
+      );
+    }
+
     // FAILED-UPDATE RESTORE CAPTURE (#180): `beginInstallOp` below overwrites
     // the single (package, org) journal row — on an UPDATE (a prior op is
     // `finalized` for a DIFFERENT artifact) that destroys the OLD install's
@@ -357,28 +421,12 @@ export async function installWorkflowExtensionSaga(
     try {
       await deps.advanceInstallOpPhase({ installOpId, phase: "materialized", digest: mat.digest });
 
-      // 2. TRUST GATE (incl signature) — classify ONCE. A workflow install
-      // must REFUSE here, BEFORE preflight + any workflow_template/dashboard
-      // writes, when the package is not trusted (e.g. unsigned / invalid
-      // signature under CINATRA_EXTENSION_REQUIRE_SIGNATURES). Never write
-      // artifacts or finalize for an untrusted package.
-      const requestedPorts = await deps.readRequestedPorts(mat.storeDir);
+      // 2. GRANT REQUEST — the trust verdict was already classified (and an
+      // untrusted package refused, fully inertly) at gate 1.7 ABOVE, before
+      // the journal begin. Only a TRUSTED install reaches this journaled
+      // region, so the grant mutation below can no longer be triggered by a
+      // refused attempt (#181 review round 0 finding 2 / round 1 finding 1).
       await deps.recordRequestedGrant({ packageName, orgId, requestedPorts });
-      const verdict = classifyExtensionTrust({
-        packageName,
-        registryUrl,
-        integrityVerified: true,
-        persistedTrustDecision: true,
-        signatureVerified: resolveSignatureVerdict({ packageName, version, integrity, signature }),
-        trustedActivationHosts: trustedActivationHosts(),
-        allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
-      });
-      if (!verdict.trusted) {
-        throw new WorkflowInstallPreflightError(
-          "UNTRUSTED",
-          `${packageName}@${version}: refused by the trust/signature gate before any writes`,
-        );
-      }
       // Capability split: auto-approve the requested host-port grant
       // ONLY for a `trusted-signed` package. A `trusted-bootstrap` workflow package
       // still installs (import-trust lets its template/dashboards write), but its
@@ -425,6 +473,7 @@ export async function installWorkflowExtensionSaga(
         contentHash: mat.contentHash,
         ...(sha256 ? { attestedSha256: sha256 } : {}),
         ...(signature ? { signature } : {}),
+        ...(closureHash ? { closureHash } : {}),
       });
 
       // 6.5 EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
@@ -490,6 +539,7 @@ export async function installWorkflowExtensionSaga(
               contentHash: priorSource.contentHash ?? "",
               ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
               ...(priorSource.signature ? { signature: priorSource.signature } : {}),
+              ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
             });
           } catch (restoreErr) {
             console.error(
@@ -725,6 +775,11 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
           version: i.version,
           expectedIntegrity: i.expectedIntegrity,
           registryUrl: persistRegistryUrl,
+          // cinatra#181: the verified plan threads into step 4.7; per-node
+          // fetches ride the SAME injected fetchTarball seam built above, so
+          // a gatekept install's plan nodes keep the broker grant/identity.
+          plan: i.plan ?? null,
+          expectedClosureHash: i.expectedClosureHash ?? null,
         },
         fetchTarball ? { fetchTarball } : {},
       );
@@ -917,6 +972,7 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
           contentHash: p.contentHash,
           ...(p.attestedSha256 ? { attestedSha256: p.attestedSha256 } : {}),
           ...(p.signature ? { signature: p.signature } : {}),
+          ...(p.closureHash ? { closureHash: p.closureHash } : {}),
         },
         { actor: { source: "runtime-installer" }, reason: `workflow runtime install provenance @ ${p.version}` },
       );
@@ -929,7 +985,7 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
       const target = pickSingleActiveRow(rows, orgId);
       const src = target?.source;
       if (!src || (src as { type?: string }).type !== "verdaccio") return null;
-      const v = src as { registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string };
+      const v = src as { registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string; closureHash?: string };
       return {
         registryUrl: v.registryUrl,
         version: v.version,
@@ -937,6 +993,7 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         ...(v.contentHash ? { contentHash: v.contentHash } : {}),
         ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
         ...(v.signature ? { signature: v.signature } : {}),
+        ...(v.closureHash ? { closureHash: v.closureHash } : {}),
       };
     },
     readCurrentDependencies: async (packageName, orgId) => {

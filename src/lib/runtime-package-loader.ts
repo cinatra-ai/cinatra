@@ -178,6 +178,9 @@ export async function loadRuntimePackageExtensions(
       version: anchor.version ?? "",
       integrity: anchor.integrity,
       signature: anchor.signature,
+      // cinatra#181: a closure package (recorded closureHash) re-verifies ONLY
+      // against a v2 signature binding that hash — never a v1/absent one.
+      closureHash: anchor.closureHash ?? null,
     });
     const verdict = classifyExtensionTrust({
       packageName: rec.packageName,

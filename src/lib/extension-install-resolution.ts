@@ -288,6 +288,8 @@ export async function resolveRuntimeConnectorUiRecord(
       version: anchor.version ?? "",
       integrity: anchor.integrity,
       signature: anchor.signature,
+      // cinatra#181: same closure downgrade-refusal as the boot loader.
+      closureHash: anchor.closureHash ?? null,
     }),
     // Vendor-agnostic trust: same host allowlist + bootstrap lever the boot
     // loader uses. Rendering the connector UI is import-trust only (no privileged

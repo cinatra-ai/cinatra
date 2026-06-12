@@ -22,7 +22,6 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import * as tar from "tar";
 import {
   DEFAULT_PACKAGE_STORE_PATH,
   classifyServerEntryArtifact,
@@ -33,6 +32,7 @@ import {
 import {
   HOST_PROVIDED_PACKAGES,
   STORE_SIDECAR_FILENAME,
+  basePackageOfSpecifier,
   contentHashOfEntries,
   parseModuleImports,
   scanHostPeerValueImports,
@@ -43,6 +43,15 @@ import {
   type ContentHashEntry,
   type StoreSidecar,
 } from "@/lib/extension-package-store-core";
+import {
+  planRootDependencyNames,
+  type MaterializationPlan,
+} from "@/lib/extension-materialization-plan-core";
+import {
+  executeMaterializationPlan,
+  extractTarballHardened,
+} from "@/lib/extension-materialization-plan-executor";
+import { isBuiltin } from "node:module";
 
 export type FetchTarballResult = { bytes: Buffer; integrity: string };
 export type FetchTarball = (input: {
@@ -60,6 +69,17 @@ export type MaterializeInput = {
   registryUrl?: string;
   /** Override the store root (default `/data/extensions/packages`). */
   storeRoot?: string;
+  /**
+   * The PARSED + VALIDATED signed materialization plan (cinatra#181), when
+   * the package declares a library-dependency closure. The pipeline parses
+   * the packument transport, verifies the v2 signature against its own
+   * recomputed closureHash, and threads BOTH here; the executor re-derives
+   * the hash and refuses a mismatch. null/omitted = closure-less (today's
+   * behavior byte-for-byte).
+   */
+  plan?: MaterializationPlan | null;
+  /** The pipeline-verified closureHash (REQUIRED when `plan` is set). */
+  expectedClosureHash?: string | null;
 };
 
 export type MaterializeDeps = {
@@ -109,6 +129,13 @@ export type InstallTrustAnchor = {
   version?: string | null;
   /** The base64 Ed25519 signature over the tarball (recorded at install), if signed. */
   signature?: string | null;
+  /**
+   * The 128-hex closureHash recorded at install when the package carried a
+   * signed materialization plan (cinatra#181). Threaded into the v2 signature
+   * verdict at boot/activation — a closure package can never re-verify as
+   * trusted on a v1/absent signature. null/undefined = closure-less.
+   */
+  closureHash?: string | null;
 };
 
 /** Default fetch — lazily imports the registries package (pacote lives there). */
@@ -138,6 +165,31 @@ export async function materializePackageToStore(
   const fetchTarball = deps.fetchTarball ?? defaultFetchTarball;
   const now = deps.now ?? (() => new Date().toISOString());
   const storeRoot = input.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+
+  // cinatra#181 — library-dependency-closure threading preconditions. The plan
+  // (when present) must arrive WITH the pipeline-verified closureHash, and its
+  // self-declared identity must equal the package being materialized — a plan
+  // signed for another (name, version) must never execute here.
+  const plan = input.plan ?? null;
+  const expectedClosureHash = input.expectedClosureHash ?? null;
+  if (plan && !expectedClosureHash) {
+    throw new Error(
+      `[package-store] ${input.packageName}: a materialization plan was threaded without its verified ` +
+        `closureHash — refusing (the executor requires the pipeline-verified hash)`,
+    );
+  }
+  if (!plan && expectedClosureHash) {
+    throw new Error(
+      `[package-store] ${input.packageName}: a closureHash was threaded without its plan — refusing ` +
+        `(inconsistent caller threading)`,
+    );
+  }
+  if (plan && (plan.package.name !== input.packageName || plan.package.version !== input.version)) {
+    throw new Error(
+      `[package-store] ${input.packageName}@${input.version}: the materialization plan identifies as ` +
+        `${plan.package.name}@${plan.package.version} — a plan must bind the exact package it executes for`,
+    );
+  }
 
   // 1. fetch bytes + 2. verify SRI BEFORE writing anything.
   const { bytes, integrity } = await fetchTarball({
@@ -190,6 +242,26 @@ export async function materializePackageToStore(
       }
       if (existingPkg) {
         await assertServerEntryIsBuiltArtifact(targetDir, existingPkg, input.packageName);
+        // cinatra#181 REUSE closure check — FAIL-LOUD, NON-DESTRUCTIVE (codex
+        // round-0 finding 3): a signed plan is IMMUTABLE per (name, version,
+        // integrity), so a same-digest dir whose recorded closureHash differs
+        // from the expected plan's (or is absent when a plan is expected, or
+        // present when none is) is refused with operator remediation — NEVER
+        // silently reused and NEVER automatically removed (the dir may be a
+        // live finalized install; store identity is <pkg>@<ver>/<digest>).
+        const recordedClosureHash = existingSidecar.closureHash ?? null;
+        if (recordedClosureHash !== expectedClosureHash) {
+          throw new Error(
+            `[package-store] ${input.packageName}@${input.version}: an integrity-valid store dir for this ` +
+              `exact tarball digest exists, but its recorded closureHash ` +
+              `(${recordedClosureHash ?? "absent"}) does not match the expected plan's ` +
+              `(${expectedClosureHash ?? "absent"}). A signed plan is immutable per (name, version, ` +
+              `integrity) — this dir was materialized under a different/absent plan (possibly by a ` +
+              `pre-closure installer, possibly tampering). Refusing to reuse AND refusing to delete a ` +
+              `possibly-live install: an operator must uninstall the package (or remove ${targetDir} ` +
+              `after confirming it is not live) before re-installing.`,
+          );
+        }
         return {
           packageName: input.packageName,
           version: input.version,
@@ -211,14 +283,23 @@ export async function materializePackageToStore(
   const extractDir = path.join(tmpRoot, "pkg");
   await mkdir(extractDir, { recursive: true });
   try {
-    const tgzPath = path.join(tmpRoot, "package.tgz");
-    await writeFile(tgzPath, bytes);
-    await tar.x({ file: tgzPath, cwd: extractDir, strip: 1 });
+    // HARDENED extraction (cinatra#181, codex round-0 finding 4): the tar
+    // entry-type filter accepts ONLY File + Directory headers — a HARDLINK
+    // (Link) entry materializes as a regular file and passes every
+    // `lstat`-based walk, so the header is the only reliable refusal point.
+    // Bundled node_modules stays LEGAL for the extension tarball itself
+    // (inline-mode packages bundle their deps).
+    await extractTarballHardened({
+      bytes,
+      destDir: extractDir,
+      label: `${input.packageName}@${input.version}`,
+      forbidNodeModules: false,
+    });
 
-    // 3b. Reject symlinks / hardlinks / special files. tar strips `..` and
-    // absolute paths, but a bundled symlink (e.g. `register.mjs -> ../../etc`)
-    // would let `file://` import + the content hash escape the package dir. We
-    // refuse any non-regular-file / non-dir entry.
+    // 3b. Walk-time re-check (defense in depth behind the tar-header filter):
+    // reject symlinks / special files anywhere under the extracted tree — a
+    // bundled symlink would let `file://` import + the content hash escape the
+    // integrity-verified package dir.
     await assertNoUnsafeEntries(extractDir);
 
     // 4. validate it is a Cinatra extension + the bundled-deps gate.
@@ -236,7 +317,8 @@ export async function materializePackageToStore(
       throw new Error(`[package-store] ${input.packageName}: not a Cinatra extension (no cinatra manifest block)`);
     }
     const present = await readPresentNodeModules(path.join(extractDir, "node_modules"));
-    const depVerdict = validateBundledDependencies(pkgJson, present);
+    const planRootDeps = plan ? planRootDependencyNames(plan) : null;
+    const depVerdict = validateBundledDependencies(pkgJson, present, planRootDeps);
     if (!depVerdict.ok) {
       if (depVerdict.hostProvidedInDeps.length > 0) {
         throw new Error(
@@ -245,10 +327,25 @@ export async function materializePackageToStore(
             `"peerDependencies" and never bundle a copy (a duplicate SDK instance breaks ABI identity).`,
         );
       }
+      if (depVerdict.bundledAndPlanned && depVerdict.bundledAndPlanned.length > 0) {
+        throw new Error(
+          `[package-store] ${input.packageName}: dependency(ies) ${depVerdict.bundledAndPlanned.join(", ")} ` +
+            `are BOTH bundled in the tarball AND covered by the signed materialization plan — one source ` +
+            `of truth per dependency (bundled XOR planned); refusing.`,
+        );
+      }
+      if (depVerdict.planOnlyUndeclared && depVerdict.planOnlyUndeclared.length > 0) {
+        throw new Error(
+          `[package-store] ${input.packageName}: the signed materialization plan covers ` +
+            `${depVerdict.planOnlyUndeclared.join(", ")} which the manifest does not declare in ` +
+            `"dependencies" — plan and manifest must reconcile in both directions; refusing.`,
+        );
+      }
       throw new Error(
-        `[package-store] ${input.packageName}: runtime dependencies are not bundled in the tarball ` +
-          `(${depVerdict.missing.join(", ")}). Extensions MUST bundle their runtime deps — the installer ` +
-          `never runs npm/pnpm install (the security-hardening rule).`,
+        `[package-store] ${input.packageName}: runtime dependencies are neither bundled in the tarball ` +
+          `nor covered by a signed materialization plan (${depVerdict.missing.join(", ")}). Extensions ` +
+          `MUST ship every runtime dep (bundled, or via a signed plan) — the installer never runs ` +
+          `npm/pnpm install (the security-hardening rule).`,
       );
     }
 
@@ -272,6 +369,32 @@ export async function materializePackageToStore(
     // no-server-entry package (agents/skills/artifacts unaffected).
     await assertServerEntryIsBuiltArtifact(extractDir, pkgJson, input.packageName);
 
+    // 4.7 (cinatra#181) — execute the SIGNED materialization plan VERBATIM,
+    // BEFORE the step-5 content hash so the hash + the install trust anchor
+    // cover the POST-closure tree (boot re-verify then covers the libraries
+    // with zero loader changes). Per-node fetches ride the SAME injected
+    // fetchTarball seam as the root tarball (broker identity preserved); the
+    // executor re-derives the closureHash and refuses caller-threading drift.
+    if (plan && expectedClosureHash) {
+      await executeMaterializationPlan(
+        { plan, expectedClosureHash, packageDir: extractDir, packageName: input.packageName },
+        { fetchTarball },
+      );
+
+      // 4.8 — residual-coverage check (the install-time mirror of the
+      // closure-mode builder's relaxed residual-import check): every bare
+      // VALUE-import specifier reachable from the built serverEntry must map
+      // to a node builtin, a bundled top-level node_modules package, or a
+      // plan ROOT dependency. Anything else would defer to an opaque
+      // activation-time ERR_MODULE_NOT_FOUND — refuse at materialize instead.
+      // Closure packages only: the closure-less path stays byte-for-byte
+      // today's behavior.
+      await assertServerEntryBareSpecifierCoverage(extractDir, pkgJson, input.packageName, {
+        present: await readPresentNodeModules(path.join(extractDir, "node_modules")),
+        planRoots: planRootDeps ?? new Set<string>(),
+      });
+    }
+
     // 5. content hash (excludes the sidecar we are about to write) + sidecar.
     const entries = await collectFileEntries(extractDir, [STORE_SIDECAR_FILENAME]);
     const contentHash = contentHashOfEntries(entries);
@@ -282,6 +405,7 @@ export async function materializePackageToStore(
       packageName: input.packageName,
       version: input.version,
       registryUrl: input.registryUrl,
+      ...(expectedClosureHash ? { closureHash: expectedClosureHash } : {}),
       materializedAt: now(),
     };
     await writeFile(path.join(extractDir, STORE_SIDECAR_FILENAME), JSON.stringify(sidecar, null, 2));
@@ -711,6 +835,90 @@ export async function assertNoHostPeerValueImports(
         next = await resolveSelfPackageImport(extractDir, exportsMap, selfName, spec);
       }
       if (next && !visited.has(next)) queue.push(next);
+    }
+  }
+}
+
+/**
+ * Step 4.8 (cinatra#181) — residual-coverage check for CLOSURE packages: walk
+ * the SAME value-edge graph as the host-peer gate (relative + self-package
+ * specifiers; type-only edges erased; node_modules never entered) and collect
+ * every BARE specifier. Each bare specifier's base package must be a node
+ * BUILTIN, a BUNDLED top-level node_modules package, or a plan ROOT
+ * dependency — else the import would only fail at activation
+ * (ERR_MODULE_NOT_FOUND under the prod file:// loader), so refuse loudly at
+ * materialize time. Host peers are NOT exempted here: a host-peer VALUE
+ * import was already refused by step 4.5, and a host-peer TYPE import never
+ * reaches this walk (type edges are erased).
+ *
+ * Mirrors the closure-mode builder's relaxed residual-import check (builtins
+ * ∪ declared deps) — the install-time set is builtins ∪ bundled ∪ plan roots,
+ * the exact set Node can actually resolve in the materialized store dir.
+ */
+async function assertServerEntryBareSpecifierCoverage(
+  extractDir: string,
+  pkgJson: Record<string, unknown>,
+  packageName: string,
+  allowed: { present: ReadonlySet<string>; planRoots: ReadonlySet<string> },
+): Promise<void> {
+  const entryAbs = resolveServerEntryFile(extractDir, pkgJson);
+  if (!entryAbs) return; // no serverEntry → nothing to cover (plan-only package)
+  try {
+    if (!(await stat(entryAbs)).isFile()) return;
+  } catch {
+    return; // missing serverEntry file is the built-artifact gate's refusal (4.6, already ran)
+  }
+
+  const selfName = typeof pkgJson.name === "string" ? pkgJson.name : null;
+  const exportsMap = pkgJson.exports;
+
+  const visited = new Set<string>();
+  const queue: string[] = [entryAbs];
+  while (queue.length > 0) {
+    const fileAbs = queue.shift() as string;
+    if (visited.has(fileAbs)) continue;
+    visited.add(fileAbs);
+
+    let source: string;
+    try {
+      source = await readFile(fileAbs, "utf8");
+    } catch (error) {
+      const relFile = path.relative(extractDir, fileAbs);
+      throw new Error(
+        `[package-store] ${packageName}: a file in the serverEntry import graph cannot be read ` +
+          `(${relFile}): ${error instanceof Error ? error.message : String(error)}. Failing closed — ` +
+          `the residual-coverage check cannot certify an unreadable graph file.`,
+      );
+    }
+
+    for (const imp of parseModuleImports(source, fileAbs)) {
+      if (!imp.isValueEdge) continue;
+      const spec = imp.specifier;
+      if (spec.startsWith("./") || spec.startsWith("../")) {
+        const next = await resolveRelativeImport(extractDir, fileAbs, spec);
+        if (next && !visited.has(next)) queue.push(next);
+        continue;
+      }
+      if (selfName) {
+        const next = await resolveSelfPackageImport(extractDir, exportsMap, selfName, spec);
+        if (next) {
+          if (!visited.has(next)) queue.push(next);
+          continue;
+        }
+      }
+      const base = basePackageOfSpecifier(spec);
+      if (base === null) continue; // absolute/odd specifier — not a bare package import
+      if (base === selfName) continue; // self-subpath that resolveSelfPackageImport could not map — 4.6/loader territory
+      if (isBuiltin(spec) || isBuiltin(base)) continue;
+      if (allowed.present.has(base) || allowed.planRoots.has(base)) continue;
+      const relFile = path.relative(extractDir, fileAbs);
+      throw new Error(
+        `[package-store] ${packageName}: serverEntry graph imports "${spec}" (${relFile}, line ${imp.line}) ` +
+          `— not a node builtin, not bundled in node_modules, and not a root of the signed ` +
+          `materialization plan. The prod file:// loader could never resolve it (it would fail at ` +
+          `activation as ERR_MODULE_NOT_FOUND); refusing at materialize. Bundle the dependency or add ` +
+          `it to the package's declared dependencies so the publish-time plan covers it.`,
+      );
     }
   }
 }
