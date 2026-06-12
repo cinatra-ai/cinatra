@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   scanCoreExtensionEdges,
@@ -20,12 +20,13 @@ function runGate(extraEnv = {}) {
 }
 
 describe("core-extension-import-ban gate", () => {
-  it("scans ZERO real core->extension edges (the value-import surface is fully retired)", () => {
+  it("scans ZERO real core->extension edges (the value-import surface is fully retired, shared lexer)", () => {
     const edges = scanCoreExtensionEdges();
-    // The nango serverEntry cutover (cinatra#151 Stage 1) retired the LAST
-    // value-import cluster — the live scan is EMPTY (scanner correctness is
-    // covered by the synthetic-fixture tests below; the gate flips to
-    // pinned-empty with the transport blind-spot closure, cinatra#151 Stage 3).
+    // The nango serverEntry cutover (cinatra#151 Stage 1) retired the last
+    // facade cluster; the transport-DI inversion (Stage 3) retired the final
+    // 4 hidden transport edges AND adopted the shared lexical stripper in the
+    // same PR — the live scan is HONESTLY empty (the blind-spot regression is
+    // pinned by the fixture test below).
     const flat = Object.values(edges).flat();
     expect(flat).toEqual([]);
     expect(flat).not.toContain("@cinatra-ai/nango-connector");
@@ -34,6 +35,29 @@ describe("core-extension-import-ban gate", () => {
     // the generated manifest now — no static connector import may reappear.
     expect(edges["src/lib/mcp-server.ts"]).toBeUndefined();
     expect(edges["src/lib/primitive-handlers.ts"]).toBeUndefined();
+    // The former transport-DI binder (renamed) names no extension package.
+    expect(edges["src/lib/register-host-connector-services.ts"]).toBeUndefined();
+  });
+
+  it("BLIND-SPOT REGRESSION (cinatra#151 Stage 3): a line comment containing a literal /* no longer hides following imports", () => {
+    const dir = mkdtempSync(join(tmpdir(), "core-ext-gate-lexer-"));
+    mkdirSync(join(dir, "lib"), { recursive: true });
+    // The exact failure class that hid the transport-DI import cluster: a
+    // doc note mentioning `@/lib/*` opens a bogus block comment under the
+    // legacy regex stripper, swallowing every following line until the next
+    // `*/` anywhere in the file. The shared lexer must still see the import.
+    writeFileSync(
+      join(dir, "lib", "blind-spot.ts"),
+      [
+        "// `@/lib/*` is no longer reachable from any connector package itself.",
+        'import { register } from "@cinatra-ai/blog-skills/register";',
+        "export const x = register; /* trailing block */",
+        "",
+      ].join("\n"),
+    );
+    const extNames = new Set(["@cinatra-ai/blog-skills"]);
+    const edges = scanCoreExtensionEdges(dir, extNames);
+    expect(edges["src/lib/blind-spot.ts"]).toEqual(["@cinatra-ai/blog-skills"]);
   });
 
   it("diffEdges flags a NEW edge as added and a gone edge as removed", () => {
@@ -115,9 +139,18 @@ describe("core-extension-import-ban gate", () => {
     expect(edges["src/lib/feature.ts"]).toEqual(["@cinatra-ai/blog-skills"]);
   });
 
-  it("the committed repo state passes the gate (baseline is current)", () => {
+  it("the committed repo state passes the gate (baseline PINNED EMPTY)", () => {
     const res = runGate();
     expect(res.status, res.stdout + res.stderr).toBe(0);
-    expect(res.stdout).toMatch(/no NEW core->extension coupling/);
+    expect(res.stdout).toMatch(/zero core->extension import edges/);
+    expect(res.stdout).toMatch(/PINNED EMPTY/);
+  });
+
+  it("the committed baseline FILE is empty (a re-populated baseline is itself a failure)", () => {
+    const doc = JSON.parse(
+      readFileSync(join(REPO_ROOT, "scripts/audit/core-extension-import-ban.baseline.json"), "utf8"),
+    );
+    expect(doc.edges).toEqual({});
+    expect(doc.note).toMatch(/PINNED EMPTY/);
   });
 });

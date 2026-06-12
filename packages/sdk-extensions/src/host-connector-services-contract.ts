@@ -3,13 +3,17 @@
 // The transport/provider registration-via-capabilities cutover moves transport
 // connector bootstrap out of the host's static import-and-call list and into
 // each connector's `serverEntry` (`register(ctx)`). The bespoke host deps the
-// transports need (legacy connector-config KV, the Nango connection-storage
-// surface, google-oauth runtime, the secrets codec, the external-MCP registry,
-// MCP self-client headers, instance identity) are delivered as PER-CONCERN
-// capability provider impls the HOST registers into the generic capability
-// registry at boot; a connector's `register(ctx)` resolves only the concerns it
-// needs via `ctx.capabilities.resolveProviders(<id>)` and adapts them into its
-// own deps slot.
+// transports need (legacy connector-config KV, google-oauth runtime, the
+// secrets codec, the external-MCP registry, MCP self-client headers, instance
+// identity, MCP pagination, content-editor A2A dispatch, the drupal/wordpress
+// MCP instance surfaces, runtime mode, notifications, the skills catalog, and
+// the provider-named openai/anthropic connection stores) are delivered as
+// PER-CONCERN capability provider impls the HOST registers into the generic
+// capability registry at boot; a connector's `register(ctx)` resolves only the
+// concerns it needs via `ctx.capabilities.resolveProviders(<id>)` and adapts
+// them into its own deps slot. The nango connection-storage surface resolves
+// via the connector-authored `nango-system` capability instead
+// (./nango-system-contract — cinatra#151 Stages 1+3).
 //
 // WHY capability impls and not new ctx ports or SDK DI value-slots:
 //   - the ctx-port ABI is frozen (additive optional methods only) AND the
@@ -40,7 +44,6 @@ import type { EmailSystemMessage, EmailSendReceipt } from "./email-connector-con
  * an extension package name). */
 export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   connectorConfig: "@cinatra-ai/host:connector-config",
-  nangoConnectionStorage: "@cinatra-ai/host:nango-connection-storage",
   googleOAuth: "@cinatra-ai/host:google-oauth",
   secretsCodec: "@cinatra-ai/host:secrets-codec",
   externalMcpRegistry: "@cinatra-ai/host:external-mcp-registry",
@@ -50,6 +53,25 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   blogRouting: "@cinatra-ai/host:blog-routing",
   objectsIntegration: "@cinatra-ai/host:objects-integration",
   extensionActionGuard: "@cinatra-ai/host:extension-action-guard",
+  // --- transport-DI inversion services (cinatra#151 Stage 3) ---------------
+  // The per-concern host services the openai/anthropic/drupal-mcp/
+  // wordpress-mcp serverEntry transports adapt into their own deps slots at
+  // activation. NOTE the retired sibling: the legacy
+  // `@cinatra-ai/host:nango-connection-storage` delegating adapter id is GONE
+  // from this contract — every consumer resolves the connector-authored
+  // `nango-system` surface directly (the host keeps publishing the legacy
+  // string id ONLY as a deprecation-window compat shim for already-installed
+  // runtime package-store digests; removal rides the epic's governance
+  // end-state, cinatra#151 Stage 7).
+  mcpPagination: "@cinatra-ai/host:mcp-pagination",
+  contentEditorDispatch: "@cinatra-ai/host:content-editor-dispatch",
+  drupalMcp: "@cinatra-ai/host:drupal-mcp",
+  wordpressMcp: "@cinatra-ai/host:wordpress-mcp",
+  runtimeMode: "@cinatra-ai/host:runtime-mode",
+  notifications: "@cinatra-ai/host:notifications",
+  skillsCatalog: "@cinatra-ai/host:skills-catalog",
+  openaiConnection: "@cinatra-ai/host:openai-connection",
+  anthropicConnection: "@cinatra-ai/host:anthropic-connection",
 } as const;
 
 /** The legacy global connector-config KV (raw `connectorId`-keyed rows — NOT
@@ -63,53 +85,119 @@ export type HostConnectorConfigService = {
   delete(connectorId: string): void;
 };
 
-/** The Nango connection-storage surface (host-bound from the nango gateway).
- * Mirrors the host's synchronous-where-sync functions 1:1 so a connector's
- * existing deps contract can be satisfied without internal rewrites. */
-export type HostNangoConnectionStorageService = {
-  isConfigured(): boolean;
-  getStatus(): { status: "connected" | "not_connected"; detail?: string };
-  getFrontendConfig(): unknown;
-  getPrimarySavedConnection(
-    connectorKey: string,
-    opts?: { scope?: "app" | "user"; userId?: string },
-  ): {
+// The legacy `HostNangoConnectionStorageService` type is RETIRED with its
+// adapter id (cinatra#151 Stage 3): consumers type the connector-authored
+// surface via `NangoSystemSurface` (./nango-system-contract).
+
+/** MCP list pagination helpers (`@/lib/mcp-pagination` stays host-side). */
+export type HostMcpPaginationService = {
+  decodeCursor(cursor?: string): number;
+  buildListPage<T>(
+    items: T[],
+    total: number,
+    offset: number,
+    limit: number,
+  ): { items: T[]; total: number; nextCursor?: string };
+};
+
+/**
+ * Host-owned A2A blocking dispatch to a content-editor agent (shared by the
+ * drupal/wordpress MCP connectors). The host helper mints the A2A bearer,
+ * opens the external A2A client, sends one text-mode task and returns the
+ * agent's reply TEXT — the `@cinatra-ai/llm` + `@cinatra-ai/a2a` runtime
+ * edges stay host-side.
+ */
+export type HostContentEditorDispatchService = {
+  dispatch(input: { agentUrl: string; payload: unknown; timeoutMs: number }): Promise<string>;
+};
+
+/** Drupal external-MCP toolbox surfaces (instance settings + cached probe +
+ * endpoint/URL policy — `@/lib/drupal-api` / `@/lib/drupal-mcp-connection`
+ * stay host-side). */
+export type HostDrupalMcpService = {
+  listInstances(): Array<{
+    id: string;
+    name: string;
+    siteUrl: string;
+    nangoConnectionId: string;
     providerConfigKey: string;
-    connectionId: string;
-    displayName?: string;
-    email?: string;
-  } | null;
-  ensureIntegration(input: {
-    provider: string;
-    providerConfigKey: string;
-    displayName?: string;
-    [k: string]: unknown;
-  }): Promise<unknown>;
-  ensureConnectorIntegration(connectorKey: string): Promise<unknown>;
-  importConnection(input: Record<string, unknown>): Promise<unknown>;
-  getCredentials(
-    providerConfigKey: string,
-    connectionId: string,
-    opts?: { forceRefresh?: boolean },
-  ): Promise<unknown>;
-  saveConnectionRecord(
-    connectorKey: string,
-    record: Record<string, unknown>,
-    opts?: { multiple?: boolean; scope?: "app" | "user"; userId?: string },
-  ): Promise<unknown>;
-  removeConnectionRecord(
-    connectorKey: string,
-    connectionId: string,
-    opts?: { scope?: "app" | "user"; userId?: string },
-  ): Promise<unknown>;
-  deleteConnection(providerConfigKey: string, connectionId: string): Promise<unknown>;
-  clearConnectionRecords(
-    connectorKey: string,
-    opts?: { scope?: "app" | "user"; userId?: string },
-  ): Promise<unknown>;
-  buildBearerAuthHeader(input: Record<string, unknown>): Promise<unknown>;
-  providerConfigKeys: Record<string, string>;
-  connectionIds: Record<string, string>;
+  }>;
+  probe(
+    siteUrl: string,
+    authHeader: string,
+  ): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
+  resolveServerUrl(siteUrl: string): string;
+  isPrivateUrl(url: string): boolean;
+};
+
+/** WordPress external-MCP toolbox surfaces + the instance hard-delete
+ * (`@/lib/wordpress-api` / `@/lib/wordpress-mcp-connection` stay host-side). */
+export type HostWordPressMcpService = {
+  listInstances(): Array<{
+    id: string;
+    name: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }>;
+  probeAdapter(instance: {
+    id: string;
+    name: string;
+    siteUrl: string;
+    username: string;
+    applicationPassword: string;
+  }): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
+  resolveServerUrl(siteUrl: string): string;
+  isPrivateUrl(url: string): boolean;
+  deleteInstance(id: string): Promise<void>;
+};
+
+/** Host runtime-mode flag (development vs production). */
+export type HostRuntimeModeService = {
+  isDevelopment(): boolean;
+};
+
+/** Host notification creation (best-effort user-facing notices). */
+export type HostNotificationsService = {
+  create(input: {
+    title: string;
+    body: string;
+    kind?: "error" | "info" | "success" | "warning";
+    href?: string;
+  }): Promise<void>;
+};
+
+/** Skills-catalog read (the host binds a call-time lazy import so the
+ * `@cinatra-ai/skills` boot cycle never rides a connector's register graph). */
+export type HostSkillsCatalogService = {
+  read(): Promise<{
+    skills: Array<{
+      id: string;
+      name: string;
+      slug: string;
+      description: string;
+      packageId: string;
+      packageName: string;
+      packageSlug: string;
+      sourcePath?: string;
+    }>;
+  }>;
+};
+
+/** The host-owned openai connection row + the shared connection store
+ * (`@/lib/openai-connection-store` is read by host configuration surfaces —
+ * NOT relocatable into the extension; provider-named like `googleOAuth`). */
+export type HostOpenAIConnectionService = {
+  readRowFromDatabase(): unknown;
+  read(): unknown;
+  update(input: unknown): Promise<void>;
+  clear(): Promise<void>;
+  updateLoggingEnabled(loggingEnabled: boolean): Promise<void>;
+};
+
+/** The host-owned anthropic connection row (DB fallback credential). */
+export type HostAnthropicConnectionService = {
+  readRowFromDatabase(): unknown;
 };
 
 /** Google-OAuth runtime helpers (status / authed fetch / token refresh). */

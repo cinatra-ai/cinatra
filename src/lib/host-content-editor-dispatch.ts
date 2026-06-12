@@ -8,7 +8,8 @@ import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
 // (buildA2aBearerToken) + `@cinatra-ai/a2a` (createExternalA2AClient / Task) —
 // live HERE and are delivered to each connector via its `deps.dispatchContentEditor`
-// binding (see register-transport-connectors.ts). The connector keeps only the
+// binding (the `@cinatra-ai/host:content-editor-dispatch` service published
+// by register-host-connector-services.ts). The connector keeps only the
 // `stripCodeFences` + `JSON.parse` of the returned text.
 //
 // Behavior: mint the A2A bearer for the "openai" provider, open the external A2A

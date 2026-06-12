@@ -3,13 +3,6 @@
   "schemaVersion": 1,
   "packages": [
     {
-      "packageName": "@cinatra-ai/anthropic-connector",
-      "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "94f622a1293a4372da795c07585e29ea628daec6",
-      "packageVersion": "0.1.0",
-      "treeSha256": "edc20dcdaa79297231470bd1a15c4614a42bccc4f4fc5d6e2335f37f7899ff53"
-    },
-    {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
       "resolvedSha": "d471248349aa3403a076df4d6b8e69244e41dafc",
@@ -45,18 +38,11 @@
       "treeSha256": "ce2376d980de18527a8f6bdd45121e335015d1be2844df3a6c26f56d34d4ab5b"
     },
     {
-      "packageName": "@cinatra-ai/drupal-mcp-connector",
-      "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "cb713a780ffe1acc878ad6cd7241c6f3fccea97f",
-      "packageVersion": "0.1.0",
-      "treeSha256": "afafe2a0c32dab643082e81cab99343175eee0cec1310d5ed26e045369041ed4"
-    },
-    {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "3f1dc8023e2be1ca9e3988f63762fcab6751b062",
+      "resolvedSha": "47b3cddf524682b7d4c541ee5baa1dd1557a56e6",
       "packageVersion": "0.1.0",
-      "treeSha256": "dfd4b733eb9e31a6d9ca932200fad55db4af69cd445aa6dca545ed82b321a676"
+      "treeSha256": "3824fbde0104831c529fc4aae18b6fc3dbc78b301534ea5d22285e207cf0557c"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
@@ -80,13 +66,6 @@
       "treeSha256": "4c3cb47e23b45b8336e7e45391bcbcc4b7bf31b165659d42540f249c2723fdaa"
     },
     {
-      "packageName": "@cinatra-ai/openai-connector",
-      "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "574c182e4040f9b96fa8383d70abd06df2fddcf5",
-      "packageVersion": "0.1.0",
-      "treeSha256": "a7c97801586fb120491d74d61ddc7aed8da22c0efe98a79c49fc8544cdffb410"
-    },
-    {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
       "resolvedSha": "938372cd9ca6467c3b63f93bae3bc873bd2c630e",
@@ -99,13 +78,6 @@
       "resolvedSha": "b2d784cf63af193333a9206e8a18ae9136600bbc",
       "packageVersion": "0.1.0",
       "treeSha256": "c507b9c5dfb4ab11b02d131df4765ec2b88480c9aca60f19ba23c420e006ef9c"
-    },
-    {
-      "packageName": "@cinatra-ai/wordpress-mcp-connector",
-      "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "c1ed558e17a7dbda5dc35e996fd24ef7bfd84174",
-      "packageVersion": "0.1.0",
-      "treeSha256": "ee01b448f874dfe880d4eee7c9f592d48a036a7dbb076caaaf90d25f74a07252"
     }
   ]
 }
