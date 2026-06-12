@@ -15,6 +15,12 @@
  *     has cloned dev/wordpress-plugin/ + dev/drupal-module/cinatra/ and dev-auto-setup
  *     has minted the widget auth keys).
  *   - The cinatra dev server is started by this config with the scripted provider.
+ *
+ * CI: the WP/Drupal UAT Gate workflow provisions the app-service env this suite
+ * needs (SUPABASE_DB_URL + a live Postgres/Redis, BETTER_AUTH_SECRET, the
+ * CINATRA_RUNTIME_MODE=development scripted-provider gate, and an OPENAI_API_KEY
+ * presence placeholder) entirely from in-repo, non-secret values — see
+ * .github/workflows/wp-drupal-uat.yml (cinatra#173).
  */
 import { defineConfig } from "@playwright/test";
 import { baseUse, desktopChrome, REPO_ROOT, repoPath, suitePath } from "./base";

@@ -47,6 +47,7 @@ on:
       ]
   schedule:
     - cron: "0 7 * * *" # nightly full suite (07:00 UTC)
+  workflow_dispatch: # on-demand proof of the nightly full-suite path (cinatra#173)
 
 permissions:
   contents: read
@@ -67,6 +68,13 @@ jobs:
       # run_real = run the real UAT: relevant paths touched AND not a draft PR.
       # (changed-paths only runs on pull_request, so draft is defined here.)
       run_real: ${{ steps.filter.outputs.relevant == 'true' && github.event.pull_request.draft != true }}
+      # run_uat = run_real AND the override label is NOT present. Single source of
+      # truth for "Postgres/Redis + secret + composite action all activate" on the
+      # uat-gate job — drives the conditional service images AND every real-run
+      # step `if:` so the services condition can never drift from the step
+      # conditions. (changed-paths is pull_request-only, so the labels read here
+      # is always defined.)
+      run_uat: ${{ steps.filter.outputs.relevant == 'true' && github.event.pull_request.draft != true && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat') }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
@@ -134,6 +142,58 @@ jobs:
     needs: changed-paths
     runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 40
+    # Conditional service containers (the dashboard-live-verify idiom): an empty
+    # `image` string means the service is NOT started. `services:` containers
+    # spin up for the WHOLE job regardless of step `if:`, so gating the image on
+    # the single authoritative `run_uat` output keeps the fast-pass / draft /
+    # override-labeled paths container-free and trivially fast-green as a
+    # required check, while the real-run path gets a live Postgres + Redis.
+    services:
+      postgres:
+        # postgres:17-alpine matches docker-compose.yml's Postgres major so CI
+        # exercises the same engine `cinatra setup dev` provisions against.
+        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'postgres:17-alpine' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: ${{ needs.changed-paths.outputs.run_uat == 'true' && 'redis:7-alpine' || '' }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # In-repo, zero-secret app-service env mirroring dashboard-live-verify.yml.
+      # The connection string is the same literal the CLI's own rebuildEnvLocal()
+      # writes; the Postgres service publishes 5434 above. Job-level env is
+      # inherited by every step INCLUDING the composite action's steps, so
+      # `cinatra setup dev` (run inside the composite action) finds SUPABASE_DB_URL
+      # and a live DB. (cinatra#173)
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      REDIS_URL: redis://127.0.0.1:6379
+      # scripted-test-provider.ts fail-CLOSES unless this is exactly 'development'
+      # (and NODE_ENV != production); `setup dev` also asserts the configured
+      # runtime mode equals development. Do NOT set NODE_ENV=production here.
+      CINATRA_RUNTIME_MODE: development
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      # next.config.ts REQUIRED_ENV asserts presence of OPENAI_API_KEY at
+      # dev-server startup (next.config.ts:6-13). The UAT boots `pnpm dev` with
+      # the deterministic SCRIPTED provider (no real OpenAI call), but the
+      # presence check still fires — so a zero-secret placeholder is required
+      # (mirrors dashboard-live-verify.yml and the Dockerfile placeholder).
+      OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
       - name: Fail loud if changed-paths did not succeed
         if: needs.changed-paths.result != 'success'
@@ -145,20 +205,28 @@ jobs:
         run: |
           echo "::notice::override-wp-drupal-uat label present — UAT hard gate skipped."
           echo "Requires both owners' review + a PR-body rationale (what breaks, follow-up PRs, rollback). See docs/developer/contributing.md."
-      - name: No contract paths touched (or draft) → gate passes quickly
-        if: >-
-          needs.changed-paths.outputs.run_real != 'true'
-          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
-        run: echo "No WP/Drupal contract paths touched, or draft PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
+      - name: No contract paths touched (or draft/override) → gate passes quickly
+        if: needs.changed-paths.outputs.run_uat != 'true'
+        run: echo "No WP/Drupal contract paths touched, or draft/override-labeled PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
       - name: Checkout
-        if: >-
-          needs.changed-paths.outputs.run_real == 'true'
-          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        if: needs.changed-paths.outputs.run_uat == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Assert app-service env present (regression pin for cinatra#173)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        # Env-presence guard ONLY (runs in the caller, BEFORE the composite
+        # action installs `pg`). Postgres reachability is already guaranteed by
+        # the services.postgres healthcheck (steps don't start until it passes).
+        run: |
+          : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
+          : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
+          : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
+          : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
+          echo "app-service env present"
       - name: Run full UAT suite
-        if: >-
-          needs.changed-paths.outputs.run_real == 'true'
-          && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat')
+        if: needs.changed-paths.outputs.run_uat == 'true'
         uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@5c1a35972ef9dc4b0a7fe627be704e016d27f394 # v0.1.0
         with:
           # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
@@ -166,11 +234,66 @@ jobs:
           deploy-key: ${{ secrets.WP_DRUPAL_UAT_DEPLOY_KEY }}
 
   nightly:
-    if: github.event_name == 'schedule'
+    # schedule = the 07:00Z nightly; workflow_dispatch = on-demand proof of the
+    # full-suite path (cinatra#173). The full suite runs regardless of paths.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ vars.WP_DRUPAL_UAT_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 50
+    services:
+      postgres:
+        # postgres:17-alpine matches docker-compose.yml's Postgres major so CI
+        # exercises the same engine `cinatra setup dev` provisions against.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # In-repo, zero-secret app-service env mirroring dashboard-live-verify.yml
+      # (and the uat-gate job above). Job-level env reaches the composite
+      # action's steps, so `cinatra setup dev` finds SUPABASE_DB_URL + a live DB
+      # on ubuntu-latest. (cinatra#173)
+      SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5434/postgres
+      REDIS_URL: redis://127.0.0.1:6379
+      # scripted-test-provider.ts fail-CLOSES unless this is exactly 'development'
+      # (and NODE_ENV != production); `setup dev` also asserts development.
+      CINATRA_RUNTIME_MODE: development
+      BETTER_AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3000
+      # Presence-only — next.config.ts REQUIRED_ENV asserts it at dev-server
+      # startup; the UAT uses the deterministic scripted provider, never a real
+      # OpenAI call. Zero-secret placeholder (mirrors dashboard-live-verify.yml).
+      OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
+        run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Assert app-service env present (regression pin for cinatra#173)
+        # Env-presence guard ONLY (runs in the caller, BEFORE the composite
+        # action installs `pg`). Postgres reachability is already guaranteed by
+        # the services.postgres healthcheck (steps don't start until it passes).
+        run: |
+          : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
+          : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
+          : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
+          : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
+          echo "app-service env present"
       - name: Run full UAT suite
         uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@5c1a35972ef9dc4b0a7fe627be704e016d27f394 # v0.1.0
         with:
