@@ -880,6 +880,11 @@ export async function installExtensionFromRegistry(
             contentHash: priorSource.contentHash ?? "",
             ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
             ...(priorSource.signature ? { signature: priorSource.signature } : {}),
+            // cinatra#181: the prior install's closureHash MUST ride every
+            // restore — sourceSwitchExtension replaces the WHOLE source
+            // object, so omitting it here would strip the OLD closure anchor
+            // and break (or downgrade) its boot-time v2 re-verification.
+            ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
           });
         } catch (restoreErr) {
           console.error(

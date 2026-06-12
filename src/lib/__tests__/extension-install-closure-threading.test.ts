@@ -196,6 +196,39 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
   });
 });
 
+describe("failed-UPDATE restore carries the prior closureHash (merge-safe finding)", () => {
+  it("a post-begin update failure re-records the OLD provenance INCLUDING its closureHash", async () => {
+    const { v2 } = signedV2Env();
+    const provenance: unknown[] = [];
+    const priorClosureHash = "ab".repeat(64);
+    const { deps } = fakePipelineDeps({
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v2, materializationPlan: transportPlan() }),
+      recordProvenance: async (i) => {
+        provenance.push(i);
+      },
+      // a prior FINALIZED install exists (this is an UPDATE)...
+      readInstallOp: async () => ({ installOpId: "old-op", packageName: PKG, orgId: null, phase: "finalized", digest: "old-digest" }) as never,
+      readCurrentSource: async () => ({
+        registryUrl: REGISTRY,
+        version: "0.9.0",
+        integrity: "sha512-old",
+        contentHash: "old-ch",
+        signature: "old-sig",
+        closureHash: priorClosureHash,
+      }),
+      // ...and a post-begin step throws (migration preflight refusal).
+      preflightMigrations: async () => {
+        throw new Error("boom mid-update");
+      },
+    });
+    await expect(installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps)).rejects.toThrow(/boom mid-update/);
+    // the restore write (the LAST provenance call) carries the OLD closureHash
+    const restore = provenance[provenance.length - 1] as Record<string, unknown>;
+    expect(restore.version).toBe("0.9.0");
+    expect(restore.closureHash).toBe(priorClosureHash);
+  });
+});
+
 describe("workflow install saga × materialization plan (the SECOND install path)", () => {
   function makeSagaDeps(resolveOverride?: WorkflowInstallSagaDeps["resolveIntegrity"]) {
     const calls = { materialize: [] as unknown[], provenance: [] as unknown[], grantRequests: [] as unknown[], gc: [] as unknown[] };
