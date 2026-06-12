@@ -72,37 +72,72 @@ An `exports`-map key targeting a built file also works:
 
 Two non-negotiables for the published artifact:
 
-- **Self-contained bundle.** The store does not materialize your
-  `node_modules` unless the tarball bundles them — and the materializer's
-  bundled-dependencies gate requires every `dependencies` entry to be present
-  under the tarball's `node_modules`. Bundling the entry's runtime graph into
-  `register.mjs` (and pruning the inlined `dependencies` from the published
-  manifest) satisfies the gate with a strictly smaller artifact.
+- **Self-contained bundle (inline mode — the default).** The store does not
+  materialize your `node_modules` unless the tarball bundles them — and the
+  materializer's bundled-dependencies gate requires every `dependencies`
+  entry to be present under the tarball's `node_modules`. Bundling the
+  entry's runtime graph into `register.mjs` (and pruning the inlined
+  `dependencies` from the published manifest) satisfies the gate with a
+  strictly smaller artifact. See
+  [Dependency modes](#dependency-modes-inline-and-prune-vs-declare-and-closure)
+  for the declare-and-closure alternative (cinatra#181).
 - **Host ABI peers stay external.** The host-PROVIDED packages
   (`@cinatra-ai/sdk-extensions`, `@cinatra-ai/sdk-ui`, `@cinatra-ai/mcp-client`
   — `HOST_PROVIDED_PACKAGES` in `src/lib/extension-package-store-core.ts`)
   are never inlined: extensions keep them type-only and reach every
   privileged surface via the injected `ctx` ports (a host-peer VALUE import
   in the entry's graph is refused by the materializer's host-peer gate).
-  Everything ELSE the entry's graph reaches must be inlined — including
-  `react`/`react-dom` (their `react-server` builds — the host RSC layer's
-  view) and Next's server-layer module views — because the store provides no
-  module resolution beyond Node builtins. Those are build-time inputs, not
-  runtime peers.
+  In INLINE mode everything ELSE the entry's graph reaches must be inlined —
+  including `react`/`react-dom` (their `react-server` builds — the host RSC
+  layer's view) and Next's server-layer module views — because the store
+  provides no module resolution beyond Node builtins. Those are build-time
+  inputs, not runtime peers. In CLOSURE mode declared runtime `dependencies`
+  additionally stay external (materialized at install from the signed plan);
+  the host-peer rule is identical in both modes.
 
 First-party connectors do not hand-maintain this shape: the release pipeline
 builds it (`scripts/extensions/build-server-entry.mjs` — the canonical
 builder; the release workflow and the marketplace wave-runner both run it).
 For a SOURCE-shaped entry the builder stages a temp pack dir, esbuild-bundles
 the resolved source entry into a top-level `register.mjs`, rewrites the
-manifest IN THE STAGED DIR ONLY (`serverEntry: "./register.mjs"`, inlined
-`dependencies` pruned, `register.mjs` appended to `files`), and `npm pack`
-runs from that stage — the source tree is never touched, and every downstream
-consumer reads the PACKED manifest from the tarball bytes. An ALREADY-BUILT
-entry passes through verbatim (no bundle, no manifest rewrite — the package
-is packed as-is). The in-tree source-mirror shape
+manifest IN THE STAGED DIR ONLY (`serverEntry: "./register.mjs"`,
+`register.mjs` appended to `files`, and — in inline mode — the inlined
+`dependencies` pruned; closure mode keeps them), and `npm pack` runs from
+that stage — the source tree is never touched, and every downstream consumer
+reads the PACKED manifest from the tarball bytes. An ALREADY-BUILT entry
+passes through verbatim (no bundle, no manifest rewrite — the package is
+packed as-is; closure mode residual-validates its import graph without
+re-bundling). The in-tree source-mirror shape
 (`exports["./register"] → "./src/register.ts"`) stays canonical for the
 static-bundle path.
+
+## Dependency modes: inline-and-prune vs declare-and-closure
+
+`cinatra.dependencyMode` (cinatra#181) selects how a package's npm LIBRARY
+dependencies reach the runtime store. The builder reads it from the manifest;
+the `--mode` CLI flag overrides it for TESTS ONLY.
+
+| | `"inline"` (default — field absent) | `"closure"` |
+|---|---|---|
+| esbuild externals | host ABI peers only | host ABI peers + declared runtime `dependencies` (incl. subpaths) |
+| packed `dependencies` | PRUNED | KEPT (basis of the signed plan; registry specs only — `npm:` aliases of host peers and git/file/link/workspace/URL specs refused) |
+| residual-import rule | node builtins ONLY | node builtins ∪ declared `dependencies`; host peers refused; self-references traced INTO the scanned graph (never blanket-allowed) |
+| already-importable entry | verbatim passthrough | verbatim passthrough + residual VALIDATION (never re-bundled) |
+| no `serverEntry` | verbatim copy | verbatim copy (legal — the plan alone covers the deps) |
+| built `register.mjs` + packed-manifest self-check | mandatory | mandatory |
+
+In closure mode the dependencies are materialized at INSTALL time from the
+package's publish-time **signed canonical materialization plan** (exact node
+identities, parent→child edges, exact `node_modules` placement paths,
+per-node sha512, `closureHash` over the canonical plan; the installer
+executes it verbatim — zero install-time resolver decisions). Until the
+host's relaxed install gate ("every declared dep is bundled OR in the signed
+plan") and the publish-time signer ship, adoption is FAIL-CLOSED by
+construction: a closure tarball is refused by the current bundled-deps gate,
+and no signed plan can exist. No package may declare
+`dependencyMode: "closure"` before the mode-aware builder and the relaxed
+gate are deployed; host ABI peers can never be closure libraries (the builder
+and the install gate both refuse them in `dependencies`).
 
 ## Error families and their fixes
 
