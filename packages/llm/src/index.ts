@@ -204,8 +204,9 @@ export type {
   AgentRunMcpActorTokenIssuer,
 } from "./mcp-access";
 
-// Legacy compatibility — parseStructuredJson utility
-export { parseStructuredJson } from "@cinatra-ai/openai-connector";
+// Provider-neutral structured-JSON extraction (relocated from the openai
+// connector — cinatra#151 Stage 2; identical signature and behavior).
+export { parseStructuredJson } from "./structured-json";
 
 // Legacy compatibility — skill artifact loader (used by campaign-email-outreach)
 export { createSkillArtifactLoader, type SkillArtifactLoader, type SkillArtifact } from "./skills";

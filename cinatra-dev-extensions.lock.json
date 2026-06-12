@@ -178,6 +178,11 @@
       "resolvedSha": "2b27f75ba217a572b0306d305d80b9a602ae49f3"
     },
     {
+      "packageName": "@cinatra-ai/gemini-connector",
+      "repo": "cinatra-ai/gemini-connector",
+      "resolvedSha": "56d8b5740fd4eb126e9695e3515917d6b62e7829"
+    },
+    {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
       "resolvedSha": "eb1fb859c4a0e5d5e501e7462109aa2507d69888"

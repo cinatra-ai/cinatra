@@ -1658,21 +1658,12 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.96.0
         version: 0.96.0(zod@4.4.3)
-      '@cinatra-ai/anthropic-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/anthropic-connector
-      '@cinatra-ai/gemini-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/gemini-connector
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
       '@cinatra-ai/metric-usage-api':
         specifier: workspace:*
         version: link:../metric-usage-api
-      '@cinatra-ai/openai-connector':
-        specifier: workspace:*
-        version: link:../../extensions/cinatra-ai/openai-connector
       '@cinatra-ai/skills':
         specifier: workspace:*
         version: link:../skills
@@ -13746,7 +13737,7 @@ snapshots:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)
-      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
+      '@trpc/react-query': 11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)
       '@trpc/server': 11.15.1(typescript@6.0.3)
       clsx: 2.1.1
       cronstrue: 3.14.0
@@ -16610,7 +16601,7 @@ snapshots:
       '@trpc/server': 11.15.1(typescript@6.0.3)
       typescript: 6.0.3
 
-  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.17.0(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
+  '@trpc/react-query@11.15.1(@tanstack/react-query@5.99.2(react@19.2.6))(@trpc/client@11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3))(@trpc/server@11.15.1(typescript@6.0.3))(react@19.2.6)(typescript@6.0.3)':
     dependencies:
       '@tanstack/react-query': 5.99.2(react@19.2.6)
       '@trpc/client': 11.15.1(@trpc/server@11.15.1(typescript@6.0.3))(typescript@6.0.3)

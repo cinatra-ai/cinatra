@@ -51,6 +51,50 @@ describe("llm-provider-surface resolution", () => {
       "openai",
     ]);
   });
+
+  // LLM provider adapter cutover (cinatra#151 Stage 2): the packages/llm
+  // adapter members ride the SAME surface — buildRequestHeaders /
+  // writeLogFile / the GATED shellTools pair resolve per provider and stay
+  // undefined (degrading per the packages/llm call-site rules) when a
+  // provider has not registered them.
+  it("resolves the Stage 2 adapter members per provider; absence stays undefined", async () => {
+    const writeLogFile = vi.fn(async (_input: unknown) => {});
+    const runCommandInDocker = vi.fn(async (_input: unknown) => ({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+      timedOut: false,
+    }));
+    registerSurface("openai", {
+      writeLogFile,
+      shellTools: { readSettings: () => ({ maxOutputKilobytes: 64 }), runCommandInDocker },
+    });
+    registerSurface("gemini", {
+      buildRequestHeaders: (input: { apiKey?: string }) =>
+        input.apiKey ? { "x-goog-api-key": input.apiKey } : {},
+      writeLogFile: vi.fn(async (_input: unknown) => {}),
+    });
+    registerSurface("anthropic", {});
+
+    const openai = getLlmProviderSurface("openai");
+    await openai?.writeLogFile?.({ label: "l", kind: "request", body: {} });
+    expect(writeLogFile).toHaveBeenCalledTimes(1);
+    expect(openai?.shellTools?.readSettings()).toEqual({ maxOutputKilobytes: 64 });
+    await expect(
+      openai?.shellTools?.runCommandInDocker({ shellCommand: "echo hi" }),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: "ok" });
+
+    const gemini = getLlmProviderSurface("gemini");
+    expect(gemini?.buildRequestHeaders?.({ apiKey: "k" })).toEqual({ "x-goog-api-key": "k" });
+
+    // anthropic registered none of the Stage 2 members — all stay undefined
+    // (packages/llm degrades per call site: null connection / no-op logging /
+    // fail-loud shell).
+    const anthropic = getLlmProviderSurface("anthropic");
+    expect(anthropic?.writeLogFile).toBeUndefined();
+    expect(anthropic?.buildRequestHeaders).toBeUndefined();
+    expect(anthropic?.shellTools).toBeUndefined();
+  });
 });
 
 describe("campaign-action degraded modes (R6)", () => {

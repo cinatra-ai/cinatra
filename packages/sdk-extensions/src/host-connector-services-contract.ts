@@ -459,6 +459,43 @@ export type LlmProviderSurface = {
     clearConnection?(): Promise<unknown>;
     saveSkillsSettings?(formData: FormData): Promise<unknown>;
   };
+  // --- LLM provider adapter members (cinatra#151 Stage 2) ----------------
+  // Resolved by the host's packages/llm adapters at call time (the last
+  // value-imports packages/llm carried). Absence degrades per member:
+  // connection/headers members gate adapter availability; log writers are
+  // best-effort (host no-ops when absent).
+  /** Provider request headers (e.g. Gemini API key + host self-client headers). */
+  buildRequestHeaders?(input: {
+    apiKey?: string;
+    contentType?: string;
+    extraHeaders?: Record<string, string>;
+  }): Record<string, string>;
+  /** Request/response telemetry log writer (connector owns enabled-check + redaction). */
+  writeLogFile?(input: { label: string; kind: "request" | "response"; body: unknown }): Promise<void>;
+  /**
+   * GATED shell-tool members (least privilege): a settings reader + the
+   * docker-confined executor — never a raw client/spawn handle. The ABI
+   * deliberately carries NO administration/settings parameter: the
+   * connector's STORED settings are the single policy authority (enabled
+   * flag, command allowlists, mount roots, limits are enforced inside the
+   * connector against stored state and cannot be overridden through this
+   * surface).
+   */
+  shellTools?: {
+    readSettings(): unknown;
+    runCommandInDocker(input: {
+      shellCommand: string;
+      cwd?: string;
+      timeoutMs?: number;
+      maxOutputLength?: number;
+    }): Promise<{
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      timedOut?: boolean;
+      outputTruncated?: boolean;
+    }>;
+  };
 };
 
 /**

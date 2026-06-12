@@ -19,9 +19,6 @@
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/metric-usage-api": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
-    "@cinatra-ai/anthropic-connector": "workspace:*",
-    "@cinatra-ai/gemini-connector": "workspace:*",
-    "@cinatra-ai/openai-connector": "workspace:*",
     "@google/genai": "^2.3.0",
     "@anthropic-ai/sdk": "^0.96.0",
     "openai": "^6.38.0"
