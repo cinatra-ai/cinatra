@@ -22,6 +22,7 @@ import { join } from "node:path";
 import {
   validateFieldRendererDeclarations,
   mergeFieldRendererBindings,
+  comparableFieldRendererBinding,
   // eslint-disable-next-line @typescript-eslint/ban-ts-comment
   // @ts-ignore — dependency-free .mjs data/validation module (allowJs)
 } from "../../../scripts/extensions/agent-binding-kinds.mjs";
@@ -60,16 +61,19 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
   } catch {
     return [];
   }
+  // SORTED traversal — first-declarer-wins among runtime duplicates must be
+  // deterministic (alphabetical), never filesystem-order dependent (the
+  // converged "generated-then-alphabetical" merge order).
   let scopes: string[] = [];
   try {
-    scopes = readdirSync(installDir);
+    scopes = readdirSync(installDir).sort();
   } catch {
     return [];
   }
   for (const scope of scopes) {
     let dirs: string[] = [];
     try {
-      dirs = readdirSync(join(installDir, scope));
+      dirs = readdirSync(join(installDir, scope)).sort();
     } catch {
       continue;
     }
@@ -115,13 +119,35 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
  * does not carry. Deterministic; used by the server action, the A2UI
  * translator resolver, and kind-based ID lookups.
  */
+const warnedGeneratedDivergence = new Set<string>();
+
 export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding> {
-  const generatedIds = new Set(
-    GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id),
+  const generatedById = new Map(
+    GENERATED_FIELD_RENDERER_BINDINGS.map((b) => [b.id, b]),
   );
-  const runtimeOnly = collectInstalledFieldRendererBindings().filter(
-    (b) => !generatedIds.has(b.id),
-  );
+  const runtimeOnly: CollectedBinding[] = [];
+  for (const b of collectInstalledFieldRendererBindings()) {
+    const generated = generatedById.get(b.id);
+    if (!generated) {
+      runtimeOnly.push(b);
+      continue;
+    }
+    // Generated precedence; a DIVERGENT runtime duplicate is named loudly
+    // (once per id) so a drifted installed package is diagnosable — runtime
+    // data still never breaks the host.
+    if (
+      comparableFieldRendererBinding(generated) !==
+        comparableFieldRendererBinding(b) &&
+      !warnedGeneratedDivergence.has(b.id)
+    ) {
+      warnedGeneratedDivergence.add(b.id);
+      console.warn(
+        `[field-renderer-bindings] installed package ${b.declaredBy} declares ${b.id} ` +
+          `divergently from the generated binding (declared by ${generated.declaredBy}); ` +
+          `the generated binding wins`,
+      );
+    }
+  }
   return [
     ...(GENERATED_FIELD_RENDERER_BINDINGS as ReadonlyArray<CollectedBinding>),
     ...runtimeOnly,

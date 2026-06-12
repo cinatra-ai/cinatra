@@ -149,6 +149,22 @@ export function validateFieldRendererDeclarations(packageName, raw) {
 }
 
 /**
+ * The canonical comparable form for duplicate-divergence checks (the
+ * deep-equal contract: kind, priority, midRunHitl, a2uiTranslator, params).
+ * ONE definition — the generator's merge and the runtime collector's
+ * generated-vs-runtime divergence warning both consume it.
+ */
+export function comparableFieldRendererBinding(e) {
+  return JSON.stringify({
+    kind: e.kind,
+    priority: e.priority,
+    midRunHitl: e.midRunHitl === true,
+    a2uiTranslator: e.a2uiTranslator ?? null,
+    params: e.params ?? null,
+  });
+}
+
+/**
  * Merge per-package validated entries with the cross-declaration rules:
  *   - duplicate id with DEEP-EQUAL (kind, priority, midRunHitl,
  *     a2uiTranslator, params) -> dedupe (first declarer recorded);
@@ -160,14 +176,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
 export function mergeFieldRendererBindings(allEntries) {
   const errors = [];
   const byId = new Map();
-  const comparable = (e) =>
-    JSON.stringify({
-      kind: e.kind,
-      priority: e.priority,
-      midRunHitl: e.midRunHitl === true,
-      a2uiTranslator: e.a2uiTranslator ?? null,
-      params: e.params ?? null,
-    });
+  const comparable = comparableFieldRendererBinding;
   for (const e of allEntries) {
     const prev = byId.get(e.id);
     if (!prev) {
