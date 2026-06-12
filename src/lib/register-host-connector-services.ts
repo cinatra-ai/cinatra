@@ -49,6 +49,9 @@ import {
   type HostDrupalMcpService,
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
+  type HostWordPressContentService,
+  type HostWordPressWidgetAuthService,
+  type WordPressInstanceRowShape,
   type HostRuntimeModeService,
   type HostNotificationsService,
   type HostSkillsCatalogService,
@@ -76,8 +79,30 @@ import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
 // WordPress instance settings + hard-delete + LinkedIn account
 // materialization for the nango connection-save flow — published as the
 // BLOCKING `nango-connection-materializer` capability and the
-// `wordpress-mcp` per-concern service.
-import { deleteWordPressInstance, getWordPressAPISettings, saveWordPressInstanceFromNangoConnection } from "@/lib/wordpress-api";
+// `wordpress-mcp` per-concern service. The connection/instance-admin reads,
+// the remote webhook-subscription client, and the post/media content surface
+// (cinatra#172 Stage H3) are published as the extended `wordpress-mcp` and
+// the NEW `wordpress-content` services so the wordpress connectors' settings
+// and handler modules carry no `@/` edge.
+import {
+  createWordPressDraft,
+  deleteWordPressInstance,
+  deleteWordPressPost,
+  deleteWordPressWebhookSubscription,
+  getWordPressAPISettings,
+  getWordPressAPIStatus,
+  listPublishedWordPressPosts,
+  listWordPressWebhookSubscriptions,
+  readWordPressInstanceById,
+  readWordPressPost,
+  readWordPressPostStatus,
+  registerWordPressWebhookSubscription,
+  saveWordPressInstanceFromNangoConnection,
+  updateWordPressDraftMeta,
+  updateWordPressPost,
+  uploadWordPressMedia,
+  type WordPressInstanceSettings,
+} from "@/lib/wordpress-api";
 import { saveLinkedInAccountFromNangoConnection } from "@/lib/linkedin-api";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
@@ -86,8 +111,16 @@ import { saveLinkedInAccountFromNangoConnection } from "@/lib/linkedin-api";
 import {
   isPrivateUrl,
   probeWordPressInstanceMcpAdapter,
+  resolveWordPressMcpEndpoint,
   resolveWordPressMcpFallbackEndpoint,
 } from "@/lib/wordpress-mcp-connection";
+// Widget auth-config storage for the wordpress assistant widget (cinatra#172
+// Stage H3): published as the `wordpress-widget-auth` per-concern service
+// (the webhook HMAC verification stays host-only).
+import {
+  generateWidgetAuthConfig as generateWordPressWidgetAuthConfig,
+  readWidgetAuthConfig as readWordPressWidgetAuthConfig,
+} from "@/lib/wordpress-widget-auth";
 import {
   getDrupalMcpInstanceStatuses,
   probeDrupalMcp,
@@ -283,7 +316,80 @@ export function registerHostConnectorServices(): void {
     deleteInstance: async (id) => {
       await deleteWordPressInstance(id);
     },
+    // Connection/instance-admin surface (cinatra#172 Stage H3). The webhook
+    // writers (register/remove) sit behind the assistant connector's
+    // manage-gated "use server" actions — identical posture to the static
+    // imports they replace (see the contract's TRUST note).
+    getAPIStatus: getWordPressAPIStatus,
+    getAPISettings: getWordPressAPISettings,
+    readInstanceById: readWordPressInstanceById,
+    resolveEndpoint: resolveWordPressMcpEndpoint,
+    webhookSubscriptions: {
+      list: listWordPressWebhookSubscriptions,
+      register: registerWordPressWebhookSubscription,
+      remove: deleteWordPressWebhookSubscription,
+    },
   } satisfies HostWordPressMcpService);
+
+  // WordPress post/media CONTENT surface (cinatra#172 Stage H3) — a SEPARATE
+  // capability id from the connection-focused `wordpress-mcp` service so
+  // connection admin and content CRUD never evolve under one id. Basic-auth
+  // resolution (Nango on the row's credential binding) runs host-side inside
+  // each member. The contract keeps row timestamps OPTIONAL for skew while
+  // the host API requires them — host rows always carry them, so the epoch
+  // fallback only guards hand-built rows from a skewed companion.
+  const asWordPressInstanceRow = (
+    instance: WordPressInstanceRowShape,
+  ): WordPressInstanceSettings => ({
+    ...instance,
+    createdAt: instance.createdAt ?? new Date(0).toISOString(),
+    updatedAt: instance.updatedAt ?? new Date(0).toISOString(),
+  });
+  register(svc.wordpressContent, {
+    createDraft: (input) =>
+      createWordPressDraft({ instance: asWordPressInstanceRow(input.instance), payload: input.payload }),
+    readPost: (input) =>
+      readWordPressPost({
+        instance: asWordPressInstanceRow(input.instance),
+        wordpressPostId: input.wordpressPostId,
+        postType: input.postType,
+      }),
+    readPostStatus: (input) =>
+      readWordPressPostStatus({
+        instance: asWordPressInstanceRow(input.instance),
+        wordpressPostId: input.wordpressPostId,
+      }),
+    listPublishedPosts: (instance, options) =>
+      listPublishedWordPressPosts(asWordPressInstanceRow(instance), options),
+    deletePost: (input) =>
+      deleteWordPressPost({
+        instance: asWordPressInstanceRow(input.instance),
+        wordpressPostId: input.wordpressPostId,
+      }),
+    uploadMedia: (input) =>
+      uploadWordPressMedia({ ...input, instance: asWordPressInstanceRow(input.instance) }),
+    updateDraftMeta: (input) =>
+      updateWordPressDraftMeta({
+        instance: asWordPressInstanceRow(input.instance),
+        wordpressPostId: input.wordpressPostId,
+        meta: input.meta,
+      }),
+    updatePost: (input) =>
+      updateWordPressPost({
+        instance: asWordPressInstanceRow(input.instance),
+        wordpressPostId: input.wordpressPostId,
+        postType: input.postType,
+        fields: input.fields,
+      }),
+  } satisfies HostWordPressContentService);
+
+  // Widget auth-config storage for the wordpress assistant widget (cinatra#172
+  // Stage H3): `generate` MINTS+PERSISTS a fresh key + webhook secret
+  // (manage-gated in the connector); `read` backs the settings page render.
+  register(svc.wordpressWidgetAuth, {
+    read: readWordPressWidgetAuthConfig,
+    generate: generateWordPressWidgetAuthConfig,
+  } satisfies HostWordPressWidgetAuthService);
 
   register(svc.runtimeMode, {
     isDevelopment: isAppDevelopmentMode,

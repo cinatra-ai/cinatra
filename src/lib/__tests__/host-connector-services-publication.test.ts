@@ -60,11 +60,88 @@ vi.mock("@cinatra-ai/google-oauth-connection", () => ({
 vi.mock("@/lib/host-content-editor-dispatch", () => ({ dispatchContentEditorViaA2A: async () => "" }));
 
 const wordpressMaterialized: unknown[] = [];
+const wordpressApiCalls: Record<string, unknown[][]> = {
+  webhookList: [],
+  webhookRegister: [],
+  webhookRemove: [],
+  createDraft: [],
+  readPost: [],
+  readPostStatus: [],
+  listPublishedPosts: [],
+  deletePost: [],
+  uploadMedia: [],
+  updateDraftMeta: [],
+  updatePost: [],
+};
+const WP_ROW = {
+  id: "wp-1",
+  name: "Site",
+  siteUrl: "https://wp.example",
+  username: "u",
+  applicationPassword: "p",
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-02T00:00:00Z",
+};
+const WP_SUB = {
+  id: "sub-1",
+  event_type: "post_published",
+  target_url: "https://app.example/api/webhooks/wordpress",
+  post_types: [] as string[],
+  created_at: "2026-01-03T00:00:00Z",
+};
 vi.mock("@/lib/wordpress-api", () => ({
   deleteWordPressInstance: async () => ({}),
-  getWordPressAPISettings: () => ({ instances: [] }),
+  getWordPressAPISettings: () => ({ instances: [], loggingEnabled: true }),
+  getWordPressAPIStatus: () => ({
+    status: "connected",
+    detail: "1 WordPress instance is configured.",
+  }),
+  readWordPressInstanceById: (id: string) => (id === WP_ROW.id ? WP_ROW : null),
   saveWordPressInstanceFromNangoConnection: async (input: unknown) => {
     wordpressMaterialized.push(input);
+  },
+  listWordPressWebhookSubscriptions: async (...args: unknown[]) => {
+    wordpressApiCalls.webhookList.push(args);
+    return [WP_SUB];
+  },
+  registerWordPressWebhookSubscription: async (...args: unknown[]) => {
+    wordpressApiCalls.webhookRegister.push(args);
+    return WP_SUB;
+  },
+  deleteWordPressWebhookSubscription: async (...args: unknown[]) => {
+    wordpressApiCalls.webhookRemove.push(args);
+  },
+  createWordPressDraft: async (...args: unknown[]) => {
+    wordpressApiCalls.createDraft.push(args);
+    return { wordpressPostId: 10, adminUrl: "https://wp.example/wp-admin/post.php?post=10&action=edit" };
+  },
+  readWordPressPost: async (...args: unknown[]) => {
+    wordpressApiCalls.readPost.push(args);
+    return { id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" };
+  },
+  readWordPressPostStatus: async (...args: unknown[]) => {
+    wordpressApiCalls.readPostStatus.push(args);
+    return { id: 10, status: "draft", adminUrl: "a" };
+  },
+  listPublishedWordPressPosts: async (...args: unknown[]) => {
+    wordpressApiCalls.listPublishedPosts.push(args);
+    return { items: [], total: 0 };
+  },
+  deleteWordPressPost: async (...args: unknown[]) => {
+    wordpressApiCalls.deletePost.push(args);
+    return { deleted: true, previousStatus: "draft" };
+  },
+  uploadWordPressMedia: async (...args: unknown[]) => {
+    wordpressApiCalls.uploadMedia.push(args);
+    return { mediaId: 7, sourceUrl: "https://wp.example/m.png" };
+  },
+  updateWordPressDraftMeta: async (...args: unknown[]) => {
+    wordpressApiCalls.updateDraftMeta.push(args);
+    return { id: 10 };
+  },
+  updateWordPressPost: async (...args: unknown[]) => {
+    wordpressApiCalls.updatePost.push(args);
+    return { id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" };
   },
 }));
 const linkedinMaterialized: unknown[] = [];
@@ -77,7 +154,20 @@ vi.mock("@/lib/linkedin-api", () => ({
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
   isPrivateUrl: () => false,
   probeWordPressInstanceMcpAdapter: async () => ({}),
-  resolveWordPressMcpFallbackEndpoint: () => null,
+  resolveWordPressMcpFallbackEndpoint: (siteUrl: string) =>
+    `${siteUrl}/index.php?rest_route=/mcp/mcp-adapter-default-server`,
+  resolveWordPressMcpEndpoint: (siteUrl: string) => `${siteUrl}/wp-json/mcp/mcp-adapter-default-server`,
+}));
+const wpWidgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
+vi.mock("@/lib/wordpress-widget-auth", () => ({
+  readWidgetAuthConfig: () => {
+    wpWidgetAuthCalls.read += 1;
+    return { apiKey: "wpk-existing", webhookSecret: "s-existing", generatedAt: "2026-01-01T00:00:00Z" };
+  },
+  generateWidgetAuthConfig: () => {
+    wpWidgetAuthCalls.generate += 1;
+    return { apiKey: "wpk-fresh", webhookSecret: "s-fresh", generatedAt: "2026-01-02T00:00:00Z" };
+  },
 }));
 vi.mock("@/lib/drupal-mcp-connection", () => ({
   probeDrupalMcp: async () => ({}),
@@ -119,6 +209,8 @@ import {
   type HostDrupalMcpService,
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
+  type HostWordPressContentService,
+  type HostWordPressWidgetAuthService,
   type HostRuntimeModeService,
   type HostOpenAIConnectionService,
   type HostAnthropicConnectionService,
@@ -310,5 +402,168 @@ describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", 
     expect(widgetAuth.generate()).toEqual({ apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" });
     expect(widgetAuthCalls.read).toBe(1);
     expect(widgetAuthCalls.generate).toBe(1);
+  });
+});
+
+describe("wordpress connection-admin + content + widget-auth services (cinatra#172 Stage H3)", () => {
+  // Grant-drift coverage: one assertion row per NEW/EXTENDED service MEMBER —
+  // the publication test pins the full member set, not just the service id.
+  it("extends @cinatra-ai/host:wordpress-mcp with the connection/instance-admin surface (every member bound)", async () => {
+    const wordpress = resolveSingle<HostWordPressMcpService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressMcp,
+    );
+    // Pre-H3 members survive unchanged.
+    expect(wordpress.listInstances()).toEqual([]);
+    expect(typeof wordpress.probeAdapter).toBe("function");
+    expect(typeof wordpress.resolveServerUrl).toBe("function");
+    expect(typeof wordpress.isPrivateUrl).toBe("function");
+    expect(typeof wordpress.deleteInstance).toBe("function");
+
+    // getAPIStatus — the connector's wordpress_status primitive read (SYNC).
+    expect(wordpress.getAPIStatus()).toEqual({
+      status: "connected",
+      detail: "1 WordPress instance is configured.",
+    });
+
+    // getAPISettings — full settings document (rows + logging flag).
+    expect(wordpress.getAPISettings()).toEqual({ instances: [], loggingEnabled: true });
+
+    // readInstanceById — row lookup, null on unknown id.
+    expect(wordpress.readInstanceById("wp-1")).toEqual(WP_ROW);
+    expect(wordpress.readInstanceById("nope")).toBeNull();
+
+    // resolveEndpoint — the PRIMARY pretty-permalink form (`/wp-json/...`),
+    // DISTINCT from resolveServerUrl (the FALLBACK `index.php?rest_route=`
+    // form). The two members must stay separately bound — conflating them
+    // was the H3 design's named hazard. Pin BOTH forms and their inequality.
+    expect(wordpress.resolveEndpoint("https://wp.example")).toBe(
+      "https://wp.example/wp-json/mcp/mcp-adapter-default-server",
+    );
+    expect(wordpress.resolveServerUrl("https://wp.example")).toBe(
+      "https://wp.example/index.php?rest_route=/mcp/mcp-adapter-default-server",
+    );
+    expect(wordpress.resolveEndpoint("https://wp.example")).not.toBe(
+      wordpress.resolveServerUrl("https://wp.example"),
+    );
+
+    // webhookSubscriptions.list — remote read, forwards the instance row.
+    await expect(wordpress.webhookSubscriptions.list(WP_ROW)).resolves.toEqual([WP_SUB]);
+    expect(wordpressApiCalls.webhookList.at(-1)).toEqual([WP_ROW]);
+
+    // webhookSubscriptions.register — WRITER; forwards row + subscription.
+    const sub = { event_type: "post_published", target_url: "https://app.example/api/webhooks/wordpress", post_types: [] };
+    await expect(wordpress.webhookSubscriptions.register(WP_ROW, sub)).resolves.toEqual(WP_SUB);
+    expect(wordpressApiCalls.webhookRegister.at(-1)).toEqual([WP_ROW, sub]);
+
+    // webhookSubscriptions.remove — WRITER; forwards row + subscription id.
+    await expect(wordpress.webhookSubscriptions.remove(WP_ROW, "sub-1")).resolves.toBeUndefined();
+    expect(wordpressApiCalls.webhookRemove.at(-1)).toEqual([WP_ROW, "sub-1"]);
+  });
+
+  it("publishes @cinatra-ai/host:wordpress-content with the full post/media CRUD member set", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent).toBe(
+      "@cinatra-ai/host:wordpress-content",
+    );
+    const content = resolveSingle<HostWordPressContentService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent,
+    );
+
+    // createDraft — WRITER; instance row + payload forwarded intact.
+    const payload = { title: "T", content: "C", excerpt: "E", status: "draft" as const };
+    await expect(content.createDraft({ instance: WP_ROW, payload })).resolves.toEqual({
+      wordpressPostId: 10,
+      adminUrl: "https://wp.example/wp-admin/post.php?post=10&action=edit",
+    });
+    expect(wordpressApiCalls.createDraft.at(-1)).toEqual([{ instance: WP_ROW, payload }]);
+
+    // readPost — reader; forwards id + postType.
+    await expect(
+      content.readPost({ instance: WP_ROW, wordpressPostId: 10, postType: "page" }),
+    ).resolves.toEqual({ id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" });
+    expect(wordpressApiCalls.readPost.at(-1)).toEqual([
+      { instance: WP_ROW, wordpressPostId: 10, postType: "page" },
+    ]);
+
+    // readPostStatus — reader.
+    await expect(content.readPostStatus({ instance: WP_ROW, wordpressPostId: 10 })).resolves.toEqual({
+      id: 10,
+      status: "draft",
+      adminUrl: "a",
+    });
+    expect(wordpressApiCalls.readPostStatus.at(-1)).toEqual([
+      { instance: WP_ROW, wordpressPostId: 10 },
+    ]);
+
+    // listPublishedPosts — reader; pagination options forwarded.
+    await expect(content.listPublishedPosts(WP_ROW, { offset: 10, limit: 10 })).resolves.toEqual({
+      items: [],
+      total: 0,
+    });
+    expect(wordpressApiCalls.listPublishedPosts.at(-1)).toEqual([WP_ROW, { offset: 10, limit: 10 }]);
+
+    // deletePost — WRITER.
+    await expect(content.deletePost({ instance: WP_ROW, wordpressPostId: 10 })).resolves.toEqual({
+      deleted: true,
+      previousStatus: "draft",
+    });
+    expect(wordpressApiCalls.deletePost.at(-1)).toEqual([{ instance: WP_ROW, wordpressPostId: 10 }]);
+
+    // uploadMedia — WRITER.
+    const media = { instance: WP_ROW, imageBase64: "QUJD", imageMimeType: "image/png", title: "img" };
+    await expect(content.uploadMedia(media)).resolves.toEqual({
+      mediaId: 7,
+      sourceUrl: "https://wp.example/m.png",
+    });
+    expect(wordpressApiCalls.uploadMedia.at(-1)).toEqual([media]);
+
+    // updateDraftMeta — WRITER; meta envelope forwarded intact.
+    await expect(
+      content.updateDraftMeta({ instance: WP_ROW, wordpressPostId: 10, meta: { k: "v" } }),
+    ).resolves.toEqual({ id: 10 });
+    expect(wordpressApiCalls.updateDraftMeta.at(-1)).toEqual([
+      { instance: WP_ROW, wordpressPostId: 10, meta: { k: "v" } },
+    ]);
+
+    // updatePost — WRITER; top-level field envelope forwarded intact.
+    const fields = { title: "X", status: "draft" as const };
+    await expect(
+      content.updatePost({ instance: WP_ROW, wordpressPostId: 10, postType: "post", fields }),
+    ).resolves.toEqual({ id: 10, status: "draft", title: "T", content: "C", excerpt: "E", adminUrl: "a" });
+    expect(wordpressApiCalls.updatePost.at(-1)).toEqual([
+      { instance: WP_ROW, wordpressPostId: 10, postType: "post", fields },
+    ]);
+  });
+
+  it("normalizes skew rows missing timestamps (epoch fallback) before reaching the host API", async () => {
+    const content = resolveSingle<HostWordPressContentService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressContent,
+    );
+    const skewRow = { id: "wp-2", name: "S", siteUrl: "https://wp2.example", username: "u", applicationPassword: "p" };
+    await content.readPostStatus({ instance: skewRow, wordpressPostId: 1 });
+    const forwarded = (wordpressApiCalls.readPostStatus.at(-1)![0] as { instance: Record<string, unknown> }).instance;
+    expect(forwarded.createdAt).toBe(new Date(0).toISOString());
+    expect(forwarded.updatedAt).toBe(new Date(0).toISOString());
+    expect(forwarded.id).toBe("wp-2");
+  });
+
+  it("publishes @cinatra-ai/host:wordpress-widget-auth with read + generate (writer) members", () => {
+    const widgetAuth = resolveSingle<HostWordPressWidgetAuthService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth,
+    );
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressWidgetAuth).toBe(
+      "@cinatra-ai/host:wordpress-widget-auth",
+    );
+    expect(widgetAuth.read()).toEqual({
+      apiKey: "wpk-existing",
+      webhookSecret: "s-existing",
+      generatedAt: "2026-01-01T00:00:00Z",
+    });
+    expect(widgetAuth.generate()).toEqual({
+      apiKey: "wpk-fresh",
+      webhookSecret: "s-fresh",
+      generatedAt: "2026-01-02T00:00:00Z",
+    });
+    expect(wpWidgetAuthCalls.read).toBe(1);
+    expect(wpWidgetAuthCalls.generate).toBe(1);
   });
 });

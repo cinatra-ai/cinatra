@@ -71,6 +71,14 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   // (`@/lib/drupal-widget-auth` stays host-side).
   drupalWidgetAuth: "@cinatra-ai/host:drupal-widget-auth",
   wordpressMcp: "@cinatra-ai/host:wordpress-mcp",
+  // --- hostInternal pinned-empty sweep (cinatra#172 Stage H3) --------------
+  // WordPress post/media CONTENT surface — deliberately a SEPARATE capability
+  // id from the connection-focused `wordpress-mcp` service so connection
+  // admin and content CRUD never evolve under one id.
+  wordpressContent: "@cinatra-ai/host:wordpress-content",
+  // Per-concern widget-auth config surface for the wordpress assistant widget
+  // (`@/lib/wordpress-widget-auth` stays host-side).
+  wordpressWidgetAuth: "@cinatra-ai/host:wordpress-widget-auth",
   runtimeMode: "@cinatra-ai/host:runtime-mode",
   notifications: "@cinatra-ai/host:notifications",
   skillsCatalog: "@cinatra-ai/host:skills-catalog",
@@ -193,16 +201,47 @@ export type HostDrupalWidgetAuthService = {
   generate(): { apiKey: string; generatedAt: string };
 };
 
-/** WordPress external-MCP toolbox surfaces + the instance hard-delete
- * (`@/lib/wordpress-api` / `@/lib/wordpress-mcp-connection` stay host-side). */
+/** Structural WordPress instance row threading through the wordpress
+ * connection/content services. Required fields are what every consumer needs;
+ * the row metadata is optional FOR SKEW ONLY (host rows always carry the
+ * Nango binding + timestamps) so a connector compiled against this shape can
+ * meet any host. `@/lib/wordpress-api`'s `WordPressInstanceSettings` is the
+ * host-side authority. */
+export type WordPressInstanceRowShape = {
+  id: string;
+  name: string;
+  siteUrl: string;
+  username: string;
+  applicationPassword: string;
+  /** Nango credential binding (host rows always carry these; optional for skew). */
+  providerConfigKey?: string;
+  connectionId?: string;
+  /** Row metadata (host rows always carry these; optional for skew). */
+  lastValidatedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  /** Opt-in site-specific blog-connector binding (host-persisted). */
+  blogConnectorId?: string;
+};
+
+/** WordPress external-MCP toolbox + connection/instance-admin surfaces
+ * (`@/lib/wordpress-api` / `@/lib/wordpress-mcp-connection` stay host-side).
+ * Post/media CONTENT CRUD deliberately lives on the SEPARATE
+ * `@cinatra-ai/host:wordpress-content` service (`HostWordPressContentService`)
+ * so connection admin and content writes never evolve under one capability id.
+ *
+ * TRUST (cinatra#172 Stage H3): READ and WRITE members share this ONE
+ * in-process capability id — the registry is server-side only, never
+ * client-resolvable. The WRITERS are `deleteInstance` (hard-deletes the
+ * instance row + best-effort Nango cleanup) and `webhookSubscriptions.register`
+ * / `webhookSubscriptions.remove` (mutate the REMOTE WordPress site's
+ * `cinatra/v1/webhooks` subscription table over Basic auth). AUTHORIZATION
+ * GATING STAYS EXTENSION-SIDE: the connectors' "use server" actions keep
+ * their `requireExtensionAction(<pkg>, "manage")` gates — the identical
+ * posture the static `@/lib/wordpress-api` imports carried before the
+ * cutover. */
 export type HostWordPressMcpService = {
-  listInstances(): Array<{
-    id: string;
-    name: string;
-    siteUrl: string;
-    username: string;
-    applicationPassword: string;
-  }>;
+  listInstances(): Array<WordPressInstanceRowShape>;
   probeAdapter(instance: {
     id: string;
     name: string;
@@ -210,9 +249,182 @@ export type HostWordPressMcpService = {
     username: string;
     applicationPassword: string;
   }): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
+  /** FALLBACK (`index.php?rest_route=`) endpoint form — works in every WP
+   * configuration; the INJECTED MCP server URL. Distinct from
+   * `resolveEndpoint` (the PRIMARY pretty-permalink form) — do not conflate. */
   resolveServerUrl(siteUrl: string): string;
   isPrivateUrl(url: string): boolean;
+  /** WRITER — hard-delete an instance row (best-effort Nango cleanup). */
   deleteInstance(id: string): Promise<void>;
+  // --- connection/instance-admin surface (cinatra#172 Stage H3) ------------
+  /** Aggregate status for the connector's `wordpress_status` primitive. */
+  getAPIStatus(): { status: "connected" | "not_connected"; detail: string };
+  /** Full instance settings document (rows + logging flag). */
+  getAPISettings(): { instances: Array<WordPressInstanceRowShape>; loggingEnabled?: boolean };
+  /** One instance row by id (null when unknown). */
+  readInstanceById(id: string): WordPressInstanceRowShape | null;
+  /** PRIMARY (`/wp-json/...` pretty-permalink) endpoint form — the canonical
+   * URL shown in admin UIs. Distinct from `resolveServerUrl` (FALLBACK). */
+  resolveEndpoint(siteUrl: string): string;
+  /** Remote `cinatra/v1/webhooks` subscription client (direct Basic auth on
+   * the instance row — works without Nango). `register`/`remove` are WRITERS
+   * against the remote WordPress site. */
+  webhookSubscriptions: {
+    list(instance: {
+      siteUrl: string;
+      username: string;
+      applicationPassword: string;
+    }): Promise<
+      Array<{
+        id: string;
+        event_type: string;
+        target_url: string;
+        post_types: string[];
+        created_at: string;
+      }>
+    >;
+    /** WRITER — idempotent remote subscription upsert (HTTP 409 == success). */
+    register(
+      instance: { siteUrl: string; username: string; applicationPassword: string },
+      subscription: { event_type: string; target_url: string; post_types?: string[] },
+    ): Promise<{
+      id: string;
+      event_type: string;
+      target_url: string;
+      post_types: string[];
+      created_at: string;
+    }>;
+    /** WRITER — idempotent remote subscription delete (404 == already gone). */
+    remove(
+      instance: { siteUrl: string; username: string; applicationPassword: string },
+      subscriptionId: string,
+    ): Promise<void>;
+  };
+};
+
+/** WordPress post/media CONTENT surface (`@/lib/wordpress-api` stays
+ * host-side; Basic-auth resolution runs host-side through Nango on the
+ * instance row's credential binding). SEPARATE capability id from the
+ * connection-focused `wordpress-mcp` service — connection admin and content
+ * CRUD must never evolve under one id.
+ *
+ * TRUST (cinatra#172 Stage H3): this is a COARSE content-CRUD surface — read
+ * and write members share this ONE in-process capability id (server-side
+ * registry only). The WRITERS are `createDraft`, `deletePost`, `uploadMedia`,
+ * `updateDraftMeta`, and `updatePost` (all mutate the REMOTE WordPress site);
+ * `readPost` / `readPostStatus` / `listPublishedPosts` are readers.
+ * AUTHORIZATION GATING STAYS EXTENSION-SIDE / DISPATCH-SIDE: the consuming
+ * MCP primitive handlers sit behind the host's MCP dispatch + actor gating —
+ * the identical posture the static `@/lib/wordpress-api` imports carried
+ * before the cutover (no member is client-resolvable). */
+export type HostWordPressContentService = {
+  /** WRITER — create a draft post; payload mirrors the host's
+   * `WordPressWritablePostPayload` (status is pinned to "draft"). */
+  createDraft(input: {
+    instance: WordPressInstanceRowShape;
+    payload: {
+      title: string;
+      content: string;
+      excerpt: string;
+      status: "draft";
+      slug?: string;
+      author?: number;
+      comment_status?: "open" | "closed";
+      ping_status?: "open" | "closed";
+      format?: string;
+      sticky?: boolean;
+      template?: string;
+      categories?: number[];
+      tags?: number[];
+      meta?: Record<string, unknown>;
+      featured_media?: number;
+    };
+  }): Promise<{ wordpressPostId: number; publicUrl?: string; adminUrl: string }>;
+  readPost(input: {
+    instance: WordPressInstanceRowShape;
+    wordpressPostId: number;
+    postType?: string;
+  }): Promise<{
+    id: number;
+    status: string;
+    title: string;
+    content: string;
+    excerpt: string;
+    slug?: string;
+    link?: string;
+    featured_media?: number;
+    categories?: number[];
+    tags?: number[];
+    adminUrl: string;
+  }>;
+  readPostStatus(input: {
+    instance: WordPressInstanceRowShape;
+    wordpressPostId: number;
+  }): Promise<{ id: number; status: string; adminUrl: string; publicUrl?: string }>;
+  listPublishedPosts(
+    instance: WordPressInstanceRowShape,
+    options?: { offset?: number; limit?: number },
+  ): Promise<{
+    items: Array<{ id: number; title: string; status: string; date: string; url: string }>;
+    total: number;
+  }>;
+  /** WRITER — delete a post on the remote site. */
+  deletePost(input: {
+    instance: WordPressInstanceRowShape;
+    wordpressPostId: number;
+  }): Promise<{ deleted: boolean; previousStatus?: string }>;
+  /** WRITER — upload media (featured images). */
+  uploadMedia(input: {
+    instance: WordPressInstanceRowShape;
+    imageBase64: string;
+    imageMimeType: string;
+    title: string;
+  }): Promise<{ mediaId: number; sourceUrl?: string }>;
+  /** WRITER — meta-only post update; returns the raw WP post record. */
+  updateDraftMeta(input: {
+    instance: WordPressInstanceRowShape;
+    wordpressPostId: number;
+    meta: Record<string, unknown>;
+  }): Promise<unknown>;
+  /** WRITER — top-level field updates (title/content/excerpt/status/meta). */
+  updatePost(input: {
+    instance: WordPressInstanceRowShape;
+    wordpressPostId: number;
+    postType?: string;
+    fields: {
+      title?: string;
+      content?: string;
+      excerpt?: string;
+      status?: "publish" | "future" | "draft" | "pending" | "private";
+      meta?: Record<string, unknown>;
+    };
+  }): Promise<{
+    id: number;
+    status: string;
+    title: string;
+    content: string;
+    excerpt: string;
+    adminUrl: string;
+  }>;
+};
+
+/** Widget AUTH-CONFIG storage for the WordPress assistant widget
+ * (`@/lib/wordpress-widget-auth` stays host-side; the request-time
+ * origin/token validation lives in the host's generic widget-stream auth and
+ * the webhook HMAC verification — `verifyWebhookSignature` — stays host-only,
+ * NOT here).
+ *
+ * TRUST (cinatra#172 Stage H3): read and write share this ONE in-process
+ * capability id (server-side registry only). The WRITER is `generate()` — it
+ * MINTS AND PERSISTS a fresh widget API key + webhook secret, immediately
+ * invalidating the previous pair. AUTHORIZATION GATING STAYS EXTENSION-SIDE:
+ * the connector's "use server" generate action keeps its
+ * `requireExtensionAction(<pkg>, "manage")` gate — the identical posture the
+ * static import carried. */
+export type HostWordPressWidgetAuthService = {
+  read(): { apiKey: string; webhookSecret: string; generatedAt: string } | null;
+  /** WRITER — mint + persist a fresh key + webhook secret (invalidates the old). */
+  generate(): { apiKey: string; webhookSecret: string; generatedAt: string };
 };
 
 /** Host runtime-mode flag (development vs production). */
