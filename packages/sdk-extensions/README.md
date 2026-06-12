@@ -28,6 +28,16 @@ Server-entry extensions pin a compatible range via `cinatra.sdkAbiRange`
 (e.g. `"^2"`); the loader refuses to activate an extension whose declared range
 the host ABI does not satisfy.
 
+## `cinatra.serverEntry` — published packages ship BUILT artifacts
+
+A runtime-store-installed package's `cinatra.serverEntry` must resolve —
+exports-map key first, else literal `./`-relative path — to an existing
+`.mjs`/`.cjs`/`.js` file inside the package (the recommended published shape
+is a top-level `register.mjs` with `cinatra.serverEntry: "./register.mjs"`).
+TypeScript source, extensionless, and missing entries are refused at install
+time. Full normative contract, error families, and the operator refresh
+runbook: [`docs/extension-server-entry-contract.md`](../../docs/extension-server-entry-contract.md).
+
 ## Allowed first-party dependencies
 
 A Cinatra extension's only permitted `@cinatra-ai/*` **code** dependencies are
@@ -51,7 +61,7 @@ modules:
   "name": "@acme/crm-connector",
   "cinatra": {
     "kind": "connector",
-    "serverEntry": "./register",
+    "serverEntry": "./register.mjs",
     "migrationsDir": "cinatra/migrations"
   }
 }

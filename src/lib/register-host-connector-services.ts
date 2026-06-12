@@ -182,7 +182,16 @@ export function registerHostConnectorServices(): void {
   // installed before the re-point; that window is closed. A digest that old
   // gets a capability-resolution miss at call time and must be refreshed
   // from the marketplace (every current package resolves the
-  // connector-authored `nango-system` surface directly).
+  // connector-authored `nango-system` surface directly). The miss is thrown
+  // by the stale package's OWN bundled code — the host deliberately does NOT
+  // resurrect the id with a tombstone provider (the Stage 7 pin: the id
+  // resolves to NOTHING, host-connector-services-publication.test.ts).
+  // Operator remediation — an installed digest that predates a host
+  // capability re-point is refreshed via the marketplace hot-update path;
+  // for a first-party connector that refresh is only meaningful AFTER the
+  // cinatra#161 republish wave (earlier refreshes hit the built-artifacts-
+  // only install gate: loud, old digest stays active). Runbook:
+  // docs/extension-server-entry-contract.md ("refreshing a stale digest").
 
   register(svc.googleOAuth, {
     getStatus: getGoogleOAuthStatus,

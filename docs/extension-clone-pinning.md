@@ -1,5 +1,10 @@
 # Pinned extension clone-back (CI) — locks, canary, and the bump recipe
 
+> This doc covers how the STATIC path acquires extension SOURCE. The other
+> acquisition path — marketplace installs into the runtime package store —
+> accepts BUILT artifacts only; see the
+> [runtime-store `serverEntry` contract](./extension-server-entry-contract.md).
+
 ## Why
 
 Merge-gating CI materializes every `cinatraDevExtensions` companion repo
