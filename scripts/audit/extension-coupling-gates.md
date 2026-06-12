@@ -71,19 +71,25 @@ by all three gates:
 
 Permanently exempt are ONLY:
 
-1. **The generated manifest tree** — the exact files
+1. **The generator-emitted file list** — the exact files
    `scripts/extensions/generate-extension-manifest.mjs` emits (the shared
    `GENERATED_MANIFEST_FILES` list: `extensions.server.ts`,
    `connector-setup-pages.ts`, `extensions.client.tsx`,
-   `widget-stream-public-paths.ts` under `src/lib/generated/`). Names there
+   `widget-stream-public-paths.ts`, `agent-bindings.ts` under
+   `src/lib/generated/`, plus the ONE package-local emission
+   `packages/objects/src/generated/artifact-floor.ts` — cinatra#151 Stage 6:
+   the semantic-floor binding lives inside `packages/objects` because that
+   package is consumed from graphs where the host `@/` alias does not
+   resolve; same generator, same byte pin, same explicit-list discipline —
+   the exempt class is the EMITTED LIST, not a directory). Names there
    are generator output — the legitimate data-driven install list, not
-   hand-coupling. The owner ruling on #36 made the whole generated tree
+   hand-coupling. The owner ruling on #36 made the generator-emitted set
    the ONE permanent-exempt class (the sibling generated maps are part of it,
    not a separate concession), unifying the instance-coupling and import-ban
    exempt sets. Two integrity guards keep the exemption honest:
    - the exemption is an EXPLICIT file list, never a directory prefix — a
-     hand-added extra file under `src/lib/generated/` is counted (default
-     class runtime-coupling → NEW key → hard fail);
+     hand-added extra file under `src/lib/generated/` (or any `generated/`
+     dir) is counted (default class runtime-coupling → NEW key → hard fail);
    - the listed files are pinned to the generator's byte-exact output by the
      FAIL-CLOSED `generate-extension-manifest.mjs --check` CI step (drift,
      missing file, or catalog-parity break fails CI).
@@ -126,7 +132,7 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **20 occurrences / 15 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4; −85 occ agent-identity decoupling — manifest-declared field-renderer bindings + role bindings + dev-tooling derivation, Stage 5) | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **0 occurrences / 0 files** — the baseline is EMPTY (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4; −85 occ agent-identity decoupling — manifest-declared field-renderer bindings + role bindings + dev-tooling derivation, Stage 5; −20 occ artifact/blog/seed tail — generated semantic-floor binding, extension-role-resolved materializers/dashboard, neutralized prose, extension-relocated + presence-conditional seeds, Stage 6). The PINNED-EMPTY gate flip is the Stage 7 governance end-state. | shrink-only, frozen (EMPTY) |
 | `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1; −4 hidden transport edges — the transport-DI inversion, Stage 3, which adopted the shared lexer in the same PR so the zero is HONEST). | PINNED EMPTY |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
@@ -262,18 +268,35 @@ epic's scope and tracked elsewhere:
   extension aliases retired in favor of `tsconfigPaths: true`; the CLI's
   tailscale modules are discovered from `cinatra.devCliModules` manifest
   declarations.
-- **The artifact/blog/seed tail (the remaining 20 occ)** — default-artifact
-  resolution (src/lib/artifacts/* + packages/objects, 9 occ),
-  artifact materializers (blog idea/post/image + marketing-icp mcp, 4 occ),
-  blog host surfaces (src/lib/blog/*, 6 occ — blog-pipeline-agent,
-  blog-content-workflow, blog-linkedin-publish-agent, blog-image-artifact),
-  and the seed workflow literal (packages/workflows
-  major-product-release, 2 occ — counts: artifacts/objects cluster 11 +
-  blog-host 7 + seed 2, with the blog materializer files counted in the
-  artifact cluster). Stage 6 territory (manifest default-flag + materializer
-  capabilities + registry resolution + presence-conditional seeds). Each is
-  a real named-extension reference in core; each shrinks only by genuine
-  decoupling work.
+- **The artifact/blog/seed tail — RETIRED (cinatra#151 Stage 6).** The last
+  20 occurrences: (a) the semantic-floor type (8 occ) resolves from the
+  manifest-declared `artifact-default-floor` extension role, emitted as the
+  generated pure-data `packages/objects/src/generated/artifact-floor.ts`
+  (the ONE generator emission outside `src/lib/generated/` — package-local
+  so `@/`-alias-free graphs consume it; same `--check` byte pin, same
+  explicit-list exemption discipline) with generation-time guards: exactly
+  one claimant AND the claimant must be a `cinatra.systemExtensions`
+  member; (b) the three blog artifact materializers + the blog operator
+  dashboard resolve through `cinatra.roles` claims
+  (`artifact-blog-{post-body,idea-summary,image}`,
+  `blog-operator-dashboard`) via `src/lib/extension-roles.ts` — fail-loud
+  descriptive for materializers (no more silent dangling assertions on
+  absent types), degrade-to-index for the dashboard URL; (c) 6 prose
+  literals (retired-stub error messages, MCP tool descriptions) neutralized;
+  (d) the host-side seed module `packages/workflows/src/seed/` DELETED —
+  the extension-owned template ships via the major-release-workflow
+  extension's bpmn install path, and `scripts/seed.mjs` demo fixtures are
+  presence-conditional under the shared
+  `scripts/seed-lib/extension-presence.mjs` helper (skip-with-notice,
+  never a dangling agent ref; determinism pinned for BOTH the required-only
+  and full universes by `scripts/__tests__/seed-workflow-presence.test.mjs`).
+  Stage 6 also fixed a latent pre-existing defect in exactly this area: the
+  artifact-extension cinatra-key allowlists (objects bridge +
+  artifact-handler byte-mirror) rejected `cinatra.dependencies`, so the
+  object-registry bridge had been skip-warning EVERY on-disk artifact
+  extension at boot and artifact installs were rejected; both allowlists
+  now accept the cross-kind `dependencies` + `roles` keys, pinned by a
+  live-tree zero-skip registration test.
 
 Every cluster lives in the committed baselines — visible, counted, and
 incapable of growing.

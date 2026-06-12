@@ -1282,7 +1282,7 @@ export async function saveBlogPostImageToMediaLibrary(_input: {
 }): Promise<never> {
   throw new Error(
     "Retired: `blog_media_*` is delete-as-superseded. Blog images live in " +
-      "`@cinatra-ai/blog-image-artifact` rows; reach them through " +
+      "canonical blog image artifact rows; reach them through " +
       "`/artifacts`.",
   );
 }

@@ -26,9 +26,9 @@
     {
       "packageName": "@cinatra-ai/default-artifact",
       "repo": "cinatra-ai/default-artifact",
-      "resolvedSha": "15d24544d32d6c01231b64fc3dcfdc25f83b24c3",
+      "resolvedSha": "949d42d9acd1f42a618568a686fc78b20449394c",
       "packageVersion": "0.1.0",
-      "treeSha256": "ce2376d980de18527a8f6bdd45121e335015d1be2844df3a6c26f56d34d4ab5b"
+      "treeSha256": "2016e6b5f33ec0bbadc7af80e87488e3b1c1fff66c341498ff067546749abf99"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",

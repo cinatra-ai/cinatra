@@ -145,7 +145,7 @@ const TOOL_META = {
   },
   artifact_extension_get: {
     description:
-      "Fetch the semantic manifest view for one artifact extension by package name (e.g. \"@cinatra-ai/marketing-icp-artifact\"). Returns `{packageName, label, acceptedMimes, authorableMimes, authoringSkillIds, matcherSkillIds, agentDependencies}`. The chat reads `authoringSkillIds[0]` (the authoring skill to follow) and picks a `declaredMime` from `authorableMimes` (NOT `acceptedMimes` — the latter includes binary upload-only MIMEs). Use AFTER `artifact_extension_search`. Read-only.",
+      "Fetch the semantic manifest view for one artifact extension by package name (a `packageName` returned by `artifact_extension_search`). Returns `{packageName, label, acceptedMimes, authorableMimes, authoringSkillIds, matcherSkillIds, agentDependencies}`. The chat reads `authoringSkillIds[0]` (the authoring skill to follow) and picks a `declaredMime` from `authorableMimes` (NOT `acceptedMimes` — the latter includes binary upload-only MIMEs). Use AFTER `artifact_extension_search`. Read-only.",
     inputSchema: artifactExtensionGetSchema,
   },
   artifact_authoring_emit: {

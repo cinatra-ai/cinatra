@@ -28,6 +28,10 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
 
   it("GENERATED_MANIFEST_FILES pins the exact emitted set (it is also the coupling gates' permanent-exempt list)", () => {
     expect([...GENERATED_MANIFEST_FILES].sort()).toEqual([
+      // The semantic-floor artifact binding (cinatra#151 Stage 6) — the ONE
+      // emitted path outside src/lib/generated/ (package-local pure data;
+      // policy note in scripts/audit/extension-coupling-gates.md).
+      "packages/objects/src/generated/artifact-floor.ts",
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
       // Agent UI bindings + role bindings (cinatra#151 Stage 5).
       "src/lib/generated/agent-bindings.ts",

@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 15,
-      "keys": 15,
-      "occurrences": 20
+      "files": 0,
+      "keys": 0,
+      "occurrences": 0
     },
     "mechanical": {
       "files": 0,
@@ -13,21 +13,5 @@
       "occurrences": 0
     }
   },
-  "occurrences": {
-    "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
-    "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
-    "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,
-    "src/lib/artifacts/artifact-creation.ts :: package :: @cinatra-ai/default-artifact": 1,
-    "src/lib/artifacts/artifact-service.ts :: package :: @cinatra-ai/default-artifact": 1,
-    "src/lib/artifacts/mcp.ts :: package :: @cinatra-ai/marketing-icp-artifact": 1,
-    "src/lib/artifacts/producer-assertions.ts :: package :: @cinatra-ai/default-artifact": 1,
-    "src/lib/artifacts/semantic-assertion-store.ts :: package :: @cinatra-ai/default-artifact": 2,
-    "src/lib/blog-idea-artifact-materializer.ts :: package :: @cinatra-ai/blog-idea-artifact": 1,
-    "src/lib/blog-image-materializer.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
-    "src/lib/blog-post-artifact-materializer.ts :: package :: @cinatra-ai/blog-post-artifact": 1,
-    "src/lib/blog/dashboard-url.ts :: package :: @cinatra-ai/blog-content-workflow": 1,
-    "src/lib/blog/generation.ts :: package :: @cinatra-ai/blog-pipeline-agent": 3,
-    "src/lib/blog/mcp/registry.ts :: package :: @cinatra-ai/blog-linkedin-publish-agent": 1,
-    "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1
-  }
+  "occurrences": {}
 }

@@ -2,9 +2,34 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { Client } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import { createWorkflowPrimitiveHandlers } from "../mcp/handlers";
-import { createWorkflowTemplate } from "../store";
-import { seedMajorProductReleaseTemplate } from "../seed/major-product-release";
-import { agentFixture, nonAgentFixture } from "./fixtures";
+import { createWorkflowTemplate, listWorkflowTemplates } from "../store";
+import { RELEASE_TEMPLATE_FIXTURE, agentFixture, nonAgentFixture } from "./fixtures";
+
+// Test-owned idempotent seed of the release-template FIXTURE (the host-side
+// seed module is retired, cinatra#151 Stage 6 — the extension-owned template
+// ships via the major-release-workflow extension's bpmn install path).
+const FIXTURE_TEMPLATE_KEY = "major-product-release";
+const FIXTURE_TEMPLATE_VERSION = 1;
+async function seedReleaseTemplateFixture(input: {
+  orgId: string;
+}): Promise<{ created: boolean; templateId: string }> {
+  const existing = (await listWorkflowTemplates({ orgId: input.orgId })).find(
+    (t) => t.key === FIXTURE_TEMPLATE_KEY && t.version === FIXTURE_TEMPLATE_VERSION,
+  );
+  if (existing) return { created: false, templateId: existing.id };
+  const tmpl = await createWorkflowTemplate({
+    key: FIXTURE_TEMPLATE_KEY,
+    version: FIXTURE_TEMPLATE_VERSION,
+    name: "Major Product Release",
+    description: "AI-assisted multi-week product launch: content drafts, legal sign-off, go/no-go, announce.",
+    definition: RELEASE_TEMPLATE_FIXTURE,
+    orgId: input.orgId,
+    ownerLevel: "organization",
+    ownerId: input.orgId,
+    createdBy: null,
+  });
+  return { created: true, templateId: tmpl.id };
+}
 
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
 const ORG = "test-org-handlers";
@@ -96,9 +121,9 @@ describe("chat MCP handlers (integration)", () => {
   });
 
   it("seeds the Major Product Release template and round-trips instantiate → preview", async () => {
-    const first = await seedMajorProductReleaseTemplate({ orgId: ORG });
+    const first = await seedReleaseTemplateFixture({ orgId: ORG });
     expect(first.created).toBe(true);
-    const again = await seedMajorProductReleaseTemplate({ orgId: ORG }); // idempotent
+    const again = await seedReleaseTemplateFixture({ orgId: ORG }); // idempotent
     expect(again.created).toBe(false);
 
     const list = (await handlers.workflow_template_list(req({}))) as {

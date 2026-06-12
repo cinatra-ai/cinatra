@@ -32,6 +32,11 @@ import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { resolveSingletonBlogOrgId } from "@/lib/blog-image-materializer";
+// The target semantic artifact type resolves from the manifest-declared
+// "artifact-blog-post-body" extension role — fail-loud when the blog
+// artifact universe is absent (cinatra#151 Stage 6); never a hard-coded
+// package name, never a dangling assertion on a non-present type.
+import { requireExtensionRole } from "@/lib/extension-roles";
 
 export type MaterializeBlogPostBodyInput = {
   /** UTF-8 markdown body string. */
@@ -71,7 +76,7 @@ export async function materializeBlogPostBodyArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: "@cinatra-ai/blog-post-artifact",
+    extension: requireExtensionRole("artifact-blog-post-body"),
     assertedBy: "agent",
     principal: null,
   });

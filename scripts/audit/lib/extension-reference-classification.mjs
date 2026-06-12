@@ -38,17 +38,21 @@ export const CLASSIFICATIONS = Object.freeze([
 // ---------------------------------------------------------------------------
 // The STRICT permanent-exempt FILE set.
 //
-// ONLY the generated manifest tree — the exact files
+// ONLY the generator-emitted file list — the exact files
 // `scripts/extensions/generate-extension-manifest.mjs` emits (the shared
 // GENERATED_MANIFEST_FILES list; a test pins set == emitted set). Names there
 // are generator output — the legitimate data-driven install list — not
-// hand-coupling. The owner ruling on cinatra-ai/cinatra#36 made the whole
-// generated tree the ONE permanent-exempt class (the sibling generated maps
-// are part of it, not a separate concession). Two integrity guards keep the
-// exemption honest:
+// hand-coupling. The owner ruling on cinatra-ai/cinatra#36 made the
+// generator-emitted set the ONE permanent-exempt class (the sibling generated
+// maps are part of it, not a separate concession). The set lives mostly under
+// src/lib/generated/ plus the ONE package-local emission
+// packages/objects/src/generated/artifact-floor.ts (cinatra#151 Stage 6 — the
+// semantic-floor binding consumed from graphs where the host `@/` alias does
+// not resolve; same generator, same `--check` byte pin, same explicit-list
+// discipline). Two integrity guards keep the exemption honest:
 //   - it is an EXPLICIT file list, never a directory prefix — a hand-added
-//     extra file under src/lib/generated/ is counted (default class
-//     runtime-coupling → NEW key → hard fail);
+//     extra file under src/lib/generated/ (or any generated/ dir) is counted
+//     (default class runtime-coupling → NEW key → hard fail);
 //   - the listed files themselves are pinned to the generator's byte-exact
 //     output by the FAIL-CLOSED `generate-extension-manifest.mjs --check` CI
 //     step (a hand-edit of a generated file fails CI).

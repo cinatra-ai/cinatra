@@ -23,6 +23,9 @@ import "server-only";
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
+// Target type via the manifest-declared "artifact-blog-image" extension
+// role — fail-loud when absent (cinatra#151 Stage 6).
+import { requireExtensionRole } from "@/lib/extension-roles";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
@@ -97,7 +100,7 @@ export async function materializeBlogImageArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: "@cinatra-ai/blog-image-artifact",
+    extension: requireExtensionRole("artifact-blog-image"),
     assertedBy: "agent",
     principal: null,
   });

@@ -97,8 +97,15 @@ export const semanticProducesSchema: z.ZodType<SemanticArtifactRef[]> = z.array(
 // non-default eligible re-asserts the default. Every artifact ALWAYS has
 // >=1 eligible semantic type; never co-asserted with a confident non-default
 // eligible. It is the FLOOR, not a parallel match.
+//
+// The floor type's package NAME comes from the generated manifest data —
+// the single "artifact-default-floor" role claimant, validated at
+// generation (exactly one claimant; must be a cinatra.systemExtensions
+// member) — so core source never names the concrete extension
+// (cinatra#151 Stage 6).
 // ---------------------------------------------------------------------------
-export const DEFAULT_ARTIFACT_EXTENSION = "@cinatra-ai/default-artifact";
+export { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
+import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 
 /** True iff `extension` is the built-in floor semantic artifact type. */
 export function isDefaultArtifactType(extension: string | null | undefined): boolean {
