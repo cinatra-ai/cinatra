@@ -1007,6 +1007,7 @@ jobs:
           packages/sdk-extensions/src
           scripts/extensions/__tests__/inventory.test.mjs
           scripts/extensions/__tests__/generate-extension-manifest.test.mjs
+          scripts/extensions/__tests__/build-server-entry.test.ts
           scripts/extensions/__tests__/update-dev-extension-lock.test.mjs
           scripts/ci/__tests__/extension-pin-divergence-report.test.mjs
           scripts/extensions/__tests__/strip-comments.test.mjs
@@ -1077,6 +1078,7 @@ jobs:
           src/lib/__tests__/extension-signature-backfill.test.ts
           src/lib/__tests__/cli-rich-schema-drift.test.ts
           src/lib/__tests__/extension-install-e2e.test.ts
+          src/lib/__tests__/extension-install-first-party-e2e.test.ts
           src/lib/__tests__/extension-signature.test.ts
           src/lib/__tests__/extension-install-signed-e2e.test.ts
           scripts/extensions/__tests__/schema-config-validator-parity.test.ts
