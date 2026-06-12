@@ -66,12 +66,17 @@ export {
   recordFromManifest,
   recordDeclaresHostMigrations,
   resolveServerEntryPath,
+  resolveExportsSubpath,
+  resolveDeclaredServerEntry,
+  classifyServerEntryArtifact,
   DEFAULT_PACKAGE_STORE_PATH,
 } from "./runtime-loader";
 export type {
   PackageStoreRecord,
   PackageStoreFs,
   RuntimeLoaderDeps,
+  ServerEntryArtifactClass,
+  ServerEntryResolution,
 } from "./runtime-loader";
 
 export {

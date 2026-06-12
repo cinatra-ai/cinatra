@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  classifyServerEntryArtifact,
   discoverPackageStoreRecords,
   recordDeclaresHostMigrations,
   recordFromManifest,
+  resolveDeclaredServerEntry,
+  resolveExportsSubpath,
   resolveServerEntryPath,
   runRuntimePackageActivation,
   type PackageStoreFs,
@@ -34,9 +37,102 @@ function makeFs(files: Record<string, string>, dirs: string[]): PackageStoreFs {
   };
 }
 
-function manifest(name: string, cinatra: Record<string, unknown> | null): string {
-  return JSON.stringify(cinatra ? { name, cinatra } : { name });
+function manifest(
+  name: string,
+  cinatra: Record<string, unknown> | null,
+  extra: Record<string, unknown> = {},
+): string {
+  return JSON.stringify(cinatra ? { name, ...extra, cinatra } : { name, ...extra });
 }
+
+// --- the shared exports resolver (pinned Cinatra semantics, cinatra#161) ------
+describe("resolveExportsSubpath (pinned Cinatra resolver semantics)", () => {
+  it("resolves an exact string key", () => {
+    expect(resolveExportsSubpath({ "./register": "./register.mjs" }, "./register")).toBe("./register.mjs");
+    expect(resolveExportsSubpath({ ".": "./index.mjs" }, ".")).toBe("./index.mjs");
+  });
+
+  it("resolves a ONE-level conditional entry picking import → default → require", () => {
+    expect(
+      resolveExportsSubpath({ "./register": { import: "./a.mjs", require: "./a.cjs" } }, "./register"),
+    ).toBe("./a.mjs");
+    expect(resolveExportsSubpath({ "./register": { default: "./d.mjs" } }, "./register")).toBe("./d.mjs");
+    expect(resolveExportsSubpath({ "./register": { require: "./r.cjs" } }, "./register")).toBe("./r.cjs");
+  });
+
+  it("returns null for a missing key, a non-object map, or a null/undefined map", () => {
+    expect(resolveExportsSubpath({ "./other": "./o.mjs" }, "./register")).toBeNull();
+    expect(resolveExportsSubpath("not-a-map", "./register")).toBeNull();
+    expect(resolveExportsSubpath(undefined, "./register")).toBeNull();
+    expect(resolveExportsSubpath(null, "./register")).toBeNull();
+  });
+
+  it("refuses everything outside the pinned language: arrays, wildcards, nested conditions, null targets, non-./ targets", () => {
+    // array targets
+    expect(resolveExportsSubpath({ "./register": ["./a.mjs"] }, "./register")).toBeNull();
+    expect(resolveExportsSubpath(["./register.mjs"], "./register")).toBeNull();
+    // wildcard patterns: exact-key lookup only — `./*` never matches `./register`
+    expect(resolveExportsSubpath({ "./*": "./dist/*.mjs" }, "./register")).toBeNull();
+    // nested condition objects (one level deep only)
+    expect(
+      resolveExportsSubpath({ "./register": { import: { node: "./n.mjs" } } }, "./register"),
+    ).toBeNull();
+    // null targets
+    expect(resolveExportsSubpath({ "./register": null }, "./register")).toBeNull();
+    expect(resolveExportsSubpath({ "./register": { import: null, default: null } }, "./register")).toBeNull();
+    // targets not starting with `./`
+    expect(resolveExportsSubpath({ "./register": "register.mjs" }, "./register")).toBeNull();
+    expect(resolveExportsSubpath({ "./register": "/abs/register.mjs" }, "./register")).toBeNull();
+    expect(resolveExportsSubpath({ "./register": { import: "register.mjs" } }, "./register")).toBeNull();
+  });
+});
+
+describe("resolveDeclaredServerEntry (three-way: exports hit / literal fallback / declared-but-invalid)", () => {
+  it("resolves through a declared exports key", () => {
+    expect(
+      resolveDeclaredServerEntry({ "./register": "./dist/register.mjs" }, "./register"),
+    ).toEqual({ kind: "resolved", rel: "./dist/register.mjs", viaExports: true });
+  });
+  it("falls back to the literal path ONLY when the key is NOT declared", () => {
+    expect(resolveDeclaredServerEntry({ ".": "./index.mjs" }, "./register.mjs")).toEqual({
+      kind: "resolved",
+      rel: "./register.mjs",
+      viaExports: false,
+    });
+    expect(resolveDeclaredServerEntry(undefined, "./register.mjs")).toEqual({
+      kind: "resolved",
+      rel: "./register.mjs",
+      viaExports: false,
+    });
+  });
+  it("REFUSES a DECLARED key whose target is outside the pinned language — never a silent literal fallback", () => {
+    for (const target of ["/abs/evil.mjs", "register.mjs", null, ["./a.mjs"], { import: { node: "./n.mjs" } }]) {
+      expect(
+        resolveDeclaredServerEntry({ "./register.mjs": target }, "./register.mjs"),
+        JSON.stringify(target),
+      ).toEqual({ kind: "invalid-exports-target" });
+    }
+  });
+});
+
+describe("classifyServerEntryArtifact (built-artifacts-only contract)", () => {
+  it("classifies .mjs/.cjs/.js as importable", () => {
+    expect(classifyServerEntryArtifact("./register.mjs")).toBe("importable");
+    expect(classifyServerEntryArtifact("./dist/register.cjs")).toBe("importable");
+    expect(classifyServerEntryArtifact("/store/pkg/register.js")).toBe("importable");
+  });
+  it("classifies .ts/.tsx/.mts/.cts as source", () => {
+    expect(classifyServerEntryArtifact("./src/register.ts")).toBe("source");
+    expect(classifyServerEntryArtifact("./src/register.tsx")).toBe("source");
+    expect(classifyServerEntryArtifact("./src/register.mts")).toBe("source");
+    expect(classifyServerEntryArtifact("./src/register.cts")).toBe("source");
+  });
+  it("classifies extensionless / unknown extensions as unresolved", () => {
+    expect(classifyServerEntryArtifact("./register")).toBe("unresolved");
+    expect(classifyServerEntryArtifact("./register.json")).toBe("unresolved");
+    expect(classifyServerEntryArtifact("./register.wasm")).toBe("unresolved");
+  });
+});
 
 describe("recordFromManifest", () => {
   it("parses a server-only extension manifest", () => {
@@ -148,19 +244,99 @@ describe("recordFromManifest", () => {
       expect(recordDeclaresHostMigrations(rec!), JSON.stringify(bad)).toBe(true);
     }
   });
+
+  it("carries serverEntryRel when serverEntry is an exports-map KEY (string + conditional forms)", () => {
+    const str = recordFromManifest(
+      "/d/exp",
+      manifest("@x/exp", { kind: "connector", serverEntry: "./register" }, {
+        exports: { ".": "./index.mjs", "./register": "./dist/register.mjs" },
+      }),
+    );
+    expect(str?.serverEntry).toBe("./register");
+    expect(str?.serverEntryRel).toBe("./dist/register.mjs");
+
+    const cond = recordFromManifest(
+      "/d/expcond",
+      manifest("@x/expcond", { kind: "connector", serverEntry: "./register" }, {
+        exports: { "./register": { import: "./dist/register.mjs", require: "./dist/register.cjs" } },
+      }),
+    );
+    expect(cond?.serverEntryRel).toBe("./dist/register.mjs");
+  });
+
+  it("flags a DECLARED exports key with an out-of-contract target (invalidExportsTargetDeclared) instead of falling back to the literal", () => {
+    const rec = recordFromManifest(
+      "/d/badtarget",
+      manifest("@x/badtarget", { kind: "connector", serverEntry: "./register.mjs" }, {
+        exports: { "./register.mjs": "/abs/evil.mjs" },
+      }),
+    );
+    expect(rec?.serverEntryRel).toBeUndefined();
+    expect(rec?.invalidExportsTargetDeclared).toBe(true);
+  });
+
+  it("omits serverEntryRel when there is no exports map, no key hit, or no serverEntry (literal fallback)", () => {
+    const noMap = recordFromManifest("/d/nomap", manifest("@x/nomap", { serverEntry: "./register.mjs" }));
+    expect(noMap?.serverEntryRel).toBeUndefined();
+    const noKey = recordFromManifest(
+      "/d/nokey",
+      manifest("@x/nokey", { serverEntry: "./register.mjs" }, { exports: { ".": "./index.mjs" } }),
+    );
+    expect(noKey?.serverEntryRel).toBeUndefined();
+    const noEntry = recordFromManifest("/d/noentry", manifest("@x/noentry", { kind: "artifact" }, { exports: { ".": "./i.mjs" } }));
+    expect(noEntry?.serverEntryRel).toBeUndefined();
+  });
 });
 
 describe("resolveServerEntryPath", () => {
-  it("resolves ./register against the store dir", () => {
+  it("resolves a literal ./register.mjs against the store dir", () => {
+    const rec = {
+      packageName: "@x/srv",
+      serverEntry: "./register.mjs",
+      storeDir: "/data/extensions/packages/x",
+    } as PackageStoreRecord;
+    expect(resolveServerEntryPath(rec)).toBe("/data/extensions/packages/x/register.mjs");
+  });
+  it("prefers the exports-map resolution (serverEntryRel) over the literal serverEntry", () => {
     const rec = {
       packageName: "@x/srv",
       serverEntry: "./register",
+      serverEntryRel: "./dist/register.mjs",
       storeDir: "/data/extensions/packages/x",
     } as PackageStoreRecord;
-    expect(resolveServerEntryPath(rec)).toBe("/data/extensions/packages/x/register");
+    expect(resolveServerEntryPath(rec)).toBe("/data/extensions/packages/x/dist/register.mjs");
   });
   it("returns null when there is no serverEntry", () => {
     expect(resolveServerEntryPath({ serverEntry: null, storeDir: "/d" } as PackageStoreRecord)).toBeNull();
+  });
+  it("SAFETY: guards the RESULT of resolution — a hostile exports TARGET is unsafe even when the declared key looks benign", () => {
+    for (const hostile of ["../../evil.mjs", "/abs/evil.mjs"]) {
+      const rec = {
+        packageName: "@x/evil",
+        serverEntry: "./register",
+        serverEntryRel: hostile,
+        storeDir: "/store/evil",
+      } as PackageStoreRecord;
+      expect(resolveServerEntryPath(rec), hostile).toBeNull();
+    }
+  });
+});
+
+// Parity note (cinatra#161): the host materializer imports the SAME
+// resolveExportsSubpath this suite pins (one shared resolver — drift between
+// the install-time scanner and this loader is impossible by construction).
+// The cross-scanner agreement over real materialized fixtures is proven in
+// src/lib/__tests__/runtime-package-loader-parity.test.ts.
+describe("recordFromManifest × resolveServerEntryPath (exports-aware end-to-end)", () => {
+  it("the REAL first-party shape — serverEntry './register' as an exports KEY over a built target — resolves to the built file", () => {
+    const rec = recordFromManifest(
+      "/store/fp",
+      manifest("@x/first-party", { kind: "connector", serverEntry: "./register", sdkAbiRange: "^2" }, {
+        exports: { ".": "./dist/index.mjs", "./register": "./dist/register.mjs" },
+      }),
+    );
+    expect(rec?.serverEntryRel).toBe("./dist/register.mjs");
+    expect(resolveServerEntryPath(rec!)).toBe("/store/fp/dist/register.mjs");
   });
 });
 
@@ -209,10 +385,10 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
   it("materialized server-only package is imported + registered WITHOUT a rebuild", async () => {
     const registered: string[] = [];
     const records: PackageStoreRecord[] = [
-      { packageName: "@x/srv", serverEntry: "./register", requestedHostPorts: ["capabilities"], sdkAbiRange: "^2", storeDir: "/store/srv" },
+      { packageName: "@x/srv", serverEntry: "./register.mjs", requestedHostPorts: ["capabilities"], sdkAbiRange: "^2", storeDir: "/store/srv" },
     ];
     const importModule = vi.fn(async (abs: string) => {
-      expect(abs).toBe("/store/srv/register");
+      expect(abs).toBe("/store/srv/register.mjs");
       return serverModule(() => registered.push("@x/srv"));
     });
     const res = await runRuntimePackageActivation("/store", {
@@ -230,10 +406,10 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
     const importModule = vi.fn(async () => serverModule(() => {}));
     const records: PackageStoreRecord[] = [
       { packageName: "@x/data", serverEntry: null, storeDir: "/store/data" },
-      { packageName: "@x/future", serverEntry: "./register", sdkAbiRange: ">=99", storeDir: "/store/future" },
+      { packageName: "@x/future", serverEntry: "./register.mjs", sdkAbiRange: ">=99", storeDir: "/store/future" },
       // With the host ABI now 2.0.0, an extension pinned to the stale "^1"
       // (i.e. >=1 <2) is ABI-refused — host above the ^1 ceiling.
-      { packageName: "@x/legacy", serverEntry: "./register", sdkAbiRange: "^1", storeDir: "/store/legacy" },
+      { packageName: "@x/legacy", serverEntry: "./register.mjs", sdkAbiRange: "^1", storeDir: "/store/legacy" },
     ];
     const res = await runRuntimePackageActivation("/store", { fs: makeFs({}, []), importModule, makeContext, records });
     // @x/data declares no serverEntry -> filtered out entirely (no result row).
@@ -254,7 +430,7 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
   it("refuses activation when the integrity gate fails (no code imported)", async () => {
     const importModule = vi.fn(async () => serverModule(() => {}));
     const records: PackageStoreRecord[] = [
-      { packageName: "@x/tampered", serverEntry: "./register", sdkAbiRange: "^2", storeDir: "/store/tampered" },
+      { packageName: "@x/tampered", serverEntry: "./register.mjs", sdkAbiRange: "^2", storeDir: "/store/tampered" },
     ];
     const res = await runRuntimePackageActivation("/store", {
       fs: makeFs({}, []),
@@ -273,7 +449,7 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
   it("end-to-end through real discovery: drop a package in the store, it activates", async () => {
     const root = "/data/extensions/packages";
     const fs = makeFs(
-      { [`${root}/srv/package.json`]: manifest("@x/dropped", { serverEntry: "./register", sdkAbiRange: "^2" }) },
+      { [`${root}/srv/package.json`]: manifest("@x/dropped", { serverEntry: "./register.mjs", sdkAbiRange: "^2" }) },
       [root, `${root}/srv`],
     );
     const registered: string[] = [];
@@ -290,9 +466,9 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
   it("FAIL-CLOSED: refuses every record for a duplicated package name (ambiguous identity)", async () => {
     const importModule = vi.fn(async () => serverModule(() => {}));
     const records: PackageStoreRecord[] = [
-      { packageName: "@x/dup", serverEntry: "./register", sdkAbiRange: "^2", storeDir: "/store/dup/sha-a" },
-      { packageName: "@x/dup", serverEntry: "./register", sdkAbiRange: "^2", storeDir: "/store/dup/sha-b" },
-      { packageName: "@x/ok", serverEntry: "./register", sdkAbiRange: "^2", storeDir: "/store/ok" },
+      { packageName: "@x/dup", serverEntry: "./register.mjs", sdkAbiRange: "^2", storeDir: "/store/dup/sha-a" },
+      { packageName: "@x/dup", serverEntry: "./register.mjs", sdkAbiRange: "^2", storeDir: "/store/dup/sha-b" },
+      { packageName: "@x/ok", serverEntry: "./register.mjs", sdkAbiRange: "^2", storeDir: "/store/ok" },
     ];
     const res = await runRuntimePackageActivation("/store", { fs: makeFs({}, []), importModule, makeContext, records });
     const dup = res.find((r) => r.packageName === "@x/dup");
@@ -312,6 +488,100 @@ describe("runRuntimePackageActivation (PNP proof: store -> activate via shared d
     const r = res.find((x) => x.packageName === "@x/evil");
     expect(r?.status).toBe("failed");
     expect(String(r?.error)).toMatch(/unsafe serverEntry/);
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("SAFETY: refuses a HOSTILE exports TARGET (key benign, target escapes) — relative and absolute forms, without importing", async () => {
+    // `exports["./register"]: "../../x.mjs"` — a check the literal-only resolver
+    // never needed: the abs/`..` guard must apply to the RESULT of exports
+    // resolution. Discovery carries the hostile target via serverEntryRel.
+    const importModule = vi.fn(async () => serverModule(() => {}));
+    for (const hostile of ["../../escape/evil.mjs", "/abs/evil.mjs"]) {
+      const records: PackageStoreRecord[] = [
+        {
+          packageName: "@x/hostile-exports",
+          serverEntry: "./register",
+          serverEntryRel: hostile,
+          sdkAbiRange: "^2",
+          storeDir: "/store/hostile",
+        },
+      ];
+      const res = await runRuntimePackageActivation("/store", { fs: makeFs({}, []), importModule, makeContext, records });
+      const r = res.find((x) => x.packageName === "@x/hostile-exports");
+      expect(r?.status, hostile).toBe("failed");
+      expect(String(r?.error), hostile).toMatch(/unsafe serverEntry/);
+    }
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-LOUD classification: a TS-source entry records an ACTIONABLE failed activation (legacy-store defense), not an opaque import error", async () => {
+    // Simulates a store dir written by an OLDER installer (the new materializer
+    // refuses this shape at install time): the entry resolves through exports to
+    // TypeScript source. The loader must refuse BEFORE integrity/import with the
+    // built-artifacts-only message.
+    const importModule = vi.fn(async () => serverModule(() => {}));
+    const verifyIntegrity = vi.fn(async () => true);
+    const root = "/data/extensions/packages";
+    const fs = makeFs(
+      {
+        [`${root}/legacy/package.json`]: JSON.stringify({
+          name: "@x/legacy-source",
+          exports: { "./register": "./src/register.ts" },
+          cinatra: { kind: "connector", serverEntry: "./register", sdkAbiRange: "^2" },
+        }),
+      },
+      [root, `${root}/legacy`],
+    );
+    const res = await runRuntimePackageActivation(root, { fs, importModule, makeContext, verifyIntegrity });
+    const r = res.find((x) => x.packageName === "@x/legacy-source");
+    expect(r?.status).toBe("failed");
+    expect(String(r?.error)).toMatch(/BUILT artifacts only/);
+    expect(String(r?.error)).toMatch(/TypeScript source/);
+    expect(String(r?.error)).toContain('"./src/register.ts"');
+    expect(String(r?.error)).toMatch(/reinstall the package from the marketplace/);
+    // classification fires BEFORE the integrity gate and BEFORE any import.
+    expect(verifyIntegrity).not.toHaveBeenCalled();
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-LOUD: a DECLARED exports key with an out-of-contract target NEVER falls back to the literal path (codex AB-r0 finding 1)", async () => {
+    // serverEntry "./register.mjs" looks like a fine literal AND the file could
+    // exist — but the manifest DECLARES exports["./register.mjs"] with a hostile
+    // non-./ target. Falling back to the literal would be fail-open; the loader
+    // must refuse with the actionable message instead.
+    const importModule = vi.fn(async () => serverModule(() => {}));
+    const root = "/data/extensions/packages";
+    const fs = makeFs(
+      {
+        [`${root}/badtarget/package.json`]: JSON.stringify({
+          name: "@x/bad-exports-target",
+          exports: { "./register.mjs": "/abs/evil.mjs" },
+          cinatra: { kind: "connector", serverEntry: "./register.mjs", sdkAbiRange: "^2" },
+        }),
+      },
+      [root, `${root}/badtarget`],
+    );
+    const res = await runRuntimePackageActivation(root, { fs, importModule, makeContext, verifyIntegrity: async () => true });
+    const r = res.find((x) => x.packageName === "@x/bad-exports-target");
+    expect(r?.status).toBe("failed");
+    expect(String(r?.error)).toMatch(/outside the supported exports forms/);
+    expect(String(r?.error)).toMatch(/BUILT artifacts only/);
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-LOUD classification: an EXTENSIONLESS resolution (today's first-party source-mirror shape) is refused with the actionable message", async () => {
+    // `serverEntry: "./register"` with NO exports key (the drupal-mcp /
+    // wordpress-mcp shape) — the literal fallback is extensionless, which under
+    // the contract is `unresolved`, never an ENOENT at import time.
+    const importModule = vi.fn(async () => serverModule(() => {}));
+    const records: PackageStoreRecord[] = [
+      { packageName: "@x/extensionless", serverEntry: "./register", sdkAbiRange: "^2", storeDir: "/store/el" },
+    ];
+    const res = await runRuntimePackageActivation("/store", { fs: makeFs({}, []), importModule, makeContext, records });
+    const r = res.find((x) => x.packageName === "@x/extensionless");
+    expect(r?.status).toBe("failed");
+    expect(String(r?.error)).toMatch(/BUILT artifacts only/);
+    expect(String(r?.error)).toMatch(/not a concrete importable file/);
     expect(importModule).not.toHaveBeenCalled();
   });
 });

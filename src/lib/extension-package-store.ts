@@ -25,6 +25,9 @@ import { randomBytes } from "node:crypto";
 import * as tar from "tar";
 import {
   DEFAULT_PACKAGE_STORE_PATH,
+  classifyServerEntryArtifact,
+  resolveDeclaredServerEntry,
+  resolveExportsSubpath,
   type PackageStoreRecord,
 } from "@cinatra-ai/sdk-extensions";
 import {
@@ -169,15 +172,34 @@ export async function materializePackageToStore(
     );
     const existingSidecar = ok ? await readStoreSidecar(targetDir) : null;
     if (ok && existingSidecar) {
-      return {
-        packageName: input.packageName,
-        version: input.version,
-        storeDir: targetDir,
-        digest,
-        integrity,
-        contentHash: existingSidecar.contentHash,
-        reused: true,
-      };
+      // The built-artifacts-only gate (step 4.6 below) applies to the REUSE
+      // path too (codex AB-r1 finding 2): an integrity-valid same-digest dir
+      // written by a PRE-CONTRACT installer must not be accepted as a
+      // successful materialization — re-installing a source-mirror package
+      // must refuse loudly, not silently reuse the old dir. An unreadable
+      // manifest falls through to remove + re-materialize (where the fresh
+      // extract re-runs full validation over the same bytes).
+      const existingPkgRaw = await readFile(path.join(targetDir, "package.json"), "utf8").catch(() => null);
+      let existingPkg: Record<string, unknown> | null = null;
+      if (existingPkgRaw) {
+        try {
+          existingPkg = JSON.parse(existingPkgRaw) as Record<string, unknown>;
+        } catch {
+          existingPkg = null;
+        }
+      }
+      if (existingPkg) {
+        await assertServerEntryIsBuiltArtifact(targetDir, existingPkg, input.packageName);
+        return {
+          packageName: input.packageName,
+          version: input.version,
+          storeDir: targetDir,
+          digest,
+          integrity,
+          contentHash: existingSidecar.contentHash,
+          reused: true,
+        };
+      }
     }
     // Present but invalid → remove + re-materialize.
     await rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
@@ -240,6 +262,15 @@ export async function materializePackageToStore(
     // ERR_MODULE_NOT_FOUND or load a SECOND SDK instance and break ABI identity.
     // Fail-closed at materialize time so a hazardous package is never published.
     await assertNoHostPeerValueImports(extractDir, pkgJson, input.packageName);
+
+    // 4.6. Built-artifacts-only serverEntry gate (cinatra#161 — the PRIMARY
+    // refusal). A declared `cinatra.serverEntry` must resolve — through the
+    // shared exports-aware resolver, same semantics as the loader — to an
+    // EXISTING regular file with a Node-importable extension. A source-mirror
+    // shape is REFUSED loudly HERE, at install time, never deferred to an
+    // opaque activation failure. `serverEntry` absent stays a valid
+    // no-server-entry package (agents/skills/artifacts unaffected).
+    await assertServerEntryIsBuiltArtifact(extractDir, pkgJson, input.packageName);
 
     // 5. content hash (excludes the sidecar we are about to write) + sidecar.
     const entries = await collectFileEntries(extractDir, [STORE_SIDECAR_FILENAME]);
@@ -450,11 +481,13 @@ const TRACEABLE_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".mjs", ".cj
  * Supports the two real declaration forms:
  *   - a direct relative file path: `serverEntry: "./register.mjs"`;
  *   - an `exports` map KEY: `serverEntry: "./register"` →
- *     `exports["./register"]` → e.g. `./src/register.ts`.
- * Mirrors the safe-path discipline of the loader's `resolveServerEntryPath`:
- * an absolute path or any `..` segment is rejected (returns null) so the trace
- * can never escape the integrity-verified package dir. Returns null when there
- * is no serverEntry (nothing to scan).
+ *     `exports["./register"]` → e.g. `./register.mjs`.
+ * The exports-key resolution is the SDK's `resolveExportsSubpath` — the SAME
+ * shared resolver the runtime loader applies (cinatra#161: one resolver
+ * everywhere, drift impossible). Mirrors the safe-path discipline of the
+ * loader's `resolveServerEntryPath`: an absolute path or any `..` segment is
+ * rejected (returns null) so the trace can never escape the integrity-verified
+ * package dir. Returns null when there is no serverEntry (nothing to scan).
  */
 function resolveServerEntryFile(
   extractDir: string,
@@ -463,28 +496,92 @@ function resolveServerEntryFile(
   const cinatra = (pkgJson.cinatra ?? null) as Record<string, unknown> | null;
   const serverEntry = cinatra && typeof cinatra.serverEntry === "string" ? cinatra.serverEntry : null;
   if (!serverEntry) return null;
-  // Prefer the `exports` map when the serverEntry is a declared key.
-  const rel = resolveExportsSubpath(pkgJson.exports, serverEntry) ?? serverEntry;
-  return safeJoinInside(extractDir, rel);
+  // Shared three-way resolution: a DECLARED exports key with an out-of-contract
+  // target is NOT silently treated as a literal path (it yields null here —
+  // nothing to scan — and the built-artifact gate refuses it loudly).
+  const resolution = resolveDeclaredServerEntry(pkgJson.exports, serverEntry);
+  if (resolution.kind !== "resolved") return null;
+  return safeJoinInside(extractDir, resolution.rel);
 }
 
 /**
- * Resolve an `exports` map KEY (`"./register"`, `"."`) to its relative target
- * file, picking the `import`/`default`/`require` condition for a conditional
- * entry. Returns null when `exportsMap` is not a plain object or the key is
- * absent. Shared by `resolveServerEntryFile` and the self-package subpath
- * resolution in the import-graph trace.
+ * Step 4.6 — the built-artifacts-only serverEntry gate (cinatra#161, the
+ * PRIMARY refusal; the loader's classification is defense in depth for legacy
+ * store dirs). A declared `cinatra.serverEntry` must resolve — exports-map key
+ * first (shared SDK resolver), else the literal `./`-relative path — to a path
+ * that (a) stays inside the package dir, (b) names an existing regular file,
+ * and (c) carries a Node-importable extension (`.mjs`/`.cjs`/`.js`).
+ * `.ts`/`.tsx`/`.mts`/`.cts`, extensionless resolutions, and missing files are
+ * refused with an actionable error BEFORE anything is published to the store.
+ * `serverEntry` absent stays a valid no-server-entry package (silent return).
  */
-function resolveExportsSubpath(exportsMap: unknown, key: string): string | null {
-  if (!exportsMap || typeof exportsMap !== "object" || Array.isArray(exportsMap)) return null;
-  const target = (exportsMap as Record<string, unknown>)[key];
-  if (typeof target === "string") return target;
-  if (target && typeof target === "object") {
-    const cond = target as Record<string, unknown>;
-    const picked = cond.import ?? cond.default ?? cond.require;
-    if (typeof picked === "string") return picked;
+async function assertServerEntryIsBuiltArtifact(
+  extractDir: string,
+  pkgJson: Record<string, unknown>,
+  packageName: string,
+): Promise<void> {
+  const cinatra = (pkgJson.cinatra ?? null) as Record<string, unknown> | null;
+  const serverEntry = cinatra && typeof cinatra.serverEntry === "string" ? cinatra.serverEntry : null;
+  if (!serverEntry) return; // no serverEntry → valid (agents/skills/artifacts)
+
+  const builtShapeHint =
+    `The runtime store accepts BUILT artifacts only: ship a built ESM entry ` +
+    `(top-level "register.mjs" with cinatra.serverEntry "./register.mjs" is the convention; an exports ` +
+    `key targeting a built file under dist/ also works). Refusing to materialize.`;
+
+  // Shared three-way resolution (codex AB-r0 finding 1): a DECLARED exports
+  // key whose target is outside the pinned resolver language is refused — it
+  // must never silently fall back to the literal path.
+  const resolution = resolveDeclaredServerEntry(pkgJson.exports, serverEntry);
+  if (resolution.kind !== "resolved") {
+    throw new Error(
+      `[package-store] ${packageName}: cinatra.serverEntry "${serverEntry}" is a declared exports key ` +
+        `whose target is outside the supported exports forms (an exact key mapping to a "./"-relative ` +
+        `string, or a one-level conditional whose import/default/require value is such a string). ` +
+        `${builtShapeHint}`,
+    );
   }
-  return null;
+  const rel = resolution.rel;
+  // SAME segment-level rule the loader's resolveServerEntryPath applies (codex
+  // AB-r0 finding 2): any `..` segment or absolute path is refused EVEN IF it
+  // would normalize back inside the package — otherwise an entry like
+  // "./dist/../register.mjs" materializes here and then fails activation as
+  // unsafe (install-time and activation-time must agree).
+  const cleanedRel = rel.replace(/^\.\//, "");
+  const escapesPackageDir =
+    cleanedRel.startsWith("/") || cleanedRel.split("/").some((seg) => seg === "..");
+  const abs = escapesPackageDir ? null : safeJoinInside(extractDir, rel);
+  if (!abs) {
+    throw new Error(
+      `[package-store] ${packageName}: cinatra.serverEntry "${serverEntry}" resolves to "${rel}" — ` +
+        `escapes the package dir. ${builtShapeHint}`,
+    );
+  }
+  const cls = classifyServerEntryArtifact(rel);
+  if (cls === "source") {
+    throw new Error(
+      `[package-store] ${packageName}: cinatra.serverEntry "${serverEntry}" resolves to "${rel}" — a ` +
+        `TypeScript source entry. ${builtShapeHint}`,
+    );
+  }
+  if (cls !== "importable") {
+    throw new Error(
+      `[package-store] ${packageName}: cinatra.serverEntry "${serverEntry}" resolves to "${rel}" — ` +
+        `has no importable extension (.mjs/.cjs/.js). ${builtShapeHint}`,
+    );
+  }
+  let entryStat: Awaited<ReturnType<typeof stat>> | null = null;
+  try {
+    entryStat = await stat(abs);
+  } catch {
+    entryStat = null;
+  }
+  if (!entryStat || !entryStat.isFile()) {
+    throw new Error(
+      `[package-store] ${packageName}: cinatra.serverEntry "${serverEntry}" resolves to "${rel}" — ` +
+        `does not exist in the tarball${entryStat ? " as a regular file" : ""}. ${builtShapeHint}`,
+    );
+  }
 }
 
 /**

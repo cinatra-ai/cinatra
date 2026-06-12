@@ -36,6 +36,7 @@ import "server-only";
 
 import {
   DEFAULT_PACKAGE_STORE_PATH,
+  classifyServerEntryArtifact,
   destroyExtensionModule,
   normalizeServerModule,
   resolveServerEntryPath,
@@ -962,10 +963,17 @@ async function makeRealFs(): Promise<import("@cinatra-ai/sdk-extensions").Packag
 }
 
 /** Import + normalize a store record's server module (best-effort; null on any
- *  failure — an unloadable old module is just GC'd without a destroy). */
+ *  failure — an unloadable old module is just GC'd without a destroy). Applies
+ *  the SAME refusal rules as the runtime loader's importServerEntry (cinatra#161,
+ *  codex AB-r1 finding 1): a declared-but-invalid exports target and a
+ *  non-importable (source/extensionless) entry are refused BEFORE any import —
+ *  the pre-finalize probe must never execute top-level code the real loader
+ *  would refuse. */
 async function importStoreModule(rec: PackageStoreRecord): Promise<ExtensionModule | null> {
+  if (rec.invalidExportsTargetDeclared) return null;
   const abs = resolveServerEntryPath(rec);
   if (!abs) return null;
+  if (classifyServerEntryArtifact(abs) !== "importable") return null;
   try {
     const { pathToFileURL } = await import("node:url");
     const { realpath } = await import("node:fs/promises");

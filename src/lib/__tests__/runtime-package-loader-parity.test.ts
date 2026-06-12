@@ -11,7 +11,14 @@ import {
   recordFromManifest,
   type PackageStoreFs,
 } from "@cinatra-ai/sdk-extensions";
-import { sriForBytes } from "@/lib/extension-package-store-core";
+import {
+  STORE_SIDECAR_FILENAME,
+  contentHashOfEntries,
+  sriForBytes,
+  storePackageDir,
+  tarballDigestSegment,
+  type ContentHashEntry,
+} from "@/lib/extension-package-store-core";
 import {
   materializePackageToStore,
   verifyMaterializedPackageIntegrity,
@@ -156,6 +163,13 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
   // Build + materialize a fixture with arbitrary files. `exportsMap`/`serverEntry`
   // let a test exercise both the direct-path (`./register.ts`) and exports-key
   // (`./register` → `exports["./register"]`) serverEntry resolution forms.
+  //
+  // NOTE (cinatra#161): a TS-source serverEntry can no longer MATERIALIZE — the
+  // built-artifacts-only gate (step 4.6) refuses it AFTER this host-peer gate
+  // (step 4.5). REJECTION cases still run end-to-end through the materializer
+  // (4.5 throws first); gate-PASS cases over TS graphs are asserted at the gate
+  // level via the exported `assertNoHostPeerValueImports` (the same call the
+  // materializer makes), with `writeGateFixtureDir` below.
   async function materializeFixture(opts: {
     storeRoot: string;
     files: Record<string, string>;
@@ -189,6 +203,45 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
       );
     } finally {
       await rm(srcRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  // Write a gate-fixture dir WITHOUT materializing (for gate-PASS cases over TS
+  // graphs, which the built-artifacts-only step would otherwise refuse). The
+  // caller runs `assertNoHostPeerValueImports` — the exact materializer call.
+  async function writeGateFixtureDir(opts: {
+    files: Record<string, string>;
+    serverEntry: string | null;
+    exportsMap?: Record<string, string>;
+  }): Promise<{ extractDir: string; pkgJson: Record<string, unknown> }> {
+    const extractDir = await mkdtemp(path.join(tmpdir(), "cinatra-gate-dir-"));
+    for (const [rel, contents] of Object.entries(opts.files)) {
+      const abs = path.join(extractDir, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, contents);
+    }
+    const pkgJson: Record<string, unknown> = {
+      name: "@cinatra-ai/gate-fixture",
+      version: "0.0.1",
+      ...(opts.exportsMap ? { exports: opts.exportsMap } : {}),
+      cinatra: { kind: "connector", serverEntry: opts.serverEntry, requestedHostPorts: [], sdkAbiRange: "^2" },
+    };
+    await writeFile(path.join(extractDir, "package.json"), JSON.stringify(pkgJson));
+    return { extractDir, pkgJson };
+  }
+
+  async function expectGatePasses(opts: {
+    files: Record<string, string>;
+    serverEntry: string | null;
+    exportsMap?: Record<string, string>;
+  }): Promise<void> {
+    const { extractDir, pkgJson } = await writeGateFixtureDir(opts);
+    try {
+      await expect(
+        assertNoHostPeerValueImports(extractDir, pkgJson, "@cinatra-ai/gate-fixture"),
+      ).resolves.toBeUndefined();
+    } finally {
+      await rm(extractDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 
@@ -232,18 +285,14 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
     ).rejects.toThrow(/requireExtensionAction/);
   });
 
-  it("MATERIALIZES a serverEntry whose graph imports the host peer TYPE-ONLY", async () => {
-    const storeRoot = path.join(workDir, "store-gate-typeonly");
-    const result = await materializeFixture({
-      storeRoot,
+  it("PASSES the gate for a serverEntry whose graph imports the host peer TYPE-ONLY", async () => {
+    await expectGatePasses({
       serverEntry: "./register.ts",
       files: {
         "register.ts": `import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions";\nimport { run } from "./impl";\nexport function register(ctx: ExtensionHostContext) { run(ctx); }`,
         "impl.ts": `import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions";\nexport function run(ctx: ExtensionHostContext) { ctx.logger.info("ok"); }`,
       },
     });
-    expect(result.reused).toBe(false);
-    expect(result.storeDir).toContain("gate-fixture");
   });
 
   it("resolves an exports-key serverEntry (`./register` → exports map) before scanning", async () => {
@@ -278,17 +327,14 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
     // register.ts imports `./contract` TYPE-ONLY. contract.ts value-imports a
     // host peer, but a type-only edge is erased at compile and is NOT in the
     // runtime graph the file:// loader follows — so the trace must skip it and
-    // materialize cleanly (the false-positive fix).
-    const storeRoot = path.join(workDir, "store-gate-typeedge");
-    const result = await materializeFixture({
-      storeRoot,
+    // pass the gate cleanly (the false-positive fix).
+    await expectGatePasses({
       serverEntry: "./register.ts",
       files: {
         "register.ts": `import type { Thing } from "./contract";\nexport function register(): Thing | null { return null; }`,
         "contract.ts": `import { requireExtensionAction } from "@cinatra-ai/sdk-extensions";\nexport type Thing = ReturnType<typeof requireExtensionAction>;`,
       },
     });
-    expect(result.reused).toBe(false);
   });
 
   it("DOES follow a value relative edge even when a type edge to the same file precedes it", async () => {
@@ -335,18 +381,15 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
   it("does NOT follow a TRUE third-party bare specifier (only the package's own name self-resolves)", async () => {
     // register.ts value-imports `other-pkg/internal` — a third-party specifier,
     // NOT the package's own name — so the trace must stop at it (bundled deps are
-    // out of scope) and materialize cleanly even though a same-named file exists
+    // out of scope) and pass the gate cleanly even though a same-named file exists
     // under node_modules.
-    const storeRoot = path.join(workDir, "store-gate-thirdparty");
-    const result = await materializeFixture({
-      storeRoot,
+    await expectGatePasses({
       serverEntry: "./register.ts",
       files: {
         "register.ts": `import type { Ctx } from "@cinatra-ai/sdk-extensions";\nimport { run } from "other-pkg/internal";\nexport function register(ctx: Ctx) { run(); }`,
         "node_modules/other-pkg/internal.js": `const sdk = require("@cinatra-ai/sdk-extensions");\nexports.run = () => sdk;`,
       },
     });
-    expect(result.reused).toBe(false);
   });
 
   it("FAILS LOUD when a file that resolved INTO the graph cannot be read (vs a silent skip for no/missing serverEntry)", async () => {
@@ -387,9 +430,7 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
   });
 
   it("ignores a value import inside node_modules (bundled third-party deps are out of scope)", async () => {
-    const storeRoot = path.join(workDir, "store-gate-nm");
-    const result = await materializeFixture({
-      storeRoot,
+    await expectGatePasses({
       serverEntry: "./register.ts",
       files: {
         "register.ts": `import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions";\nimport { dep } from "some-dep";\nexport function register(ctx: ExtensionHostContext) { dep(); }`,
@@ -399,7 +440,6 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
         "node_modules/some-dep/index.js": `const sdk = require("@cinatra-ai/sdk-extensions");\nexports.dep = () => sdk;`,
       },
     });
-    expect(result.reused).toBe(false);
   });
 
   // ---- parser-only edge cases, proven
@@ -431,10 +471,8 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
     ).rejects.toThrow(/@cinatra-ai\/sdk-extensions at VALUE position/);
   });
 
-  it("MATERIALIZES cleanly when the only host-peer mention is inside a regex literal", async () => {
-    const storeRoot = path.join(workDir, "store-gate-regex");
-    const result = await materializeFixture({
-      storeRoot,
+  it("PASSES the gate when the only host-peer mention is inside a regex literal", async () => {
+    await expectGatePasses({
       serverEntry: "./register.ts",
       files: {
         "register.ts":
@@ -443,7 +481,6 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
           `export function register(ctx: Ctx) { return r; }`,
       },
     });
-    expect(result.reused).toBe(false);
   });
 
   // ---- further edge cases: real-filename ScriptKind + module.require ---------
@@ -477,6 +514,108 @@ describe("materialize-time host-peer value-import gate (fail-closed)", () => {
         },
       }),
     ).rejects.toThrow(/@cinatra-ai\/sdk-extensions at VALUE position/);
+  });
+
+  // ---- the built-artifacts-only serverEntry gate (cinatra#161, step 4.6) ----
+  // The PRIMARY refusal: a source-mirror / missing / extensionless / escaping
+  // serverEntry is refused at INSTALL (materialize) time with an actionable
+  // [package-store] error — never deferred to an opaque activation failure.
+  describe("built-artifacts-only serverEntry gate (install-time refusal)", () => {
+    it("REFUSES a TS source-mirror serverEntry (exports key → ./src/register.ts) with the pinned error head", async () => {
+      const storeRoot = path.join(workDir, "store-built-source");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register",
+          exportsMap: { ".": "./src/index.ts", "./register": "./src/register.ts" },
+          files: {
+            // model-B clean (type-only) so the host-peer gate (4.5) PASSES and
+            // the refusal provably comes from the built-artifact gate (4.6).
+            "src/register.ts": `import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions";\nexport function register(ctx: ExtensionHostContext) { ctx.logger.info("src"); }`,
+          },
+        }),
+      ).rejects.toThrow(
+        '[package-store] @cinatra-ai/gate-fixture: cinatra.serverEntry "./register" resolves to ' +
+          '"./src/register.ts" — a TypeScript source entry. The runtime store accepts BUILT artifacts only:',
+      );
+    });
+
+    it("REFUSES an EXTENSIONLESS resolution (no exports key; the literal fallback)", async () => {
+      const storeRoot = path.join(workDir, "store-built-extless");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register",
+          files: { "register.mjs": REGISTER_MJS },
+        }),
+      ).rejects.toThrow(/has no importable extension \(\.mjs\/\.cjs\/\.js\)/);
+    });
+
+    it("REFUSES a DECLARED entry whose resolved file is missing from the tarball", async () => {
+      const storeRoot = path.join(workDir, "store-built-missing");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register.mjs",
+          files: { "other.mjs": REGISTER_MJS },
+        }),
+      ).rejects.toThrow(/does not exist in the tarball/);
+    });
+
+    it("REFUSES a HOSTILE exports TARGET that escapes the package dir", async () => {
+      const storeRoot = path.join(workDir, "store-built-escape");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register",
+          // starts with "./" (passes the resolver's target-language check) but
+          // traverses out — the SAFETY guard must reject the RESULT.
+          exportsMap: { "./register": "./../evil.mjs" },
+          files: { "register.mjs": REGISTER_MJS },
+        }),
+      ).rejects.toThrow(/escapes the package dir/);
+    });
+
+    it("REFUSES an internal `..` segment EVEN IF it normalizes back inside the package (scanner/loader agreement)", async () => {
+      // "./dist/../register.mjs" normalizes to an EXISTING top-level file — but
+      // the loader's resolveServerEntryPath rejects any `..` segment, so the
+      // install-time gate must refuse it too (codex AB-r0 finding 2: a package
+      // must never materialize and then fail activation as unsafe).
+      const storeRoot = path.join(workDir, "store-built-dotdot");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register",
+          exportsMap: { "./register": "./dist/../register.mjs" },
+          files: { "register.mjs": REGISTER_MJS, "dist/index.mjs": "export {};\n" },
+        }),
+      ).rejects.toThrow(/escapes the package dir/);
+    });
+
+    it("REFUSES a DECLARED exports key with an out-of-contract target — never a silent literal fallback (codex AB-r0 finding 1)", async () => {
+      // serverEntry "./register.mjs" + a PRESENT register.mjs would pass as a
+      // literal — but the manifest DECLARES exports["./register.mjs"] with a
+      // hostile absolute target. The gate must refuse, matching the loader.
+      const storeRoot = path.join(workDir, "store-built-badtarget");
+      await expect(
+        materializeFixture({
+          storeRoot,
+          serverEntry: "./register.mjs",
+          exportsMap: { "./register.mjs": "/abs/evil.mjs" },
+          files: { "register.mjs": REGISTER_MJS },
+        }),
+      ).rejects.toThrow(/declared exports key whose target is outside the supported exports forms/);
+    });
+
+    it("MATERIALIZES a package with NO serverEntry (agents/skills/artifacts unaffected)", async () => {
+      const storeRoot = path.join(workDir, "store-built-noentry");
+      const result = await materializeFixture({
+        storeRoot,
+        serverEntry: null,
+        files: { "data.json": "{}" },
+      });
+      expect(result.reused).toBe(false);
+    });
   });
 });
 
@@ -562,6 +701,234 @@ describe("dual-loader PARITY: runtime record + activation == static (the loader-
     expect(runtimeResults.some((r) => r.status === "registered")).toBe(true);
     expect(runtimeRecorded).toEqual([PKG]);
     expect(runtimeRecorded).toEqual(staticRecorded);
+  });
+});
+
+describe("exports-key + built artifact is a FIRST-CLASS store citizen (the cinatra#161 contract pin)", () => {
+  // The REAL first-party shape: `serverEntry: "./register"` declared as an
+  // `exports`-map KEY whose target is a BUILT file under dist/. This is what
+  // the release pipeline publishes after its build step (Stage C) — it must
+  // materialize AND activate, proving the two scanners (materialize-time and
+  // activation-time) agree via the ONE shared resolver.
+  const FP_PKG = "@cinatra-ai/first-party-shape";
+
+  async function buildFirstPartyShapeTarball(): Promise<{ bytes: Buffer; sri: string }> {
+    const srcRoot = await mkdtemp(path.join(tmpdir(), "cinatra-fpshape-src-"));
+    const pkgDir = path.join(srcRoot, "package");
+    await mkdir(path.join(pkgDir, "dist"), { recursive: true });
+    await writeFile(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: FP_PKG,
+        version: VERSION,
+        exports: { ".": "./dist/index.mjs", "./register": "./dist/register.mjs" },
+        cinatra: { kind: "connector", serverEntry: "./register", requestedHostPorts: [], sdkAbiRange: "^2" },
+      }),
+    );
+    await writeFile(path.join(pkgDir, "dist", "register.mjs"), REGISTER_MJS);
+    await writeFile(path.join(pkgDir, "dist", "index.mjs"), "export {};\n");
+    const tgz = path.join(srcRoot, "fixture.tgz");
+    await tar.c({ gzip: true, cwd: srcRoot, file: tgz }, ["package"]);
+    const bytes = await readFile(tgz);
+    await rm(srcRoot, { recursive: true, force: true }).catch(() => undefined);
+    return { bytes, sri: sriForBytes(bytes, "sha512") };
+  }
+
+  it("materializes AND activates `registered` end-to-end; the discovered record carries the exports resolution (serverEntryRel)", async () => {
+    const storeRoot = path.join(workDir, "store-fpshape");
+    const { bytes, sri } = await buildFirstPartyShapeTarball();
+    const mat = await materializePackageToStore(
+      { packageName: FP_PKG, version: VERSION, expectedIntegrity: sri, registryUrl: REGISTRY, storeRoot },
+      { fetchTarball: async () => ({ bytes, integrity: sri }), now: () => "2026-06-12T00:00:00.000Z" },
+    );
+    expect(mat.reused).toBe(false);
+
+    // The runtime-discovered record resolves the SAME exports target the
+    // materializer accepted — the shared-resolver agreement, observable.
+    const records = await discoverPackageStoreRecords(storeRoot, realFs);
+    expect(records).toHaveLength(1);
+    expect(records[0].serverEntry).toBe("./register");
+    expect(records[0].serverEntryRel).toBe("./dist/register.mjs");
+
+    const results = await loadRuntimePackageExtensions(storeRoot, {
+      resolveInstallAnchor: async (name) =>
+        name === FP_PKG
+          ? { integrity: mat.integrity, contentHash: mat.contentHash, registryUrl: REGISTRY, trustDecision: true }
+          : null,
+    });
+    expect(results.find((r) => r.packageName === FP_PKG)?.status).toBe("registered");
+  });
+});
+
+describe("legacy-store defense (store dirs written by OLDER installers — fail LOUD, never opaque ENOENT)", () => {
+  // Hand-write a COMPLETE store entry (files + sidecar + persisted tarball),
+  // bypassing the materializer — exactly what a store written by an older
+  // installer looks like: integrity verifies (the old anchor was recorded over
+  // these very files), but the entry violates the built-artifacts-only
+  // contract. The LOADER must record an actionable `failed`, not an ENOENT.
+  async function handWriteLegacyStore(opts: {
+    storeRoot: string;
+    packageName: string;
+    files: Record<string, string>;
+    pkgJson: Record<string, unknown>;
+  }): Promise<{ integrity: string; contentHash: string; bytes: Buffer }> {
+    const srcRoot = await mkdtemp(path.join(tmpdir(), "cinatra-legacy-src-"));
+    const pkgDir = path.join(srcRoot, "package");
+    const allFiles: Record<string, string> = {
+      ...opts.files,
+      "package.json": JSON.stringify(opts.pkgJson),
+    };
+    for (const [rel, contents] of Object.entries(allFiles)) {
+      const abs = path.join(pkgDir, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, contents);
+    }
+    const tgz = path.join(srcRoot, "legacy.tgz");
+    await tar.c({ gzip: true, cwd: srcRoot, file: tgz }, ["package"]);
+    const bytes = await readFile(tgz);
+    const integrity = sriForBytes(bytes, "sha512");
+    const digest = tarballDigestSegment(bytes);
+
+    const entries: ContentHashEntry[] = Object.entries(allFiles).map(([relPath, contents]) => ({
+      relPath,
+      bytes: Buffer.from(contents),
+    }));
+    const contentHash = contentHashOfEntries(entries);
+
+    const targetDir = storePackageDir(opts.storeRoot, opts.packageName, VERSION, digest);
+    for (const [rel, contents] of Object.entries(allFiles)) {
+      const abs = path.join(targetDir, rel);
+      await mkdir(path.dirname(abs), { recursive: true });
+      await writeFile(abs, contents);
+    }
+    await writeFile(
+      path.join(targetDir, STORE_SIDECAR_FILENAME),
+      JSON.stringify({
+        integrity,
+        tarballDigest: digest,
+        contentHash,
+        packageName: opts.packageName,
+        version: VERSION,
+        registryUrl: REGISTRY,
+        materializedAt: "2026-06-12T00:00:00.000Z",
+      }),
+    );
+    await writeFile(`${targetDir}.tgz`, bytes);
+    await rm(srcRoot, { recursive: true, force: true }).catch(() => undefined);
+    return { integrity, contentHash, bytes };
+  }
+
+  it("a TS-source entry in a legacy store records an ACTIONABLE failed activation (the loader classification)", async () => {
+    const storeRoot = path.join(workDir, "store-legacy-ts");
+    const PKG_TS = "@cinatra-ai/legacy-source-mirror";
+    const anchor = await handWriteLegacyStore({
+      storeRoot,
+      packageName: PKG_TS,
+      pkgJson: {
+        name: PKG_TS,
+        version: VERSION,
+        exports: { "./register": "./src/register.ts" },
+        cinatra: { kind: "connector", serverEntry: "./register", requestedHostPorts: [], sdkAbiRange: "^2" },
+      },
+      files: {
+        "src/register.ts": `export function register(ctx) { ctx.logger.info("legacy"); }`,
+      },
+    });
+    const results = await loadRuntimePackageExtensions(storeRoot, {
+      resolveInstallAnchor: async (name) =>
+        name === PKG_TS
+          ? { integrity: anchor.integrity, contentHash: anchor.contentHash, registryUrl: REGISTRY, trustDecision: true }
+          : null,
+    });
+    const r = results.find((x) => x.packageName === PKG_TS);
+    expect(r?.status).toBe("failed");
+    expect(String(r?.error)).toMatch(/BUILT artifacts only/);
+    expect(String(r?.error)).toMatch(/TypeScript source/);
+    expect(String(r?.error)).not.toMatch(/ENOENT/);
+  });
+
+  it("the materializer REUSE path applies the built-artifact gate too — a pre-contract same-digest dir is REFUSED, not silently reused (codex AB-r1 finding 2)", async () => {
+    // Hand-write an integrity-valid SOURCE-MIRROR store dir (what an old
+    // installer left behind), then re-install the SAME bytes through the real
+    // materializer: the idempotency branch finds the dir, integrity verifies —
+    // and the gate must still refuse with the install-time error.
+    const storeRoot = path.join(workDir, "store-legacy-reuse");
+    const PKG_REUSE = "@cinatra-ai/legacy-reuse-mirror";
+    const pkgJson = {
+      name: PKG_REUSE,
+      version: VERSION,
+      exports: { "./register": "./src/register.ts" },
+      cinatra: { kind: "connector", serverEntry: "./register", requestedHostPorts: [], sdkAbiRange: "^2" },
+    };
+    const files = { "src/register.ts": `export function register(ctx) { ctx.logger.info("legacy"); }` };
+    const { integrity, bytes } = await handWriteLegacyStore({ storeRoot, packageName: PKG_REUSE, pkgJson, files });
+    await expect(
+      materializePackageToStore(
+        { packageName: PKG_REUSE, version: VERSION, expectedIntegrity: integrity, registryUrl: REGISTRY, storeRoot },
+        { fetchTarball: async () => ({ bytes, integrity }), now: () => "2026-06-12T00:00:00.000Z" },
+      ),
+    ).rejects.toThrow(/a TypeScript source entry/);
+  });
+
+  it("the pre-finalize hot-update PROBE refuses what the loader refuses — a declared-invalid exports target never executes top-level code (codex AB-r1 finding 1)", async () => {
+    // serverEntry "./register.mjs" + a PRESENT literal register.mjs would import
+    // fine as a literal — but the manifest DECLARES exports["./register.mjs"]
+    // with an out-of-contract target, which the real loader refuses. The probe
+    // (verifyDigestImportsAndRegisters → importStoreModule) must refuse too,
+    // not pass the probe and then fail live activation.
+    const { verifyDigestImportsAndRegisters } = await import("@/lib/extension-runtime-activate");
+    const storeRoot = path.join(workDir, "store-legacy-probe");
+    const PKG_PROBE = "@cinatra-ai/legacy-probe-mirror";
+    const probeMarker = `globalThis.__cinatra161ProbeImported = true;\n`;
+    const anchor = await handWriteLegacyStore({
+      storeRoot,
+      packageName: PKG_PROBE,
+      pkgJson: {
+        name: PKG_PROBE,
+        version: VERSION,
+        exports: { "./register.mjs": "/abs/evil.mjs" },
+        cinatra: { kind: "connector", serverEntry: "./register.mjs", requestedHostPorts: [], sdkAbiRange: "^2" },
+      },
+      files: { "register.mjs": probeMarker + REGISTER_MJS },
+    });
+    const verdict = await verifyDigestImportsAndRegisters(PKG_PROBE, storeRoot, undefined, {
+      integrity: anchor.integrity,
+      contentHash: anchor.contentHash,
+      approvedPorts: [],
+    });
+    expect(verdict).toEqual({ ok: false, reason: "import-failed" });
+    // the refusal happened BEFORE import — no top-level code ran.
+    expect((globalThis as Record<string, unknown>).__cinatra161ProbeImported).toBeUndefined();
+  });
+
+  it("a MISSING built entry in a legacy store fails with the wrapped actionable message, not a bare ENOENT (host importModule)", async () => {
+    const storeRoot = path.join(workDir, "store-legacy-missing");
+    const PKG_MISS = "@cinatra-ai/legacy-missing-entry";
+    const anchor = await handWriteLegacyStore({
+      storeRoot,
+      packageName: PKG_MISS,
+      pkgJson: {
+        name: PKG_MISS,
+        version: VERSION,
+        cinatra: { kind: "connector", serverEntry: "./register.mjs", requestedHostPorts: [], sdkAbiRange: "^2" },
+      },
+      // classification says importable, integrity verifies (anchor recorded over
+      // these files) — but the file the entry names was never shipped. The bare
+      // realpath ENOENT must be wrapped into the actionable shape.
+      files: { "readme.txt": "no register.mjs here" },
+    });
+    const results = await loadRuntimePackageExtensions(storeRoot, {
+      resolveInstallAnchor: async (name) =>
+        name === PKG_MISS
+          ? { integrity: anchor.integrity, contentHash: anchor.contentHash, registryUrl: REGISTRY, trustDecision: true }
+          : null,
+    });
+    const r = results.find((x) => x.packageName === PKG_MISS);
+    expect(r?.status).toBe("failed");
+    expect(String(r?.error)).toMatch(/does not exist in the materialized package/);
+    expect(String(r?.error)).toMatch(/BUILT artifacts only/);
+    expect(String(r?.error)).toMatch(/reinstall the package from the marketplace/);
+    expect(String(r?.error)).not.toMatch(/ENOENT/);
   });
 });
 

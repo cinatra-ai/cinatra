@@ -248,7 +248,27 @@ export async function loadRuntimePackageExtensions(
       // realpath-bound: the resolved server entry must stay INSIDE the verified
       // package dir even after following filesystem links (defense beyond the
       // string-based serverEntry guard + the post-extract symlink rejection).
-      const [realAbs, realStore] = await Promise.all([realpath(abs), realpath(rec.storeDir)]);
+      let realAbs: string;
+      let realStore: string;
+      try {
+        [realAbs, realStore] = await Promise.all([realpath(abs), realpath(rec.storeDir)]);
+      } catch (error) {
+        // A missing resolved entry surfaces as a realpath ENOENT. Rethrow it in
+        // the actionable built-artifacts-only shape (cinatra#161) instead of
+        // leaking a bare ENOENT into an opaque `failed` activation — this is
+        // the legacy-store defense for dirs written by OLDER installers (the
+        // materializer's install-time gate refuses new ones).
+        if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+          const rel = rec.serverEntryRel ?? rec.serverEntry;
+          throw new Error(
+            `[runtime-package-loader] serverEntry "${rec.serverEntry}" for ${rec.packageName} — ` +
+              `resolved entry "${rel}" does not exist in the materialized package. ` +
+              `The runtime store activates BUILT artifacts only: publish a built ESM entry ` +
+              `(e.g. cinatra.serverEntry "./register.mjs") and reinstall the package from the marketplace.`,
+          );
+        }
+        throw error;
+      }
       if (realAbs !== realStore && !realAbs.startsWith(realStore + "/")) {
         throw new Error(
           `[runtime-package-loader] serverEntry for ${rec.packageName} resolves outside its package dir — refusing import`,
