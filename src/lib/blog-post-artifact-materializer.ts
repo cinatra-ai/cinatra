@@ -58,6 +58,9 @@ async function* asTextStream(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 export async function materializeBlogPostBodyArtifact(
   input: MaterializeBlogPostBodyInput,
 ): Promise<MaterializeBlogPostBodyResult> {
+  // Resolve the target type FIRST (fail-loud in reduced universes) so an
+  // absent claimant never leaves an orphaned floor-only artifact behind.
+  const targetExtension = requireExtensionRole("artifact-blog-post-body");
   const orgId = await resolveSingletonBlogOrgId();
   const bytes = Buffer.from(input.content, "utf-8");
   const result = await createSemanticArtifact({
@@ -76,7 +79,7 @@ export async function materializeBlogPostBodyArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: requireExtensionRole("artifact-blog-post-body"),
+    extension: targetExtension,
     assertedBy: "agent",
     principal: null,
   });

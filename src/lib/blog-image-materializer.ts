@@ -82,6 +82,9 @@ export async function resolveSingletonBlogOrgId(): Promise<string> {
 export async function materializeBlogImageArtifact(
   input: MaterializeBlogImageInput,
 ): Promise<MaterializeBlogImageResult> {
+  // Resolve the target type FIRST (fail-loud in reduced universes) so an
+  // absent claimant never leaves an orphaned floor-only artifact behind.
+  const targetExtension = requireExtensionRole("artifact-blog-image");
   const orgId = await resolveSingletonBlogOrgId();
   const bytes = Buffer.from(input.imageBase64, "base64");
   const result = await createSemanticArtifact({
@@ -100,7 +103,7 @@ export async function materializeBlogImageArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: requireExtensionRole("artifact-blog-image"),
+    extension: targetExtension,
     assertedBy: "agent",
     principal: null,
   });
