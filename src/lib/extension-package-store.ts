@@ -388,9 +388,13 @@ export async function materializePackageToStore(
       // plan ROOT dependency. Anything else would defer to an opaque
       // activation-time ERR_MODULE_NOT_FOUND — refuse at materialize instead.
       // Closure packages only: the closure-less path stays byte-for-byte
-      // today's behavior.
+      // today's behavior. `present` is the PRE-plan bundled set (review round
+      // 1 finding 2): a hoisted TRANSITIVE plan node legally lands at
+      // top-level node_modules, but direct extension imports of it are
+      // covered ONLY by plan ROOTS — Node would resolve such an import today
+      // and silently break when the transitive dep dedupes elsewhere.
       await assertServerEntryBareSpecifierCoverage(extractDir, pkgJson, input.packageName, {
-        present: await readPresentNodeModules(path.join(extractDir, "node_modules")),
+        present,
         planRoots: planRootDeps ?? new Set<string>(),
       });
     }

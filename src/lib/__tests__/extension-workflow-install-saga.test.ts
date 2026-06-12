@@ -344,7 +344,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
     expect(h.events).toContain("finalize");
   });
 
-  it("REQUIRE_SIGNATURES=true + unsigned → refuses BEFORE any writes (no template/dashboard, rolled back)", async () => {
+  it("REQUIRE_SIGNATURES=true + unsigned → refuses FULLY INERTLY (no journal begin, no grant, no template/dashboard)", async () => {
     const prev = process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
     process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = "true";
     try {
@@ -353,7 +353,14 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
       expect(h.events).not.toContain("write:template");
       expect(h.events).not.toContain("write:dashboard-template");
       expect(h.events).not.toContain("finalize");
-      expect(h.events).toContain("phase:rolled_back");
+      // cinatra#181 review round 1: the trust gate now refuses BEFORE
+      // `beginInstallOp` (the journal UPSERT would destroy a prior install's
+      // `finalized` boot anchor) and BEFORE `recordRequestedGrant` (a changed
+      // request would reset a prior APPROVED grant) — the refusal is fully
+      // inert, so there is NO journal row and NOTHING to roll back.
+      expect(h.events).not.toContain("begin");
+      expect(h.events).not.toContain("phase:rolled_back");
+      expect(h.events).not.toContain("grant:requested");
     } finally {
       if (prev === undefined) delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
       else process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = prev;

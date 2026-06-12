@@ -86,6 +86,9 @@ export const MAX_PLAN_TOTAL_TARBALL_BYTES = 256 * 1024 * 1024; // 256 MiB
 export const MAX_PLAN_NODE_UNPACKED_BYTES = 64 * 1024 * 1024; // 64 MiB per node
 export const MAX_PLAN_NODE_ENTRIES = 10_000; // files+dirs per node
 
+/** Max individual violations carried into a refusal message (detail bound). */
+const MAX_REPORTED_VIOLATIONS = 20;
+
 /** The lifecycle scripts the installer refuses (it never executes package code). */
 const REFUSED_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"] as const;
 
@@ -131,6 +134,7 @@ export async function extractTarballHardened(input: {
 }): Promise<void> {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "cinatra-plan-node-tgz-"));
   const violations: string[] = [];
+  let suppressedViolations = 0;
   let declaredBytes = 0;
   let entryCount = 0;
   let capBreached: string | null = null;
@@ -144,15 +148,9 @@ export async function extractTarballHardened(input: {
       filter: (entryPath, entry) => {
         // Once a cap is breached, skip EVERYTHING (fail-closed; one message).
         if (capBreached) return false;
-        const entryType = String((entry as { type?: unknown }).type ?? "Unknown");
-        if (!ACCEPTED_TAR_ENTRY_TYPES.has(entryType)) {
-          violations.push(`${entryType} entry "${entryPath}"`);
-          return false;
-        }
-        if (input.forbidNodeModules && entryPath.split("/").includes("node_modules")) {
-          violations.push(`node_modules segment in entry "${entryPath}"`);
-          return false;
-        }
+        // Caps count EVERY header — including entries the type/node_modules
+        // checks below will skip (review round 1 finding 3: a tarball of a
+        // million symlink headers must hit the entry cap, not stream on).
         if (input.caps) {
           entryCount += 1;
           declaredBytes += Number((entry as { size?: unknown }).size ?? 0) || 0;
@@ -164,6 +162,18 @@ export async function extractTarballHardened(input: {
             capBreached = `declared unpacked size above ${input.caps.maxUnpackedBytes} bytes`;
             return false;
           }
+        }
+        const entryType = String((entry as { type?: unknown }).type ?? "Unknown");
+        if (!ACCEPTED_TAR_ENTRY_TYPES.has(entryType)) {
+          // Bounded detail: refusal is already certain — keep the message O(1).
+          if (violations.length < MAX_REPORTED_VIOLATIONS) violations.push(`${entryType} entry "${entryPath}"`);
+          else suppressedViolations += 1;
+          return false;
+        }
+        if (input.forbidNodeModules && entryPath.split("/").includes("node_modules")) {
+          if (violations.length < MAX_REPORTED_VIOLATIONS) violations.push(`node_modules segment in entry "${entryPath}"`);
+          else suppressedViolations += 1;
+          return false;
         }
         return true;
       },
@@ -177,9 +187,10 @@ export async function extractTarballHardened(input: {
     );
   }
   if (violations.length > 0) {
+    const suppressed = suppressedViolations > 0 ? ` (+${suppressedViolations} more)` : "";
     throw new MaterializationExecutorError(
-      `${input.label}: refused tarball entr${violations.length === 1 ? "y" : "ies"} — ` +
-        `${violations.join("; ")}. Only regular files and directories are accepted ` +
+      `${input.label}: refused tarball entr${violations.length === 1 && suppressedViolations === 0 ? "y" : "ies"} — ` +
+        `${violations.join("; ")}${suppressed}. Only regular files and directories are accepted ` +
         `(symlinks/hardlinks/devices are escape vectors${input.forbidNodeModules ? "; bundled node_modules inside a plan-node tarball is refused in plan format v1" : ""}).`,
     );
   }

@@ -169,9 +169,12 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
 
 describe("workflow install saga × materialization plan (the SECOND install path)", () => {
   function makeSagaDeps(resolveOverride?: WorkflowInstallSagaDeps["resolveIntegrity"]) {
-    const calls = { materialize: [] as unknown[], provenance: [] as unknown[], grantRequests: [] as unknown[] };
+    const calls = { materialize: [] as unknown[], provenance: [] as unknown[], grantRequests: [] as unknown[], gc: [] as unknown[] };
     const journal = new Map<string, { installOpId: string; phase: string }>();
     const deps: WorkflowInstallSagaDeps = {
+      gcStoreDir: async (dir) => {
+        calls.gc.push(dir);
+      },
       withInstallLock: async (_pkg, fn) => fn(),
       beginInstallOp: async ({ installOpId, packageName, orgId }) => {
         journal.set(`${packageName}::${orgId}`, { installOpId, phase: "materialized" });
@@ -203,7 +206,7 @@ describe("workflow install saga × materialization plan (the SECOND install path
       archiveDashboards: async () => undefined,
       deleteWorkflowTemplate: async () => ({ deleted: true }),
     };
-    return { deps, calls };
+    return { deps, calls, journal };
   }
 
   it("THREADS the plan + closureHash into materialize and provenance (parity with the pipeline — codex finding 2)", async () => {
@@ -230,8 +233,8 @@ describe("workflow install saga × materialization plan (the SECOND install path
     expect(calls.provenance[0]).toMatchObject({ closureHash: PLAN_CLOSURE_HASH });
   });
 
-  it("DOWNGRADE REFUSAL in the saga: an UNSIGNED closure package is hard-untrusted (the bootstrap path is closed) and refused before writes", async () => {
-    const { deps, calls } = makeSagaDeps(); // plan present, NO signature
+  it("DOWNGRADE REFUSAL in the saga: an UNSIGNED closure package is hard-untrusted (the bootstrap path is closed) and refused FULLY INERTLY", async () => {
+    const { deps, calls, journal } = makeSagaDeps(); // plan present, NO signature
     await expect(
       installWorkflowExtensionSaga({ packageName: PKG, version: VER, actor: { orgId: "org-1", userId: "u1" } }, deps),
     ).rejects.toThrow(/refused by the trust\/signature gate/);
@@ -239,6 +242,11 @@ describe("workflow install saga × materialization plan (the SECOND install path
     // round-0 finding 2: the refusal must NOT have mutated the grant — a
     // CHANGED port request would otherwise reset a prior APPROVED grant.
     expect(calls.grantRequests).toHaveLength(0);
+    // round-1 finding 1: the refusal must NOT have journaled — beginInstallOp
+    // UPSERTs the single (package, org) row and would destroy the previous
+    // install's `finalized` op (its boot anchor). Only the GC ran.
+    expect(journal.size).toBe(0);
+    expect(calls.gc).toHaveLength(1);
   });
 
   it("REFUSES a plan bound to another package BEFORE any journal/template write", async () => {

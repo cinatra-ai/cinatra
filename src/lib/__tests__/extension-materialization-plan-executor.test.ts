@@ -337,6 +337,18 @@ describe("extractTarballHardened — shared hardened extraction", () => {
     ).rejects.toThrow(/declared unpacked size above 1000 bytes/);
   });
 
+  it("caps count SKIPPED headers too: a symlink-header flood hits the entry cap, never streams on", async () => {
+    const bytes = await makeTarball("lib-x", "1.0.0", {}, {
+      mutate: async (pkgDir) => {
+        for (let i = 0; i < 6; i++) await symlink("/etc", path.join(pkgDir, `s${i}`));
+      },
+    });
+    const dest = await tempDir("hx-");
+    await expect(
+      extractTarballHardened({ bytes, destDir: dest, label: "lib-x@1.0.0", forbidNodeModules: true, caps: { maxEntries: 3, maxUnpackedBytes: 1024 * 1024 } }),
+    ).rejects.toThrow(/more than 3 entries/);
+  });
+
   it("names EVERY violation in one refusal", async () => {
     const bytes = await makeTarball("ext", "1.0.0", { "index.js": "x\n" }, {
       mutate: async (pkgDir) => {

@@ -283,6 +283,47 @@ describe("step 4.8 residual-coverage (closure packages only)", () => {
     ).rejects.toThrow(/imports "totally-uncovered-lib"[\s\S]*not a root of the signed/);
   });
 
+  it("REFUSES a direct import of a HOISTED TRANSITIVE plan node (covered only by plan ROOTS, not placement)", async () => {
+    // Plan: left-pad is the declared ROOT; hoist-dep is left-pad's transitive
+    // dep, legally HOISTED to top-level node_modules. The extension imports
+    // hoist-dep DIRECTLY — undeclared, not a root: Node would resolve it
+    // today and silently break when the transitive dep dedupes elsewhere.
+    const leftPad = await leftPadBytes();
+    const hoistDep = await makeTarball({ name: "hoist-dep", version: "1.0.0" }, { "index.js": "module.exports = 1;\n" });
+    const ext = await makeClosureExtension(
+      'import leftPad from "left-pad";\nimport h from "hoist-dep";\nexport function register() { return leftPad(String(h), 3); }\n',
+    );
+    const plan = parseMaterializationPlan({
+      format: "cinatra-materialization-plan/v1",
+      package: { name: EXT, version: VER },
+      rootDependencies: [{ name: "left-pad", placementPath: "node_modules/left-pad" }],
+      nodes: [
+        {
+          name: "left-pad", version: "1.3.0", integrity: sriForBytes(leftPad),
+          placementPath: "node_modules/left-pad",
+          dependencies: [{ name: "hoist-dep", placementPath: "node_modules/hoist-dep" }],
+        },
+        {
+          name: "hoist-dep", version: "1.0.0", integrity: sriForBytes(hoistDep),
+          placementPath: "node_modules/hoist-dep", dependencies: [],
+        },
+      ],
+    });
+    const closureHash = computeClosureHash(plan);
+    const fetch: FetchTarball = async (i) => {
+      if (i.packageName === EXT) return { bytes: ext, integrity: sriForBytes(ext) };
+      if (i.packageName === "left-pad") return { bytes: leftPad, integrity: sriForBytes(leftPad) };
+      if (i.packageName === "hoist-dep") return { bytes: hoistDep, integrity: sriForBytes(hoistDep) };
+      throw new Error(`unexpected fetch ${i.packageName}`);
+    };
+    await expect(
+      materializePackageToStore(
+        { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot: await tempDir("store-"), plan, expectedClosureHash: closureHash },
+        { fetchTarball: fetch },
+      ),
+    ).rejects.toThrow(/imports "hoist-dep"[\s\S]*not a root of the signed/);
+  });
+
   it("REFUSES an unresolvable SELF-package bare import (would only fail at activation otherwise)", async () => {
     const leftPad = await leftPadBytes();
     const ext = await makeClosureExtension(
