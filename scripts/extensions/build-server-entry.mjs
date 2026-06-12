@@ -236,6 +236,12 @@ export const KNOWN_OPTIONAL_NATIVE_ADDONS = Object.freeze(["bufferutil", "utf-8-
  * @param {string} bundleText  emitted register.mjs source
  * @param {string} packageName for the error message
  */
+/** Escape EVERY regex metacharacter (incl. backslash) in a literal for use in a
+ * dynamic RegExp — complete escaping, not a partial set. */
+function escapeRegExp(literal) {
+  return String(literal).replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+}
+
 export function assertAllowlistedAddonsAreGuarded(bundleText, packageName) {
   // Neutralize strings/comments ONCE up front (length-preserving) for the brace
   // scan AND for distinguishing a real call from a name inside a comment/string.
@@ -245,8 +251,10 @@ export function assertAllowlistedAddonsAreGuarded(bundleText, packageName) {
   const code = neutralizeLiteralsAndComments(bundleText);
   for (const addon of KNOWN_OPTIONAL_NATIVE_ADDONS) {
     // A `require`-style identifier (require / __require / a-renamed-require) +
-    // `("<addon>")`, matched on the raw bundle.
-    const requireCallRe = new RegExp(`\\b[\\w$]*require[\\w$]*\\s*\\(\\s*(['"])${addon.replace(/[-]/g, "\\$&")}\\1\\s*\\)`, "g");
+    // `("<addon>")`, matched on the raw bundle. `addon` is FULLY regex-escaped
+    // (every metacharacter incl. backslash) — the allowlist is constant today,
+    // but a partial escape is a latent injection/escaping hazard if it grows.
+    const requireCallRe = new RegExp(`\\b[\\w$]*require[\\w$]*\\s*\\(\\s*(['"])${escapeRegExp(addon)}\\1\\s*\\)`, "g");
     let m;
     while ((m = requireCallRe.exec(bundleText)) !== null) {
       // A `require` whose identifier sits in a comment/string (blanked) is not a
