@@ -89,7 +89,7 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
   },
   "blog_post_publish_linkedin_update": {
     description:
-      "Update the content of an existing LinkedIn draft. Used by @cinatra-ai/blog-linkedin-publish-agent to persist operator edits made at the HITL draft-review gate before calling blog_post_publish_linkedin_publish. Returns { ok: true }.",
+      "Update the content of an existing LinkedIn draft. Used by the LinkedIn publish agent to persist operator edits made at the HITL draft-review gate before calling blog_post_publish_linkedin_publish. Returns { ok: true }.",
     inputSchema: schemas.updateLinkedInDraftSchema,
   },
   "blog_post_publish_linkedin_publish": {

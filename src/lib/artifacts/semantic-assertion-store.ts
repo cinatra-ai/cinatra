@@ -1,5 +1,12 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+// The floor type id comes from the generated manifest data (the single
+// "artifact-default-floor" role claimant) via the PURE-DATA
+// @cinatra-ai/objects/artifact-floor subpath — keeps the server-heavy
+// objects barrel out of this lib's unit-test collection (the old
+// leaf-mirror rationale holds; the mirror itself is retired,
+// cinatra#151 Stage 6).
+import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, ensurePostgresSchema, postgresSchema } from "@/lib/database";
 
@@ -45,10 +52,6 @@ export function shouldDefaultBeEligible(
   );
 }
 
-// LEAF-MIRROR of @cinatra-ai/objects DEFAULT_ARTIFACT_EXTENSION (lock-step;
-// inlined to keep the server-heavy objects barrel out of this lib's unit
-// test collection — same mirror discipline as the schema byte-mirror).
-const DEFAULT_ARTIFACT_EXTENSION = "@cinatra-ai/default-artifact";
 const isDefaultArtifactType = (ext: string | null | undefined): boolean =>
   ext === DEFAULT_ARTIFACT_EXTENSION;
 
@@ -222,7 +225,7 @@ WHERE o.id=$1 AND o.org_id=$2`,
 export class DefaultArtifactNotDirectlyAssertableError extends Error {
   constructor() {
     super(
-      "@cinatra-ai/default-artifact is the floor type — it is managed ONLY by " +
+      `${DEFAULT_ARTIFACT_EXTENSION} is the floor type — it is managed ONLY by ` +
         "the floor rebalance, never asserted/confirmed directly.",
     );
     this.name = "DefaultArtifactNotDirectlyAssertableError";

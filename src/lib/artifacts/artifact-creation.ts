@@ -31,6 +31,12 @@ import {
   composeAndValidateClassifierSignals,
   type ClassifierSignals,
 } from "@cinatra-ai/objects/classifier-signals";
+// The semantic FLOOR type id comes from the generated manifest data (the
+// single "artifact-default-floor" role claimant) via the PURE-DATA
+// @cinatra-ai/objects/artifact-floor subpath — no server-heavy objects
+// barrel in the unit-test graph (the old inline-mirror rationale holds;
+// the mirror itself is retired, cinatra#151 Stage 6).
+import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 // Deterministic producer assertions resolve and org-validate BEFORE Tx2,
 // then splice into Tx2 before the floor rebalance.
 // `buildAssertSemanticTypeQueries` is the tx-composable builder
@@ -141,13 +147,6 @@ export class ResourceOrphanedError extends Error {
     this.name = "ResourceOrphanedError";
   }
 }
-
-// Default-artifact extension id (canonical, kept in lock-step with the
-// extension dir under extensions/cinatra-ai/default-artifact/). The
-// semantic-assertion store inlines its own copy of this constant
-// (leaf-mirror) to avoid the server-heavy @cinatra-ai/objects barrel in
-// unit tests.
-const DEFAULT_ARTIFACT_EXTENSION = "@cinatra-ai/default-artifact";
 
 export async function createSemanticArtifact(
   input: CreateSemanticArtifactInput,

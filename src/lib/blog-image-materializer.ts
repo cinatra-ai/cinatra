@@ -23,6 +23,9 @@ import "server-only";
 
 import { createSemanticArtifact } from "@/lib/artifacts/artifact-creation";
 import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
+// Target type via the manifest-declared "artifact-blog-image" extension
+// role — fail-loud when absent (cinatra#151 Stage 6).
+import { requireExtensionRole } from "@/lib/extension-roles";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { betterAuthDb, betterAuthOrganizations } from "@/lib/better-auth-db";
@@ -79,6 +82,9 @@ export async function resolveSingletonBlogOrgId(): Promise<string> {
 export async function materializeBlogImageArtifact(
   input: MaterializeBlogImageInput,
 ): Promise<MaterializeBlogImageResult> {
+  // Resolve the target type FIRST (fail-loud in reduced universes) so an
+  // absent claimant never leaves an orphaned floor-only artifact behind.
+  const targetExtension = requireExtensionRole("artifact-blog-image");
   const orgId = await resolveSingletonBlogOrgId();
   const bytes = Buffer.from(input.imageBase64, "base64");
   const result = await createSemanticArtifact({
@@ -97,7 +103,7 @@ export async function materializeBlogImageArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: "@cinatra-ai/blog-image-artifact",
+    extension: targetExtension,
     assertedBy: "agent",
     principal: null,
   });

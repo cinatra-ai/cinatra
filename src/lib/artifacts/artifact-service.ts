@@ -10,6 +10,9 @@ import {
 } from "./artifact-creation";
 import { tombstoneArtifact as retentionTombstone } from "./artifact-retention";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
+// Generated pure-data floor constant (cinatra#151 Stage 6) — core source
+// never names the floor extension package.
+import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import {
   listEligibleAssertions,
   listEligibleAssertionsForArtifacts,
@@ -127,7 +130,7 @@ function toSummary(
     // unit test that doesn't drive the assertion store).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     primaryExtension:
-      semanticIdentity?.primaryExtension ?? "@cinatra-ai/default-artifact",
+      semanticIdentity?.primaryExtension ?? DEFAULT_ARTIFACT_EXTENSION,
     sourceUrl: connectorRefSourceUrl(rec.data),
   };
 }

@@ -15,7 +15,6 @@
     "./schedule": "./src/schedule/resolver.ts",
     "./state": "./src/state/index.ts",
     "./scope": "./src/scope/index.ts",
-    "./seed": "./src/seed/major-product-release.ts",
     "./engine": "./src/engine/index.ts",
     "./manifest": "./src/manifest.ts",
     "./extension-ops": "./src/extension-ops.ts",

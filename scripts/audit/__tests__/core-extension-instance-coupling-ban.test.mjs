@@ -31,11 +31,40 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(names.has("@cinatra-ai/blog-skills")).toBe(true);
   });
 
-  it("counts real hardcoded coupling (string + path literals) — sentinel: src/lib/blog/generation.ts", () => {
+  it("counts real hardcoded coupling (string + path literals) — fixture; the historic live sentinel is RETIRED", () => {
+    // The historic live sentinel — src/lib/blog/generation.ts's
+    // retired-stub error strings naming @cinatra-ai/blog-pipeline-agent —
+    // was decoupled by the artifact/blog/seed tail (cinatra#151 Stage 6;
+    // the whole baseline is now EMPTY). Pin BOTH facts: the live file
+    // carries no keys, and the string/path-literal shapes themselves stay
+    // counted via a synthetic fixture.
     const occ = scanInstanceCoupling();
     const genKeys = Object.keys(occ).filter((k) => k.startsWith("src/lib/blog/generation.ts ::"));
-    expect(genKeys.length).toBeGreaterThan(0);
-    expect(genKeys.some((k) => k.includes("package :: @cinatra-ai/"))).toBe(true);
+    expect(genKeys).toEqual([]);
+
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-literal-shapes-"));
+    try {
+      mkdirSync(join(root, "src/lib"), { recursive: true });
+      writeFileSync(
+        join(root, "src/lib/coupled.ts"),
+        [
+          'export const MSG = "use `@scope/sample-agent` instead";',
+          'export const P = `extensions/scope/sample-agent/skills/${"x"}/SKILL.md`;',
+          "",
+        ].join("\n"),
+      );
+      const extensions = {
+        names: new Set(["@scope/sample-agent"]),
+        dirPaths: new Set(["extensions/scope/sample-agent"]),
+      };
+      const fixtureOcc = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      expect(fixtureOcc["src/lib/coupled.ts :: package :: @scope/sample-agent"]).toBe(1);
+      expect(
+        Object.keys(fixtureOcc).some((k) => k.startsWith("src/lib/coupled.ts :: path ::")),
+      ).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("regression guard: src/lib/blog/openai.ts is de-coupled (IoC cutover — resolves skills by capability key, not hardcoded extension)", () => {
@@ -47,11 +76,27 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(prefillKeys).toEqual([]);
   });
 
-  it("counts imports too (the src-only import-ban does not scan packages/ — close that hole)", () => {
+  it("counts packages/ imports too (fixture; the live packages/ cluster is RETIRED)", () => {
+    // The last live packages/ carrier (packages/workflows seed agentRefs)
+    // was retired by cinatra#151 Stage 6 — the import-counting hole-closer
+    // is pinned by a synthetic packages/ fixture instead.
     const occ = scanInstanceCoupling();
-    // packages/* files that reference an extension package name (incl. imports)
     const pkgRefs = Object.keys(occ).filter((k) => k.startsWith("packages/") && k.includes(":: package ::"));
-    expect(pkgRefs.length).toBeGreaterThan(0);
+    expect(pkgRefs).toEqual([]);
+
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-packages-"));
+    try {
+      mkdirSync(join(root, "packages/sample/src"), { recursive: true });
+      writeFileSync(
+        join(root, "packages/sample/src/uses.ts"),
+        'import { z } from "@scope/sample-agent";\nexport const u = z;\n',
+      );
+      const extensions = { names: new Set(["@scope/sample-agent"]), dirPaths: new Set() };
+      const fixtureOcc = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      expect(fixtureOcc["packages/sample/src/uses.ts :: package :: @scope/sample-agent"]).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("does NOT false-positive on the CORE @cinatra-ai/extensions/<subpath> package path", () => {

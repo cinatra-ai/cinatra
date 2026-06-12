@@ -57,6 +57,13 @@ export const BINDING_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 // Role names: kebab-case, host-neutral (a role is NOT a package name).
 export const ROLE_NAME_RE = /^[a-z][a-z0-9-]*$/;
 
+// The semantic-floor artifact role (cinatra#151 Stage 6): the single role the
+// generator REQUIRES a claimant for (and requires that claimant to be a
+// cinatra.systemExtensions member) — the floor artifact type is structural,
+// present in every universe. Emitted as a dedicated pure-data constant into
+// packages/objects/src/generated/artifact-floor.ts.
+export const ARTIFACT_DEFAULT_FLOOR_ROLE = "artifact-default-floor";
+
 // `params` is public renderer metadata (it crosses a "use server" boundary to
 // the client and is registered into the client-side renderer registry). It
 // must be a small plain-JSON object and MUST NOT carry secrets.

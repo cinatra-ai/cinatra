@@ -1,4 +1,10 @@
 import "server-only";
+// The floor type's package name comes from the generated manifest data
+// (the single "artifact-default-floor" role claimant) via the PURE-DATA
+// @cinatra-ai/objects/artifact-floor subpath — no heavy objects barrel in
+// the import graph (the old leaf-mirror rationale holds; the mirror
+// itself is retired, cinatra#151 Stage 6).
+import { DEFAULT_ARTIFACT_EXTENSION } from "@cinatra-ai/objects/artifact-floor";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import {
   getPostgresConnectionString,
@@ -44,12 +50,7 @@ export type ProducerAssertionPlan = {
   produces: string[];
 };
 
-// Leaf-mirror of `@cinatra-ai/objects/semantic-manifest`
-// DEFAULT_ARTIFACT_EXTENSION -- inlined (NOT imported) to keep the
-// heavy `@cinatra-ai/objects` barrel out of the artifact-creation
-// import graph. Same pattern as artifact-creation.ts:108. Keep in
-// lock-step with the canonical constant.
-const DEFAULT_ARTIFACT_EXTENSION = "@cinatra-ai/default-artifact";
+
 
 const conn = (): string => getPostgresConnectionString();
 const q = (): string => postgresSchema.replaceAll('"', '""');

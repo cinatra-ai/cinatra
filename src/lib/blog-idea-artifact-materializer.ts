@@ -23,6 +23,9 @@ import { assertSemanticType } from "@/lib/artifacts/semantic-assertion-store";
 import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
 import { createLocalDiskBlobStore } from "@/lib/artifacts/local-disk-blob-store";
 import { resolveSingletonBlogOrgId } from "@/lib/blog-image-materializer";
+// Target type via the manifest-declared "artifact-blog-idea-summary"
+// extension role — fail-loud when absent (cinatra#151 Stage 6).
+import { requireExtensionRole } from "@/lib/extension-roles";
 
 export type MaterializeBlogIdeaInput = {
   /** UTF-8 markdown idea summary string. */
@@ -43,6 +46,9 @@ async function* asTextStream(bytes: Uint8Array): AsyncIterable<Uint8Array> {
 export async function materializeBlogIdeaArtifact(
   input: MaterializeBlogIdeaInput,
 ): Promise<MaterializeBlogIdeaResult> {
+  // Resolve the target type FIRST (fail-loud in reduced universes) so an
+  // absent claimant never leaves an orphaned floor-only artifact behind.
+  const targetExtension = requireExtensionRole("artifact-blog-idea-summary");
   const orgId = await resolveSingletonBlogOrgId();
   const bytes = Buffer.from(input.summary, "utf-8");
   const result = await createSemanticArtifact({
@@ -61,7 +67,7 @@ export async function materializeBlogIdeaArtifact(
   assertSemanticType({
     orgId,
     artifactId: result.artifactId,
-    extension: "@cinatra-ai/blog-idea-artifact",
+    extension: targetExtension,
     assertedBy: "agent",
     principal: null,
   });

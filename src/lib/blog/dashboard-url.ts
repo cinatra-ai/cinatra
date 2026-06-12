@@ -5,12 +5,16 @@ import {
   excludeProjectTemplates,
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import type { ActorContext } from "@/lib/authz/actor-context";
+import { resolveExtensionRole } from "@/lib/extension-roles";
 
-const BLOG_EXTENSION_PACKAGE = "@cinatra-ai/blog-content-workflow";
 const DASHBOARDS_INDEX_URL = "/dashboards";
 
-// Resolves the materialized blog-content-workflow dashboard row URL for the
-// caller. Returns `/dashboards/{rowId}` when a row exists matching the caller's
+// Resolves the materialized blog operator dashboard row URL for the caller.
+// The dashboard-owning extension resolves from the manifest-declared
+// "blog-operator-dashboard" extension role (cinatra#151 Stage 6) — when no
+// present extension claims it (reduced universes), the resolver degrades to
+// the dashboards index, exactly like the no-matching-row case. Returns
+// `/dashboards/{rowId}` when a row exists matching the caller's
 // org + (when provided) project; otherwise returns the dashboards index URL
 // `/dashboards`. Caller is responsible for projecting its own actor (request
 // path: `getActorContext()` from `@/lib/auth-session`; worker path: the ALS
@@ -23,12 +27,15 @@ export async function resolveBlogDashboardUrl(
   const organizationId = actor.organizationId;
   if (!organizationId) return DASHBOARDS_INDEX_URL;
 
+  const blogDashboardOwner = resolveExtensionRole("blog-operator-dashboard");
+  if (!blogDashboardOwner) return DASHBOARDS_INDEX_URL;
+
   const rows = await listOrgDashboardRows(organizationId);
   // Exclude project-scope TEMPLATE rows — those never render directly (the
   // dashboard detail page 404s them); only their per-project instances are
   // operational.
   const blogRows = excludeProjectTemplates(rows).filter(
-    (r) => r.extensionId === BLOG_EXTENSION_PACKAGE,
+    (r) => r.extensionId === blogDashboardOwner,
   );
 
   // Project-scoped instance first.

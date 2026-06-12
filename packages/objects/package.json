@@ -16,6 +16,7 @@
     "./graphiti-client": "./src/graphiti-client.ts",
     "./register-artifact-extensions": "./src/integration/register-artifact-extensions.ts",
     "./graphiti-projector": "./src/graphiti-projector.ts",
+    "./artifact-floor": "./src/generated/artifact-floor.ts",
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./classifier-signals": "./src/classifier-signals.ts"
   },

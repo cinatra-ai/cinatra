@@ -77,8 +77,8 @@ export async function startBlogPostIdeaGeneration(_input: {
   transcriptIds: string[];
 }): Promise<never> {
   throw new Error(
-    "Retired. Use the blog-pipeline-agent " +
-      "idea_flow (via `@cinatra-ai/blog-pipeline-agent`) instead. " +
+    "Retired. Use the blog pipeline agent's " +
+      "idea_flow instead. " +
       "`packages/asset-blog` keeps this stub for legacy callers.",
   );
 }
@@ -95,8 +95,8 @@ export async function startBlogPostDraftGeneration(_input: {
   ideaId: string;
 }): Promise<never> {
   throw new Error(
-    "Retired. Use the blog-pipeline-agent " +
-      "draft_flow (via `@cinatra-ai/blog-pipeline-agent`) instead. " +
+    "Retired. Use the blog pipeline agent's " +
+      "draft_flow instead. " +
       "`packages/asset-blog` keeps this stub for legacy callers.",
   );
 }
@@ -509,8 +509,8 @@ export async function startLinkedInDraftCreation(_input: {
   blogPostUrl: string;
 }): Promise<never> {
   throw new Error(
-    "Retired. Use the blog-pipeline-agent " +
-      "linkedin_flow (via `@cinatra-ai/blog-pipeline-agent`) instead. " +
+    "Retired. Use the blog pipeline agent's " +
+      "linkedin_flow instead. " +
       "`packages/asset-blog` keeps this stub for legacy callers.",
   );
 }

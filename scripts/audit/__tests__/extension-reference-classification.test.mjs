@@ -22,6 +22,12 @@ describe("extension-reference classification taxonomy", () => {
     // generator emits from — the exempt set and the emitted set cannot drift.
     expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([...GENERATED_MANIFEST_FILES].sort());
     expect([...PERMANENT_EXEMPT_FILES].sort()).toEqual([
+      // The semantic-floor artifact binding (cinatra#151 Stage 6): the ONE
+      // generator emission outside src/lib/generated/ — package-local pure
+      // data (packages/objects is consumed from graphs where the host `@/`
+      // alias does not resolve), same --check byte pin, same explicit-list
+      // discipline (the exempt class is the EMITTED LIST, not a directory).
+      "packages/objects/src/generated/artifact-floor.ts",
       // The generated guarded-optional-loaders test (cinatra#7): a
       // __tests__ path was ALREADY gate-exempt by classification, so listing
       // it adds no exemption surface — it puts the file under the same

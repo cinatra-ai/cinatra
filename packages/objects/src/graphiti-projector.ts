@@ -2,6 +2,7 @@ import "server-only";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { addEpisode, deleteEpisode, identityHashToUuid } from "./graphiti-client";
+import { DEFAULT_ARTIFACT_EXTENSION } from "./generated/artifact-floor";
 import { objectSyncAdapterRegistry } from "./sync-adapters/registry";
 import type { ObjectSyncAdapter, StoredObject } from "./sync-adapters/adapter";
 
@@ -104,7 +105,7 @@ export function projectArtifactSafe(
     // classifier asserted) — Graphiti consumers can still navigate
     // by the immutable artifactId.
     primaryExtension:
-      semanticIdentity?.primaryExtension ?? "@cinatra-ai/default-artifact",
+      semanticIdentity?.primaryExtension ?? DEFAULT_ARTIFACT_EXTENSION,
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
     excerpt:
       typeof excerptRaw === "string"
@@ -510,7 +511,7 @@ ORDER BY asserted_at, extension`,
   });
   type Row = { extension: string; asserted_by: string; asserted_at: string };
   const rows = (res?.rows ?? []) as Row[];
-  const DEFAULT_EXT = "@cinatra-ai/default-artifact";
+  const DEFAULT_EXT = DEFAULT_ARTIFACT_EXTENSION;
   const eligibleExtensions = rows.map((r) => String(r.extension));
   const nonDefault = rows.filter((r) => r.extension !== DEFAULT_EXT);
   if (nonDefault.length === 0) {

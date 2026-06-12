@@ -112,3 +112,74 @@ export const allFixtures = {
   approval: approvalFixture,
   dst: dstFixture,
 };
+
+// TEST-OWNED release-template fixture (cinatra#151 Stage 6). The host-side
+// seed module this file used to exercise is retired — the extension-owned
+// major-release template ships via the major-release-workflow extension's
+// `cinatra/workflow.bpmn` through the workflow-extension install path, and
+// the demo seed (`scripts/seed.mjs`) carries its own presence-conditional
+// fixture copy. This fixture preserves the validation-contract coverage:
+// TEMPLATE mode (relative schedules anchored to the release, a typed
+// required placeholder, agent tasks, an approval gate, no concrete date).
+export const RELEASE_TEMPLATE_FIXTURE: WorkflowSpec = {
+  name: "{{product}} — Major Product Release",
+  product: "{{product}}",
+  placeholders: {
+    product: { type: "string", required: true, description: "Product / release name" },
+  },
+  tasks: [
+    {
+      key: "kickoff",
+      type: "checkpoint",
+      title: "Release kickoff",
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "P21D", direction: "before" },
+    },
+    {
+      key: "blog",
+      type: "agent_task",
+      title: "Draft launch blog for {{product}}",
+      agentRef: { package: "@cinatra-ai/fixture-writer-agent" },
+      input: { brief: "{{product}} launch announcement" },
+      dependsOn: [{ taskKey: "kickoff" }],
+      maxAttempts: 3,
+      failurePolicy: "block",
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "P10D", direction: "before", localTime: "09:00" },
+    },
+    {
+      key: "press",
+      type: "agent_task",
+      title: "Draft press release for {{product}}",
+      agentRef: { package: "@cinatra-ai/fixture-writer-agent" },
+      input: { brief: "{{product}} press release" },
+      dependsOn: [{ taskKey: "kickoff" }],
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "P10D", direction: "before" },
+    },
+    {
+      key: "legal",
+      type: "approval",
+      title: "Legal sign-off",
+      requiredScope: { level: "organization" },
+      rejectionPolicy: "needs_revision",
+      dependsOn: [
+        { taskKey: "blog", outcome: "success" },
+        { taskKey: "press", outcome: "success" },
+      ],
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "P5D", direction: "before" },
+    },
+    {
+      key: "final",
+      type: "checkpoint",
+      title: "Go / no-go review",
+      dependsOn: [{ taskKey: "legal", outcome: "success" }],
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "P1D", direction: "before" },
+    },
+    {
+      key: "announce",
+      type: "notification",
+      title: "Announce {{product}} is live",
+      message: "{{product}} has shipped.",
+      dependsOn: [{ taskKey: "final" }],
+      schedule: { mode: "relative", anchor: "target", offsetIso8601: "PT1H", direction: "after" },
+    },
+  ],
+};
