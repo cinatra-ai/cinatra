@@ -21,11 +21,12 @@ import { ensureDevEncryptionKey } from "@/lib/dev-encryption-key-bootstrap";
 // code into the Edge module graph.
 import "../sentry.server.config";
 
-// Wire host-runtime impls into every transport
-// connector at boot. Importing the module is enough; it auto-registers on
-// load (registerTransportConnectors is also exported for explicit calls
-// from non-Next.js entrypoints such as BullMQ workers + vitest setup).
-import "@/lib/register-transport-connectors";
+// Publish the per-concern host connector services at boot (serverEntry
+// transports self-bind at activation). Importing the module is enough; it
+// auto-registers on load (registerHostConnectorServices is also exported for
+// explicit calls from non-Next.js entrypoints such as BullMQ workers +
+// vitest setup).
+import "@/lib/register-host-connector-services";
 
 // Wire the host enforcement behind the SDK `requireExtensionAction(...)` guard
 // so extension server actions can gate on the per-install connector policy

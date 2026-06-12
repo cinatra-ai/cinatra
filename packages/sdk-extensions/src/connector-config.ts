@@ -10,7 +10,9 @@
 // via `setExtensionConnectorConfigStore`, and EVERY connector resolves
 // `getExtensionConnectorConfig`/`setExtensionConnectorConfig`. There is NO
 // per-connector host binding — adding a connector needs zero host change (vs a
-// per-connector `registerXConnector(...)` in register-transport-connectors.ts,
+// per-connector `registerXConnector(...)` host-service adaptation in each
+// connector's `register(ctx)` (host services published by
+// register-host-connector-services.ts),
 // which is a host hardcode per connector). The SDK owns the shape; the host owns
 // the storage. The `packageId` is carried for future per-extension scoping/audit;
 // the legacy global-key storage uses the `key` directly today.

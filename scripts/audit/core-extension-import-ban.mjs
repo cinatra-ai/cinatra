@@ -2,15 +2,24 @@
 // True-IoC boundary gate — the HOST(core) -> EXTENSION direction.
 //
 // The merged `extension-import-ban` gate bans extensions importing `@/`. This is
-// its mirror: ZERO-TOLERANCE (cinatra-ai/cinatra#36) on cinatra CORE
-// (`src/`) importing a named extension package
-// (`@cinatra-ai/<x>-{connector,agent,artifact,skill,workflow}`).
+// its mirror: ZERO-TOLERANCE on cinatra CORE (`src/`) importing a named
+// extension package (`@cinatra-ai/<x>-{connector,agent,artifact,skill,workflow}`).
 // Every such edge is static coupling that makes the system LESS extensible (core
-// knows a specific extension by name). The committed baseline is the FROZEN
-// RESIDUAL FLOOR of the IoC cutover (epic #24): it may only ever SHRINK, by
-// any mechanism — a new edge fails CI, the committed baseline may never grow
-// vs the base ref (the one-PR un-exempt seed transition is retired), and
-// `--write-baseline` refuses to write a grown baseline.
+// knows a specific extension by name).
+//
+// PINNED EMPTY (cinatra#151 Stage 3 — the honest-zero flip, following the
+// discovery-dispatcher-bypass precedent): the last residual edges (the
+// transport-DI import cluster) are retired and the scanner adopted the shared
+// lexical comment stripper (lib/strip-comments.mjs) in the SAME PR, closing
+// the documented blind spot that hid comment-adjacent imports (a literal
+// `/*` inside a line comment swallowed the import section of
+// register-transport-connectors.ts, since renamed). From the flip onward:
+//   - ANY current core->extension import edge fails CI immediately;
+//   - a NON-EMPTY committed baseline is itself a hard failure;
+//   - `--write-baseline` REFUSES to write a non-empty baseline;
+//   - the CORE_EXT_BAN_BASE monotonic guard survives purely as a tamper
+//     check (fail-closed on unresolvable refs).
+// Zero is the floor AND the ceiling — there is no data path that can raise it.
 //
 // Exempt (never counted):
 //   - the generated manifest tree — the EXPLICIT generator-emitted file list
@@ -40,6 +49,7 @@ import { execFileSync } from "node:child_process";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertExtensionsPresent } from "./lib/assert-extensions-cloned.mjs";
+import { stripComments } from "./lib/strip-comments.mjs";
 import { classifyFile } from "./lib/extension-reference-classification.mjs";
 import { GENERATED_MANIFEST_FILES } from "../extensions/generated-manifest-files.mjs";
 
@@ -121,10 +131,12 @@ function walk(dir, acc) {
   return acc;
 }
 
-// Strip line + block comments so commented-out / doc imports don't false-trip.
-function stripComments(src) {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-}
+// Shared single-pass lexical comment stripper (lib/strip-comments.mjs) — the
+// legacy regex pair went BLIND after a line comment containing a literal `/*`
+// (it swallowed every following import until the next `*/`), which hid the
+// transport-DI import cluster from this gate. Adopted WITH those edges'
+// removal (the register's stated policy: a stripping correction that would
+// reveal edges lands only with the edges gone — cinatra#151 Stage 3).
 
 /** Returns { [coreFileRelToSrc]: sorted extension package names }. */
 export function scanCoreExtensionEdges(srcRoot = SRC_ROOT, extensionNames = discoverExtensionNames()) {
@@ -210,31 +222,26 @@ function main() {
   const count = flatten(current).size;
 
   if (args.includes("--write-baseline")) {
-    // FAIL-CLOSED write (zero-tolerance, #36): the baseline is the frozen
-    // residual floor — regeneration may only ever SHRINK it. Refuse to write
-    // any NEW edge vs the committed baseline (remove the new import instead).
-    if (existsSync(BASELINE_PATH)) {
-      const committed = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).edges ?? {};
-      const grownVsCommitted = baselineGrowth(committed, current);
-      if (grownVsCommitted.length) {
-        console.error(
-          `[core-extension-import-ban] FAIL — refusing to write a GROWN baseline (zero-tolerance: the floor only shrinks; remove the new core->extension import instead of re-baselining it):`,
-        );
-        grownVsCommitted.forEach((e) => console.error("  + " + e));
-        process.exit(1);
-      }
+    // PINNED EMPTY (cinatra#151 Stage 3): there is nothing left to tolerate.
+    // Refuse to write a non-empty baseline — remove the core->extension
+    // import instead (route through the generated manifest / capability
+    // registry, never a named import).
+    if (count) {
+      console.error(
+        `[core-extension-import-ban] FAIL — refusing to write a NON-EMPTY baseline (the floor is pinned at zero; route through the generated manifest / runtime-discovery dispatcher / capability registry instead of re-baselining):`,
+      );
+      [...flatten(current)].sort().forEach((e) => console.error("  + " + e));
+      process.exit(1);
     }
     const doc = {
       note:
-        "True-IoC HOST->EXTENSION import baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36). Each entry is a CURRENT core(src/)->extension import edge; every edge is classified runtime-coupling or mechanical under the shared taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the one-PR un-exempt seed transition is retired; --write-baseline refuses grown output). Exempt: ONLY the generated manifest tree (the explicit generator-emitted file list) and tests; anthropic-connector is un-exempt and its host->ext edges are counted here. Regenerate (shrink-only) with `node scripts/audit/core-extension-import-ban.mjs --write-baseline`.",
+        "True-IoC HOST->EXTENSION import baseline — PINNED EMPTY by the honest-zero flip (cinatra#151 Stage 3, on the discovery-dispatcher-bypass precedent; scanner on the shared lexical stripper lib/strip-comments.mjs since the same PR). Any core(src/)->extension import edge fails CI immediately; a non-empty committed baseline is itself a failure and --write-baseline refuses to produce one. Exempt: ONLY the generated manifest tree (the explicit generator-emitted file list) and tests. The classificationSummary is retained at pinned zeros for tooling-shape compatibility.",
       classificationSummary: summarizeEdgeClassification(current),
       edges: current,
     };
     writeFileSync(BASELINE_PATH, stable(doc));
-    const sum = doc.classificationSummary;
     console.log(
-      `[core-extension-import-ban] baseline written — ${count} edges across ${Object.keys(current).length} core files ` +
-        `(runtime-coupling: ${sum["runtime-coupling"].edges}, mechanical: ${sum.mechanical.edges}).`,
+      `[core-extension-import-ban] baseline written — ${count} edge(s) (pinned empty).`,
     );
     return;
   }
@@ -244,6 +251,17 @@ function main() {
     process.exit(1);
   }
   const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).edges ?? {};
+
+  // PINNED-EMPTY pin: the committed baseline must be EMPTY — a re-populated
+  // baseline file is a bypass attempt regardless of the tree's state.
+  const committedCount = flatten(baseline).size;
+  if (committedCount) {
+    console.error(
+      `[core-extension-import-ban] FAIL — committed baseline is NON-EMPTY (${committedCount} edge(s)); the floor is pinned at zero since the honest-zero flip (cinatra#151 Stage 3):`,
+    );
+    [...flatten(baseline)].sort().forEach((e) => console.error("  + " + e));
+    process.exit(1);
+  }
 
   // Monotonic guard: in CI the committed baseline must be a subset of the base ref's.
   const baseRef = process.env.CORE_EXT_BAN_BASE;
@@ -298,24 +316,18 @@ function main() {
     }
   }
 
-  const { added, removed } = diffEdges(baseline, current);
-  if (removed.length) {
-    console.log(`[core-extension-import-ban] NOTE — ${removed.length} baseline edge(s) decoupled (remove via --write-baseline):`);
-    removed.forEach((e) => console.log("  - " + e));
-  }
-  if (added.length) {
+  // PINNED EMPTY: any current edge fails immediately (zero is the floor and
+  // the ceiling — there is no tolerated set left to diff against).
+  if (count) {
     console.error(
-      `[core-extension-import-ban] FAIL — ${added.length} NEW core->extension edge(s) ` +
-        `(ZERO-TOLERANCE: route through the generated manifest / runtime-discovery dispatcher, never a named import):`,
+      `[core-extension-import-ban] FAIL — ${count} core->extension import edge(s) ` +
+        `(PINNED EMPTY: route through the generated manifest / runtime-discovery dispatcher / capability registry, never a named import):`,
     );
-    added.forEach((e) => console.error("  + " + e));
+    [...flatten(current)].sort().forEach((e) => console.error("  + " + e));
     process.exit(1);
   }
-  const sum = summarizeEdgeClassification(current);
   console.log(
-    `[core-extension-import-ban] OK — no NEW core->extension coupling (zero-tolerance holds). Frozen floor: ${count} edges ` +
-      `[runtime-coupling: ${sum["runtime-coupling"].edges} edge(s) / ${sum["runtime-coupling"].files} file(s); ` +
-      `mechanical: ${sum.mechanical.edges} edge(s) / ${sum.mechanical.files} file(s)] (the floor only shrinks — see scripts/audit/extension-coupling-gates.md).`,
+    `[core-extension-import-ban] OK — zero core->extension import edges (baseline PINNED EMPTY since the honest-zero flip, cinatra#151 Stage 3; shared lexical stripper; see scripts/audit/extension-coupling-gates.md).`,
   );
 }
 

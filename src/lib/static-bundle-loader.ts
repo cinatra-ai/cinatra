@@ -11,7 +11,7 @@ import "server-only";
 // `serverEntry` extensions in every runtime mode — the transport/provider
 // connectors bind their host deps and register their capability providers
 // inside `register(ctx)`, adapted from the per-concern host services the boot
-// imports publish (see register-transport-connectors.ts). Only extensions
+// imports publish (see register-host-connector-services.ts). Only extensions
 // that declare `cinatra.serverEntry` are activated; required-set activation
 // is asserted post-boot (src/lib/required-extension-activation.ts).
 

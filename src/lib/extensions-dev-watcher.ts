@@ -275,8 +275,9 @@ async function loadOnePackage(
   }
 
   // --- connector kind: workspace-compiled. There is no runtime
-  //     (re)load step — connectors are wired by the DI registrar at boot
-  //     (src/lib/register-transport-connectors.ts). Identify it explicitly
+  //     (re)load step — connectors self-bind from `register(ctx)` against the
+  //     host services published at boot
+  //     (src/lib/register-host-connector-services.ts). Identify it explicitly
   //     so the watcher can log a truthful "no-op, restart to apply" instead
   //     of a misleading "reloaded".
   if (pkgJson.cinatra?.kind === "connector") {
@@ -499,7 +500,7 @@ export async function loadAllExtensionPackages(
         console.info(
           `[cinatra:extensions:connector] ${res.packageName ?? res.pkgDirName} ` +
             `v${res.packageVersion ?? "?"} — connector (workspace-compiled; ` +
-            `wired by register-transport-connectors at boot, not by this scan)`,
+            `wired against register-host-connector-services at boot, not by this scan)`,
         );
       } else if (res.kind === "artifact") {
         artifactPkgs += 1;
@@ -540,7 +541,7 @@ export async function loadAllExtensionPackages(
       `bridge; their co-located auditor-pattern skill bundles registered ` +
       `into the catalog); ${connectorPkgs} connector ` +
       `package(s) present (workspace-compiled — wired by ` +
-      `register-transport-connectors at boot, not by this scan); ` +
+      `register-host-connector-services at boot, not by this scan); ` +
       `${workflowPkgs} workflow template(s) present (handled by the ` +
       `workflow marketplace install path / installWorkflowTemplate, not by this scan).`,
   );

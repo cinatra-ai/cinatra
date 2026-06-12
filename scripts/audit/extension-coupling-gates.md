@@ -39,6 +39,11 @@ mechanism. Concretely, for the coupling gates:
 - the discovery-bypass baseline is PINNED EMPTY: a non-empty committed
   baseline is itself a failure, and any non-sanctioned direct-reader
   reference fails immediately;
+- the import-ban baseline is PINNED EMPTY since the honest-zero flip
+  (cinatra#151 Stage 3, landed WITH the shared-lexer adoption + the last
+  transport edges' removal per the stated policy): any core->extension
+  import edge fails immediately, a non-empty committed baseline is itself a
+  failure, and `--write-baseline` refuses non-empty output;
 - `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the precedent zero-tolerance flip for the `sdkOnly` dimension; its
   `STRICT_SDK_ONLY_ALLOWLIST` is EMPTY); its `hostInternal`/`crossExtension`
   dimensions remain shrink-only floors.
@@ -106,8 +111,11 @@ reference appearing in JSX text AFTER a bare non-URL `//` on the same line
 would be under-counted. No such case exists in the tree. Since the zero-tolerance flip (#36) there is
 no epoch-recompute path: if a future JSX-aware lexer reveals references, they
 must be fixed in the same PR that lands the lexer (the floor cannot rise).
-The same applies to the sibling scanners' older comment-stripping: a stripping
-correction that would reveal edges must land with those edges removed.
+That policy was exercised by the import-ban scanner itself: its legacy regex
+stripper (blind after a line comment containing a literal `/*`) was replaced
+by the shared lexer in the SAME PR that removed the four transport-DI edges
+it had been hiding (cinatra#151 Stage 3) — every coupling scanner now runs
+the shared lexer.
 
 ## Pinned floors (the #36 end-state)
 
@@ -118,8 +126,8 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **113 occurrences / 46 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, cinatra#151 Stage 2) | shrink-only, frozen |
-| `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1, closing the #35 facade residual). The committed baseline is EMPTY; the pinned-empty gate flip rides the transport-blind-spot closure (cinatra#151 Stage 3) so the flip is honest under the shared lexer. | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **109 occurrences / 45 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3) | shrink-only, frozen |
+| `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1; −4 hidden transport edges — the transport-DI inversion, Stage 3, which adopted the shared lexer in the same PR so the zero is HONEST). | PINNED EMPTY |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
 | `host-peer-value-import-ban` | **0** | hold at 0 |
@@ -141,10 +149,14 @@ epic's scope and tracked elsewhere:
   host resolves it in `src/lib/nango-system.ts` (fail-loud default, the
   pinned auth boot read degraded per the design's item 9a); the facade is
   DELETED, all former consumers (routes, pages, `ctx.nango`, packages)
-  re-pointed; `register-transport-connectors.ts` dropped its 15-name nango
-  import block and keeps publishing `@cinatra-ai/host:nango-connection-storage`
-  as a thin delegating adapter (old-id retirement rides the transport-DI
-  cutover, cinatra#151 Stage 3). Floors moved: `core-extension-import-ban`
+  re-pointed; the transport binder dropped its 15-name nango import block.
+  The old `@cinatra-ai/host:nango-connection-storage` delegating adapter was
+  retired by the transport-DI inversion (cinatra#151 Stage 3): the SDK
+  contract id + type are GONE and every in-tree consumer resolves
+  `nango-system` directly; the string id survives ONLY as a deprecation-window
+  compat shim for already-installed runtime package-store digests
+  (register-host-connector-services.ts; removal is a named Stage 7
+  deliverable). Floors moved: `core-extension-import-ban`
   10 → 0 edges, instance-coupling 135 → 120 occ, root connector deps 1 → 0,
   declarations 16/16 unchanged (nango moved from hard-imported + root-dep to
   generated-required in the cover gate). The companion sweep (removing the
@@ -189,34 +201,33 @@ epic's scope and tracked elsewhere:
   connector `workspace:*` deps are pruned), drupal-mcp, wordpress-mcp
   (transport DI cluster), crm, gmail, google-calendar (packages/agents
   single-function edges). Gemini's ONLY hard edges lived in packages/llm,
-  so Stage 2 also moved it OUT of the bootable declaration: the bootable
-  floor is now **15** (8 `systemExtensions` + 7 hard-wired packages;
-  gemini is guardedOptional/acquirable-on-demand, dev-universe pinned in
-  the dev lock). Nango left the hard-import surface in cinatra#151 Stage 1
-  (generated-required). The 15→8 tail is exactly the two deferred cutovers
-  (the drupal/wordpress content-editor MCP + openai/anthropic transport DI,
-  cinatra#151 Stage 3; the packages/agents picker/action edges, Stage 4).
-- **The statically-wired transport DI cluster** —
-  `src/lib/register-transport-connectors.ts` still value-imports the
-  LLM-platform connectors (openai `/deps`, anthropic) and the
-  drupal/wordpress content-editor MCP connectors for `register<X>Connector(deps)`
-  binding; its header documents this as explicitly out of the
-  transport-registration cutover's scope ("until their own cutover phase").
-  KNOWN SCANNER LIMITATION: these edges are currently INVISIBLE to the
-  import-ban scanner — the file's header contains a literal `@/lib/*` whose
-  `/*` the legacy comment-stripper treats as a block-comment opener, swallowing
-  the import section (the documented stripping-limitation class above).
-  Exactly FOUR hidden edges remain (openai `/deps`, anthropic, drupal-mcp,
-  wordpress-mcp) — the nango edge in this file was REMOVED by the cinatra#151
-  Stage 1 authorship transfer (the 15-name import block is gone). They
-  ARE counted by the instance-coupling gate (`package ::` keys for that file
-  in the committed baseline), and since the dep-drop slice (cinatra#7) they ARE counted by the
-  required-extensions COVER gate (which adopted the shared lexer — it is
-  live-coverage, not baseline-ratcheted, so the correction needed no edge
-  removal there and closes a real under-coverage hole the dep drop would
-  otherwise have opened). Per the policy above, the IMPORT-BAN stripper
-  correction must land WITH these edges removed — i.e. with the
-  LLM-platform/content-editor DI cutover (cinatra#151 Stage 3), not before.
+  so Stage 2 also moved it OUT of the bootable declaration; the transport-DI
+  inversion (cinatra#151 Stage 3) then retired the last LLM-platform +
+  content-editor MCP hard imports (openai, anthropic, drupal-mcp,
+  wordpress-mcp self-bind from their serverEntries against the per-concern
+  host services): the bootable floor is now **11** (8 `systemExtensions` +
+  3 hard-wired packages — crm, gmail, google-calendar; the four transports
+  are guardedOptional/acquirable-on-demand, dev-universe pinned in the dev
+  lock). Nango left the hard-import surface in cinatra#151 Stage 1
+  (generated-required). The 11→8 tail is exactly the packages/agents
+  picker/action edges (Stage 4).
+- **The statically-wired transport DI cluster — RETIRED (cinatra#151
+  Stage 3).** The transport-DI inversion moved registration authorship
+  connector-side: openai/anthropic extended their `register(ctx)` and
+  drupal-mcp/wordpress-mcp gained serverEntries; each builds its deps slot
+  from the per-concern host services (mcp-pagination,
+  content-editor-dispatch, drupal-mcp, wordpress-mcp, runtime-mode,
+  notifications, skills-catalog, openai-connection, anthropic-connection)
+  plus the connector-authored `nango-system` surface, lazily at call time,
+  behind a bind-if-absent skew guard (swept after the cutover). The binder
+  was renamed `register-host-connector-services.ts` and names NO extension
+  package; the four hidden edges are gone, the import-ban scanner adopted
+  the shared lexer in the SAME PR (closing the documented blind spot), and
+  the gate is PINNED EMPTY. The four transports left the bootable
+  declaration (requiredExtensions 15 → 11). The five old-id consumers
+  (gemini, apify, tailscale, gmail, apollo) re-pointed to `nango-system`;
+  the old id survives only as the documented compat shim (Stage 7
+  removal).
 - **The literal tail** — agent-renderer registration maps
   (`packages/agents/src/register-default-renderers.ts` and the per-renderer
   files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed

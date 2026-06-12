@@ -102,21 +102,40 @@ describe("core-extension-instance-coupling-ban gate", () => {
     }
   });
 
-  it("scanner-correctness regression: real imports adjacent to comments are counted", () => {
+  it("scanner-correctness regression: the comment-adjacent import shape stays counted (fixture); the live transport cluster is RETIRED", () => {
+    // The historic live carrier of this regression —
+    // src/lib/register-transport-connectors.ts, whose `@/lib/*` line comment
+    // blinded the old regex stripper to its static import cluster — was fully
+    // decoupled by the transport-DI inversion (cinatra#151 Stage 3; renamed
+    // register-host-connector-services.ts, zero extension names). Pin BOTH
+    // facts: the live tree carries no transport keys, and the comment-adjacent
+    // shape itself is still counted via a synthetic fixture.
     const occ = scanInstanceCoupling();
-    // A line comment containing `@/lib/*` sits above the static import cluster —
-    // the old regex stripper swallowed the whole cluster as a bogus block comment.
-    // (The transport-registration cutover removed the 7 transport registrar imports; the nango
-    // serverEntry cutover (cinatra#151 Stage 1) then dropped the 15-name nango
-    // import block; the file still statically imports the remaining legacy
-    // cluster — openai/anthropic/drupal/wordpress — behind the same comment
-    // shape, so the regression stays live.)
-    const transport = Object.keys(occ).filter((k) => k.startsWith("src/lib/register-transport-connectors.ts :: package ::"));
-    expect(transport.some((k) => k.endsWith("@cinatra-ai/nango-connector"))).toBe(false);
-    expect(transport.some((k) => k.endsWith("@cinatra-ai/wordpress-mcp-connector"))).toBe(true);
-    // The other previously-hidden site (the hand-maintained loader map in
-    // src/lib/connector-setup-pages.ts) has since been DECOUPLED — the
-    // comment-adjacent-loader-map shape is covered by the fixture test below.
+    const transport = Object.keys(occ).filter(
+      (k) =>
+        k.startsWith("src/lib/register-transport-connectors.ts :: package ::") ||
+        k.startsWith("src/lib/register-host-connector-services.ts :: package ::"),
+    );
+    expect(transport).toEqual([]);
+
+    const root = mkdtempSync(join(tmpdir(), "instance-gate-comment-adjacent-"));
+    try {
+      mkdirSync(join(root, "src/lib"), { recursive: true });
+      writeFileSync(
+        join(root, "src/lib/binder.ts"),
+        [
+          "// `@/lib/*` is no longer reachable from any connector package itself.",
+          'import { register } from "@scope/sample-connector/deps";',
+          "export const x = register; /* trailing block */",
+          "",
+        ].join("\n"),
+      );
+      const extensions = { names: new Set(["@scope/sample-connector"]), dirPaths: new Set() };
+      const fixtureOcc = scanInstanceCoupling(root, extensions, { allowlist: new Map() });
+      expect(fixtureOcc["src/lib/binder.ts :: package :: @scope/sample-connector"]).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("scanner-correctness regression (fixture): a placeholder-import comment directly above a live loader entry does not hide it", () => {
