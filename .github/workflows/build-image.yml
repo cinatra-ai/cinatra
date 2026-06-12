@@ -792,20 +792,26 @@ jobs:
       - name: Extension dependency-manifest drift gate
         run: node scripts/audit/extension-deps-gate.mjs
 
-      # No-new-rot `@/` import-ban for extensions. The baseline records the
-      # CURRENT coupling, decoupled incrementally in the decoupling sweep; CI
-      # fails only on NEW `@/`/cross-extension coupling. anthropic exempt.
+      # The `@/` import-ban for extensions. PINNED EMPTY (cinatra#172 — the
+      # zero-floor flip for the extension→host direction, on the
+      # core-extension-import-ban precedent): ANY current hostInternal/
+      # crossExtension/sdkOnly edge fails immediately, a non-empty committed
+      # baseline is itself a failure, --write-baseline refuses non-empty
+      # output. No whole-extension exemptions; the only carve-out mechanism is
+      # the owner-ruled sdkOnly STRICT_SDK_ONLY_ALLOWLIST (EMPTY,
+      # self-policing).
       - name: Extension @/ import-ban + SDK-only gate (strict sdkOnly)
         env:
-          # Monotonic ratchet: the committed baseline must be a subset of the
-          # base-branch baseline (it may only shrink). Same base ref the
+          # Retained purely as a fail-closed TAMPER CHECK since the flip: the
+          # committed baseline must be a subset of the base-branch baseline
+          # (trivially holds while both stay pinned empty; flag-like or
+          # unresolvable refs fail closed). Same base ref the
           # administration-route gate uses.
           IMPORT_BAN_BASE: ${{ steps.base.outputs.base }}
-        # --strict-sdk-only makes the sdkOnly dimension ZERO-TOLERANCE
-        # (baseline ignored — every extension must import only the SDK packages),
-        # except the documented STRICT_SDK_ONLY_ALLOWLIST carve-out (crm->objects,
-        # tracked as the objects-ctx follow-up). The @/ + cross-extension ratchets
-        # are UNCHANGED (still no-new-rot against the base baseline).
+        # --strict-sdk-only is retained as an accepted NO-OP for CLI
+        # compatibility — the sdkOnly dimension is UNCONDITIONALLY
+        # zero-tolerance since the flip (neither passing nor omitting the flag
+        # can weaken enforcement; pinned by the gate's unit tests).
         run: node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 
       - name: Extension import-ban gate tests

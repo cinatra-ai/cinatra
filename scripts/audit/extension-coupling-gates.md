@@ -4,8 +4,11 @@ This document is the reference the extension-coupling gates point at. It
 defines the shared reference taxonomy, the strict exemption policy, and the
 **zero-floor end-state** (cinatra#151 Stage 7 — the close of the zero-floor
 IoC epic, built on the zero-tolerance flip cinatra-ai/cinatra#36 that closed
-the IoC Runtime Cutover epic #24): no hand-written host code imports or names
-a concrete extension, and the gates are pinned so none ever can again.
+the IoC Runtime Cutover epic #24 — completed in BOTH directions by the
+cinatra#172 flip): no hand-written host code imports or names a concrete
+extension, no extension imports host `@/` modules / other extensions /
+non-SDK first-party packages, and the gates are pinned so none ever can
+again.
 
 ## The gates
 
@@ -13,7 +16,7 @@ a concrete extension, and the gates are pinned so none ever can again.
 | --- | --- | --- | --- |
 | `core-extension-instance-coupling-ban.mjs` | core (`src/` + `packages/`) naming a specific extension (string/JSX/prompt/metadata literal, path literal, or import) | `file :: kind :: value -> count` occurrences | `core-extension-instance-coupling-ban.baseline.json` — **PINNED EMPTY** |
 | `core-extension-import-ban.mjs` | core (`src/`) importing an extension package | `file -> extension` edges | `core-extension-import-ban.baseline.json` — **PINNED EMPTY** |
-| `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` — shrink-only (`sdkOnly` zero-tolerance) |
+| `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` — **PINNED EMPTY** |
 | `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
@@ -22,9 +25,10 @@ distinct from the baseline, which is pinned EMPTY since the flip — cinatra#36)
 `host-peer-value-import-ban.mjs` holds every serverEntry graph at 0 host-peer
 value imports (SDK peers stay type-only).
 
-## Enforcement model — the zero-floor end-state (cinatra#151 Stage 7)
+## Enforcement model — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
-THREE baselines are PINNED EMPTY — zero is the floor AND the ceiling:
+FOUR baselines are PINNED EMPTY — zero is the floor AND the ceiling, in BOTH
+directions of the IoC rule:
 
 - **`core-extension-instance-coupling-ban`** (the Stage 7 flip): any
   non-comment occurrence of an extension package name or
@@ -39,14 +43,20 @@ THREE baselines are PINNED EMPTY — zero is the floor AND the ceiling:
   `--write-baseline` refusals; `CORE_EXT_BAN_BASE` kept as a tamper check.
 - **`discovery-dispatcher-bypass-ban`** (the #36 flip): any non-sanctioned
   direct native-reader reference fails immediately.
+- **`extension-import-ban`** (the cinatra#172 flip — the extension→host
+  direction, completing the IoC rule's zero floor in both directions): any
+  current `hostInternal`, `crossExtension`, or `sdkOnly` edge fails
+  immediately (the committed baseline is no longer consulted for violation
+  detection); a committed baseline with any non-empty dimension is itself a
+  failure; `--write-baseline` refuses non-empty output; `--strict-sdk-only`
+  is retained as an accepted no-op (the `sdkOnly` dimension is
+  unconditionally zero-tolerance — neither passing nor omitting the flag can
+  weaken enforcement); the owner-ruled `STRICT_SDK_ONLY_ALLOWLIST` (EMPTY,
+  self-policing via the stale-carve-out hard failure) is the only carve-out
+  mechanism, scoped to the `sdkOnly` dimension exclusively; `IMPORT_BAN_BASE`
+  survives purely as a fail-closed tamper check.
 
 On top of the pinned-empty gates:
-
-- `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the precedent
-  zero-tolerance flip for the `sdkOnly` dimension; its
-  `STRICT_SDK_ONLY_ALLOWLIST` is EMPTY); its `hostInternal`/`crossExtension`
-  dimensions remain shrink-only floors (see the end-state record below for
-  the one standing non-zero floor).
 - the cover gate enforces the **declaration equality**
   `requiredExtensions == systemExtensions == lock` (cinatra#151 Stage 7) ON
   TOP of its live bootable-coverage derivation: the prod bootable declaration
@@ -130,18 +140,19 @@ by the shared lexer in the SAME PR that removed the four transport-DI edges
 it had been hiding (cinatra#151 Stage 3) — every CORE-side coupling scanner
 (instance-coupling, import-ban, the cover gate's hard-import scan) now runs
 the shared lexer. (`extension-import-ban` — the reverse direction — still
-strips comments via its own inventory tooling; its floors are shrink-only
-ratcheted, so a stripper correction there lands under the same
-fix-with-the-reveal policy.)
+strips comments via its own inventory tooling; its floors are PINNED EMPTY
+since the cinatra#172 flip, so a stripper correction there that reveals
+edges must land WITH those edges' removal in the same PR — the identical
+fix-with-the-reveal policy, with no floor that can rise.)
 
-## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7)
+## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
 | Gate | Pinned floor | Direction |
 | --- | --- | --- |
 | `core-extension-instance-coupling-ban` | **0 occurrences / 0 keys / 0 files** | PINNED EMPTY (Stage 7 flip) |
 | `core-extension-import-ban` | **0 edges / 0 files** | PINNED EMPTY (Stage 3 flip, honest under the shared lexer) |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY (#36 flip) |
-| `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY) | shrink-only (see the end-state record) |
+| `extension-import-ban` | **0 `@/` + 0 cross-extension + 0 sdkOnly** (allowlist EMPTY) | PINNED EMPTY (cinatra#172 flip) |
 | `host-peer-value-import-ban` | **0** over all serverEntry graphs | hold at 0 |
 | cover gate declarations | **requiredExtensions == systemExtensions == lock == 8** (0 hard-imported, 8 generated-required, 0 root-dep; every other extension guardedOptional/acquirable-on-demand) | equality, live-enforced |
 | Root + package-level concrete connector `workspace:*` deps | **0** | hold at 0 |
@@ -159,6 +170,17 @@ Stage 5 agent-identity decoupling (−85), Stage 6 artifact/blog/seed tail
 `requiredExtensions` shrank 16 → 8 == `systemExtensions` along the same train
 (gemini at Stage 2; openai/anthropic/drupal-mcp/wordpress-mcp at Stage 3;
 crm/gmail/google-calendar at Stage 4).
+
+The REVERSE direction (cinatra#172, stages H1–H5): `extension-import-ban`'s
+`hostInternal` dimension went **16 → 12 → 8 → 4 → 0 → PINNED EMPTY** —
+H1 crm ctx-port adoption + the two test re-groundings (gmail, twenty), H2 the
+Drupal family (drupal-mcp service extension + the new drupal-widget-auth
+service), H3 the WordPress family (wordpress-mcp connection-admin extension +
+the new wordpress-content and wordpress-widget-auth services), H4 the
+transport tail (new github/linkedin/youtube connection services + the
+external-mcp-registry read surface), H5 the pinned-empty flip
+(`crossExtension` and `sdkOnly` were already empty). All FOUR coupling
+baselines are pinned empty from H5 onward.
 
 ## End-state record — how core reaches extensions now
 
@@ -201,14 +223,29 @@ SANCTIONED inversion-of-control paths, each with its own guard:
   `primitiveOverrides` from manifests), `/connectors` readiness (generated
   loader maps).
 
-**The one standing non-zero floor (explicitly OUT of the cinatra#151
-acceptance):** `extension-import-ban`'s `hostInternal` dimension — extensions
-importing host `@/` modules — stands at **16 edges**. It is the REVERSE
-direction (extension→host), shrank as a side effect of the serverEntry/
-host-service work (20 → 16 across the epic), and folding it into an epic's
-acceptance needs an owner scope ruling (requested asynchronously on the
-epic; this register entry is its tracker until ruled). The dimension is
-shrink-only ratcheted, so it cannot regress while the ruling is pending.
+**How extensions reach host capability now (the cinatra#172 end-state — the
+former "one standing non-zero floor" register entry is retired; the owner
+ruled zero-floor in both directions and stages H1–H5 delivered it):** the
+SANCTIONED extension→host paths, each grant- or contract-guarded:
+
+- **`register(ctx)` host ports** (`ExtensionHostContext`,
+  `packages/sdk-extensions/src/host-context.ts`): `authSession`, `jobs`,
+  `nango`, `capabilities`, `mcp`, … — grant-gated by manifest
+  `requestedHostPorts`.
+- **Per-concern `@cinatra-ai/host:*` services** published at boot by
+  `src/lib/register-host-connector-services.ts` (SDK contract types in
+  `packages/sdk-extensions/src/host-connector-services-contract.ts`,
+  publication asserted member-by-member by
+  `src/lib/__tests__/host-connector-services-publication.test.ts`), consumed
+  through each connector's `deps.ts` slot (namespaced+versioned `globalThis`
+  Symbol, bound lazily and fail-loud by the serverEntry `register(ctx)`;
+  SDK imports in serverEntry graphs stay type-only — held at 0 by
+  `host-peer-value-import-ban`). Connectors keep STRUCTURAL local types, so
+  no SDK type import is needed to compile against an older host.
+- **Frozen pure-data contract ids** (queue names, config keys): inlined
+  connector-local constants documented as serialization contracts (e.g. the
+  `twenty-pointer-repair` job name), with the host registry
+  (`BACKGROUND_JOB_NAMES`, …) staying the single authority.
 
 ## Scanner correctness (historical)
 
@@ -244,6 +281,7 @@ IMPORT_BAN_BASE=origin/main node scripts/audit/extension-import-ban.mjs --strict
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
 node scripts/audit/core-extension-import-ban.mjs --write-baseline
+node scripts/audit/extension-import-ban.mjs --write-baseline
 ```
 
 The extension source tree must be cloned back first

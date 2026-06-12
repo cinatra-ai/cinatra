@@ -2,13 +2,16 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
   diffCoupling,
   currentCoupling,
+  pinnedEmptyViolations,
   baselineGrowth,
   staleAllowlistEntries,
   STRICT_SDK_ONLY_ALLOWLIST,
 } from "../extension-import-ban.mjs";
+import { buildInventory } from "../../extensions/inventory.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -21,6 +24,20 @@ function runGate(extraEnv = {}) {
     encoding: "utf8",
   });
 }
+
+function runGateArgs(args = [], extraEnv = {}) {
+  return spawnSync("node", [GATE, ...args], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, ...extraEnv },
+    encoding: "utf8",
+  });
+}
+
+// NOTE (cinatra#172): the gate's CHECK MODE is pinned empty — main() no longer
+// consults the committed baseline for violation detection (see the PINNED EMPTY
+// suites below). diffCoupling / baselineGrowth / staleAllowlistEntries stay
+// exported with their full pre-flip semantics; the describes for them pin the
+// pure-core behavior pinnedEmptyViolations is built on.
 
 describe("diffCoupling (no-new-rot core)", () => {
   const baseline = {
@@ -405,5 +422,181 @@ describe("baselineGrowth — sdkOnly is part of the monotonic guard", () => {
     };
     const grew = baselineGrowth(base, committed);
     expect(grew.some((g) => g.includes("@cinatra-ai/sneaky-new-dep"))).toBe(true);
+  });
+});
+
+describe("PINNED EMPTY (cinatra#172 — the zero-floor flip)", () => {
+  it("the committed baseline FILE is empty in EVERY dimension (a re-populated baseline is itself a failure)", () => {
+    const doc = JSON.parse(
+      readFileSync(join(REPO_ROOT, "scripts/audit/extension-import-ban.baseline.json"), "utf8"),
+    );
+    expect(doc.hostInternal).toEqual({});
+    expect(doc.crossExtension).toEqual({});
+    expect(doc.sdkOnly).toEqual({});
+    expect(doc.note).toMatch(/PINNED EMPTY/);
+    // tooling-shape compat field retained at its pinned value (mirrors the core
+    // gate keeping classificationSummary at pinned zeros)
+    expect(doc.classification).toBe("runtime-coupling");
+  });
+
+  it("the LIVE repo scans zero edges in every dimension (hostInternal 16 -> 0 across H1-H4; honestly empty, not vacuous)", async () => {
+    const inv = await buildInventory();
+    expect(inv.extensions.length).toBeGreaterThan(0); // not vacuous — the extension tree is cloned back
+    const c = currentCoupling(inv);
+    expect(c.hostInternal).toEqual({});
+    expect(c.crossExtension).toEqual({});
+    expect(c.sdkOnly).toEqual({});
+  });
+
+  it("the committed repo state passes the gate, reporting the pinned zeros", () => {
+    const r = runGate({ IMPORT_BAN_BASE: "" });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/0 @\/ \+ 0 cross-extension \+ 0 non-SDK/);
+    expect(r.stdout).toMatch(/PINNED EMPTY/);
+  });
+
+  it("pinnedEmptyViolations takes NO baseline parameter — no committed document can tolerate an edge (arity pin)", () => {
+    // (current) — the allowlist is a defaulted second param; there is no
+    // baseline anywhere in the signature, so 'baseline no longer consulted'
+    // holds by construction.
+    expect(pinnedEmptyViolations.length).toBe(1);
+  });
+
+  it("a synthetic hostInternal edge is a violation WITHOUT baseline consultation", () => {
+    const v = pinnedEmptyViolations({
+      hostInternal: { "@cinatra-ai/x-connector": ["@/lib/database"] },
+    });
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("@/ import");
+    expect(v[0]).toContain("@/lib/database");
+  });
+
+  it("a synthetic crossExtension edge is a violation WITHOUT baseline consultation", () => {
+    const v = pinnedEmptyViolations({
+      crossExtension: { "@cinatra-ai/x-connector": ["@cinatra-ai/y-connector"] },
+    });
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("cross-extension import");
+  });
+
+  it("a synthetic sdkOnly edge is a violation — strict UNCONDITIONALLY (no flag involved at this level at all)", () => {
+    const v = pinnedEmptyViolations({
+      sdkOnly: { "@cinatra-ai/x-connector": ["@cinatra-ai/mcp-server"] },
+    });
+    expect(v).toHaveLength(1);
+    expect(v[0]).toContain("non-SDK @cinatra-ai dep");
+  });
+
+  it("the sdkOnly allowlist still works under the pin — exact-edge, sdkOnly-scoped ONLY (no carve-out path for the other dimensions)", () => {
+    const allow = new Set([JSON.stringify(["@cinatra-ai/crm-connector", "@cinatra-ai/objects"])]);
+    // allowlisted sdkOnly edge passes
+    expect(
+      pinnedEmptyViolations({ sdkOnly: { "@cinatra-ai/crm-connector": ["@cinatra-ai/objects"] } }, allow),
+    ).toEqual([]);
+    // the SAME key as a hostInternal or crossExtension edge still fails
+    expect(
+      pinnedEmptyViolations({ hostInternal: { "@cinatra-ai/crm-connector": ["@cinatra-ai/objects"] } }, allow),
+    ).toHaveLength(1);
+    expect(
+      pinnedEmptyViolations({ crossExtension: { "@cinatra-ai/crm-connector": ["@cinatra-ai/objects"] } }, allow),
+    ).toHaveLength(1);
+    // wrong source / wrong target still fails (exact edge)
+    expect(
+      pinnedEmptyViolations({ sdkOnly: { "@cinatra-ai/rogue-connector": ["@cinatra-ai/objects"] } }, allow),
+    ).toHaveLength(1);
+    expect(
+      pinnedEmptyViolations({ sdkOnly: { "@cinatra-ai/crm-connector": ["@cinatra-ai/mcp-server"] } }, allow),
+    ).toHaveLength(1);
+    // and the DEFAULT allowlist stays EMPTY (owner sign-off required to mint one)
+    expect(STRICT_SDK_ONLY_ALLOWLIST.size).toBe(0);
+  });
+});
+
+describe("PINNED EMPTY — live gate subprocess fixtures (scratch violation in the cloned-back tree)", () => {
+  const FIXTURE_DIR = join(REPO_ROOT, "extensions/cinatra-ai/gmail-connector/src");
+  const FIXTURE_FILE = join(FIXTURE_DIR, "__pinned-empty-flip-fixture__.ts");
+  const SCRATCH_MODULE = "@/lib/__pinned-empty-flip-scratch__";
+  const BASELINE = join(REPO_ROOT, "scripts/audit/extension-import-ban.baseline.json");
+
+  function withScratchEdge(fn) {
+    expect(
+      existsSync(FIXTURE_DIR),
+      "extensions tree must be cloned back (scripts/ci/sync-dev-extensions.mjs) before this suite",
+    ).toBe(true);
+    writeFileSync(FIXTURE_FILE, `import "${SCRATCH_MODULE}";\nexport {};\n`);
+    try {
+      return fn();
+    } finally {
+      rmSync(FIXTURE_FILE, { force: true });
+    }
+  }
+
+  it("check mode FAILS (exit 1) naming the edge — and NEITHER passing NOR omitting --strict-sdk-only/--strict can weaken it", () => {
+    withScratchEdge(() => {
+      for (const args of [[], ["--strict-sdk-only"], ["--strict"]]) {
+        const r = runGateArgs(args, { IMPORT_BAN_BASE: "" });
+        expect(r.status, JSON.stringify(args) + "\n" + r.stdout + r.stderr).toBe(1);
+        expect(r.stderr).toContain(SCRATCH_MODULE);
+        expect(r.stderr).toMatch(/PINNED EMPTY/);
+      }
+    });
+  });
+
+  it("check mode FAILS (exit 1) on a scratch CROSS-EXTENSION + sdkOnly edge through the full CLI path (both dimensions named)", () => {
+    // One undeclared sibling-extension import registers in BOTH the
+    // crossExtension dimension (undeclared cross-extension import) and the
+    // sdkOnly dimension (non-SDK first-party package) — live CLI proof that
+    // the pin covers all three dimensions, not just hostInternal.
+    expect(
+      existsSync(FIXTURE_DIR),
+      "extensions tree must be cloned back (scripts/ci/sync-dev-extensions.mjs) before this suite",
+    ).toBe(true);
+    writeFileSync(FIXTURE_FILE, 'import "@cinatra-ai/crm-connector";\nexport {};\n');
+    try {
+      const r = runGateArgs([], { IMPORT_BAN_BASE: "" });
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/cross-extension import: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
+      expect(r.stderr).toMatch(/non-SDK @cinatra-ai dep: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
+      expect(r.stderr).toMatch(/PINNED EMPTY/);
+    } finally {
+      rmSync(FIXTURE_FILE, { force: true });
+    }
+  });
+
+  it("--write-baseline REFUSES non-empty output (exit 1) and leaves the baseline file byte-unchanged", () => {
+    const before = readFileSync(BASELINE, "utf8");
+    withScratchEdge(() => {
+      const r = runGateArgs(["--write-baseline"], { IMPORT_BAN_BASE: "" });
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/refusing to write a NON-EMPTY baseline/);
+      expect(r.stderr).toContain(SCRATCH_MODULE);
+    });
+    expect(readFileSync(BASELINE, "utf8")).toBe(before);
+  });
+
+  it("--write-baseline on the clean tree rewrites EXACTLY the committed pinned-empty document (idempotent)", () => {
+    const before = readFileSync(BASELINE, "utf8");
+    try {
+      const r = runGateArgs(["--write-baseline"], { IMPORT_BAN_BASE: "" });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(readFileSync(BASELINE, "utf8")).toBe(before);
+    } finally {
+      writeFileSync(BASELINE, before);
+    }
+  });
+
+  it("a NON-EMPTY committed baseline is itself a failure (the re-population guard), even with a CLEAN tree", () => {
+    const before = readFileSync(BASELINE, "utf8");
+    try {
+      const doc = JSON.parse(before);
+      doc.hostInternal = { "@cinatra-ai/gmail-connector": ["@/lib/database"] };
+      writeFileSync(BASELINE, JSON.stringify(doc, null, 2) + "\n");
+      const r = runGateArgs([], { IMPORT_BAN_BASE: "" });
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/committed baseline is NON-EMPTY/);
+      expect(r.stderr).toContain("@/lib/database");
+    } finally {
+      writeFileSync(BASELINE, before);
+    }
   });
 });
