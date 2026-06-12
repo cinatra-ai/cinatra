@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 45,
-      "keys": 74,
-      "occurrences": 109
+      "files": 41,
+      "keys": 70,
+      "occurrences": 105
     },
     "mechanical": {
       "files": 0,
@@ -26,7 +26,6 @@
     "packages/agents/src/blog-wordpress-draft-confirm-renderer.tsx :: package :: @cinatra-ai/blog-wordpress-publish-agent": 1,
     "packages/agents/src/campaign-recipients-review-renderer.tsx :: package :: @cinatra-ai/email-recipient-selection-agent": 2,
     "packages/agents/src/context-selector-renderer.tsx :: package :: @cinatra-ai/context-selection-agent": 1,
-    "packages/agents/src/cta-actions.ts :: package :: @cinatra-ai/google-calendar-connector": 1,
     "packages/agents/src/cta-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
     "packages/agents/src/email-drafts-review-renderer.tsx :: package :: @cinatra-ai/email-drafting-agent": 2,
     "packages/agents/src/execution.ts :: package :: @cinatra-ai/reviewer-agent": 1,
@@ -35,7 +34,6 @@
     "packages/agents/src/gmail-sender-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
     "packages/agents/src/list-curator-final-list-renderer.tsx :: package :: @cinatra-ai/list-curator-agent": 1,
     "packages/agents/src/list-curator-scrape-schema-renderer.tsx :: package :: @cinatra-ai/list-curator-agent": 1,
-    "packages/agents/src/list-picker-actions.ts :: package :: @cinatra-ai/crm-connector": 1,
     "packages/agents/src/list-picker-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
     "packages/agents/src/mcp/schemas.ts :: package :: @cinatra-ai/email-recipient-selection-agent": 1,
     "packages/agents/src/mcp/schemas.ts :: package :: @cinatra-ai/email-test-delivery-agent": 1,
@@ -61,7 +59,6 @@
     "packages/agents/src/run-author-agent.ts :: package :: @cinatra-ai/author-agent": 2,
     "packages/agents/src/send-confirmation-renderer.tsx :: package :: @cinatra-ai/email-delivery-agent": 2,
     "packages/agents/src/send-confirmation-renderer.tsx :: package :: @cinatra-ai/email-outreach-agent": 1,
-    "packages/agents/src/server-actions.ts :: package :: @cinatra-ai/gmail-connector": 1,
     "packages/agents/src/skill-recommender-agent-renderers.tsx :: package :: @cinatra-ai/email-drafting-agent": 1,
     "packages/agents/src/validate-oas-runtime-invariants.ts :: path :: extensions/cinatra-ai/email-outreach-agent": 1,
     "packages/agents/vitest.config.ts :: package :: @cinatra-ai/anthropic-connector": 1,
@@ -72,7 +69,6 @@
     "packages/agents/vitest.config.ts :: path :: extensions/cinatra-ai/openai-connector": 2,
     "packages/cli/src/index.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 2,
     "packages/cli/src/tailscale-provision.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 1,
-    "packages/connectors-catalog/src/overrides.mjs :: package :: @cinatra-ai/gmail-connector": 1,
     "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
     "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
     "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,

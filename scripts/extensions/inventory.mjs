@@ -65,9 +65,6 @@ async function loadConnectorCatalog() {
   const descMod = await import(
     join(REPO_ROOT, "packages/connectors-catalog/src/descriptors.mjs")
   );
-  const overrideMod = await import(
-    join(REPO_ROOT, "packages/connectors-catalog/src/overrides.mjs")
-  );
   const prefixToPackage = [];
   for (const d of descMod.CONNECTOR_DESCRIPTORS ?? []) {
     for (const prefix of d.mcpPrimitivePrefixes ?? []) {
@@ -78,8 +75,49 @@ async function loadConnectorCatalog() {
   prefixToPackage.sort((a, b) => b.prefix.length - a.prefix.length);
   return {
     prefixToPackage,
-    primitiveOverrides: overrideMod.PRIMITIVE_TO_CONNECTOR_OVERRIDES ?? {},
+    primitiveOverrides: deriveFacadePrimitiveOverrides(listExtensions()),
   };
+}
+
+/**
+ * Facade-primitive overrides, DERIVED from the extension manifests
+ * (cinatra#151 Stage 4): a connector that owns a facade primitive whose name
+ * does not carry its tool prefix declares it as `cinatra.facadePrimitives`
+ * (e.g. gmail-connector declares `["email_send"]`). This replaces the
+ * hand-written `connectors-catalog/src/overrides.mjs` map — the catalog
+ * derives instead of naming a concrete package in core. Deterministic on
+ * collision: the lexicographically-first package name wins, with a warning
+ * (two claimants is a manifest bug, not a resolution choice).
+ * Exported for unit tests.
+ */
+export function deriveFacadePrimitiveOverrides(extensionEntries) {
+  const overrides = {};
+  for (const e of extensionEntries) {
+    let pkg;
+    try {
+      pkg = readJson(e.pkgPath);
+    } catch {
+      continue;
+    }
+    if (!pkg?.name) continue;
+    const declared = Array.isArray(pkg?.cinatra?.facadePrimitives)
+      ? pkg.cinatra.facadePrimitives
+      : [];
+    for (const primitive of declared) {
+      if (typeof primitive !== "string" || primitive.length === 0) continue;
+      const existing = overrides[primitive];
+      if (existing && existing !== pkg.name) {
+        console.warn(
+          `[inventory] facade primitive "${primitive}" is claimed by both ${existing} and ${pkg.name} — ` +
+            `keeping the lexicographically first (fix the manifests: one owner per primitive).`,
+        );
+        if (pkg.name < existing) overrides[primitive] = pkg.name;
+        continue;
+      }
+      overrides[primitive] = pkg.name;
+    }
+  }
+  return overrides;
 }
 
 // ---------------------------------------------------------------------------

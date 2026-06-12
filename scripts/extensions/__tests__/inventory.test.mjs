@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildInventory,
+  deriveFacadePrimitiveOverrides,
   scanHostImportsInText,
   scanCrossExtImportsInText,
   isValidExtensionDependency,
@@ -386,5 +388,57 @@ describe("buildInventory — sdkOnlyViolations per extension (live, real repo)",
         expect(SDK_PACKAGES.has(v), `${x.name} flagged SDK pkg ${v}`).toBe(false);
       }
     }
+  });
+});
+
+// Facade-primitive overrides are DERIVED from extension manifests
+// (cinatra.facadePrimitives — cinatra#151 Stage 4). The hand-written
+// connectors-catalog overrides.mjs map is retired; this derivation is the
+// single source for the inventory's primitive->connector candidate mapping.
+describe("deriveFacadePrimitiveOverrides — manifest-driven, deterministic", () => {
+  const writeFixture = (dir, name, cinatra) => {
+    const pkgDir = join(dir, name.split("/")[1] ?? name);
+    mkdirSync(pkgDir, { recursive: true });
+    const pkgPath = join(pkgDir, "package.json");
+    writeFileSync(pkgPath, JSON.stringify({ name, cinatra }, null, 2));
+    return { scope: "cinatra-ai", slug: name, dir: pkgDir, pkgPath };
+  };
+
+  it("maps each declared facade primitive to the declaring package", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "inv-facade-"));
+    const entries = [
+      writeFixture(tmp, "@cinatra-ai/gmail-connector", { facadePrimitives: ["email_send"] }),
+      writeFixture(tmp, "@cinatra-ai/apollo-connector", {}),
+    ];
+    expect(deriveFacadePrimitiveOverrides(entries)).toEqual({
+      email_send: "@cinatra-ai/gmail-connector",
+    });
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("ignores malformed declarations (non-array, non-string, empty) and unreadable manifests", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "inv-facade-"));
+    const entries = [
+      writeFixture(tmp, "@cinatra-ai/a-connector", { facadePrimitives: "email_send" }),
+      writeFixture(tmp, "@cinatra-ai/b-connector", { facadePrimitives: [42, "", "ok_prim"] }),
+      { scope: "cinatra-ai", slug: "missing", dir: tmp, pkgPath: join(tmp, "nope/package.json") },
+    ];
+    expect(deriveFacadePrimitiveOverrides(entries)).toEqual({
+      ok_prim: "@cinatra-ai/b-connector",
+    });
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("collision: lexicographically-first package wins regardless of scan order (deterministic)", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "inv-facade-"));
+    const a = writeFixture(tmp, "@cinatra-ai/aaa-connector", { facadePrimitives: ["email_send"] });
+    const b = writeFixture(tmp, "@cinatra-ai/zzz-connector", { facadePrimitives: ["email_send"] });
+    expect(deriveFacadePrimitiveOverrides([a, b])).toEqual({
+      email_send: "@cinatra-ai/aaa-connector",
+    });
+    expect(deriveFacadePrimitiveOverrides([b, a])).toEqual({
+      email_send: "@cinatra-ai/aaa-connector",
+    });
+    rmSync(tmp, { recursive: true, force: true });
   });
 });
