@@ -75,17 +75,9 @@ vi.mock("../db", () => ({
 
 vi.mock("@/lib/nango-system", () => ({
   listSavedNangoConnections: (_key: string) => savedConnections.list,
-  // The host's register-host-connector-services.ts (loaded transitively via
-  // server-actions -> store) imports `requireNangoSystem` for the
-  // deprecation-window nango-connection-storage compat shim. Every shim
-  // member resolves at CALL time and this test never calls one — a no-op
-  // stub lets the graph resolve.
-  requireNangoSystem: () => ({
-    isNangoConfigured: () => false,
-    getNangoStatus: () => ({ status: "not_connected", detail: "" }),
-    providerConfigKeys: {},
-    connectionIds: {},
-  }),
+  // (The former requireNangoSystem stub is gone: the host binder dropped its
+  // last nango-system edge with the nango-connection-storage compat shim —
+  // cinatra#151 Stage 7.)
 }));
 
 // ---------------------------------------------------------------------------

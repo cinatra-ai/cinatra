@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import {
   scanInstanceCoupling,
@@ -330,10 +330,24 @@ describe("core-extension-instance-coupling-ban gate", () => {
     expect(baselineGrowth({ "a :: package :: @x/y": 2 }, { "a :: package :: @x/y": 1 })).toEqual([]);
   });
 
-  it("the committed repo state PASSES the gate (no NEW coupling vs the baseline)", () => {
+  it("the committed repo state PASSES the gate (baseline PINNED EMPTY)", () => {
     const res = runGate();
     expect(res.status, res.stderr || res.stdout).toBe(0);
-    expect(res.stdout).toMatch(/no NEW instance coupling/);
+    expect(res.stdout).toMatch(/zero hardcoded extension-instance references/);
+    expect(res.stdout).toMatch(/PINNED EMPTY/);
+  });
+
+  it("the committed baseline FILE is empty (a re-populated baseline is itself a failure — zero-floor flip, cinatra#151 Stage 7)", () => {
+    const doc = JSON.parse(
+      readFileSync(join(REPO_ROOT, "scripts/audit/core-extension-instance-coupling-ban.baseline.json"), "utf8"),
+    );
+    expect(doc.occurrences).toEqual({});
+    expect(doc.note).toMatch(/PINNED EMPTY/);
+    // The frozen epoch + the pinned-zero classification summary survive as
+    // tamper checks / tooling-shape compatibility.
+    expect(doc.scannerEpoch).toBe(SCANNER_EPOCH);
+    expect(doc.classificationSummary["runtime-coupling"].occurrences).toBe(0);
+    expect(doc.classificationSummary.mechanical.occurrences).toBe(0);
   });
 
   it("fails CLOSED on a set-but-unresolvable base ref", () => {

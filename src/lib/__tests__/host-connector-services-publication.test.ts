@@ -7,9 +7,11 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 // nango gateway's save path awaits (failures fold into the save result), and
 // (c) the transport-DI inversion surface (cinatra#151 Stage 3): the
 // per-concern services the openai/anthropic/drupal-mcp/wordpress-mcp
-// serverEntry transports adapt into their own deps slots, the old
-// `@cinatra-ai/host:nango-connection-storage` id surviving ONLY as the
-// deprecation-window compat shim, and the binder naming NO extension package.
+// serverEntry transports adapt into their own deps slots, the binder naming
+// NO extension package, and (d) the zero-floor end-state (cinatra#151
+// Stage 7): the legacy `@cinatra-ai/host:nango-connection-storage` id is
+// FULLY retired — its deprecation-window compat shim is gone and the id
+// resolves to NOTHING.
 
 vi.mock("server-only", () => ({}));
 
@@ -53,14 +55,8 @@ vi.mock("@cinatra-ai/google-oauth-connection", () => ({
 }));
 // No extension-package mocks: the binder imports NO extension package since
 // the transport-DI inversion (cinatra#151 Stage 3) — the transports self-bind
-// at activation.
-vi.mock("@/lib/nango-system", () => ({
-  requireNangoSystem: () => ({
-    isNangoConfigured: () => false,
-    getNangoStatus: () => ({ status: "not_connected", detail: "" }),
-    providerConfigKeys: { github: "cinatra-github" },
-  }),
-}));
+// at activation. (No @/lib/nango-system mock either: the binder dropped its
+// last nango-system edge with the compat shim, cinatra#151 Stage 7.)
 vi.mock("@/lib/host-content-editor-dispatch", () => ({ dispatchContentEditorViaA2A: async () => "" }));
 
 const wordpressMaterialized: unknown[] = [];
@@ -228,20 +224,17 @@ describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
     expect(typeof resolveSingle<{ read: unknown }>(svc.skillsCatalog).read).toBe("function");
   });
 
-  it("the old nango-connection-storage id is OUT of the SDK contract and survives only as the deprecation-window compat shim", () => {
+  it("the old nango-connection-storage id is FULLY retired — out of the SDK contract AND no longer published (cinatra#151 Stage 7)", () => {
     // The contract no longer mints the id (consumers resolve nango-system).
     expect(
       Object.values(HOST_CONNECTOR_SERVICE_CAPABILITIES),
     ).not.toContain("@cinatra-ai/host:nango-connection-storage");
-    // The shim still resolves for already-installed runtime package-store
-    // digests, delegating to the nango-system surface at call time.
-    const shim = resolveSingle<{
-      isConfigured(): boolean;
-      getStatus(): { status: string };
-      providerConfigKeys: Record<string, string>;
-    }>("@cinatra-ai/host:nango-connection-storage");
-    expect(shim.isConfigured()).toBe(false);
-    expect(shim.getStatus().status).toBe("not_connected");
-    expect(shim.providerConfigKeys.github).toBe("cinatra-github");
+    // The deprecation-window compat shim is GONE: the id resolves to NOTHING.
+    // A runtime package-store digest predating the Stage 3 re-point gets a
+    // capability-resolution miss at call time and must be refreshed from the
+    // marketplace.
+    expect(
+      resolveCapabilityProviders("@cinatra-ai/host:nango-connection-storage"),
+    ).toEqual([]);
   });
 });

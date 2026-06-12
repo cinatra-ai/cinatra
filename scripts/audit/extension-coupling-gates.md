@@ -1,52 +1,60 @@
-# Extension-coupling audit gates — classification, exemption policy, counts
+# Extension-coupling audit gates — classification, exemption policy, end-state
 
-This document is the reference the three extension-coupling gates point at. It
-defines the shared reference taxonomy, the strict exemption policy, the
-zero-tolerance enforcement model (cinatra-ai/cinatra#36 — the closing
-phase of the IoC Runtime Cutover epic #24), and the pinned per-gate floors.
-Update the floor table whenever a baseline legitimately shrinks.
+This document is the reference the extension-coupling gates point at. It
+defines the shared reference taxonomy, the strict exemption policy, and the
+**zero-floor end-state** (cinatra#151 Stage 7 — the close of the zero-floor
+IoC epic, built on the zero-tolerance flip cinatra-ai/cinatra#36 that closed
+the IoC Runtime Cutover epic #24): no hand-written host code imports or names
+a concrete extension, and the gates are pinned so none ever can again.
 
 ## The gates
 
 | Gate | Direction | Unit | Baseline |
 | --- | --- | --- | --- |
-| `core-extension-instance-coupling-ban.mjs` | core (`src/` + `packages/`) naming a specific extension (string/JSX/prompt/metadata literal, path literal, or import) | `file :: kind :: value -> count` occurrences | `core-extension-instance-coupling-ban.baseline.json` |
-| `core-extension-import-ban.mjs` | core (`src/`) importing an extension package | `file -> extension` edges | `core-extension-import-ban.baseline.json` |
-| `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` |
+| `core-extension-instance-coupling-ban.mjs` | core (`src/` + `packages/`) naming a specific extension (string/JSX/prompt/metadata literal, path literal, or import) | `file :: kind :: value -> count` occurrences | `core-extension-instance-coupling-ban.baseline.json` — **PINNED EMPTY** |
+| `core-extension-import-ban.mjs` | core (`src/`) importing an extension package | `file -> extension` edges | `core-extension-import-ban.baseline.json` — **PINNED EMPTY** |
+| `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` — shrink-only (`sdkOnly` zero-tolerance) |
+| `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
 distinct from the baseline, which is pinned EMPTY since the flip — cinatra#36).
+`host-peer-value-import-ban.mjs` holds every serverEntry graph at 0 host-peer
+value imports (SDK peers stay type-only).
 
-## Enforcement model — ZERO-TOLERANCE (cinatra#36)
+## Enforcement model — the zero-floor end-state (cinatra#151 Stage 7)
 
-All baselines are FROZEN RESIDUAL FLOORS: they may only ever SHRINK, by any
-mechanism. Concretely, for the coupling gates:
+THREE baselines are PINNED EMPTY — zero is the floor AND the ceiling:
 
-- any reference/edge NOT in the committed baseline fails CI immediately;
-- the committed baseline may never grow vs the base ref (monotonic guard,
-  fail-closed on unresolvable refs);
-- `--write-baseline` REFUSES to write a grown baseline (remove the coupling
-  instead of re-baselining it);
-- the instance-coupling gate's `SCANNER_EPOCH` growth allowance is RETIRED —
-  the epoch is frozen at 2 and survives purely as a tamper check (committed
-  epoch must equal the script's and the base ref's; any mismatch fails). A
-  scanner fix that reveals previously hidden references must land WITH those
-  references fixed in the same PR;
-- the import-ban gate's one-PR `NEWLY_UNEXEMPTED_BASELINE_SEED` transition is
-  RETIRED — un-exempting a connector requires removing its edges in the same
-  PR;
-- the discovery-bypass baseline is PINNED EMPTY: a non-empty committed
-  baseline is itself a failure, and any non-sanctioned direct-reader
-  reference fails immediately;
-- the import-ban baseline is PINNED EMPTY since the honest-zero flip
-  (cinatra#151 Stage 3, landed WITH the shared-lexer adoption + the last
-  transport edges' removal per the stated policy): any core->extension
-  import edge fails immediately, a non-empty committed baseline is itself a
-  failure, and `--write-baseline` refuses non-empty output;
-- `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the precedent zero-tolerance flip for the `sdkOnly` dimension; its
+- **`core-extension-instance-coupling-ban`** (the Stage 7 flip): any
+  non-comment occurrence of an extension package name or
+  `extensions/<scope>/<name>/` path literal in core source fails CI
+  immediately; a non-empty committed baseline is itself a failure;
+  `--write-baseline` refuses non-empty output. The frozen `SCANNER_EPOCH`
+  (=2) and the `CORE_EXT_INSTANCE_BAN_BASE` monotonic guard survive purely as
+  tamper checks (fail-closed on unresolvable refs / any epoch mismatch).
+- **`core-extension-import-ban`** (the Stage 3 honest-zero flip, landed WITH
+  the shared-lexer adoption + the last transport edges' removal): any
+  core->extension import edge fails immediately; same non-empty-baseline and
+  `--write-baseline` refusals; `CORE_EXT_BAN_BASE` kept as a tamper check.
+- **`discovery-dispatcher-bypass-ban`** (the #36 flip): any non-sanctioned
+  direct native-reader reference fails immediately.
+
+On top of the pinned-empty gates:
+
+- `extension-import-ban.mjs` runs `--strict-sdk-only` in CI (the precedent
+  zero-tolerance flip for the `sdkOnly` dimension; its
   `STRICT_SDK_ONLY_ALLOWLIST` is EMPTY); its `hostInternal`/`crossExtension`
-  dimensions remain shrink-only floors.
+  dimensions remain shrink-only floors (see the end-state record below for
+  the one standing non-zero floor).
+- the cover gate enforces the **declaration equality**
+  `requiredExtensions == systemExtensions == lock` (cinatra#151 Stage 7) ON
+  TOP of its live bootable-coverage derivation: the prod bootable declaration
+  may not grow beyond the system set without an owner ruling that also
+  declares the package a systemExtension. The equality pins the DECLARATIONS
+  only — regrowth of hard-coded extension names in code is caught by the two
+  pinned-empty coupling gates, and an undeclared hard import is caught by the
+  live coverage derivation, not by the equality.
 
 Changing any of this requires editing the gate code and its tests in a
 reviewed PR — there is no data path (baseline, epoch, seed, regenerate) that
@@ -55,16 +63,15 @@ can raise a floor.
 ## Reference classification (shared taxonomy)
 
 Defined in `scripts/audit/lib/extension-reference-classification.mjs` and used
-by all three gates:
+by the coupling gates:
 
 - **runtime-coupling** — core selects/loads/branches on a specific extension
   at runtime (named imports, loader maps, provider registration,
-  prompt/dispatch literals). The default class; everything still counted is
-  in this class (see the residual floor register below).
+  prompt/dispatch literals). The default class; ZERO occurrences remain — any
+  reappearance fails the pinned-empty gates.
 - **mechanical** — re-export facades, hand-written inventories/catalogs, and
-  dev-name lists. Counted and ratcheted exactly like runtime-coupling — never
-  exempt. The mechanical-cleanup phase (#35) drove this class to ZERO occurrences; any reappearance is a
-  NEW key and hard-fails.
+  dev-name lists. Counted exactly like runtime-coupling — never exempt; at
+  ZERO since the mechanical-cleanup phase (#35).
 - **permanent-exempt** — never counted. Strict, owner-ruled set; see below.
 
 ## Strict exemption policy
@@ -89,7 +96,7 @@ Permanently exempt are ONLY:
    exempt sets. Two integrity guards keep the exemption honest:
    - the exemption is an EXPLICIT file list, never a directory prefix — a
      hand-added extra file under `src/lib/generated/` (or any `generated/`
-     dir) is counted (default class runtime-coupling → NEW key → hard fail);
+     dir) is counted (default class runtime-coupling → hard fail);
    - the listed files are pinned to the generator's byte-exact output by the
      FAIL-CLOSED `generate-extension-manifest.mjs --check` CI step (drift,
      missing file, or catalog-parity break fails CI).
@@ -102,20 +109,20 @@ Permanently exempt are ONLY:
    are reported separately from counted ones. IDs may contain ONLY the
    boundary alphabet `[A-Za-z0-9_.:/@-]` (`DATA_CONTRACT_ID_ALPHABET_RE`) —
    enforced as a structural defect — so the exact-ID masking can never
-   prefix-mask a longer ID past a non-alphabet character. Currently EMPTY —
-   nothing in the residual floor is a data-contract ID (the nango facade is
-   an import, not an ID), so no entry was minted for the zero-tolerance flip (#36).
+   prefix-mask a longer ID past a non-alphabet character. **EMPTY at the
+   zero-floor end-state** — it stays empty unless an owner ruling mints an
+   entry.
 3. Test files (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `tests/`)
    and the `extensions/` tree itself (an extension naming itself is fine).
 
 No facades, no inventories, no dev-name lists are exempt — they are counted
-(`mechanical`) and hard-fail as NEW keys if they ever reappear.
+(`mechanical`) and hard-fail if they ever reappear.
 
 Known, documented residual lexer limitation: JSX TEXT is not modeled by
 `lib/strip-comments.mjs` (that needs a JSX-aware parser), so a named-extension
 reference appearing in JSX text AFTER a bare non-URL `//` on the same line
-would be under-counted. No such case exists in the tree. Since the zero-tolerance flip (#36) there is
-no epoch-recompute path: if a future JSX-aware lexer reveals references, they
+would be under-counted. No such case exists in the tree. There is no
+epoch-recompute path: if a future JSX-aware lexer reveals references, they
 must be fixed in the same PR that lands the lexer (the floor cannot rise).
 That policy was exercised by the import-ban scanner itself: its legacy regex
 stripper (blind after a line comment containing a literal `/*`) was replaced
@@ -123,183 +130,81 @@ by the shared lexer in the SAME PR that removed the four transport-DI edges
 it had been hiding (cinatra#151 Stage 3) — every coupling scanner now runs
 the shared lexer.
 
-## Pinned floors (the #36 end-state)
+## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7)
 
-Recorded at the flip (#36; verify with the commands below); floors may only
-move DOWN. The epic's journey: the corrected epoch-2 baseline started at 349
-occurrences / 96 import edges; the decoupling phases (#27–#35) drove it to the floor below; the flip (#36)
-pinned it.
-
-| Gate | Pinned floor (current) | Direction |
+| Gate | Pinned floor | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **0 occurrences / 0 files** — the baseline is EMPTY (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4; −85 occ agent-identity decoupling — manifest-declared field-renderer bindings + role bindings + dev-tooling derivation, Stage 5; −20 occ artifact/blog/seed tail — generated semantic-floor binding, extension-role-resolved materializers/dashboard, neutralized prose, extension-relocated + presence-conditional seeds, Stage 6). The PINNED-EMPTY gate flip is the Stage 7 governance end-state. | shrink-only, frozen (EMPTY) |
-| `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1; −4 hidden transport edges — the transport-DI inversion, Stage 3, which adopted the shared lexer in the same PR so the zero is HONEST). | PINNED EMPTY |
-| `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
-| `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
-| `host-peer-value-import-ban` | **0** | hold at 0 |
+| `core-extension-instance-coupling-ban` | **0 occurrences / 0 keys / 0 files** | PINNED EMPTY (Stage 7 flip) |
+| `core-extension-import-ban` | **0 edges / 0 files** | PINNED EMPTY (Stage 3 flip, honest under the shared lexer) |
+| `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY (#36 flip) |
+| `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY) | shrink-only (see the end-state record) |
+| `host-peer-value-import-ban` | **0** over all serverEntry graphs | hold at 0 |
+| cover gate declarations | **requiredExtensions == systemExtensions == lock == 8** (0 hard-imported, 8 generated-required, 0 root-dep; every other extension guardedOptional/acquirable-on-demand) | equality, live-enforced |
+| Root + package-level concrete connector `workspace:*` deps | **0** | hold at 0 |
 
-"Is the cutover done?" has an exact answer: the gates can no longer move
-backward, the exempt set is the only sanctioned coupling, and the residual
-floor below is the remaining (frozen, tracked) decoupling debt.
+The journey (for the record): the corrected epoch-2 instance-coupling
+baseline started at **349 occurrences / 96 import edges**; the decoupling
+phases (#27–#35) and the Plan-B lazy/guarded cutover (#7) drove it to the
+166/41 flip floor (#36); the zero-floor epic (cinatra#151) emptied it —
+Stage 1 nango serverEntry cutover (−15 occ, import-ban 10→0),
+Stage 2 packages/llm provider adapters (−7), Stage 3 transport-DI inversion
+(−4, import-ban pinned empty + shared lexer), Stage 4 packages/agents
+connector edges + catalog metadata (−4, requiredExtensions floor 8 reached),
+Stage 5 agent-identity decoupling (−85), Stage 6 artifact/blog/seed tail
+(−20, baseline EMPTY), Stage 7 pinned the zero + the declaration equality.
+`requiredExtensions` shrank 16 → 8 == `systemExtensions` along the same train
+(gemini at Stage 2; openai/anthropic/drupal-mcp/wordpress-mcp at Stage 3;
+crm/gmail/google-calendar at Stage 4).
 
-## Residual floor register (what the 166 occ / 41 edges ARE)
+## End-state record — how core reaches extensions now
 
-The IoC cutover epic (#24) removed the gate's *tolerance* for coupling; it
-deliberately did NOT remove these residual clusters, which are out of the
-epic's scope and tracked elsewhere:
+The residual floor register is retired (nothing residual is left). The
+SANCTIONED inversion-of-control paths, each with its own guard:
 
-- **The `src/lib/nango.ts` facade — RETIRED (cinatra#151 Stage 1).** The
-  serverEntry cutover landed the ratified inverse direction: the connector's
-  `register(ctx)` registers the full `nango-system` capability surface
-  (config-store + blocking-materializer inversion in the companion); the
-  host resolves it in `src/lib/nango-system.ts` (fail-loud default, the
-  pinned auth boot read degraded per the design's item 9a); the facade is
-  DELETED, all former consumers (routes, pages, `ctx.nango`, packages)
-  re-pointed; the transport binder dropped its 15-name nango import block.
-  The old `@cinatra-ai/host:nango-connection-storage` delegating adapter was
-  retired by the transport-DI inversion (cinatra#151 Stage 3): the SDK
-  contract id + type are GONE and every in-tree consumer resolves
-  `nango-system` directly; the string id survives ONLY as a deprecation-window
-  compat shim for already-installed runtime package-store digests
-  (register-host-connector-services.ts; removal is a named Stage 7
-  deliverable). Floors moved: `core-extension-import-ban`
-  10 → 0 edges, instance-coupling 135 → 120 occ, root connector deps 1 → 0,
-  declarations 16/16 unchanged (nango moved from hard-imported + root-dep to
-  generated-required in the cover gate). The companion sweep (removing the
-  connector's skew-window `@/lib` fallbacks) is the named follow-up.
-- **The host's eager connector value-import surface** — at the flip, 11
-  unique connector packages still value-imported by `src/` (anthropic,
-  apollo, blog, crm, email, gemini, nango, openai, social-media, tailscale,
-  twenty: campaign actions, configuration/setup pages, the transport
-  registration legacy cluster, background jobs, blog/email surfaces), with
-  ~20 concrete connector packages still hard `workspace:*` deps of the root
-  package.json — this is prod-bootability **Plan B** territory
-  (cinatra-ai/cinatra#7): making these imports lazy/guarded and the generated
-  maps presence-aware so `requiredExtensions` can shrink from the 33-package
-  bootable set toward the ~8 true system packages. Explicitly out of epic
-  #24's scope (its scope boundary says so). Plan B's presence-aware
-  generated-maps slice is LANDED: the generated tree now carries generator-owned
-  `resolution: "required" | "guardedOptional"` metadata on every loader
-  entry (keyed on `cinatra.systemExtensions`; missing/unknown counts as
-  required, fail-closed), guardedOptional loaders route through the
-  standardized degraded-result guard (`src/lib/extension-load-guard.ts`),
-  and the maps are regenerated at every consuming surface (`make setup`
-  dev path + the prod image build stage, with `--check --self` as the
-  non-canonical self-check mode). Floors UNCHANGED by that slice (enabler; the
-  generated tree is the exempt class). The 41→10-edge shrink retired
-  the non-nango `src/` value-import surface (cinatra#7); the dep-drop slice then (a) taught the cover
-  gate (`required-extensions-cover-host-imports.mjs`) the guarded-optional
-  class — a generated-map package classified `guardedOptional` (and proven
-  degradable by the generated test) is ACQUIRABLE-ON-DEMAND, no longer
-  bootable; missing/unknown classification stays required, fail-closed — and
-  (b) DROPPED the 19 non-nango root `workspace:*` connector deps (20 → 1;
-  resolution rides the tsconfig path aliases, the mechanism the six already
-  root-dep-free connectors proved through dev + prod-image builds). The
-  cover gate also adopted the shared lexical stripper
-  (`lib/strip-comments.mjs`), closing its `@/lib/*` blind spot: the HONEST
-  hard-import surface (src/ + packages/, generated tree excluded) is **7
-  packages** — openai, anthropic (the transport DI cluster only, since the
-  cinatra#151 Stage 2 LLM-provider adapter cutover retired every
-  packages/llm connector import: provider adapters resolve connection /
-  headers / log-writer / GATED shell-tool members through each connector's
-  `llm-provider-surface` registration, `parseStructuredJson` relocated into
-  packages/llm as the provider-neutral utility it is, and packages/llm's 3
-  connector `workspace:*` deps are pruned), drupal-mcp, wordpress-mcp
-  (transport DI cluster), crm, gmail, google-calendar (packages/agents
-  single-function edges). Gemini's ONLY hard edges lived in packages/llm,
-  so Stage 2 also moved it OUT of the bootable declaration; the transport-DI
-  inversion (cinatra#151 Stage 3) then retired the last LLM-platform +
-  content-editor MCP hard imports (openai, anthropic, drupal-mcp,
-  wordpress-mcp self-bind from their serverEntries against the per-concern
-  host services); the packages/agents connector-edge cutover (cinatra#151
-  Stage 4) then retired the LAST 3 hard-wired packages — crm, gmail,
-  google-calendar resolve via connector-registered capability surfaces
-  (`crm-list-reader`, `email-sender-identities`, `appointment-schedules`)
-  and moved to the dev lock — so the bootable floor is now
-  **8 == `systemExtensions`** (the cover-gate floor: 0 hard-imported,
-  8 generated-required, 0 root-dep; every other extension is
-  guardedOptional/acquirable-on-demand). Nango left the hard-import surface
-  in cinatra#151 Stage 1 (generated-required). Stage 4 also moved the
-  connectors-catalog `email_send` override into gmail-connector's manifest
-  (`cinatra.facadePrimitives`, derived by `scripts/extensions/inventory.mjs`
-  — the catalog names no concrete package) and pruned the phantom
-  concrete-connector `workspace:*` deps (packages/agents 2,
-  packages/connectors 8 — all zero-source-reference; the prod-shape
-  install-failure class flagged on cinatra#149).
-- **The statically-wired transport DI cluster — RETIRED (cinatra#151
-  Stage 3).** The transport-DI inversion moved registration authorship
-  connector-side: openai/anthropic extended their `register(ctx)` and
-  drupal-mcp/wordpress-mcp gained serverEntries; each builds its deps slot
-  from the per-concern host services (mcp-pagination,
-  content-editor-dispatch, drupal-mcp, wordpress-mcp, runtime-mode,
-  notifications, skills-catalog, openai-connection, anthropic-connection)
-  plus the connector-authored `nango-system` surface, lazily at call time,
-  behind a bind-if-absent skew guard (swept after the cutover). The binder
-  was renamed `register-host-connector-services.ts` and names NO extension
-  package; the four hidden edges are gone, the import-ban scanner adopted
-  the shared lexer in the SAME PR (closing the documented blind spot), and
-  the gate is PINNED EMPTY. The four transports left the bootable
-  declaration (requiredExtensions 15 → 11). The five old-id consumers
-  (gemini, apify, tailscale, gmail, apollo) re-pointed to `nango-system`;
-  the old id survives only as the documented compat shim (Stage 7
-  removal).
-- **The agent-identity cluster — RETIRED (cinatra#151 Stage 5).** The
-  renderer hand map (`register-default-renderers.ts`, 33 occ), the
-  per-renderer agent-ID matchers (~20 occ across 15 files), the a2ui
-  adapter's mid-run translator map (4 occ), the role-selection literals
-  (agent-creation-review / run-author-agent / orchestrator HITL /
-  execution / mcp-schemas, 16 occ), and the dev-tooling literals
-  (packages/agents vitest aliases 8, validate-oas message 1, packages/cli
-  tailscale paths 3) are GONE. The inversion: each agent's manifest declares
-  `cinatra.fieldRenderers` (x-renderer ID -> host-neutral renderer KIND, +
-  priority/midRunHitl/a2uiTranslator/params) and `cinatra.roles`; the
-  generator validates them FAIL-CLOSED (shared validator,
-  `scripts/extensions/agent-binding-kinds.mjs`: id shape, known kinds,
-  duplicate-divergence conflicts, role uniqueness) and emits the pure-data
-  `src/lib/generated/agent-bindings.ts` (added to GENERATED_MANIFEST_FILES —
-  byte-pinned + exempt). The host keeps only the NEUTRAL kind table
-  (components) and registers from the generated bindings at init (Source A),
-  while packages installed at RUNTIME contribute through the
-  installed-package collector + the HITL panels' fetch-and-register hook
-  (Source B — same validator, skip-warn), so runtime-installed agents keep
-  bespoke renderers on prod images. Roles resolve FAIL-LOUD
-  (`packages/agents/src/agent-roles.ts`) — all four host-required roles are
-  claimed by `cinatra.systemExtensions` members. Dev tooling: vitest
-  extension aliases retired in favor of `tsconfigPaths: true`; the CLI's
-  tailscale modules are discovered from `cinatra.devCliModules` manifest
-  declarations.
-- **The artifact/blog/seed tail — RETIRED (cinatra#151 Stage 6).** The last
-  20 occurrences: (a) the semantic-floor type (8 occ) resolves from the
-  manifest-declared `artifact-default-floor` extension role, emitted as the
-  generated pure-data `packages/objects/src/generated/artifact-floor.ts`
-  (the ONE generator emission outside `src/lib/generated/` — package-local
-  so `@/`-alias-free graphs consume it; same `--check` byte pin, same
-  explicit-list exemption discipline) with generation-time guards: exactly
-  one claimant AND the claimant must be a `cinatra.systemExtensions`
-  member; (b) the three blog artifact materializers + the blog operator
-  dashboard resolve through `cinatra.roles` claims
-  (`artifact-blog-{post-body,idea-summary,image}`,
-  `blog-operator-dashboard`) via `src/lib/extension-roles.ts` — fail-loud
-  descriptive for materializers (no more silent dangling assertions on
-  absent types), degrade-to-index for the dashboard URL; (c) 6 prose
-  literals (retired-stub error messages, MCP tool descriptions) neutralized;
-  (d) the host-side seed module `packages/workflows/src/seed/` DELETED —
-  the extension-owned template ships via the major-release-workflow
-  extension's bpmn install path, and `scripts/seed.mjs` demo fixtures are
-  presence-conditional under the shared
-  `scripts/seed-lib/extension-presence.mjs` helper (skip-with-notice,
-  never a dangling agent ref; determinism pinned for BOTH the required-only
-  and full universes by `scripts/__tests__/seed-workflow-presence.test.mjs`).
-  Stage 6 also fixed a latent pre-existing defect in exactly this area: the
-  artifact-extension cinatra-key allowlists (objects bridge +
-  artifact-handler byte-mirror) rejected `cinatra.dependencies`, so the
-  object-registry bridge had been skip-warning EVERY on-disk artifact
-  extension at boot and artifact installs were rejected; both allowlists
-  now accept the cross-kind `dependencies` + `roles` keys, pinned by a
-  live-tree zero-skip registration test.
+- **The generated manifest tree** (`GENERATED_MANIFEST_FILES`): the generator
+  — driven by extension `package.json` declarations — is the ONE place
+  concrete extension names appear outside `extensions/` and tests. Byte-pinned
+  by the fail-closed `generate-extension-manifest.mjs --check` CI step;
+  loader entries carry generator-owned `resolution` metadata
+  (`required` for `cinatra.systemExtensions` members, else `guardedOptional`
+  routed through the standardized degraded-result guard and proven degradable
+  by the generated test). The presence-degraded build job asserts the
+  regime-aware emission (system-only universe ⇒ zero guarded loaders).
+- **The capability registry**: connectors/agents self-register surfaces from
+  their `serverEntry` `register(ctx)` (nango-system, llm-provider-surface,
+  crm-list-reader, email-sender-identities, appointment-schedules, transport
+  deps, …); the host publishes per-concern `@cinatra-ai/host:*` services
+  (`register-host-connector-services.ts` — names NO extension package) and
+  resolves extension surfaces at call time with established fail-loud or
+  degrade-to-empty semantics per consumer. The legacy
+  `@cinatra-ai/host:nango-connection-storage` delegating adapter id is FULLY
+  retired (Stage 3 contract removal; Stage 7 compat-shim removal — the id
+  resolves to nothing; a pre-Stage-3 runtime package-store digest gets a
+  capability-resolution miss at call time and must be refreshed from the
+  marketplace).
+- **Manifest metadata bindings**: `cinatra.fieldRenderers`, `cinatra.roles`,
+  `cinatra.facadePrimitives`, `cinatra.devCliModules` — validated fail-closed
+  at generation (`scripts/extensions/agent-binding-kinds.mjs` etc.), emitted
+  as pure data (`agent-bindings.ts`, `artifact-floor.ts`), resolved by
+  neutral host primitives (`agent-roles.ts`, `extension-roles.ts` — fail-loud
+  for system-required roles, degrade for optional ones). Runtime-installed
+  packages contribute renderer bindings through the installed-package
+  collector (Source B); roles bind from build-time presence (documented
+  limitation).
+- **Presence-conditional host surfaces**: seeds
+  (`scripts/seed-lib/extension-presence.mjs` — skip-with-notice, determinism
+  pinned for both universes), the connectors catalog (derives
+  `primitiveOverrides` from manifests), `/connectors` readiness (generated
+  loader maps).
 
-Every cluster lives in the committed baselines — visible, counted, and
-incapable of growing.
+**The one standing non-zero floor (explicitly OUT of the cinatra#151
+acceptance):** `extension-import-ban`'s `hostInternal` dimension — extensions
+importing host `@/` modules — stands at **16 edges**. It is the REVERSE
+direction (extension→host), shrank as a side effect of the serverEntry/
+host-service work (20 → 16 across the epic), and folding it into an epic's
+acceptance needs an owner scope ruling (requested asynchronously on the
+epic; this register entry is its tracker until ruled). The dimension is
+shrink-only ratcheted, so it cannot regress while the ruling is pending.
 
 ## Scanner correctness (historical)
 
@@ -309,28 +214,32 @@ that was not lexical-context aware; the shared single-pass lexer
 real references (a `/*` inside a line comment swallowing following code; a
 `//` inside a string swallowing the line). The recomputed baseline after the
 fix was a one-time RISE sanctioned by bumping `SCANNER_EPOCH` 1 → 2 in the
-same PR. The zero-tolerance flip (#36) FROZE the epoch at 2 and retired the growth allowance: from the
-flip onward, shrink-only holds unconditionally and the epoch is a pure tamper
-check.
+same PR. The zero-tolerance flip (#36) FROZE the epoch at 2 and retired the
+growth allowance; the zero-floor flip (cinatra#151 Stage 7) pinned the empty
+baseline, so the epoch survives purely as a tamper check on the committed
+baseline document.
 
 ## Reproduction
 
 ```sh
-# current state (all should pass / print the pinned floors above)
+# end-state (all should pass / print the pinned floors above)
 node scripts/audit/core-extension-instance-coupling-ban.mjs
 node scripts/audit/core-extension-import-ban.mjs
 node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 node scripts/audit/extension-import-ban.mjs --strict-sdk-only
-node scripts/extensions/generate-extension-manifest.mjs --check   # fail-closed integrity of the exempt generated tree
+node scripts/audit/host-peer-value-import-ban.mjs
+node scripts/audit/required-extensions-cover-host-imports.mjs   # 8 == 8 == 8
+node scripts/extensions/generate-extension-manifest.mjs --check # fail-closed integrity of the exempt generated tree
 
-# with the CI monotonic base-ref guard
+# with the CI monotonic base-ref tamper checks
 CORE_EXT_INSTANCE_BAN_BASE=origin/main node scripts/audit/core-extension-instance-coupling-ban.mjs
 CORE_EXT_BAN_BASE=origin/main node scripts/audit/core-extension-import-ban.mjs
 DISCOVERY_BYPASS_BASE=origin/main node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 IMPORT_BAN_BASE=origin/main node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 
-# regenerate a baseline after legitimate decoupling work (REFUSES growth)
+# regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
+node scripts/audit/core-extension-import-ban.mjs --write-baseline
 ```
 
 The extension source tree must be cloned back first

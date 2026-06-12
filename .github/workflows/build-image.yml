@@ -829,11 +829,11 @@ jobs:
         run: pnpm exec vitest run scripts/audit/__tests__/host-peer-value-import-ban.test.mjs
 
       # The MIRROR gate: core(src/) -> extension import ban.
-      # ZERO-TOLERANCE (cinatra#36): no new hand-coded core->extension edge
-      # may land — this gate exempts ONLY the explicit generator-emitted
-      # file list and tests. The committed baseline is the FROZEN
-      # residual floor of the IoC cutover: it may only ever shrink (the
-      # un-exempt seed transition is retired; --write-baseline refuses growth).
+      # PINNED EMPTY (cinatra#151 Stage 3 — the honest-zero flip on the
+      # shared lexer): any core->extension import edge fails immediately, a
+      # non-empty committed baseline is itself a failure, --write-baseline
+      # refuses non-empty output. Exempts ONLY the explicit generator-emitted
+      # file list and tests; the base ref survives as a tamper check.
       - name: Core -> extension import-ban gate (zero-tolerance)
         env:
           # Monotonic guard: the committed baseline must be a subset of the
@@ -867,13 +867,13 @@ jobs:
       # OTHER way core hardcodes a specific extension (the way blog/openai.ts
       # slipped past the import-ban): string-literal / path references to an exact
       # extension package name or `extensions/<scope>/<name>/` path.
-      # ZERO-TOLERANCE (cinatra#36): the committed baseline is the
-      # FROZEN residual floor of the IoC cutover — it may only ever shrink, by
-      # any mechanism (the SCANNER_EPOCH growth allowance is retired and now a
-      # pure tamper check; --write-baseline refuses grown output). The only
+      # PINNED EMPTY (cinatra#151 Stage 7 — the zero-floor flip): any current
+      # occurrence fails immediately, a non-empty committed baseline is itself
+      # a failure, --write-baseline refuses non-empty output (the frozen
+      # SCANNER_EPOCH and the base ref survive as tamper checks). The only
       # sanctioned named-extension references are the generated manifest tree +
-      # the documented data-contract-ID allowlist.
-      # Counts + end-state: scripts/audit/extension-coupling-gates.md.
+      # the documented data-contract-ID allowlist (empty, owner-ruled only).
+      # End-state record: scripts/audit/extension-coupling-gates.md.
       - name: Core -> extension instance-coupling gate (zero-tolerance)
         env:
           # Monotonic guard: committed baseline counts must not exceed the base
@@ -897,8 +897,11 @@ jobs:
       # bootable set from cinatra-required-extensions.lock.json; this fails CI
       # when a host-imported extension package is missing from
       # cinatra.requiredExtensions or from that lock (the image would build a
-      # tree that cannot resolve the import), or when lock and declaration
-      # drift apart (forgotten regeneration).
+      # tree that cannot resolve the import), when lock and declaration
+      # drift apart (forgotten regeneration), or when requiredExtensions !=
+      # systemExtensions (the declaration equality guard — cinatra#151
+      # Stage 7: the bootable declaration may not grow beyond the system set
+      # without an owner ruling).
       - name: Required-extensions cover host imports gate
         run: node scripts/audit/required-extensions-cover-host-imports.mjs
 

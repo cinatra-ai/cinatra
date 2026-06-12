@@ -57,12 +57,12 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   // The per-concern host services the openai/anthropic/drupal-mcp/
   // wordpress-mcp serverEntry transports adapt into their own deps slots at
   // activation. NOTE the retired sibling: the legacy
-  // `@cinatra-ai/host:nango-connection-storage` delegating adapter id is GONE
-  // from this contract — every consumer resolves the connector-authored
-  // `nango-system` surface directly (the host keeps publishing the legacy
-  // string id ONLY as a deprecation-window compat shim for already-installed
-  // runtime package-store digests; removal rides the epic's governance
-  // end-state, cinatra#151 Stage 7).
+  // `@cinatra-ai/host:nango-connection-storage` delegating adapter id is
+  // FULLY retired (contract id + type removed at Stage 3; the host's
+  // deprecation-window compat shim removed at the epic's governance
+  // end-state, cinatra#151 Stage 7) — every consumer resolves the
+  // connector-authored `nango-system` surface directly, and the legacy id
+  // resolves to nothing.
   mcpPagination: "@cinatra-ai/host:mcp-pagination",
   contentEditorDispatch: "@cinatra-ai/host:content-editor-dispatch",
   drupalMcp: "@cinatra-ai/host:drupal-mcp",

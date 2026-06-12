@@ -324,9 +324,11 @@ describe("coverageDefects", () => {
     rootDepExtensions: new Set(["@scope/b-connector"]),
     required: new Set(["@scope/a-connector", "@scope/b-connector", "@scope/system-agent"]),
     locked: new Set(["@scope/a-connector", "@scope/b-connector", "@scope/system-agent"]),
+    // Declaration equality (cinatra#151 Stage 7): required == systemExtensions.
+    systemExtensions: new Set(["@scope/a-connector", "@scope/b-connector", "@scope/system-agent"]),
   };
 
-  it("passes when required = lock covers imports ∪ root deps (superset allowed)", () => {
+  it("passes when required == systemExtensions == lock covers imports ∪ root deps", () => {
     const { defects, bootable } = coverageDefects(base);
     expect(defects).toEqual([]);
     expect([...bootable].sort()).toEqual(["@scope/a-connector", "@scope/b-connector"]);
@@ -369,6 +371,32 @@ describe("coverageDefects", () => {
       defects.some((d) => d.includes("@scope/missing-system-skill") && d.includes("systemExtensions ⊆ requiredExtensions")),
     ).toBe(true);
   });
+
+  it("DECLARATION EQUALITY (cinatra#151 Stage 7): fails when requiredExtensions ⊃ systemExtensions", () => {
+    const { defects } = coverageDefects({
+      ...base,
+      required: new Set([...base.required, "@scope/extra-connector"]),
+      locked: new Set([...base.locked, "@scope/extra-connector"]),
+    });
+    expect(
+      defects.some((d) => d.includes("@scope/extra-connector") && d.includes("equality guard")),
+    ).toBe(true);
+    // The equality guard's message must never suggest the coverage fix
+    // direction (adding to required) — it demands shrink-or-owner-ruling.
+    const eq = defects.find((d) => d.includes("equality guard"));
+    expect(eq).toMatch(/owner ruling/);
+  });
+
+  it("DECLARATION EQUALITY is fail-closed: an absent systemExtensions declaration flags every required name", () => {
+    const { defects } = coverageDefects({
+      hostImported: new Set(),
+      rootDepExtensions: new Set(),
+      required: new Set(["@scope/a-connector"]),
+      locked: new Set(["@scope/a-connector"]),
+      // systemExtensions omitted entirely (defaults to empty set)
+    });
+    expect(defects.some((d) => d.includes("@scope/a-connector") && d.includes("equality guard"))).toBe(true);
+  });
 });
 
 describe("repo-live coverage (the gate's own contract against THIS tree)", () => {
@@ -392,6 +420,12 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
       systemExtensions: live.systemExtensions,
     });
     expect(defects).toEqual([]);
+
+    // The zero-floor end-state (cinatra#151 Stage 7): the three declarations
+    // are EQUAL sets — the equality guard above just verified it (defects
+    // empty), pin the sets themselves too.
+    expect([...live.required].sort()).toEqual([...live.systemExtensions].sort());
+    expect([...locked].sort()).toEqual([...live.required].sort());
 
     // The under-coverage hole this gate closed (cinatra#7, dep-drop slice) had
     // ONE live carrier: the statically-wired transport DI cluster, whose

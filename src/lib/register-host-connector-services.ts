@@ -68,11 +68,6 @@ import {
   clearOpenAIConnection,
   updateOpenAILoggingEnabled,
 } from "@/lib/openai-connection-store";
-// The connector-authored nango-system surface (cinatra#151 Stage 1): resolved
-// at CALL time behind the deprecation-window compat shim below — activation
-// order never matters.
-import { requireNangoSystem } from "@/lib/nango-system";
-import type { NangoSystemSurface } from "@cinatra-ai/sdk-extensions";
 // Shared host-side A2A content-editor dispatch helper (drupal + wordpress
 // content-editor connectors). Carries the @cinatra-ai/llm + @cinatra-ai/a2a
 // runtime edges host-side so neither connector imports them.
@@ -159,54 +154,15 @@ export function registerHostConnectorServices(): void {
   };
   register(NANGO_CONNECTION_MATERIALIZER_CAPABILITY, hostNangoMaterializer);
 
-  // DEPRECATION-WINDOW COMPAT SHIM — the legacy nango connection-storage id.
-  // The `@cinatra-ai/host:nango-connection-storage` adapter is RETIRED from
-  // the SDK contract and from every in-tree consumer (each resolves the
-  // connector-authored `nango-system` surface directly, cinatra#151 Stage 3).
-  // The string id stays published ONLY for already-installed runtime
-  // package-store digests (/data/extensions/packages) that predate the
-  // re-point — their lazy resolution must keep working across a host upgrade
-  // until the marketplace update path refreshes them. Removal is a NAMED
-  // deliverable of the epic's governance end-state (cinatra#151 Stage 7).
-  // Every member resolves the surface at CALL time; the const key maps are
-  // getters for the same reason (this module evaluates at boot, BEFORE
-  // activation).
-  register("@cinatra-ai/host:nango-connection-storage", {
-    isConfigured: () => requireNangoSystem().isNangoConfigured(),
-    getStatus: () => requireNangoSystem().getNangoStatus(),
-    getFrontendConfig: () => requireNangoSystem().getNangoFrontendConfig(),
-    getPrimarySavedConnection: (
-      ...args: Parameters<NangoSystemSurface["getPrimarySavedNangoConnection"]>
-    ) => requireNangoSystem().getPrimarySavedNangoConnection(...args),
-    ensureIntegration: (...args: Parameters<NangoSystemSurface["ensureNangoIntegration"]>) =>
-      requireNangoSystem().ensureNangoIntegration(...args),
-    ensureConnectorIntegration: (
-      ...args: Parameters<NangoSystemSurface["ensureNangoConnectorIntegration"]>
-    ) => requireNangoSystem().ensureNangoConnectorIntegration(...args),
-    importConnection: (...args: Parameters<NangoSystemSurface["importNangoConnection"]>) =>
-      requireNangoSystem().importNangoConnection(...args),
-    getCredentials: (...args: Parameters<NangoSystemSurface["getNangoCredentials"]>) =>
-      requireNangoSystem().getNangoCredentials(...args),
-    saveConnectionRecord: (...args: Parameters<NangoSystemSurface["saveNangoConnectionRecord"]>) =>
-      requireNangoSystem().saveNangoConnectionRecord(...args),
-    removeConnectionRecord: (
-      ...args: Parameters<NangoSystemSurface["removeNangoConnectionRecord"]>
-    ) => requireNangoSystem().removeNangoConnectionRecord(...args),
-    deleteConnection: (...args: Parameters<NangoSystemSurface["deleteNangoConnection"]>) =>
-      requireNangoSystem().deleteNangoConnection(...args),
-    clearConnectionRecords: (
-      ...args: Parameters<NangoSystemSurface["clearNangoConnectionRecords"]>
-    ) => requireNangoSystem().clearNangoConnectionRecords(...args),
-    buildBearerAuthHeader: (
-      ...args: Parameters<NangoSystemSurface["buildBearerAuthHeaderFromNango"]>
-    ) => requireNangoSystem().buildBearerAuthHeaderFromNango(...args),
-    get providerConfigKeys() {
-      return requireNangoSystem().providerConfigKeys;
-    },
-    get connectionIds() {
-      return requireNangoSystem().connectionIds;
-    },
-  });
+  // The legacy `@cinatra-ai/host:nango-connection-storage` id is FULLY
+  // RETIRED (cinatra#151 Stage 7 — the epic's governance end-state). It was
+  // removed from the SDK contract and every in-tree consumer by the
+  // transport-DI inversion (Stage 3) and survived here only as a
+  // deprecation-window compat shim for runtime package-store digests
+  // installed before the re-point; that window is closed. A digest that old
+  // gets a capability-resolution miss at call time and must be refreshed
+  // from the marketplace (every current package resolves the
+  // connector-authored `nango-system` surface directly).
 
   register(svc.googleOAuth, {
     getStatus: getGoogleOAuthStatus,

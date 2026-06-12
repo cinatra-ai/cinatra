@@ -11,21 +11,25 @@
 // knowing a specific extension by name, which a true IoC system must not do —
 // capabilities come from the manifest/registry, not hardcoded references.
 //
-// ZERO-TOLERANCE (cinatra-ai/cinatra#36 — flipped at the end of the
-// IoC cutover epic #24): every current occurrence is recorded in the baseline
-// as `file :: kind :: value -> count`; the gate fails if any count GROWS or a
-// NEW occurrence appears, and (with a base ref) if the committed baseline
-// grew vs the base branch. The baseline is the FROZEN RESIDUAL FLOOR of the
-// cutover — it may only ever SHRINK, by ANY mechanism: the scanner-epoch
-// growth allowance is permanently retired (an epoch mismatch is now a hard
-// failure, never a growth sanction) and `--write-baseline` refuses to write a
-// grown baseline. The ONLY sanctioned named-extension references are the
-// strict exempt set: the generated manifest tree + the documented
-// data-contract-ID allowlist. A scanner fix that reveals previously hidden
-// references must land WITH the references removed (or, if they are genuine
-// data-contract IDs, owner-ruled allowlist entries) in the same PR —
-// re-baselining upward is impossible by data; only a reviewed change to this
-// gate and its tests could alter the semantics.
+// PINNED EMPTY (cinatra#151 Stage 7 — the zero-floor flip, following the
+// import-ban / discovery-bypass precedents): the zero-tolerance ratchet
+// (cinatra-ai/cinatra#36) drove the baseline from 349 occurrences to EMPTY
+// across the cinatra#151 stages (1-6); from the flip onward zero is the floor
+// AND the ceiling:
+//   - ANY current occurrence fails CI immediately (there is no tolerated set
+//     left to diff against);
+//   - a NON-EMPTY committed baseline is itself a hard failure;
+//   - `--write-baseline` REFUSES to write a non-empty baseline;
+//   - the CORE_EXT_INSTANCE_BAN_BASE monotonic guard and the frozen
+//     SCANNER_EPOCH survive purely as tamper checks (fail-closed on
+//     unresolvable refs / any epoch mismatch).
+// The ONLY sanctioned named-extension references are the strict exempt set:
+// the generated manifest tree + the documented data-contract-ID allowlist
+// (empty; entries are minted only by owner ruling). A scanner fix that
+// reveals previously hidden references must land WITH the references removed
+// (or owner-ruled into the allowlist) in the same PR — there is no data path
+// (baseline, epoch, seed, regenerate) that can raise the floor; only a
+// reviewed change to this gate and its tests could alter the semantics.
 //
 // Counts ALL non-comment occurrences INCLUDING imports — the src-only
 // import-ban gate does not scan `packages/`, so a package-side
@@ -351,35 +355,33 @@ function main() {
   }
 
   if (args.includes("--write-baseline")) {
-    // FAIL-CLOSED write (zero-tolerance, #36): the baseline is the frozen
-    // residual floor of the IoC cutover — regeneration may only ever SHRINK
-    // it. Refuse to write a baseline with any NEW or GROWN key vs the
-    // committed one (remove the new coupling instead). First write (no
-    // committed baseline) is the introducing exception.
-    if (existsSync(BASELINE_PATH)) {
-      const committed = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).occurrences ?? {};
-      const grownVsCommitted = diffGrown(committed, current);
-      if (grownVsCommitted.length) {
-        console.error(
-          `[core-extension-instance-coupling-ban] FAIL — refusing to write a GROWN baseline (zero-tolerance: the floor only shrinks; remove the new coupling instead of re-baselining it):`,
-        );
-        grownVsCommitted.forEach((e) => console.error("  + " + e));
-        process.exit(1);
-      }
+    // PINNED EMPTY (cinatra#151 Stage 7): there is nothing left to tolerate.
+    // Refuse to write a non-empty baseline — remove the named-extension
+    // reference instead (route through the manifest/registry/capability
+    // path, or — for a genuine stable contract ID — request an owner-ruled
+    // DATA_CONTRACT_ID_ALLOWLIST entry).
+    if (totalOcc) {
+      console.error(
+        `[core-extension-instance-coupling-ban] FAIL — refusing to write a NON-EMPTY baseline (the floor is pinned at zero; remove the hardcoded extension-instance reference instead of re-baselining it):`,
+      );
+      Object.entries(current)
+        .map(([k, c]) => `${k} -> ${c}`)
+        .sort()
+        .forEach((e) => console.error("  + " + e));
+      process.exit(1);
     }
     writeFileSync(
       BASELINE_PATH,
       stable({
         note:
-          "true-IoC hardcoded-extension-INSTANCE coupling baseline — the FROZEN RESIDUAL FLOOR of the IoC cutover (epic #24), pinned by the zero-tolerance flip (#36). Each entry is a CURRENT occurrence count of a specific extension package NAME (as a string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source. Every entry is classified runtime-coupling or mechanical (see scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md). The floor may only ever SHRINK — growth is never sanctioned (the scanner-epoch allowance is retired; --write-baseline refuses grown output). The ONLY sanctioned named-extension references are the generated manifest tree (the explicit generator-emitted file list), the documented data-contract-ID allowlist, tests, and the extensions/ tree itself. Regenerate (shrink-only) with `node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline`.",
+          "true-IoC hardcoded-extension-INSTANCE coupling baseline — PINNED EMPTY by the zero-floor flip (cinatra#151 Stage 7; the zero-tolerance ratchet #36 drove the residual floor of the IoC cutover from 349 occurrences to zero across the cinatra#151 stages). Any non-comment occurrence of a specific extension package NAME (string/JSX/prompt/metadata literal OR an import — the src-only core-extension-import-ban gate does not scan packages/, so imports are counted here too) or an `extensions/<scope>/<name>/` PATH literal in core source fails CI immediately; a non-empty committed baseline is itself a failure and --write-baseline refuses to produce one. The ONLY sanctioned named-extension references are the generated manifest tree (the explicit generator-emitted file list), the documented data-contract-ID allowlist (empty; owner-ruled entries only), tests, and the extensions/ tree itself. The scannerEpoch and classificationSummary are retained at their frozen/pinned values as tamper checks and for tooling-shape compatibility.",
         scannerEpoch: SCANNER_EPOCH,
         classificationSummary: summary,
         occurrences: current,
       }),
     );
     console.log(
-      `[core-extension-instance-coupling-ban] baseline written — ${totalOcc} occurrence(s) across ${totalFiles} core file(s) ` +
-        `(runtime-coupling: ${summary["runtime-coupling"].occurrences}, mechanical: ${summary.mechanical.occurrences}; ` +
+      `[core-extension-instance-coupling-ban] baseline written — ${totalOcc} occurrence(s) (pinned empty; ` +
         `allowlisted data-contract IDs reported separately: ${allowlistedOcc}).`,
     );
     return;
@@ -392,6 +394,18 @@ function main() {
   const baselineDoc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
   const baseline = baselineDoc.occurrences ?? {};
   const committedEpoch = baselineDoc.scannerEpoch ?? 1;
+
+  // PINNED-EMPTY pin (cinatra#151 Stage 7): the committed baseline must be
+  // EMPTY — a re-populated baseline file is a bypass attempt regardless of
+  // the tree's state.
+  const committedKeys = Object.keys(baseline);
+  if (committedKeys.length) {
+    console.error(
+      `[core-extension-instance-coupling-ban] FAIL — committed baseline is NON-EMPTY (${committedKeys.length} key(s)); the floor is pinned at zero since the zero-floor flip (cinatra#151 Stage 7):`,
+    );
+    committedKeys.sort().forEach((k) => console.error(`  + ${k} -> ${baseline[k]}`));
+    process.exit(1);
+  }
 
   if (committedEpoch !== SCANNER_EPOCH) {
     console.error(
@@ -456,27 +470,24 @@ function main() {
     }
   }
 
-  const shrunk = diffShrunk(baseline, current);
-  if (shrunk.length) {
-    console.log(`[core-extension-instance-coupling-ban] NOTE — ${shrunk.length} coupling(s) reduced (regenerate the baseline via --write-baseline):`);
-    shrunk.forEach((e) => console.log("  - " + e));
-  }
-  const grown = diffGrown(baseline, current);
-  if (grown.length) {
+  // PINNED EMPTY: any current occurrence fails immediately (zero is the
+  // floor and the ceiling — there is no tolerated set left to diff against).
+  if (totalOcc) {
     console.error(
-      `[core-extension-instance-coupling-ban] FAIL — ${grown.length} NEW/GROWN hardcoded extension-instance reference(s) in core ` +
-        `(ZERO-TOLERANCE: the only sanctioned named-extension references are the generated manifest tree and the documented ` +
-        `data-contract-ID allowlist — route through the manifest/registry, never name a specific extension):`,
+      `[core-extension-instance-coupling-ban] FAIL — ${totalOcc} hardcoded extension-instance reference(s) across ${totalFiles} core file(s) ` +
+        `(PINNED EMPTY: the only sanctioned named-extension references are the generated manifest tree and the documented ` +
+        `data-contract-ID allowlist — route through the manifest/registry/capability path, never name a specific extension):`,
     );
-    grown.forEach((e) => console.error("  + " + e));
+    Object.entries(current)
+      .map(([k, c]) => `${k} -> ${c}`)
+      .sort()
+      .forEach((e) => console.error("  + " + e));
     process.exit(1);
   }
   console.log(
-    `[core-extension-instance-coupling-ban] OK — no NEW instance coupling (zero-tolerance holds). Frozen floor: ${totalOcc} occurrence(s) across ${totalFiles} file(s) ` +
-      `[runtime-coupling: ${summary["runtime-coupling"].occurrences} occ / ${summary["runtime-coupling"].files} file(s); ` +
-      `mechanical: ${summary.mechanical.occurrences} occ / ${summary.mechanical.files} file(s); ` +
-      `data-contract allowlisted (sanctioned, not counted): ${allowlistedOcc}] ` +
-      `(exempt set: generated manifest tree + documented data-contract-ID allowlist ONLY; the floor only shrinks — see scripts/audit/extension-coupling-gates.md).`,
+    `[core-extension-instance-coupling-ban] OK — zero hardcoded extension-instance references (baseline PINNED EMPTY since the zero-floor flip, cinatra#151 Stage 7) ` +
+      `[data-contract allowlisted (sanctioned, not counted): ${allowlistedOcc}] ` +
+      `(exempt set: generated manifest tree + documented data-contract-ID allowlist ONLY — see scripts/audit/extension-coupling-gates.md).`,
   );
 }
 

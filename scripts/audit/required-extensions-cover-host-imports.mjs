@@ -38,7 +38,18 @@
 //   - the lock and requiredExtensions drift apart in either direction
 //     (run scripts/extensions/update-required-extension-lock.mjs), or
 //   - cinatra.systemExtensions ⊄ cinatra.requiredExtensions (the system set
-//     must always ride the bootable declaration).
+//     must always ride the bootable declaration), or
+//   - cinatra.requiredExtensions ⊄ cinatra.systemExtensions — the DECLARATION
+//     EQUALITY guard (cinatra#151 Stage 7, the zero-floor end-state):
+//     together with the two subset checks above this pins
+//     requiredExtensions == systemExtensions == lock. The prod bootable
+//     declaration may not grow beyond the system set; a package that must
+//     become required needs an owner ruling that also declares it a
+//     systemExtension (one reviewed edit, both lists). This guard pins the
+//     DECLARATIONS only — regrowth of hard-coded extension names anywhere in
+//     code is caught by the two PINNED-EMPTY coupling gates, and a hard
+//     import of an undeclared package is caught by the live bootable-coverage
+//     derivation above, not by this equality.
 //
 // The HARD-import scan is deliberately conservative: it counts type-only
 // imports too (a missing package still breaks `pnpm typecheck` and a local
@@ -348,6 +359,18 @@ export function coverageDefects({ hostImported, rootDepExtensions, required, loc
       defects.push(`system extension ${name} is MISSING from cinatra.requiredExtensions (systemExtensions ⊆ requiredExtensions must hold)`);
     }
   }
+  // DECLARATION EQUALITY (cinatra#151 Stage 7): requiredExtensions may not
+  // exceed systemExtensions — with the subset check above and the lock<->
+  // required drift checks this enforces requiredExtensions == systemExtensions
+  // == lock. Fail-closed by construction: an empty/absent systemExtensions
+  // declaration flags every required name.
+  for (const name of [...required].sort()) {
+    if (!systemExtensions.has(name)) {
+      defects.push(
+        `required extension ${name} is NOT declared in cinatra.systemExtensions (requiredExtensions == systemExtensions equality guard — the bootable declaration may not grow beyond the system set without an owner ruling that also declares the package a systemExtension)`,
+      );
+    }
+  }
   return { bootable, defects };
 }
 
@@ -435,8 +458,18 @@ function main() {
       `[required-extensions-cover-host-imports] FAIL — ${defects.length} coverage defect(s):`,
     );
     for (const d of defects) console.error("  - " + d);
+    // Remediation branches by defect class (the equality guard's fix is the
+    // OPPOSITE direction of the coverage fix — never "add to required").
+    if (defects.some((d) => d.includes("equality guard"))) {
+      console.error(
+        "\nEquality-guard remediation: requiredExtensions == systemExtensions is the zero-floor end-state " +
+          "(cinatra#151 Stage 7). Either REMOVE the package from cinatra.requiredExtensions (and regenerate the " +
+          "lock via `node scripts/extensions/update-required-extension-lock.mjs`), or — with an owner ruling — " +
+          "declare it in cinatra.systemExtensions too (then regenerate the generated maps AND the lock).",
+      );
+    }
     console.error(
-      "\nRemediation: add the package to cinatra.requiredExtensions (with its version range), run " +
+      "\nCoverage remediation: add the package to cinatra.requiredExtensions (with its version range), run " +
         "`node scripts/extensions/update-required-extension-lock.mjs`, and commit both. Hard import sites:",
     );
     for (const [file, names] of Object.entries(byFile)) {
@@ -454,7 +487,8 @@ function main() {
   console.log(
     `[required-extensions-cover-host-imports] OK — bootable set covered: ${bootable.size} package(s) ` +
       `(${hardImported.size} hard-imported, ${generated.bootable.size} generated-required, ` +
-      `${rootDepExtensions.size} root-dep) ⊆ requiredExtensions (${required.size}) = lock (${locked.size}); ` +
+      `${rootDepExtensions.size} root-dep) ⊆ requiredExtensions (${required.size}) == systemExtensions (${systemExtensions.size}) == lock (${locked.size}) ` +
+      `(declaration equality pinned — cinatra#151 Stage 7); ` +
       `${generated.acquirable.size} generated-map package(s) classified guardedOptional ⇒ acquirable-on-demand.`,
   );
 }
