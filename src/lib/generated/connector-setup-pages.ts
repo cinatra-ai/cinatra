@@ -35,6 +35,7 @@ export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry>
   "google-calendar-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/google-calendar-connector/setup-page", () => import("@cinatra-ai/google-calendar-connector/setup-page")) },
   "google-oauth-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/google-oauth-connector/setup-page", () => import("@cinatra-ai/google-oauth-connector/setup-page")) },
   "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/setup-page", () => import("@cinatra-ai/linkedin-connector/setup-page")) },
+  "linkedin-oauth-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-oauth-connector/setup-page", () => import("@cinatra-ai/linkedin-oauth-connector/setup-page")) },
   "mcp-client-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/mcp-client-connector/setup-page", () => import("@cinatra-ai/mcp-client-connector/setup-page")) },
   "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/setup-page", () => import("@cinatra-ai/openai-connector/setup-page")) },
   "tailscale-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/tailscale-connector/setup-page", () => import("@cinatra-ai/tailscale-connector/setup-page")) },

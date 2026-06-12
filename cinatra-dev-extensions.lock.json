@@ -220,7 +220,12 @@
     {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
-      "resolvedSha": "f37eb2cd574a1dbf714575170c0008b7708da8d4"
+      "resolvedSha": "35492d49cac54fa332c214792aee34665d84859a"
+    },
+    {
+      "packageName": "@cinatra-ai/linkedin-oauth-connector",
+      "repo": "cinatra-ai/linkedin-oauth-connector",
+      "resolvedSha": "f49c05b50598a1c203e55701f0bf2bf03688e66d"
     },
     {
       "packageName": "@cinatra-ai/list-curator-agent",

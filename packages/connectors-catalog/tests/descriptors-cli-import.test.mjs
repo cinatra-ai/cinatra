@@ -20,11 +20,15 @@ const MCP_LESS_CONNECTOR_SLUGS = new Set([
   "mcp-client-connector",
   "wordpress-assistant-connector",
   "drupal-assistant-connector",
+  // LinkedIn OAuth is a pure admin credentials form (Client ID / secret); it
+  // exposes no outbound MCP primitives — the per-user connect + publish
+  // primitives live on @cinatra-ai/linkedin-connector.
+  "linkedin-oauth-connector",
 ]);
 
 describe("connector descriptors (CLI-safe surface)", () => {
-  it("ships the canonical 19-entry catalog", () => {
-    expect(CONNECTOR_DESCRIPTORS).toHaveLength(19);
+  it("ships the canonical 20-entry catalog", () => {
+    expect(CONNECTOR_DESCRIPTORS).toHaveLength(20);
   });
 
   it("every descriptor has the required fields with non-empty values", () => {
@@ -58,10 +62,10 @@ describe("connector descriptors (CLI-safe surface)", () => {
     expect(new Set(slugs).size).toBe(slugs.length);
   });
 
-  it("visibility split matches the dev-fixture expectation (12 admin / 7 workspace)", () => {
+  it("visibility split matches the dev-fixture expectation (13 admin / 7 workspace)", () => {
     const admin = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "admin");
     const workspace = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "workspace");
-    expect(admin).toHaveLength(12);
+    expect(admin).toHaveLength(13);
     expect(workspace).toHaveLength(7);
     // Sanity: the split must account for every descriptor (no third tier).
     expect(admin.length + workspace.length).toBe(CONNECTOR_DESCRIPTORS.length);

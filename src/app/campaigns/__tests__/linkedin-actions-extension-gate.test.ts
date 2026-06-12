@@ -65,18 +65,28 @@ function firstExecutableStatement(body: string): string {
   return s;
 }
 
+// The LinkedIn connector split (cinatra-ai/linkedin-connector#9) relocated the
+// credential WRITE — the only security-sensitive LinkedIn connector action — to
+// @cinatra-ai/linkedin-oauth-connector (the admin half). The per-user connector
+// (@cinatra-ai/linkedin-connector) no longer ships any server action: the old
+// saveLinkedInConnectionAction moved here, and the broken
+// deleteLinkedInAccountAction (it filtered the wrong, orphaned config key and
+// never removed the user-scope Nango connection) was dropped rather than ship a
+// false delete. So the manage-gate invariant now guards the oauth connector's
+// save action.
 const SOURCE = readFileSync(
-  join(process.cwd(), "extensions/cinatra-ai/linkedin-connector/src/actions.ts"),
+  join(process.cwd(), "extensions/cinatra-ai/linkedin-oauth-connector/src/actions.ts"),
   "utf-8",
 );
-const GATE = `requireExtensionAction("@cinatra-ai/linkedin-connector", "manage")`;
+const GATE = `requireExtensionAction(PACKAGE_NAME, "manage")`;
 
-describe("linkedin connection actions — extension manage gate", () => {
-  for (const fnName of ["saveLinkedInConnectionAction", "deleteLinkedInAccountAction"]) {
+describe("linkedin oauth connection action — extension manage gate", () => {
+  for (const fnName of ["saveLinkedInOAuthConnectionAction"]) {
     it(`${fnName}: the FIRST executable statement is the requireExtensionAction manage gate`, () => {
       const body = extractFunctionBody(SOURCE, fnName);
       // The very first executable statement (after any comments) must be exactly
-      // the awaited manage gate — nothing may run before it.
+      // the awaited manage gate — nothing may run before it. The action gates on
+      // the inlined PACKAGE_NAME constant (= "@cinatra-ai/linkedin-oauth-connector").
       expect(firstExecutableStatement(body).startsWith(`await ${GATE};`)).toBe(true);
     });
   }

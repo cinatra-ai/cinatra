@@ -45,7 +45,7 @@ const VENDOR_MANIFEST = [
   },
   {
     extensionDir: "extensions/cinatra-ai/linkedin-connector",
-    uiItems: ["badge", "button", "input", "label"],
+    uiItems: ["alert"],
   },
   {
     extensionDir: "extensions/cinatra-ai/drupal-assistant-connector",

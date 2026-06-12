@@ -161,6 +161,18 @@ const RAW_DESCRIPTORS = [
     mcpPrimitivePrefixes: ["google_oauth_"],
     setupSubroute: "setup",
   },
+  // LinkedIn OAuth app credentials (the admin half of the LinkedIn connector
+  // split — cinatra-ai/linkedin-connector#9). Mirrors google-oauth-connector:
+  // an admin-visibility setup page that owns the Client ID / secret form and
+  // exposes NO MCP primitives (the per-user connect + publish primitives stay
+  // on @cinatra-ai/linkedin-connector).
+  {
+    slug: "linkedin-oauth-connector",
+    displayName: "LinkedIn OAuth",
+    defaultVisibility: "admin",
+    mcpPrimitivePrefixes: [],
+    setupSubroute: "setup",
+  },
   // twenty-connector is a provider for the provider-agnostic crm-connector
   // facade. Only the provider appears here — crm-connector itself is a
   // facade/dependency, not a setup-discoverable surface.
