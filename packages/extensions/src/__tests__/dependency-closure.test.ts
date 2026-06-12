@@ -290,3 +290,157 @@ describe("makeScopedManifestLookup (no cross-org dependency bleed)", () => {
     expect(findBrokenClosures([appB, depPlat])).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #180: shared edge predicates + edgeType-aware closure + forward gate
+// ---------------------------------------------------------------------------
+
+import {
+  assertForwardInstallClosureForPackage,
+  isAutoInstallableEdge,
+  isInstallBlockingEdge,
+} from "../dependency-closure";
+
+function peer(packageName: string, requirement: "required" | "optional" = "required"): ExtensionDependency {
+  return { ...req(packageName), edgeType: "peer", requirement };
+}
+function installTime(packageName: string, requirement: "required" | "optional" = "required"): ExtensionDependency {
+  return { ...req(packageName), edgeType: "install-time", requirement };
+}
+
+describe("edge predicates (#180) — the TEST-PINNED edgeType × requirement matrix", () => {
+  // Every install-gating / auto-install surface keys on these two predicates.
+  // This matrix is the contract: changing a cell is a semantic change to the
+  // dependency model and must be deliberate.
+  const matrix: Array<[ExtensionDependency, boolean, boolean]> = [
+    //  edge                          install-blocking  auto-installable
+    [req("b"), /*           runtime/required      */ true, true],
+    [installTime("b"), /*   install-time/required */ true, true],
+    [opt("b"), /*           runtime/optional      */ false, false],
+    [installTime("b", "optional"), /* it/optional */ false, false],
+    [peer("b", "required"), /* peer/required      */ false, false],
+    [peer("b", "optional"), /* peer/optional      */ false, false],
+  ];
+  it.each(matrix.map(([e, blocking, auto]) => [e.edgeType, e.requirement, e, blocking, auto] as const))(
+    "%s/%s → install-blocking=%j",
+    (_t, _r, e, blocking, auto) => {
+      expect(isInstallBlockingEdge(e)).toBe(blocking);
+      expect(isAutoInstallableEdge(e)).toBe(auto);
+    },
+  );
+});
+
+describe("computeClosure — peer edges are bucketed out of missingRequired (#180)", () => {
+  it("a MISSING required-peer edge lands in missingPeer, never missingRequired", () => {
+    const a = ext("a", "active", [peer("p"), req("b")]);
+    const b = ext("b", "active", []);
+    const lookup = (n: string) => ({ a, b }[n]);
+    const result = computeClosure(a, lookup);
+    expect(result.ok).toBe(true); // peer never breaks the install closure
+    expect(result.missingRequired).toEqual([]);
+    expect(result.missingPeer.map((d) => d.packageName)).toEqual(["p"]);
+    expect(result.missingOptional).toEqual([]);
+  });
+
+  it("an ARCHIVED optional-peer edge also lands in missingPeer", () => {
+    const a = ext("a", "active", [peer("p", "optional")]);
+    const p = ext("p", "archived", []);
+    const result = computeClosure(a, (n) => ({ a, p }[n]));
+    expect(result.missingPeer.map((d) => `${d.packageName}:${d.status}`)).toEqual(["p:archived"]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("assertInstallClosure does NOT throw for a missing peer; STILL throws for a missing blocking edge", () => {
+    const peerOnly = ext("a", "active", [peer("p")]);
+    expect(() => assertInstallClosure(peerOnly, () => undefined)).not.toThrow();
+
+    const blocking = ext("a", "active", [installTime("b")]);
+    expect(() => assertInstallClosure(blocking, () => undefined)).toThrowError(DependencyClosureError);
+  });
+
+  it("findBrokenClosures ignores missing peer edges (boot gate never trips on peers)", () => {
+    const rows = [ext("a", "active", [peer("p")])];
+    expect(findBrokenClosures(rows)).toEqual([]);
+  });
+
+  it("evaluateExecutionClosure routes missing peers into the per-kind ADVISORY (activation-time check)", () => {
+    const wf = ext("w", "active", [peer("p")], "workflow");
+    const verdict = evaluateExecutionClosure(wf, () => undefined);
+    expect(verdict.requiredClosureOk).toBe(true);
+    expect(verdict.advisory?.behavior).toBe("fail-instantiate");
+    expect(verdict.advisory?.missingOptional.map((d) => d.packageName)).toEqual(["p"]);
+    // workflow-kind: a missing peer trips the fail-instantiate execution block
+    expect(verdict.executionBlock?.code).toBe("OPTIONAL_MISSING_FAILS_INSTANTIATE");
+
+    const agent = ext("g", "active", [peer("p")], "agent");
+    const agentVerdict = evaluateExecutionClosure(agent, () => undefined);
+    expect(agentVerdict.executionBlock).toBeNull();
+    expect(agentVerdict.advisory?.behavior).toBe("stop-run-hitl");
+  });
+});
+
+describe("assertArchiveDoesNotBreakClosure — peer dependents never block (#180)", () => {
+  it("a live dependent holding only a PEER edge does not block the archive", () => {
+    const target = ext("t", "active", []);
+    const dependent = ext("d", "active", [peer("t")]);
+    expect(() => assertArchiveDoesNotBreakClosure(target, [target, dependent])).not.toThrow();
+  });
+
+  it("a live dependent holding a required INSTALL-TIME edge still blocks", () => {
+    const target = ext("t", "active", []);
+    const dependent = ext("d", "active", [installTime("t")]);
+    expect(() => assertArchiveDoesNotBreakClosure(target, [target, dependent])).toThrowError(
+      /required by active dependents: d/,
+    );
+  });
+});
+
+describe("assertForwardInstallClosureForPackage (#180 item 5 — the fresh-install forward gate)", () => {
+  it("refuses when an install-blocking edge's target is missing, NAMING the dep + the interim instruction", () => {
+    const a = ext("a", "active", [req("b")]);
+    try {
+      assertForwardInstallClosureForPackage("a", [a]);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DependencyClosureError);
+      expect((e as DependencyClosureError).code).toBe("REQUIRED_MISSING");
+      expect((e as Error).message).toContain("b (missing)");
+      expect((e as Error).message).toContain("auto-install lands in the next stage");
+      // The actionable instruction is part of the contract: name the deps and
+      // tell the operator to install them first.
+      expect((e as Error).message).toContain("install b first, then retry");
+      expect((e as DependencyClosureError).dependents).toEqual(["b"]);
+    }
+  });
+
+  it("passes when blocking edges are satisfied; peer/optional edges never gate", () => {
+    const a = ext("a", "active", [req("b"), peer("p"), opt("o")]);
+    const b = ext("b", "locked", []);
+    expect(() => assertForwardInstallClosureForPackage("a", [a, b])).not.toThrow();
+  });
+
+  it("scopes to the given org: only the matching row is gated", () => {
+    const orgRow = { ...ext("a", "active", [req("b")]), organizationId: "org-1", id: "id-a-org" };
+    const platformRow = ext("a", "active", []); // platform row has no edges
+    // gate org-2 → no row at that scope → pass
+    expect(() =>
+      assertForwardInstallClosureForPackage("a", [orgRow, platformRow], { organizationId: "org-2" }),
+    ).not.toThrow();
+    // gate org-1 → broken
+    expect(() =>
+      assertForwardInstallClosureForPackage("a", [orgRow, platformRow], { organizationId: "org-1" }),
+    ).toThrowError(DependencyClosureError);
+    // platform scope (null) → clean
+    expect(() =>
+      assertForwardInstallClosureForPackage("a", [orgRow, platformRow], { organizationId: null }),
+    ).not.toThrow();
+  });
+
+  it("an ARCHIVED blocking dep counts as missing (closure semantics preserved)", () => {
+    const a = ext("a", "active", [req("b")]);
+    const b = ext("b", "archived", []);
+    // The scope-aware lookup resolves LIVE rows only, so an archived dep
+    // surfaces as "missing" — either way the gate refuses.
+    expect(() => assertForwardInstallClosureForPackage("a", [a, b])).toThrowError(/b \(missing\)/);
+  });
+});

@@ -808,6 +808,54 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
     ]);
   });
 
+  it("R1 HIGH 1: the restoreDurableAnchor closure ALSO restores the OLD dependency edges (#180) — the failed version's edges never survive a rolled-back update", async () => {
+    const OLD_EDGES = [
+      { packageName: "@cinatra-ai/old-dep", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "*" }, requirement: "required" },
+    ];
+    const NEW_EDGES = [
+      { packageName: "@cinatra-ai/new-dep", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "*" }, requirement: "required" },
+    ];
+    const persisted: unknown[] = [];
+    const deps = updateBaseDeps({
+      readCurrentSource: async () => ({ registryUrl: REGISTRY, version: "1.0.0", integrity: "sha512-old", contentHash: "ch-old" }),
+      // CAPTURE: the OLD persisted edges (read BEFORE the finalize seam overwrites them).
+      readCurrentDependencies: async () => OLD_EDGES as never,
+      readDependencyEdges: async () => NEW_EDGES as never,
+      persistDependencyEdges: async (i) => { persisted.push(i.dependencies); },
+      activateUpdateWithRollback: async (i) => {
+        await i.restoreDurableAnchor();
+        return { activated: false, rolledBack: true, rollbackComplete: true, reason: "failed:register-threw" };
+      },
+    });
+    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps);
+    expect(r.rolledBack).toBe(true);
+    // Forward seam wrote the NEW edges; the rollback re-persisted the OLD ones LAST.
+    expect(persisted[0]).toEqual(NEW_EDGES);
+    expect(persisted[persisted.length - 1]).toEqual(OLD_EDGES);
+  });
+
+  it("R1 HIGH 1: a failing edge restore during post-commit rollback counts as a FAILED step ('dependencies') → rollbackComplete:false", async () => {
+    const OLD_EDGES = [
+      { packageName: "@cinatra-ai/old-dep", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "*" }, requirement: "required" },
+    ];
+    const deps = updateBaseDeps({
+      readCurrentDependencies: async () => OLD_EDGES as never,
+      readDependencyEdges: async () => [] as never,
+      persistDependencyEdges: async (i) => {
+        // Forward write ([]) succeeds; the rollback re-persist (OLD_EDGES) FAILS.
+        if (i.dependencies.length > 0) throw new Error("edge-restore-failed");
+      },
+      activateUpdateWithRollback: async (i) => {
+        const outcome = await i.restoreDurableAnchor();
+        return { activated: false, rolledBack: true, rollbackComplete: outcome.complete, reason: outcome.complete ? "failed:register-threw" : `failed:register-threw (${outcome.reason})` };
+      },
+    });
+    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps);
+    expect(r.rolledBack).toBe(true);
+    expect(r.rollbackComplete).toBe(false);
+    expect(r.reason).toContain("dependencies");
+  });
+
   it("HIGH 3: a durable restore STEP failing during post-commit rollback → NOT a clean rolledBack (rollbackComplete:false), with the failed-step reason surfaced", async () => {
     // The activator forwards the closure's completeness verdict as rollbackComplete
     // (mirroring the real hotUpdateWithDurableRollback). recordProvenance throws ONLY
@@ -1018,5 +1066,162 @@ describe("installExtensionFromRegistry — HOST-COMPAT GATE (cinatra.sdkAbiRange
     const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
     expect(r.installed).toBe(true);
     expect(calls.provenance).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #180 PR-1: dependency-edge read (dual-read, fail-loud) + persistence at the
+// finalize seam + the FRESH-install forward closure gate.
+// ---------------------------------------------------------------------------
+
+describe("installExtensionFromRegistry — dependency edges become real (#180)", () => {
+  type Edge = {
+    packageName: string;
+    edgeType: "runtime" | "install-time" | "peer";
+    versionConstraint: { kind: "semver-range"; range: string };
+    requirement: "required" | "optional";
+    kind?: "agent" | "connector" | "artifact" | "skill" | "workflow";
+  };
+  const EDGES: Edge[] = [
+    {
+      packageName: "@cinatra-ai/dep-a",
+      kind: "connector",
+      edgeType: "runtime",
+      versionConstraint: { kind: "semver-range", range: "*" },
+      requirement: "required",
+    },
+  ];
+
+  function depsWithEdges(over: Partial<InstallPipelineDeps> = {}) {
+    const order: string[] = [];
+    const persisted: unknown[] = [];
+    const gated: unknown[] = [];
+    const gcd: string[] = [];
+    const deps: InstallPipelineDeps = {
+      resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
+      materialize: async () => ({ storeDir: "/store/foo/digest", digest: "digest", integrity: "sha512-abc", contentHash: "ch" }),
+      readRequestedPorts: async () => [],
+      recordProvenance: async () => { order.push("provenance"); },
+      recordRequestedGrant: async () => { order.push("requested"); },
+      approveGrant: async () => { order.push("approved"); },
+      beginInstallOp: async () => { order.push("begin"); },
+      advanceInstallOpPhase: async (i) => { order.push(`phase:${i.phase}`); },
+      readDependencyEdges: async (storeDir) => { order.push(`readEdges:${storeDir}`); return EDGES; },
+      persistDependencyEdges: async (i) => { order.push("persistEdges"); persisted.push(i); },
+      assertForwardInstallClosure: async (i) => { order.push("forwardGate"); gated.push(i); },
+      gcStoreDir: async (d) => { gcd.push(d); },
+      ...over,
+    };
+    return { deps, order, persisted, gated, gcd };
+  }
+
+  it("FRESH install: edges are read from the materialized store and persisted at the FINALIZE SEAM (order pinned: provenance → persist → forward gate → finalized)", async () => {
+    const { deps, order, persisted, gated } = depsWithEdges();
+    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: "org-1" }, deps);
+    expect(r.installed).toBe(true);
+    // Read happens EARLY (pre-journal), persist + gate sit between provenance
+    // and the finalized phase — a `finalized` op implies persisted edges.
+    expect(order.indexOf("readEdges:/store/foo/digest")).toBeLessThan(order.indexOf("begin"));
+    const tail = order.slice(order.indexOf("provenance"));
+    expect(tail).toEqual(["provenance", "persistEdges", "forwardGate", "phase:finalized"]);
+    expect(persisted).toEqual([
+      { packageName: "@cinatra-ai/foo", orgId: "org-1", dependencies: EDGES },
+    ]);
+    expect(gated).toEqual([{ packageName: "@cinatra-ai/foo", orgId: "org-1" }]);
+  });
+
+  it("FRESH install: a FORWARD-GATE refusal aborts the finalize (journal never 'finalized'; error propagates into the existing rollback path)", async () => {
+    const { deps, order } = depsWithEdges({
+      assertForwardInstallClosure: async () => {
+        order.push("forwardGate");
+        throw new Error("Cannot install @cinatra-ai/foo — it requires @cinatra-ai/dep-a (missing).");
+      },
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/requires @cinatra-ai\/dep-a/);
+    expect(order).toContain("persistEdges"); // edges landed before the gate ran
+    expect(order).not.toContain("phase:finalized"); // the op never finalized
+  });
+
+  it("UPDATE: edges are REFRESHED on the row but the forward gate does NOT run (update gating is the version-aware stage)", async () => {
+    const { deps, order, persisted, gated } = depsWithEdges({
+      // A prior finalized op (different digest) makes this an UPDATE.
+      readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "old-digest" }),
+    });
+    await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps);
+    expect(persisted).toHaveLength(1);
+    expect(gated).toEqual([]);
+    expect(order).toContain("phase:finalized");
+  });
+
+  it("R1 HIGH 1: an UPDATE that throws AFTER the finalize seam (pre-finalize catch) restores the OLD provenance + OLD edges alongside the OLD journal op", async () => {
+    const OLD_EDGES: Edge[] = [
+      { packageName: "@cinatra-ai/old-dep", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "*" }, requirement: "required" },
+    ];
+    const provenanceVersions: string[] = [];
+    const persisted: unknown[] = [];
+    const begins: unknown[] = [];
+    const { deps } = depsWithEdges({
+      // A prior FINALIZED op = a real UPDATE.
+      readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "old-digest" }),
+      readCurrentSource: async () => ({ registryUrl: REGISTRY, version: "1.0.0", integrity: "sha512-old", contentHash: "ch-old" }),
+      readCurrentDependencies: async () => OLD_EDGES,
+      recordProvenance: async (i) => { provenanceVersions.push(i.version); },
+      persistDependencyEdges: async (i) => { persisted.push(i.dependencies); },
+      beginInstallOp: async (i) => { begins.push(i); },
+      // The NEW attempt's finalize advance FAILS; the restore's re-finalize of
+      // the OLD op (different id) succeeds.
+      advanceInstallOpPhase: async (i) => {
+        if (i.phase === "finalized" && i.installOpId !== "old-op") throw new Error("finalize-advance-failed");
+      },
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null, installOpId: "new-op" }, deps),
+    ).rejects.toThrow("finalize-advance-failed");
+    // Journal restored to the OLD finalized op…
+    expect(begins).toContainEqual(expect.objectContaining({ installOpId: "old-op", digest: "old-digest" }));
+    // …the OLD provenance was re-recorded (forward write was 2.0.0, restore is 1.0.0)…
+    expect(provenanceVersions[provenanceVersions.length - 1]).toBe("1.0.0");
+    // …and the OLD edges were re-persisted LAST (the failed version's edges never survive).
+    expect(persisted[0]).toEqual(EDGES);
+    expect(persisted[persisted.length - 1]).toEqual(OLD_EDGES);
+  });
+
+  it("DUAL-READ failure (malformed/conflicted manifest) throws BEFORE any durable mutation and GCs the materialized dir (fresh install)", async () => {
+    const { deps, order, gcd } = depsWithEdges({
+      readDependencyEdges: async () => {
+        throw new Error("@cinatra-ai/foo: cinatra.dependencies and legacy cinatra.agentDependencies disagree");
+      },
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/disagree/);
+    // Fully inert: no journal begin, no grant, no provenance — and the bad dir is GC'd.
+    expect(order.filter((o) => ["begin", "requested", "approved", "provenance"].includes(o))).toEqual([]);
+    expect(gcd).toEqual(["/store/foo/digest"]);
+  });
+
+  it("DUAL-READ failure on a SAME-DIGEST live re-install does NOT GC the live install's dir", async () => {
+    const { deps, gcd } = depsWithEdges({
+      readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "digest" }), // same digest as materialize
+      readDependencyEdges: async () => { throw new Error("malformed cinatra.dependencies"); },
+    });
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
+    ).rejects.toThrow(/malformed/);
+    expect(gcd).toEqual([]); // the dir IS the live install's dir — never GC'd
+  });
+
+  it("deps without the #180 seams (older unit harnesses) behave exactly as before", async () => {
+    const { deps, order } = depsWithEdges({
+      readDependencyEdges: undefined,
+      persistDependencyEdges: undefined,
+      assertForwardInstallClosure: undefined,
+    });
+    const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
+    expect(r.installed).toBe(true);
+    expect(order).toContain("phase:finalized");
+    expect(order.join(",")).not.toContain("persistEdges");
   });
 });

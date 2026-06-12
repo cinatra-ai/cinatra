@@ -26,12 +26,54 @@ export type ClosureNode = {
   kind?: ExtensionKind;
 };
 
+// ---------------------------------------------------------------------------
+// Shared edge predicates (#180). EVERY surface that decides "does this edge
+// block an install / should this edge be auto-installed" keys on these two
+// predicates — never on `requirement` alone — so peer/optional semantics can
+// never drift between the install gate, the dependency (auto-install) phase,
+// and the archive/uninstall dependent-blocking gates.
+//
+//   edgeType × requirement   install-blocking   auto-installable
+//   runtime      required          YES                YES
+//   install-time required          YES                YES
+//   runtime      optional          no                 no
+//   install-time optional          no                 no
+//   peer         required          no                 no   (activation-time check)
+//   peer         optional          no                 no   (activation-time check)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a MISSING edge target must fail an install (and, symmetrically,
+ * when archiving/uninstalling the target must be refused while a live
+ * dependent holds this edge). PEER edges are never install-blocking — a peer
+ * is a coexistence constraint checked at activation time via the per-kind
+ * behaviors, not a presence requirement.
+ */
+export function isInstallBlockingEdge(dep: ExtensionDependency): boolean {
+  return dep.requirement === "required" && dep.edgeType !== "peer";
+}
+
+/**
+ * True when the dependency (auto-install) phase may pull this edge's target
+ * into the to-install set. PEER edges are never auto-installed (installing a
+ * peer on the dependent's behalf would invert the relationship); OPTIONAL
+ * edges are never auto-installed either (the per-kind optional-missing
+ * behaviors own that degradation, not the installer).
+ */
+export function isAutoInstallableEdge(dep: ExtensionDependency): boolean {
+  return dep.requirement === "required" && dep.edgeType !== "peer";
+}
+
 export type ClosureResult = {
   ok: boolean;
-  /** Required deps that are missing or archived (closure-breaking). */
+  /** Install-blocking deps (required runtime/install-time edges) that are
+   *  missing or archived (closure-breaking). */
   missingRequired: ClosureNode[];
   /** Optional deps that are missing or archived (per-kind behavior governs). */
   missingOptional: ClosureNode[];
+  /** PEER deps that are missing or archived — never install-blocking, never
+   *  auto-installed; surfaced to the activation-time per-kind behaviors. */
+  missingPeer: ClosureNode[];
   /** Full visited set, for diagnostics. */
   visited: string[];
 };
@@ -75,6 +117,7 @@ export function computeClosure(
   const visited = new Set<string>();
   const missingRequired: ClosureNode[] = [];
   const missingOptional: ClosureNode[] = [];
+  const missingPeer: ClosureNode[] = [];
 
   const stack: { deps: ExtensionDependency[] }[] = [{ deps: root.dependencies }];
   visited.add(root.packageName);
@@ -91,7 +134,12 @@ export function computeClosure(
           status: installed ? installed.status : "missing",
           kind: installed?.kind,
         };
-        if (dep.requirement === "required") missingRequired.push(node);
+        // EdgeType-aware bucketing (#180): only an INSTALL-BLOCKING edge
+        // (required runtime/install-time) breaks the closure. A PEER edge —
+        // required or optional — is an activation-time concern (per-kind
+        // behaviors), never install/boot/restore-blocking.
+        if (dep.edgeType === "peer") missingPeer.push(node);
+        else if (isInstallBlockingEdge(dep)) missingRequired.push(node);
         else missingOptional.push(node);
         // Do not recurse into a missing/archived dependency.
         continue;
@@ -108,6 +156,7 @@ export function computeClosure(
     ok: missingRequired.length === 0,
     missingRequired,
     missingOptional,
+    missingPeer,
     visited: [...visited],
   };
 }
@@ -189,12 +238,19 @@ export function evaluateExecutionClosure(
   lookup: ManifestLookup,
 ): ExecutionClosureVerdict {
   const result = computeClosure(target, lookup);
+  // PEER edges ride the per-kind ACTIVATION-TIME behaviors (#180): a missing
+  // peer is never install/boot/restore-blocking (computeClosure buckets it
+  // out of missingRequired), but at the execution/instantiate surfaces it is
+  // dispatched exactly like a missing optional dep — the dependent's kind
+  // decides (stop-run-hitl / skip-step-audit / log-continue /
+  // fail-instantiate).
+  const missingAdvisory = [...result.missingOptional, ...result.missingPeer];
   const advisory: OptionalMissingAdvisory | null =
-    result.missingOptional.length > 0
+    missingAdvisory.length > 0
       ? {
           kind: target.kind,
           behavior: optionalMissingBehaviorForKind(target.kind),
-          missingOptional: result.missingOptional,
+          missingOptional: missingAdvisory,
         }
       : null;
 
@@ -290,8 +346,12 @@ export function assertArchiveDoesNotBreakClosure(
   for (const row of allRows) {
     if (row.packageName === target.packageName) continue;
     if (!PRESENT_STATUSES.has(row.status)) continue; // archived dependents don't block
+    // Same predicate as the install gate: only an INSTALL-BLOCKING edge
+    // (required runtime/install-time) blocks the archive — a peer edge is a
+    // coexistence constraint, not a presence requirement, so it never holds
+    // its target hostage.
     const requiresTarget = row.dependencies.some(
-      (d) => d.packageName === target.packageName && d.requirement === "required",
+      (d) => d.packageName === target.packageName && isInstallBlockingEdge(d),
     );
     if (requiresTarget) blockingDependents.push(row.packageName);
   }
@@ -301,5 +361,50 @@ export function assertArchiveDoesNotBreakClosure(
       `Cannot archive/uninstall ${target.packageName} — required by active dependents: ${blockingDependents.join(", ")}. Archive or detach them first.`,
       blockingDependents,
     );
+  }
+}
+
+/**
+ * FORWARD install gate (#180 item 5): at the END of a fresh install — after
+ * the candidate row's manifest edges were persisted, before the install
+ * reports success — refuse when any live row of `packageName` has a broken
+ * install-blocking closure. PURE over the provided snapshot; each row's deps
+ * resolve through the scope-aware lookup (own org row, then platform row).
+ *
+ * `organizationId` UNDEFINED checks every live row of the package; `null`
+ * checks the platform-scoped row; a string checks that org's row — the same
+ * scope the install pipeline finalized.
+ *
+ * TEMPORARY refusal copy: dependency AUTO-INSTALL is the next stage of #180
+ * (the dependency phase / batch saga). Until it lands, this gate is
+ * deliberately fail-LOUD with an actionable instruction instead of the
+ * pre-#180 silent success that left a broken closure for the boot gate to
+ * find. The copy is updated when the dependency phase ships.
+ */
+export function assertForwardInstallClosureForPackage(
+  packageName: string,
+  allRows: InstalledExtension[],
+  opts?: { organizationId?: string | null },
+): void {
+  const targets = allRows.filter(
+    (r) =>
+      r.packageName === packageName &&
+      PRESENT_STATUSES.has(r.status) &&
+      (opts?.organizationId === undefined ||
+        (r.organizationId ?? null) === (opts.organizationId ?? null)),
+  );
+  for (const target of targets) {
+    const result = computeClosure(target, makeScopedManifestLookup(allRows, target.organizationId));
+    if (result.missingRequired.length > 0) {
+      const missing = result.missingRequired.map((d) => `${d.packageName} (${d.status})`);
+      const names = result.missingRequired.map((d) => d.packageName);
+      throw new DependencyClosureError(
+        "REQUIRED_MISSING",
+        `Cannot install ${packageName} — it requires ${missing.join(", ")}. ` +
+          `Dependency auto-install lands in the next stage of #180; install ` +
+          `${names.join(", ")} first, then retry.`,
+        names,
+      );
+    }
   }
 }

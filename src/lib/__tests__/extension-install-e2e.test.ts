@@ -157,3 +157,140 @@ describe("dev install E2E — local pack → /data → anchor → activate", () 
     expect(activations).toHaveLength(0); // fails closed — present in /data but not trusted
   });
 });
+
+// ---------------------------------------------------------------------------
+// #180 PR-1: a DEPFUL fixture through the REAL pipeline + REAL dual-read +
+// REAL edgeType-aware forward gate — edges persisted (incl. the `kind` field),
+// fresh install refused while the blocking dep is absent, finalized once the
+// dep is present.
+// ---------------------------------------------------------------------------
+
+describe("dev install E2E — dependency edges + forward gate (#180)", () => {
+  const DEP_PKG = "@cinatra-ai/install-e2e-dep";
+  const ROOT_PKG = "@cinatra-ai/install-e2e-depful-fixture";
+  const ROOT_EDGES = [
+    {
+      packageName: DEP_PKG,
+      kind: "connector",
+      edgeType: "runtime",
+      versionConstraint: { kind: "semver-range", range: "*" },
+      requirement: "required",
+    },
+    {
+      packageName: "@cinatra-ai/install-e2e-peer",
+      kind: "connector",
+      edgeType: "peer",
+      versionConstraint: { kind: "semver-range", range: "*" },
+      requirement: "optional",
+    },
+  ];
+
+  async function packDepfulFixture(): Promise<{ bytes: Buffer; sri: string }> {
+    const src = path.join(workDir, "src-depful", "package");
+    await mkdir(src, { recursive: true });
+    await writeFile(
+      path.join(src, "package.json"),
+      JSON.stringify({
+        name: ROOT_PKG,
+        version: VERSION,
+        cinatra: {
+          kind: "connector",
+          serverEntry: "./register.mjs",
+          requestedHostPorts: [],
+          sdkAbiRange: "^2",
+          dependencies: ROOT_EDGES,
+          // The legacy vocabulary RESTATES a subset — the dual-read must
+          // accept this (canonical wins) and the canonical edges persist.
+          agentDependencies: { [DEP_PKG]: "*" },
+        },
+      }),
+    );
+    await writeFile(path.join(src, "register.mjs"), REGISTER_MJS);
+    const out = path.join(workDir, "depful.tgz");
+    await tar.c({ gzip: true, cwd: path.join(workDir, "src-depful"), file: out }, ["package"]);
+    const bytes = await readFile(out);
+    return { bytes, sri: sriForBytes(bytes, "sha512") };
+  }
+
+  function canonicalRow(packageName: string, dependencies: unknown[], orgId: string | null) {
+    return {
+      id: `iext_${packageName.split("/")[1]}`,
+      packageName,
+      ownerLevel: "platform" as const,
+      ownerId: null,
+      organizationId: orgId,
+      kind: "connector" as const,
+      status: "active" as const,
+      source: { type: "local" as const, path: `/x/${packageName}`, resolvedCommitOrTreeHash: "h" },
+      requiredInProd: false,
+      dependencies: dependencies as never,
+      manifestHash: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+  }
+
+  it("REFUSES the fresh install while the blocking dep is absent; FINALIZES + persists edges (incl. kind) once present", async () => {
+    const { bytes, sri } = await packDepfulFixture();
+    const { readManifestDependencyEdgesFromStore } = await import(
+      "@cinatra-ai/extensions/manifest-dependencies"
+    );
+    const { assertForwardInstallClosureForPackage } = await import(
+      "@cinatra-ai/extensions/dependency-closure"
+    );
+
+    const orgId: string | null = null;
+    let depInstalled = false;
+    const state: InstallState & { dependencies?: unknown[] } = {};
+    const storeRoot = path.join(workDir, "data-depful", "extensions", "packages");
+
+    const deps: InstallPipelineDeps = {
+      ...makePipelineDeps(state),
+      resolveIntegrity: async () => ({ integrity: sri, registryUrl: REGISTRY }),
+      materialize: async (i) => {
+        const m = await materializePackageToStore(
+          {
+            packageName: i.packageName,
+            version: i.version,
+            expectedIntegrity: i.expectedIntegrity,
+            registryUrl: i.registryUrl,
+            storeRoot: i.storeRoot,
+          },
+          { fetchTarball: async () => ({ bytes, integrity: sri }), now: () => "2026-06-12T00:00:00.000Z" },
+        );
+        return { storeDir: m.storeDir, digest: m.digest, integrity: m.integrity, contentHash: m.contentHash };
+      },
+      // The REAL dual-read helper over the REAL materialized bytes.
+      readDependencyEdges: async (storeDir) => (await readManifestDependencyEdgesFromStore(storeDir)).edges,
+      persistDependencyEdges: async (i) => {
+        state.dependencies = i.dependencies;
+      },
+      // The REAL edgeType-aware forward gate over a canonical snapshot that
+      // mirrors what the persist seam just wrote.
+      assertForwardInstallClosure: async (p) => {
+        const rows = [canonicalRow(p.packageName, state.dependencies ?? [], p.orgId)];
+        if (depInstalled) rows.push(canonicalRow(DEP_PKG, [], p.orgId));
+        assertForwardInstallClosureForPackage(p.packageName, rows as never, { organizationId: p.orgId });
+      },
+    };
+
+    // (a) dep ABSENT → the fresh install is refused LOUD, never finalized. The
+    // missing PEER edge does NOT participate in the refusal (edgeType-aware).
+    await expect(
+      installExtensionFromRegistry({ packageName: ROOT_PKG, version: VERSION, orgId, storeRoot }, deps),
+    ).rejects.toThrow(new RegExp(`requires ${DEP_PKG.replace("/", "\\/")} \\(missing\\)`));
+    expect(state.journalPhase).not.toBe("finalized");
+
+    // (b) dep PRESENT → finalizes; the persisted edges are the manifest's
+    // canonical declaration VERBATIM — kind field included, peer edge included.
+    depInstalled = true;
+    const result = await installExtensionFromRegistry(
+      { packageName: ROOT_PKG, version: VERSION, orgId, storeRoot },
+      deps,
+    );
+    expect(result.installed).toBe(true);
+    expect(state.journalPhase).toBe("finalized");
+    expect(state.dependencies).toEqual(ROOT_EDGES);
+    expect((state.dependencies as Array<{ kind?: string }>)[0]?.kind).toBe("connector");
+  });
+});

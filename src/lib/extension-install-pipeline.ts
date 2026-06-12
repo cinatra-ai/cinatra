@@ -13,6 +13,7 @@ import "server-only";
 // canonical store + grant store.
 
 import type { HostPortName } from "@cinatra-ai/sdk-extensions";
+import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
@@ -181,6 +182,21 @@ export type InstallPipelineDeps = {
     signature?: string | null;
   } | null>;
   /**
+   * Capture the CURRENT canonical row's persisted dependency edges for the
+   * (package, org) BEFORE `persistDependencyEdges` overwrites them (#180). On
+   * a hot-UPDATE these are the OLD install's edges — restored by BOTH unwind
+   * paths (the pre-finalize catch and the post-commit durable rollback) so a
+   * failed update never leaves the NEW manifest's edges on a row whose live
+   * install is the OLD version (that would corrupt every closure gate that
+   * reads the row). Returns null when no live row exists. Optional (omitted →
+   * edges are not restored on rollback); the default factory wires the
+   * canonical-store read.
+   */
+  readCurrentDependencies?: (
+    packageName: string,
+    orgId: string | null,
+  ) => Promise<ExtensionDependency[] | null>;
+  /**
    * POST-COMMIT in-process activation for a FRESH install (no prior digest to
    * protect). Called AFTER finalize with the just-materialized store dir, so the
    * running process picks the package up WITHOUT a restart (targeted
@@ -259,6 +275,47 @@ export type InstallPipelineDeps = {
    * factory wires `rm`).
    */
   gcStoreDir?: (storeDir: string) => Promise<void>;
+  /**
+   * Read the materialized manifest's dependency edges (#180) — the DUAL-READ
+   * helper over the SRI-verified bytes (`cinatra.dependencies` canonical-wins;
+   * legacy `cinatra.agentDependencies` projected to required runtime edges;
+   * both-present-and-inequivalent or malformed = THROW, fail-loud). Runs
+   * EARLY (with the host-compat gate, before any durable mutation) so a
+   * refused manifest is fully inert. Optional so existing unit tests can omit
+   * it (then no edges are read/persisted); the default factory always wires it.
+   */
+  readDependencyEdges?: (storeDir: string) => Promise<ExtensionDependency[]>;
+  /**
+   * Persist the manifest edges onto the canonical install row at the SAME
+   * (package, org) scope the journal/grant/provenance bind (#180 edge
+   * persistence). Called at the FINALIZE SEAM — after
+   * `recordProvenance`, immediately before the journal advances to
+   * `finalized` — so no install-op reaches `finalized` without persisted
+   * edges. The dispatcher's row seed stays `dependencies: []` (the manifest
+   * is unreadable pre-materialize); THIS write is where edges become real.
+   * Optional for unit tests; the default factory wires the sanctioned
+   * canonical writer (`recordExtensionDependencies`).
+   */
+  persistDependencyEdges?: (input: {
+    packageName: string;
+    orgId: string | null;
+    dependencies: ExtensionDependency[];
+  }) => Promise<void>;
+  /**
+   * FORWARD install-closure gate (#180 item 5) for a FRESH install: after the
+   * candidate's edges are persisted, refuse to finalize when an
+   * install-blocking (required runtime/install-time) edge's target is not
+   * installed — peer edges never block, optional edges never block. A throw
+   * here routes into the EXISTING failure path: the journal never reaches
+   * `finalized` and the dispatcher rolls the placeholder row back. NOT run
+   * for an update (the hot-update path protects the previous install; update
+   * constraint gating is the version-aware stage of #180). Optional for unit
+   * tests; the default factory wires the shared closure gate.
+   */
+  assertForwardInstallClosure?: (input: {
+    packageName: string;
+    orgId: string | null;
+  }) => Promise<void>;
 };
 
 export type InstallPipelineResult = {
@@ -368,6 +425,32 @@ export async function installExtensionFromRegistry(
           sdkAbiRange: declared.sdkAbiRange,
         }),
       );
+    }
+  }
+
+  // DEPENDENCY-EDGE READ (#180) — the dual-read helper over the materialized
+  // (SRI-verified) manifest. Runs EARLY, with the host-compat gate above and
+  // the same inertness contract: a malformed `cinatra.dependencies` entry or a
+  // canonical-vs-legacy `agentDependencies` conflict THROWS here, BEFORE the
+  // first durable mutation (`beginInstallOp` below) — a prior install's
+  // journal/grant/provenance are untouched and the just-materialized dir is
+  // GC'd (unless it IS the live install's dir, the same-digest re-install
+  // guard the host-compat gate uses). The edges themselves are PERSISTED late,
+  // at the finalize seam below.
+  let dependencyEdges: ExtensionDependency[] | null = null;
+  if (deps.readDependencyEdges) {
+    try {
+      dependencyEdges = await deps.readDependencyEdges(mat.storeDir);
+    } catch (err) {
+      const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+      if (deps.gcStoreDir && !isLiveDigest) {
+        try {
+          await deps.gcStoreDir(mat.storeDir);
+        } catch {
+          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+        }
+      }
+      throw err;
     }
   }
 
@@ -524,6 +607,13 @@ export async function installExtensionFromRegistry(
   const isUpdate = priorOp?.phase === "finalized";
   const priorSource = isUpdate ? (await deps.readCurrentSource?.(input.packageName, input.orgId)) ?? null : null;
   const priorGrant = isUpdate ? (await deps.readGrantForScope?.(input.packageName, input.orgId)) ?? null : null;
+  // (d) the prior canonical row's persisted dependency EDGES (#180) — the NEW
+  // manifest's edges land at the finalize seam below, so a failed update must
+  // restore these on BOTH unwind paths or every closure gate reads the failed
+  // version's edges against the still-live OLD install.
+  const priorEdges = isUpdate
+    ? (await deps.readCurrentDependencies?.(input.packageName, input.orgId)) ?? null
+    : null;
 
   let grantStatus: "approved" | "pending" = "pending";
   try {
@@ -608,6 +698,39 @@ export async function installExtensionFromRegistry(
       ...(sha256 ? { attestedSha256: sha256 } : {}),
       ...(signature ? { signature } : {}),
     });
+
+    // EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
+    // manifest's dependency edges (read EARLY above, fail-loud) land on the
+    // canonical row together with the provenance, BEFORE the journal advances
+    // to `finalized` — so a `finalized` install-op implies persisted edges.
+    // Runs for fresh installs AND updates (an update's new manifest must
+    // refresh the row's edges, or every downstream closure gate reads stale
+    // truth). A throw here aborts the finalize: the catch below restores the
+    // prior op on an update; a fresh install's non-finalized row is the
+    // dispatcher's to roll back.
+    if (dependencyEdges !== null && deps.persistDependencyEdges) {
+      await deps.persistDependencyEdges({
+        packageName: input.packageName,
+        orgId: input.orgId,
+        dependencies: dependencyEdges,
+      });
+    }
+
+    // FORWARD INSTALL GATE (#180 item 5) — FRESH installs only: with the
+    // candidate's edges persisted, refuse to finalize when an
+    // install-blocking edge's target is not installed (edgeType-aware: peer
+    // and optional edges never block). The throw routes into the existing
+    // rollback (journal never `finalized`; the dispatcher drops the
+    // placeholder row). An UPDATE is not gated here — the previous install
+    // stays protected by the hot-update machinery, and update-time
+    // constraint evaluation is the version-aware stage of #180.
+    if (!isUpdate && deps.assertForwardInstallClosure) {
+      await deps.assertForwardInstallClosure({
+        packageName: input.packageName,
+        orgId: input.orgId,
+      });
+    }
+
     await deps.advanceInstallOpPhase?.({ installOpId, phase: "finalized" });
   } catch (err) {
     // A post-begin step threw. The dispatcher takes `ownsRollback:false` for an
@@ -649,9 +772,7 @@ export async function installExtensionFromRegistry(
       // above mutated the grant (a CHANGED request reset it to pending; a signed
       // install re-approved it against the new ports) BEFORE this pre-finalize step
       // threw — so without this the OLD version would restart with the WRONG grant.
-      // Provenance is untouched pre-finalize (`recordProvenance` is at the tail), so
-      // restoring the journal op + the grant fully reverts a pre-finalize update
-      // failure. A fresh install captured no priorGrant → this is skipped.
+      // A fresh install captured no priorGrant → this is skipped.
       if (priorGrant && deps.restoreGrant) {
         try {
           await deps.restoreGrant({
@@ -668,6 +789,51 @@ export async function installExtensionFromRegistry(
             `[extension-install-pipeline] failed to restore prior host-port grant for ` +
               `${input.packageName} after a failed update — the previous install may carry the ` +
               `wrong grant until a successful re-install: ` +
+              `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
+          );
+        }
+      }
+      // ALSO restore the OLD provenance + dependency EDGES (#180). The tail of
+      // the try block is `recordProvenance` → `persistDependencyEdges` →
+      // forward gate → finalize, so a throw in that window can leave the NEW
+      // version's source and/or edges on the canonical row while the journal
+      // (restored above) anchors the OLD install. Re-recording the CAPTURED
+      // prior values is idempotent when the corresponding write never ran
+      // (same-value rewrite), so we restore unconditionally on an update
+      // failure rather than tracking exactly where the throw happened.
+      // Best-effort + isolated, like the journal/grant restores above.
+      if (priorSource) {
+        try {
+          await deps.recordProvenance({
+            packageName: input.packageName,
+            orgId: input.orgId,
+            version: priorSource.version,
+            registryUrl: priorSource.registryUrl,
+            integrity: priorSource.integrity,
+            contentHash: priorSource.contentHash ?? "",
+            ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
+            ...(priorSource.signature ? { signature: priorSource.signature } : {}),
+          });
+        } catch (restoreErr) {
+          console.error(
+            `[extension-install-pipeline] failed to restore prior provenance for ` +
+              `${input.packageName} after a failed update: ` +
+              `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
+          );
+        }
+      }
+      if (priorEdges !== null && deps.persistDependencyEdges) {
+        try {
+          await deps.persistDependencyEdges({
+            packageName: input.packageName,
+            orgId: input.orgId,
+            dependencies: priorEdges,
+          });
+        } catch (restoreErr) {
+          console.error(
+            `[extension-install-pipeline] failed to restore prior dependency edges for ` +
+              `${input.packageName} after a failed update — closure gates may read the failed ` +
+              `version's edges until a successful re-install: ` +
               `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
           );
         }
@@ -763,6 +929,22 @@ export async function installExtensionFromRegistry(
           failedSteps.push("grant");
           // eslint-disable-next-line no-console
           console.error(`[extension-install-pipeline] rollback: restore OLD grant for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      // (i-d) restore the OLD dependency EDGES (#180): the finalize seam above
+      // persisted the NEW manifest's edges; with the OLD version re-pinned,
+      // leaving them would corrupt every closure gate (boot, archive-blocking,
+      // forward install) that reads the canonical row.
+      if (priorEdges !== null && deps.persistDependencyEdges) {
+        try {
+          await deps.persistDependencyEdges({
+            packageName: input.packageName,
+            orgId: input.orgId,
+            dependencies: priorEdges,
+          });
+        } catch (e) {
+          failedSteps.push("dependencies");
+          console.error(`[extension-install-pipeline] rollback: restore OLD dependency edges for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       return failedSteps.length === 0
@@ -998,6 +1180,46 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
       return readDeclaredHostCompatFromStore(storeDir);
     },
+    // DEPENDENCY EDGES (#180): dual-read over the materialized manifest
+    // (canonical `cinatra.dependencies` wins; legacy `cinatra.agentDependencies`
+    // projected; conflict/malformed = fail-loud throw).
+    readDependencyEdges: async (storeDir) => {
+      const { readManifestDependencyEdgesFromStore } = await import(
+        "@cinatra-ai/extensions/manifest-dependencies"
+      );
+      const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
+      return edges;
+    },
+    // EDGE PERSISTENCE at the finalize seam: the sanctioned canonical writer,
+    // bound to the SAME single (package, org) row the provenance write resolved.
+    persistDependencyEdges: async (p) => {
+      const rows = await readInstalledExtensionsByPackageName(p.packageName);
+      const target = pickSingleActiveRow(rows, p.orgId);
+      if (!target) {
+        throw new Error(
+          `persistDependencyEdges: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
+        );
+      }
+      const { recordExtensionDependencies } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await recordExtensionDependencies(target.id, p.dependencies, {
+        actor: { source: "runtime-installer" },
+        reason: `manifest dependency edges @ install`,
+      });
+    },
+    // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
+    // canonical snapshot, scoped to the install's org.
+    assertForwardInstallClosure: async (p) => {
+      const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+      const { assertForwardInstallClosureForPackage } = await import(
+        "@cinatra-ai/extensions/dependency-closure"
+      );
+      const allRows = await listInstalledExtensions({});
+      assertForwardInstallClosureForPackage(p.packageName, allRows, {
+        organizationId: p.orgId,
+      });
+    },
     recordProvenance: async (p) => {
       // The ONLY sanctioned provenance writer is sourceSwitchExtension (it
       // re-validates the source then writes via the lifecycle path). Resolve the
@@ -1119,6 +1341,14 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
         ...(v.signature ? { signature: v.signature } : {}),
       };
+    },
+    // CAPTURE (#180): the prior canonical row's persisted dependency edges —
+    // restored by both unwind paths when an UPDATE fails after the finalize
+    // seam overwrote them with the new manifest's edges.
+    readCurrentDependencies: async (packageName, orgId) => {
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      const target = pickSingleActiveRow(rows, orgId);
+      return target ? target.dependencies : null;
     },
     beginInstallOp: (b) => beginInstallOp(b).then(() => undefined),
     advanceInstallOpPhase: (a) => advanceInstallOpPhase(a).then(() => undefined),

@@ -17,6 +17,7 @@ import "server-only";
 import {
   _internalDeleteInstalledExtension,
   _internalInsertInstalledExtension,
+  _internalUpdateInstalledExtensionMetadata,
   _internalUpdateInstalledExtensionSource,
   _internalUpdateInstalledExtensionStatus,
   readInstalledExtensionById,
@@ -28,11 +29,13 @@ import {
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
   validateExtensionSource,
+  type ExtensionDependency,
   type ExtensionLifecycleStatus,
   type ExtensionSource,
   type InstalledExtension,
   type LifecycleTransitionOp,
 } from "./canonical-types";
+import { validateExtensionDependencyShape } from "./manifest-dependencies";
 
 /**
  * Structured error returned when a lifecycle transition is refused.
@@ -389,4 +392,41 @@ export async function sourceSwitchExtension(
   // status preserved (locked stays locked, archived stays archived).
   const updated = await _internalUpdateInstalledExtensionSource(id, newSource);
   return updated;
+}
+
+/**
+ * Record the manifest-declared dependency edges on a canonical row — the
+ * EDGE-PERSISTENCE writer (#180). The dispatcher's install seed is
+ * deliberately `dependencies: []` (the manifest is not readable before
+ * materialize), so every MATERIALIZING install path calls this at its
+ * finalize seam with the edges the dual-read helper
+ * (`manifest-dependencies.ts`) read from the verified manifest. Status /
+ * provenance are untouched (this is a metadata write, not a lifecycle
+ * transition); each entry is re-validated structurally so a malformed edge
+ * can never reach the row, no matter the caller.
+ */
+export async function recordExtensionDependencies(
+  id: string,
+  dependencies: ExtensionDependency[],
+  opts: TransitionOpts,
+): Promise<InstalledExtension> {
+  const ext = await readInstalledExtensionById(id);
+  if (!ext) {
+    throw new LifecycleTransitionError(
+      "EXT_NOT_FOUND",
+      `installed_extension '${id}' not found`,
+    );
+  }
+  for (const dep of dependencies) {
+    const problems = validateExtensionDependencyShape(dep, ext.packageName);
+    if (problems.length > 0) {
+      throw new LifecycleTransitionError(
+        "INVALID_INPUT",
+        `recordExtensionDependencies refused for ${ext.packageName} — malformed edge ` +
+          `${JSON.stringify(dep)}: ${problems.join("; ")} (actor: ${opts.actor.source}, reason: ${opts.reason})`,
+        { dep, problems },
+      );
+    }
+  }
+  return _internalUpdateInstalledExtensionMetadata(id, { dependencies });
 }

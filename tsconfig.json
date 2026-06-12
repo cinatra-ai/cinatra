@@ -34,6 +34,7 @@
       "@cinatra-ai/extensions/required-in-prod": ["./packages/extensions/src/required-in-prod.ts"],
       "@cinatra-ai/extensions/static-bundle-anchor": ["./packages/extensions/src/static-bundle-anchor.ts"],
       "@cinatra-ai/extensions/dependency-closure": ["./packages/extensions/src/dependency-closure.ts"],
+      "@cinatra-ai/extensions/manifest-dependencies": ["./packages/extensions/src/manifest-dependencies.ts"],
       "@cinatra-ai/extensions/system-extension-inventory": ["./packages/extensions/src/system-extension-inventory.ts"],
       "@cinatra-ai/extensions/dev-version": ["./packages/extensions/src/dev-version.ts"],
       "@cinatra-ai/extensions/publish-authority": ["./packages/extensions/src/publish-authority.ts"],

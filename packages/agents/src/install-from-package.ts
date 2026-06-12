@@ -159,6 +159,30 @@ async function _installAgentFromPackageImpl(
       .agentDependencies;
     const agentDependencies: Record<string, string> = rawDeps ?? {};
 
+    // DEPENDENCY-EDGE DUAL-READ (#180): the agent path is a MATERIALIZING
+    // install path, so its canonical row must carry the
+    // manifest's real edges instead of the dispatcher's `dependencies: []`
+    // seed. Read them HERE, with the other manifest validations and BEFORE
+    // the disk materialize / any agent_templates write — a malformed
+    // `cinatra.dependencies` entry or a canonical-vs-legacy
+    // `agentDependencies` conflict throws and the refusal mutates nothing.
+    // The write TARGETS (live canonical rows) are ALSO resolved here, in the
+    // same inert window: the resolve is fail-loud on an unreachable canonical
+    // store, and running it before `updateAgentTemplate`/`createAgentVersion`
+    // means a transient store failure refuses the install while NOTHING has
+    // mutated — the edges are then WRITTEN below, at the
+    // finalize seams, against these pre-resolved targets.
+    // Dynamic import: @cinatra-ai/agents -> @cinatra-ai/extensions is a static cycle.
+    const { parseManifestDependencyEdges, resolveLiveCanonicalEdgeTargets, writeDependencyEdgesToCanonicalRows } = await import(
+      "@cinatra-ai/extensions/manifest-dependencies"
+    );
+    const dependencyEdges = parseManifestDependencyEdges(extracted.manifest, {
+      packageName: extracted.packageName,
+    }).edges;
+    const dependencyEdgeTargets = await resolveLiveCanonicalEdgeTargets({
+      packageName: extracted.packageName,
+    });
+
     // Propagate manifest.cinatra.type into the template row.
     const rawType = (manifest.cinatra as { type?: unknown }).type;
     // Recognize OAS-aligned aliases ("node", "flow") and canonical values
@@ -252,6 +276,14 @@ async function _installAgentFromPackageImpl(
         contentHash,
         snapshot,
       });
+
+      // EDGE PERSISTENCE (#180): land the manifest edges on the PRE-RESOLVED
+      // canonical row targets now that the template write committed — the
+      // agent path's finalize seam (upsert branch). The store read already
+      // happened in the inert window above; a WRITE failure here throws into
+      // the catch below (materialize rollback) like any other post-write
+      // failure on this path.
+      await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
 
       // Register agent-declared output object types (upsert branch).
       // See registerDeclaredObjectTypes helper at the bottom of this function.
@@ -357,6 +389,10 @@ async function _installAgentFromPackageImpl(
       await createAgentVersion({ id: versionId, templateId: raceExisting.id, contentHash, snapshot });
       templateId = raceExisting.id;
     }
+
+    // EDGE PERSISTENCE (#180): same finalize-seam write as the upsert branch
+    // above — covers both the fresh INSERT and the 23505-race upsert path.
+    await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
 
     // Register agent-declared output object types (fresh-install branch).
     await registerDeclaredObjectTypes({

@@ -69,9 +69,19 @@ vi.mock("@/lib/extension-install-ops", () => ({
 }));
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readInstalledExtensionsByPackageName: h.readInstalledExtensionsByPackageName,
+  // #180 forward gate: an empty canonical snapshot → nothing to gate.
+  listInstalledExtensions: vi.fn(async () => []),
 }));
 vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   sourceSwitchExtension: h.sourceSwitchExtension,
+  // #180 edge persistence: the sanctioned canonical writer (no-op here — these
+  // fixtures pin trust/provenance routing, not edge persistence).
+  recordExtensionDependencies: vi.fn(async () => ({})),
+}));
+vi.mock("@cinatra-ai/extensions/manifest-dependencies", () => ({
+  // The fixture storeDir is synthetic (no real package.json on disk) — the
+  // dual-read seam reports a declared-empty edge set.
+  readManifestDependencyEdgesFromStore: vi.fn(async () => ({ edges: [], source: "canonical" })),
 }));
 vi.mock("@/lib/extension-install-anchor", () => ({
   pickSingleActiveRow: h.pickSingleActiveRow,

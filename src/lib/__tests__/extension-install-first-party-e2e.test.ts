@@ -43,6 +43,8 @@ type InstallState = {
   source?: { type: string; registryUrl: string; integrity: string; contentHash: string };
   grant?: { status: string; approvedPorts: string[]; orgId: string | null };
   journalPhase?: string;
+  /** #180: the dependency edges the pipeline persisted at the finalize seam. */
+  dependencies?: unknown[];
 };
 
 let workDir: string;
@@ -130,6 +132,19 @@ function makePipelineDeps(state: InstallState): InstallPipelineDeps {
     advanceInstallOpPhase: async ({ phase }) => {
       state.journalPhase = phase;
     },
+    // #180: the REAL dual-read helper over the materialized manifest + a
+    // recording persist seam, so the e2e pins that a finalized first-party
+    // install carries its manifest edges.
+    readDependencyEdges: async (storeDir) => {
+      const { readManifestDependencyEdgesFromStore } = await import(
+        "@cinatra-ai/extensions/manifest-dependencies"
+      );
+      const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
+      return edges;
+    },
+    persistDependencyEdges: async (i) => {
+      state.dependencies = i.dependencies;
+    },
   };
 }
 
@@ -161,6 +176,16 @@ describe("first-party install E2E — canonical builder → pack → real pipeli
     expect(result.requestedPorts).toEqual(["capabilities"]);
     expect(result.grantStatus).toBe("pending"); // unsigned bootstrap → ports stay pending
     expect(state.journalPhase).toBe("finalized");
+
+    // #180: the finalize seam persisted the manifest's REAL dependency edges —
+    // read by the dual-read helper from the materialized (SRI-verified) bytes.
+    // nango declares `cinatra.dependencies: []` (declared-empty, not a silent
+    // default), so the persisted set is exactly the manifest's declaration.
+    const builtManifest = JSON.parse(
+      await readFile(path.join(workDir, "staging", "package", "package.json"), "utf8"),
+    ) as { cinatra: { dependencies: unknown[] } };
+    expect(state.dependencies).toEqual(builtManifest.cinatra.dependencies);
+    expect(state.dependencies).toEqual([]);
 
     // 3. ADMIN APPROVAL (the separate grant flow): nango's register() calls
     //    ctx.capabilities.registerProvider, and the `capabilities` port is

@@ -588,3 +588,169 @@ describe("installWorkflowExtensionSaga — HOST-COMPAT GATE (cinatra.sdkAbiRange
     expect(res.status).toBe("installed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #180 PR-1: dependency edges on the WORKFLOW saga path — dual-read (pre-
+// journal, fail-loud), persistence at the finalize seam, fresh-install
+// forward gate routing into the inverse-order compensation.
+// ---------------------------------------------------------------------------
+
+describe("installWorkflowExtensionSaga — dependency edges become real (#180)", () => {
+  const EDGES = [
+    {
+      packageName: "@cinatra-ai/dep-a",
+      kind: "connector" as const,
+      edgeType: "runtime" as const,
+      versionConstraint: { kind: "semver-range" as const, range: "*" },
+      requirement: "required" as const,
+    },
+  ];
+
+  function withEdgeSeams(h: Harness, over: Partial<WorkflowInstallSagaDeps> = {}) {
+    const persisted: unknown[] = [];
+    const gated: unknown[] = [];
+    const gcd: string[] = [];
+    h.deps = {
+      ...h.deps,
+      readDependencyEdges: async (storeDir) => {
+        h.events.push(`readEdges:${storeDir}`);
+        return EDGES;
+      },
+      persistDependencyEdges: async (i) => {
+        h.events.push("persistEdges");
+        persisted.push(i);
+      },
+      assertForwardInstallClosure: async (i) => {
+        h.events.push("forwardGate");
+        gated.push(i);
+      },
+      gcStoreDir: async (d) => {
+        gcd.push(d);
+      },
+      ...over,
+    };
+    return { persisted, gated, gcd };
+  }
+
+  it("edges are read pre-journal and persisted at the FINALIZE SEAM (provenance → persist → gate → finalize)", async () => {
+    const h = makeHarness();
+    const { persisted, gated } = withEdgeSeams(h);
+    const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    expect(res.status).toBe("installed");
+    expect(h.events.indexOf("readEdges:/store/dir")).toBeLessThan(h.events.indexOf("begin"));
+    const provenanceIdx = h.events.indexOf("provenance");
+    expect(h.events.slice(provenanceIdx)).toEqual(["provenance", "persistEdges", "forwardGate", "finalize"]);
+    expect(persisted).toEqual([{ packageName: TRUSTED_PKG, orgId: "org-1", dependencies: EDGES }]);
+    expect(gated).toEqual([{ packageName: TRUSTED_PKG, orgId: "org-1" }]);
+  });
+
+  it("a FORWARD-GATE refusal on a FRESH install routes into the inverse-order compensation (never finalized)", async () => {
+    const h = makeHarness();
+    withEdgeSeams(h, {
+      assertForwardInstallClosure: async () => {
+        h.events.push("forwardGate");
+        throw new Error(`Cannot install ${TRUSTED_PKG} — it requires @cinatra-ai/dep-a (missing).`);
+      },
+    });
+    await expect(
+      installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(/requires @cinatra-ai\/dep-a/);
+    // Edges were persisted (the row carries truth even for the refused install),
+    // then the gate threw → compensation ran in inverse order; never finalized.
+    expect(h.events).toContain("persistEdges");
+    expect(h.events).not.toContain("finalize");
+    expect(h.events).toContain("compensate:archive-dashboards");
+    expect(h.events).toContain("compensate:delete-template:tpl-new");
+    expect(h.events).toContain("fail");
+    expect(h.events).toContain("phase:rolled_back");
+  });
+
+  it("a DUAL-READ failure throws BEFORE beginInstallOp (journal untouched) and GCs the materialized dir", async () => {
+    const h = makeHarness();
+    const { gcd } = withEdgeSeams(h, {
+      readDependencyEdges: async () => {
+        throw new Error(`${TRUSTED_PKG}: cinatra.dependencies and legacy cinatra.agentDependencies disagree`);
+      },
+    });
+    await expect(
+      installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(/disagree/);
+    expect(h.events).not.toContain("begin");
+    expect(h.events.filter((e) => e.startsWith("write:"))).toEqual([]);
+    expect(gcd).toEqual(["/store/dir"]);
+    expect(h.journal.size).toBe(0);
+  });
+
+  it("an UPDATE (prior finalized op, different version) refreshes edges but skips the forward gate", async () => {
+    const h = makeHarness();
+    // Seed a PRIOR finalized op at a DIFFERENT version's op id.
+    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: `${TRUSTED_PKG}@0.9.0:wf:org-1`, phase: "finalized" });
+    const { persisted, gated } = withEdgeSeams(h);
+    const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    expect(res.status).toBe("installed");
+    expect(persisted).toHaveLength(1);
+    expect(gated).toEqual([]);
+  });
+
+  it("R1 HIGH 2: a FAILED UPDATE restores the prior FINALIZED journal op + provenance + edges (the old install stays boot-anchorable; no fail/rolled_back marking)", async () => {
+    const OLD_EDGES = [
+      {
+        packageName: "@cinatra-ai/old-dep",
+        edgeType: "runtime" as const,
+        versionConstraint: { kind: "semver-range" as const, range: "*" },
+        requirement: "required" as const,
+      },
+    ];
+    const priorOpId = `${TRUSTED_PKG}@1.0.0:wf:org-1`;
+    const provenanceVersions: string[] = [];
+    const persisted: unknown[] = [];
+    const h = makeHarness();
+    withEdgeSeams(h, {
+      readCurrentSource: async () => ({
+        registryUrl: "https://registry.cinatra.ai",
+        version: "1.0.0",
+        integrity: "sha512-old",
+        contentHash: "ch-old",
+      }),
+      readCurrentDependencies: async () => OLD_EDGES,
+      persistDependencyEdges: async (i) => {
+        h.events.push("persistEdges");
+        persisted.push(i.dependencies);
+      },
+      recordProvenance: async (i) => {
+        h.events.push("provenance");
+        provenanceVersions.push(i.version);
+      },
+      // The NEW attempt's finalize FAILS (post-provenance, post-edges).
+      finalizeInstallOp: async () => {
+        throw new Error("finalize-failed");
+      },
+    });
+    // A prior FINALIZED install at 1.0.0; this attempt is the 1.0.1 UPDATE.
+    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: priorOpId, phase: "finalized" });
+
+    await expect(
+      installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.1", actor }, h.deps),
+    ).rejects.toThrow("finalize-failed");
+
+    // The journal points back at the OLD finalized op (trust-anchorable again)…
+    expect(h.journal.get(`${TRUSTED_PKG}::org-1`)).toEqual({ installOpId: priorOpId, phase: "finalized" });
+    // …the failed attempt was NOT marked fail/rolled_back over the restored row…
+    expect(h.events).not.toContain("fail");
+    expect(h.events).not.toContain("phase:rolled_back");
+    // …the OLD provenance was re-recorded (forward write was 1.0.1, restore is 1.0.0)…
+    expect(provenanceVersions[provenanceVersions.length - 1]).toBe("1.0.0");
+    // …and the OLD edges were re-persisted LAST (the failed version's edges never survive).
+    expect(persisted[0]).toEqual(EDGES);
+    expect(persisted[persisted.length - 1]).toEqual(OLD_EDGES);
+    // The attempt's own writes were still compensated in inverse order.
+    expect(h.events).toContain("compensate:archive-dashboards");
+  });
+
+  it("harnesses without the #180 seams behave exactly as before", async () => {
+    const h = makeHarness();
+    const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    expect(res.status).toBe("installed");
+    expect(h.events).not.toContain("persistEdges");
+  });
+});

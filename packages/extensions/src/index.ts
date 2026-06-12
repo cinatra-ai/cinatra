@@ -463,6 +463,13 @@ async function syncCanonicalManifestInstall(
           integrity: "dispatcher-install",
         },
         requiredInProd,
+        // SEED ONLY (#180): the manifest is not readable pre-materialize, so
+        // the row starts with no edges. Every MATERIALIZING install path
+        // (runtime pipeline, workflow saga, agent installer) persists the
+        // manifest's REAL `cinatra.dependencies` edges at its finalize seam
+        // via `recordExtensionDependencies` — a finalized install implies
+        // persisted edges; this `[]` only ever survives on rows the pipeline
+        // never finalized.
         dependencies: [],
         manifestHash: null,
         status: requiredInProd && !isDev ? "locked" : "active",

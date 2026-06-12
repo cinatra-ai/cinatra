@@ -37,6 +37,8 @@ import "server-only";
 // the saga (extensions.ts) and the workflows extension-handler delegates installs to
 // it; `runHostExtensionInstallAndActivate` drives the integrity pipeline.
 
+import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
+
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
@@ -105,9 +107,12 @@ export type WorkflowInstallSagaDeps = {
   advanceInstallOpPhase: (input: { installOpId: string; phase: "materialized" | "granted" | "preflighted" | "writing" | "finalized" | "failed" | "rolled_back"; digest?: string | null }) => Promise<void>;
   finalizeInstallOp: (installOpId: string) => Promise<void>;
   failInstallOp: (installOpId: string) => Promise<void>;
-  /** Read the current op's phase + id for (package, org) — drives the
-   *  idempotent short-circuit (a finalized op for the SAME artifact → no-op). */
-  readInstallOp: (packageName: string, orgId: string | null) => Promise<{ phase: string; installOpId: string } | null>;
+  /** Read the current op's phase + id (+ digest) for (package, org) — drives the
+   *  idempotent short-circuit (a finalized op for the SAME artifact → no-op) AND
+   *  the failed-UPDATE restore (re-`begin` the prior finalized op at its original
+   *  id + digest — see the catch block). `digest` is optional so older unit-test
+   *  fakes stay valid; the default factory's journal read always returns it. */
+  readInstallOp: (packageName: string, orgId: string | null) => Promise<{ phase: string; installOpId: string; digest?: string | null } | null>;
 
   // -- materialize -------------------------------------------------------
   /** Resolve the tarball SRI + the registry it lives on (root of trust) + the optional signature. */
@@ -155,6 +160,37 @@ export type WorkflowInstallSagaDeps = {
   /** Persist the REAL provenance (sha512 integrity + content hash + the additive
    *  sha256 attestation) on the canonical row — LATE, just before finalize. */
   recordProvenance: (input: { packageName: string; orgId: string | null; version: string; registryUrl: string; integrity: string; contentHash: string; attestedSha256?: string; signature?: string | null }) => Promise<void>;
+  /** Read the materialized manifest's dependency edges (#180) — the DUAL-READ
+   *  helper (`cinatra.dependencies` canonical-wins; legacy
+   *  `cinatra.agentDependencies` projected; conflict/malformed = THROW,
+   *  fail-loud). Runs with the host-compat gate (pre-journal) so a refused
+   *  manifest is fully inert. Optional so existing unit tests can omit it;
+   *  the default factory always wires it. */
+  readDependencyEdges?: (storeDir: string) => Promise<ExtensionDependency[]>;
+  /** Persist the manifest edges onto the canonical row at the saga's
+   *  (package, org) scope — the FINALIZE-SEAM invariant write
+   *  (#180): runs with `recordProvenance`, before `finalizeInstallOp`, so a
+   *  `finalized` workflow install-op implies persisted edges. Optional for
+   *  unit tests; the default factory wires the sanctioned canonical writer. */
+  persistDependencyEdges?: (input: { packageName: string; orgId: string | null; dependencies: ExtensionDependency[] }) => Promise<void>;
+  /** FORWARD install-closure gate (#180 item 5) for a FRESH install — refuses
+   *  the finalize when an install-blocking edge's target is not installed
+   *  (peer/optional edges never block). A throw routes into the saga's
+   *  inverse-order compensation. Optional for unit tests; the default factory
+   *  wires the shared closure gate. */
+  assertForwardInstallClosure?: (input: { packageName: string; orgId: string | null }) => Promise<void>;
+  /** Capture the CURRENT canonical verdaccio source for the (package, org)
+   *  BEFORE the saga's `recordProvenance` overwrites it — on a failed UPDATE
+   *  the catch block re-records it so the canonical row keeps pointing at the
+   *  still-live OLD install. Optional (omitted → no provenance restore); the
+   *  default factory wires the canonical-store read. */
+  readCurrentSource?: (packageName: string, orgId: string | null) => Promise<{ registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string | null } | null>;
+  /** Capture the CURRENT canonical row's persisted dependency edges (#180)
+   *  BEFORE the finalize seam overwrites them — on a failed UPDATE the catch
+   *  block re-persists them (closure gates must read the live OLD install's
+   *  edges, never the failed version's). Optional; the default factory wires
+   *  the canonical-store read. */
+  readCurrentDependencies?: (packageName: string, orgId: string | null) => Promise<ExtensionDependency[] | null>;
 
   // -- compensation (inverse-order rollback inverses) --------------------
   /** Inverse of WRITE 2/3/4 — archive the extension's dashboards (rows preserved). */
@@ -278,6 +314,44 @@ export async function installWorkflowExtensionSaga(
       }
     }
 
+    // 1.6 DEPENDENCY-EDGE READ (#180) — the dual-read helper over the
+    // materialized (SRI-verified) manifest, with the SAME pre-journal
+    // inertness contract as the host-compat gate above: a malformed
+    // `cinatra.dependencies` entry or a canonical-vs-legacy conflict throws
+    // HERE — before `beginInstallOp`, the grant request, preflight, and any
+    // template/dashboard write — and the just-materialized dir is GC'd. The
+    // edges are PERSISTED late, at the finalize seam (step 6).
+    let dependencyEdges: ExtensionDependency[] | null = null;
+    if (deps.readDependencyEdges) {
+      try {
+        dependencyEdges = await deps.readDependencyEdges(mat.storeDir);
+      } catch (err) {
+        if (deps.gcStoreDir) {
+          try {
+            await deps.gcStoreDir(mat.storeDir);
+          } catch {
+            /* best-effort GC — a leftover dir is recovered by a later retry. */
+          }
+        }
+        throw err;
+      }
+    }
+
+    // FAILED-UPDATE RESTORE CAPTURE (#180): `beginInstallOp` below overwrites
+    // the single (package, org) journal row — on an UPDATE (a prior op is
+    // `finalized` for a DIFFERENT artifact) that destroys the OLD install's
+    // anchor, and the late writes (provenance → edges) overwrite the OLD
+    // install's canonical source + dependency edges before `finalizeInstallOp`
+    // commits the new attempt. Snapshot all three NOW so the catch block can
+    // restore the previously-working install when this attempt fails.
+    const isUpdate = existing?.phase === "finalized";
+    const priorSource = isUpdate
+      ? (await deps.readCurrentSource?.(packageName, orgId)) ?? null
+      : null;
+    const priorEdges = isUpdate
+      ? (await deps.readCurrentDependencies?.(packageName, orgId)) ?? null
+      : null;
+
     await deps.beginInstallOp({ installOpId, packageName, orgId });
 
     try {
@@ -352,6 +426,23 @@ export async function installWorkflowExtensionSaga(
         ...(sha256 ? { attestedSha256: sha256 } : {}),
         ...(signature ? { signature } : {}),
       });
+
+      // 6.5 EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
+      // manifest edges (read at 1.6, fail-loud) land on the canonical row
+      // with the provenance, BEFORE `finalizeInstallOp` — a `finalized`
+      // workflow install-op implies persisted edges. Then the FORWARD gate
+      // (item 5) refuses a FRESH install whose install-blocking edges are
+      // unsatisfied (peer/optional never block); the throw routes into the
+      // saga's inverse-order compensation below. An UPDATE (a prior finalized
+      // op exists) refreshes edges but is not forward-gated here — update
+      // constraint evaluation is the version-aware stage of #180.
+      if (dependencyEdges !== null && deps.persistDependencyEdges) {
+        await deps.persistDependencyEdges({ packageName, orgId, dependencies: dependencyEdges });
+      }
+      if (!isUpdate && deps.assertForwardInstallClosure) {
+        await deps.assertForwardInstallClosure({ packageName, orgId });
+      }
+
       await deps.finalizeInstallOp(installOpId);
 
       return { status: "installed", version, templateId: tpl.templateId, dashboardMaterialized: dashboardWritten };
@@ -361,11 +452,69 @@ export async function installWorkflowExtensionSaga(
       // error. Order is the inverse of the writes: undo dashboards → undo the
       // workflow_template (ONLY the one THIS attempt created).
       await compensate({ deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites });
-      try {
-        await deps.failInstallOp(installOpId);
-        await deps.advanceInstallOpPhase({ installOpId, phase: "rolled_back" });
-      } catch (journalErr) {
-        console.error(`[workflow-install-saga] journal unwind failed for ${packageName}:`, journalErr);
+      if (isUpdate && existing) {
+        // FAILED UPDATE (#180): `beginInstallOp` above overwrote the OLD
+        // install's `finalized` journal op, and the late writes may have
+        // overwritten its canonical source and/or dependency edges. RESTORE
+        // all three — re-`begin` the prior op at its ORIGINAL id + digest and
+        // re-advance it to `finalized` (the trust anchor requires `finalized`,
+        // so without this the previously-working workflow install would stop
+        // boot-anchoring), then re-record the captured source + edges
+        // (idempotent same-value rewrites when the corresponding write never
+        // ran). Each step is best-effort + isolated; the ORIGINAL error is
+        // always rethrown. The failed attempt's op intentionally vanishes
+        // from the one-row-per-(package, org) journal — exactly the runtime
+        // pipeline's failed-update semantics.
+        try {
+          await deps.beginInstallOp({
+            installOpId: existing.installOpId,
+            packageName,
+            orgId,
+            digest: existing.digest ?? null,
+          });
+          await deps.advanceInstallOpPhase({ installOpId: existing.installOpId, phase: "finalized" });
+        } catch (restoreErr) {
+          console.error(
+            `[workflow-install-saga] failed to restore prior finalized install-op ${existing.installOpId} for ${packageName} after a failed update — the previous install may not boot-anchor until a successful re-install:`,
+            restoreErr,
+          );
+        }
+        if (priorSource) {
+          try {
+            await deps.recordProvenance({
+              packageName,
+              orgId,
+              version: priorSource.version,
+              registryUrl: priorSource.registryUrl,
+              integrity: priorSource.integrity,
+              contentHash: priorSource.contentHash ?? "",
+              ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
+              ...(priorSource.signature ? { signature: priorSource.signature } : {}),
+            });
+          } catch (restoreErr) {
+            console.error(
+              `[workflow-install-saga] failed to restore prior provenance for ${packageName} after a failed update:`,
+              restoreErr,
+            );
+          }
+        }
+        if (priorEdges !== null && deps.persistDependencyEdges) {
+          try {
+            await deps.persistDependencyEdges({ packageName, orgId, dependencies: priorEdges });
+          } catch (restoreErr) {
+            console.error(
+              `[workflow-install-saga] failed to restore prior dependency edges for ${packageName} after a failed update — closure gates may read the failed version's edges until a successful re-install:`,
+              restoreErr,
+            );
+          }
+        }
+      } else {
+        try {
+          await deps.failInstallOp(installOpId);
+          await deps.advanceInstallOpPhase({ installOpId, phase: "rolled_back" });
+        } catch (journalErr) {
+          console.error(`[workflow-install-saga] journal unwind failed for ${packageName}:`, journalErr);
+        }
       }
       throw err;
     }
@@ -653,6 +802,45 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
       const { readDeclaredHostCompatFromStore } = await import("@/lib/extension-host-compat");
       return readDeclaredHostCompatFromStore(storeDir);
     },
+    // DEPENDENCY EDGES (#180): dual-read over the materialized manifest
+    // (fail-loud on conflict/malformed — see manifest-dependencies.ts).
+    readDependencyEdges: async (storeDir) => {
+      const { readManifestDependencyEdgesFromStore } = await import(
+        "@cinatra-ai/extensions/manifest-dependencies"
+      );
+      const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
+      return edges;
+    },
+    // EDGE PERSISTENCE at the finalize seam: the sanctioned canonical writer,
+    // bound to the SAME single (package, org) row recordProvenance resolved.
+    persistDependencyEdges: async (p) => {
+      const rows = await readInstalledExtensionsByPackageName(p.packageName);
+      const target = pickSingleActiveRow(rows, p.orgId);
+      if (!target) {
+        throw new Error(
+          `persistDependencyEdges: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
+        );
+      }
+      const { recordExtensionDependencies } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await recordExtensionDependencies(target.id, p.dependencies, {
+        actor: { source: "runtime-installer" },
+        reason: `manifest dependency edges @ workflow install`,
+      });
+    },
+    // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
+    // canonical snapshot, scoped to the saga's org.
+    assertForwardInstallClosure: async (p) => {
+      const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+      const { assertForwardInstallClosureForPackage } = await import(
+        "@cinatra-ai/extensions/dependency-closure"
+      );
+      const allRows = await listInstalledExtensions({});
+      assertForwardInstallClosureForPackage(p.packageName, allRows, {
+        organizationId: p.orgId,
+      });
+    },
     gcStoreDir: async (storeDir) => {
       const { rm } = await import("node:fs/promises");
       await rm(storeDir, { recursive: true, force: true });
@@ -690,6 +878,29 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         },
         { actor: { source: "runtime-installer" }, reason: `workflow runtime install provenance @ ${p.version}` },
       );
+    },
+    // FAILED-UPDATE RESTORE CAPTURES (#180): the prior canonical verdaccio
+    // source + persisted dependency edges for the saga's (package, org) scope —
+    // snapshotted before the late writes overwrite them.
+    readCurrentSource: async (packageName, orgId) => {
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      const target = pickSingleActiveRow(rows, orgId);
+      const src = target?.source;
+      if (!src || (src as { type?: string }).type !== "verdaccio") return null;
+      const v = src as { registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string };
+      return {
+        registryUrl: v.registryUrl,
+        version: v.version,
+        integrity: v.integrity,
+        ...(v.contentHash ? { contentHash: v.contentHash } : {}),
+        ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
+        ...(v.signature ? { signature: v.signature } : {}),
+      };
+    },
+    readCurrentDependencies: async (packageName, orgId) => {
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      const target = pickSingleActiveRow(rows, orgId);
+      return target ? target.dependencies : null;
     },
 
     archiveDashboards: async ({ packageName, orgId, userId }) => {
