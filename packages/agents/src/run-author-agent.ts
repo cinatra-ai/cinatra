@@ -44,16 +44,20 @@ import {
   extractAuthorDraftFromText,
   type AuthorDraft,
 } from "./author-draft";
+import { requireAgentRole, agentRoleDirSlug } from "./agent-roles";
 
 // EXPORTED as the canonical author-lane identity: the chat-dispatch
 // creation-flow set (creation-flow-packages.ts) derives from THIS constant
-// instead of carrying its own copy of the package name.
-export const AUTHOR_AGENT_PACKAGE_NAME = "@cinatra-ai/author-agent";
-const AUTHOR_AGENT_DIR_SLUG = "author-agent";
+// instead of carrying its own copy of the package name. Role-resolved
+// (cinatra#151 Stage 5b): the author agent advertises "agent-author" in its
+// manifest; resolution is FAIL-LOUD (it is a cinatra.systemExtensions
+// member, present in every universe by the required lock).
+export const AUTHOR_AGENT_PACKAGE_NAME = requireAgentRole("agent-author");
+const AUTHOR_AGENT_DIR_SLUG = agentRoleDirSlug("agent-author");
 const AUTHOR_AGENT_LOG_LABEL = "run_author_agent";
 
 const FALLBACK_AUTHOR_SYSTEM =
-  "You are the @cinatra-ai/author-agent. Draft a new Cinatra agent extension " +
+  `You are the ${AUTHOR_AGENT_PACKAGE_NAME}. Draft a new Cinatra agent extension ` +
   "package from the supplied creation spec. Emit ONLY the JSON envelope " +
   '`{"draft":{"package":{…},"oas":{…},"skills":[…]}}`. No prose, no code fences. ' +
   "Follow the kind-at-end naming convention (`@cinatra-ai/<slug>-(agent|skill|connector|artifact)`). " +

@@ -24,6 +24,8 @@ import {
   readAgentRunById,
   readAgentTemplateByPackageName,
 } from "./store";
+import type { FieldRendererBindingInput } from "./register-default-renderers";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 
 // ---------------------------------------------------------------------------
 // SkillForChip — serialisable subset of SkillManifest safe to cross the
@@ -73,6 +75,51 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
     return { connectedApps, gmailAliases };
   } catch {
     return { connectedApps: [], gmailAliases: [] };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getRuntimeFieldRendererBindingsAction — SOURCE B of the two-source
+// field-renderer binding registration (cinatra#151 Stage 5): bindings
+// declared by agent packages INSTALLED AT RUNTIME (materialized after build,
+// so absent from the generated build-time map). The HITL panel surfaces
+// fetch these on mount and register them idempotently
+// (useRuntimeFieldRendererBindings), giving runtime-installed agents their
+// bespoke renderers on prod images where they are not bundled.
+//
+// Security: requires a valid session — unauthenticated callers receive [].
+// Output is PUBLIC renderer metadata (validated, size-capped plain JSON ids/
+// kinds/params — never secrets); enumeration-only, no writes.
+// All errors → [] so renderer resolution degrades to the schema-field
+// fallback rather than crashing the panel.
+// ---------------------------------------------------------------------------
+export async function getRuntimeFieldRendererBindingsAction(): Promise<
+  FieldRendererBindingInput[]
+> {
+  const session = await requireAuthSession().catch(() => null);
+  if (!session?.user?.id) return [];
+  try {
+    const { collectInstalledFieldRendererBindings } = await import(
+      "./field-renderer-bindings.server"
+    );
+    const generatedIds = new Set(
+      GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id),
+    );
+    // Runtime-only ids: the generated (build-time) bindings are already
+    // compiled into the client registry — re-sending them would only churn
+    // registration order.
+    return collectInstalledFieldRendererBindings()
+      .filter((b) => !generatedIds.has(b.id))
+      .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params }) => ({
+        id,
+        kind,
+        priority,
+        ...(midRunHitl === true ? { midRunHitl: true } : {}),
+        ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
+        ...(params !== undefined ? { params } : {}),
+      }));
+  } catch {
+    return [];
   }
 }
 

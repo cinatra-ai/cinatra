@@ -1,21 +1,15 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { FieldRendererCondition, FieldRendererProps } from "./field-renderer-registry";
+import type { FieldRendererProps } from "./field-renderer-registry";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { SchemaFieldRenderer } from "./schema-field-renderer";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
-// Condition predicate exported for downstream consumers that want a single
-// "is this a reviewer-agent output field?" check. Registry entries do NOT use
-// this shared predicate — they use inline strict-equality conditions to keep
-// the new ID and legacy alias resolvable independently (see register-default-renderers.ts).
-export const isReviewerAgentOutputField: FieldRendererCondition = (_fieldName, schema) => {
-  const xRenderer = (schema as { "x-renderer"?: string })["x-renderer"];
-  return xRenderer === "@cinatra-ai/reviewer-agent:output"
-    || xRenderer === "@cinatra/email-reviewer-agent:output";
-};
+// Condition: the reviewer-agent manifest binding (kind "reviewer-output") and
+// the host-registered legacy-scope alias each resolve to this component with
+// strict ID matching — see register-default-renderers.ts.
 
 // Summary is the LLM-supplied one-line context line; render only when
 // non-empty. Styling: muted-foreground, small, with bottom margin for

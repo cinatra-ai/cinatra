@@ -6,8 +6,16 @@
  * agent whose renderer ID happens to share the same suffix. Those renderer IDs
  * are matched only by strict equality against the full namespaced renderer ID.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { classifyMidRunHitl } from "../orchestrator-mid-run-hitl";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+
+// The strict slice is registry-driven (cinatra#151 Stage 5): the flagged IDs
+// come from each agent's manifest `midRunHitl: true` declaration via the
+// generated bindings — register them exactly as the app shell does.
+beforeAll(() => {
+  ensureDefaultFieldRenderersRegistered();
+});
 
 describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
   it.each([

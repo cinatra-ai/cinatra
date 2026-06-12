@@ -48,6 +48,7 @@ import {
 } from "./validate-agent-json";
 import { scanOasForRuntimeInvariantFindings } from "./validate-oas-runtime-invariants";
 import { resolveAgentInstallDir } from "./agent-install-path";
+import { requireAgentRole, agentRoleDirSlug } from "./agent-roles";
 import {
   mergeReviewLanes,
   restampLaneSource,
@@ -142,11 +143,19 @@ async function emitMilestoneIfThreaded(
 // (mcp/handlers.ts) and the chat-dispatch creation-flow set
 // (creation-flow-packages.ts) derive from THIS constant instead of carrying
 // their own copies of the package names.
-export const REVIEWER_LANE_PACKAGES = [
-  "@cinatra-ai/security-reviewer-agent",
-  "@cinatra-ai/code-reviewer-agent",
-  "@cinatra-ai/planner-agent",
-];
+// Role-resolved (cinatra#151 Stage 5b): the lane agents advertise their roles
+// in their manifests; resolution is FAIL-LOUD because all three are
+// cinatra.systemExtensions (present in every universe by the required lock).
+// Lane order is the canonical dispatch order (security, code, planner).
+export const REVIEWER_LANE_ROLES = [
+  "agent-security-reviewer",
+  "agent-code-reviewer",
+  "agent-planner",
+] as const;
+
+export const REVIEWER_LANE_PACKAGES = REVIEWER_LANE_ROLES.map((role) =>
+  requireAgentRole(role),
+);
 
 export const AGENT_CREATION_REVIEW_PRIMITIVE_NAME = "agent_creation_review";
 
@@ -266,11 +275,11 @@ type ReviewerPromptTemplate = {
  * methodology skills co-located inside each agent's extension package
  * under the thin-OAS package layout.
  */
-const REVIEWER_LANE_TO_PACKAGE: Record<string, string> = {
-  "agent-security-reviewer": "@cinatra-ai/security-reviewer-agent",
-  "agent-code-reviewer": "@cinatra-ai/code-reviewer-agent",
-  "agent-planner": "@cinatra-ai/planner-agent",
-};
+// Lane label == role name (the lane labels are the stable security-semantic
+// identities; the role bindings resolve them to packages).
+const REVIEWER_LANE_TO_PACKAGE: Record<string, string> = Object.fromEntries(
+  REVIEWER_LANE_ROLES.map((role) => [role, requireAgentRole(role)]),
+);
 
 async function loadReviewerPrompt(
   slug: "agent-security-reviewer" | "agent-code-reviewer" | "agent-planner",
@@ -326,14 +335,10 @@ async function loadReviewerPrompt(
   } // end if preResolvedSkillIds === undefined
   const installRoot = resolveAgentInstallDir();
   // Lane labels are stable security-semantic identities (wired into
-  // normalizeReviewFindings + spoof-downgrade + tests). The on-disk
-  // package dirs were renamed kind-at-end; map label -> dir slug.
-  const REVIEWER_PROMPT_DIR: Record<string, string> = {
-    "agent-security-reviewer": "security-reviewer-agent",
-    "agent-code-reviewer": "code-reviewer-agent",
-    "agent-planner": "planner-agent",
-  };
-  const dirSlug = REVIEWER_PROMPT_DIR[slug] ?? slug;
+  // normalizeReviewFindings + spoof-downgrade + tests) AND the role names —
+  // the on-disk dir slug derives from the role-bound package name
+  // (cinatra#151 Stage 5b), replacing the retired hand-maintained slug map.
+  const dirSlug = agentRoleDirSlug(slug);
   const oasPath = join(installRoot, "cinatra-ai", dirSlug, "cinatra", "oas.json");
   if (!existsSync(oasPath)) {
     return {

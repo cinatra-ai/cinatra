@@ -29,6 +29,8 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
   it("GENERATED_MANIFEST_FILES pins the exact emitted set (it is also the coupling gates' permanent-exempt list)", () => {
     expect([...GENERATED_MANIFEST_FILES].sort()).toEqual([
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
+      // Agent UI bindings + role bindings (cinatra#151 Stage 5).
+      "src/lib/generated/agent-bindings.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",

@@ -63,6 +63,7 @@ import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
+import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -1170,6 +1171,11 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   } = props;
 
   const router = useRouter();
+
+  // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
+  // bindings of RUNTIME-installed agent packages; re-renders on arrival so
+  // registry resolution + classifyMidRunHitl pick them up.
+  useRuntimeFieldRendererBindings();
 
   // Completed-step replay state.
   // initialSubmissionEntries is server-rendered (instance-screens.tsx) so first

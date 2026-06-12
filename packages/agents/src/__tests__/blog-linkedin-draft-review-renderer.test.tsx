@@ -15,10 +15,9 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
-import {
-  BlogLinkedinDraftReviewRenderer,
-  isBlogLinkedinDraftReviewField,
-} from "../blog-linkedin-draft-review-renderer";
+import { BlogLinkedinDraftReviewRenderer } from "../blog-linkedin-draft-review-renderer";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import type { FieldRendererContext } from "../field-renderer-registry";
 
 const MINIMAL_CONTEXT: FieldRendererContext = { connectedApps: [] };
@@ -52,24 +51,24 @@ afterEach(() => {
   cleanup();
 });
 
-describe("isBlogLinkedinDraftReviewField predicate", () => {
+describe("linkedin draft-review registry resolution", () => {
+  // Registry-driven condition (cinatra#151 Stage 5): the id comes from the
+  // blog-linkedin-publish-agent's manifest binding.
+  const resolveFor = (schema: Record<string, unknown>) =>
+    fieldRendererRegistry.resolve("draftReview", schema, MINIMAL_CONTEXT)?.renderer ?? null;
   it("matches strict equality on the renderer key", () => {
+    ensureDefaultFieldRenderersRegistered();
     expect(
-      isBlogLinkedinDraftReviewField("draftReview", {
-        "x-renderer": "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-      } as never, MINIMAL_CONTEXT),
-    ).toBe(true);
+      resolveFor({ "x-renderer": "@cinatra-ai/blog-linkedin-publish-agent:draft-review" }),
+    ).toBe(BlogLinkedinDraftReviewRenderer);
   });
 
   it("rejects other renderer keys", () => {
+    ensureDefaultFieldRenderersRegistered();
     expect(
-      isBlogLinkedinDraftReviewField("draftReview", {
-        "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review",
-      } as never, MINIMAL_CONTEXT),
-    ).toBe(false);
-    expect(
-      isBlogLinkedinDraftReviewField("draftReview", {} as never, MINIMAL_CONTEXT),
-    ).toBe(false);
+      resolveFor({ "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review" }),
+    ).not.toBe(BlogLinkedinDraftReviewRenderer);
+    expect(resolveFor({})).not.toBe(BlogLinkedinDraftReviewRenderer);
   });
 });
 

@@ -61,6 +61,9 @@ import {
 } from "./clone-runtime.mjs";
 // Pure URL-shape helper shared with the TS in-process MCP writer.
 import { buildMcpPublicBaseUrlRow } from "../../mcp-server/src/mcp-public-base-url-shape.mjs";
+// Manifest-driven dev-CLI module discovery (local leaf module — static import
+// is extension-empty safe; the actual extension reach stays a lazy import()).
+import { loadDevCliModule } from "./dev-cli-modules.mjs";
 // Tailscale connector source lives in the gitignored `extensions/cinatra-ai/`
 // clone-back target, ABSENT on a fresh checkout until `cinatra setup dev`
 // populates it. `mintTailscaleAuthKey`, `TailscaleApiError`, and
@@ -4773,24 +4776,20 @@ function findRepoRootFromWorktree(worktreePath) {
 }
 
 // ---------------------------------------------------------------------------
-// Lazy loaders for the @cinatra-ai/tailscale-connector extension source. Naming
-// the extension path HERE — once per module file — keeps core's hardcoded
-// extension-instance coupling at the baseline (the core-extension-instance-coupling
-// gate counts EVERY non-comment occurrence of the path) while preserving the
-// extension-empty lazy bootstrap: each loader `import()`s on demand, and every
-// caller keeps its own graceful-degradation guard (an absent/gitignored extension
-// throws ERR_MODULE_NOT_FOUND on the SAME specifier exactly as the inline import
-// did, so the cold-import resolve-hook test still intercepts it).
+// Lazy loaders for the tailscale connector's CLI modules (cinatra#151
+// Stage 5c — manifest-discovered): the connector DECLARES its modules under
+// `cinatra.devCliModules` and the CLI resolves them by KEY through
+// dev-cli-modules.mjs, naming no extension package or path. The
+// extension-empty lazy bootstrap is preserved: each loader resolves on
+// demand, and a missing declarer throws with `.code = ERR_MODULE_NOT_FOUND`
+// — the same failure class as the retired literal import — so every caller's
+// graceful-degradation guard keeps working.
 // ---------------------------------------------------------------------------
 function loadTailscaleApiModule() {
-  return import(
-    "../../../extensions/cinatra-ai/tailscale-connector/src/tailscale-api.mjs"
-  );
+  return loadDevCliModule("tailscale-api");
 }
 function loadTailscaleHostnameModule() {
-  return import(
-    "../../../extensions/cinatra-ai/tailscale-connector/src/tailscale-hostname.mjs"
-  );
+  return loadDevCliModule("tailscale-hostname");
 }
 
 async function runCloneStart(argv) {

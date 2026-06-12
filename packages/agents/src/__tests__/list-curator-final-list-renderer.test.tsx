@@ -17,10 +17,9 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
-import {
-  ListCuratorFinalListRenderer,
-  isListCuratorFinalListField,
-} from "../list-curator-final-list-renderer";
+import { ListCuratorFinalListRenderer } from "../list-curator-final-list-renderer";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import type { FieldRendererContext } from "../field-renderer-registry";
 
 const MINIMAL_CONTEXT: FieldRendererContext = { connectedApps: [] };
@@ -68,26 +67,19 @@ describe("ListCuratorFinalListRenderer", () => {
     vi.restoreAllMocks();
   });
 
-  it("isListCuratorFinalListField matches only the exact final-list-review id", () => {
+  it("the registry resolves only the exact final-list-review id to this renderer", () => {
+    // Registry-driven condition (cinatra#151 Stage 5): the id comes from the
+    // list-curator-agent's manifest binding (kind "final-list-review").
+    ensureDefaultFieldRenderersRegistered();
+    const resolveFor = (schema: Record<string, unknown>) =>
+      fieldRendererRegistry.resolve("", schema, MINIMAL_CONTEXT)?.renderer ?? null;
     expect(
-      isListCuratorFinalListField(
-        "",
-        {
-          "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review",
-        },
-        MINIMAL_CONTEXT,
-      ),
-    ).toBe(true);
+      resolveFor({ "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review" }),
+    ).toBe(ListCuratorFinalListRenderer);
     expect(
-      isListCuratorFinalListField(
-        "",
-        {
-          "x-renderer": "@cinatra-ai/list-curator-agent:scrape-schema-review",
-        },
-        MINIMAL_CONTEXT,
-      ),
-    ).toBe(false);
-    expect(isListCuratorFinalListField("", {}, MINIMAL_CONTEXT)).toBe(false);
+      resolveFor({ "x-renderer": "@cinatra-ai/list-curator-agent:scrape-schema-review" }),
+    ).not.toBe(ListCuratorFinalListRenderer);
+    expect(resolveFor({})).not.toBe(ListCuratorFinalListRenderer);
   });
 
   it("renders List name input, memberRefs preview, Approve list + Cancel buttons", () => {
