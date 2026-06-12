@@ -39,6 +39,18 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
+# No IMPLICIT installs inside the image build: deps are laid down EXCLUSIVELY
+# by the two frozen installs above. pnpm v11's verify-deps-before-run
+# heuristic (default: install) can otherwise auto-run a NON-frozen
+# `pnpm install` before a `pnpm run` script when buildx restores the install
+# layers from the GHA cache (its state check mistrusts the restored layers) —
+# and a fresh workspace re-resolution hard-fails on workspace deps that are
+# legitimately ABSENT from the image's pruned extension universe (the frozen
+# installs tolerate them via lockfile importers). Disabling the heuristic here
+# is supply-chain hardening, not a workaround: an implicit non-frozen install
+# in the image build would be a bug even when it succeeds.
+ENV npm_config_verify_deps_before_run=false
+
 # Presence-aware map regeneration (cinatra#7). `COPY . .` restored the
 # COMMITTED src/lib/generated/* maps — the dev/CI-canonical artifact generated
 # against the full clone-back extension universe. THIS image's presence
