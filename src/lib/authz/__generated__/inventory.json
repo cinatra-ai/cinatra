@@ -490,77 +490,77 @@
     {
       "primitiveName": "crm_account_create",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 368
+      "line": 380
     },
     {
       "primitiveName": "crm_account_get",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 359
+      "line": 371
     },
     {
       "primitiveName": "crm_account_search",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 350
+      "line": 362
     },
     {
       "primitiveName": "crm_account_update",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 381
+      "line": 393
     },
     {
       "primitiveName": "crm_contact_create",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 312
+      "line": 324
     },
     {
       "primitiveName": "crm_contact_find_by_email",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 339
+      "line": 351
     },
     {
       "primitiveName": "crm_contact_get",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 303
+      "line": 315
     },
     {
       "primitiveName": "crm_contact_search",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 294
+      "line": 306
     },
     {
       "primitiveName": "crm_contact_update",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 326
+      "line": 338
     },
     {
       "primitiveName": "crm_list_create",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 414
+      "line": 426
     },
     {
       "primitiveName": "crm_list_get",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 405
+      "line": 417
     },
     {
       "primitiveName": "crm_list_member_add",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 432
+      "line": 444
     },
     {
       "primitiveName": "crm_list_member_remove",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 444
+      "line": 456
     },
     {
       "primitiveName": "crm_list_members_get",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 423
+      "line": 435
     },
     {
       "primitiveName": "crm_list_search",
       "file": "extensions/cinatra-ai/crm-connector/src/mcp/module.ts",
-      "line": 396
+      "line": 408
     },
     {
       "primitiveName": "dashboards_archive",
