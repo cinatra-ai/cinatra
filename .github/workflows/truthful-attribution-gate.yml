@@ -1,0 +1,41 @@
+name: truthful-attribution-gate
+
+# Thin caller for the org-reusable truthful-attribution-gate (cinatra-ai/ci),
+# per the ratified spec cinatra-engineering#119 (re-scopes/supersedes #116).
+#
+# WARN mode (spec §7 step 4): the gate computes presence + anti-fabrication
+# findings (a truthful `Assisted-by`; a `Reviewed-by` that matches a real,
+# non-self, non-stale PR approval at the reviewed head by a login whose repo
+# permission meets the claimed tier; a `Gate-suite` that matches the committed
+# suite and whose required contexts ran green; high-risk paths require the
+# human arm at tier=maintainer) and emits them as annotations — but NEVER fails
+# the check. The ENFORCE flip is NOT a caller change: per spec §7/§8.5 it is
+# gated on the dedicated machine identity for agent-opened PRs ([owner] issue).
+#
+# Double-pinned: the reusable workflow is pinned to an immutable SHA AND carries
+# the version comment (the moving ci marker re-pointed to this SHA) on the
+# `uses:` line below, exactly like the other cinatra-ai/ci gate callers here.
+#
+# A `.github/gate-suite.json` (the named, versioned required-check set + the
+# Accountable engineer) is NOT committed here yet: per spec §7 step 3 it lands
+# via an owner-reviewed PR carrying a human-arm record at the ENFORCE-bootstrap
+# stage (it is itself a high-risk org-governance path). Until then the gate
+# verifies presence + the human arm (the gate arm simply isn't exercised on
+# cinatra), which is exactly the WARN-stage scope.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+jobs:
+  truthful-attribution-gate:
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@2f1b1477f62d1bbe4e79349cbb6a94bd8053acce # v0.1.0
+    with:
+      mode: warn
+      ref: 2f1b1477f62d1bbe4e79349cbb6a94bd8053acce
