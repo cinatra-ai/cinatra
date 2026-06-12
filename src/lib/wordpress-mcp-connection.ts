@@ -6,7 +6,8 @@
  * INJECTION of those servers is manifest-driven: the wordpress-mcp-connector
  * extension's `mcp-toolbox` module builds the injected tools (resolved through
  * the generated manifest loader map), consuming this file's probe + endpoint
- * helpers via its host-bound deps (src/lib/register-transport-connectors.ts).
+ * helpers via its host-bound deps (the `@cinatra-ai/host:wordpress-mcp`
+ * service published by src/lib/register-host-connector-services.ts).
  * This file keeps the host-owned pieces: the cached reachability probe (also
  * used by the assistant-connector settings pages), the endpoint resolution,
  * and the private-URL policy shared with the external-MCP registry.

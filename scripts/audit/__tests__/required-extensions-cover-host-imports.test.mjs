@@ -393,21 +393,24 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
     });
     expect(defects).toEqual([]);
 
-    // The under-coverage hole this gate closed (cinatra#7, dep-drop slice): the
-    // statically-wired transport DI cluster's connector imports are inside a
-    // file whose header line comment contains a literal `/*` — the legacy
-    // stripper went blind there. Pin that the hard scan SEES those edges (the
-    // file and the wired packages are the documented residual cluster; if the
-    // cluster is ever cut over, update/remove this pin alongside).
-    const transport = live.byFile["src/lib/register-transport-connectors.ts"];
-    expect(transport).toBeDefined();
+    // The under-coverage hole this gate closed (cinatra#7, dep-drop slice) had
+    // ONE live carrier: the statically-wired transport DI cluster, whose
+    // connector imports sat behind a header line comment containing a literal
+    // `/*` (the legacy stripper went blind there). That cluster was CUT OVER
+    // by the transport-DI inversion (cinatra#151 Stage 3): the binder —
+    // renamed register-host-connector-services.ts — imports NO extension
+    // package, and the four transports left the bootable declaration. Pin the
+    // end-state (the lexer-correctness shape itself is covered by the fixture
+    // tests above).
+    expect(live.byFile["src/lib/register-transport-connectors.ts"]).toBeUndefined();
+    expect(live.byFile["src/lib/register-host-connector-services.ts"]).toBeUndefined();
     for (const pkg of [
       "@cinatra-ai/openai-connector",
       "@cinatra-ai/anthropic-connector",
       "@cinatra-ai/drupal-mcp-connector",
       "@cinatra-ai/wordpress-mcp-connector",
     ]) {
-      expect(transport).toContain(pkg);
+      expect(live.hostImported.has(pkg)).toBe(false);
     }
 
     // Every generated-map-only package must be positively classified — the

@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 46,
-      "keys": 78,
-      "occurrences": 113
+      "files": 45,
+      "keys": 74,
+      "occurrences": 109
     },
     "mechanical": {
       "files": 0,
@@ -87,10 +87,6 @@
     "src/lib/blog/dashboard-url.ts :: package :: @cinatra-ai/blog-content-workflow": 1,
     "src/lib/blog/generation.ts :: package :: @cinatra-ai/blog-pipeline-agent": 3,
     "src/lib/blog/mcp/registry.ts :: package :: @cinatra-ai/blog-linkedin-publish-agent": 1,
-    "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/anthropic-connector": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/drupal-mcp-connector": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "src/lib/register-transport-connectors.ts :: package :: @cinatra-ai/wordpress-mcp-connector": 1
+    "src/lib/blog/store.ts :: package :: @cinatra-ai/blog-image-artifact": 1
   }
 }

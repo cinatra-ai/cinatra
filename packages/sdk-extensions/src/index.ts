@@ -343,7 +343,15 @@ export {
 } from "./host-connector-services-contract";
 export type {
   HostConnectorConfigService,
-  HostNangoConnectionStorageService,
+  HostMcpPaginationService,
+  HostContentEditorDispatchService,
+  HostDrupalMcpService,
+  HostWordPressMcpService,
+  HostRuntimeModeService,
+  HostNotificationsService,
+  HostSkillsCatalogService,
+  HostOpenAIConnectionService,
+  HostAnthropicConnectionService,
   HostGoogleOAuthService,
   HostSecretsCodecService,
   HostExternalMcpRegistryService,

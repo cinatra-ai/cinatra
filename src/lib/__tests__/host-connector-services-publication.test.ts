@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 
-// Host per-concern service publication (register-transport-connectors):
-// pins the ADDITIVE Stage-0 surface of the nango serverEntry cutover
-// (cinatra#151) — (a) the `@cinatra-ai/host:connector-config` service now
-// carries the PHYSICAL `delete` member (the nango legacy-key purge must
-// remove the dead, untrusted row — never blank it), and (b) the BLOCKING
-// `nango-connection-materializer` capability the nango gateway's save path
-// will await for linkedin/wordpress account materialization (failures fold
-// into the save result — the inline fail-blocking semantics preserved).
+// Host per-concern service publication (register-host-connector-services):
+// pins (a) the `@cinatra-ai/host:connector-config` PHYSICAL `delete` member
+// (the nango legacy-key purge must remove the dead, untrusted row — never
+// blank it), (b) the BLOCKING `nango-connection-materializer` capability the
+// nango gateway's save path awaits (failures fold into the save result), and
+// (c) the transport-DI inversion surface (cinatra#151 Stage 3): the
+// per-concern services the openai/anthropic/drupal-mcp/wordpress-mcp
+// serverEntry transports adapt into their own deps slots, the old
+// `@cinatra-ai/host:nango-connection-storage` id surviving ONLY as the
+// deprecation-window compat shim, and the binder naming NO extension package.
 
 vi.mock("server-only", () => ({}));
 
@@ -49,26 +51,15 @@ vi.mock("@cinatra-ai/google-oauth-connection", () => ({
   googleApiFetch: async () => ({}),
   refreshGoogleOAuthAccessTokenIfNeeded: async () => ({}),
 }));
-vi.mock("@cinatra-ai/openai-connector/deps", () => ({ registerOpenAIConnector: () => {} }));
-vi.mock("@cinatra-ai/anthropic-connector", () => ({ registerAnthropicConnector: () => {} }));
-vi.mock("@cinatra-ai/drupal-mcp-connector", () => ({ registerDrupalConnector: () => {} }));
-vi.mock("@cinatra-ai/wordpress-mcp-connector", () => ({ registerWordPressConnector: () => {} }));
+// No extension-package mocks: the binder imports NO extension package since
+// the transport-DI inversion (cinatra#151 Stage 3) — the transports self-bind
+// at activation.
 vi.mock("@/lib/nango-system", () => ({
-  buildBearerAuthHeaderFromNango: async () => null,
-  CINATRA_NANGO_CONNECTION_IDS: {},
-  CINATRA_NANGO_PROVIDER_CONFIG_KEYS: {},
-  clearNangoConnectionRecords: async () => {},
-  deleteNangoConnection: async () => {},
-  ensureNangoConnectorIntegration: async () => null,
-  ensureNangoIntegration: async () => null,
-  getNangoCredentials: async () => null,
-  getNangoFrontendConfig: () => ({}),
-  getNangoStatus: () => ({ status: "not_connected" }),
-  getPrimarySavedNangoConnection: () => null,
-  importNangoConnection: async () => ({}),
-  isNangoConfigured: () => false,
-  removeNangoConnectionRecord: async () => {},
-  saveNangoConnectionRecord: async () => {},
+  requireNangoSystem: () => ({
+    isNangoConfigured: () => false,
+    getNangoStatus: () => ({ status: "not_connected", detail: "" }),
+    providerConfigKeys: { github: "cinatra-github" },
+  }),
 }));
 vi.mock("@/lib/host-content-editor-dispatch", () => ({ dispatchContentEditorViaA2A: async () => "" }));
 
@@ -103,6 +94,12 @@ import {
   NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
   type HostConnectorConfigService,
   type NangoConnectionMaterializer,
+  type HostMcpPaginationService,
+  type HostDrupalMcpService,
+  type HostWordPressMcpService,
+  type HostRuntimeModeService,
+  type HostOpenAIConnectionService,
+  type HostAnthropicConnectionService,
 } from "@cinatra-ai/sdk-extensions";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
@@ -115,9 +112,9 @@ function resolveSingle<T>(capability: string): T {
 }
 
 beforeAll(async () => {
-  // Module load auto-runs registerTransportConnectors() against the REAL
+  // Module load auto-runs registerHostConnectorServices() against the REAL
   // capability registry (the mocked deps keep it inert).
-  await import("@/lib/register-transport-connectors");
+  await import("@/lib/register-host-connector-services");
 });
 
 describe("host connector-config service (Stage-0 delete member)", () => {
@@ -190,5 +187,61 @@ describe("nango-connection-materializer capability (blocking save-path hooks)", 
     await expect(
       m.materialize({ connectorKey: "github", providerConfigKey: "cinatra-github", connectionId: "c-4" }),
     ).resolves.toEqual({ handled: false });
+  });
+});
+
+describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
+  it("publishes the per-concern services the serverEntry transports adapt", () => {
+    const svc = HOST_CONNECTOR_SERVICE_CAPABILITIES;
+    const pagination = resolveSingle<HostMcpPaginationService>(svc.mcpPagination);
+    expect(typeof pagination.decodeCursor).toBe("function");
+    expect(typeof pagination.buildListPage).toBe("function");
+
+    const drupal = resolveSingle<HostDrupalMcpService>(svc.drupalMcp);
+    expect(drupal.listInstances()).toEqual([]);
+    expect(typeof drupal.probe).toBe("function");
+    expect(typeof drupal.resolveServerUrl).toBe("function");
+    expect(typeof drupal.isPrivateUrl).toBe("function");
+
+    const wordpress = resolveSingle<HostWordPressMcpService>(svc.wordpressMcp);
+    expect(wordpress.listInstances()).toEqual([]);
+    expect(typeof wordpress.probeAdapter).toBe("function");
+    expect(typeof wordpress.deleteInstance).toBe("function");
+
+    const runtimeMode = resolveSingle<HostRuntimeModeService>(svc.runtimeMode);
+    expect(runtimeMode.isDevelopment()).toBe(false);
+
+    const openai = resolveSingle<HostOpenAIConnectionService>(svc.openaiConnection);
+    expect(typeof openai.readRowFromDatabase).toBe("function");
+    expect(typeof openai.read).toBe("function");
+    expect(typeof openai.update).toBe("function");
+    expect(typeof openai.clear).toBe("function");
+    expect(typeof openai.updateLoggingEnabled).toBe("function");
+
+    const anthropic = resolveSingle<HostAnthropicConnectionService>(svc.anthropicConnection);
+    expect(typeof anthropic.readRowFromDatabase).toBe("function");
+
+    expect(typeof resolveSingle<{ dispatch: unknown }>(svc.contentEditorDispatch).dispatch).toBe(
+      "function",
+    );
+    expect(typeof resolveSingle<{ create: unknown }>(svc.notifications).create).toBe("function");
+    expect(typeof resolveSingle<{ read: unknown }>(svc.skillsCatalog).read).toBe("function");
+  });
+
+  it("the old nango-connection-storage id is OUT of the SDK contract and survives only as the deprecation-window compat shim", () => {
+    // The contract no longer mints the id (consumers resolve nango-system).
+    expect(
+      Object.values(HOST_CONNECTOR_SERVICE_CAPABILITIES),
+    ).not.toContain("@cinatra-ai/host:nango-connection-storage");
+    // The shim still resolves for already-installed runtime package-store
+    // digests, delegating to the nango-system surface at call time.
+    const shim = resolveSingle<{
+      isConfigured(): boolean;
+      getStatus(): { status: string };
+      providerConfigKeys: Record<string, string>;
+    }>("@cinatra-ai/host:nango-connection-storage");
+    expect(shim.isConfigured()).toBe(false);
+    expect(shim.getStatus().status).toBe("not_connected");
+    expect(shim.providerConfigKeys.github).toBe("cinatra-github");
   });
 });
