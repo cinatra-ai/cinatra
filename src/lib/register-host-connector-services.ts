@@ -47,6 +47,7 @@ import {
   type HostMcpPaginationService,
   type HostContentEditorDispatchService,
   type HostDrupalMcpService,
+  type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostRuntimeModeService,
   type HostNotificationsService,
@@ -87,8 +88,27 @@ import {
   probeWordPressInstanceMcpAdapter,
   resolveWordPressMcpFallbackEndpoint,
 } from "@/lib/wordpress-mcp-connection";
-import { probeDrupalMcp, resolveDrupalMcpServerUrl } from "@/lib/drupal-mcp-connection";
-import { getDrupalAPISettings } from "@/lib/drupal-api";
+import {
+  getDrupalMcpInstanceStatuses,
+  probeDrupalMcp,
+  resolveDrupalMcpServerUrl,
+} from "@/lib/drupal-mcp-connection";
+// Drupal instance-admin surface (cinatra#172 Stage H2): the connector settings
+// page's save/delete/status moved behind the extended `drupal-mcp` service so
+// the connector's settings/handlers modules carry no `@/` edge. The write
+// members stay behind the connector's manage-gated "use server" actions.
+import {
+  deleteDrupalInstance,
+  getDrupalAPISettings,
+  getDrupalAPIStatus,
+  saveDrupalInstance,
+} from "@/lib/drupal-api";
+// Widget auth-config storage for the drupal assistant widget (cinatra#172
+// Stage H2): published as the `drupal-widget-auth` per-concern service.
+import {
+  generateDrupalWidgetAuthConfig,
+  readDrupalWidgetAuthConfig,
+} from "@/lib/drupal-widget-auth";
 
 let _registered = false;
 
@@ -225,7 +245,23 @@ export function registerHostConnectorServices(): void {
     probe: probeDrupalMcp,
     resolveServerUrl: resolveDrupalMcpServerUrl,
     isPrivateUrl,
+    // Instance-admin surface (cinatra#172 Stage H2). The writers
+    // (saveInstance/deleteInstance) sit behind the connector's manage-gated
+    // "use server" actions — identical posture to the static imports they
+    // replace (see the contract's TRUST note).
+    getAPIStatus: getDrupalAPIStatus,
+    saveInstance: saveDrupalInstance,
+    deleteInstance: deleteDrupalInstance,
+    getInstanceStatuses: getDrupalMcpInstanceStatuses,
   } satisfies HostDrupalMcpService);
+
+  // Widget auth-config storage for the drupal assistant widget (cinatra#172
+  // Stage H2): `generate` MINTS+PERSISTS a fresh key (manage-gated in the
+  // connector); `read` backs the settings page render.
+  register(svc.drupalWidgetAuth, {
+    read: readDrupalWidgetAuthConfig,
+    generate: generateDrupalWidgetAuthConfig,
+  } satisfies HostDrupalWidgetAuthService);
 
   register(svc.wordpressMcp, {
     listInstances: () => getWordPressAPISettings().instances,

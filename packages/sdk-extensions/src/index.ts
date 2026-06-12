@@ -351,6 +351,7 @@ export type {
   HostMcpPaginationService,
   HostContentEditorDispatchService,
   HostDrupalMcpService,
+  HostDrupalWidgetAuthService,
   HostWordPressMcpService,
   HostRuntimeModeService,
   HostNotificationsService,

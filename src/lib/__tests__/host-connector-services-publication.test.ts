@@ -82,8 +82,33 @@ vi.mock("@/lib/wordpress-mcp-connection", () => ({
 vi.mock("@/lib/drupal-mcp-connection", () => ({
   probeDrupalMcp: async () => ({}),
   resolveDrupalMcpServerUrl: () => null,
+  getDrupalMcpInstanceStatuses: async () => [
+    { id: "i-1", name: "Site", siteUrl: "https://d.example", status: "registered", isPrivate: false },
+  ],
 }));
-vi.mock("@/lib/drupal-api", () => ({ getDrupalAPISettings: () => ({ instances: [] }) }));
+const drupalApiCalls: Record<string, unknown[][]> = { save: [], delete: [] };
+vi.mock("@/lib/drupal-api", () => ({
+  getDrupalAPISettings: () => ({ instances: [] }),
+  getDrupalAPIStatus: async () => ({ instanceCount: 0, instances: [] }),
+  saveDrupalInstance: async (...args: unknown[]) => {
+    drupalApiCalls.save.push(args);
+    return { id: "i-1" };
+  },
+  deleteDrupalInstance: async (...args: unknown[]) => {
+    drupalApiCalls.delete.push(args);
+  },
+}));
+const widgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
+vi.mock("@/lib/drupal-widget-auth", () => ({
+  readDrupalWidgetAuthConfig: () => {
+    widgetAuthCalls.read += 1;
+    return { apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" };
+  },
+  generateDrupalWidgetAuthConfig: () => {
+    widgetAuthCalls.generate += 1;
+    return { apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" };
+  },
+}));
 
 import {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
@@ -92,6 +117,7 @@ import {
   type NangoConnectionMaterializer,
   type HostMcpPaginationService,
   type HostDrupalMcpService,
+  type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostRuntimeModeService,
   type HostOpenAIConnectionService,
@@ -236,5 +262,53 @@ describe("transport-DI inversion services (cinatra#151 Stage 3)", () => {
     expect(
       resolveCapabilityProviders("@cinatra-ai/host:nango-connection-storage"),
     ).toEqual([]);
+  });
+});
+
+describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", () => {
+  // Grant-drift coverage: one assertion row per NEW/EXTENDED service MEMBER —
+  // the publication test pins the full member set, not just the service id.
+  it("extends @cinatra-ai/host:drupal-mcp with the instance-admin surface (every member bound)", async () => {
+    const drupal = resolveSingle<HostDrupalMcpService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalMcp,
+    );
+    // Pre-H2 members survive unchanged.
+    expect(drupal.listInstances()).toEqual([]);
+    expect(typeof drupal.probe).toBe("function");
+    expect(typeof drupal.resolveServerUrl).toBe("function");
+    expect(typeof drupal.isPrivateUrl).toBe("function");
+
+    // getAPIStatus — the connector's drupal_status primitive read.
+    await expect(drupal.getAPIStatus()).resolves.toEqual({ instanceCount: 0, instances: [] });
+
+    // saveInstance — WRITER; forwards the input envelope and returns the row.
+    await expect(
+      drupal.saveInstance({ name: "Site", siteUrl: "https://d.example", mcpApiKey: "k".repeat(12) }),
+    ).resolves.toEqual({ id: "i-1" });
+    expect(drupalApiCalls.save.at(-1)).toEqual([
+      { name: "Site", siteUrl: "https://d.example", mcpApiKey: "k".repeat(12) },
+    ]);
+
+    // deleteInstance — WRITER; forwards the id.
+    await expect(drupal.deleteInstance("i-1")).resolves.toBeUndefined();
+    expect(drupalApiCalls.delete.at(-1)).toEqual(["i-1"]);
+
+    // getInstanceStatuses — host probe + Nango bearer stays host-side.
+    await expect(drupal.getInstanceStatuses()).resolves.toEqual([
+      { id: "i-1", name: "Site", siteUrl: "https://d.example", status: "registered", isPrivate: false },
+    ]);
+  });
+
+  it("publishes @cinatra-ai/host:drupal-widget-auth with read + generate (writer) members", () => {
+    const widgetAuth = resolveSingle<HostDrupalWidgetAuthService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalWidgetAuth,
+    );
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalWidgetAuth).toBe(
+      "@cinatra-ai/host:drupal-widget-auth",
+    );
+    expect(widgetAuth.read()).toEqual({ apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" });
+    expect(widgetAuth.generate()).toEqual({ apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" });
+    expect(widgetAuthCalls.read).toBe(1);
+    expect(widgetAuthCalls.generate).toBe(1);
   });
 });

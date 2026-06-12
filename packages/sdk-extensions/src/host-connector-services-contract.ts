@@ -66,6 +66,10 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   mcpPagination: "@cinatra-ai/host:mcp-pagination",
   contentEditorDispatch: "@cinatra-ai/host:content-editor-dispatch",
   drupalMcp: "@cinatra-ai/host:drupal-mcp",
+  // --- hostInternal pinned-empty sweep (cinatra#172 Stage H2) --------------
+  // Per-concern widget-auth config surface for the drupal assistant widget
+  // (`@/lib/drupal-widget-auth` stays host-side).
+  drupalWidgetAuth: "@cinatra-ai/host:drupal-widget-auth",
   wordpressMcp: "@cinatra-ai/host:wordpress-mcp",
   runtimeMode: "@cinatra-ai/host:runtime-mode",
   notifications: "@cinatra-ai/host:notifications",
@@ -111,9 +115,19 @@ export type HostContentEditorDispatchService = {
   dispatch(input: { agentUrl: string; payload: unknown; timeoutMs: number }): Promise<string>;
 };
 
-/** Drupal external-MCP toolbox surfaces (instance settings + cached probe +
- * endpoint/URL policy — `@/lib/drupal-api` / `@/lib/drupal-mcp-connection`
- * stay host-side). */
+/** Drupal external-MCP toolbox + instance-admin surfaces (instance settings +
+ * cached probe + endpoint/URL policy + the connector settings page's
+ * save/delete/status reads-and-writes — `@/lib/drupal-api` /
+ * `@/lib/drupal-mcp-connection` stay host-side).
+ *
+ * TRUST (cinatra#172 Stage H2): READ and WRITE members share this ONE
+ * in-process capability id — the registry is server-side only, never
+ * client-resolvable. The WRITERS are `saveInstance` (persists the instance
+ * row + imports the Nango credential) and `deleteInstance` (hard-deletes the
+ * row + best-effort Nango cleanup). AUTHORIZATION GATING STAYS
+ * EXTENSION-SIDE: the connector's "use server" actions keep their
+ * `requireExtensionAction(<pkg>, "manage")` gates — the identical posture the
+ * static `@/lib/drupal-api` imports carried before the cutover. */
 export type HostDrupalMcpService = {
   listInstances(): Array<{
     id: string;
@@ -121,6 +135,10 @@ export type HostDrupalMcpService = {
     siteUrl: string;
     nangoConnectionId: string;
     providerConfigKey: string;
+    /** Row metadata (host rows always carry these; optional for skew). */
+    lastValidatedAt?: string;
+    createdAt?: string;
+    updatedAt?: string;
   }>;
   probe(
     siteUrl: string,
@@ -128,6 +146,51 @@ export type HostDrupalMcpService = {
   ): Promise<"registered" | "not_installed" | "auth_error" | "unreachable">;
   resolveServerUrl(siteUrl: string): string;
   isPrivateUrl(url: string): boolean;
+  // --- instance-admin surface (cinatra#172 Stage H2) -----------------------
+  /** Aggregate status for the connector's `drupal_status` primitive. */
+  getAPIStatus(): Promise<{
+    instanceCount: number;
+    instances: Array<{ id: string; name: string; siteUrl: string; lastValidatedAt?: string }>;
+  }>;
+  /** WRITER — persist an instance row (Nango import + readback inside). */
+  saveInstance(input: { id?: string; name: string; siteUrl: string; mcpApiKey?: string }): Promise<{
+    id: string;
+    name: string;
+    siteUrl: string;
+    nangoConnectionId: string;
+    providerConfigKey: string;
+    lastValidatedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  /** WRITER — hard-delete an instance row (best-effort Nango cleanup). */
+  deleteInstance(id: string): Promise<void>;
+  /** Per-instance MCP reachability statuses (host probe + Nango bearer). */
+  getInstanceStatuses(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      siteUrl: string;
+      status: "registered" | "not_installed" | "auth_error" | "unreachable";
+      isPrivate: boolean;
+    }>
+  >;
+};
+
+/** Widget AUTH-CONFIG storage for the Drupal assistant widget
+ * (`@/lib/drupal-widget-auth` stays host-side; the request-time origin/token
+ * validation lives in the host's generic widget-stream auth, NOT here).
+ *
+ * TRUST (cinatra#172 Stage H2): read and write share this ONE in-process
+ * capability id (server-side registry only). The WRITER is `generate()` — it
+ * MINTS AND PERSISTS a fresh widget API key, immediately invalidating the
+ * previous one. AUTHORIZATION GATING STAYS EXTENSION-SIDE: the connector's
+ * "use server" generate action keeps its `requireExtensionAction(<pkg>,
+ * "manage")` gate — the identical posture the static import carried. */
+export type HostDrupalWidgetAuthService = {
+  read(): { apiKey: string; generatedAt: string } | null;
+  /** WRITER — mint + persist a fresh widget API key (invalidates the old). */
+  generate(): { apiKey: string; generatedAt: string };
 };
 
 /** WordPress external-MCP toolbox surfaces + the instance hard-delete
