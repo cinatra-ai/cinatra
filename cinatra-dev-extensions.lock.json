@@ -140,12 +140,12 @@
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
       "repo": "cinatra-ai/drupal-assistant-connector",
-      "resolvedSha": "da8d158ad26dd48a69a60f0477573c14c0bdcf19"
+      "resolvedSha": "2e2bd71ff41774dc1272da1212a878a6c55a591a"
     },
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "aa42a93281542ae89f09c472de80d3a344eef725"
+      "resolvedSha": "21bb518657de75b29b7700f39c1a0a3375a42e14"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",

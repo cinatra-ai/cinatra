@@ -45,6 +45,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/blog-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/crm-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/drupal-assistant-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/drupal-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/email-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/gemini-connector", resolution: "guardedOptional" },
