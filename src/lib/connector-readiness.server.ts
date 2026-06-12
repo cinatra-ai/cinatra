@@ -18,7 +18,7 @@ import "server-only";
 import {
   getPrimarySavedNangoConnections,
   listSavedNangoConnections,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 import { getWordPressAPISettings } from "@/lib/wordpress-api";
 import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { countExternalMcpOAuthClients } from "@/lib/better-auth-oauth-client";

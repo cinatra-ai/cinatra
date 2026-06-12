@@ -14,12 +14,12 @@ vi.mock("@/lib/wordpress-mcp-connection", () => ({
   isPrivateUrl: vi.fn((u: string) => /localhost|127\.0\.0\.1|::1/.test(u)),
 }));
 
-vi.mock("@/lib/nango", () => ({
+vi.mock("@/lib/nango-system", () => ({
   buildBearerAuthHeaderFromNango: vi.fn(),
 }));
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
-import { buildBearerAuthHeaderFromNango } from "@/lib/nango";
+import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
 import {
   getDrupalMcpInstanceStatuses,
   probeDrupalMcp,

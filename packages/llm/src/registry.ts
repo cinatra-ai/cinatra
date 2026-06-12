@@ -9,10 +9,12 @@ import { createAnthropicProviderAdapter, type AnthropicConnectionConfig } from "
 import { createGeminiProviderAdapter, getConfiguredGeminiConnection } from "./providers/gemini";
 import { buildLlmMcpServerTool, buildExternalMcpServerTools } from "./mcp-access";
 import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types";
-// Anthropic API connection config is owned by @cinatra-ai/anthropic-connector.
+// Anthropic API connection config is owned by the anthropic connector and
+// resolves through its `llm-provider-surface` registration at call time
+// (cinatra#151 Stage 2 — packages/llm carries NO connector value-imports).
 // The MCP-client-registry connector owns inbound MCP-client OAuth client
 // management only.
-import { getConfiguredAnthropicConnection } from "@cinatra-ai/anthropic-connector";
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase } from "@/lib/database";
 import {
   buildRegisteredExternalMcpServerTools,
@@ -202,6 +204,17 @@ export async function resolveChatExternalMcpTools(
 // ---------------------------------------------------------------------------
 // Resolve a provider adapter from stored connection config
 // ---------------------------------------------------------------------------
+
+/**
+ * Anthropic connection via the anthropic surface; absent surface/member ⇒
+ * null (the existing "not configured" adapter semantics — no new error
+ * class).
+ */
+async function getConfiguredAnthropicConnection(): Promise<AnthropicConnectionConfig | null> {
+  const getConfiguredConnection = getLlmProviderSurface("anthropic")?.getConfiguredConnection;
+  if (typeof getConfiguredConnection !== "function") return null;
+  return ((await getConfiguredConnection()) ?? null) as AnthropicConnectionConfig | null;
+}
 
 export async function resolveProviderAdapter(provider: LlmProvider): Promise<LlmProviderAdapter | null> {
   switch (provider) {

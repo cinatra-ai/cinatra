@@ -90,7 +90,7 @@ vi.mock("@/lib/a2a-server", () => ({
   getA2AMount: async () => ({ handle: async () => ({}) }),
 }));
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   getNangoConnection: async () => nangoState.connection,
   listSavedNangoConnections: () => [],
 }));

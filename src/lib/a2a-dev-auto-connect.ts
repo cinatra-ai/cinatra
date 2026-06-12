@@ -6,7 +6,7 @@ import {
   listSavedNangoConnections,
   saveNangoConnectionRecord,
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 import { upsertExternalAgentTemplate, renameExternalAgentTemplateRemoteId, readAgentTemplateByConnectorAndRemoteId } from "@cinatra-ai/agents";
 // The Gemini key read resolves through the `llm-provider-surface` capability
 // (lazy/guarded host-access cutover). Connector absent → the

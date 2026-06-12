@@ -327,6 +327,7 @@ export type { BlogConnectorProvider } from "./blog-connector-provider-contract";
 export {
   HOST_CONNECTOR_SERVICE_CAPABILITIES,
   NANGO_CONNECTION_SAVED_CAPABILITY,
+  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
   LLM_TOOLBOX_CAPABILITY,
   SOCIAL_POST_CAPABILITY,
   CRM_PROVIDER_CAPABILITY,
@@ -351,6 +352,8 @@ export type {
   HostEmailRoutingService,
   HostBlogRoutingService,
   NangoConnectionSavedHook,
+  NangoConnectionMaterializer,
+  NangoConnectionMaterializerInput,
   LlmToolboxProvider,
   HostObjectsIntegrationService,
   ObjectTypeRegistrarProvider,
@@ -380,3 +383,23 @@ export type {
   ChatUserContextContributor,
   ChatUserContextProviderRecord,
 } from "./chat-user-context-contract";
+
+// The nango-system capability contract (the nango serverEntry cutover): the
+// nango gateway registers its full host-facing surface from `register(ctx)`;
+// the host resolver (src/lib/nango-system.ts) imports the id constant + types
+// — extensions keep this import TYPE-ONLY (host-peer-value-import ban).
+export { NANGO_SYSTEM_CAPABILITY } from "./nango-system-contract";
+export type {
+  NangoConnectorKey,
+  NangoConnectionIdKey,
+  NangoSettings,
+  NangoFrontendConfig,
+  SavedNangoConnection,
+  NangoConnectorDefinition,
+  NangoConfigStore,
+  NangoConnectionScopeOptions,
+  NangoOAuth2IntegrationCredentials,
+  NangoConnectionDetails,
+  NangoRouteResult,
+  NangoSystemSurface,
+} from "./nango-system-contract";

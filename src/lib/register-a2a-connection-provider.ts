@@ -14,7 +14,7 @@ import {
   importNangoConnection,
   saveNangoConnectionRecord,
   removeNangoConnectionRecord,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 import {
   upsertExternalAgentTemplate,
   deleteExternalAgentTemplatesByConnectorSlug,

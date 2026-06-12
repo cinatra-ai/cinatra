@@ -11,7 +11,7 @@ import {
   isNangoConfigured,
   listSavedNangoConnections,
   removeNangoConnectionRecord,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 
 const LINKEDIN_API_VERSION = "202603";
 export const LINKEDIN_API_LOG_DIRECTORY = path.join(process.cwd(), "data", "logs", "linkedin-api");

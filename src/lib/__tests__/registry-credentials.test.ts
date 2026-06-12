@@ -22,7 +22,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   ensureNangoIntegration: vi.fn(async () => null),
   importNangoConnection: vi.fn(async () => null),
   deleteNangoConnection: vi.fn(async () => undefined),
@@ -36,7 +36,7 @@ import {
   deleteNangoConnection,
   getNangoCredentials,
   isNangoConfigured,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 import {
   readRegistryCredential,
   writeRegistryCredential,

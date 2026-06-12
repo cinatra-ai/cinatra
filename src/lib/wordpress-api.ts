@@ -10,7 +10,7 @@ import {
   getNangoCredentials,
   importNangoConnection,
   isNangoConfigured,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 
 export type WordPressInstanceSettings = {
   id: string;

@@ -264,6 +264,39 @@ if [ "${ANCHORS:-0}" -eq 0 ] || [ "${REQUIRED_ANCHORS:-0}" -eq 0 ] || [ "${LIVE_
   fail "static-bundle anchor seeding left a zero count (anchors=${ANCHORS}, required=${REQUIRED_ANCHORS}, live=${LIVE_ANCHORS})."
 fi
 
+# ── 6a-bis. Required-set EQUALITY (still data-driven; no extension-name
+# literals). The required_in_prod anchor rows on the fresh DB must equal —
+# exactly, both directions — the image's OWN `cinatra.requiredExtensions`
+# declaration. After the bootable-set shrink (cinatra#7) this pins that a
+# fresh prod DB is seeded with ONLY the declared required/system set: a
+# stale image declaration, a leftover hardcoded list, or a seeding path that
+# resurrects demoted packages all fail here.
+echo "==> fresh-DB assertion: required anchors == the image's declared required set"
+DECLARED_REQUIRED=$(docker exec "$APP" node -e '
+  const fs = require("fs");
+  const pkg = JSON.parse(fs.readFileSync("/app/package.json", "utf8"));
+  const names = ((pkg.cinatra && pkg.cinatra.requiredExtensions) || []).map((e) => {
+    const at = e.lastIndexOf("@");
+    return at <= 0 ? e : e.slice(0, at);
+  });
+  if (names.length === 0) { console.error("image declaration is empty"); process.exit(1); }
+  console.log(names.sort().join("\n"));
+')
+DB_REQUIRED=$(docker exec "$PG" psql -U postgres -d postgres -tA -c "
+  SELECT package_name FROM cinatra.installed_extension
+  WHERE owner_level = 'platform'
+    AND required_in_prod
+    AND source->>'type' = 'local'
+    AND source->>'path' LIKE 'static-bundle:%'
+  ORDER BY package_name;
+")
+if [ "$DECLARED_REQUIRED" != "$DB_REQUIRED" ]; then
+  echo "--- declared (image package.json):"; printf '%s\n' "$DECLARED_REQUIRED"
+  echo "--- required_in_prod anchors (fresh DB):"; printf '%s\n' "$DB_REQUIRED"
+  fail "required_in_prod anchor set != the image's declared requiredExtensions."
+fi
+echo "    required anchors == declared required set ($(printf '%s\n' "$DB_REQUIRED" | wc -l | tr -d ' ') packages)"
+
 # ── 6b. Boot-log assertion: loader line present, fatal markers absent ────────
 APP_LOGS=$(docker logs "$APP" 2>&1)
 if ! printf '%s' "$APP_LOGS" | grep -q '\[boot\] StaticBundleLoader:'; then

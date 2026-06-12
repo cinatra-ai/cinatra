@@ -106,11 +106,13 @@ describe("core-extension-instance-coupling-ban gate", () => {
     const occ = scanInstanceCoupling();
     // A line comment containing `@/lib/*` sits above the static import cluster —
     // the old regex stripper swallowed the whole cluster as a bogus block comment.
-    // (The transport-registration cutover removed the 7 transport registrar imports; the file still statically
-    // imports the remaining legacy cluster — nango + openai/anthropic/drupal/
-    // wordpress — behind the same comment shape, so the regression stays live.)
+    // (The transport-registration cutover removed the 7 transport registrar imports; the nango
+    // serverEntry cutover (cinatra#151 Stage 1) then dropped the 15-name nango
+    // import block; the file still statically imports the remaining legacy
+    // cluster — openai/anthropic/drupal/wordpress — behind the same comment
+    // shape, so the regression stays live.)
     const transport = Object.keys(occ).filter((k) => k.startsWith("src/lib/register-transport-connectors.ts :: package ::"));
-    expect(transport.some((k) => k.endsWith("@cinatra-ai/nango-connector"))).toBe(true);
+    expect(transport.some((k) => k.endsWith("@cinatra-ai/nango-connector"))).toBe(false);
     expect(transport.some((k) => k.endsWith("@cinatra-ai/wordpress-mcp-connector"))).toBe(true);
     // The other previously-hidden site (the hand-maintained loader map in
     // src/lib/connector-setup-pages.ts) has since been DECOUPLED — the

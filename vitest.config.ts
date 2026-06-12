@@ -282,6 +282,8 @@ export default defineConfig({
       "packages/sdk-ui/src/**/__tests__/**/*.test.{ts,tsx}",
       // Extension inventory + dependency-graph generator (pure; reads repo).
       "scripts/extensions/__tests__/**/*.test.{ts,mjs}",
+      // CI clone-back pinning helpers (pure cores; dependency-injected IO).
+      "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
     ],
@@ -306,8 +308,14 @@ export default defineConfig({
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
-      // Mirrors the `*.integration.test.ts` exclusion above.
-      "src/lib/__tests__/integration/**",
+      // Mirrors the `*.integration.test.ts` exclusion above. Lifted when
+      // CINATRA_DB_INTEGRATION_TESTS=1 — the extension-lifecycle-db-tests CI
+      // job (Postgres service container) and local runs against a dev
+      // Postgres use that flag; the suites ALSO self-skip without a real
+      // SUPABASE_DB_URL, so the flag alone can never make them fail-vacuous.
+      ...(process.env.CINATRA_DB_INTEGRATION_TESTS === "1"
+        ? []
+        : ["src/lib/__tests__/integration/**"]),
       // QUARANTINE (sandbox gap): brittle `(\w+)\(\)`
       // scanner regex matches `resolveExtensionActorSummary()`; ungated in CI.
       "src/__tests__/mcp-server-tool-count.test.ts",

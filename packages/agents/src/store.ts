@@ -1,7 +1,7 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, lt, type SQL } from "drizzle-orm";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
 import { expireRunStream } from "@cinatra-ai/a2a";
-import { listSavedNangoConnections } from "@cinatra-ai/nango-connector";
+import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID, createHash } from "node:crypto";
 import { diffLines } from "diff";
 import semver from "semver";

@@ -41,7 +41,7 @@ import {
   getNangoCredentials,
   importNangoConnection,
   isNangoConfigured,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 
 export type RegistryCredentialKind = "request-secret" | "token";
 

@@ -21,7 +21,7 @@ vi.mock("@/lib/database", () => ({
 // Mock the @cinatra-ai/nango-connector surface.
 // ---------------------------------------------------------------------------
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS: { drupal: "cinatra-drupal" },
   deleteNangoConnection: vi.fn(),
   ensureNangoConnectorIntegration: vi.fn(async () => null),
@@ -40,7 +40,7 @@ import {
   isNangoConfigured,
   removeNangoConnectionRecord,
   saveNangoConnectionRecord,
-} from "@cinatra-ai/nango-connector";
+} from "@/lib/nango-system";
 
 import {
   saveDrupalInstance,

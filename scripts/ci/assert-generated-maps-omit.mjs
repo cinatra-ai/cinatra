@@ -11,11 +11,13 @@
 //     whole job silently degenerating into "assert nothing, build anything".
 //
 //   (default omission mode)       (run AFTER removal + regeneration)
-//     Asserts EVERY emitted file contains ZERO references to the absent
-//     package — neither the full package name (record keys, literal import
-//     specifiers) nor the bare slug as a quoted map key. A leftover
-//     reference means the regeneration did not presence-filter the entry —
-//     exactly the #109/#110 fresh-clone build-failure class this check pins.
+//     Accepts ONE OR MORE absent packages (the required-only universe prune
+//     removes many at once — cinatra#7, dep-drop slice). Asserts EVERY emitted file
+//     contains ZERO references to EACH absent package — neither the full
+//     package name (record keys, literal import specifiers) nor the bare
+//     slug as a quoted map key. A leftover reference means the regeneration
+//     did not presence-filter the entry — exactly the #109/#110 fresh-clone
+//     build-failure class this check pins.
 //     PLUS survivor assertions (anti-vacuity — an empty or gutted emission
 //     must fail, not pass):
 //       * every root `cinatra.systemExtensions` package still appears in
@@ -26,7 +28,7 @@
 //
 // Usage:
 //   node scripts/ci/assert-generated-maps-omit.mjs --expect-present @scope/pkg
-//   node scripts/ci/assert-generated-maps-omit.mjs @scope/pkg
+//   node scripts/ci/assert-generated-maps-omit.mjs @scope/pkg [@scope/pkg2 ...]
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,17 +38,17 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const args = process.argv.slice(2);
 const expectPresent = args.includes("--expect-present");
-const pkg = args.find((a) => !a.startsWith("--"));
-if (!pkg || !/^@[^/]+\/[^/]+$/.test(pkg)) {
+const pkgs = args.filter((a) => !a.startsWith("--"));
+if (pkgs.length === 0 || pkgs.some((p) => !/^@[^/]+\/[^/]+$/.test(p)) || (expectPresent && pkgs.length !== 1)) {
   console.error(
-    "[assert-generated-maps-omit] FAIL: pass exactly one scoped package name (e.g. @cinatra-ai/media-feeds-connector).",
+    "[assert-generated-maps-omit] FAIL: pass scoped package name(s) (e.g. @cinatra-ai/media-feeds-connector); " +
+      "--expect-present takes exactly one.",
   );
   process.exit(1);
 }
-const slug = pkg.split("/")[1];
 // Quoted-slug form catches slug-keyed map entries ("<slug>": …) without
 // false-positiving on an unrelated substring.
-const slugKey = JSON.stringify(slug);
+const slugKeyOf = (pkg) => JSON.stringify(pkg.split("/")[1]);
 
 const SERVER_MAP_FILE = "src/lib/generated/extensions.server.ts";
 const GENERATED_TEST_FILE = GENERATED_MANIFEST_FILES.find((p) => p.includes("__tests__"));
@@ -55,6 +57,8 @@ const read = (rel) => readFileSync(join(REPO_ROOT, rel), "utf8");
 if (expectPresent) {
   // Pre-removal probe-meaningfulness assertion: the probe must have REAL
   // loader presence in the emitted maps (package-name specifier + slug key).
+  const pkg = pkgs[0];
+  const slugKey = slugKeyOf(pkg);
   const text = read(SERVER_MAP_FILE);
   if (!text.includes(pkg) || !text.includes(slugKey)) {
     console.error(
@@ -73,14 +77,17 @@ if (expectPresent) {
 let failed = false;
 for (const rel of GENERATED_MANIFEST_FILES) {
   const text = read(rel);
-  const hits = [];
-  if (text.includes(pkg)) hits.push(`package name "${pkg}"`);
-  if (text.includes(slugKey)) hits.push(`slug key ${slugKey}`);
-  if (hits.length > 0) {
-    console.error(
-      `[assert-generated-maps-omit] FAIL: ${rel} still references the absent package (${hits.join(", ")}).`,
-    );
-    failed = true;
+  for (const pkg of pkgs) {
+    const slugKey = slugKeyOf(pkg);
+    const hits = [];
+    if (text.includes(pkg)) hits.push(`package name "${pkg}"`);
+    if (text.includes(slugKey)) hits.push(`slug key ${slugKey}`);
+    if (hits.length > 0) {
+      console.error(
+        `[assert-generated-maps-omit] FAIL: ${rel} still references the absent package (${hits.join(", ")}).`,
+      );
+      failed = true;
+    }
   }
 }
 
@@ -137,6 +144,7 @@ if (failed) {
   process.exit(1);
 }
 console.log(
-  `[assert-generated-maps-omit] OK — ${GENERATED_MANIFEST_FILES.length} generated files contain no reference to ${pkg}; ` +
-    `survivors intact (${systemExtensions.length} system extensions + guarded loaders + non-empty generated test).`,
+  `[assert-generated-maps-omit] OK — ${GENERATED_MANIFEST_FILES.length} generated files contain no reference to ` +
+    `${pkgs.length} absent package(s); survivors intact (${systemExtensions.length} system extensions + guarded ` +
+    `loaders + non-empty generated test).`,
 );

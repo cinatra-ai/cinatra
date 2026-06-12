@@ -8,8 +8,11 @@
 
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
-import { writeOpenAILogFile } from "@cinatra-ai/openai-connector";
-import { writeGeminiLogFile } from "@cinatra-ai/gemini-connector";
+// LLM provider adapter cutover (cinatra#151 Stage 2): the openai/gemini log
+// writers resolve through each connector's `llm-provider-surface`
+// registration at call time — packages/llm carries NO connector
+// value-imports. Surface/member absent ⇒ no-op (best-effort logging).
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { redactAuthorizationDeep } from "./log-redaction";
 import type { LlmProvider } from "./types";
 import { ANTHROPIC_API_LOG_DIRECTORY } from "./anthropic-log-directory";
@@ -87,6 +90,20 @@ async function pruneAnthropicLogs() {
 // Unified log writer — routes to the correct provider
 // ---------------------------------------------------------------------------
 
+/**
+ * Provider log writer via the `llm-provider-surface` `writeLogFile` member.
+ * Surface or member absent ⇒ no-op; when present, the connector's own
+ * enabled-check/redaction/fs-error semantics apply unchanged.
+ */
+async function writeProviderLogFile(
+  providerId: "openai" | "gemini",
+  input: { label: string; kind: "request" | "response"; body: unknown },
+): Promise<void> {
+  const writeLogFile = getLlmProviderSurface(providerId)?.writeLogFile;
+  if (typeof writeLogFile !== "function") return;
+  await writeLogFile(input);
+}
+
 export async function writeLlmLogFile(input: {
   provider: LlmProvider;
   label: string;
@@ -95,10 +112,10 @@ export async function writeLlmLogFile(input: {
 }) {
   switch (input.provider) {
     case "openai":
-      return writeOpenAILogFile({ label: input.label, kind: input.kind, body: input.body });
+      return writeProviderLogFile("openai", { label: input.label, kind: input.kind, body: input.body });
     case "anthropic":
       return writeAnthropicLogFile({ label: input.label, kind: input.kind, body: input.body });
     case "gemini":
-      return writeGeminiLogFile({ label: input.label, kind: input.kind, body: input.body });
+      return writeProviderLogFile("gemini", { label: input.label, kind: input.kind, body: input.body });
   }
 }

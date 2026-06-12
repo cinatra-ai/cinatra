@@ -20,17 +20,15 @@ function runGate(extraEnv = {}) {
 }
 
 describe("core-extension-import-ban gate", () => {
-  it("scans real core->extension edges (and the MCP registration surfaces stay decoupled)", () => {
+  it("scans ZERO real core->extension edges (the value-import surface is fully retired)", () => {
     const edges = scanCoreExtensionEdges();
-    // The scanner still sees the REMAINING real connector edges in the tree
-    // (the decoupling sweep shrinks this set toward zero).
+    // The nango serverEntry cutover (cinatra#151 Stage 1) retired the LAST
+    // value-import cluster — the live scan is EMPTY (scanner correctness is
+    // covered by the synthetic-fixture tests below; the gate flips to
+    // pinned-empty with the transport blind-spot closure, cinatra#151 Stage 3).
     const flat = Object.values(edges).flat();
-    expect(flat.some((e) => e.endsWith("-connector"))).toBe(true);
-    // The remaining residual is the nango cluster (the lazy/guarded
-    // host-access cutover retired every other connector's value-import edges,
-    // including the un-exempt anthropic-connector's — cinatra#7); nango stays
-    // scanned.
-    expect(flat).toContain("@cinatra-ai/nango-connector");
+    expect(flat).toEqual([]);
+    expect(flat).not.toContain("@cinatra-ai/nango-connector");
     expect(flat).not.toContain("@cinatra-ai/anthropic-connector");
     // The MCP module + primitive-handler registration surfaces resolve through
     // the generated manifest now — no static connector import may reappear.
