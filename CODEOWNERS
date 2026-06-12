@@ -6,28 +6,28 @@
 # specific, security-relevant rules are listed after the broad ones.
 
 # Default owner for everything in the repository.
-*                   @cinatra-ai/maintainers
+*                   @groganz @megajustice
 
 # Documentation.
-/docs/              @cinatra-ai/maintainers
+/docs/              @groganz @megajustice
 
 # Application source.
-/src/               @cinatra-ai/maintainers
+/src/               @groganz @megajustice
 
 # Workspace packages.
-/packages/          @cinatra-ai/maintainers
+/packages/          @groganz @megajustice
 
 # Repository automation and scripts.
-/.github/           @cinatra-ai/maintainers
-/scripts/           @cinatra-ai/maintainers
+/.github/           @groganz @megajustice
+/scripts/           @groganz @megajustice
 
 # Security-relevant surfaces.
 # CI/CD definitions and dependency manifests gate the supply chain, so changes
 # here always require Code Owner review.
-/SECURITY.md        @cinatra-ai/maintainers
-/.github/workflows/ @cinatra-ai/maintainers
-/package.json       @cinatra-ai/maintainers
-/pnpm-lock.yaml     @cinatra-ai/maintainers
+/SECURITY.md        @groganz @megajustice
+/.github/workflows/ @groganz @megajustice
+/package.json       @groganz @megajustice
+/pnpm-lock.yaml     @groganz @megajustice
 
 # Public project metadata (licensing).
-/LICENSE            @cinatra-ai/maintainers
+/LICENSE            @groganz @megajustice
