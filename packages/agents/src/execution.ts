@@ -1076,7 +1076,7 @@ async function runAgentBuilderExecutionJobInner(
       return;
     }
 
-    const { getNangoConnection } = await import("@cinatra-ai/nango-connector");
+    const { getNangoConnection } = await import("@/lib/nango-system");
     const {
       createExternalA2AClient,
       startExternalSseProxyFromStream,

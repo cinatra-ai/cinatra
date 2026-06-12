@@ -1,7 +1,7 @@
-diff --git a/migrations/0004_narrow-usage-events-cost-usd.sql b/migrations/0004_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0005_narrow-usage-events-cost-usd.sql b/migrations/0005_narrow-usage-events-cost-usd.sql
 new file mode 100644
 --- /dev/null
-+++ b/migrations/0004_narrow-usage-events-cost-usd.sql
++++ b/migrations/0005_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -12,14 +12,14 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -42,6 +42,13 @@
-       "summary": "Drop the dormant extension_migrations ledger (issue #118): it backed the RETIRED extension JSON-DSL migration machinery and was empty on every lineage (no extension ever declared cinatra.migrations). Extension migrations now record into the shared node-pg-migrate pgmigrations ledger under ext_<scope>_<pkg>__NNNN names; required by the drop-table rule.",
+@@ -49,6 +49,13 @@
+       "summary": "Demote the 17 anchor rows the requiredExtensions shrink (cinatra#7) removed from the prod bootable set (33 -> 16): required_in_prod -> false and locked -> active for exactly those rows; archived tombstones stay archived; nothing is uninstalled and all provenance/dependency/owner state is preserved. Fresh databases seed from the current declaration and ledger-fake the chain; idempotent on re-run.",
        "destructive": true,
-       "tables": ["extension_migrations"]
+       "tables": ["installed_extension"]
 +    },
 +    {
-+      "seq": "0004",
-+      "file": "0004_narrow-usage-events-cost-usd.sql",
++      "seq": "0005",
++      "file": "0005_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

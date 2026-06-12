@@ -5,10 +5,10 @@ import {
   deleteNangoConnection,
   ensureNangoIntegration,
   getNangoConnection,
-  getNangoOAuth2IntegrationCredentials,
   getNangoOAuthCallbackUrl,
+  getNangoSystem,
   getPrimarySavedNangoConnection,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 // This package barrel is intentionally SERVER-ONLY and exposes the Google OAuth
 // RUNTIME facade (settings/status/token refresh) consumed by auth.ts + layout.tsx
 // + the host google-oauth-connector provider binder. The operator-facing setup UI
@@ -49,14 +49,23 @@ function writeStoredSettings(value: GoogleOAuthStoredSettings) {
 }
 
 export async function getGoogleOAuthSettings(): Promise<GoogleOAuthSettings> {
-  const nangoCredentials = await getNangoOAuth2IntegrationCredentials(CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth);
+  // BOOT-ORDER PIN (cinatra#151 item 9a — the ONE module-eval-time nango
+  // path): auth.ts awaits this at module TOP LEVEL, BEFORE static-bundle
+  // activation registers the nango-system surface. An unresolved surface
+  // degrades to the stored DB row (nangoCredentials = null in the existing
+  // fallback chain) — NEVER a throw; runtime reads after activation see live
+  // Nango values. Pinned by the boot-order test.
+  const nangoSystem = getNangoSystem();
+  const nangoCredentials = nangoSystem
+    ? await nangoSystem.getNangoOAuth2IntegrationCredentials(nangoSystem.providerConfigKeys.googleOAuth)
+    : null;
   const stored = readStoredSettings();
 
   return {
     // Prefer Nango as source of truth; fall back to DB copy for resilience across Nango restarts
     clientId: nangoCredentials?.clientId ?? stored.clientId,
     clientSecret: nangoCredentials?.clientSecret ?? stored.clientSecret,
-    redirectUri: stored.redirectUri ?? getNangoOAuthCallbackUrl(),
+    redirectUri: stored.redirectUri ?? (nangoSystem ? nangoSystem.getNangoOAuthCallbackUrl() : undefined),
   };
 }
 

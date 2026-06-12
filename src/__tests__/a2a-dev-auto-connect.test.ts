@@ -37,7 +37,7 @@ const nango = vi.hoisted(() => ({
   saveNangoConnectionRecordImpl: null as null | (() => Promise<unknown>),
 }));
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS: {
     a2aServer: "cinatra-a2a-server",
   },

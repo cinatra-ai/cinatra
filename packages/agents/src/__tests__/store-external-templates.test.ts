@@ -73,7 +73,7 @@ vi.mock("../db", () => ({
   agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
 }));
 
-vi.mock("@cinatra-ai/nango-connector", () => ({
+vi.mock("@/lib/nango-system", () => ({
   listSavedNangoConnections: (_key: string) => savedConnections.list,
   // The host's register-transport-connectors.ts (loaded transitively via
   // server-actions -> store) now imports the full connection-storage surface to

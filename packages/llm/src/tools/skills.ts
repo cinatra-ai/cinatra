@@ -14,11 +14,13 @@ import * as path from "node:path";
 import { existsSync } from "node:fs";
 import { readSkillFileContent, type SkillSource } from "@cinatra-ai/skills";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
-import {
-  readOpenAIShellSettings,
-  runOpenAIShellCommandInDocker,
-  type OpenAIShellSettings,
-} from "@cinatra-ai/openai-connector";
+// LLM provider adapter cutover (cinatra#151 Stage 2): the openai shell tools
+// (settings reader + docker-confined executor) resolve through the openai
+// connector's GATED `shellTools` capability member at call time —
+// packages/llm carries NO connector value-imports, and the capability ABI
+// accepts no settings/administration override (the connector's STORED
+// settings are the single policy authority).
+import { requireLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import type { LlmTool, LlmShellTool, LlmFunctionTool, LlmMcpServerTool, LlmWebSearchTool } from "../types";
 
 type SkillSummary = {
@@ -288,11 +290,52 @@ async function executeLocalSkillCommand(
 // shell tool — executes commands in a sandboxed Docker container
 // ---------------------------------------------------------------------------
 
-export function createShellTool(options: {
-  administration?: OpenAIShellSettings;
-  mountedSkills: SkillSummary[];
-}): LlmShellTool {
-  const settings = options.administration ?? readOpenAIShellSettings();
+type OpenAIShellToolsMember = NonNullable<
+  ReturnType<typeof requireLlmProviderSurface>["shellTools"]
+>;
+
+/**
+ * The openai surface's GATED shell-tool members. Fail-loud when the connector
+ * is absent or predates the Stage 2 surface — the docker shell-delivery path
+ * cannot proceed without the openai connector (cinatra#151 established
+ * degraded semantics for required members).
+ */
+function requireOpenAIShellTools(): OpenAIShellToolsMember {
+  const surface = requireLlmProviderSurface("openai");
+  const shellTools = surface.shellTools;
+  if (
+    !shellTools ||
+    typeof shellTools.readSettings !== "function" ||
+    typeof shellTools.runCommandInDocker !== "function"
+  ) {
+    throw new Error(
+      'The "openai" LLM provider connector is active but does not expose the ' +
+        "gated shellTools members — the installed connector predates the " +
+        "Stage 2 surface (cinatra#151); update/re-acquire the openai connector.",
+    );
+  }
+  return shellTools;
+}
+
+/**
+ * Default output limit derived from the connector-stored settings. The
+ * capability ABI is loose (`readSettings(): unknown`), so the shape is
+ * runtime-guarded (design review MEDIUM): a finite positive
+ * `maxOutputKilobytes` is honored; anything else defers to the executor,
+ * which resolves its limits from the SAME stored settings connector-side.
+ */
+function defaultShellOutputLimit(settings: unknown): number | undefined {
+  const kilobytes = (settings as { maxOutputKilobytes?: unknown } | null | undefined)
+    ?.maxOutputKilobytes;
+  return typeof kilobytes === "number" && Number.isFinite(kilobytes) && kilobytes > 0
+    ? kilobytes * 1024
+    : undefined;
+}
+
+export function createShellTool(options: { mountedSkills: SkillSummary[] }): LlmShellTool {
+  // Resolve at construction: shell delivery without the openai connector is a
+  // defect of the request, not a degradable mode — fail loud here.
+  const shellTools = requireOpenAIShellTools();
   const mountedSkills = options.mountedSkills;
 
   return {
@@ -303,15 +346,15 @@ export function createShellTool(options: {
       path: s.directoryPath ?? `/tmp/skills/${s.slug}`,
     })),
     execute: async (action) => {
-      const maxOutputLength = action.maxOutputLength ?? settings.maxOutputKilobytes * 1024;
+      const maxOutputLength =
+        action.maxOutputLength ?? defaultShellOutputLimit(shellTools.readSettings());
       const timeoutMs = action.timeoutMs ?? undefined;
 
       return Promise.all(
         action.commands.map(async (command) => {
           try {
-            const result = await runOpenAIShellCommandInDocker({
+            const result = await shellTools.runCommandInDocker({
               shellCommand: command,
-              administration: settings,
               timeoutMs: timeoutMs ?? undefined,
               maxOutputLength,
             });

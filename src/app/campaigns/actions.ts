@@ -42,7 +42,7 @@ import {
   importNangoConnection,
   ensureNangoIntegration,
   saveNangoConnectionAction as _saveNangoConnectionAction,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 import {
   listWordPressInstances,
   saveWordPressInstance,

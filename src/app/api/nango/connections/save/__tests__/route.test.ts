@@ -6,19 +6,37 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
-vi.mock("@cinatra-ai/nango-connector", () => ({
-  handleNangoConnectionSaveRequest: vi.fn(async () => ({ body: { success: true }, status: 200 })),
-}));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(async () => ({ user: { id: "user-1" } })),
 }));
 
-import { handleNangoConnectionSaveRequest } from "@cinatra-ai/nango-connector";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions";
 import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,
 } from "@/lib/extension-capabilities-registry";
 import { POST } from "../route";
+
+// Post serverEntry cutover (cinatra#151) the route resolves the
+// connector-authored nango-system surface instead of importing the package —
+// register a fake surface through the REAL resolver path.
+const handleNangoConnectionSaveRequest = vi.fn(async () => ({
+  body: { success: true } as Record<string, unknown>,
+  status: 200,
+}));
+
+function registerNangoSurface() {
+  registerCapabilityProvider(NANGO_SYSTEM_CAPABILITY, {
+    packageName: "@cinatra-ai/nango-connector",
+    impl: {
+      isNangoConfigured: () => true,
+      getNangoStatus: () => ({ status: "connected", detail: "" }),
+      getNangoSettings: () => ({}),
+      providerConfigKeys: {},
+      handleNangoConnectionSaveRequest,
+    },
+  });
+}
 
 function saveRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/nango/connections/save", {
@@ -37,7 +55,8 @@ function registerHook(connectorKey: string, scope: "app" | "user" | undefined, r
 
 beforeEach(() => {
   __resetCapabilityRegistry();
-  vi.mocked(handleNangoConnectionSaveRequest).mockResolvedValue({
+  registerNangoSurface();
+  handleNangoConnectionSaveRequest.mockResolvedValue({
     body: { success: true },
     status: 200,
   } as never);
@@ -77,7 +96,7 @@ describe("nango connection-save route — registration-driven post-save hooks", 
   });
 
   it("does not run hooks when the save itself failed", async () => {
-    vi.mocked(handleNangoConnectionSaveRequest).mockResolvedValue({
+    handleNangoConnectionSaveRequest.mockResolvedValue({
       body: { success: false },
       status: 400,
     } as never);

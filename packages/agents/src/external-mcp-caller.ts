@@ -4,7 +4,7 @@ import {
   listEnabledGlobalExternalMcpServers,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
 } from "@/lib/external-mcp-registry";
-import { getNangoCredentials, isNangoConfigured } from "@/lib/nango";
+import { getNangoCredentials, isNangoConfigured } from "@/lib/nango-system";
 
 // ---------------------------------------------------------------------------
 // Internal helper — resolve API key for a server's Nango connection if available

@@ -51,15 +51,38 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-vi.mock("@cinatra-ai/openai-connector", () => ({
-  // Minimal stub so getConfiguredOpenAIConnection returns a usable shape.
-  getConfiguredOpenAIConnection: vi.fn(async () => ({
-    apiKey: "sk-test",
-    defaultModel: "gpt-4o-mini",
-  })),
-  buildOpenAIRequestHeaders: vi.fn(() => ({})),
-  writeOpenAILogFile: vi.fn(),
-  parseStructuredJson: vi.fn(),
+// All three LLM provider surfaces (cinatra#151 Stage 2): connection
+// readers / headers / log writers resolve through the capability resolver.
+const { llmSurfaces } = vi.hoisted(() => ({
+  llmSurfaces: {
+    openai: {
+      providerId: "openai",
+      // Minimal stub so getConfiguredOpenAIConnection returns a usable shape.
+      getConfiguredConnection: async () => ({ apiKey: "sk-test", defaultModel: "gpt-4o-mini" }),
+      writeLogFile: async () => {},
+    },
+    anthropic: {
+      providerId: "anthropic",
+      getConfiguredConnection: async () => ({ apiKey: "sk-ant-test" }),
+    },
+    gemini: {
+      providerId: "gemini",
+      getConfiguredAPIKey: async () => "gem-test",
+      buildRequestHeaders: () => ({}),
+      writeLogFile: async () => {},
+    },
+  } as Record<string, object>,
+}));
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: vi.fn((providerId: string) => llmSurfaces[providerId] ?? null),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    const surface = llmSurfaces[providerId];
+    if (!surface) {
+      throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+    }
+    return surface;
+  }),
+  listLlmProviderSurfaces: vi.fn(() => Object.values(llmSurfaces)),
 }));
 
 // Stub Anthropic + Gemini client modules so importing their providers does
@@ -73,9 +96,6 @@ vi.mock("@anthropic-ai/sdk", () => {
   }
   return { default: MockAnthropic };
 });
-vi.mock("@cinatra-ai/anthropic-connector", () => ({
-  getConfiguredAnthropicConnection: vi.fn(async () => ({ apiKey: "sk-ant-test" })),
-}));
 vi.mock("@google/genai", () => {
   class MockGoogleGenAI {
     constructor(_config: unknown) {}
@@ -84,12 +104,6 @@ vi.mock("@google/genai", () => {
   }
   return { GoogleGenAI: MockGoogleGenAI };
 });
-vi.mock("@cinatra-ai/gemini-connector", () => ({
-  getConfiguredGeminiAPIKey: vi.fn(async () => "gem-test"),
-  buildGeminiRequestHeaders: vi.fn(() => ({})),
-  writeGeminiLogFile: vi.fn(),
-}));
-
 // MCP-related stubs — mirror entry-point-actor-context.test.ts so importing
 // ./index does not pull DB / Nango calls.
 vi.mock("../mcp-access", () => ({

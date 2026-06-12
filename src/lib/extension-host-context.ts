@@ -126,41 +126,41 @@ function makeMcp(packageName: string): ExtensionHostContext["mcp"] {
 function makeNango(): ExtensionHostContext["nango"] {
   return {
     isConfigured: async () => {
-      const { isNangoConfigured } = await import("@/lib/nango");
+      const { isNangoConfigured } = await import("@/lib/nango-system");
       return isNangoConfigured();
     },
     getConnection: async (connectionId, providerConfigKey) => {
-      const { getNangoConnection } = await import("@/lib/nango");
+      const { getNangoConnection } = await import("@/lib/nango-system");
       return getNangoConnection(providerConfigKey, connectionId);
     },
     ensureConnectSession: async (input) => {
-      const { createNangoConnectSession } = await import("@/lib/nango");
+      const { createNangoConnectSession } = await import("@/lib/nango-system");
       return createNangoConnectSession(input as Parameters<typeof createNangoConnectSession>[0]);
     },
     // Render-time getters for connector setup/settings pages (ABI 2.2.0). The
     // SDK takes `connectorKey: string`; we narrow to the host roster union at the
     // boundary. `@/lib/nango` is `export * from "@cinatra-ai/nango-connector"`.
     getStatus: async () => {
-      const { getNangoStatus } = await import("@/lib/nango");
+      const { getNangoStatus } = await import("@/lib/nango-system");
       return getNangoStatus();
     },
     getFrontendConfig: async () => {
-      const { getNangoFrontendConfig } = await import("@/lib/nango");
+      const { getNangoFrontendConfig } = await import("@/lib/nango-system");
       return getNangoFrontendConfig();
     },
     getPrimarySavedConnection: async (connectorKey, opts) => {
-      const { getPrimarySavedNangoConnection } = await import("@/lib/nango");
+      const { getPrimarySavedNangoConnection } = await import("@/lib/nango-system");
       return getPrimarySavedNangoConnection(
         connectorKey as Parameters<typeof getPrimarySavedNangoConnection>[0],
         opts,
       );
     },
     getPrimarySavedConnections: async (opts) => {
-      const { getPrimarySavedNangoConnections } = await import("@/lib/nango");
+      const { getPrimarySavedNangoConnections } = await import("@/lib/nango-system");
       return getPrimarySavedNangoConnections(opts);
     },
     listConnectionRecords: async (connectorKey) => {
-      const { listSavedNangoConnections } = await import("@/lib/nango");
+      const { listSavedNangoConnections } = await import("@/lib/nango-system");
       return listSavedNangoConnections(
         connectorKey as Parameters<typeof listSavedNangoConnections>[0],
       );

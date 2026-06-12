@@ -107,6 +107,10 @@ jobs:
               - 'packages/sdk-ui/package.json'
               - 'next.config.ts'
               - 'package.json'
+              # Pinned clone-back inputs: a lock bump changes the materialized
+              # extension tree the smoke's build runs against.
+              - 'cinatra-required-extensions.lock.json'
+              - 'cinatra-dev-extensions.lock.json'
 
   smoke:
     name: /agents Playwright smoke

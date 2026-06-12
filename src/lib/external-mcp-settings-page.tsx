@@ -19,7 +19,7 @@ import {
 } from "@/lib/external-mcp-registry";
 import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
 import { requireAuthSession } from "@/lib/auth-session";
-import { getNangoStatus } from "@/lib/nango";
+import { getNangoStatus } from "@/lib/nango-system";
 import {
   createExternalMcpServerAction,
   deleteExternalMcpServerAction,

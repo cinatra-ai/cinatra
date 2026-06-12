@@ -32,10 +32,26 @@ vi.mock("@google/genai", async () => {
   return { ...actual, GoogleGenAI: MockGoogleGenAI };
 });
 
-vi.mock("@cinatra-ai/gemini-connector", () => ({
-  buildGeminiRequestHeaders: () => ({}),
-  getConfiguredGeminiAPIKey: async () => "test-key",
-  writeGeminiLogFile: async () => {},
+// The gemini `llm-provider-surface` (cinatra#151 Stage 2): the provider
+// adapter resolves key/headers/log-writer through the capability resolver.
+// (vi.hoisted: the mock factories below are hoisted above plain consts.)
+const { geminiSurface } = vi.hoisted(() => ({
+  geminiSurface: {
+    providerId: "gemini",
+    getConfiguredAPIKey: async () => "test-key",
+    buildRequestHeaders: () => ({}),
+    writeLogFile: async () => {},
+  },
+}));
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: vi.fn((providerId: string) =>
+    providerId === "gemini" ? geminiSurface : null,
+  ),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    if (providerId === "gemini") return geminiSurface;
+    throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+  }),
+  listLlmProviderSurfaces: vi.fn(() => [geminiSurface]),
 }));
 
 import { createGeminiProviderAdapter } from "../providers/gemini";

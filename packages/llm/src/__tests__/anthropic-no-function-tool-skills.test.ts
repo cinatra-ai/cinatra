@@ -34,9 +34,26 @@ vi.mock("@cinatra-ai/skills", () => ({
   readSkillFileContent: async () => "",
 }));
 
-vi.mock("@cinatra-ai/openai-connector", () => ({
-  readOpenAIShellSettings: async () => null,
-  runOpenAIShellCommandInDocker: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+// The openai `llm-provider-surface` GATED shellTools member (cinatra#151
+// Stage 2): the settings reader + docker executor resolve via the capability.
+const { openaiShellSurface } = vi.hoisted(() => ({
+  openaiShellSurface: {
+    providerId: "openai",
+    shellTools: {
+      readSettings: () => null,
+      runCommandInDocker: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
+    },
+  },
+}));
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: vi.fn((providerId: string) =>
+    providerId === "openai" ? openaiShellSurface : null,
+  ),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    if (providerId === "openai") return openaiShellSurface;
+    throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+  }),
+  listLlmProviderSurfaces: vi.fn(() => [openaiShellSurface]),
 }));
 
 import { AnthropicContainerSkillDelivery } from "../tools/skill-delivery";

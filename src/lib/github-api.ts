@@ -9,7 +9,7 @@ import {
   isNangoConfigured,
   listSavedNangoConnections,
   type SavedNangoConnection,
-} from "@/lib/nango";
+} from "@/lib/nango-system";
 
 type GitHubStoredSettings = {
   redirectUri?: string;

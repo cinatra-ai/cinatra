@@ -53,10 +53,14 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
 } as const;
 
 /** The legacy global connector-config KV (raw `connectorId`-keyed rows — NOT
- * the org-scoped `ctx.settings` namespace; existing rows keep working). */
+ * the org-scoped `ctx.settings` namespace; existing rows keep working).
+ * `delete` PHYSICALLY removes a row — required by consumers whose security
+ * posture forbids blanking a dead key (e.g. the nango legacy-key purge, where
+ * the stale row's values are untrusted and must not survive in any form). */
 export type HostConnectorConfigService = {
   read<T>(connectorId: string, fallback: T): T;
   write(connectorId: string, value: unknown): void;
+  delete(connectorId: string): void;
 };
 
 /** The Nango connection-storage surface (host-bound from the nango gateway).
@@ -190,6 +194,31 @@ export type NangoConnectionSavedHook = {
   connectorKey: string;
   scope?: "app" | "user";
   run(input: { userId?: string }): Promise<void>;
+};
+
+/**
+ * A BLOCKING materializer for the Nango connection-save flow — distinct from
+ * the best-effort `nango-connection-saved` hooks above. The nango gateway's
+ * save path awaits every registered materializer for the saved `connectorKey`
+ * and FOLDS FAILURES INTO ITS RESULT (a materializer failure fails the save —
+ * the inline semantics of the wordpress/linkedin account materialization that
+ * historically ran inside the save body). The host registers one provider
+ * whose `materialize` dispatches by `connectorKey` and reports `handled`; the
+ * save path FAILS LOUD when a connector key that requires materialization
+ * finds no handler (never a silent skip).
+ */
+export const NANGO_CONNECTION_MATERIALIZER_CAPABILITY = "nango-connection-materializer";
+export type NangoConnectionMaterializerInput = {
+  connectorKey: string;
+  providerConfigKey: string;
+  connectionId: string;
+  /** WordPress-style site URL carried by the save request (when present). */
+  siteUrl?: string;
+  scope?: "app" | "user";
+  userId?: string;
+};
+export type NangoConnectionMaterializer = {
+  materialize(input: NangoConnectionMaterializerInput): Promise<{ handled: boolean }>;
 };
 
 /**
@@ -429,6 +458,43 @@ export type LlmProviderSurface = {
     saveConnection?(formData: FormData): Promise<unknown>;
     clearConnection?(): Promise<unknown>;
     saveSkillsSettings?(formData: FormData): Promise<unknown>;
+  };
+  // --- LLM provider adapter members (cinatra#151 Stage 2) ----------------
+  // Resolved by the host's packages/llm adapters at call time (the last
+  // value-imports packages/llm carried). Absence degrades per member:
+  // connection/headers members gate adapter availability; log writers are
+  // best-effort (host no-ops when absent).
+  /** Provider request headers (e.g. Gemini API key + host self-client headers). */
+  buildRequestHeaders?(input: {
+    apiKey?: string;
+    contentType?: string;
+    extraHeaders?: Record<string, string>;
+  }): Record<string, string>;
+  /** Request/response telemetry log writer (connector owns enabled-check + redaction). */
+  writeLogFile?(input: { label: string; kind: "request" | "response"; body: unknown }): Promise<void>;
+  /**
+   * GATED shell-tool members (least privilege): a settings reader + the
+   * docker-confined executor — never a raw client/spawn handle. The ABI
+   * deliberately carries NO administration/settings parameter: the
+   * connector's STORED settings are the single policy authority (enabled
+   * flag, command allowlists, mount roots, limits are enforced inside the
+   * connector against stored state and cannot be overridden through this
+   * surface).
+   */
+  shellTools?: {
+    readSettings(): unknown;
+    runCommandInDocker(input: {
+      shellCommand: string;
+      cwd?: string;
+      timeoutMs?: number;
+      maxOutputLength?: number;
+    }): Promise<{
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      timedOut?: boolean;
+      outputTruncated?: boolean;
+    }>;
   };
 };
 

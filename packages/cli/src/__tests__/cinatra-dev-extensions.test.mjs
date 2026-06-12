@@ -10,8 +10,10 @@ import {
   parseDevExtensionFlags,
   selectEntries,
   extensionEnvOverrideVarFor,
+  loadDevExtensionPins,
   readDevExtensionsConfig,
   syncCinatraDevExtensions,
+  REQUIRED_EXTENSIONS_LOCK_FILENAME,
 } from "../cinatra-dev-extensions.mjs";
 
 describe("deriveKindFromName", () => {
@@ -210,5 +212,202 @@ describe("syncCinatraDevExtensions — real bare-git clone + ff-only pull", () =
         expect(existsSync(path.join(dest, "NEW.txt"))).toBe(true);
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pinned mode (cinatra#141): lock loading + sha plumbing
+// ---------------------------------------------------------------------------
+
+describe("loadDevExtensionPins — fail-closed lock partition", () => {
+  const SHA_A = "a".repeat(40);
+  const SHA_B = "b".repeat(40);
+  const REQ_URL = "https://github.com/cinatra-ai/nango-connector.git";
+  const DEV_URL = "https://github.com/cinatra-ai/resend-connector.git";
+
+  /** readFile double serving package.json + the two locks from plain objects. */
+  const makeReadFile = ({ config, required, dev }) => (p) => {
+    if (p.endsWith("cinatra-required-extensions.lock.json")) {
+      if (required === undefined) throw new Error("ENOENT");
+      return JSON.stringify(required);
+    }
+    if (p.endsWith("cinatra-dev-extensions.lock.json")) {
+      if (dev === undefined) throw new Error("ENOENT");
+      return JSON.stringify(dev);
+    }
+    return JSON.stringify({ cinatraDevExtensions: config });
+  };
+
+  const baseConfig = {
+    "@cinatra-ai/nango-connector": { url: REQ_URL },
+    "@cinatra-ai/resend-connector": { url: DEV_URL },
+  };
+  const baseRequired = {
+    packages: [{ packageName: "@cinatra-ai/nango-connector", repo: "cinatra-ai/nango-connector", resolvedSha: SHA_A }],
+  };
+  const baseDev = {
+    packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_B }],
+  };
+
+  it("merges both locks; each pin remembers its source lock", () => {
+    const pins = loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev: baseDev }));
+    expect(pins.get("@cinatra-ai/nango-connector")).toMatchObject({ sha: SHA_A, source: "cinatra-required-extensions.lock.json" });
+    expect(pins.get("@cinatra-ai/resend-connector")).toMatchObject({ sha: SHA_B, source: "cinatra-dev-extensions.lock.json" });
+  });
+
+  it("a missing dev lock is a hard error (never degrades to tip-tracking)", () => {
+    expect(() =>
+      loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev: undefined })),
+    ).toThrow(/could not be read/);
+  });
+
+  it("a package pinned in BOTH locks is refused (single authority for the required set)", () => {
+    const dev = { packages: [...baseDev.packages, { packageName: "@cinatra-ai/nango-connector", repo: "cinatra-ai/nango-connector", resolvedSha: SHA_B }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /BOTH locks/,
+    );
+  });
+
+  it("a dev-lock entry that is not a cinatraDevExtensions entry is a stale pin (refused)", () => {
+    const dev = { packages: [...baseDev.packages, { packageName: "@cinatra-ai/gone-connector", repo: "cinatra-ai/gone-connector", resolvedSha: SHA_B }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /stale pin/,
+    );
+  });
+
+  it("a config entry with no pin in either lock is refused (fail-closed completeness)", () => {
+    const config = { ...baseConfig, "@cinatra-ai/new-connector": { url: "https://github.com/cinatra-ai/new-connector.git" } };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config, required: baseRequired, dev: baseDev }))).toThrow(
+      /no pin in/,
+    );
+  });
+
+  it("a lock repo slug contradicting the COMMITTED config URL is refused (retarget without re-pin)", () => {
+    const dev = { packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/other-repo", resolvedSha: SHA_B }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /retargeted/,
+    );
+  });
+
+  it("a local (file://) config URL skips the slug cross-check (test fixtures)", () => {
+    const config = { ...baseConfig, "@cinatra-ai/resend-connector": { url: "file:///tmp/fixture.git" } };
+    const pins = loadDevExtensionPins("/repo", makeReadFile({ config, required: baseRequired, dev: baseDev }));
+    expect(pins.get("@cinatra-ai/resend-connector").sha).toBe(SHA_B);
+  });
+
+  it("a DUPLICATE pin within one lock is refused (the merge must never be order-dependent)", () => {
+    const dev = { packages: [...baseDev.packages, { ...baseDev.packages[0], resolvedSha: SHA_A }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /duplicate pin/,
+    );
+  });
+
+  it("a malformed resolvedSha is refused at lock-read time", () => {
+    const dev = { packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: "deadbeef" }] };
+    expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
+      /40-hex/,
+    );
+  });
+
+  it("an EMPTY dev lock is legal when the required lock covers the whole universe", () => {
+    const config = { "@cinatra-ai/nango-connector": { url: REQ_URL } };
+    const pins = loadDevExtensionPins("/repo", makeReadFile({ config, required: baseRequired, dev: { packages: [] } }));
+    expect(pins.size).toBe(1);
+  });
+
+  it("lock filename constants stay in lockstep with prod acquisition", async () => {
+    const prod = await import("../prod-extension-acquisition.mjs");
+    expect(REQUIRED_EXTENSIONS_LOCK_FILENAME).toBe(prod.LOCK_FILENAME);
+  });
+});
+
+describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantics", () => {
+  const SHA_B = "b".repeat(40);
+  const DEV_URL = "https://github.com/cinatra-ai/resend-connector.git";
+  const config = { "@cinatra-ai/resend-connector": { url: DEV_URL } };
+  const required = {
+    packages: [{ packageName: "@cinatra-ai/anthropic-connector", repo: "cinatra-ai/anthropic-connector", resolvedSha: "a".repeat(40) }],
+  };
+  const dev = {
+    packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_B }],
+  };
+  // Required-lock packages need not be cinatraDevExtensions entries (prod-only
+  // packages are simply not cloned back), so `required` above referencing a
+  // package outside `config` must be accepted.
+  const makeDeps = (gitCalls) => ({
+    readFile: (p) => {
+      if (p.endsWith("cinatra-required-extensions.lock.json")) return JSON.stringify(required);
+      if (p.endsWith("cinatra-dev-extensions.lock.json")) return JSON.stringify(dev);
+      return JSON.stringify({ cinatraDevExtensions: config });
+    },
+    exists: () => false, // absent slot → clone path
+    readdir: () => [],
+    mkdirp: () => {},
+    git: (args) => {
+      gitCalls.push(args.join(" "));
+      if (args.join(" ") === "rev-parse HEAD") return SHA_B;
+      if (args[0] === "cat-file") return ""; // commit present after clone
+      return "";
+    },
+  });
+
+  it("--pinned clones then detaches at the dev-lock sha", async () => {
+    const gitCalls = [];
+    const r = await syncCinatraDevExtensions({
+      repoRoot: "/repo",
+      targetRoot: "/repo",
+      argv: ["--pinned"],
+      env: {},
+      log: () => {},
+      deps: makeDeps(gitCalls),
+    });
+    expect(r.results[0]).toMatchObject({ action: "cloned", pinnedSha: SHA_B });
+    expect(gitCalls).toContain(`checkout --detach ${SHA_B}`);
+  });
+
+  it("a CINATRA_*_REPO_URL override is only an ALTERNATE REMOTE — the pin still applies", async () => {
+    const gitCalls = [];
+    const override = "https://github.com/somefork/resend-connector.git";
+    const r = await syncCinatraDevExtensions({
+      repoRoot: "/repo",
+      targetRoot: "/repo",
+      argv: ["--pinned"],
+      env: { CINATRA_RESEND_CONNECTOR_REPO_URL: override },
+      log: () => {},
+      deps: makeDeps(gitCalls),
+    });
+    // clone goes to the override remote, but the checkout is still the pin —
+    // and the lock-vs-config slug check used the COMMITTED url, not the override.
+    expect(gitCalls.some((g) => g.startsWith("clone") && g.includes(override))).toBe(true);
+    expect(gitCalls).toContain(`checkout --detach ${SHA_B}`);
+    expect(r.results[0].pinnedSha).toBe(SHA_B);
+  });
+
+  it("--pinned + --force are mutually exclusive", async () => {
+    await expect(
+      syncCinatraDevExtensions({
+        repoRoot: "/repo",
+        targetRoot: "/repo",
+        argv: ["--pinned", "--force"],
+        env: {},
+        log: () => {},
+        deps: makeDeps([]),
+      }),
+    ).rejects.toThrow(/mutually exclusive/);
+  });
+
+  it("without --pinned the lock files are not even read (tip-tracking unchanged)", async () => {
+    const lockReads = [];
+    const gitCalls = [];
+    const deps = makeDeps(gitCalls);
+    const innerRead = deps.readFile;
+    deps.readFile = (p) => {
+      if (p.includes(".lock.json")) lockReads.push(p);
+      return innerRead(p);
+    };
+    const r = await syncCinatraDevExtensions({ repoRoot: "/repo", targetRoot: "/repo", argv: [], env: {}, log: () => {}, deps });
+    expect(r.results[0].action).toBe("cloned");
+    expect(lockReads).toEqual([]);
+    expect(gitCalls.some((g) => g.startsWith("checkout --detach"))).toBe(false);
   });
 });
