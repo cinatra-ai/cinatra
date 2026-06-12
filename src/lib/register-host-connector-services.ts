@@ -29,9 +29,17 @@ import {
   decodeCursor,
   buildListPage,
 } from "@/lib/mcp-pagination";
+// External-MCP registry mutation + the registry READ/bearer-mint surface
+// (cinatra#172 Stage H4): the twenty transport resolves its live workspace
+// row + upstream bearer through the extended `external-mcp-registry` service
+// so `twenty-mcp-call.ts` carries no `@/` edge. The bearer mint is trusted
+// in-process plumbing — see the contract's TRUST note.
 import {
   upsertExternalMcpServer,
   deleteExternalMcpServer,
+  getExternalMcpServerById,
+  listExternalMcpServers,
+  resolveExternalMcpServerBearer,
 } from "@/lib/external-mcp-registry";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
@@ -52,6 +60,10 @@ import {
   type HostWordPressContentService,
   type HostWordPressWidgetAuthService,
   type WordPressInstanceRowShape,
+  type HostExternalMcpRegistryService,
+  type HostGitHubConnectionService,
+  type HostLinkedInConnectionService,
+  type HostYouTubeConnectionService,
   type HostRuntimeModeService,
   type HostNotificationsService,
   type HostSkillsCatalogService,
@@ -103,7 +115,33 @@ import {
   uploadWordPressMedia,
   type WordPressInstanceSettings,
 } from "@/lib/wordpress-api";
-import { saveLinkedInAccountFromNangoConnection } from "@/lib/linkedin-api";
+// LinkedIn account materialization for the nango connection-save flow + the
+// connection-admin/publish surface (cinatra#172 Stage H4) published as the
+// `linkedin-connection` per-concern service so the connector's settings page,
+// transport adapter, and MCP handlers carry no `@/` edge. `publishLinkedInPost`
+// is the service's WRITER — see the contract's TRUST note.
+import {
+  getLinkedInAPISettings,
+  getLinkedInAPIStatus,
+  listLinkedInAccounts,
+  listLinkedInDestinations,
+  publishLinkedInPost,
+  saveLinkedInAccountFromNangoConnection,
+} from "@/lib/linkedin-api";
+// GitHub OAuth/connection-admin surface (cinatra#172 Stage H4): published as
+// the `github-connection` per-concern service so the connector's settings
+// page + manage-gated "use server" actions carry no `@/` edge.
+import {
+  getGitHubAPIStatus,
+  getGitHubOAuthSettings,
+  listGitHubRepositories,
+  saveGitHubOAuthSettings,
+  saveGitHubRepositorySelection,
+} from "@/lib/github-api";
+// YouTube OAuth token mint (cinatra#172 Stage H4): published as the
+// `youtube-connection` per-concern service so the media-feeds connector's
+// MCP handlers carry no `@/` edge (the scraper receives the mint function).
+import { getConfiguredYouTubeAccessToken } from "@/lib/youtube-api";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
 // are published as the `wordpress-mcp` / `drupal-mcp` per-concern services so
@@ -237,7 +275,15 @@ export function registerHostConnectorServices(): void {
   register(svc.externalMcpRegistry, {
     upsertServer: upsertExternalMcpServer,
     deleteServer: deleteExternalMcpServer,
-  });
+    // Registry READ + bearer-mint surface (cinatra#172 Stage H4). The bearer
+    // mint is trusted in-process plumbing for server-side callers (the twenty
+    // transport) — it bypasses the LLM-facing Layer-B proxy by design; see
+    // the contract's TRUST note. The minted bearer never crosses a wire
+    // boundary other than the upstream MCP call itself.
+    getServerById: getExternalMcpServerById,
+    listServers: listExternalMcpServers,
+    resolveBearer: resolveExternalMcpServerBearer,
+  } satisfies HostExternalMcpRegistryService);
 
   register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
 
@@ -430,10 +476,64 @@ export function registerHostConnectorServices(): void {
   // deps slots bind the same way since the transport-DI inversion
   // (cinatra#151 Stage 3) — no static registrar call survives here.
 
-  // Remaining transport connectors (github, linkedin, youtube, media-feeds)
-  // have only DOMAIN-lib imports (no host-internal infra deps), so no DI
-  // registration is needed. Their `@/lib/<x>-api` imports are domain modules
-  // that stay with the connector package.
+  // Transport-tail connection services (cinatra#172 Stage H4): the last four
+  // hostInternal edges (github / linkedin / media-feeds / twenty) invert onto
+  // per-concern services here — the domain modules (`@/lib/github-api`,
+  // `@/lib/linkedin-api`, `@/lib/youtube-api`, `@/lib/external-mcp-registry`)
+  // stay host-side; the connectors adapt these services into their own deps
+  // slots at activation.
+
+  // GitHub OAuth/connection-admin surface. The writers
+  // (saveOAuthSettings / saveRepositorySelection) sit behind the connector's
+  // manage-gated "use server" actions — identical posture to the static
+  // imports they replace (see the contract's TRUST note).
+  register(svc.githubConnection, {
+    getStatus: getGitHubAPIStatus,
+    // The stored personal-access-token fallback is STRIPPED before
+    // publication: it belongs to the host's skills-configuration fallback
+    // path, not the connector's settings surface (least-privilege hardening
+    // over the static import — codex H4 round-1 finding 2).
+    getOAuthSettings: async () => {
+      const { personalAccessToken: _hostOnlyPat, ...settings } = await getGitHubOAuthSettings();
+      return settings;
+    },
+    listRepositories: listGitHubRepositories,
+    saveOAuthSettings: saveGitHubOAuthSettings,
+    saveRepositorySelection: saveGitHubRepositorySelection,
+  } satisfies HostGitHubConnectionService);
+
+  // LinkedIn connection-admin + publish surface. `publishPost` is the WRITER
+  // (publishes to the remote LinkedIn network) — reached only through the
+  // host's MCP dispatch + actor gating and the social-media facade's routing,
+  // identical posture to the static imports replaced (contract TRUST note).
+  // Token material never leaves the host through this service: legacy stored
+  // account rows may carry an OAuth bearer (`accessToken`/`tokenExpiresAt`),
+  // and the connector's `linkedin_accounts_list` MCP primitive returns these
+  // rows to callers — STRIP both fields from every published row
+  // (least-privilege hardening over the static import — codex H4 round-1
+  // finding 1). The publish path resolves tokens host-side from the store.
+  const stripLinkedInAccountTokens = (
+    account: Awaited<ReturnType<typeof listLinkedInAccounts>>[number],
+  ) => {
+    const { accessToken: _hostOnlyToken, tokenExpiresAt: _hostOnlyExpiry, ...row } = account;
+    return row;
+  };
+  register(svc.linkedinConnection, {
+    getStatus: getLinkedInAPIStatus,
+    getSettings: async () => {
+      const { accounts, ...settings } = await getLinkedInAPISettings();
+      return { ...settings, accounts: accounts.map(stripLinkedInAccountTokens) };
+    },
+    listAccounts: async () => (await listLinkedInAccounts()).map(stripLinkedInAccountTokens),
+    listDestinations: listLinkedInDestinations,
+    publishPost: publishLinkedInPost,
+  } satisfies HostLinkedInConnectionService);
+
+  // YouTube OAuth token mint (single reader; the bearer stays in-process —
+  // the media-feeds scraper forwards it only to the YouTube Data API).
+  register(svc.youtubeConnection, {
+    getConfiguredAccessToken: getConfiguredYouTubeAccessToken,
+  } satisfies HostYouTubeConnectionService);
 
   // Observability parity: agent extensions log per-package via
   // `[cinatra:extensions:agent]`; skill extensions log a scan summary via

@@ -33,9 +33,30 @@ vi.mock("@/lib/database", () => ({
   readAnthropicConnectionFromDatabase: () => ({}),
 }));
 vi.mock("@/lib/mcp-pagination", () => ({ decodeCursor: () => null, buildListPage: () => ({}) }));
+const EXT_MCP_ROW = {
+  id: "twenty-workspace",
+  label: "Twenty (workspace)",
+  serverUrl: "https://twenty.example/mcp",
+  nangoConnectionId: "nango-1",
+  scope: "workspace" as const,
+  orgId: null,
+  userId: null,
+  enabled: true,
+  allowedTools: null,
+  allowedCatalogTools: ["people_search"],
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-02T00:00:00Z",
+};
+const extMcpCalls: Record<string, unknown[][]> = { resolveBearer: [] };
 vi.mock("@/lib/external-mcp-registry", () => ({
   upsertExternalMcpServer: async () => ({}),
   deleteExternalMcpServer: async () => {},
+  getExternalMcpServerById: (id: string) => (id === EXT_MCP_ROW.id ? EXT_MCP_ROW : null),
+  listExternalMcpServers: () => [EXT_MCP_ROW],
+  resolveExternalMcpServerBearer: async (...args: unknown[]) => {
+    extMcpCalls.resolveBearer.push(args);
+    return "bearer-jwt";
+  },
 }));
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
 vi.mock("@/lib/mcp-self-client", () => ({ buildAppMcpSelfClientHeaders: () => ({}) }));
@@ -145,10 +166,115 @@ vi.mock("@/lib/wordpress-api", () => ({
   },
 }));
 const linkedinMaterialized: unknown[] = [];
+// The HOST row carries legacy token material; the service must STRIP it
+// (least-privilege — the linkedin_accounts_list MCP primitive returns these
+// rows to callers).
+const LI_ACCOUNT = {
+  id: "li-1",
+  memberId: "m-1",
+  name: "Ada",
+  email: "ada@example.com",
+  accessToken: "li-legacy-bearer",
+  tokenExpiresAt: "2026-12-31T00:00:00Z",
+  destinations: [
+    { id: "org-1", type: "organization" as const, name: "Acme", urn: "urn:li:organization:org-1" },
+  ],
+  createdAt: "2026-01-01T00:00:00Z",
+  updatedAt: "2026-01-02T00:00:00Z",
+};
+const {
+  accessToken: _liToken,
+  tokenExpiresAt: _liExpiry,
+  ...LI_ACCOUNT_PUBLISHED
+} = LI_ACCOUNT;
+const LI_DESTINATION = {
+  linkedinAccountId: "li-1",
+  linkedinAccountName: "Ada",
+  destinationType: "organization" as const,
+  destinationId: "org-1",
+  destinationName: "Acme",
+  authorUrn: "urn:li:organization:org-1",
+};
+const linkedinApiCalls: Record<string, unknown[][]> = {
+  listDestinations: [],
+  publishPost: [],
+};
 vi.mock("@/lib/linkedin-api", () => ({
   saveLinkedInAccountFromNangoConnection: async (input: unknown) => {
     linkedinMaterialized.push(input);
     return { id: "acct" };
+  },
+  getLinkedInAPIStatus: async () => ({
+    status: "connected",
+    detail: "1 LinkedIn account is connected.",
+  }),
+  getLinkedInAPISettings: async () => ({
+    clientId: "li-client",
+    clientSecret: "li-secret",
+    redirectUri: "https://app.example/callback",
+    accounts: [LI_ACCOUNT],
+    loggingEnabled: true,
+  }),
+  listLinkedInAccounts: async () => [LI_ACCOUNT],
+  listLinkedInDestinations: async (...args: unknown[]) => {
+    linkedinApiCalls.listDestinations.push(args);
+    return [LI_DESTINATION];
+  },
+  publishLinkedInPost: async (...args: unknown[]) => {
+    linkedinApiCalls.publishPost.push(args);
+    return {
+      postUrn: "urn:li:share:1",
+      postUrl: "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A1/",
+    };
+  },
+}));
+const GH_REPO = {
+  id: 7,
+  owner: "acme",
+  repo: "site",
+  fullName: "acme/site",
+  url: "https://github.com/acme/site",
+  visibility: "private" as const,
+  permissions: { admin: true, maintain: true, push: true, triage: true, pull: true },
+};
+const githubApiCalls: Record<string, unknown[][]> = {
+  saveOAuthSettings: [],
+  saveRepositorySelection: [],
+};
+vi.mock("@/lib/github-api", () => ({
+  getGitHubAPIStatus: async () => ({
+    status: "connected",
+    detail: "Connected as Ada for acme/site.",
+    accountName: "Ada",
+    settingsConfigured: true,
+    selectedRepositoryFullName: "acme/site",
+    selectedRepositoryUrl: "https://github.com/acme/site",
+  }),
+  getGitHubOAuthSettings: async () => ({
+    clientId: "gh-client",
+    clientSecret: "gh-secret",
+    redirectUri: "https://app.example/callback",
+    scopes: ["repo", "workflow", "read:user", "user:email"],
+    selectedRepositoryFullName: "acme/site",
+    selectedRepositoryUrl: "https://github.com/acme/site",
+    // Host-side PAT fallback — the service must STRIP this before publishing.
+    personalAccessToken: "ghp-host-only",
+  }),
+  listGitHubRepositories: async () => [GH_REPO],
+  saveGitHubOAuthSettings: async (...args: unknown[]) => {
+    githubApiCalls.saveOAuthSettings.push(args);
+    return { clientId: "gh-client", clientSecret: "gh-secret", scopes: [] };
+  },
+  saveGitHubRepositorySelection: async (...args: unknown[]) => {
+    githubApiCalls.saveRepositorySelection.push(args);
+    return GH_REPO;
+  },
+}));
+const youtubeApiCalls: Record<string, number> = { getConfiguredAccessToken: 0 };
+vi.mock("@/lib/youtube-api", () => ({
+  getConfiguredYouTubeAccessToken: async () => {
+    youtubeApiCalls.getConfiguredAccessToken += 1;
+    return "yt-access-token";
   },
 }));
 vi.mock("@/lib/wordpress-mcp-connection", () => ({
@@ -211,6 +337,10 @@ import {
   type HostWordPressMcpService,
   type HostWordPressContentService,
   type HostWordPressWidgetAuthService,
+  type HostExternalMcpRegistryService,
+  type HostGitHubConnectionService,
+  type HostLinkedInConnectionService,
+  type HostYouTubeConnectionService,
   type HostRuntimeModeService,
   type HostOpenAIConnectionService,
   type HostAnthropicConnectionService,
@@ -565,5 +695,156 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     });
     expect(wpWidgetAuthCalls.read).toBe(1);
     expect(wpWidgetAuthCalls.generate).toBe(1);
+  });
+});
+
+describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
+  // Grant-drift coverage: one assertion row per NEW/EXTENDED service MEMBER —
+  // the publication test pins the full member set, not just the service id.
+  it("extends @cinatra-ai/host:external-mcp-registry with the read + bearer-mint surface (every member bound)", async () => {
+    const registry = resolveSingle<HostExternalMcpRegistryService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.externalMcpRegistry,
+    );
+    // Pre-H4 WRITER members survive unchanged.
+    expect(typeof registry.upsertServer).toBe("function");
+    expect(typeof registry.deleteServer).toBe("function");
+
+    // getServerById — row lookup, null on unknown id.
+    expect(registry.getServerById("twenty-workspace")).toEqual(EXT_MCP_ROW);
+    expect(registry.getServerById("nope")).toBeNull();
+
+    // listServers — full registry read.
+    expect(registry.listServers()).toEqual([EXT_MCP_ROW]);
+
+    // resolveBearer — in-process bearer mint; forwards the full row (the
+    // TRUSTED server-side path that bypasses the LLM-facing Layer-B proxy —
+    // the contract's TRUST note documents this posture).
+    await expect(registry.resolveBearer(EXT_MCP_ROW)).resolves.toBe("bearer-jwt");
+    expect(extMcpCalls.resolveBearer.at(-1)).toEqual([EXT_MCP_ROW]);
+  });
+
+  it("publishes @cinatra-ai/host:github-connection with the full connection-admin member set", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection).toBe(
+      "@cinatra-ai/host:github-connection",
+    );
+    const github = resolveSingle<HostGitHubConnectionService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.githubConnection,
+    );
+
+    // getStatus — settings-page badge + Nango card read.
+    await expect(github.getStatus()).resolves.toEqual({
+      status: "connected",
+      detail: "Connected as Ada for acme/site.",
+      accountName: "Ada",
+      settingsConfigured: true,
+      selectedRepositoryFullName: "acme/site",
+      selectedRepositoryUrl: "https://github.com/acme/site",
+    });
+
+    // getOAuthSettings — OAuth app settings document. The host-side PAT
+    // fallback must be STRIPPED (toEqual is exact-match: its absence below
+    // pins the strip — codex H4 round-1 finding 2).
+    await expect(github.getOAuthSettings()).resolves.toEqual({
+      clientId: "gh-client",
+      clientSecret: "gh-secret",
+      redirectUri: "https://app.example/callback",
+      scopes: ["repo", "workflow", "read:user", "user:email"],
+      selectedRepositoryFullName: "acme/site",
+      selectedRepositoryUrl: "https://github.com/acme/site",
+    });
+    await expect(github.getOAuthSettings()).resolves.not.toHaveProperty(
+      "personalAccessToken",
+    );
+
+    // listRepositories — live-connection repository options.
+    await expect(github.listRepositories()).resolves.toEqual([GH_REPO]);
+
+    // saveOAuthSettings — WRITER; input envelope forwarded intact.
+    const oauthInput = { clientId: "next-id", clientSecret: "next-secret" };
+    await expect(github.saveOAuthSettings(oauthInput)).resolves.toEqual({
+      clientId: "gh-client",
+      clientSecret: "gh-secret",
+      scopes: [],
+    });
+    expect(githubApiCalls.saveOAuthSettings.at(-1)).toEqual([oauthInput]);
+
+    // saveRepositorySelection — WRITER; input envelope forwarded intact.
+    await expect(
+      github.saveRepositorySelection({ repositoryFullName: "acme/site" }),
+    ).resolves.toEqual(GH_REPO);
+    expect(githubApiCalls.saveRepositorySelection.at(-1)).toEqual([
+      { repositoryFullName: "acme/site" },
+    ]);
+  });
+
+  it("publishes @cinatra-ai/host:linkedin-connection with the full connection-admin + publish member set", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection).toBe(
+      "@cinatra-ai/host:linkedin-connection",
+    );
+    const linkedin = resolveSingle<HostLinkedInConnectionService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.linkedinConnection,
+    );
+
+    // getStatus — the connector's linkedin_status primitive read.
+    await expect(linkedin.getStatus()).resolves.toEqual({
+      status: "connected",
+      detail: "1 LinkedIn account is connected.",
+    });
+
+    // getSettings — full settings document (credentials + account rows).
+    // Account rows are published TOKEN-STRIPPED (toEqual is exact-match: the
+    // absence of accessToken/tokenExpiresAt below pins the strip — codex H4
+    // round-1 finding 1; the host mock row DOES carry both).
+    await expect(linkedin.getSettings()).resolves.toEqual({
+      clientId: "li-client",
+      clientSecret: "li-secret",
+      redirectUri: "https://app.example/callback",
+      accounts: [LI_ACCOUNT_PUBLISHED],
+      loggingEnabled: true,
+    });
+
+    // listAccounts — connected account rows, token-stripped the same way.
+    await expect(linkedin.listAccounts()).resolves.toEqual([LI_ACCOUNT_PUBLISHED]);
+    const [publishedRow] = await linkedin.listAccounts();
+    expect(publishedRow).not.toHaveProperty("accessToken");
+    expect(publishedRow).not.toHaveProperty("tokenExpiresAt");
+
+    // listDestinations — options envelope forwarded intact (incl. the
+    // user-scope variant the MCP destinations handler uses).
+    await expect(linkedin.listDestinations()).resolves.toEqual([LI_DESTINATION]);
+    expect(linkedinApiCalls.listDestinations.at(-1)).toEqual([]);
+    await linkedin.listDestinations({ scope: "user", userId: "u-1" });
+    expect(linkedinApiCalls.listDestinations.at(-1)).toEqual([
+      { scope: "user", userId: "u-1" },
+    ]);
+
+    // publishPost — the WRITER (publishes to the remote LinkedIn network);
+    // input envelope forwarded intact. This is one of the two coarse H4
+    // surfaces the design's grant-drift hardening names explicitly.
+    const post = {
+      linkedinAccountId: "li-1",
+      destinationType: "organization" as const,
+      destinationId: "org-1",
+      content: "Hello",
+      userId: "u-1",
+    };
+    await expect(linkedin.publishPost(post)).resolves.toEqual({
+      postUrn: "urn:li:share:1",
+      postUrl: "https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A1/",
+    });
+    expect(linkedinApiCalls.publishPost.at(-1)).toEqual([post]);
+  });
+
+  it("publishes @cinatra-ai/host:youtube-connection with the single token-mint reader", async () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection).toBe(
+      "@cinatra-ai/host:youtube-connection",
+    );
+    const youtube = resolveSingle<HostYouTubeConnectionService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.youtubeConnection,
+    );
+    await expect(youtube.getConfiguredAccessToken()).resolves.toBe("yt-access-token");
+    expect(youtubeApiCalls.getConfiguredAccessToken).toBe(1);
+    // No writer members on this service (single reader by design).
+    expect(Object.keys(youtube)).toEqual(["getConfiguredAccessToken"]);
   });
 });

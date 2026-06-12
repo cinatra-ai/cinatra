@@ -79,6 +79,13 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   // Per-concern widget-auth config surface for the wordpress assistant widget
   // (`@/lib/wordpress-widget-auth` stays host-side).
   wordpressWidgetAuth: "@cinatra-ai/host:wordpress-widget-auth",
+  // --- hostInternal pinned-empty sweep (cinatra#172 Stage H4) --------------
+  // Per-concern connection-admin surfaces for the github/linkedin transports
+  // and the youtube OAuth token mint (`@/lib/github-api` / `@/lib/linkedin-api`
+  // / `@/lib/youtube-api` stay host-side).
+  githubConnection: "@cinatra-ai/host:github-connection",
+  linkedinConnection: "@cinatra-ai/host:linkedin-connection",
+  youtubeConnection: "@cinatra-ai/host:youtube-connection",
   runtimeMode: "@cinatra-ai/host:runtime-mode",
   notifications: "@cinatra-ai/host:notifications",
   skillsCatalog: "@cinatra-ai/host:skills-catalog",
@@ -427,6 +434,165 @@ export type HostWordPressWidgetAuthService = {
   generate(): { apiKey: string; webhookSecret: string; generatedAt: string };
 };
 
+/** GitHub OAuth/connection-admin surface (`@/lib/github-api` stays host-side;
+ * credential storage + the Nango integration upsert + the GitHub REST calls
+ * all run host-side inside each member).
+ *
+ * TRUST (cinatra#172 Stage H4): read and write members share this ONE
+ * in-process capability id (server-side registry only — never
+ * client-resolvable). The WRITERS are `saveOAuthSettings` (persists the OAuth
+ * app credentials and ensures the Nango integration) and
+ * `saveRepositorySelection` (persists the repository binding after validating
+ * it against the live connection's repository list). AUTHORIZATION GATING
+ * STAYS EXTENSION-SIDE: the connector's "use server" actions keep their
+ * `requireExtensionAction(<pkg>, "manage")` gates — the identical posture the
+ * static `@/lib/github-api` imports carried before the cutover. */
+export type HostGitHubConnectionService = {
+  /** Aggregate connection status for the settings page badge + Nango card. */
+  getStatus(): Promise<{
+    status: "connected" | "incomplete" | "not_connected";
+    detail?: string;
+    accountName?: string;
+    accountEmail?: string;
+    settingsConfigured: boolean;
+    selectedRepositoryFullName?: string;
+    selectedRepositoryUrl?: string;
+  }>;
+  /** OAuth app settings document (Nango-resolved credentials + stored
+   * repository selection; `scopes` is the host's pinned scope set). The
+   * stored personal-access-token fallback is NOT published here — it belongs
+   * to the host's skills-configuration fallback path and stays host-side
+   * (least-privilege hardening over the static import this replaces). */
+  getOAuthSettings(): Promise<{
+    clientId?: string;
+    clientSecret?: string;
+    redirectUri?: string;
+    scopes: string[];
+    selectedRepositoryFullName?: string;
+    selectedRepositoryUrl?: string;
+  }>;
+  /** Repositories reachable through the live connection (sorted by name). */
+  listRepositories(): Promise<
+    Array<{
+      id: number;
+      owner: string;
+      repo: string;
+      fullName: string;
+      url: string;
+      visibility: "private" | "public";
+      permissions: {
+        admin: boolean;
+        maintain: boolean;
+        push: boolean;
+        triage: boolean;
+        pull: boolean;
+      };
+    }>
+  >;
+  /** WRITER — persist OAuth app credentials + ensure the Nango integration.
+   * Returns the persisted settings document. */
+  saveOAuthSettings(input: {
+    clientId?: string;
+    clientSecret?: string;
+  }): Promise<unknown>;
+  /** WRITER — persist the repository selection (validated against the live
+   * connection; throws on an unknown repository). Returns the selected row. */
+  saveRepositorySelection(input: { repositoryFullName?: string }): Promise<unknown>;
+};
+
+/** Structural LinkedIn account row threading through the linkedin connection
+ * service (`@/lib/linkedin-api`'s `LinkedInAccountConnection` is the
+ * host-side authority). TOKEN MATERIAL IS DELIBERATELY ABSENT: the host
+ * service STRIPS `accessToken`/`tokenExpiresAt` from every row it publishes
+ * (least-privilege hardening over the static import this replaces — the
+ * legacy stored row may carry a bearer, and the `linkedin_accounts_list` MCP
+ * primitive returns these rows to callers). The publish path resolves tokens
+ * host-side from the underlying store and never needs them here. */
+export type LinkedInAccountRowShape = {
+  id: string;
+  memberId: string;
+  name: string;
+  email?: string;
+  profileUrl?: string;
+  destinations: Array<{
+    id: string;
+    type: "member" | "organization";
+    name: string;
+    urn?: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** LinkedIn connection-admin + publish surface (`@/lib/linkedin-api` stays
+ * host-side; token resolution, the LinkedIn REST calls, and the API logging
+ * all run host-side inside each member).
+ *
+ * TRUST (cinatra#172 Stage H4): this is one of the two COARSE transport
+ * services the H4 design flags — read members and the publish WRITER share
+ * this ONE in-process capability id (server-side registry only). The WRITER
+ * is `publishPost`: it publishes PUBLIC content to the remote LinkedIn
+ * network (member feed or organization page). AUTHORIZATION GATING STAYS
+ * EXTENSION-SIDE / DISPATCH-SIDE: the consuming MCP primitive handlers sit
+ * behind the host's MCP dispatch + actor gating, and the social-media
+ * transport publish path sits behind the host facade's routing — the
+ * identical posture the static `@/lib/linkedin-api` imports carried before
+ * the cutover (no member is client-resolvable). */
+export type HostLinkedInConnectionService = {
+  /** Aggregate status for the connector's `linkedin_status` primitive. */
+  getStatus(): Promise<{ status: "connected" | "not_connected"; detail: string }>;
+  /** Full settings document (Nango-resolved credentials + account rows). */
+  getSettings(): Promise<{
+    clientId?: string;
+    clientSecret?: string;
+    redirectUri?: string;
+    accounts: LinkedInAccountRowShape[];
+    loggingEnabled?: boolean;
+  }>;
+  /** Connected account rows (updatedAt-desc). */
+  listAccounts(): Promise<LinkedInAccountRowShape[]>;
+  /** Publish destinations (app-scope account destinations, or user-scope
+   * Nango connections when `scope: "user"`). */
+  listDestinations(options?: { scope?: "app" | "user"; userId?: string }): Promise<
+    Array<{
+      linkedinAccountId: string;
+      linkedinAccountName: string;
+      destinationType: "member" | "organization";
+      destinationId: string;
+      destinationName: string;
+      authorUrn: string;
+    }>
+  >;
+  /** WRITER — publish a post to the remote LinkedIn network. */
+  publishPost(input: {
+    linkedinAccountId: string;
+    destinationType: "member" | "organization";
+    destinationId: string;
+    content: string;
+    userId?: string;
+  }): Promise<{ postUrn: string; postUrl: string }>;
+};
+
+/** YouTube OAuth access-token mint over the saved Nango binding
+ * (`@/lib/youtube-api` stays host-side; the Nango credential refresh runs
+ * host-side inside the member).
+ *
+ * TRUST (cinatra#172 Stage H4): single READER member, no writers. The minted
+ * bearer is returned IN-PROCESS to the media-feeds scraper (which forwards
+ * it only to Google's YouTube Data API) and must never cross any other wire
+ * boundary — the identical posture the static `@/lib/youtube-api` import
+ * carried before the cutover. */
+export type HostYouTubeConnectionService = {
+  /** Nango-backed OAuth2 access-token mint. Returns null when Nango is
+   * unconfigured or the resolved credentials are not a usable OAUTH2 bearer;
+   * with no SAVED connection it still attempts the legacy fixed Nango
+   * connection id before giving up, and a failing Nango credential resolution
+   * REJECTS (it is not folded to null) — identical semantics to the static
+   * `getConfiguredYouTubeAccessToken` import this replaces (callers keep
+   * their existing null/throw handling). */
+  getConfiguredAccessToken(): Promise<string | null>;
+};
+
 /** Host runtime-mode flag (development vs production). */
 export type HostRuntimeModeService = {
   isDevelopment(): boolean;
@@ -496,11 +662,57 @@ export type HostSecretsCodecService = {
   decryptSecret(input: { ciphertext: string; iv: string }, aad?: string): string;
 };
 
-/** Global external-MCP server registry mutation (apify-style first-party
- * registration of an externally-hosted MCP server). */
+/** Structural external-MCP server registry row threading through the
+ * registry service's read surface. Mirrors the host's
+ * `ExternalMcpServerRecord` (`@/lib/external-mcp-registry` is the host-side
+ * authority); every field is required — registry rows always carry the full
+ * document, so consumers need no skew-optional fields here. */
+export type ExternalMcpServerRowShape = {
+  id: string;
+  label: string;
+  serverUrl: string;
+  nangoConnectionId: string | null;
+  scope: "global" | "org" | "team" | "user" | "workspace";
+  orgId: string | null;
+  userId: string | null;
+  enabled: boolean;
+  /** Layer A — native MCP allowlist (`null` = no filter). */
+  allowedTools: string[] | null;
+  /** Layer B — catalog toolName allowlist enforced by the host proxy
+   * (`null` = no filter at the proxy layer). */
+  allowedCatalogTools: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Global external-MCP server registry: mutation (apify-style first-party
+ * registration of an externally-hosted MCP server) + the registry READ and
+ * bearer-mint surface (cinatra#172 Stage H4) the twenty transport resolves
+ * its live workspace row through.
+ *
+ * TRUST (cinatra#172 Stage H4): read and write members share this ONE
+ * in-process capability id — the registry is server-side only, never
+ * client-resolvable. The WRITERS are `upsertServer` and `deleteServer`
+ * (pre-existing). `resolveBearer` MINTS the upstream bearer via Nango and
+ * returns it IN-PROCESS to the caller; server-side callers are trusted and
+ * may hit the upstream directly, BYPASSING the host's Layer-B
+ * (`allowed_catalog_tools`) proxy — that proxy remains the LLM-facing
+ * enforcement point, and in-process callers are responsible for using the
+ * right tool names (the identical posture the static
+ * `@/lib/external-mcp-registry` import carried before the cutover; the
+ * minted bearer must never cross a wire boundary). */
 export type HostExternalMcpRegistryService = {
   upsertServer(input: Record<string, unknown>): void;
   deleteServer(id: string): void;
+  // --- registry READ + bearer-mint surface (cinatra#172 Stage H4) ----------
+  /** One registry row by id (null when unknown). */
+  getServerById(id: string): ExternalMcpServerRowShape | null;
+  /** Every registry row (cached host-side, createdAt ASC). */
+  listServers(): ExternalMcpServerRowShape[];
+  /** Upstream bearer mint for a row via its Nango binding (null when Nango
+   * is unconfigured, the row has no connection, or resolution fails —
+   * callers treat null as "no auth header"). */
+  resolveBearer(server: ExternalMcpServerRowShape): Promise<string | null>;
 };
 
 /** Auth headers for the in-app MCP self-client. */
