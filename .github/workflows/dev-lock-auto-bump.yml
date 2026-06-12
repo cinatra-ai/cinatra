@@ -1,0 +1,266 @@
+# Scheduled auto-bump for cinatra-dev-extensions.lock.json (cinatra#141).
+#
+# The floating-HEAD canary (extension-head-canary.yml) only REPORTS when
+# companion tips drift past the committed pins; landing the bump used to be a
+# purely manual one-PR recipe (docs/extension-clone-pinning.md). This workflow
+# runs that exact recipe on a schedule and maintains ONE rolling bump PR:
+#   1. regenerate cinatra-dev-extensions.lock.json — the NON-required universe
+#      only; cinatra-required-extensions.lock.json stays a deliberate human
+#      bump (it is the prod bootable set's single authority);
+#   2. if (and only if) the lock moved: re-sync the tree to the new pins,
+#      `pnpm install` (pnpm-lock.yaml moves WITH the pins), regenerate the
+#      generated maps and re-run their fail-closed `--check`;
+#   3. commit exactly the recipe files together on the fixed branch
+#      `auto/dev-lock-bump` (force-updated — one rolling PR, never a stack of
+#      stale ones) and open/refresh the PR. No drift -> clean no-op (and the
+#      rolling PR is retired if an equivalent bump already landed manually).
+#
+# TOKEN BOUNDARY: the repo's Actions policy does not let the default
+# GITHUB_TOKEN create pull requests, so push + PR use the Actions secret
+# `DEV_LOCK_BUMP_TOKEN` (an operator-provisioned least-privilege token for
+# this repo). Three rules keep that boundary closed:
+#   - the secret is referenced ONLY in this schedule/dispatch workflow; never
+#     add a pull_request trigger here — PR-controlled code must never run in
+#     a job that can reach the token;
+#   - the checkout does not persist credentials, and the token is injected
+#     only into the final push/PR step;
+#   - no companion-controlled code executes in this job at all: the lock
+#     updater and the map generator are host-repo scripts that only READ
+#     companion manifests, and `pnpm install` runs with `--ignore-scripts`
+#     (lifecycle scripts could otherwise poison GITHUB_ENV/GITHUB_PATH for
+#     the token step; the bump PR's own full CI run exercises the normal
+#     install path).
+# Failure mode of an expired/revoked token is benign: this job fails loud,
+# the canary keeps flagging drift, and the manual recipe keeps working.
+#
+# NON-GATING: like the canary, this must never block a merge. The bump PR's
+# own CI run is the integration test for the new pins.
+name: dev-lock-auto-bump
+
+on:
+  schedule:
+    # Weekday early-UTC, on an off-minute away from on-the-hour spikes and
+    # AFTER the daily 05:23 canary (whose report this workflow acts on).
+    - cron: '37 6 * * 1-5'
+  workflow_dispatch:
+
+# The default token stays read-only; every write goes through the PAT in the
+# final step.
+permissions:
+  contents: read
+
+concurrency:
+  group: dev-lock-auto-bump
+  cancel-in-progress: false
+
+jobs:
+  auto-bump:
+    name: Dev-lock auto-bump (rolling PR)
+    # Upstream main only: forks/mirrors have no token and no rolling branch,
+    # and a workflow_dispatch from any non-main ref must not be able to push
+    # that ref's state into the bump branch (the job is skipped instead).
+    if: github.repository == 'cinatra-ai/cinatra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # No credentials on disk after checkout: only the explicit
+          # token-scoped final step may write.
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      # Same first signal as the canary: one ::warning:: per moved repo —
+      # including required-lock divergence, which this workflow deliberately
+      # does NOT bump (update-required-extension-lock.mjs is a human action).
+      - name: HEAD-vs-pin divergence report
+        run: node scripts/ci/extension-pin-divergence-report.mjs
+
+      # Cheap drift probe: re-resolving the non-required universe is
+      # `git ls-remote` only (no clone, no install) — see the updater's
+      # header. The diff of the committed lock is the authoritative drift
+      # signal; everything expensive below is gated on it.
+      - name: Regenerate cinatra-dev-extensions.lock.json
+        run: node scripts/extensions/update-dev-extension-lock.mjs
+
+      - name: Detect dev-lock drift
+        id: drift
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- cinatra-dev-extensions.lock.json; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "No dev-lock drift: companion tips match the committed pins. Clean no-op." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          # Human-readable old -> new pin list, reused by the step summary,
+          # the commit body and the PR body.
+          node --input-type=module > /tmp/pin-changes.md <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { readFileSync } from "node:fs";
+          const before = new Map(
+            JSON.parse(
+              execFileSync("git", ["show", "HEAD:cinatra-dev-extensions.lock.json"], { encoding: "utf8" }),
+            ).packages.map((p) => [p.packageName, p.resolvedSha]),
+          );
+          const after = JSON.parse(readFileSync("cinatra-dev-extensions.lock.json", "utf8")).packages;
+          const lines = [];
+          for (const p of after) {
+            const old = before.get(p.packageName);
+            if (old !== p.resolvedSha) {
+              lines.push(`- \`${p.packageName}\`: ${old ? old.slice(0, 12) : "(new)"} -> ${p.resolvedSha.slice(0, 12)}`);
+            }
+          }
+          for (const [name, sha] of before) {
+            if (!after.some((p) => p.packageName === name)) lines.push(`- \`${name}\`: ${sha.slice(0, 12)} -> (removed)`);
+          }
+          console.log(lines.join("\n"));
+          NODE
+          {
+            echo "## Dev-lock drift detected"
+            echo ""
+            cat /tmp/pin-changes.md
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/pin-changes.md
+
+      # ----- the expensive recipe steps only run when the lock moved -----
+
+      # The rest of the documented bump recipe, in order: re-pin the working
+      # tree, move pnpm-lock.yaml with the pins, regenerate the maps, and
+      # fail closed if the generator disagrees with what it just wrote.
+      - name: Re-sync the tree to the new pins
+        if: steps.drift.outputs.drift == 'true'
+        run: node scripts/ci/sync-dev-extensions.mjs --pinned
+
+      # --no-frozen-lockfile: Actions exports CI=true, under which pnpm
+      # defaults to frozen — but moving pnpm-lock.yaml is the very point of
+      # this step. --ignore-scripts: see TOKEN BOUNDARY above; the lockfile
+      # resolution itself is script-independent, and the bump PR's gating CI
+      # runs the normal `pnpm install --frozen-lockfile` against the result.
+      - name: pnpm install (pnpm-lock.yaml moves WITH the pins)
+        if: steps.drift.outputs.drift == 'true'
+        run: pnpm install --no-frozen-lockfile --ignore-scripts
+
+      - name: Regenerate + check the generated maps
+        if: steps.drift.outputs.drift == 'true'
+        run: |
+          set -euo pipefail
+          node scripts/extensions/generate-extension-manifest.mjs
+          node scripts/extensions/generate-extension-manifest.mjs --check
+
+      # Fail-closed commit scope: the dirty set after regeneration must be a
+      # SUBSET of the recipe files (dev lock + pnpm-lock.yaml + the
+      # generator's own output list; the dev lock is already known dirty from
+      # the detect step — pnpm-lock.yaml/maps legitimately stay put on a
+      # source-only companion bump). Any path outside the allowlist aborts
+      # the run instead of being silently dropped or silently committed.
+      - name: Verify the dirty set is exactly the recipe files
+        if: steps.drift.outputs.drift == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "cinatra-dev-extensions.lock.json"
+            echo "pnpm-lock.yaml"
+            node -e "import('./scripts/extensions/generated-manifest-files.mjs').then((m) => console.log(m.GENERATED_MANIFEST_FILES.join('\n')))"
+          } > /tmp/recipe-files.txt
+          git status --porcelain=v1 | cut -c4- > /tmp/dirty.txt
+          status=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! grep -qxF "$f" /tmp/recipe-files.txt; then
+              echo "::error::unexpected dirty path after regeneration: $f"
+              status=1
+            fi
+          done < /tmp/dirty.txt
+          exit "$status"
+
+      - name: Push rolling branch + open/refresh (or retire) the bump PR
+        env:
+          GH_TOKEN: ${{ secrets.DEV_LOCK_BUMP_TOKEN }}
+          DRIFT: ${{ steps.drift.outputs.drift }}
+        run: |
+          set -euo pipefail
+
+          # No drift: nothing to push — but if a rolling bump PR is still
+          # open (an equivalent bump landed manually, or tips moved back),
+          # retire it instead of leaving it stale.
+          # Owner-qualified head filter: `gh pr list --head <branch>` matches
+          # by bare branch name, so a fork PR named auto/dev-lock-bump could
+          # shadow the real rolling PR. The REST filter is exact.
+          find_rolling_pr() {
+            gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&head=${GITHUB_REPOSITORY_OWNER}:auto/dev-lock-bump" \
+              --jq '.[0].number // empty'
+          }
+
+          if [ "$DRIFT" != "true" ]; then
+            stale="$(find_rolling_pr)"
+            if [ -n "$stale" ]; then
+              gh pr close "$stale" --repo "$GITHUB_REPOSITORY" --delete-branch \
+                --comment "Pins are back in sync with main without this PR (a bump landed directly, or companion tips returned to the pinned shas) — retiring the rolling auto-bump PR."
+              echo "Retired stale bump PR #$stale" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
+
+          git config user.name "Sandro Groganz"
+          git config user.email "sandro@cinatra.ai"
+
+          today="$(date -u +%Y-%m-%d)"
+          title="chore(extensions): dev-lock auto-bump (${today})"
+
+          # One rolling branch, recreated from the current main head every
+          # run — never stacked commits, never a second PR. Stage exactly the
+          # verified recipe-file set.
+          git checkout -B auto/dev-lock-bump
+          xargs git add -- < /tmp/recipe-files.txt
+          git commit -m "$title" \
+            -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
+
+          # Idempotency: if the remote rolling branch already holds this
+          # exact TREE (identical pins + lockfile + maps + everything else),
+          # skip the push — no CI re-runs, no PR-update spam.
+          git fetch origin "+refs/heads/auto/dev-lock-bump:refs/remotes/origin/auto/dev-lock-bump" 2>/dev/null || true
+          pushed=true
+          if git rev-parse -q --verify "refs/remotes/origin/auto/dev-lock-bump" >/dev/null \
+            && [ "$(git rev-parse 'refs/remotes/origin/auto/dev-lock-bump^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+            pushed=false
+            echo "Rolling bump branch already holds this exact tree — skipping push." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            git push --force \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "HEAD:refs/heads/auto/dev-lock-bump"
+          fi
+
+          {
+            echo "Automated rolling dev-lock bump, opened by \`.github/workflows/dev-lock-auto-bump.yml\` — see \`docs/extension-clone-pinning.md\` for the recipe and the lock partition."
+            echo ""
+            echo "The full bump recipe in one commit: \`cinatra-dev-extensions.lock.json\` + \`pnpm-lock.yaml\` + regenerated \`src/lib/generated\` maps. This PR's own CI run is the integration test for the new pins. The branch is force-updated from the current main head on each scheduled run while the PR is open — review and merge it like any deliberate bump PR."
+            echo ""
+            echo "## Pin changes"
+            echo ""
+            cat /tmp/pin-changes.md
+          } > /tmp/pr-body.md
+
+          existing="$(find_rolling_pr)"
+          if [ -z "$existing" ]; then
+            url="$(gh pr create --repo "$GITHUB_REPOSITORY" \
+              --head auto/dev-lock-bump --base main \
+              --title "$title" --body-file /tmp/pr-body.md)"
+            echo "Opened bump PR: $url" | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$pushed" = true ]; then
+            gh pr edit "$existing" --repo "$GITHUB_REPOSITORY" \
+              --title "$title" --body-file /tmp/pr-body.md >/dev/null
+            echo "Refreshed bump PR #$existing" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Bump PR #$existing already current." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

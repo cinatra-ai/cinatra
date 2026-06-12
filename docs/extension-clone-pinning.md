@@ -54,10 +54,20 @@ attention at the next bump" — it gates nothing.
 
 ## Bumping the pins (one deliberate PR)
 
-Who/when: whoever lands a companion-repo rollout that needs host integration,
-or whoever picks up a red/warning canary run; otherwise on demand. There is no
-scheduled auto-bump PR (repo Actions policy does not allow workflow-created
-PRs), so the canary is the cadence signal and a human lands the bump.
+Who/when: the scheduled auto-bump
+(`.github/workflows/dev-lock-auto-bump.yml`, weekday mornings + manual
+dispatch) runs this exact recipe for the DEV lock and maintains one rolling
+bump PR on the fixed branch `auto/dev-lock-bump` (force-updated from the
+current `main` head each run; clean no-op while tips match the pins). Because
+the repo's Actions policy does not let the default workflow token create PRs,
+that workflow pushes and opens its PR with the operator-provisioned
+`DEV_LOCK_BUMP_TOKEN` Actions secret; an expired token just stops the
+auto-PRs while the canary keeps flagging drift and this manual recipe keeps
+working. Humans still land bumps
+directly for anything the automation deliberately does not touch: required-set
+packages (`update-required-extension-lock.mjs` stays a deliberate human
+action), targeted `--select` bumps, and companion-rollout integration that
+cannot wait for the schedule.
 
 ```sh
 # 1. re-pin (all, or --select a,b for a targeted bump)
