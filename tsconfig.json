@@ -149,6 +149,8 @@
       "@cinatra-ai/wordpress-assistant-connector/settings-page": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/settings-page.tsx"],
       "@cinatra-ai/wordpress-assistant-connector/setup-page": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/setup-page.tsx"],
       "@cinatra-ai/drupal-assistant-connector": ["./extensions/cinatra-ai/drupal-assistant-connector/src/index.ts"],
+      "@cinatra-ai/drupal-assistant-connector/register": ["./extensions/cinatra-ai/drupal-assistant-connector/src/register.ts"],
+      "@cinatra-ai/drupal-assistant-connector/deps": ["./extensions/cinatra-ai/drupal-assistant-connector/src/deps.ts"],
       "@cinatra-ai/drupal-assistant-connector/settings-page": ["./extensions/cinatra-ai/drupal-assistant-connector/src/settings-page.tsx"],
       "@cinatra-ai/drupal-assistant-connector/setup-page": ["./extensions/cinatra-ai/drupal-assistant-connector/src/setup-page.tsx"],
       "@cinatra-ai/youtube-connector": ["./extensions/cinatra-ai/youtube-connector/src/index.ts"],

@@ -2,14 +2,6 @@
   "note": "Extension import-ban no-new-rot baseline. `hostInternal`/`crossExtension` = CURRENT @/ or cross-extension coupling tolerated until the decoupling sweep removes it. `sdkOnly` = CURRENT non-SDK first-party/sibling-vendor code coupling (deps + source imports incl. `import type`) tolerated until the connector sweep migrates each onto `ctx`; the canonical rule is SDK-packages-only. Under the shared extension-reference taxonomy (scripts/audit/lib/extension-reference-classification.mjs + scripts/audit/extension-coupling-gates.md) ALL entries in every dimension classify as runtime-coupling; nothing extension-side is mechanical or permanently exempt. Regenerate with `node scripts/audit/extension-import-ban.mjs --write-baseline` (every dimension should only ever SHRINK). The `--strict-sdk-only` flip makes `sdkOnly` zero-tolerance. anthropic-connector is un-exempt and scanned like every other connector.",
   "classification": "runtime-coupling",
   "hostInternal": {
-    "@cinatra-ai/drupal-assistant-connector": [
-      "@/lib/drupal-mcp-connection",
-      "@/lib/drupal-widget-auth"
-    ],
-    "@cinatra-ai/drupal-mcp-connector": [
-      "@/lib/drupal-api",
-      "@/lib/drupal-mcp-connection"
-    ],
     "@cinatra-ai/github-connector": [
       "@/lib/github-api"
     ],
