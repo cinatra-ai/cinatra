@@ -11,10 +11,10 @@ A CLI-safe, dependency-free catalog of the built-in connector descriptors. It ho
 - `getConnectorDescriptorByPackageId(packageId)` — lookup by npm package id
 - `getConnectorDescriptorBySlug(slug)` — lookup by URL slug
 
-`@cinatra-ai/connectors-catalog/overrides.mjs`
-
-- `PRIMITIVE_TO_CONNECTOR_OVERRIDES` — facade primitive → provider package id
-- `lookupPrimitiveOverride(primitiveName)` — resolve a facade primitive to its provider
+Facade-primitive provider overrides moved OUT of this catalog (cinatra#151
+Stage 4): the owning connector declares `cinatra.facadePrimitives` in its own
+manifest and `scripts/extensions/inventory.mjs` derives the mapping from the
+extension manifests — the catalog names no concrete provider package.
 
 A `ConnectorDescriptor` carries `packageId`, `slug`, `displayName`, `defaultVisibility` (`"admin" | "workspace"`), `mcpPrimitivePrefixes`, and `setupSubroute`.
 
@@ -25,11 +25,9 @@ import {
   listConnectorDescriptors,
   getConnectorDescriptorBySlug,
 } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
-import { lookupPrimitiveOverride } from "@cinatra-ai/connectors-catalog/overrides.mjs";
 
 const all = listConnectorDescriptors();
 const gmail = getConnectorDescriptorBySlug("gmail-connector");
-const provider = lookupPrimitiveOverride("email_send");
 ```
 
 ## Docs

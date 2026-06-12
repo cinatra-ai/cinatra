@@ -126,7 +126,7 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **109 occurrences / 45 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3) | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **105 occurrences / 41 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4) | shrink-only, frozen |
 | `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1; −4 hidden transport edges — the transport-DI inversion, Stage 3, which adopted the shared lexer in the same PR so the zero is HONEST). | PINNED EMPTY |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
@@ -205,12 +205,21 @@ epic's scope and tracked elsewhere:
   inversion (cinatra#151 Stage 3) then retired the last LLM-platform +
   content-editor MCP hard imports (openai, anthropic, drupal-mcp,
   wordpress-mcp self-bind from their serverEntries against the per-concern
-  host services): the bootable floor is now **11** (8 `systemExtensions` +
-  3 hard-wired packages — crm, gmail, google-calendar; the four transports
-  are guardedOptional/acquirable-on-demand, dev-universe pinned in the dev
-  lock). Nango left the hard-import surface in cinatra#151 Stage 1
-  (generated-required). The 11→8 tail is exactly the packages/agents
-  picker/action edges (Stage 4).
+  host services); the packages/agents connector-edge cutover (cinatra#151
+  Stage 4) then retired the LAST 3 hard-wired packages — crm, gmail,
+  google-calendar resolve via connector-registered capability surfaces
+  (`crm-list-reader`, `email-sender-identities`, `appointment-schedules`)
+  and moved to the dev lock — so the bootable floor is now
+  **8 == `systemExtensions`** (the cover-gate floor: 0 hard-imported,
+  8 generated-required, 0 root-dep; every other extension is
+  guardedOptional/acquirable-on-demand). Nango left the hard-import surface
+  in cinatra#151 Stage 1 (generated-required). Stage 4 also moved the
+  connectors-catalog `email_send` override into gmail-connector's manifest
+  (`cinatra.facadePrimitives`, derived by `scripts/extensions/inventory.mjs`
+  — the catalog names no concrete package) and pruned the phantom
+  concrete-connector `workspace:*` deps (packages/agents 2,
+  packages/connectors 8 — all zero-source-reference; the prod-shape
+  install-failure class flagged on cinatra#149).
 - **The statically-wired transport DI cluster — RETIRED (cinatra#151
   Stage 3).** The transport-DI inversion moved registration authorship
   connector-side: openai/anthropic extended their `register(ctx)` and
