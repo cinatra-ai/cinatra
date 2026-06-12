@@ -58,6 +58,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/social-media-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/tailscale-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/twenty-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/wordpress-assistant-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "a2a-server-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "anthropic-connector", resolution: "guardedOptional" },

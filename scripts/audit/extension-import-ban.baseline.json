@@ -13,14 +13,6 @@
     ],
     "@cinatra-ai/twenty-connector": [
       "@/lib/external-mcp-registry"
-    ],
-    "@cinatra-ai/wordpress-assistant-connector": [
-      "@/lib/wordpress-api",
-      "@/lib/wordpress-mcp-connection",
-      "@/lib/wordpress-widget-auth"
-    ],
-    "@cinatra-ai/wordpress-mcp-connector": [
-      "@/lib/wordpress-api"
     ]
   },
   "crossExtension": {},

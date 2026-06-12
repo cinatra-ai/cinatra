@@ -146,6 +146,8 @@
       "@cinatra-ai/drupal-mcp-connector/mcp-module": ["./extensions/cinatra-ai/drupal-mcp-connector/src/mcp/module.ts"],
       "@cinatra-ai/drupal-mcp-connector/widget-chat-tool": ["./extensions/cinatra-ai/drupal-mcp-connector/src/widget-chat-tool.ts"],
       "@cinatra-ai/wordpress-assistant-connector": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/index.ts"],
+      "@cinatra-ai/wordpress-assistant-connector/register": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/register.ts"],
+      "@cinatra-ai/wordpress-assistant-connector/deps": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/deps.ts"],
       "@cinatra-ai/wordpress-assistant-connector/settings-page": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/settings-page.tsx"],
       "@cinatra-ai/wordpress-assistant-connector/setup-page": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/setup-page.tsx"],
       "@cinatra-ai/drupal-assistant-connector": ["./extensions/cinatra-ai/drupal-assistant-connector/src/index.ts"],

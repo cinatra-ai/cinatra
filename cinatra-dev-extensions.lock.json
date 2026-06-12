@@ -345,12 +345,12 @@
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
       "repo": "cinatra-ai/wordpress-assistant-connector",
-      "resolvedSha": "f2aec65e2d1a00c4993bf08fd9ad6f62f261639a"
+      "resolvedSha": "f9ab650522a39afc9f0aec8fe9b17b7e96a203ae"
     },
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "43181fe741e66d37d3b3b90c8e76bde3deb1b4b0"
+      "resolvedSha": "9087744660fc7fd2d44c2ab60a3c1aac9a114fa9"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
