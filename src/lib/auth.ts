@@ -26,7 +26,7 @@ const betterAuthConsoleUrl = process.env.BETTER_AUTH_CONSOLE_URL;
 
 // This module-level value is read via a TOP-LEVEL await, which runs on every
 // module load. Crucially, `auth.ts` is pulled into the Next.js instrumentation
-// hook at boot (instrumentation.node.ts → register-transport-connectors /
+// hook at boot (instrumentation.node.ts → register-host-connector-services /
 // register-extension-action-guard → auth-session → auth), so an UNGUARDED
 // rejection here propagates out of the hook's module load as
 // "An error occurred while loading instrumentation hook: connect ECONNREFUSED …"

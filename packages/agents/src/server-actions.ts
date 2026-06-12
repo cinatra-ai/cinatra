@@ -1,11 +1,11 @@
 "use server";
 
-// Side-effect import wires the transport-connector DI singletons in this
-// server-action bundle (separate Turbopack graph from instrumentation boot).
-// Without it getStoredGmailSendAsAddresses() throws "host runtime deps not
+// Side-effect import publishes the per-concern host connector services in
+// this server-action bundle (separate Turbopack graph from instrumentation
+// boot). Without it getStoredGmailSendAsAddresses() throws "host service not
 // registered" — here it's swallowed by a try/catch so gmail aliases silently
 // never load. Same pattern as src/app/api/chat/runner.ts.
-import "@/lib/register-transport-connectors";
+import "@/lib/register-host-connector-services";
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import { buildSkillResourceRef, requireResourceAccess } from "./auth-policy";

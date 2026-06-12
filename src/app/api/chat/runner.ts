@@ -1,17 +1,16 @@
 import "server-only";
 
-// Transport-connector DI registrations live in
-// `@/lib/register-transport-connectors` and run on import via the
+// The per-concern host connector services are published in
+// `@/lib/register-host-connector-services` and run on import via the
 // instrumentation entrypoint. In dev (Turbopack) the chat route bundle
-// can compile separately, instantiating its own copy of each transport
-// connector package without the registration side-effect — the connector's
-// deps resolution then throws "host runtime deps not registered" mid-chat.
-// Importing the registrar here side-effects into the chat bundle's module
-// graph too, so the host DI deps every transport connector needs are wired
-// before the chat turn runs (chat-user-context providers register through
-// each connector's own `register(ctx)` via the serverEntry loader). This is
+// can compile separately without that side-effect — a connector's lazy
+// host-service resolution then throws "host service not registered"
+// mid-chat. Importing the registrar here side-effects into the chat
+// bundle's module graph too, so the services every serverEntry transport
+// adapts are published before the chat turn runs (the registry is
+// globalThis-anchored, so one publication serves every bundle). This is
 // a core->core edge: the registrar is host code, no extension is named here.
-import "@/lib/register-transport-connectors";
+import "@/lib/register-host-connector-services";
 
 import { existsSync, readFileSync } from "node:fs";
 import {

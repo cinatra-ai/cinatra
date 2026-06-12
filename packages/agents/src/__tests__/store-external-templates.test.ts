@@ -75,29 +75,17 @@ vi.mock("../db", () => ({
 
 vi.mock("@/lib/nango-system", () => ({
   listSavedNangoConnections: (_key: string) => savedConnections.list,
-  // The host's register-transport-connectors.ts (loaded transitively via
-  // server-actions -> store) now imports the full connection-storage surface to
-  // bind it into the Nango-consumer connectors' deps. These are bound by
-  // reference at module load, never called by this test (which exercises only the
-  // external-agent-template store helpers) — no-op stubs let the graph resolve.
-  isNangoConfigured: () => false,
-  getPrimarySavedNangoConnection: () => null,
-  getNangoStatus: () => ({ status: "not_connected", detail: "" }),
-  getNangoFrontendConfig: () => ({}),
-  CINATRA_NANGO_CONNECTION_IDS: {},
-  CINATRA_NANGO_PROVIDER_CONFIG_KEYS: {},
-  ensureNangoIntegration: async () => undefined,
-  ensureNangoConnectorIntegration: async () => undefined,
-  importNangoConnection: async () => undefined,
-  getNangoCredentials: async () => null,
-  saveNangoConnectionRecord: async () => undefined,
-  removeNangoConnectionRecord: async () => undefined,
-  deleteNangoConnection: async () => undefined,
-  clearNangoConnectionRecords: async () => undefined,
-  // Imported by register-transport-connectors.ts (drupal connector's host-bound
-  // Nango bearer-header builder) which loads transitively via server-actions →
-  // store. The mock must export it or the module-eval throws.
-  buildBearerAuthHeaderFromNango: async () => null,
+  // The host's register-host-connector-services.ts (loaded transitively via
+  // server-actions -> store) imports `requireNangoSystem` for the
+  // deprecation-window nango-connection-storage compat shim. Every shim
+  // member resolves at CALL time and this test never calls one — a no-op
+  // stub lets the graph resolve.
+  requireNangoSystem: () => ({
+    isNangoConfigured: () => false,
+    getNangoStatus: () => ({ status: "not_connected", detail: "" }),
+    providerConfigKeys: {},
+    connectionIds: {},
+  }),
 }));
 
 // ---------------------------------------------------------------------------

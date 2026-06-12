@@ -4,7 +4,8 @@ import "server-only";
 // of Drupal MCP servers is manifest-driven: the drupal-mcp-connector
 // extension's `mcp-toolbox` module builds the injected tools (resolved through
 // the generated manifest loader map), consuming this file's probe + endpoint
-// helpers via its host-bound deps (src/lib/register-transport-connectors.ts).
+// helpers via its host-bound deps (the `@cinatra-ai/host:drupal-mcp`
+// service published by src/lib/register-host-connector-services.ts).
 // This file keeps the host-owned probe used by the connector settings pages.
 
 import { getDrupalAPISettings } from "@/lib/drupal-api";
