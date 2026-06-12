@@ -200,7 +200,7 @@
     {
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
-      "resolvedSha": "eb1fb859c4a0e5d5e501e7462109aa2507d69888"
+      "resolvedSha": "585d729115f19d22f23f678836a8186cbb060995"
     },
     {
       "packageName": "@cinatra-ai/gmail-connector",
@@ -220,7 +220,7 @@
     {
       "packageName": "@cinatra-ai/linkedin-connector",
       "repo": "cinatra-ai/linkedin-connector",
-      "resolvedSha": "21bbaedce8d4a3608d5e5f9ed30a85116535d339"
+      "resolvedSha": "f37eb2cd574a1dbf714575170c0008b7708da8d4"
     },
     {
       "packageName": "@cinatra-ai/list-curator-agent",
@@ -255,7 +255,7 @@
     {
       "packageName": "@cinatra-ai/media-feeds-connector",
       "repo": "cinatra-ai/media-feeds-connector",
-      "resolvedSha": "58138cc6749297cb755975c2c6d391d2ad92e280"
+      "resolvedSha": "201e6857d02872b372d0bc2706bdb362089230cc"
     },
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
@@ -325,7 +325,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "cc012b6695f80773ebfc77050c8446c696673d9f"
+      "resolvedSha": "9d59bb3ec3d92ec894f0c5ccaf90f923543ab402"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",

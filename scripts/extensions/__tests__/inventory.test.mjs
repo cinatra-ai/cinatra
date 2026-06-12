@@ -237,8 +237,14 @@ describe("inventory generator", () => {
       }
     }
 
-    // the empirical host-import surface is non-empty (drives the ABI port set)
-    expect(inv.summary.distinctHostInternalImports.length).toBeGreaterThan(0);
+    // the empirical host-import surface is EMPTY since the cinatra#172 H4
+    // pins shrink (hostInternal 4 -> 0; every former `@/` edge now rides a
+    // ctx port or a per-concern `@cinatra-ai/host:*` service via a deps
+    // slot). Pin ZERO here — any reappearing `@/` import is rot the
+    // extension-import-ban gate also rejects (shrink-only ratchet now, pinned
+    // empty at the #172 H5 flip). The scanner itself stays exercised either
+    // way (it walks every extension source file above).
+    expect(inv.summary.distinctHostInternalImports).toEqual([]);
   });
 });
 
