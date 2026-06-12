@@ -183,4 +183,3 @@ export const RELEASE_TEMPLATE_FIXTURE: WorkflowSpec = {
     },
   ],
 };
-
