@@ -58,6 +58,25 @@ function redactToken(str, token) {
   return String(str).split(token).join("***");
 }
 
+/**
+ * Registry-scoped credential entry for pacote option objects.
+ *
+ * npm-registry-fetch (pacote's HTTP layer) resolves credentials ONLY from
+ * nerf-dart-scoped '//<host>/<path>:_authToken' option keys (or forceAuth) —
+ * a flat `token` option is silently ignored and produces requests with NO
+ * Authorization header (#179). Plain-JS mirror of the canonical TS helper
+ * `registryScopedAuthOptions` in @cinatra-ai/registries (this CLI script
+ * cannot import the TS source). Returns {} when no token is configured.
+ */
+function registryScopedAuthOptions(registryUrl, token) {
+  if (!token) return {};
+  const parsed = new URL(registryUrl);
+  const pathname = parsed.pathname.endsWith("/")
+    ? parsed.pathname
+    : `${parsed.pathname}/`;
+  return { [`//${parsed.host}${pathname}:_authToken`]: token };
+}
+
 // ---------------------------------------------------------------------------
 // Derive inputSchema from cinatra/oas.json when a tarball lacks the canonical
 // compiled agent.json.
@@ -211,8 +230,9 @@ async function resolveAgentDependencyTree({ rootPackageName, rootRange, registry
     registry: registryUrl + "/",
     preferOnline: true,
     fullMetadata: true,
+    // Scoped key, NEVER a flat `token` — npm-registry-fetch ignores that (#179).
+    ...registryScopedAuthOptions(registryUrl, token),
   };
-  if (token) pacoteOpts.token = token;
 
   const { default: pacote } = await import("pacote");
 
@@ -452,8 +472,9 @@ async function installAgentFromPackage({ packageName, packageVersion, registryUr
   const pacoteOpts = {
     registry: registryUrl + "/",
     preferOnline: true,
+    // Scoped key, NEVER a flat `token` — npm-registry-fetch ignores that (#179).
+    ...registryScopedAuthOptions(registryUrl, token),
   };
-  if (token) pacoteOpts.token = token;
 
   const spec = packageVersion ? `${packageName}@${packageVersion}` : packageName;
   const tempDir = await mkdtemp(tmpdir() + "/cinatra-agent-install-");
@@ -722,6 +743,9 @@ export const __test = {
   parseArgv,
   parseSpec,
   redactToken,
+  // Exported so the #179 regression (flat pacote `token` option, ignored by
+  // npm-registry-fetch) stays pinned at the CLI layer too.
+  registryScopedAuthOptions,
   lockfileToTree,
   lockfileFromTree,
   stableStringifyLockfile,
