@@ -21,12 +21,9 @@ import type {
 // lets them confirm (leave the draft in place) or reject (delete the
 // draft from WordPress via deleteInWordPress: true).
 
-export const isBlogWordpressDraftConfirmField: FieldRendererCondition = (
-  _field,
-  schema,
-) =>
-  (schema as { ["x-renderer"]?: string })["x-renderer"] ===
-  "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+// Condition: registered from the manifest binding (kind
+// "wordpress-draft-confirm") with strict ID matching — see
+// register-default-renderers.ts.
 
 type DraftConfirmValue = {
   wordpressDraftId: string;

@@ -16,24 +16,37 @@ import { getSkillsForAgentAction } from "./server-actions";
 import type { SkillForChip } from "./server-actions";
 import type { FieldRendererProps } from "./field-renderer-registry";
 
-const DRAFTS_PACKAGE = "@cinatra-ai/email-drafting-agent";
-
 export function SkillRecommenderRenderer({
   onChange,
   disabled,
+  bindingParams,
 }: FieldRendererProps) {
   const [skills, setSkills] = useState<SkillForChip[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
+  // The skills-target package is EXTENSION-OWNED registration metadata: the
+  // skill-recommender agent's manifest binding declares
+  // `params.skillsTargetPackage` (the agent whose assigned skills this gate
+  // reviews). Absent/malformed params degrade to an empty list with a
+  // functional Continue — the gate stays advanceable (pinned by test).
+  const skillsTargetPackage =
+    typeof bindingParams?.skillsTargetPackage === "string"
+      ? bindingParams.skillsTargetPackage
+      : null;
+
   useEffect(() => {
-    getSkillsForAgentAction(DRAFTS_PACKAGE)
+    if (!skillsTargetPackage) {
+      setLoaded(true);
+      return;
+    }
+    getSkillsForAgentAction(skillsTargetPackage)
       .then((s) => {
         setSkills(s);
         setLoaded(true);
       })
       .catch(() => setLoaded(true));
-  }, []);
+  }, [skillsTargetPackage]);
 
   const handleContinue = useCallback(async () => {
     if (submitting || disabled) return;

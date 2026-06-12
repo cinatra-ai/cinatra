@@ -110,6 +110,17 @@ export type FieldRendererProps = {
    * The parent merges the supplied object into currentValue before the fetch.
    */
   onHitlContextChange?: (ctx: Record<string, unknown>) => void;
+  /**
+   * Extension-owned registration metadata (cinatra#151 Stage 5). When the
+   * resolved registry entry came from a manifest `cinatra.fieldRenderers`
+   * declaration with a `params` object, the registration wrapper injects it
+   * here verbatim. PUBLIC renderer metadata only (it crosses the server ->
+   * client boundary and is validated, size-capped plain JSON) — never
+   * secrets. Renderers that take per-binding configuration (e.g. the
+   * skill-recommend renderer's target package) read it from this prop and
+   * MUST degrade gracefully when absent/malformed.
+   */
+  bindingParams?: Readonly<Record<string, unknown>>;
 };
 
 export type FieldRendererCondition = (
@@ -123,6 +134,15 @@ export type FieldRendererEntry = {
   priority: number;                           // higher priority wins on ties
   condition: FieldRendererCondition;
   renderer: ComponentType<FieldRendererProps>;
+  /**
+   * Manifest-declared mid-run HITL classification (cinatra#151 Stage 5).
+   * `true` when the binding's `cinatra.fieldRenderers` entry sets
+   * `midRunHitl: true` — the HITL panel surfaces consult this (via
+   * orchestrator-mid-run-hitl.ts) to buffer values for an outer Continue
+   * instead of submitting per interaction. Absent for host-internal entries
+   * and bindings without the flag.
+   */
+  midRunHitl?: boolean;
 };
 
 class FieldRendererRegistryImpl {

@@ -21,6 +21,12 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   "src/lib/generated/extensions.server.ts",
   "src/lib/generated/connector-setup-pages.ts",
   "src/lib/generated/extensions.client.tsx",
+  // Agent UI bindings + agent role bindings (cinatra#151 Stage 5): pure-data
+  // map of x-renderer ID -> host renderer KIND (+ mid-run classification,
+  // a2ui translator kind, params) and role -> package, derived from each
+  // present extension's `cinatra.fieldRenderers` / `cinatra.roles` manifest
+  // metadata, validated fail-closed (agent-binding-kinds.mjs).
+  "src/lib/generated/agent-bindings.ts",
   "src/lib/generated/widget-stream-public-paths.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing

@@ -27,6 +27,12 @@ describe("extension-reference classification taxonomy", () => {
       // it adds no exemption surface — it puts the file under the same
       // fail-closed --check integrity pin as the maps it asserts.
       "src/lib/generated/__tests__/guarded-optional-loaders.test.ts",
+      // Agent UI bindings + role bindings (cinatra#151 Stage 5): pure-data
+      // x-renderer ID -> renderer KIND map + role -> package map derived from
+      // each present extension's manifest, validated FAIL-CLOSED at
+      // generation (agent-binding-kinds.mjs) and byte-pinned by --check like
+      // every other generated file.
+      "src/lib/generated/agent-bindings.ts",
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",

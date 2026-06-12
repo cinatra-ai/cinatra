@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import { LoadingSpinner, type ProcessProgressStep } from "@cinatra-ai/sdk-ui";
-import type { FieldRendererCondition, FieldRendererProps } from "./field-renderer-registry";
+import type { FieldRendererProps } from "./field-renderer-registry";
 import {
   fetchCampaignRecipients,
   fetchChildInterruptOutput,
@@ -87,10 +87,10 @@ function extractRecipientsFromOutput(output: string): RecipientsExtractionResult
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isCampaignRecipientsReviewField: FieldRendererCondition = (_f, schema) =>
-  // :output suffix is the canonical mid-run HITL ID.
-  // Screen-specific IDs remain accepted for persisted resume runs.
-  (["@cinatra-ai/email-recipient-selection-agent:output","@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review","campaign-recipients-review"] as string[]).includes((schema as { ["x-renderer"]?: string })["x-renderer"] ?? "");
+// Condition: registered from the manifest bindings (kind
+// "campaign-recipients-review"; the :output canonical ID, the screen-specific
+// compat ID, and the bare alias all resolve here) — see
+// register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // State machine

@@ -49,6 +49,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildInventory } from "./inventory.mjs";
 import { GENERATED_MANIFEST_FILES } from "./generated-manifest-files.mjs";
 import { CONNECTOR_DESCRIPTORS } from "../../packages/connectors-catalog/src/descriptors.mjs";
+import {
+  validateFieldRendererDeclarations,
+  mergeFieldRendererBindings,
+  mergeRoleDeclarations,
+} from "./agent-binding-kinds.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -866,6 +871,38 @@ export async function buildManifest() {
     );
   }
 
+  // Agent UI bindings + role bindings (cinatra#151 Stage 5): collected from
+  // every present extension's `cinatra.fieldRenderers` / `cinatra.roles`
+  // manifest metadata and validated FAIL-CLOSED via the shared validator
+  // (agent-binding-kinds.mjs) — an invalid or conflicting declaration is a
+  // generation error, so nothing invalid can ever become byte-pinned exempt
+  // generated data. Presence-aware like every other map: only on-disk
+  // packages contribute (the runtime collector in
+  // packages/agents/src/field-renderer-bindings.server.ts covers packages
+  // installed AFTER build with the same validator, skip-warn).
+  const bindingErrors = [];
+  const allFieldRendererEntries = [];
+  const roleDeclarations = [];
+  for (const r of records) {
+    const cin = readCinatraManifest(r.sourceDir);
+    const { entries, errors } = validateFieldRendererDeclarations(r.packageName, cin.fieldRenderers);
+    bindingErrors.push(...errors);
+    allFieldRendererEntries.push(...entries);
+    if (cin.roles !== undefined) {
+      roleDeclarations.push({ packageName: r.packageName, roles: cin.roles });
+    }
+  }
+  const { merged: agentFieldRendererBindings, errors: mergeErrors } =
+    mergeFieldRendererBindings(allFieldRendererEntries);
+  const { roles: agentRoleBindings, errors: roleErrors } =
+    mergeRoleDeclarations(roleDeclarations);
+  bindingErrors.push(...mergeErrors, ...roleErrors);
+  if (bindingErrors.length > 0) {
+    throw new Error(
+      `[extension-manifest] invalid agent UI binding / role declarations:\n  - ${bindingErrors.join("\n  - ")}`,
+    );
+  }
+
   return {
     records,
     connectorSetupPages,
@@ -876,7 +913,10 @@ export async function buildManifest() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
-    chatWidgetModules,  };
+    chatWidgetModules,
+    agentFieldRendererBindings,
+    agentRoleBindings,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1358,66 @@ function emitClient() {
   );
 }
 
+// Agent UI bindings + agent role bindings (cinatra#151 Stage 5). Pure DATA,
+// no imports — consumable from BOTH the client renderer registry path
+// (packages/agents/src/register-default-renderers.ts via field-renderer-init)
+// and server code (role resolution, a2ui translator wiring). Validated
+// fail-closed at generation by the shared validator
+// (scripts/extensions/agent-binding-kinds.mjs).
+function emitAgentBindings(fieldRendererBindings, roleBindings) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const entryLines = fieldRendererBindings
+    .map((b) => {
+      const parts = [
+        `id: ${JSON.stringify(b.id)}`,
+        `kind: ${JSON.stringify(b.kind)}`,
+        `priority: ${b.priority}`,
+      ];
+      if (b.midRunHitl === true) parts.push("midRunHitl: true");
+      if (b.a2uiTranslator !== undefined) parts.push(`a2uiTranslator: ${JSON.stringify(b.a2uiTranslator)}`);
+      if (b.params !== undefined) parts.push(`params: ${JSON.stringify(b.params)}`);
+      parts.push(`declaredBy: ${JSON.stringify(b.declaredBy)}`);
+      return `  { ${parts.join(", ")} },`;
+    })
+    .join("\n");
+  const roleLines = Object.entries(roleBindings)
+    .map(([role, pkg]) => `  ${JSON.stringify(role)}: ${JSON.stringify(pkg)},`)
+    .join("\n");
+  return (
+    `${HEADER(script)}\n` +
+    `// Agent UI bindings (cinatra#151 Stage 5): which x-renderer ID activates\n` +
+    `// which host-neutral renderer KIND (component table:\n` +
+    `// packages/agents/src/register-default-renderers.ts), plus the mid-run\n` +
+    `// HITL classification, the A2UI mid-run translator kind, and optional\n` +
+    `// extension-owned params. Derived from each PRESENT extension's\n` +
+    `// \`cinatra.fieldRenderers\` manifest declaration (validated fail-closed —\n` +
+    `// see scripts/extensions/agent-binding-kinds.mjs). Packages installed at\n` +
+    `// RUNTIME (after build) contribute through the installed-package\n` +
+    `// collector (packages/agents/src/field-renderer-bindings.server.ts), not\n` +
+    `// this file.\n` +
+    `export type GeneratedFieldRendererBinding = {\n` +
+    `  readonly id: string;\n` +
+    `  readonly kind: string;\n` +
+    `  readonly priority: number;\n` +
+    `  readonly midRunHitl?: true;\n` +
+    `  readonly a2uiTranslator?: string;\n` +
+    `  readonly params?: Readonly<Record<string, unknown>>;\n` +
+    `  readonly declaredBy: string;\n` +
+    `};\n\n` +
+    `export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRendererBinding> = [\n` +
+    `${entryLines}\n` +
+    `];\n\n` +
+    `// Agent ROLE bindings: role name -> the single claimant package\n` +
+    `// (global uniqueness enforced at generation). Roles are how host code\n` +
+    `// selects an agent for a lane/duty (e.g. the creation-review lanes)\n` +
+    `// WITHOUT naming a package: packages/agents/src/agent-roles.ts resolves\n` +
+    `// fail-loud for the systemExtension-backed roles.\n` +
+    `export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {\n` +
+    `${roleLines}\n` +
+    `};\n`
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Parity (the catalog safety net)
 // ---------------------------------------------------------------------------
@@ -1432,6 +1532,7 @@ const OUT_SETUP = generatedOutPath("connector-setup-pages.ts");
 const OUT_CLIENT = generatedOutPath("extensions.client.tsx");
 const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
+const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 
 /**
  * Fail-closed verdict for `--check` (cinatra#36): any drift/missing
@@ -1457,10 +1558,13 @@ async function main() {
     externalMcpToolboxes,
     widgetStreamAgents,
     chatWidgetModules,
+    agentFieldRendererBindings,
+    agentRoleBindings,
   } = await buildManifest();
   const files = [
     [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
     [OUT_CLIENT, emitClient()],
+    [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings)],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
     [
       OUT_GUARDED_TEST,

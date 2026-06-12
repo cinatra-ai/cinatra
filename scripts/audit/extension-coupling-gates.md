@@ -126,7 +126,7 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **105 occurrences / 41 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4) | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **20 occurrences / 15 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, Stage 2; −4 occ transport-DI inversion, Stage 3; −4 occ packages/agents connector edges + catalog-override manifest move, Stage 4; −85 occ agent-identity decoupling — manifest-declared field-renderer bindings + role bindings + dev-tooling derivation, Stage 5) | shrink-only, frozen |
 | `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1; −4 hidden transport edges — the transport-DI inversion, Stage 3, which adopted the shared lexer in the same PR so the zero is HONEST). | PINNED EMPTY |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
@@ -237,11 +237,43 @@ epic's scope and tracked elsewhere:
   (gemini, apify, tailscale, gmail, apollo) re-pointed to `nango-system`;
   the old id survives only as the documented compat shim (Stage 7
   removal).
-- **The literal tail** — agent-renderer registration maps
-  (`packages/agents/src/register-default-renderers.ts` and the per-renderer
-  files), a2ui adapter agent IDs, telemetry/logging provider catalogs, seed
-  workflows, and dev tooling globs. Each is a real named-extension reference
-  in core; each shrinks only by genuine decoupling work.
+- **The agent-identity cluster — RETIRED (cinatra#151 Stage 5).** The
+  renderer hand map (`register-default-renderers.ts`, 33 occ), the
+  per-renderer agent-ID matchers (~20 occ across 15 files), the a2ui
+  adapter's mid-run translator map (4 occ), the role-selection literals
+  (agent-creation-review / run-author-agent / orchestrator HITL /
+  execution / mcp-schemas, 16 occ), and the dev-tooling literals
+  (packages/agents vitest aliases 8, validate-oas message 1, packages/cli
+  tailscale paths 3) are GONE. The inversion: each agent's manifest declares
+  `cinatra.fieldRenderers` (x-renderer ID -> host-neutral renderer KIND, +
+  priority/midRunHitl/a2uiTranslator/params) and `cinatra.roles`; the
+  generator validates them FAIL-CLOSED (shared validator,
+  `scripts/extensions/agent-binding-kinds.mjs`: id shape, known kinds,
+  duplicate-divergence conflicts, role uniqueness) and emits the pure-data
+  `src/lib/generated/agent-bindings.ts` (added to GENERATED_MANIFEST_FILES —
+  byte-pinned + exempt). The host keeps only the NEUTRAL kind table
+  (components) and registers from the generated bindings at init (Source A),
+  while packages installed at RUNTIME contribute through the
+  installed-package collector + the HITL panels' fetch-and-register hook
+  (Source B — same validator, skip-warn), so runtime-installed agents keep
+  bespoke renderers on prod images. Roles resolve FAIL-LOUD
+  (`packages/agents/src/agent-roles.ts`) — all four host-required roles are
+  claimed by `cinatra.systemExtensions` members. Dev tooling: vitest
+  extension aliases retired in favor of `tsconfigPaths: true`; the CLI's
+  tailscale modules are discovered from `cinatra.devCliModules` manifest
+  declarations.
+- **The artifact/blog/seed tail (the remaining 20 occ)** — default-artifact
+  resolution (src/lib/artifacts/* + packages/objects, 9 occ),
+  artifact materializers (blog idea/post/image + marketing-icp mcp, 4 occ),
+  blog host surfaces (src/lib/blog/*, 6 occ — blog-pipeline-agent,
+  blog-content-workflow, blog-linkedin-publish-agent, blog-image-artifact),
+  and the seed workflow literal (packages/workflows
+  major-product-release, 2 occ — counts: artifacts/objects cluster 11 +
+  blog-host 7 + seed 2, with the blog materializer files counted in the
+  artifact cluster). Stage 6 territory (manifest default-flag + materializer
+  capabilities + registry resolution + presence-conditional seeds). Each is
+  a real named-extension reference in core; each shrinks only by genuine
+  decoupling work.
 
 Every cluster lives in the committed baselines — visible, counted, and
 incapable of growing.

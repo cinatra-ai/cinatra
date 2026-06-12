@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 import {
@@ -15,12 +14,9 @@ import { GmailSenderFieldRenderer } from "./gmail-sender-renderer";
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isSendConfirmationField: FieldRendererCondition = (_fieldName, schema) => {
-  // The :output suffix is the canonical mid-run HITL ID.
-  // Legacy screen-specific ID is kept for backward compat with existing resume runs.
-  const xr = (schema as { ["x-renderer"]?: string })["x-renderer"] ?? "";
-  return xr === "@cinatra-ai/email-delivery-agent:output" || xr === "@cinatra-ai/email-delivery-agent:send-confirmation" || xr === "send-confirmation";
-};
+// Condition: registered from the manifest bindings (kind "send-confirmation"
+// — the :output canonical ID, the legacy screen-specific ID, and the bare
+// alias) with strict matching — see register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Renderer
@@ -175,7 +171,7 @@ export function SendConfirmationRenderer({
       {/* Sender email */}
       <GmailSenderFieldRenderer
         fieldName="senderEmail"
-        schema={{ type: "string", title: "Sender email", "x-renderer": "@cinatra-ai/email-outreach-agent:gmail-sender" }}
+        schema={{ type: "string", title: "Sender email", "x-renderer": "gmail-sender" }}
         value={senderEmail}
         onChange={(v) => setSenderEmail(typeof v === "string" ? v : "")}
         disabled={disabled}

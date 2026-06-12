@@ -15,7 +15,6 @@ import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 
@@ -23,13 +22,8 @@ import type {
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isListPickerField: FieldRendererCondition = (_f, schema) =>
-  (
-    [
-      "@cinatra-ai/email-outreach-agent:list-picker",
-      "list-picker",
-    ] as string[]
-  ).includes((schema as { ["x-renderer"]?: string })["x-renderer"] ?? "");
+// Condition: registered from the manifest binding (kind "list-picker") with
+// strict ID + bare-alias matching — see register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Value shape

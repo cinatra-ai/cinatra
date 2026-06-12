@@ -24,12 +24,9 @@ import type {
 // via blog_post_publish_linkedin_update BEFORE the publish primitive runs
 // (see SKILL.md Step 6).
 
-export const isBlogLinkedinDraftReviewField: FieldRendererCondition = (
-  _field,
-  schema,
-) =>
-  (schema as { ["x-renderer"]?: string })["x-renderer"] ===
-  "@cinatra-ai/blog-linkedin-publish-agent:draft-review";
+// Condition: registered from the manifest binding (kind
+// "linkedin-draft-review") with strict ID matching — see
+// register-default-renderers.ts.
 
 type DraftReviewValue = {
   linkedinDraftId: string;

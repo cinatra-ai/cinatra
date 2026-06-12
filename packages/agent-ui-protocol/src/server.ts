@@ -40,6 +40,8 @@ export {
   A2UiAdapter,
   publishA2UiEvent,
   __disconnectSharedA2UiPublisher,
+  A2UI_MID_RUN_TRANSLATOR_KINDS,
+  type MidRunTranslatorResolver,
 } from "./a2ui-adapter";
 
 export { DualAdapterDispatch } from "./dual-adapter";

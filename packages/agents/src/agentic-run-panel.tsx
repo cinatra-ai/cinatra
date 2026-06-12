@@ -23,6 +23,8 @@ import { approveReviewTask } from "./hitl-actions";
 // text (back-compat invariant).
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
+import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { getAgentBuilderTask, type TaskSnapshot } from "./a2a-actions";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
@@ -226,6 +228,10 @@ export function AgenticRunPanel({
   initialStreamedText,
   onActiveGateChange,
 }: AgenticRunPanelProps) {
+  // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
+  // bindings of RUNTIME-installed agent packages; re-renders on arrival so
+  // resolution below picks them up.
+  useRuntimeFieldRendererBindings();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
@@ -890,9 +896,12 @@ export function AgenticRunPanel({
                 // orchestrator-stepper-panel's classifyMidRunHitl entry.
                 const isMidRunHitl =
                   effectiveHitlContext.xRenderer.endsWith(":output") ||
-                  // Canonical context-selector id.
-                  effectiveHitlContext.xRenderer ===
-                    "@cinatra-ai/context-selection-agent:context-selector";
+                  // Manifest-flagged mid-run gates (cinatra#151 Stage 5): a
+                  // binding declaring `midRunHitl: true` (e.g. the
+                  // context-selector) buffers into the outer Continue here
+                  // too — strict ID match via the live registry, covering
+                  // runtime-installed agents as well.
+                  hasMidRunHitlBinding(effectiveHitlContext.xRenderer);
                 // Grouped-setup forms (x-renderer === GROUPED_SETUP_FORM_RENDERER_ID or
                 // its :output variant) have their own submit button — auto-approve after
                 // the form submits so the user sees exactly ONE Continue button.
