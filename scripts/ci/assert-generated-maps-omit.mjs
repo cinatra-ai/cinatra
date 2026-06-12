@@ -22,14 +22,28 @@
 //     must fail, not pass):
 //       * every root `cinatra.systemExtensions` package still appears in
 //         extensions.server.ts (the never-absent required set);
-//       * at least one guardedOptional loader (guardedExtensionImport(…))
-//         survived in extensions.server.ts;
+//       * the guarded-loader expectation is REGIME-AWARE (cinatra#151
+//         Stage 4, the cover-gate floor): loader GUARDEDNESS is keyed on
+//         `cinatra.systemExtensions` (the generator's classification
+//         authority), so when the PRESENT universe (the extensions/ tree)
+//         contains ONLY system extensions — the floor regime, where
+//         requiredExtensions == systemExtensions — the correct emission has
+//         ZERO guardedOptional loaders, and ANY `guardedExtensionImport(…)`
+//         is itself a failure (a guarded loader can only reference a
+//         non-system package, which is absent from this universe — a
+//         stale/unfiltered emission). With ANY present non-system package
+//         at least one guardedOptional loader must survive, as before.
+//         Both regimes are REAL assertions — neither is vacuous, and the
+//         systemExtensions survivor check above fails an empty/gutted
+//         emission in either regime. Regime detection is FAIL-CLOSED:
+//         a missing extensions/ tree, an unreadable manifest, or a
+//         missing/empty package name is an ERROR, never a silent exclusion;
 //       * the generated classification test still pins at least one entry.
 //
 // Usage:
 //   node scripts/ci/assert-generated-maps-omit.mjs --expect-present @scope/pkg
 //   node scripts/ci/assert-generated-maps-omit.mjs @scope/pkg [@scope/pkg2 ...]
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GENERATED_MANIFEST_FILES } from "../extensions/generated-manifest-files.mjs";
@@ -111,10 +125,71 @@ for (const name of systemExtensions) {
     failed = true;
   }
 }
-if (!serverText.includes("guardedExtensionImport(")) {
+// Regime-aware guarded-loader expectation (header note): derive the PRESENT
+// extension package set from the extensions/ tree (manifest `name` fields,
+// FAIL-CLOSED on unreadable/nameless manifests and on a missing tree) and
+// key guardedness on `cinatra.systemExtensions` — the generator's
+// classification authority (a required-but-not-system package would still
+// emit guardedOptional). System-only present universe ⇒ ZERO guarded
+// loaders is the correct emission and any guarded loader fails; any present
+// non-system package ⇒ at least one guarded survivor must exist, as before.
+const systemSet = new Set(systemExtensions);
+const presentNames = [];
+const extRoot = join(REPO_ROOT, "extensions");
+if (!existsSync(extRoot)) {
   console.error(
-    `[assert-generated-maps-omit] FAIL: ${SERVER_MAP_FILE} contains NO guardedOptional loader — ` +
-      `an emission with zero guarded survivors cannot prove the presence contract.`,
+    "[assert-generated-maps-omit] FAIL: extensions/ tree is missing — regime detection cannot run " +
+      "(this check must execute against the pruned-but-present universe, never an empty checkout).",
+  );
+  failed = true;
+} else {
+  for (const scope of readdirSync(extRoot, { withFileTypes: true })) {
+    if (!scope.isDirectory()) continue;
+    for (const ext of readdirSync(join(extRoot, scope.name), { withFileTypes: true })) {
+      if (!ext.isDirectory()) continue;
+      const pkgPath = join(extRoot, scope.name, ext.name, "package.json");
+      if (!existsSync(pkgPath)) {
+        console.error(
+          `[assert-generated-maps-omit] FAIL: extensions/${scope.name}/${ext.name} has no package.json — ` +
+            `cannot classify the present universe (fail-closed).`,
+        );
+        failed = true;
+        continue;
+      }
+      let name;
+      try {
+        name = JSON.parse(readFileSync(pkgPath, "utf8"))?.name;
+      } catch {
+        name = undefined;
+      }
+      if (typeof name !== "string" || name.length === 0) {
+        console.error(
+          `[assert-generated-maps-omit] FAIL: extensions/${scope.name}/${ext.name}/package.json has an ` +
+            `unreadable or missing "name" — cannot classify the present universe (fail-closed).`,
+        );
+        failed = true;
+        continue;
+      }
+      presentNames.push(name);
+    }
+  }
+}
+const nonSystemPresent = presentNames.filter((n) => !systemSet.has(n));
+const systemOnlyRegime = presentNames.length > 0 && nonSystemPresent.length === 0;
+const hasGuardedLoader = serverText.includes("guardedExtensionImport(");
+if (systemOnlyRegime && hasGuardedLoader) {
+  console.error(
+    `[assert-generated-maps-omit] FAIL: the present universe is SYSTEM-ONLY (${presentNames.length} ` +
+      `package(s), all in cinatra.systemExtensions) but ${SERVER_MAP_FILE} still emits a ` +
+      `guardedOptional loader — a guarded loader can only reference a non-system package, ` +
+      `so the emission was not presence-filtered.`,
+  );
+  failed = true;
+} else if (presentNames.length > 0 && !systemOnlyRegime && !hasGuardedLoader) {
+  console.error(
+    `[assert-generated-maps-omit] FAIL: ${SERVER_MAP_FILE} contains NO guardedOptional loader while ` +
+      `${nonSystemPresent.length} non-system package(s) are present (e.g. ${nonSystemPresent[0] ?? "?"}) — ` +
+      `an emission with zero guarded survivors in a mixed universe cannot prove the presence contract.`,
   );
   failed = true;
 }
@@ -145,6 +220,7 @@ if (failed) {
 }
 console.log(
   `[assert-generated-maps-omit] OK — ${GENERATED_MANIFEST_FILES.length} generated files contain no reference to ` +
-    `${pkgs.length} absent package(s); survivors intact (${systemExtensions.length} system extensions + guarded ` +
-    `loaders + non-empty generated test).`,
+    `${pkgs.length} absent package(s); survivors intact (${systemExtensions.length} system extensions, ` +
+    `${systemOnlyRegime ? "system-only regime: zero guarded loaders as declared" : "mixed universe: guarded loaders survived"}, ` +
+    `non-empty generated test).`,
 );
