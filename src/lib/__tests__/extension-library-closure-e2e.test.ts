@@ -87,19 +87,25 @@ async function makeTarball(manifest: Record<string, unknown>, files: Record<stri
     await writeFile(abs, content);
   }
   const out = path.join(src, "out.tgz");
-  await tar.c({ gzip: true, cwd: src, file: out, portable: true, noMtime: true }, ["package"]);
+  // EXPLICIT SORTED entry list (review r0 finding 1): recursive directory
+  // enumeration order is filesystem-dependent and would leak into the tarball
+  // bytes -> the plan SRIs -> the committed golden closureHash.
+  const entries = ["package.json", ...Object.keys(files)].sort().map((rel) => `package/${rel}`);
+  await tar.c({ gzip: true, cwd: src, file: out, portable: true, noMtime: true }, entries);
   return readFile(out);
 }
 
 // ---------------------------------------------------------------------------
-// The GOLDEN fixture closure: root extension + 4 nodes.
-//   lib-b@1.0.0 at node_modules/lib-b                      (root dep)
+// The GOLDEN fixture closure: root extension + 5 nodes.
 //   lib-a@1.0.0 at node_modules/lib-a                      (root dep)
+//   lib-b@1.0.0 at node_modules/lib-b                      (root dep)
 //   lib-b@2.0.0 at node_modules/lib-a/node_modules/lib-b   (same NAME, two VERSIONS)
 //   lib-c@1.0.0 at node_modules/lib-c                      (root dep)
 //   lib-c@1.0.0 at node_modules/lib-a/node_modules/lib-c   (same name@version, TWO PLACEMENTS)
-// lib-a's edges: lib-b -> nested 2.0.0; lib-c -> its own nested copy.
-// Every byte below is FIXED so the content hash is machine-independent.
+// Edges: lib-a -> nested lib-b@2.0.0 AND -> TOP-LEVEL lib-c (a HOISTED edge:
+// a nested package resolving an ancestor placement); nested lib-b@2.0.0 ->
+// the NESTED lib-c copy (which makes the duplicate placement reachable).
+// Every byte below is FIXED so the goldens are machine-independent.
 // ---------------------------------------------------------------------------
 
 const GOLDEN_EXT = "@cinatra-test/closure-golden";
@@ -146,7 +152,10 @@ async function goldenFixture(): Promise<GoldenFixture> {
         version: "2.0.0",
         name: "lib-b",
         integrity: sriForBytes(libB2),
-        dependencies: [],
+        // The NESTED lib-c duplicate placement, reachable through this edge
+        // (Node-resolution-valid: node_modules/lib-a/node_modules/lib-c is on
+        // lib-b's walk-up path).
+        dependencies: [{ name: "lib-c", placementPath: "node_modules/lib-a/node_modules/lib-c" }],
       },
       {
         name: "lib-a",
@@ -154,7 +163,8 @@ async function goldenFixture(): Promise<GoldenFixture> {
         integrity: sriForBytes(libA),
         placementPath: "node_modules/lib-a",
         dependencies: [
-          { name: "lib-c", placementPath: "node_modules/lib-a/node_modules/lib-c" },
+          // HOISTED edge: lib-a resolves lib-c at the TOP-LEVEL placement.
+          { name: "lib-c", placementPath: "node_modules/lib-c" },
           { name: "lib-b", placementPath: "node_modules/lib-a/node_modules/lib-b" },
         ],
       },
@@ -303,22 +313,30 @@ async function e2eFixture(): Promise<E2eFixture> {
   // 1. A SOURCE package in declare-and-closure mode whose built entry imports
   //    the library — run the REAL builder (passthrough + residual validation).
   const srcDir = path.join(await tempDir("e2e-src-"), "pkg");
-  await mkdir(srcDir, { recursive: true });
+  await mkdir(path.join(srcDir, "src"), { recursive: true });
   await writeFile(
     path.join(srcDir, "package.json"),
     JSON.stringify({
       name: E2E_EXT,
       version: E2E_VER,
       dependencies: { "left-pad-fixture": "^1.0.0" },
-      cinatra: { kind: "connector", serverEntry: "./register.mjs", dependencyMode: "closure", sdkAbiRange: "^2" },
+      exports: { "./register": "./src/register.ts" },
+      cinatra: { kind: "connector", serverEntry: "./register", dependencyMode: "closure", sdkAbiRange: "^2" },
     }),
   );
+  // TS SOURCE entry (review r0 finding 3): forces the REAL esbuild bundle
+  // path — the builder must EXTERNALIZE the declared dep (closure mode),
+  // emit a built register.mjs, rewrite the packed manifest, and KEEP
+  // `dependencies` for the signed plan.
   await writeFile(
-    path.join(srcDir, "register.mjs"),
-    'import leftPad from "left-pad-fixture";\nexport function register(ctx) { ctx.logger.info(`closure-e2e ${leftPad("x", 5)}`); }\n',
+    path.join(srcDir, "src", "register.ts"),
+    'import leftPad from "left-pad-fixture";\nexport function register(ctx: { logger: { info(msg: string): void } }): void { ctx.logger.info(`closure-e2e ${leftPad("x", 5)}`); }\n',
   );
   const built = await buildServerEntryPack({ packageDir: srcDir });
   expect(built.dependencyMode).toBe("closure");
+  expect(built.mode).toBe("bundled"); // the REAL source-built path, not passthrough
+  const packedManifest = JSON.parse(await readFile(path.join(built.packDir, "package.json"), "utf8")) as Record<string, unknown>;
+  expect(packedManifest.dependencies).toEqual({ "left-pad-fixture": "^1.0.0" }); // KEPT (closure mode)
   // 2. Tar the BUILT pack dir (npm layout).
   const tarSrc = await tempDir("e2e-pack-");
   const pkgDir = path.join(tarSrc, "package");

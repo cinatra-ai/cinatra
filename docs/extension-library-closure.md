@@ -40,7 +40,7 @@ lockfile ──► canonical PLAN ──► closureHash ──► v2 signature
 | packed `dependencies` | PRUNED | KEPT (the basis of the signed plan) |
 | residual imports | node builtins only | builtins ∪ declared deps (host peers refused) |
 | dependency specs | any | PLAIN registry range/tag ONLY — every `npm:` alias refused (plan/v1 carries ONE identity per node: placement name == registry name) |
-| built `register.mjs` + self-check | mandatory | mandatory |
+| built `register.mjs` + self-check | mandatory (when a serverEntry is declared) | mandatory (when a serverEntry is declared; a closure package with NO serverEntry is legal — the plan alone covers its deps) |
 
 See `docs/extension-server-entry-contract.md` for the full builder contract.
 
