@@ -280,7 +280,21 @@ describe("step 4.8 residual-coverage (closure packages only)", () => {
         { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot: await tempDir("store-"), plan, expectedClosureHash: closureHash },
         { fetchTarball: fetchFor(ext, leftPad) },
       ),
-    ).rejects.toThrow(/imports "totally-uncovered-lib".*not a root of the signed/s);
+    ).rejects.toThrow(/imports "totally-uncovered-lib"[\s\S]*not a root of the signed/);
+  });
+
+  it("REFUSES an unresolvable SELF-package bare import (would only fail at activation otherwise)", async () => {
+    const leftPad = await leftPadBytes();
+    const ext = await makeClosureExtension(
+      `import leftPad from "left-pad";\nimport helper from "${EXT}/not-exported";\nexport function register() { return leftPad(String(helper), 3); }\n`,
+    );
+    const { plan, closureHash } = makePlanFor(EXT, VER, leftPad);
+    await expect(
+      materializePackageToStore(
+        { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot: await tempDir("store-"), plan, expectedClosureHash: closureHash },
+        { fetchTarball: fetchFor(ext, leftPad) },
+      ),
+    ).rejects.toThrow(/SELF subpath [\s\S]* does not resolve/);
   });
 
   it("ACCEPTS builtins (node: and bare), plan roots, and their subpaths", async () => {

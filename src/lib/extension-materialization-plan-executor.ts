@@ -76,6 +76,16 @@ export class MaterializationExecutorError extends Error {
 /** Hard cap on the SUM of fetched plan-node tarball bytes per package. */
 export const MAX_PLAN_TOTAL_TARBALL_BYTES = 256 * 1024 * 1024; // 256 MiB
 
+/**
+ * Per-node UNPACKED caps (review round 0 finding 4): the compressed-byte cap
+ * alone admits a decompression bomb — a tiny gzip tarball can declare a huge
+ * tree that the step-5 content hash would then read into memory. Caps are
+ * enforced AT THE TAR HEADER (declared entry sizes/counts) during streaming
+ * extraction, before the offending bytes land on disk.
+ */
+export const MAX_PLAN_NODE_UNPACKED_BYTES = 64 * 1024 * 1024; // 64 MiB per node
+export const MAX_PLAN_NODE_ENTRIES = 10_000; // files+dirs per node
+
 /** The lifecycle scripts the installer refuses (it never executes package code). */
 const REFUSED_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"] as const;
 
@@ -111,9 +121,19 @@ export async function extractTarballHardened(input: {
   label: string;
   /** Refuse `node_modules` segments inside the tarball (plan nodes: true). */
   forbidNodeModules: boolean;
+  /**
+   * Optional UNPACKED caps, enforced at the tar header during streaming
+   * (declared sizes/entry counts). The plan-node executor always passes them;
+   * the extension-tarball path omits them (its size profile is the existing,
+   * unchanged contract).
+   */
+  caps?: { maxUnpackedBytes: number; maxEntries: number };
 }): Promise<void> {
   const tmpRoot = await mkdtemp(path.join(tmpdir(), "cinatra-plan-node-tgz-"));
   const violations: string[] = [];
+  let declaredBytes = 0;
+  let entryCount = 0;
+  let capBreached: string | null = null;
   try {
     const tgzPath = path.join(tmpRoot, "node.tgz");
     await writeFile(tgzPath, input.bytes);
@@ -122,6 +142,8 @@ export async function extractTarballHardened(input: {
       cwd: input.destDir,
       strip: 1,
       filter: (entryPath, entry) => {
+        // Once a cap is breached, skip EVERYTHING (fail-closed; one message).
+        if (capBreached) return false;
         const entryType = String((entry as { type?: unknown }).type ?? "Unknown");
         if (!ACCEPTED_TAR_ENTRY_TYPES.has(entryType)) {
           violations.push(`${entryType} entry "${entryPath}"`);
@@ -131,11 +153,28 @@ export async function extractTarballHardened(input: {
           violations.push(`node_modules segment in entry "${entryPath}"`);
           return false;
         }
+        if (input.caps) {
+          entryCount += 1;
+          declaredBytes += Number((entry as { size?: unknown }).size ?? 0) || 0;
+          if (entryCount > input.caps.maxEntries) {
+            capBreached = `more than ${input.caps.maxEntries} entries`;
+            return false;
+          }
+          if (declaredBytes > input.caps.maxUnpackedBytes) {
+            capBreached = `declared unpacked size above ${input.caps.maxUnpackedBytes} bytes`;
+            return false;
+          }
+        }
         return true;
       },
     });
   } finally {
     await rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+  if (capBreached) {
+    throw new MaterializationExecutorError(
+      `${input.label}: refused tarball — ${capBreached} (decompression-bomb cap, fail-closed)`,
+    );
   }
   if (violations.length > 0) {
     throw new MaterializationExecutorError(
@@ -298,7 +337,13 @@ export async function executeMaterializationPlan(
     try {
       const nodeDir = path.join(tmpRoot, "pkg");
       await mkdir(nodeDir, { recursive: true });
-      await extractTarballHardened({ bytes, destDir: nodeDir, label, forbidNodeModules: true });
+      await extractTarballHardened({
+        bytes,
+        destDir: nodeDir,
+        label,
+        forbidNodeModules: true,
+        caps: { maxUnpackedBytes: MAX_PLAN_NODE_UNPACKED_BYTES, maxEntries: MAX_PLAN_NODE_ENTRIES },
+      });
       await assertNodeTreeSafe(nodeDir, node);
 
       // Placement: the plan-core grammar guarantees `placementPath` is a safe

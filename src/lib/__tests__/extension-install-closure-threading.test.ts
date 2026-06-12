@@ -133,6 +133,22 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
     expect(calls.approved).toEqual([]);
   });
 
+  it("PROBE GATING: an UNTRUSTED closure package never reaches verifyActivatableBeforeFinalize (no code execution from the probe)", async () => {
+    const kp = generateExtensionSigningKeyPair();
+    const v1 = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, kp.privateKeyPkcs8DerB64);
+    process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
+    const probed: unknown[] = [];
+    const { deps } = fakePipelineDeps({
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v1, materializationPlan: transportPlan() }),
+      verifyActivatableBeforeFinalize: async (i) => {
+        probed.push(i);
+        return { supersedes: false };
+      },
+    });
+    await installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps);
+    expect(probed).toEqual([]); // v1-over-plan = untrusted -> the import/register probe must NOT run
+  });
+
   it("a v2 signature binding the recomputed closureHash IS trusted-signed (grant auto-approves)", async () => {
     const kp = generateExtensionSigningKeyPair();
     const v2 = signExtensionV2(
@@ -153,7 +169,7 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
 
 describe("workflow install saga × materialization plan (the SECOND install path)", () => {
   function makeSagaDeps(resolveOverride?: WorkflowInstallSagaDeps["resolveIntegrity"]) {
-    const calls = { materialize: [] as unknown[], provenance: [] as unknown[] };
+    const calls = { materialize: [] as unknown[], provenance: [] as unknown[], grantRequests: [] as unknown[] };
     const journal = new Map<string, { installOpId: string; phase: string }>();
     const deps: WorkflowInstallSagaDeps = {
       withInstallLock: async (_pkg, fn) => fn(),
@@ -177,13 +193,15 @@ describe("workflow install saga × materialization plan (the SECOND install path
       materializeInstanceForProject: async () => undefined,
       restoreDashboards: async () => undefined,
       readRequestedPorts: async () => [],
-      recordRequestedGrant: async () => undefined,
+      recordRequestedGrant: async (g) => {
+        calls.grantRequests.push(g);
+      },
       approveGrant: async () => undefined,
       recordProvenance: async (i) => {
         calls.provenance.push(i);
       },
       archiveDashboards: async () => undefined,
-      deleteWorkflowTemplate: async () => undefined,
+      deleteWorkflowTemplate: async () => ({ deleted: true }),
     };
     return { deps, calls };
   }
@@ -218,6 +236,9 @@ describe("workflow install saga × materialization plan (the SECOND install path
       installWorkflowExtensionSaga({ packageName: PKG, version: VER, actor: { orgId: "org-1", userId: "u1" } }, deps),
     ).rejects.toThrow(/refused by the trust\/signature gate/);
     expect(calls.provenance).toHaveLength(0);
+    // round-0 finding 2: the refusal must NOT have mutated the grant — a
+    // CHANGED port request would otherwise reset a prior APPROVED grant.
+    expect(calls.grantRequests).toHaveLength(0);
   });
 
   it("REFUSES a plan bound to another package BEFORE any journal/template write", async () => {

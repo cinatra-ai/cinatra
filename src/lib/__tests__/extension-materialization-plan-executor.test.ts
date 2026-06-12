@@ -322,6 +322,21 @@ describe("extractTarballHardened — shared hardened extraction", () => {
     expect(existsSync(path.join(dest, "node_modules/dep/package.json"))).toBe(true);
   });
 
+  it("DECOMPRESSION-BOMB caps: entry-count and declared-unpacked-size breaches refuse at the header", async () => {
+    const manyFiles: Record<string, string> = {};
+    for (let i = 0; i < 6; i++) manyFiles[`f${i}.js`] = "x\n";
+    const bytes = await makeTarball("lib-x", "1.0.0", manyFiles);
+    const destA = await tempDir("hx-");
+    await expect(
+      extractTarballHardened({ bytes, destDir: destA, label: "lib-x@1.0.0", forbidNodeModules: true, caps: { maxEntries: 3, maxUnpackedBytes: 1024 * 1024 } }),
+    ).rejects.toThrow(/more than 3 entries/);
+    const big = await makeTarball("lib-x", "1.0.0", { "big.js": "A".repeat(4096) });
+    const destB = await tempDir("hx-");
+    await expect(
+      extractTarballHardened({ bytes: big, destDir: destB, label: "lib-x@1.0.0", forbidNodeModules: true, caps: { maxEntries: 100, maxUnpackedBytes: 1000 } }),
+    ).rejects.toThrow(/declared unpacked size above 1000 bytes/);
+  });
+
   it("names EVERY violation in one refusal", async () => {
     const bytes = await makeTarball("ext", "1.0.0", { "index.js": "x\n" }, {
       mutate: async (pkgDir) => {

@@ -564,7 +564,16 @@ export async function installExtensionFromRegistry(
   //
   // A fresh install (`supersedes:false`) is unaffected: there is no prior anchor /
   // grant to protect, the gate is a no-op, and the mutations below proceed.
-  if (deps.verifyActivatableBeforeFinalize) {
+  //
+  // TRUST GATE on the probe (cinatra#181 review round 0 finding 1): the probe
+  // IMPORTS the new digest and calls `register(ctx)` — executing package code.
+  // An UNTRUSTED package (e.g. a closure package whose v1/absent signature the
+  // downgrade-refusal matrix hard-refused, or any tampered signature) must
+  // never get code execution out of the probe. Skipping it is safe: an
+  // untrusted update's REAL safety boundary is unchanged — the post-commit
+  // hot-update activation runs under the loader's trust gate (which refuses
+  // the import) and the durable rollback restores the OLD install.
+  if (deps.verifyActivatableBeforeFinalize && verdict.trusted) {
     // EFFECTIVE ports the new digest will activate with (see the block comment):
     // a `trusted-signed` install self-grants its requested ports; otherwise the
     // probe must equal what activation will grant AFTER `recordRequestedGrant` +

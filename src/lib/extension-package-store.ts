@@ -908,7 +908,19 @@ async function assertServerEntryBareSpecifierCoverage(
       }
       const base = basePackageOfSpecifier(spec);
       if (base === null) continue; // absolute/odd specifier — not a bare package import
-      if (base === selfName) continue; // self-subpath that resolveSelfPackageImport could not map — 4.6/loader territory
+      if (base === selfName) {
+        // FAIL CLOSED (review round 0 finding 3): a SELF-package bare import
+        // that `resolveSelfPackageImport` could not map to a real in-package
+        // file would only surface at activation (ERR_PACKAGE_PATH_NOT_EXPORTED
+        // / ERR_MODULE_NOT_FOUND under the prod file:// loader) — refuse at
+        // materialize like every other uncovered bare specifier.
+        const relFile = path.relative(extractDir, fileAbs);
+        throw new Error(
+          `[package-store] ${packageName}: serverEntry graph imports the SELF subpath "${spec}" ` +
+            `(${relFile}, line ${imp.line}) which does not resolve through the package's exports map ` +
+            `to an existing in-package file — it would fail at activation; refusing at materialize.`,
+        );
+      }
       if (isBuiltin(spec) || isBuiltin(base)) continue;
       if (allowed.present.has(base) || allowed.planRoots.has(base)) continue;
       const relFile = path.relative(extractDir, fileAbs);
