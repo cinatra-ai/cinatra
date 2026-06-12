@@ -10,17 +10,17 @@
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "f73655b57383f7462a2ebac4a4a816cd67fed529"
+      "resolvedSha": "40f50cf27039f9dec416f4e28d25346f824f245e"
     },
     {
       "packageName": "@cinatra-ai/apify-connector",
       "repo": "cinatra-ai/apify-connector",
-      "resolvedSha": "7ce7af83a9ab75512c1d29fbf0548bf1c2c1ad0b"
+      "resolvedSha": "526edbef5be051967292359e2ca60ba8a4c88e5a"
     },
     {
       "packageName": "@cinatra-ai/apollo-connector",
       "repo": "cinatra-ai/apollo-connector",
-      "resolvedSha": "204dbff757652fdc200bb085e27cf2ce682868a2"
+      "resolvedSha": "38b0792cf594ceba2c097b382f87e98bf12db584"
     },
     {
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/auditor-agent",
       "repo": "cinatra-ai/auditor-agent",
-      "resolvedSha": "9b20aa9c172a3d8b8b6b1572e3640c63ce802a84"
+      "resolvedSha": "132b2b9c948ca3d9a0e0c13dfee3c7bcce80b2a7"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
@@ -70,7 +70,7 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-publish-agent",
       "repo": "cinatra-ai/blog-linkedin-publish-agent",
-      "resolvedSha": "eb54d8b7d2f77394d69c0f33a1dfb3ac1dce4c71"
+      "resolvedSha": "956807b906d0672a9595753920a2c4f3f3fc5cd1"
     },
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
@@ -95,7 +95,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "aa46e59fe9b4901b010a780a54527edb43975805"
+      "resolvedSha": "35a21baefe39a93134c0bef51df6ca11b3b53805"
     },
     {
       "packageName": "@cinatra-ai/brand-voice-artifact",
@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/context-selection-agent",
       "repo": "cinatra-ai/context-selection-agent",
-      "resolvedSha": "5c4a949c138f67d57906264321bd1cb35b261062"
+      "resolvedSha": "20bb82868768877a703497545fd76ce35b14d5c7"
     },
     {
       "packageName": "@cinatra-ai/contract-artifact",
@@ -130,7 +130,7 @@
     {
       "packageName": "@cinatra-ai/crm-connector",
       "repo": "cinatra-ai/crm-connector",
-      "resolvedSha": "804bcf7c4c4d6e4e030593886387d61aaf7e0351"
+      "resolvedSha": "03076b03c6d1b4578e2d9fa468a8fb5630431d46"
     },
     {
       "packageName": "@cinatra-ai/drupal-agent",
@@ -145,7 +145,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "cb63e3b580294f4d7f193bbdfd59d11a3db90042"
+      "resolvedSha": "c149fd3455fd564ae7648636e429a0a94c0b6c27"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
@@ -165,37 +165,37 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "3029fa276bde00ec2c3aa9c2afa12318f690b196"
+      "resolvedSha": "1189ad03b8f66ba144f3af92c60ddd222e7c4eba"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
       "repo": "cinatra-ai/email-drafting-agent",
-      "resolvedSha": "5f42a5aa020c86ef079110ee4c200a78c41c3966"
+      "resolvedSha": "e0994831f54b94b11d2383d7af42502acc37930c"
     },
     {
       "packageName": "@cinatra-ai/email-follow-up-agent",
       "repo": "cinatra-ai/email-follow-up-agent",
-      "resolvedSha": "c80a2b10d35c567088e4bbd0198bd8ceaea774c7"
+      "resolvedSha": "c8d7c7772f0c3de7b7dcdca38c6391e8704a4fd9"
     },
     {
       "packageName": "@cinatra-ai/email-outreach-agent",
       "repo": "cinatra-ai/email-outreach-agent",
-      "resolvedSha": "c4a5ae83ceec414404038444fa035c7e09b5c54b"
+      "resolvedSha": "28e8b4c98798e5b5b3c8a0f1e3c3672eb000fa04"
     },
     {
       "packageName": "@cinatra-ai/email-recipient-selection-agent",
       "repo": "cinatra-ai/email-recipient-selection-agent",
-      "resolvedSha": "6ccbac00303017ad4299322174e7806b15696cf8"
+      "resolvedSha": "3daafa053f95fc52c78de133b2db5424618a8d8f"
     },
     {
       "packageName": "@cinatra-ai/email-test-delivery-agent",
       "repo": "cinatra-ai/email-test-delivery-agent",
-      "resolvedSha": "09c77d7452b4a74ec940353875cca224358cc214"
+      "resolvedSha": "07870715c91bc7b96546466caa7d44421e144987"
     },
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "7d911cdbb05e1a386705a38ca1d1ad87fe27538c"
+      "resolvedSha": "d9801c85a05ac5e5d2221b70616d3056977331de"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
@@ -205,12 +205,12 @@
     {
       "packageName": "@cinatra-ai/gmail-connector",
       "repo": "cinatra-ai/gmail-connector",
-      "resolvedSha": "d15a67cbf7e78ed3ec3f0633fe49bc3c908cf4c2"
+      "resolvedSha": "d5d91cf7d20d8c82b25564b916984e4db276beaa"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
       "repo": "cinatra-ai/google-calendar-connector",
-      "resolvedSha": "98803b6d6bc2fef05171d104339a236c28a5da6f"
+      "resolvedSha": "c2000b42e394eb89618f7aa3879b9e7c8b7be29f"
     },
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
@@ -225,7 +225,7 @@
     {
       "packageName": "@cinatra-ai/list-curator-agent",
       "repo": "cinatra-ai/list-curator-agent",
-      "resolvedSha": "86b29b969571b957e6e73df348e0e935eeecc0cf"
+      "resolvedSha": "06d7bcd0752f0fceaa998c4e2450cb721fba28eb"
     },
     {
       "packageName": "@cinatra-ai/major-release-workflow",
@@ -265,7 +265,7 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "810cc5f779874c4e53a0cf6b0df47cebc9dd01f8"
+      "resolvedSha": "b832966132dea544cd78aac5b9c93b841c5679c3"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -280,7 +280,7 @@
     {
       "packageName": "@cinatra-ai/reviewer-agent",
       "repo": "cinatra-ai/reviewer-agent",
-      "resolvedSha": "f84042f68b7c6da2bf3ba37b78d978832dde514a"
+      "resolvedSha": "0e3070b943a1f94b60cf28303acc9205134afdfd"
     },
     {
       "packageName": "@cinatra-ai/sales-playbook-artifact",
@@ -300,7 +300,7 @@
     {
       "packageName": "@cinatra-ai/skill-recommender-agent",
       "repo": "cinatra-ai/skill-recommender-agent",
-      "resolvedSha": "0669e01f0c86077d50d05e76380cce4cf91ebb79"
+      "resolvedSha": "1809515870dff4c26330507d3f51b1f88b6e6561"
     },
     {
       "packageName": "@cinatra-ai/slide-deck-artifact",
@@ -320,7 +320,7 @@
     {
       "packageName": "@cinatra-ai/trigger-agent",
       "repo": "cinatra-ai/trigger-agent",
-      "resolvedSha": "86d96981644920f4429abf4fea69c97cdabd17e9"
+      "resolvedSha": "ded23a180f7f399f00a28efc5b54e8bbdcc43376"
     },
     {
       "packageName": "@cinatra-ai/twenty-connector",
@@ -350,7 +350,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "8298cb48e70b8abf162e95d2c40c8f6911e1272b"
+      "resolvedSha": "f248a7a45833a44158692654ee245786b6bff506"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",
