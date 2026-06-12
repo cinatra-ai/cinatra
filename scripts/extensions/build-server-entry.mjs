@@ -174,6 +174,205 @@ function basePackageOfSpecifier(spec) {
 }
 
 // ---------------------------------------------------------------------------
+// Known-optional native-addon allowlist (the ONLY residual externals tolerated
+// besides node builtins). esbuild cannot inline a `.node` native addon, so such
+// a package survives as a residual `require()` in the bundle. The general rule
+// MUST stay fail-closed — an unresolvable bare import would ENOENT at
+// activation — so this allowlist is exhaustively enumerated, never a heuristic.
+//
+// Each entry is a `ws` OPTIONAL native peer (`ws` is reached transitively
+// through `openai`'s websocket transport) that `ws` loads behind a GUARDED
+// `require()` inside try/catch with an ALREADY-ACTIVE pure-JS fallback:
+//   try { const x = require('bufferutil'); /* fast path */ }
+//   catch (e) { /* Continue regardless — the pure-JS path stays installed */ }
+// esbuild emits exactly that as a `require-call` (kind: "require-call", via the
+// module-scoped `createRequire` banner), so at runtime in the store dir the
+// require throws, the catch swallows it, and `ws` runs in pure JS. The built
+// `register.mjs` therefore imports cleanly with these addons ABSENT — verified
+// by executing the bundle under bare node with neither addon resolvable.
+//
+// This is NOT a general "allow native addons" relaxation: a native addon loaded
+// via a STATIC/unguarded import (no try/catch fallback) would crash activation,
+// and is correctly still refused because it is not on this list. Any new entry
+// must be re-proven to carry a pure-JS fallback before being added.
+// ---------------------------------------------------------------------------
+export const KNOWN_OPTIONAL_NATIVE_ADDONS = Object.freeze(["bufferutil", "utf-8-validate"]);
+
+/**
+ * True ONLY for a residual import that is BOTH:
+ *   (1) an EXACT allowlisted specifier — `bufferutil` / `utf-8-validate` with NO
+ *       subpath. `ws` loads them as bare `require('bufferutil')`; an addon is a
+ *       single `.node` binding with no subpath surface. Exact-match (not
+ *       base-package) so a traversal lookalike (`bufferutil/../left-pad`,
+ *       `bufferutil/../@cinatra-ai/sdk-extensions`, `bufferutil/foo`) can NEVER
+ *       ride the allowlisted base past the host-peer / declared-dep gates
+ *       (codex r-openai finding 1); AND
+ *   (2) a GUARDED `require-call` (esbuild `kind: "require-call"`). The whole
+ *       safety property is that the require throws inside ws's try/catch and the
+ *       pure-JS fallback takes over. A STATIC `import "bufferutil"` (or any other
+ *       kind) is uncatchable at module-eval and would ENOENT at activation, so
+ *       it is NOT allowlisted — it stays refused (codex r-openai findings 2/3).
+ * Fail-closed: anything not exactly enumerated AND require-call returns false.
+ * @param {{ path?: unknown, kind?: unknown }} imp - the esbuild metafile import record.
+ */
+/**
+ * Verify that EVERY occurrence of an allowlisted-addon `require(...)` in the
+ * EMITTED bundle text sits inside a `try { … }` block (codex r-openai-2 MED:
+ * esbuild's `kind: "require-call"` proves it is a CJS require, not a static
+ * import, but does NOT prove it is GUARDED — an UNGUARDED top-level
+ * `require("bufferutil")` would still ENOENT at activation when the addon is
+ * absent). esbuild emits the inlined CJS guard verbatim as
+ *   `try { … const x = <REQ>("bufferutil"); … } catch (e) { … }`
+ * where `<REQ>` is the banner's module-scoped require (commonly minified to
+ * `__require`). For each match we walk BACKWARD through the brace structure: at
+ * every unmatched `{` opener we hit, if its head is a `try` we accept; if we
+ * exit the enclosing function/program scope first, the require is UNGUARDED and
+ * we refuse. This makes the allowlist mean exactly "ws's guarded optional
+ * fallback", fail-closed, instead of "any require-call to these names". Applies
+ * to bundles THIS builder emits (inline + closure bundle modes); a verbatim
+ * prebuilt closure passthrough is the publisher's own artifact and is bounded
+ * by the exact-specifier require-call rule plus the residual scan.
+ *
+ * @param {string} bundleText  emitted register.mjs source
+ * @param {string} packageName for the error message
+ */
+export function assertAllowlistedAddonsAreGuarded(bundleText, packageName) {
+  // Neutralize strings/comments ONCE up front (length-preserving) for the brace
+  // scan AND for distinguishing a real call from a name inside a comment/string.
+  // We match call sites against the RAW text (the require ARGUMENT is itself a
+  // string literal we must see), then reject any match whose require IDENTIFIER
+  // lands in a blanked (comment/string) region of the neutralized view.
+  const code = neutralizeLiteralsAndComments(bundleText);
+  for (const addon of KNOWN_OPTIONAL_NATIVE_ADDONS) {
+    // A `require`-style identifier (require / __require / a-renamed-require) +
+    // `("<addon>")`, matched on the raw bundle.
+    const requireCallRe = new RegExp(`\\b[\\w$]*require[\\w$]*\\s*\\(\\s*(['"])${addon.replace(/[-]/g, "\\$&")}\\1\\s*\\)`, "g");
+    let m;
+    while ((m = requireCallRe.exec(bundleText)) !== null) {
+      // A `require` whose identifier sits in a comment/string (blanked) is not a
+      // real call — skip it (the `inComment` false-positive class).
+      if (code[m.index] === " " || code[m.index] === "\n") continue;
+      if (!isInsideTryBlock(code, m.index)) {
+        throw new Error(
+          `[build-server-entry] ${packageName}: the bundled server entry calls require("${addon}") ` +
+            `OUTSIDE a try/catch guard. The known-optional native-addon allowlist covers ONLY a guarded ` +
+            `optional require with a pure-JS fallback (as \`ws\` ships it); an unguarded require would fail ` +
+            `activation when the addon is absent. Inline it or guard it.`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * True if `pos` (the start of a require call) is lexically inside a `try { … }`
+ * block WHOSE handler is a `catch` (the only form that SWALLOWS the throw — a
+ * `try { … } finally { }` with no catch re-propagates and would still crash
+ * activation, so it is NOT guarded; codex r-openai-final MED). `code` is the
+ * ALREADY-neutralized source (strings/comments blanked) so braces never
+ * miscount. Walks backward to each unmatched `{` enclosing `pos`; when one is a
+ * `try` head, finds that block's matching close `}` and requires a `catch`
+ * after it. Keeps walking outward otherwise (an outer try may still guard it).
+ */
+function isInsideTryBlock(code, pos) {
+  let depth = 0;
+  for (let i = pos - 1; i >= 0; i--) {
+    const c = code[i];
+    if (c === "}") depth++;
+    else if (c === "{") {
+      if (depth > 0) {
+        depth--;
+        continue;
+      }
+      // Unmatched opener enclosing `pos`. Inspect the head before `{`.
+      const before = code.slice(0, i).replace(/\s+$/, "");
+      if (/\btry$/.test(before) && tryBlockHasCatch(code, i)) return true;
+      // Any other enclosing block (function body, if, for, bare block) OR a
+      // catch-less try — keep walking outward; an outer try may still guard it.
+    }
+  }
+  return false;
+}
+
+/**
+ * Given `openBrace` = the index of a `try` block's `{`, scan forward to its
+ * matching `}` and return true iff a `catch` clause follows (optionally
+ * `catch (e)` / `catch {`). A `finally`-only handler returns false. `code` is
+ * neutralized so inner braces are structural.
+ */
+function tryBlockHasCatch(code, openBrace) {
+  let depth = 0;
+  let close = -1;
+  for (let i = openBrace; i < code.length; i++) {
+    const c = code[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        break;
+      }
+    }
+  }
+  if (close === -1) return false; // unbalanced — fail-closed
+  // Whatever follows the close brace, ignoring whitespace, must START a catch.
+  const after = code.slice(close + 1).replace(/^\s+/, "");
+  return /^catch\b/.test(after);
+}
+
+/**
+ * Replace JS string literals (', ", `) and comments (// , block) in `s` with
+ * equal-length runs of spaces so structural brace scanning ignores their
+ * contents. Length-preserving (indices stay valid). Best-effort lexer adequate
+ * for esbuild's well-formed output; ambiguous cases collapse to "treat as code"
+ * which is the fail-LOUD direction for the guard check.
+ */
+function neutralizeLiteralsAndComments(s) {
+  let out = "";
+  let i = 0;
+  const n = s.length;
+  while (i < n) {
+    const c = s[i];
+    const c2 = s[i + 1];
+    if (c === "/" && c2 === "/") {
+      let j = i;
+      while (j < n && s[j] !== "\n") j++;
+      out += " ".repeat(j - i);
+      i = j;
+    } else if (c === "/" && c2 === "*") {
+      let j = i + 2;
+      while (j < n && !(s[j] === "*" && s[j + 1] === "/")) j++;
+      j = Math.min(n, j + 2);
+      out += " ".repeat(j - i);
+      i = j;
+    } else if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      let j = i + 1;
+      while (j < n && s[j] !== quote) {
+        if (s[j] === "\\") j++;
+        j++;
+      }
+      j = Math.min(n, j + 1);
+      // Preserve newlines inside template literals so line structure is stable.
+      out += s.slice(i, j).replace(/[^\n]/g, " ");
+      i = j;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+export function isKnownOptionalNativeAddon(imp) {
+  if (!imp || typeof imp !== "object") return false;
+  if (imp.kind !== "require-call") return false;
+  // EXACT specifier (no subpath) — KNOWN_OPTIONAL_NATIVE_ADDONS holds the only
+  // legal whole specifiers; a subpath/lookalike never matches.
+  return KNOWN_OPTIONAL_NATIVE_ADDONS.includes(imp.path);
+}
+
+// ---------------------------------------------------------------------------
 // Dependency mode (cinatra#181) — inline-and-prune vs declare-and-closure.
 // ---------------------------------------------------------------------------
 
@@ -214,7 +413,8 @@ export function resolveDependencyMode(cinatra, modeOverride, packageName) {
  *    passthrough scan), so an unresolvable one is a build/scan error, never a
  *    silent allowance (review r0 finding 1).
  */
-function classifyClosureResidualImport(specifier, { declaredDeps }) {
+function classifyClosureResidualImport(imp, { declaredDeps }) {
+  const specifier = imp.path;
   if (isNodeBuiltin(specifier)) return null;
   const base = basePackageOfSpecifier(specifier);
   if (base !== null && HOST_PROVIDED_PEERS.includes(base)) {
@@ -223,6 +423,13 @@ function classifyClosureResidualImport(specifier, { declaredDeps }) {
       `(take values via ctx capabilities) in EVERY dependency mode`
     );
   }
+  // Known-optional native addon (e.g. ws's bufferutil/utf-8-validate): allowed
+  // in EVERY dependency mode — but ONLY as the exact specifier via a GUARDED
+  // require-call (the guarded `require()` falls back to pure JS when the addon
+  // is absent from the store dir). A subpath/lookalike or a static import is
+  // NOT allowlisted, so it can never smuggle a peer/undeclared dep past this
+  // gate (the full import record carries `kind`).
+  if (isKnownOptionalNativeAddon(imp)) return null;
   if (base !== null && declaredDeps.has(base)) {
     // Subpath-safety (review r2 finding 1): `dep/../left-pad/...` shares
     // the `dep` base but Node-resolves OUTSIDE the declared package. The
@@ -644,23 +851,36 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
   if (dependencyMode === "closure") {
     const declaredSet = new Set(declaredDependencies);
     for (const imp of residualImports) {
-      const refusal = classifyClosureResidualImport(imp.path, { declaredDeps: declaredSet });
+      const refusal = classifyClosureResidualImport(imp, { declaredDeps: declaredSet });
       if (refusal !== null) {
         throw new Error(`[build-server-entry] ${name}: the bundled server entry ${refusal}.`);
       }
     }
   } else {
-    const residual = residualImports.filter((imp) => !isNodeBuiltin(imp.path)).map((imp) => imp.path);
+    // Allow node builtins AND the known-optional native-addon allowlist (ws's
+    // bufferutil/utf-8-validate — exact specifier via a GUARDED require-call,
+    // which falls back to pure JS); everything else (host peers, un-inlinable
+    // deps, un-allowlisted native addons, static imports) is refused, fail-closed.
+    const residual = residualImports
+      .filter((imp) => !isNodeBuiltin(imp.path) && !isKnownOptionalNativeAddon(imp))
+      .map((imp) => imp.path);
     if (residual.length > 0) {
       throw new Error(
         `[build-server-entry] ${name}: the bundled server entry still imports ${residual
           .map((s) => `"${s}"`)
-          .join(", ")} at runtime. A publishable server entry may import only node builtins — ` +
-          `host-provided peers must stay type-only (take values via ctx capabilities), and every ` +
-          `runtime dependency must be inlinable into the bundle.`,
+          .join(", ")} at runtime. A publishable server entry may import only node builtins ` +
+          `(plus the known-optional native addons ${KNOWN_OPTIONAL_NATIVE_ADDONS.map((s) => `"${s}"`).join(", ")}, ` +
+          `which fall back to pure JS) — host-provided peers must stay type-only (take values via ctx ` +
+          `capabilities), and every other runtime dependency must be inlinable into the bundle.`,
       );
     }
   }
+
+  // -- guard verification (codex r-openai-2): an allowlisted addon is tolerated
+  // ONLY when its emitted `require(...)` sits inside a try/catch (ws's optional
+  // fallback shape). An UNGUARDED require of these names would still ENOENT at
+  // activation — refuse it here, fail-closed, by scanning the emitted bundle.
+  assertAllowlistedAddonsAreGuarded(await readFile(outfile, "utf8"), name);
 
   // -- inlined packages (from the metafile input set) → the pruned-deps record.
   const inlinedPackages = [
@@ -790,7 +1010,7 @@ async function validateClosureEntryImports({ esbuild, entryAbs, pkgDir, packageN
   for (const output of Object.values(result.metafile.outputs)) {
     for (const imp of output.imports ?? []) {
       if (imp.external !== true) continue;
-      const refusal = classifyClosureResidualImport(imp.path, { declaredDeps });
+      const refusal = classifyClosureResidualImport(imp, { declaredDeps });
       if (refusal !== null) {
         throw new Error(`[build-server-entry] ${packageName}: the prebuilt server entry "${entryRel}" ${refusal}.`);
       }

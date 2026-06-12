@@ -18,6 +18,9 @@ import {
   resolveDependencyMode,
   DEPENDENCY_MODES,
   HOST_PROVIDED_PEERS,
+  KNOWN_OPTIONAL_NATIVE_ADDONS,
+  isKnownOptionalNativeAddon,
+  assertAllowlistedAddonsAreGuarded,
 } from "../build-server-entry.mjs";
 import {
   classifyServerEntryArtifact,
@@ -100,6 +103,80 @@ describe("inlined resolver parity with the SDK (the §4.1 lockstep pin)", () => 
 
   it("the builder's inlined host-peer externals equal the host's HOST_PROVIDED_PACKAGES", () => {
     expect(new Set(HOST_PROVIDED_PEERS)).toEqual(HOST_PROVIDED_PACKAGES);
+  });
+
+  // Known-optional native-addon allowlist (the ONLY residual externals tolerated
+  // besides node builtins): ws's bufferutil/utf-8-validate, loaded via a guarded
+  // require() with a pure-JS fallback. The residual gate stays fail-closed for
+  // everything else — an un-allowlisted native addon, a host peer, a relative.
+  it("the native-addon allowlist is exactly the two ws optional peers, frozen", () => {
+    expect(KNOWN_OPTIONAL_NATIVE_ADDONS).toEqual(["bufferutil", "utf-8-validate"]);
+    expect(Object.isFrozen(KNOWN_OPTIONAL_NATIVE_ADDONS)).toBe(true);
+  });
+
+  it("isKnownOptionalNativeAddon accepts ONLY the exact allowlisted addon via a guarded require-call", () => {
+    // The verified-safe form: exact specifier, kind: "require-call".
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "require-call" })).toBe(true);
+    expect(isKnownOptionalNativeAddon({ path: "utf-8-validate", kind: "require-call" })).toBe(true);
+
+    // fail-closed: a STATIC import (uncatchable → would ENOENT at activation).
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "import-statement" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "dynamic-import" })).toBe(false);
+
+    // fail-closed: any subpath / traversal lookalike never matches (exact-only),
+    // so an allowlisted base can never smuggle a host peer or undeclared dep.
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil/fallback", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil/../left-pad", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil/../@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "bufferutil-evil", kind: "require-call" })).toBe(false);
+
+    // fail-closed: un-allowlisted addon, host peer, relative/absolute, malformed.
+    expect(isKnownOptionalNativeAddon({ path: "better-sqlite3", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon({ path: "./local", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalNativeAddon(undefined)).toBe(false);
+    expect(isKnownOptionalNativeAddon("bufferutil")).toBe(false);
+  });
+
+  it("assertAllowlistedAddonsAreGuarded accepts a try-guarded require, refuses an unguarded one", () => {
+    // ws's emitted shape: guarded require inside try { … } catch.
+    const guarded =
+      'if (!process.env.WS_NO_BUFFER_UTIL) {\n  try {\n    const bufferUtil = __require("bufferutil");\n  } catch (e) {}\n}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(guarded, "x")).not.toThrow();
+
+    // unguarded top-level require → refused.
+    const unguarded = 'const x = __require("bufferutil");\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(unguarded, "x")).toThrow(/OUTSIDE a try\/catch guard/);
+
+    // require inside a function body but NOT a try → refused.
+    const fnNoTry = 'function f() {\n  return __require("utf-8-validate");\n}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(fnNoTry, "x")).toThrow(/OUTSIDE a try\/catch guard/);
+
+    // the addon name appearing only in a STRING/comment must not be mistaken for
+    // a call (length-preserving literal neutralization).
+    const inComment = '// require("bufferutil") is optional\nconst s = "require(\'utf-8-validate\')";\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(inComment, "x")).not.toThrow();
+
+    // nested: require in a try inside an if inside a function → accepted.
+    const nested =
+      'function setup() {\n  if (cond) {\n    try {\n      const u = __require("utf-8-validate");\n    } catch {}\n  }\n}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(nested, "x")).not.toThrow();
+
+    // a try with only a `finally` (no catch) does NOT swallow the throw → refused.
+    const finallyOnly = 'try {\n  const b = __require("bufferutil");\n} finally {\n  cleanup();\n}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(finallyOnly, "x")).toThrow(/OUTSIDE a try\/catch guard/);
+
+    // catch with a binding still counts.
+    const catchBinding = 'try {\n  const b = __require("bufferutil");\n} catch (err) {\n  log(err);\n}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(catchBinding, "x")).not.toThrow();
+
+    // adversarial: a STRING containing "} catch" inside a finally-only try must
+    // not fool the catch detector (strings are neutralized before brace scan).
+    const fakeCatchString = 'try {\n  const b = __require("bufferutil");\n  const s = "} catch";\n} finally {}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(fakeCatchString, "x")).toThrow(/OUTSIDE a try\/catch guard/);
+    // and a STRING "} finally" must not break a real catch.
+    const fakeFinallyString = 'try {\n  const b = __require("bufferutil");\n  const s = "} finally";\n} catch (e) {}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(fakeFinallyString, "x")).not.toThrow();
   });
 });
 
