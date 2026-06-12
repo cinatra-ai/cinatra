@@ -66,4 +66,8 @@ export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
   "agent-code-reviewer": "@cinatra-ai/code-reviewer-agent",
   "agent-planner": "@cinatra-ai/planner-agent",
   "agent-security-reviewer": "@cinatra-ai/security-reviewer-agent",
+  "artifact-blog-idea-summary": "@cinatra-ai/blog-idea-artifact",
+  "artifact-blog-image": "@cinatra-ai/blog-image-artifact",
+  "artifact-blog-post-body": "@cinatra-ai/blog-post-artifact",
+  "blog-operator-dashboard": "@cinatra-ai/blog-content-workflow",
 };

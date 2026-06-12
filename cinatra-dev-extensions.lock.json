@@ -40,7 +40,7 @@
     {
       "packageName": "@cinatra-ai/blog-content-workflow",
       "repo": "cinatra-ai/blog-content-workflow",
-      "resolvedSha": "af74d8ed036fd58000d3895d21028cdbed8ab148"
+      "resolvedSha": "d82a49b297c9fbb9ec88e1b84e6b6a78fd1e4045"
     },
     {
       "packageName": "@cinatra-ai/blog-draft-writer-agent",
@@ -50,7 +50,7 @@
     {
       "packageName": "@cinatra-ai/blog-idea-artifact",
       "repo": "cinatra-ai/blog-idea-artifact",
-      "resolvedSha": "21239d12f627653bfaf5ae6c6073994b5f473a7e"
+      "resolvedSha": "16ea9c6a36f58ee12a13d554f7d3b45be73dd3f1"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-generator-agent",
@@ -60,7 +60,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-artifact",
       "repo": "cinatra-ai/blog-image-artifact",
-      "resolvedSha": "be72ba852da26bd61b6d2e41511a28cb5c352dbe"
+      "resolvedSha": "c8fc8731276a0fdff541a99da19c6b6ee61281f3"
     },
     {
       "packageName": "@cinatra-ai/blog-image-prompt-agent",
@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
       "repo": "cinatra-ai/blog-post-artifact",
-      "resolvedSha": "1be382096325dcc0317cd8536db80e9fa71f6c91"
+      "resolvedSha": "aa401344d1cb7663bd24f8240e38f813d17d5d57"
     },
     {
       "packageName": "@cinatra-ai/blog-skills",
