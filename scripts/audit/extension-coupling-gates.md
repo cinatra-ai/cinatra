@@ -118,7 +118,7 @@ pinned it.
 
 | Gate | Pinned floor (current) | Direction |
 | --- | --- | --- |
-| `core-extension-instance-coupling-ban` | **120 occurrences / 52 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1) | shrink-only, frozen |
+| `core-extension-instance-coupling-ban` | **113 occurrences / 46 files** — ALL runtime-coupling; mechanical 0; data-contract allowlisted 0 (at the flip, #36: 166/128/81; −5 occ Ops, −9 occ Content, −17 occ LLM slices — Plan-B lazy/guarded cutover, cinatra#7; −15 occ nango serverEntry cutover, cinatra#151 Stage 1; −7 occ packages/llm provider-adapter cutover, cinatra#151 Stage 2) | shrink-only, frozen |
 | `core-extension-import-ban` | **0 edges / 0 files** — the value-import surface is fully RETIRED (at the flip, #36: 41/28; −4 Ops, −8 Content, −19 LLM — Plan-B lazy/guarded cutover, cinatra#7; −10 nango — the serverEntry cutover, cinatra#151 Stage 1, closing the #35 facade residual). The committed baseline is EMPTY; the pinned-empty gate flip rides the transport-blind-spot closure (cinatra#151 Stage 3) so the flip is honest under the shared lexer. | shrink-only, frozen |
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY |
 | `extension-import-ban` | **16 `@/` + 0 cross-extension + 0 sdkOnly** (sdkOnly zero-tolerance in CI, allowlist EMPTY; nango's 4 `@/` reachbacks fully retired — github-api by the cinatra#151 companion, database/linkedin-api/wordpress-api by the post-cutover sweep) | shrink-only |
@@ -179,16 +179,23 @@ epic's scope and tracked elsewhere:
   root-dep-free connectors proved through dev + prod-image builds). The
   cover gate also adopted the shared lexical stripper
   (`lib/strip-comments.mjs`), closing its `@/lib/*` blind spot: the HONEST
-  hard-import surface (src/ + packages/, generated tree excluded) is **9
-  packages** — nango (the #35 facade residual; implementation now tracked by
-  cinatra-ai/cinatra#151) + openai, anthropic,
-  gemini (packages/llm provider adapters + the transport DI cluster),
-  drupal-mcp, wordpress-mcp (transport DI cluster), crm, gmail,
-  google-calendar (packages/agents single-function edges). The bootable
-  floor is therefore **16** (8 `systemExtensions` + those 8 hard-wired
-  packages), not ~8: the 16→8 tail is exactly the three deferred cutovers
-  (LLM-provider extensibility; the drupal/wordpress content-editor MCP DI;
-  the packages/agents picker/action edges) — tracked on cinatra#7.
+  hard-import surface (src/ + packages/, generated tree excluded) is **7
+  packages** — openai, anthropic (the transport DI cluster only, since the
+  cinatra#151 Stage 2 LLM-provider adapter cutover retired every
+  packages/llm connector import: provider adapters resolve connection /
+  headers / log-writer / GATED shell-tool members through each connector's
+  `llm-provider-surface` registration, `parseStructuredJson` relocated into
+  packages/llm as the provider-neutral utility it is, and packages/llm's 3
+  connector `workspace:*` deps are pruned), drupal-mcp, wordpress-mcp
+  (transport DI cluster), crm, gmail, google-calendar (packages/agents
+  single-function edges). Gemini's ONLY hard edges lived in packages/llm,
+  so Stage 2 also moved it OUT of the bootable declaration: the bootable
+  floor is now **15** (8 `systemExtensions` + 7 hard-wired packages;
+  gemini is guardedOptional/acquirable-on-demand, dev-universe pinned in
+  the dev lock). Nango left the hard-import surface in cinatra#151 Stage 1
+  (generated-required). The 15→8 tail is exactly the two deferred cutovers
+  (the drupal/wordpress content-editor MCP + openai/anthropic transport DI,
+  cinatra#151 Stage 3; the packages/agents picker/action edges, Stage 4).
 - **The statically-wired transport DI cluster** —
   `src/lib/register-transport-connectors.ts` still value-imports the
   LLM-platform connectors (openai `/deps`, anthropic) and the

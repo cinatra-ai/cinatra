@@ -38,10 +38,15 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   buildSingleExternalMcpTool: vi.fn(async () => null),
 }));
 
-// Stub heavy provider SDKs + connectors so importing ./registry does
-// not drag in @cinatra-ai/mcp-client-connector (was claude-connector pre 434.2; → @/lib/database → app-level code).
-vi.mock("@cinatra-ai/anthropic-connector", () => ({
-  getConfiguredAnthropicConnection: vi.fn(async () => null),
+// LLM provider surfaces resolve to "absent" — registry/telemetry degrade
+// (anthropic connection null, log writers no-op), same semantics as the
+// pre-cutover connector mocks (cinatra#151 Stage 2).
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: vi.fn(() => null),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+  }),
+  listLlmProviderSurfaces: vi.fn(() => []),
 }));
 
 vi.mock("@/lib/database", () => ({
@@ -49,11 +54,11 @@ vi.mock("@/lib/database", () => ({
   readDefaultImageProviderFromDatabase: vi.fn(() => null),
 }));
 
-// Break the circular workspace self-import. Two transitive paths drag in
+// Break the circular workspace self-import. One transitive path drags in
 // @cinatra-ai/skills, which itself imports @cinatra-ai/llm:
-//   1. ./index → ./tools/skills → @cinatra-ai/skills/personal-skills.ts
-//   2. ./index → @cinatra-ai/openai-connector (parseStructuredJson re-export) →
-//      ./openai-skills.ts → @cinatra-ai/skills
+//   ./index → ./tools/skills → @cinatra-ai/skills/personal-skills.ts
+// (The second pre-cutover path — the openai-connector parseStructuredJson
+// re-export — is GONE: the utility now lives in ./structured-json.)
 vi.mock("./tools/skills", () => ({
   buildSkillTools: vi.fn().mockResolvedValue([]),
   buildSkillContext: vi.fn().mockResolvedValue(""),
@@ -63,15 +68,6 @@ vi.mock("./tools/skills", () => ({
   createMcpServerTool: vi.fn(),
   createWebSearchTool: vi.fn(),
   buildMcpTools: vi.fn(),
-}));
-
-vi.mock("@cinatra-ai/openai-connector", () => ({
-  parseStructuredJson: vi.fn(),
-  writeOpenAILogFile: vi.fn(),
-}));
-
-vi.mock("@cinatra-ai/gemini-connector", () => ({
-  writeGeminiLogFile: vi.fn(),
 }));
 
 // The metric-usage-api may be imported transitively.

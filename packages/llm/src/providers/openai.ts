@@ -2,12 +2,11 @@ import "server-only";
 
 import OpenAI from "openai";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
-import {
-  getConfiguredOpenAIConnection as getConfiguredOpenAIConnectionDirect,
-  buildOpenAIRequestHeaders,
-  writeOpenAILogFile,
-  type OpenAIConnectionConfig,
-} from "@cinatra-ai/openai-connector";
+// LLM provider adapter cutover (cinatra#151 Stage 2): the connector's
+// connection reader and telemetry log writer resolve through the
+// `llm-provider-surface` capability at call time — packages/llm carries NO
+// value-import of any connector package.
+import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import type {
   LlmProviderAdapter,
   LlmTool,
@@ -36,7 +35,41 @@ import {
   resolvedAttachmentsPerMessage,
 } from "../attachments/provider-parts";
 
-export type OpenAILlmConnection = OpenAIConnectionConfig;
+/**
+ * Structural mirror of the openai-connector's `OpenAIConnectionConfig`
+ * (single-author canonical type stays connector-side; the capability ABI is
+ * `unknown`-loose by contract, so this package narrows what it reads).
+ */
+export type OpenAILlmConnection = {
+  apiKey?: string;
+  projectId?: string;
+  organizationId?: string;
+  defaultModel?: string;
+  serviceTier?: string;
+  loggingEnabled?: boolean;
+  promptCachingEnabled?: boolean;
+  lastValidatedAt?: string;
+  availableModels?: string[];
+};
+// Back-compat alias (this package re-exported the connector's name).
+export type OpenAIConnectionConfig = OpenAILlmConnection;
+
+/**
+ * Best-effort request/response logging through the openai surface's
+ * `writeLogFile` member. Surface or member absent ⇒ no-op (logging never
+ * breaks the request path on connector absence); when present, the
+ * connector's own enabled-check/redaction/fs-error semantics apply
+ * unchanged.
+ */
+async function writeOpenAILogFile(input: {
+  label: string;
+  kind: "request" | "response";
+  body: unknown;
+}): Promise<void> {
+  const writeLogFile = getLlmProviderSurface("openai")?.writeLogFile;
+  if (typeof writeLogFile !== "function") return;
+  await writeLogFile(input);
+}
 
 const MAX_TOOL_RESULT_CHARS = 8000;
 const DEFAULT_MODEL = "gpt-5";
@@ -920,8 +953,16 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
 // Connection helpers (re-exported for use by the registry)
 // ---------------------------------------------------------------------------
 
-export async function getConfiguredOpenAIConnection(connection?: OpenAIConnectionConfig | null) {
-  return getConfiguredOpenAIConnectionDirect(connection ?? undefined);
+export async function getConfiguredOpenAIConnection(
+  connection?: OpenAIConnectionConfig | null,
+): Promise<OpenAILlmConnection | null> {
+  const getConfiguredConnection = getLlmProviderSurface("openai")?.getConfiguredConnection;
+  if (typeof getConfiguredConnection !== "function") {
+    // Degraded: connector absent/inactive ⇒ "not configured" (the registry's
+    // existing null-adapter semantics — no new error class).
+    return null;
+  }
+  return ((await getConfiguredConnection(connection ?? undefined)) ?? null) as
+    | OpenAILlmConnection
+    | null;
 }
-
-export { type OpenAIConnectionConfig };

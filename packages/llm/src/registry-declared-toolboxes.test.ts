@@ -34,8 +34,15 @@ vi.mock("./mcp-access", () => ({
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
 }));
-vi.mock("@cinatra-ai/anthropic-connector", () => ({
-  getConfiguredAnthropicConnection: vi.fn(async () => null),
+// LLM provider surfaces resolve to "absent" — the registry's anthropic
+// connection degrades to null (cinatra#151 Stage 2; same semantics as the
+// pre-cutover connector mock).
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurface: vi.fn(() => null),
+  requireLlmProviderSurface: vi.fn((providerId: string) => {
+    throw new Error(`The "${providerId}" LLM provider connector is not installed/active`);
+  }),
+  listLlmProviderSurfaces: vi.fn(() => []),
 }));
 vi.mock("@/lib/database", () => ({
   readDefaultLlmProviderFromDatabase: vi.fn(() => "openai"),

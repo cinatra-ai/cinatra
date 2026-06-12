@@ -3,9 +3,9 @@
   "scannerEpoch": 2,
   "classificationSummary": {
     "runtime-coupling": {
-      "files": 52,
-      "keys": 85,
-      "occurrences": 120
+      "files": 46,
+      "keys": 78,
+      "occurrences": 113
     },
     "mechanical": {
       "files": 0,
@@ -73,13 +73,6 @@
     "packages/cli/src/index.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 2,
     "packages/cli/src/tailscale-provision.mjs :: path :: extensions/cinatra-ai/tailscale-connector": 1,
     "packages/connectors-catalog/src/overrides.mjs :: package :: @cinatra-ai/gmail-connector": 1,
-    "packages/llm/src/index.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "packages/llm/src/providers/gemini.ts :: package :: @cinatra-ai/gemini-connector": 1,
-    "packages/llm/src/providers/openai.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "packages/llm/src/registry.ts :: package :: @cinatra-ai/anthropic-connector": 1,
-    "packages/llm/src/telemetry.ts :: package :: @cinatra-ai/gemini-connector": 1,
-    "packages/llm/src/telemetry.ts :: package :: @cinatra-ai/openai-connector": 1,
-    "packages/llm/src/tools/skills.ts :: package :: @cinatra-ai/openai-connector": 1,
     "packages/objects/src/graphiti-projector.ts :: package :: @cinatra-ai/default-artifact": 2,
     "packages/objects/src/semantic-manifest.ts :: package :: @cinatra-ai/default-artifact": 1,
     "packages/workflows/src/seed/major-product-release.ts :: package :: @cinatra-ai/blog-pipeline-agent": 2,

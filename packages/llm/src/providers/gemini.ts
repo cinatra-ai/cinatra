@@ -2,11 +2,11 @@ import "server-only";
 
 import { GoogleGenAI, FileState } from "@google/genai";
 import type { FunctionDeclaration, Content, Part } from "@google/genai";
-import {
-  buildGeminiRequestHeaders,
-  getConfiguredGeminiAPIKey,
-  writeGeminiLogFile,
-} from "@cinatra-ai/gemini-connector";
+// LLM provider adapter cutover (cinatra#151 Stage 2): the connector's API-key
+// reader, request-header builder and telemetry log writer resolve through the
+// `llm-provider-surface` capability at call time — packages/llm carries NO
+// value-import of any connector package.
+import { getLlmProviderSurface, requireLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import type {
   LlmProviderAdapter,
   LlmTool,
@@ -27,6 +27,55 @@ import { BatchNotSupportedError } from "../errors";
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 
 const MAX_TOOL_RESULT_CHARS = 8000;
+
+// ---------------------------------------------------------------------------
+// Capability-resolved connector members
+// ---------------------------------------------------------------------------
+
+/** API key via the gemini surface; absent surface/member ⇒ null (not configured). */
+async function getConfiguredGeminiAPIKey(): Promise<string | null> {
+  const getConfiguredAPIKey = getLlmProviderSurface("gemini")?.getConfiguredAPIKey;
+  if (typeof getConfiguredAPIKey !== "function") return null;
+  return (await getConfiguredAPIKey()) ?? null;
+}
+
+/**
+ * Request headers via the gemini surface. The adapter only exists once an API
+ * key resolved through the SAME surface, so a missing member here is a
+ * connector-version/registration defect, not a degraded mode — fail loud
+ * with a descriptive error (design review MEDIUM: never silently default,
+ * the headers carry the host self-client identity).
+ */
+function buildGeminiRequestHeaders(input: {
+  apiKey?: string;
+  contentType?: string;
+  extraHeaders?: Record<string, string>;
+}): Record<string, string> {
+  const surface = requireLlmProviderSurface("gemini");
+  if (typeof surface.buildRequestHeaders !== "function") {
+    throw new Error(
+      'The "gemini" LLM provider connector is active but does not expose ' +
+        "buildRequestHeaders — the installed connector predates the Stage 2 " +
+        "surface (cinatra#151); update/re-acquire the gemini connector.",
+    );
+  }
+  return surface.buildRequestHeaders(input);
+}
+
+/**
+ * Best-effort request/response logging through the gemini surface's
+ * `writeLogFile` member. Surface or member absent ⇒ no-op; when present, the
+ * connector's own enabled-check/fs-error semantics apply unchanged.
+ */
+async function writeGeminiLogFile(input: {
+  label: string;
+  kind: "request" | "response";
+  body: unknown;
+}): Promise<void> {
+  const writeLogFile = getLlmProviderSurface("gemini")?.writeLogFile;
+  if (typeof writeLogFile !== "function") return;
+  await writeLogFile(input);
+}
 
 // ---------------------------------------------------------------------------
 // Client construction

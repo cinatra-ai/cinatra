@@ -129,7 +129,6 @@
       "@cinatra-ai/anthropic-connector@^0.1.0",
       "@cinatra-ai/crm-connector@^0.1.0",
       "@cinatra-ai/drupal-mcp-connector@^0.1.0",
-      "@cinatra-ai/gemini-connector@^0.1.0",
       "@cinatra-ai/gmail-connector@^0.1.0",
       "@cinatra-ai/google-calendar-connector@^0.1.0",
       "@cinatra-ai/openai-connector@^0.1.0",
