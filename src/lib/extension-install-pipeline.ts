@@ -402,6 +402,32 @@ export async function installExtensionFromRegistry(
     closureHash = computeClosureHash(plan);
   }
 
+  // SIGNATURE VERDICT — computed BEFORE materialize (PR-4 review HIGH 1): a
+  // plan-bearing package whose v2 signature does not verify against the
+  // host-recomputed closureHash is REFUSED before ANY fetch/write — the plan
+  // must never EXECUTE (per-node fetches + store writes) on unverified trust.
+  // The downgrade matrix makes the verdict hard boolean whenever a plan is
+  // present (v1/absent/no-key/invalid all === false), and a closure package
+  // could never activate anyway — installing it would only burn bytes and
+  // leave an inert store dir. Closure-LESS packages keep today's semantics
+  // byte-for-byte (the same verdict value feeds classifyExtensionTrust below;
+  // untrusted closure-less installs still finalize with a pending grant).
+  const signatureVerified = resolveSignatureVerdict({
+    packageName: input.packageName,
+    version: resolvedVersion,
+    integrity,
+    signature,
+    closureHash,
+  });
+  if (plan && signatureVerified !== true) {
+    throw new Error(
+      `[install-pipeline] ${input.packageName}@${resolvedVersion}: carries a materialization plan but no ` +
+        `VERIFIED v2 signature binding its closureHash (v1/absent/unknown-prefix signatures and missing ` +
+        `trusted keys are hard refusals — cinatra#181 downgrade refusal). Refusing BEFORE any fetch or ` +
+        `write: the signed plan must verify before it may execute.`,
+    );
+  }
+
   const mat = await deps.materialize({
     packageName: input.packageName,
     // The RESOLVED concrete version (a dist-tag input would otherwise name the
@@ -498,17 +524,11 @@ export async function installExtensionFromRegistry(
     integrityVerified: true,
     persistedTrustDecision: true,
     // When signing is configured/required, the install-time decision
-    // respects it too (undefined = no signing → bootstrap/transition behavior).
-    signatureVerified: resolveSignatureVerdict({
-      packageName: input.packageName,
-      version: resolvedVersion,
-      integrity,
-      signature,
-      // cinatra#181 downgrade refusal: when the package carries a plan, the
-      // verdict is NEVER undefined — only a v2 signature binding this exact
-      // host-recomputed hash verifies (v1/absent/invalid are hard false).
-      closureHash,
-    }),
+    // respects it too (undefined = no signing → bootstrap/transition
+    // behavior). Computed ONCE, above, BEFORE materialize — when the package
+    // carries a plan the verdict is NEVER undefined and a non-true verdict
+    // already refused the install before any write (cinatra#181).
+    signatureVerified,
     trustedActivationHosts: trustedActivationHosts(),
     allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
   });

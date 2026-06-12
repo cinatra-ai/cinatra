@@ -270,6 +270,21 @@ export async function installWorkflowExtensionSaga(
       closureHash = computeClosureHash(plan);
     }
 
+    // SIGNATURE VERDICT — computed BEFORE materialize (PR-4 review HIGH 1,
+    // same contract as the registry pipeline): a plan-bearing package whose
+    // v2 signature does not verify against the host-recomputed closureHash is
+    // refused before ANY fetch/write — the signed plan must never EXECUTE on
+    // unverified trust. Fully inert: nothing materialized, nothing journaled,
+    // no grant touched, nothing to GC.
+    const signatureVerified = resolveSignatureVerdict({ packageName, version, integrity, signature, closureHash });
+    if (plan && signatureVerified !== true) {
+      throw new WorkflowInstallPreflightError(
+        "UNTRUSTED",
+        `${packageName}@${version}: carries a materialization plan but no VERIFIED v2 signature binding ` +
+          `its closureHash — refused before any fetch or write (cinatra#181 downgrade refusal)`,
+      );
+    }
+
     const installOpId = `${packageName}@${version}:wf:${orgId}`;
 
     // Idempotent ONLY for the SAME artifact: a finalized op for THIS exact
@@ -383,7 +398,7 @@ export async function installWorkflowExtensionSaga(
       registryUrl,
       integrityVerified: true,
       persistedTrustDecision: true,
-      signatureVerified: resolveSignatureVerdict({ packageName, version, integrity, signature, closureHash }),
+      signatureVerified,
       trustedActivationHosts: trustedActivationHosts(),
       allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
     });

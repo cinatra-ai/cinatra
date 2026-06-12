@@ -46,6 +46,14 @@ function transportPlan(pkg = PKG, version = VER): unknown {
 }
 const PLAN_CLOSURE_HASH = computeClosureHash(parseMaterializationPlan(transportPlan()));
 
+/** Trusted keypair + v2 signature binding the fixture plan (the verified-plan happy path). */
+function signedV2Env(version = VER, closureHash = PLAN_CLOSURE_HASH) {
+  const kp = generateExtensionSigningKeyPair();
+  const v2 = signExtensionV2({ packageName: PKG, version, integrity: INTEGRITY, closureHash }, kp.privateKeyPkcs8DerB64);
+  process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
+  return { kp, v2 };
+}
+
 function fakePipelineDeps(overrides: Partial<InstallPipelineDeps> = {}) {
   const calls = { materialize: [] as unknown[], provenance: [] as unknown[], approved: [] as unknown[] };
   const deps: InstallPipelineDeps = {
@@ -74,7 +82,10 @@ afterEach(() => {
 
 describe("install pipeline × materialization plan (cinatra#181)", () => {
   it("THREADS the parsed plan + recomputed closureHash into materialize and records the closureHash in provenance", async () => {
-    const { deps, calls } = fakePipelineDeps();
+    const { v2 } = signedV2Env();
+    const { deps, calls } = fakePipelineDeps({
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v2, materializationPlan: transportPlan() }),
+    });
     await installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps);
     expect(calls.materialize).toHaveLength(1);
     const mat = calls.materialize[0] as { plan?: { package?: { name?: string } }; expectedClosureHash?: string | null; version?: string };
@@ -84,8 +95,10 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
   });
 
   it("passes the RESOLVED version into materialize (a dist-tag input never names the store dir)", async () => {
+    const resolvedHash = computeClosureHash(parseMaterializationPlan(transportPlan(PKG, "2.0.0")));
+    const { v2 } = signedV2Env("2.0.0", resolvedHash);
     const { deps, calls } = fakePipelineDeps({
-      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, resolvedVersion: "2.0.0", materializationPlan: transportPlan(PKG, "2.0.0") }),
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v2, resolvedVersion: "2.0.0", materializationPlan: transportPlan(PKG, "2.0.0") }),
     });
     await installExtensionFromRegistry({ packageName: PKG, version: "latest", orgId: null }, deps);
     expect((calls.materialize[0] as { version: string }).version).toBe("2.0.0");
@@ -121,32 +134,48 @@ describe("install pipeline × materialization plan (cinatra#181)", () => {
     expect(calls.provenance[0]).not.toHaveProperty("closureHash");
   });
 
-  it("DOWNGRADE REFUSAL at install: a closure package with a VALID v1 signature is NOT trusted-signed (grant stays pending)", async () => {
+  it("DOWNGRADE REFUSAL at install: a closure package with a VALID v1 signature is REFUSED BEFORE any fetch/write (plan never executes)", async () => {
     const kp = generateExtensionSigningKeyPair();
     const v1 = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, kp.privateKeyPkcs8DerB64);
     process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
     const { deps, calls } = fakePipelineDeps({
       resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v1, materializationPlan: transportPlan() }),
     });
-    const r = await installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null, actorUserId: "u1" }, deps);
-    expect(r.grantStatus).toBe("pending"); // v1 over a plan-bearing package = hard refusal of the signed tier
+    await expect(installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null, actorUserId: "u1" }, deps)).rejects.toThrow(
+      /no VERIFIED v2 signature binding its closureHash/,
+    );
+    expect(calls.materialize).toHaveLength(0); // the plan never executed
+    expect(calls.provenance).toHaveLength(0);
     expect(calls.approved).toEqual([]);
   });
 
-  it("PROBE GATING: an UNTRUSTED closure package never reaches verifyActivatableBeforeFinalize (no code execution from the probe)", async () => {
+  it("UNSIGNED closure package: refused before any fetch/write too (absent signature = hard false)", async () => {
+    const { deps, calls } = fakePipelineDeps(); // plan present, NO signature, no keys
+    await expect(installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps)).rejects.toThrow(
+      /no VERIFIED v2 signature binding its closureHash/,
+    );
+    expect(calls.materialize).toHaveLength(0);
+    expect(calls.provenance).toHaveLength(0);
+  });
+
+  it("PROBE GATING: an UNTRUSTED closure-LESS package never reaches verifyActivatableBeforeFinalize (no code execution from the probe)", async () => {
+    // A closure package never even materializes (refused above); the probe
+    // gate matters for the closure-LESS untrusted case: an invalid signature
+    // (hard false) must not get probe code execution either.
     const kp = generateExtensionSigningKeyPair();
-    const v1 = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, kp.privateKeyPkcs8DerB64);
+    const wrong = generateExtensionSigningKeyPair();
+    const badSig = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, wrong.privateKeyPkcs8DerB64);
     process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
     const probed: unknown[] = [];
     const { deps } = fakePipelineDeps({
-      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: v1, materializationPlan: transportPlan() }),
+      resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, signature: badSig }),
       verifyActivatableBeforeFinalize: async (i) => {
         probed.push(i);
         return { supersedes: false };
       },
     });
     await installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: null }, deps);
-    expect(probed).toEqual([]); // v1-over-plan = untrusted -> the import/register probe must NOT run
+    expect(probed).toEqual([]); // invalid signature = untrusted -> the import/register probe must NOT run
   });
 
   it("a v2 signature binding the recomputed closureHash IS trusted-signed (grant auto-approves)", async () => {
@@ -233,20 +262,20 @@ describe("workflow install saga × materialization plan (the SECOND install path
     expect(calls.provenance[0]).toMatchObject({ closureHash: PLAN_CLOSURE_HASH });
   });
 
-  it("DOWNGRADE REFUSAL in the saga: an UNSIGNED closure package is hard-untrusted (the bootstrap path is closed) and refused FULLY INERTLY", async () => {
+  it("DOWNGRADE REFUSAL in the saga: an UNSIGNED closure package is refused BEFORE materialize (fully inert — plan never executes)", async () => {
     const { deps, calls, journal } = makeSagaDeps(); // plan present, NO signature
     await expect(
       installWorkflowExtensionSaga({ packageName: PKG, version: VER, actor: { orgId: "org-1", userId: "u1" } }, deps),
-    ).rejects.toThrow(/refused by the trust\/signature gate/);
+    ).rejects.toThrow(/no VERIFIED v2 signature binding its closureHash/);
+    // PR-4 review HIGH 1 + rounds 0/1: the refusal happens BEFORE materialize
+    // (the plan never executes — zero fetches/writes), BEFORE the journal
+    // begin (the previous install's `finalized` boot anchor survives), and
+    // BEFORE any grant mutation. Nothing was created, so nothing to GC.
+    expect(calls.materialize).toHaveLength(0);
     expect(calls.provenance).toHaveLength(0);
-    // round-0 finding 2: the refusal must NOT have mutated the grant — a
-    // CHANGED port request would otherwise reset a prior APPROVED grant.
     expect(calls.grantRequests).toHaveLength(0);
-    // round-1 finding 1: the refusal must NOT have journaled — beginInstallOp
-    // UPSERTs the single (package, org) row and would destroy the previous
-    // install's `finalized` op (its boot anchor). Only the GC ran.
     expect(journal.size).toBe(0);
-    expect(calls.gc).toHaveLength(1);
+    expect(calls.gc).toHaveLength(0);
   });
 
   it("REFUSES a plan bound to another package BEFORE any journal/template write", async () => {
