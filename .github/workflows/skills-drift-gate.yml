@@ -1,0 +1,47 @@
+name: skills-drift-gate
+
+# Thin caller for the reusable cinatra-ai/ci skills-drift-gate (cinatra#188).
+#
+# Flags when a cinatra change touches a surface an assistant-skills SKILL.md
+# depends on (MCP primitive name / @cinatra-ai/* package name / route string),
+# so the impacted skill is reviewed before it silently goes stale.
+#
+# Stage 1: WARN mode (non-failing). The reusable workflow emits warning
+# annotations + a step summary and exits 0 — the check stays green.
+#
+# Required-check context: a reusable workflow_call does NOT create its own check
+# context; the context is surfaced under THIS caller's JOB name, formatted
+# "<caller-job> / <reusable-job>". The job below is named `skills-drift-gate`
+# and the reusable job is `skills-drift-gate`, so register
+# "skills-drift-gate / skills-drift-gate" as the (warn-mode, non-required for now)
+# status check — same convention as "source-leak-gate / source-leak-gate".
+#
+# cinatra-ONLY: this gate is wired into this repo and nothing else. It is NOT
+# part of the org-wide min-repo-config rollout (cinatra is the only repo whose
+# changes can drift the assistant-skills knowledge).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # KEEP this job name stable as `skills-drift-gate` — it is the required-check
+  # context prefix.
+  skills-drift-gate:
+    # Double-pin per the eng#61 convention: the workflow ref (@<sha>) and the
+    # `ref` input below are pinned to the SAME cinatra-ai/ci commit, so the gate
+    # code is never pulled from mutable main.
+    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@7cfa55b9c5c23ef2fad98fe83a6ddb8ec1084c10 # v0.1.0
+    with:
+      # assistant-skills pin: the @cinatra-ai/assistant-skills resolvedSha that
+      # cinatra-required-extensions.lock.json records (the skills the product
+      # ships). Keep this in lockstep with that lock entry; the release-closeout
+      # sweep (cinatra#188) re-pins it to the release-current ref before
+      # reconciling the whole release diff.
+      skills_ref: d471248349aa3403a076df4d6b8e69244e41dafc
+      mode: warn
+      ref: 7cfa55b9c5c23ef2fad98fe83a6ddb8ec1084c10 # same SHA as the workflow @ref
