@@ -157,10 +157,12 @@ jobs:
           node scripts/extensions/generate-extension-manifest.mjs
           node scripts/extensions/generate-extension-manifest.mjs --check
 
-      # Fail-closed commit scope: the dirty set after regeneration must be
-      # EXACTLY the recipe files (dev lock + pnpm-lock.yaml + the generator's
-      # own output list) — anything else aborts the run instead of being
-      # silently dropped or silently committed.
+      # Fail-closed commit scope: the dirty set after regeneration must be a
+      # SUBSET of the recipe files (dev lock + pnpm-lock.yaml + the
+      # generator's own output list; the dev lock is already known dirty from
+      # the detect step — pnpm-lock.yaml/maps legitimately stay put on a
+      # source-only companion bump). Any path outside the allowlist aborts
+      # the run instead of being silently dropped or silently committed.
       - name: Verify the dirty set is exactly the recipe files
         if: steps.drift.outputs.drift == 'true'
         run: |
@@ -191,10 +193,16 @@ jobs:
           # No drift: nothing to push — but if a rolling bump PR is still
           # open (an equivalent bump landed manually, or tips moved back),
           # retire it instead of leaving it stale.
+          # Owner-qualified head filter: `gh pr list --head <branch>` matches
+          # by bare branch name, so a fork PR named auto/dev-lock-bump could
+          # shadow the real rolling PR. The REST filter is exact.
+          find_rolling_pr() {
+            gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&head=${GITHUB_REPOSITORY_OWNER}:auto/dev-lock-bump" \
+              --jq '.[0].number // empty'
+          }
+
           if [ "$DRIFT" != "true" ]; then
-            stale="$(gh pr list --repo "$GITHUB_REPOSITORY" \
-              --head auto/dev-lock-bump --base main --state open \
-              --json number --jq '.[0].number // empty')"
+            stale="$(find_rolling_pr)"
             if [ -n "$stale" ]; then
               gh pr close "$stale" --repo "$GITHUB_REPOSITORY" --delete-branch \
                 --comment "Pins are back in sync with main without this PR (a bump landed directly, or companion tips returned to the pinned shas) — retiring the rolling auto-bump PR."
@@ -218,8 +226,8 @@ jobs:
             -m "$(printf 'Scheduled re-pin of the non-required companion universe to current branch tips (docs/extension-clone-pinning.md). The full bump recipe in one commit: dev lock + pnpm-lock.yaml + regenerated maps.\n\nPin changes:\n%s' "$(cat /tmp/pin-changes.md)")"
 
           # Idempotency: if the remote rolling branch already holds this
-          # exact TREE (identical pins + lockfile + maps on an identical
-          # base), skip the push — no CI re-runs, no PR-update spam.
+          # exact TREE (identical pins + lockfile + maps + everything else),
+          # skip the push — no CI re-runs, no PR-update spam.
           git fetch origin "+refs/heads/auto/dev-lock-bump:refs/remotes/origin/auto/dev-lock-bump" 2>/dev/null || true
           pushed=true
           if git rev-parse -q --verify "refs/remotes/origin/auto/dev-lock-bump" >/dev/null \
@@ -243,9 +251,7 @@ jobs:
             cat /tmp/pin-changes.md
           } > /tmp/pr-body.md
 
-          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" \
-            --head auto/dev-lock-bump --base main --state open \
-            --json number --jq '.[0].number // empty')"
+          existing="$(find_rolling_pr)"
           if [ -z "$existing" ]; then
             url="$(gh pr create --repo "$GITHUB_REPOSITORY" \
               --head auto/dev-lock-bump --base main \
