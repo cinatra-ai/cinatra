@@ -128,6 +128,11 @@
       "resolvedSha": "792a307a519763bfe9ad50799710740871eac172"
     },
     {
+      "packageName": "@cinatra-ai/crm-connector",
+      "repo": "cinatra-ai/crm-connector",
+      "resolvedSha": "804bcf7c4c4d6e4e030593886387d61aaf7e0351"
+    },
+    {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
       "resolvedSha": "69c13c5cafea8569d39f00c95a9459ed54683074"
@@ -196,6 +201,16 @@
       "packageName": "@cinatra-ai/github-connector",
       "repo": "cinatra-ai/github-connector",
       "resolvedSha": "eb1fb859c4a0e5d5e501e7462109aa2507d69888"
+    },
+    {
+      "packageName": "@cinatra-ai/gmail-connector",
+      "repo": "cinatra-ai/gmail-connector",
+      "resolvedSha": "d15a67cbf7e78ed3ec3f0633fe49bc3c908cf4c2"
+    },
+    {
+      "packageName": "@cinatra-ai/google-calendar-connector",
+      "repo": "cinatra-ai/google-calendar-connector",
+      "resolvedSha": "98803b6d6bc2fef05171d104339a236c28a5da6f"
     },
     {
       "packageName": "@cinatra-ai/google-oauth-connector",

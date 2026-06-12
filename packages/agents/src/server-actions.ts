@@ -2,14 +2,15 @@
 
 // Side-effect import publishes the per-concern host connector services in
 // this server-action bundle (separate Turbopack graph from instrumentation
-// boot). Without it getStoredGmailSendAsAddresses() throws "host service not
-// registered" — here it's swallowed by a try/catch so gmail aliases silently
-// never load. Same pattern as src/app/api/chat/runner.ts.
+// boot). Without it the gmail connector's registered email-sender-identities
+// impl throws "host service not registered" — here it's swallowed by the
+// resolver's per-provider isolation so gmail aliases silently never load.
+// Same pattern as src/app/api/chat/runner.ts.
 import "@/lib/register-host-connector-services";
 
 import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
 import { buildSkillResourceRef, requireResourceAccess } from "./auth-policy";
-import { getStoredGmailSendAsAddresses } from "@cinatra-ai/gmail-connector";
+import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import {
   listInstalledSkills,
@@ -42,10 +43,17 @@ export type SkillForChip = {
  * field-renderer-context loader. Kept in agent-builder to avoid a reverse
  * dependency from agent-builder to chat.
  *
- * Degrades gracefully: returns empty arrays if unauthenticated or DB read fails.
- * Return shape intentionally mirrors the chat-package return type but uses a
- * plain object literal (not GmailSendAsAliasOption) because "use server" files
- * cannot reach server-only connector types across the client boundary.
+ * Registration-driven (cinatra#151 Stage 4): sender identities resolve from
+ * the `email-sender-identities` capability (registered by the gmail
+ * connector's register(ctx)) instead of value-importing the connector
+ * package. `connectedApps` derives from the providers' app slugs with
+ * non-empty identities (today: ["gmail"] iff aliases are synced — behavior
+ * preserved); `gmailAliases` keeps its gmail-specific field name because the
+ * consuming HITL renderer is gmail-specific (renderer inversion is Stage 5).
+ *
+ * Degrades gracefully: returns empty arrays if unauthenticated, the
+ * connector is absent (acquirable-on-demand, not required), or a provider
+ * read fails (per-provider isolation in the resolver).
  */
 export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
   connectedApps: string[];
@@ -54,12 +62,14 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
   const session = await requireAuthSession().catch(() => null);
   if (!session?.user?.id) return { connectedApps: [], gmailAliases: [] };
   try {
-    const { aliases } = getStoredGmailSendAsAddresses(session.user.id);
-    const gmailAliases = aliases.map((a) => ({
+    const contributions = await listEmailSenderIdentities(session.user.id);
+    const connectedApps = contributions.map((c) => c.app);
+    const gmailAliases = (
+      contributions.find((c) => c.app === "gmail")?.identities ?? []
+    ).map((a) => ({
       sendAsEmail: a.email,
       displayName: a.displayName,
     }));
-    const connectedApps = gmailAliases.length > 0 ? ["gmail"] : [];
     return { connectedApps, gmailAliases };
   } catch {
     return { connectedApps: [], gmailAliases: [] };

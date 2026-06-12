@@ -21,8 +21,10 @@ import "server-only";
 import {
   CRM_SYNC_BOOTSTRAP_CAPABILITY,
   CRM_POINTER_WRITER_CAPABILITY,
+  CRM_LIST_READER_CAPABILITY_ID,
   type CrmSyncBootstrapProvider,
   type CrmPointerWriterProvider,
+  type CrmListReader,
 } from "@cinatra-ai/sdk-extensions";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
@@ -62,4 +64,24 @@ export function resolveCrmPointerWriter(): CrmPointerWriterProvider | null {
     isCrmPointerWriter(p.impl),
   );
   return (match?.impl as CrmPointerWriterProvider | undefined) ?? null;
+}
+
+function isCrmListReader(impl: unknown): impl is CrmListReader {
+  if (typeof impl !== "object" || impl === null) return false;
+  return typeof (impl as { searchLists?: unknown }).searchLists === "function";
+}
+
+/**
+ * The live CRM list-read surface (cinatra#151 Stage 4: the agent-builder list
+ * picker resolves `crm-list-reader` instead of value-importing the
+ * crm-connector's facade), or null when no provider is registered (connector
+ * absent/inactive — acquirable-on-demand, not required). The IMPL fails loud
+ * when the connector is active but no CRM provider extension is registered;
+ * the caller owns degraded-to-empty.
+ */
+export function resolveCrmListReader(): CrmListReader | null {
+  const match = resolveCapabilityProviders(CRM_LIST_READER_CAPABILITY_ID).find((p) =>
+    isCrmListReader(p.impl),
+  );
+  return (match?.impl as CrmListReader | undefined) ?? null;
 }

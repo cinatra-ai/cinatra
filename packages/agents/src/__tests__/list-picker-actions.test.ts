@@ -1,17 +1,20 @@
 /**
- * Unit test for fetchAvailableLists (CRM-facade backed).
+ * Unit test for fetchAvailableLists (crm-list-reader capability backed).
  *
- * The picker source-of-truth now routes through `crmFacade.list.search` (the
- * provider-agnostic CRM connector). The outward `AvailableListSummary` shape
- * is preserved so downstream consumers don't have to migrate in lockstep.
+ * The picker source-of-truth routes through the `crm-list-reader` capability
+ * surface registered by the crm-connector's register(ctx) — resolved via
+ * `@/lib/crm-integration-providers` (cinatra#151 Stage 4), never by
+ * value-importing the connector package. The outward `AvailableListSummary`
+ * shape is preserved so downstream consumers don't have to migrate in
+ * lockstep.
  *
  * Contract locked here:
  *   - Admin gate fires FIRST — no CRM read if requireAdminSession rejects.
- *   - `crmFacade.list.search({ query: "", objectType: "contact" })` is the
- *     single call.
+ *   - `searchLists({ query: "", objectType: "contact" })` is the single call.
  *   - CrmList[] is mapped 1:1 to AvailableListSummary[], with `memberCount`
- *     + `lastUpdated` set to null (the new provider doesn't surface them)
+ *     + `lastUpdated` set to null (the provider doesn't surface them)
  *     and `memberType` derived from `CrmList.objectType`.
+ *   - Capability ABSENT (connector not installed/active) degrades to `[]`.
  *   - Upstream failures (no Twenty row, no bearer, network errors) degrade
  *     to `[]` rather than 500-ing the picker UI.
  */
@@ -23,22 +26,20 @@ vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(),
 }));
 
-vi.mock("@cinatra-ai/crm-connector", () => ({
-  crmFacade: {
-    list: { search: vi.fn() },
-    account: {},
-    contact: {},
-  },
+vi.mock("@/lib/crm-integration-providers", () => ({
+  resolveCrmListReader: vi.fn(),
 }));
 
 import { fetchAvailableLists } from "../list-picker-actions";
 import { requireAdminSession } from "@/lib/auth-session";
-import { crmFacade } from "@cinatra-ai/crm-connector";
+import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 
-const searchMock = vi.mocked(crmFacade.list.search);
+const searchMock = vi.fn();
+vi.mocked(resolveCrmListReader).mockImplementation(() => ({ searchLists: searchMock }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(resolveCrmListReader).mockImplementation(() => ({ searchLists: searchMock }));
 });
 
 describe("fetchAvailableLists", () => {
@@ -49,7 +50,7 @@ describe("fetchAvailableLists", () => {
     expect(searchMock).not.toHaveBeenCalled();
   });
 
-  it("calls crmFacade.list.search with objectType:'contact'", async () => {
+  it("calls searchLists with objectType:'contact'", async () => {
     vi.mocked(requireAdminSession).mockResolvedValueOnce({
       user: { id: "u1" },
       session: { activeOrganizationId: "org1" },
@@ -92,7 +93,7 @@ describe("fetchAvailableLists", () => {
     ]);
   });
 
-  it("degrades to [] when the facade throws (no Twenty row / no bearer / upstream unreachable)", async () => {
+  it("degrades to [] when the reader throws (no CRM provider / no Twenty row / upstream unreachable)", async () => {
     vi.mocked(requireAdminSession).mockResolvedValueOnce({
       user: { id: "u1" },
       session: { activeOrganizationId: "org1" },
@@ -102,7 +103,7 @@ describe("fetchAvailableLists", () => {
     expect(await fetchAvailableLists()).toEqual([]);
   });
 
-  it("returns an empty array when the facade returns no lists", async () => {
+  it("returns an empty array when the reader returns no lists", async () => {
     vi.mocked(requireAdminSession).mockResolvedValueOnce({
       user: { id: "u1" },
       session: { activeOrganizationId: "org1" },
@@ -110,5 +111,16 @@ describe("fetchAvailableLists", () => {
     searchMock.mockResolvedValueOnce([]);
 
     expect(await fetchAvailableLists()).toEqual([]);
+  });
+
+  it("degrades to [] when the crm-list-reader capability is ABSENT (connector not installed/active)", async () => {
+    vi.mocked(requireAdminSession).mockResolvedValueOnce({
+      user: { id: "u1" },
+      session: { activeOrganizationId: "org1" },
+    } as unknown as Awaited<ReturnType<typeof requireAdminSession>>);
+    vi.mocked(resolveCrmListReader).mockReturnValueOnce(null);
+
+    expect(await fetchAvailableLists()).toEqual([]);
+    expect(searchMock).not.toHaveBeenCalled();
   });
 });

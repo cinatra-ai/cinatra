@@ -79,9 +79,8 @@ const storeMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeMock);
 
-vi.mock("@cinatra-ai/gmail-connector", () => ({
-  getStoredGmailSendAsAddresses: vi.fn(async () => []),
-  registerGmailConnector: vi.fn(),
+vi.mock("@/lib/email-sender-identities", () => ({
+  listEmailSenderIdentities: vi.fn(async () => []),
 }));
 vi.mock("@/lib/agents-store", () => ({
   getAssignedSkillIdsForAgent: vi.fn(async () => []),
