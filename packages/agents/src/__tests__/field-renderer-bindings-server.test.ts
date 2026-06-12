@@ -91,6 +91,29 @@ describe("collectInstalledFieldRendererBindings", () => {
     expect(collectInstalledFieldRendererBindings()).toEqual([]);
   });
 
+  it("first-declarer-wins among DIVERGENT runtime duplicates is ALPHABETICAL (sorted traversal), never filesystem-order", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Write the alphabetically-LATER package first so insertion order would
+    // pick the wrong winner if traversal were unsorted.
+    writePkg("s", "zz-agent", {
+      name: "@s/zz-agent",
+      cinatra: { fieldRenderers: [{ id: "@s/shared:gate", kind: "cta", priority: 10 }] },
+    });
+    writePkg("s", "aa-agent", {
+      name: "@s/aa-agent",
+      cinatra: { fieldRenderers: [{ id: "@s/shared:gate", kind: "cta", priority: 90 }] },
+    });
+    const entries = collectInstalledFieldRendererBindings();
+    const hit = entries.filter((e) => e.id === "@s/shared:gate");
+    expect(hit).toHaveLength(1);
+    expect(hit[0].declaredBy).toBe("@s/aa-agent");
+    expect(hit[0].priority).toBe(90);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("conflicting declarations"),
+    );
+    warn.mockRestore();
+  });
+
   it("caches within the TTL and refreshes after the cache is cleared", () => {
     expect(collectInstalledFieldRendererBindings()).toEqual([]);
     writePkg("s", "late-agent", {
@@ -104,7 +127,8 @@ describe("collectInstalledFieldRendererBindings", () => {
 });
 
 describe("getMergedFieldRendererBindings — generated precedence", () => {
-  it("a runtime duplicate of a generated id never shadows the generated entry", () => {
+  it("a runtime duplicate of a generated id never shadows the generated entry, and a DIVERGENT one is warned naming both declarers", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const generated = GENERATED_FIELD_RENDERER_BINDINGS[0];
     writePkg("s", "shadow-agent", {
       name: "@s/shadow-agent",
@@ -117,6 +141,16 @@ describe("getMergedFieldRendererBindings — generated precedence", () => {
     expect(hit).toHaveLength(1);
     expect(hit[0].kind).toBe(generated.kind);
     expect(hit[0].priority).toBe(generated.priority);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("@s/shadow-agent"),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(generated.declaredBy),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("the generated binding wins"),
+    );
+    warn.mockRestore();
   });
 });
 
