@@ -82,9 +82,9 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "55bcd3f006f7bf25f84f74ca248219b61b098d0f",
+      "resolvedSha": "574c182e4040f9b96fa8383d70abd06df2fddcf5",
       "packageVersion": "0.1.0",
-      "treeSha256": "255a63d019bd2f077a6fe9431011c0aab6cd6dff8f3b2a893dff82712d0e7fe8"
+      "treeSha256": "a7c97801586fb120491d74d61ddc7aed8da22c0efe98a79c49fc8544cdffb410"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
