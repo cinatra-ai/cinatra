@@ -380,7 +380,7 @@ export async function installWorkflowExtensionSaga(
     // trusted (e.g. unsigned / invalid signature under
     // CINATRA_EXTENSION_REQUIRE_SIGNATURES, or a closure package whose
     // v1/absent signature the cinatra#181 downgrade-refusal matrix
-    // hard-refused). The ORDER is load-bearing (#181 review rounds 0+1):
+    // hard-refused). The ORDER is load-bearing (#181):
     //   - BEFORE `beginInstallOp`: the journal is one row per (package, org)
     //     that begin UPSERTs — journaling this refused attempt would destroy
     //     the PREVIOUS install's `finalized` op and break its boot anchor
@@ -440,7 +440,7 @@ export async function installWorkflowExtensionSaga(
       // untrusted package refused, fully inertly) at gate 1.7 ABOVE, before
       // the journal begin. Only a TRUSTED install reaches this journaled
       // region, so the grant mutation below can no longer be triggered by a
-      // refused attempt (#181 review round 0 finding 2 / round 1 finding 1).
+      // refused attempt (#181 inert-refusal contract).
       await deps.recordRequestedGrant({ packageName, orgId, requestedPorts });
       // Capability split: auto-approve the requested host-port grant
       // ONLY for a `trusted-signed` package. A `trusted-bootstrap` workflow package

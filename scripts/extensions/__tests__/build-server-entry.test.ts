@@ -617,7 +617,7 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
     ).toThrow();
   });
 
-  it("a closure-mode tarball is FAIL-CLOSED at install until the relaxed gate ships (today's bundled-deps gate refuses it)", async () => {
+  it("a closure-mode tarball WITHOUT a signed plan is FAIL-CLOSED at install (the evolved gate requires bundled XOR planned)", async () => {
     const root = await tempDir("bse-closure-failclosed-");
     const src = path.join(root, "package");
     await writeFixture(src, CLOSURE_MANIFEST, SOURCE_SHAPE_FILES);
@@ -639,7 +639,7 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
         },
         { fetchTarball: async () => ({ bytes, integrity: sriForBytes(bytes, "sha512") }), now: () => "2026-06-12T00:00:00.000Z" },
       ),
-    ).rejects.toThrow(/runtime dependencies are not bundled in the tarball/);
+    ).rejects.toThrow(/neither bundled in the tarball nor covered by a signed materialization plan/);
   });
 });
 

@@ -77,7 +77,7 @@ export class MaterializationExecutorError extends Error {
 export const MAX_PLAN_TOTAL_TARBALL_BYTES = 256 * 1024 * 1024; // 256 MiB
 
 /**
- * Per-node UNPACKED caps (review round 0 finding 4): the compressed-byte cap
+ * Per-node UNPACKED caps: the compressed-byte cap
  * alone admits a decompression bomb — a tiny gzip tarball can declare a huge
  * tree that the step-5 content hash would then read into memory. Caps are
  * enforced AT THE TAR HEADER (declared entry sizes/counts) during streaming
@@ -149,7 +149,7 @@ export async function extractTarballHardened(input: {
         // Once a cap is breached, skip EVERYTHING (fail-closed; one message).
         if (capBreached) return false;
         // Caps count EVERY header — including entries the type/node_modules
-        // checks below will skip (review round 1 finding 3: a tarball of a
+        // checks below will skip (a tarball of a
         // million symlink headers must hit the entry cap, not stream on).
         if (input.caps) {
           entryCount += 1;

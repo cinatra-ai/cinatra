@@ -353,7 +353,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
       expect(h.events).not.toContain("write:template");
       expect(h.events).not.toContain("write:dashboard-template");
       expect(h.events).not.toContain("finalize");
-      // cinatra#181 review round 1: the trust gate now refuses BEFORE
+      // cinatra#181: the trust gate now refuses BEFORE
       // `beginInstallOp` (the journal UPSERT would destroy a prior install's
       // `finalized` boot anchor) and BEFORE `recordRequestedGrant` (a changed
       // request would reset a prior APPROVED grant) — the refusal is fully

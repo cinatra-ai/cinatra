@@ -585,7 +585,7 @@ export async function installExtensionFromRegistry(
   // A fresh install (`supersedes:false`) is unaffected: there is no prior anchor /
   // grant to protect, the gate is a no-op, and the mutations below proceed.
   //
-  // TRUST GATE on the probe (cinatra#181 review round 0 finding 1): the probe
+  // TRUST GATE on the probe (cinatra#181): the probe
   // IMPORTS the new digest and calls `register(ctx)` — executing package code.
   // An UNTRUSTED package (e.g. a closure package whose v1/absent signature the
   // downgrade-refusal matrix hard-refused, or any tampered signature) must
