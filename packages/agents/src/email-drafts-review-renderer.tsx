@@ -7,7 +7,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { toast } from "@/lib/cinatra-toast";
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 import {
@@ -56,20 +55,11 @@ function extractDraftsFromOutput(output: string): StageDraft[] | undefined {
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isEmailDraftsReviewField: FieldRendererCondition = (_f, schema) =>
-  // :output suffix is the canonical mid-run HITL ID.
-  // Additional screen-specific IDs are accepted for compatibility with existing resume payloads.
-  // @cinatra-ai/email-follow-up-agent:output is intentionally NOT listed here
-  // because that ID has its own inline strict-equality condition in
-  // register-default-renderers.ts. Including it here would cause the
-  // email-drafts:output registry entry (same priority 80, registered first) to
-  // win when resolving email-followups:output, making the follow-up registry
-  // entry unreachable via resolve().
-  ([
-    "@cinatra-ai/email-drafting-agent:output",
-    "@cinatra-ai/email-drafting-agent:email-drafts-review",
-    "email-drafts-review",
-  ] as string[]).includes((schema as { ["x-renderer"]?: string })["x-renderer"] ?? "");
+// Condition: registered from the manifest bindings (kind
+// "email-drafts-review") with strict per-ID matching — the drafting agent's
+// canonical/compat IDs, the follow-up and reviewer-agent gate IDs, and the
+// bare alias each resolve through their own registry entry to this component.
+// See register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Renderer state machine

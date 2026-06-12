@@ -10,15 +10,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { FieldRendererCondition, FieldRendererProps } from "./field-renderer-registry";
+import type { FieldRendererProps } from "./field-renderer-registry";
 import { fetchAppointmentSchedules } from "./cta-actions";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "cta"
 // ---------------------------------------------------------------------------
 
-export const isCtaField: FieldRendererCondition = (_fieldName, schema) =>
-  (["@cinatra-ai/email-outreach-agent:cta","cta"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
+// Condition: registered from the manifest binding (kind "cta") with strict
+// ID + bare-alias matching — see register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Renderer

@@ -81,6 +81,10 @@ import {
   DualAdapterDispatch,
   enrichSchemaWithResolvedData,
 } from "@cinatra-ai/agent-ui-protocol/server";
+import {
+  buildA2UiMidRunTranslatorResolver,
+  resolveRendererIdForKind,
+} from "./field-renderer-bindings.server";
 import { getOrAddWayflowGateIndex } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
@@ -393,7 +397,12 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   if (taskState === "input-required") {
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
-      new A2UiAdapter(runId, run.templateId, (message) => publishA2UiEvent(runId, message)),
+      new A2UiAdapter(
+        runId,
+        run.templateId,
+        (message) => publishA2UiEvent(runId, message),
+        buildA2UiMidRunTranslatorResolver(),
+      ),
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
     console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
@@ -483,8 +492,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // an empty approve/edit input. Subflows that DO emit the envelope (any
     // value with `contentType` already present) are passed through
     // unchanged.
+    // The reviewer output-gate ID is resolved by KIND from the manifest
+    // bindings (the reviewer agent's `cinatra.fieldRenderers` declaration) —
+    // undefined when no present/installed package binds "reviewer-output",
+    // in which case the gate class is absent and synthesis correctly no-ops
+    // (the renderer falls back to the schema-field path, as before).
     if (
-      wayflowXRenderer === "@cinatra-ai/reviewer-agent:output" &&
+      wayflowXRenderer === resolveRendererIdForKind("reviewer-output") &&
       typeof enrichedValues["contentType"] !== "string"
     ) {
       // Do not gate envelope synthesis on `typeof output === "string"`:
@@ -958,8 +972,11 @@ async function runAgentBuilderExecutionJobInner(
       new AgUiAdapter(runId, run.templateId, (event) =>
         publishAgUiEvent(runId, event),
       ),
-      new A2UiAdapter(runId, run.templateId, (message) =>
-        publishA2UiEvent(runId, message),
+      new A2UiAdapter(
+        runId,
+        run.templateId,
+        (message) => publishA2UiEvent(runId, message),
+        buildA2UiMidRunTranslatorResolver(),
       ),
     );
     // The composite forwards all 5 args (including fieldName) to both children.
@@ -1025,8 +1042,11 @@ async function runAgentBuilderExecutionJobInner(
       new AgUiAdapter(runId, run.templateId, (event) =>
         publishAgUiEvent(runId, event),
       ),
-      new A2UiAdapter(runId, run.templateId, (message) =>
-        publishA2UiEvent(runId, message),
+      new A2UiAdapter(
+        runId,
+        run.templateId,
+        (message) => publishA2UiEvent(runId, message),
+        buildA2UiMidRunTranslatorResolver(),
       ),
     );
     const enrichedGroupedSchema = await enrichSchemaWithResolvedData(

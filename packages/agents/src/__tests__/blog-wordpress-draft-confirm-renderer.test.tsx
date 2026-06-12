@@ -6,10 +6,9 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
-import {
-  BlogWordpressDraftConfirmRenderer,
-  isBlogWordpressDraftConfirmField,
-} from "../blog-wordpress-draft-confirm-renderer";
+import { BlogWordpressDraftConfirmRenderer } from "../blog-wordpress-draft-confirm-renderer";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import type { FieldRendererContext } from "../field-renderer-registry";
 
 const MINIMAL_CONTEXT: FieldRendererContext = { connectedApps: [] };
@@ -40,21 +39,23 @@ afterEach(() => {
   cleanup();
 });
 
-describe("isBlogWordpressDraftConfirmField predicate", () => {
+describe("wordpress draft-confirm registry resolution", () => {
+  // Registry-driven condition (cinatra#151 Stage 5): the id comes from the
+  // blog-wordpress-publish-agent's manifest binding.
+  const resolveFor = (schema: Record<string, unknown>) =>
+    fieldRendererRegistry.resolve("draftConfirm", schema, MINIMAL_CONTEXT)?.renderer ?? null;
   it("matches strict equality on the renderer key", () => {
+    ensureDefaultFieldRenderersRegistered();
     expect(
-      isBlogWordpressDraftConfirmField("draftConfirm", {
-        "x-renderer": "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-      } as never, MINIMAL_CONTEXT),
-    ).toBe(true);
+      resolveFor({ "x-renderer": "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm" }),
+    ).toBe(BlogWordpressDraftConfirmRenderer);
   });
 
   it("rejects other renderer keys", () => {
+    ensureDefaultFieldRenderersRegistered();
     expect(
-      isBlogWordpressDraftConfirmField("draftConfirm", {
-        "x-renderer": "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-      } as never, MINIMAL_CONTEXT),
-    ).toBe(false);
+      resolveFor({ "x-renderer": "@cinatra-ai/blog-linkedin-publish-agent:draft-review" }),
+    ).not.toBe(BlogWordpressDraftConfirmRenderer);
   });
 });
 

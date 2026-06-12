@@ -14,23 +14,32 @@ import type {
 } from "./field-renderer-registry";
 import { GMAIL_SENDER_FIELD_WHITELIST, normalizeGmailSenderFieldName } from "@cinatra-ai/agent-ui-protocol";
 
-export const isGmailSenderField: FieldRendererCondition = (fieldName, schema, context) => {
-  if (!context.connectedApps.includes("gmail")) return false;
-  if (!context.gmailAliases || context.gmailAliases.length === 0) return false;
+/**
+ * Condition FACTORY (cinatra#151 Stage 5): the match-ID set comes from the
+ * binding registration (manifest-declared full ID + the host kind table's
+ * bare compat aliases) — this module names no extension. The context gating
+ * (gmail connected + aliases present) and the strict field-name whitelist
+ * heuristic are preserved verbatim from the retired isGmailSenderField.
+ */
+export const makeGmailSenderCondition =
+  (matchIds: readonly string[]): FieldRendererCondition =>
+  (fieldName, schema, context) => {
+    if (!context.connectedApps.includes("gmail")) return false;
+    if (!context.gmailAliases || context.gmailAliases.length === 0) return false;
 
-  const xRenderer = (schema as { ["x-renderer"]?: string })["x-renderer"];
-  if (xRenderer === "@cinatra-ai/email-outreach-agent:gmail-sender" || xRenderer === "gmail-sender") return true;
+    const xRenderer = (schema as { ["x-renderer"]?: string })["x-renderer"];
+    if (typeof xRenderer === "string" && matchIds.includes(xRenderer)) return true;
 
-  // Strict whitelist check — avoids misclassifying unrelated fields like
-  // `fromAddress` in a shipping schema.
-  const normalized = normalizeGmailSenderFieldName(fieldName);
-  if (!GMAIL_SENDER_FIELD_WHITELIST.has(normalized)) return false;
+    // Strict whitelist check — avoids misclassifying unrelated fields like
+    // `fromAddress` in a shipping schema.
+    const normalized = normalizeGmailSenderFieldName(fieldName);
+    if (!GMAIL_SENDER_FIELD_WHITELIST.has(normalized)) return false;
 
-  const type = (schema as { type?: string }).type;
-  const format = (schema as { format?: string }).format;
-  // Require string type and either no format or format=email.
-  return type === "string" && (format === undefined || format === "email");
-};
+    const type = (schema as { type?: string }).type;
+    const format = (schema as { format?: string }).format;
+    // Require string type and either no format or format=email.
+    return type === "string" && (format === undefined || format === "email");
+  };
 
 export function GmailSenderFieldRenderer({
   fieldName,

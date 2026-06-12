@@ -13,7 +13,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 
@@ -43,19 +42,10 @@ import type {
 //   }
 // ---------------------------------------------------------------------------
 
-// This renderer id is canonical. It is composed at render-time from the
-// template packageName and is never persisted, so paused runs do not
-// depend on renderer-id snapshots.
-export const CONTEXT_SELECTOR_RENDERER_ID =
-  "@cinatra-ai/context-selection-agent:context-selector";
-
-export const isContextSelectorField: FieldRendererCondition = (_f, schema) =>
-  (
-    [
-      CONTEXT_SELECTOR_RENDERER_ID,
-      "context-selector",
-    ] as string[]
-  ).includes((schema as { ["x-renderer"]?: string })["x-renderer"] ?? "");
+// Condition: registered from the context-selection agent's manifest binding
+// (kind "context-selector") with strict ID + bare-alias matching — see
+// register-default-renderers.ts. The canonical ID is extension-owned data;
+// this module names no extension.
 
 // ---------------------------------------------------------------------------
 // Value shape

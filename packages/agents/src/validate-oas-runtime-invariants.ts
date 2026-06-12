@@ -548,8 +548,8 @@ function scanAgentRunIdPropagation(flow: FlowComponent): ReviewFinding[] {
           `(OAS-RUNTIME-001). Add { "title": "agent_run_id", "type": "string" } ` +
           `to the ApiNode inputs[], and ensure a DataFlowEdge sources it from ` +
           `the StartNode (canonical pattern uses ` +
-          `start.cinatra_run_id → ${node.id}.agent_run_id; see ` +
-          `extensions/cinatra-ai/email-outreach-agent/cinatra/oas.json).`,
+          `start.cinatra_run_id → ${node.id}.agent_run_id; any bundled ` +
+          `flow agent's cinatra/oas.json shows the shape).`,
         location: `$referenced_components.${node.id} (Flow "${flow.flowId}")`,
         source: "deterministic",
       });

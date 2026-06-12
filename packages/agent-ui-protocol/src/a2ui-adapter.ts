@@ -22,17 +22,28 @@ const GROUPED_SETUP_FORM_RENDERER_ID = "@cinatra-ai/agent-builder:grouped-setup-
 const HITL_SURFACE_PREFIX = ":hitl:";
 
 // ---------------------------------------------------------------------------
-// Mid-run :output xRenderer dispatch table.
-// Keys are the locked xRenderer IDs. Each value is a MidRunTranslator
-// that produces 3 A2UI messages (createSurface + updateComponents + updateDataModel).
+// Mid-run xRenderer translator KINDS (cinatra#151 Stage 5).
+// This package owns the neutral translator primitives, keyed by kind name —
+// it names NO agent. WHICH xRenderer ID dispatches to which kind is
+// extension-owned data (each agent's `cinatra.fieldRenderers` declaration
+// carries an `a2uiTranslator` kind); the CALLER builds an id -> translator
+// resolver from those bindings and INJECTS it into the A2UiAdapter
+// constructor (packages/agents/src/field-renderer-bindings.server.ts).
+// Each translator produces 3 A2UI messages
+// (createSurface + updateComponents + updateDataModel).
 // ---------------------------------------------------------------------------
 
-const MID_RUN_TRANSLATORS: Record<string, MidRunTranslator> = {
-  "@cinatra-ai/email-recipient-selection-agent:output": translateRecipientsOutputToA2Ui,
-  "@cinatra-ai/email-drafting-agent:output": translateDraftsOutputToA2Ui,
-  "@cinatra-ai/email-follow-up-agent:output": translateFollowupsOutputToA2Ui,
-  "@cinatra-ai/email-delivery-agent:output": translateSendOutputToA2Ui,
+export const A2UI_MID_RUN_TRANSLATOR_KINDS: Readonly<Record<string, MidRunTranslator>> = {
+  "recipients-output": translateRecipientsOutputToA2Ui,
+  "drafts-output": translateDraftsOutputToA2Ui,
+  "followups-output": translateFollowupsOutputToA2Ui,
+  "send-output": translateSendOutputToA2Ui,
 };
+
+/** Resolver the host injects: full xRenderer ID -> mid-run translator. */
+export type MidRunTranslatorResolver = (
+  xRenderer: string,
+) => MidRunTranslator | undefined;
 
 // ---------------------------------------------------------------------------
 // Redis publisher — lazy-init singleton (same pattern as ag-ui-adapter.ts)
@@ -108,6 +119,13 @@ export class A2UiAdapter implements AgentUIAdapter {
     private readonly runId: string,
     private readonly threadId: string,
     private readonly publish: (message: A2UiMessage) => Promise<void>,
+    /**
+     * Injected mid-run translator resolution (cinatra#151 Stage 5): maps a
+     * gate's full xRenderer ID to a translator KIND via the manifest-declared
+     * bindings. Absent (tests/legacy constructions) => no mid-run translator
+     * dispatch, identical to an ID that had no MID_RUN_TRANSLATORS entry.
+     */
+    private readonly resolveMidRunTranslator?: MidRunTranslatorResolver,
   ) {}
 
   onRunStarted(): void {
@@ -160,13 +178,13 @@ export class A2UiAdapter implements AgentUIAdapter {
     // When the gate embedded a PresentationHint in values.presentation (see
     // packages/langgraph-agents/graphs/orchestrator_v1.py hitl_gate), use the
     // generic translateHintToA2UiMessages and skip the per-xRenderer
-    // MID_RUN_TRANSLATORS entry entirely. Fallback to MID_RUN_TRANSLATORS when
+    // injected mid-run translator entirely. Fallback to the injected resolver when
     // presentation is absent or malformed (defensive: null/non-object/array/
     // object-without-type all fall through).
     //
     // translateHintToA2UiMessages emits 2 messages (updateComponents +
     // updateDataModel). We prepend createSurface here so downstream consumers
-    // see the same 3-message shape that MID_RUN_TRANSLATORS entries produce.
+    // see the same 3-message shape that mid-run translators produce.
     // Missing createSurface would trigger "updateDataModel without matching
     // createSurface" in the A2UI harness.
     //
@@ -180,7 +198,7 @@ export class A2UiAdapter implements AgentUIAdapter {
     // TYPE GUARD: the check rejects null, non-objects, arrays
     // (typeof [] === "object"), and objects missing a string `type`
     // discriminator. This is tighter than a naive `typeof === "object"` check;
-    // arrays and shape-less objects fall through to MID_RUN_TRANSLATORS instead
+    // arrays and shape-less objects fall through to the injected resolver instead
     // of entering the generic dispatcher with invalid input.
     // ---------------------------------------------------------------------------
     const presentation = (values as { presentation?: unknown }).presentation;
@@ -211,8 +229,9 @@ export class A2UiAdapter implements AgentUIAdapter {
       return;
     }
 
-    // Mid-run :output xRenderers dispatch through MID_RUN_TRANSLATORS.
-    const midRunTranslator = MID_RUN_TRANSLATORS[xRenderer];
+    // Mid-run xRenderers dispatch through the INJECTED resolver (built from
+    // the manifest-declared bindings by the host caller).
+    const midRunTranslator = this.resolveMidRunTranslator?.(xRenderer);
     if (midRunTranslator) {
       const messages = midRunTranslator(surfaceId, schema, values, reviewTaskId);
       for (const msg of messages) {
@@ -221,9 +240,9 @@ export class A2UiAdapter implements AgentUIAdapter {
       return;
     }
 
-    // Setup-phase renderer — intentionally separate from MID_RUN_TRANSLATORS.
+    // Setup-phase renderer — intentionally separate from mid-run dispatch.
     // grouped-setup-form fires before the LangGraph run starts (TS execution layer),
-    // while MID_RUN_TRANSLATORS entries handle mid-run gates from LangGraph interrupts.
+    // while mid-run translator bindings handle mid-run gates from LangGraph interrupts.
     // Keeping them separate preserves the setup/mid-run distinction at the dispatch site.
     if (xRenderer !== GROUPED_SETUP_FORM_RENDERER_ID) return;
 

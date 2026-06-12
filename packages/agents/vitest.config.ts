@@ -179,10 +179,6 @@ export default defineConfig({
         root,
         "src/lib/blog/integration/register-object-types.ts",
       ),
-      "@cinatra-ai/openai-connector/actions": path.join(
-        root,
-        "extensions/cinatra-ai/openai-connector/src/actions.ts",
-      ),
       // Use the src DIRECTORY (not index.ts) so FLAT subpath imports resolve via
       // vite's natural extension resolution — same pattern + reason as
       // @cinatra-ai/objects / @cinatra-ai/skills above. The host-app
@@ -232,30 +228,10 @@ export default defineConfig({
       "@/components": path.join(root, "src/components"),
       // Host-app context tree used by @cinatra-ai/google-oauth-connection's settings-form.tsx.
       "@/context": path.join(root, "src/context"),
-      // The mcp-client connector and anthropic-connector are
-      // required by llm's registry imports.
-      "@cinatra-ai/mcp-client-connector": path.join(
-        root,
-        "extensions/cinatra-ai/mcp-client-connector/src/index.ts",
-      ),
-      // src-dir form (mirrors openai below) so subpath imports — the
-      // serverEntry loader's /register in the generated maps — resolve via
-      // vite's natural extension resolution; bare imports resolve to index.
-      "@cinatra-ai/anthropic-connector": path.join(
-        root,
-        "extensions/cinatra-ai/anthropic-connector/src",
-      ),
       "@cinatra-ai/a2a": path.join(root, "packages/a2a/src/index.ts"),
       "@cinatra-ai/metric-cost-api": path.join(
         root,
         "packages/metric-cost-api/src",
-      ),
-      // openai-connector is reached transitively via @/app/campaigns. Use
-      // src-dir form so subpath imports (e.g. /actions) resolve via vite's
-      // natural extension resolution.
-      "@cinatra-ai/openai-connector": path.join(
-        root,
-        "extensions/cinatra-ai/openai-connector/src",
       ),
       "@cinatra-ai/mcp-client": path.join(
         root,
@@ -264,6 +240,13 @@ export default defineConfig({
       // Host-app `@/app/*` for server actions referenced from connector
       // packages (e.g. google-oauth-connection).
       "@/app": path.join(root, "src/app"),
+      // NO extension package aliases here (cinatra#151 Stage 5c): every
+      // bundled extension — bare imports AND subpaths (/actions, /register,
+      // /mcp-module, ...) — resolves through `tsconfigPaths: true` reading
+      // the root tsconfig.json path maps (the epic's sanctioned per-extension
+      // resolution mechanism, maintained alongside each extension's exports).
+      // The historical explicit dir-form entries predated tsconfigPaths and
+      // are retired; only the deliberate test stubs above stay hand-written.
     },
   },
   test: {

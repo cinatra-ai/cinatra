@@ -5,20 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 
-export const isFollowUpCadenceField: FieldRendererCondition = (fieldName, schema) => {
-  const xRenderer = (schema as { ["x-renderer"]?: string })["x-renderer"];
-  // Match both the current renderer ID and the older email-drafting ID so
-  // stored interrupts continue to resolve.
-  return (
-    xRenderer === "@cinatra-ai/email-follow-up-agent:follow-up-cadence" ||
-    xRenderer === "@cinatra-ai/email-drafting-agent:follow-up-cadence" ||
-    xRenderer === "follow-up-cadence"
-  );
-};
+// Condition: registered from the manifest bindings (kind "follow-up-cadence"
+// — the follow-up agent's canonical ID, the older email-drafting compat ID,
+// and the bare alias) with strict matching — see register-default-renderers.ts.
 
 const ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"];
 

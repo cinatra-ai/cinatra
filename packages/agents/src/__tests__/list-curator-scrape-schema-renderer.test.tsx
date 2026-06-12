@@ -17,10 +17,9 @@ import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
-import {
-  ListCuratorScrapeSchemaRenderer,
-  isListCuratorScrapeSchemaField,
-} from "../list-curator-scrape-schema-renderer";
+import { ListCuratorScrapeSchemaRenderer } from "../list-curator-scrape-schema-renderer";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import type { FieldRendererContext } from "../field-renderer-registry";
 
 const MINIMAL_CONTEXT: FieldRendererContext = { connectedApps: [] };
@@ -56,26 +55,19 @@ describe("ListCuratorScrapeSchemaRenderer", () => {
     vi.restoreAllMocks();
   });
 
-  it("isListCuratorScrapeSchemaField matches only the exact scrape-schema-review id", () => {
+  it("the registry resolves only the exact scrape-schema-review id to this renderer", () => {
+    // Registry-driven condition (cinatra#151 Stage 5): the id comes from the
+    // list-curator-agent's manifest binding (kind "scrape-schema-review").
+    ensureDefaultFieldRenderersRegistered();
+    const resolveFor = (schema: Record<string, unknown>) =>
+      fieldRendererRegistry.resolve("", schema, MINIMAL_CONTEXT)?.renderer ?? null;
     expect(
-      isListCuratorScrapeSchemaField(
-        "",
-        {
-          "x-renderer": "@cinatra-ai/list-curator-agent:scrape-schema-review",
-        },
-        MINIMAL_CONTEXT,
-      ),
-    ).toBe(true);
+      resolveFor({ "x-renderer": "@cinatra-ai/list-curator-agent:scrape-schema-review" }),
+    ).toBe(ListCuratorScrapeSchemaRenderer);
     expect(
-      isListCuratorScrapeSchemaField(
-        "",
-        {
-          "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review",
-        },
-        MINIMAL_CONTEXT,
-      ),
-    ).toBe(false);
-    expect(isListCuratorScrapeSchemaField("", {}, MINIMAL_CONTEXT)).toBe(false);
+      resolveFor({ "x-renderer": "@cinatra-ai/list-curator-agent:final-list-review" }),
+    ).not.toBe(ListCuratorScrapeSchemaRenderer);
+    expect(resolveFor({})).not.toBe(ListCuratorScrapeSchemaRenderer);
   });
 
   it("renders Instructions textarea, Output schema textarea, seedUrls list, Approve + Reject buttons", () => {

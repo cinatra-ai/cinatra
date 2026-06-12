@@ -16,11 +16,12 @@ import {
 } from "@testing-library/react";
 import {
   ContextSelectorRenderer,
-  isContextSelectorField,
   groupCandidatesByScope,
   type ContextSelectorCandidate,
   type ContextSelectorValue,
 } from "../context-selector-renderer";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 afterEach(cleanup);
 
@@ -54,33 +55,29 @@ const CANDIDATE_PROJECT: ContextSelectorCandidate = {
   displayName: "Project ICP",
 };
 
-describe("isContextSelectorField (condition)", () => {
+describe("context-selector registry resolution (condition)", () => {
+  // The condition is registry-driven (cinatra#151 Stage 5): the canonical id
+  // comes from the context-selection-agent's manifest binding; the bare alias
+  // from the host kind table.
+  const resolveFor = (xRenderer: string) =>
+    fieldRendererRegistry.resolve(
+      "field",
+      { "x-renderer": xRenderer },
+      { connectedApps: [] },
+    );
   it("matches the canonical x-renderer id", () => {
+    ensureDefaultFieldRenderersRegistered();
     expect(
-      isContextSelectorField(
-        "field" as never,
-        { "x-renderer": "@cinatra-ai/context-selection-agent:context-selector" } as never,
-        { connectedApps: [] } as never,
-      ),
-    ).toBe(true);
+      resolveFor("@cinatra-ai/context-selection-agent:context-selector")?.renderer,
+    ).toBe(ContextSelectorRenderer);
   });
   it("matches the bare alias", () => {
-    expect(
-      isContextSelectorField(
-        "field" as never,
-        { "x-renderer": "context-selector" } as never,
-        { connectedApps: [] } as never,
-      ),
-    ).toBe(true);
+    ensureDefaultFieldRenderersRegistered();
+    expect(resolveFor("context-selector")?.renderer).toBe(ContextSelectorRenderer);
   });
   it("does NOT match unrelated renderers", () => {
-    expect(
-      isContextSelectorField(
-        "field" as never,
-        { "x-renderer": "list-picker" } as never,
-        { connectedApps: [] } as never,
-      ),
-    ).toBe(false);
+    ensureDefaultFieldRenderersRegistered();
+    expect(resolveFor("list-picker")?.renderer ?? null).not.toBe(ContextSelectorRenderer);
   });
 });
 

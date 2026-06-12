@@ -15,7 +15,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 
@@ -23,9 +22,8 @@ import type {
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isListCuratorFinalListField: FieldRendererCondition = (_f, schema) =>
-  (schema as { ["x-renderer"]?: string })["x-renderer"] ===
-  "@cinatra-ai/list-curator-agent:final-list-review";
+// Condition: registered from the manifest binding (kind "final-list-review")
+// with strict ID matching — see register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Value shape

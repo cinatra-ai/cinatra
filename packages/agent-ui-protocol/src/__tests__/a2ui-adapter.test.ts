@@ -1,6 +1,26 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { A2UiAdapter, __disconnectSharedA2UiPublisher } from "../a2ui-adapter";
+import {
+  A2UiAdapter,
+  __disconnectSharedA2UiPublisher,
+  A2UI_MID_RUN_TRANSLATOR_KINDS,
+} from "../a2ui-adapter";
 import type { A2UiMessage } from "../a2ui-messages";
+
+
+// Test resolver mirroring the manifest-declared bindings the host builds at
+// runtime (cinatra#151 Stage 5 — the adapter takes an INJECTED resolver; the
+// static dispatch table is retired). IDs here are test fixtures of the
+// extension-owned data contract.
+const TEST_MID_RUN_BINDINGS: Record<string, string> = {
+  "@cinatra-ai/email-recipient-selection-agent:output": "recipients-output",
+  "@cinatra-ai/email-drafting-agent:output": "drafts-output",
+  "@cinatra-ai/email-follow-up-agent:output": "followups-output",
+  "@cinatra-ai/email-delivery-agent:output": "send-output",
+};
+const testMidRunResolver = (xRenderer: string) => {
+  const kind = TEST_MID_RUN_BINDINGS[xRenderer];
+  return kind ? A2UI_MID_RUN_TRANSLATOR_KINDS[kind] : undefined;
+};
 
 afterAll(async () => { await __disconnectSharedA2UiPublisher(); });
 
@@ -134,7 +154,7 @@ describe("A2UiAdapter", () => {
 
   it("dispatches to recipients translator when xRenderer === '@cinatra-ai/email-recipient-selection-agent:output'", async () => {
     const messages: A2UiMessage[] = [];
-    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); });
+    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); }, testMidRunResolver);
     adapter.onInterrupt(
       { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
       "@cinatra-ai/email-recipient-selection-agent:output",
@@ -150,7 +170,7 @@ describe("A2UiAdapter", () => {
 
   it("dispatches to drafts translator when xRenderer === '@cinatra-ai/email-drafting-agent:output'", async () => {
     const messages: A2UiMessage[] = [];
-    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); });
+    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); }, testMidRunResolver);
     adapter.onInterrupt(
       { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
       "@cinatra-ai/email-drafting-agent:output",
@@ -165,7 +185,7 @@ describe("A2UiAdapter", () => {
 
   it("dispatches to send translator when xRenderer === '@cinatra-ai/email-delivery-agent:output'", async () => {
     const messages: A2UiMessage[] = [];
-    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); });
+    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); }, testMidRunResolver);
     adapter.onInterrupt(
       { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
       "@cinatra-ai/email-delivery-agent:output",
@@ -259,7 +279,7 @@ describe("A2UiAdapter", () => {
 
   it("absent values.presentation falls through to MID_RUN_TRANSLATORS (regression guard)", async () => {
     const messages: A2UiMessage[] = [];
-    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); });
+    const adapter = new A2UiAdapter("run-1", "tpl-1", async (m) => { messages.push(m); }, testMidRunResolver);
     adapter.onInterrupt(
       { type: "object", properties: { approved: { type: "boolean" } }, required: ["approved"] },
       "@cinatra-ai/email-recipient-selection-agent:output",
@@ -275,7 +295,7 @@ describe("A2UiAdapter", () => {
   it("malformed values.presentation (null/string/array/object-without-type) falls through to MID_RUN_TRANSLATORS", async () => {
     // null case
     const messagesNull: A2UiMessage[] = [];
-    const a1 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesNull.push(m); });
+    const a1 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesNull.push(m); }, testMidRunResolver);
     a1.onInterrupt(
       { type: "object", properties: {}, required: [] },
       "@cinatra-ai/email-recipient-selection-agent:output",
@@ -289,7 +309,7 @@ describe("A2UiAdapter", () => {
 
     // string case
     const messagesStr: A2UiMessage[] = [];
-    const a2 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesStr.push(m); });
+    const a2 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesStr.push(m); }, testMidRunResolver);
     a2.onInterrupt(
       { type: "object", properties: {}, required: [] },
       "@cinatra-ai/email-recipient-selection-agent:output",
@@ -304,7 +324,7 @@ describe("A2UiAdapter", () => {
     // array case — `typeof [] === "object"` is true, so a naive check would
     // accept it. The tightened guard must reject arrays explicitly.
     const messagesArr: A2UiMessage[] = [];
-    const a3 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesArr.push(m); });
+    const a3 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesArr.push(m); }, testMidRunResolver);
     a3.onInterrupt(
       { type: "object", properties: {}, required: [] },
       "@cinatra-ai/email-recipient-selection-agent:output",
@@ -320,7 +340,7 @@ describe("A2UiAdapter", () => {
     // discriminator field MUST be rejected by the guard (translator would
     // return null messages if it got in, but we prefer to never dispatch).
     const messagesNoType: A2UiMessage[] = [];
-    const a4 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesNoType.push(m); });
+    const a4 = new A2UiAdapter("run-1", "tpl-1", async (m) => { messagesNoType.push(m); }, testMidRunResolver);
     a4.onInterrupt(
       { type: "object", properties: {}, required: [] },
       "@cinatra-ai/email-recipient-selection-agent:output",

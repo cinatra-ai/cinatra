@@ -17,7 +17,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 import type {
-  FieldRendererCondition,
   FieldRendererProps,
 } from "./field-renderer-registry";
 
@@ -25,12 +24,9 @@ import type {
 // Condition
 // ---------------------------------------------------------------------------
 
-export const isListCuratorScrapeSchemaField: FieldRendererCondition = (
-  _f,
-  schema,
-) =>
-  (schema as { ["x-renderer"]?: string })["x-renderer"] ===
-  "@cinatra-ai/list-curator-agent:scrape-schema-review";
+// Condition: registered from the manifest binding (kind
+// "scrape-schema-review") with strict ID matching — see
+// register-default-renderers.ts.
 
 // ---------------------------------------------------------------------------
 // Value shape

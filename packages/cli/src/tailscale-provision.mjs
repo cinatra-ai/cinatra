@@ -151,11 +151,12 @@ export async function verifyRegisteredHostnameMatchesPrediction({
   dbUrl,
   schema,
 }) {
-  // Single source of truth — NEVER re-derive here. Loaded lazily so this module
-  // imports cleanly when the gitignored connector source is absent.
-  const { deriveDevTailscaleHostname } = await import(
-    "../../../extensions/cinatra-ai/tailscale-connector/src/tailscale-hostname.mjs"
-  );
+  // Single source of truth — NEVER re-derive here. Discovered + loaded lazily
+  // through the connector's `cinatra.devCliModules` manifest declaration
+  // (cinatra#151 Stage 5c) so this module imports cleanly when the gitignored
+  // connector source is absent and names no extension.
+  const { loadDevCliModule } = await import("./dev-cli-modules.mjs");
+  const { deriveDevTailscaleHostname } = await loadDevCliModule("tailscale-hostname");
   const predicted = deriveDevTailscaleHostname({ dbUrl, schema });
   const segment = extractTailscaleHostnameSegment(registered);
 
