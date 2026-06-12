@@ -268,14 +268,20 @@ function isRegistryRangeOrTag(spec) {
 
 /**
  * Closure-mode dependency-spec gate (review r0 finding 2, allowlisted per
- * r1 finding 1): the declared `dependencies` are the basis of the
- * publish-time SIGNED materialization plan, so in closure mode every spec
- * must be a registry spec — an explicit range/tag, or an `npm:` alias whose
- * target is a valid non-host-peer package name with a registry range/tag.
+ * r1 finding 1; aliases refused per the PR-2 merge-safe round): the declared
+ * `dependencies` are the basis of the publish-time SIGNED materialization
+ * plan, so in closure mode every spec must be a PLAIN registry spec — an
+ * explicit range / x-range / union / dist-tag under the dependency's REAL
+ * package name.
  *  - a host ABI peer as a dependency KEY is refused (never a closure library;
  *    the install gate refuses it too);
  *  - an `npm:` ALIAS whose target is a host ABI peer is refused (alias
  *    smuggling — the import would ride the alias key past the peer check);
+ *  - every OTHER `npm:` alias is refused too: the signed plan format
+ *    (`cinatra-materialization-plan/v1`) carries a SINGLE identity per node —
+ *    the `node_modules` placement name IS the registry package name — so an
+ *    aliased dependency (placement name != registry identity) is not
+ *    expressible. Depend on the real name instead;
  *  - everything else (file/link/workspace/portal/patch/catalog/git/
  *    GitHub-shorthand/URL/non-string/empty) is refused — the plan derives
  *    from a committed lockfile with REGISTRY sources only (the signer side
@@ -301,29 +307,27 @@ function assertClosureDependencySpecs(packageName, deps) {
       // scope marker).
       const sepIdx = aliasTarget.startsWith("@") ? aliasTarget.indexOf("@", 1) : aliasTarget.indexOf("@");
       const aliasBase = sepIdx === -1 ? aliasTarget : aliasTarget.slice(0, sepIdx);
-      const aliasRange = sepIdx === -1 ? null : aliasTarget.slice(sepIdx + 1);
       if (HOST_PROVIDED_PEERS.includes(aliasBase)) {
         throw new Error(
           `[build-server-entry] ${packageName}: dependency "${dep}" is an npm alias of host ABI peer ` +
             `"${aliasBase}" (${spec}) — host-provided peers can never be closure libraries, aliased or not.`,
         );
       }
-      if (NPM_PACKAGE_NAME_RE.test(aliasBase) && (aliasRange === null || isRegistryRangeOrTag(aliasRange))) {
-        continue; // a well-formed non-peer alias of a registry range/tag
-      }
       throw new Error(
-        `[build-server-entry] ${packageName}: dependency "${dep}" has a non-registry spec (${spec}) — ` +
-          `closure mode accepts ONLY registry ranges/tags or npm: aliases of them; the SIGNED ` +
-          `materialization plan derives from a committed lockfile with registry sources only.`,
+        `[build-server-entry] ${packageName}: dependency "${dep}" is an npm: alias (${spec}) — ` +
+          `the SIGNED materialization plan format (cinatra-materialization-plan/v1) carries a ` +
+          `single identity per node (the node_modules placement name IS the registry package ` +
+          `name), so aliased dependencies are not expressible in closure mode. ` +
+          `Depend on ${NPM_PACKAGE_NAME_RE.test(aliasBase) ? `"${aliasBase}"` : "the target package"} under its real name instead.`,
       );
     }
     if (spec === null || !isRegistryRangeOrTag(spec)) {
       throw new Error(
         `[build-server-entry] ${packageName}: dependency "${dep}" has a non-registry spec ` +
-          `(${spec === null ? JSON.stringify(rawSpec) : spec}) — closure mode accepts ONLY registry ` +
-          `ranges/tags or npm: aliases of them; the SIGNED materialization plan derives from a ` +
-          `committed lockfile with registry sources only (git/file/link/workspace/portal/patch/` +
-          `catalog/URL sources are refused at plan computation too).`,
+          `(${spec === null ? JSON.stringify(rawSpec) : spec}) — closure mode accepts ONLY plain ` +
+          `registry ranges/tags; the SIGNED materialization plan derives from a committed ` +
+          `lockfile with registry sources only (git/file/link/workspace/portal/patch/` +
+          `catalog/URL/alias sources are refused at plan computation too).`,
       );
     }
   }

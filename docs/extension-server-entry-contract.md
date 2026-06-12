@@ -120,7 +120,7 @@ the `--mode` CLI flag overrides it for TESTS ONLY.
 | | `"inline"` (default — field absent) | `"closure"` |
 |---|---|---|
 | esbuild externals | host ABI peers only | host ABI peers + declared runtime `dependencies` (incl. subpaths) |
-| packed `dependencies` | PRUNED | KEPT (basis of the signed plan; registry specs only — `npm:` aliases of host peers and git/file/link/workspace/URL specs refused) |
+| packed `dependencies` | PRUNED | KEPT (basis of the signed plan; PLAIN registry range/tag specs only — ALL `npm:` aliases refused because `cinatra-materialization-plan/v1` carries one identity per node (placement name == registry name); git/file/link/workspace/URL specs refused) |
 | residual-import rule | node builtins ONLY | node builtins ∪ declared `dependencies`; host peers refused; self-references traced INTO the scanned graph (never blanket-allowed) |
 | already-importable entry | verbatim passthrough | verbatim passthrough + residual VALIDATION (never re-bundled) |
 | no `serverEntry` | verbatim copy | verbatim copy (legal — the plan alone covers the deps) |

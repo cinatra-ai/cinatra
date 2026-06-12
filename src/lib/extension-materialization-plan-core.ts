@@ -32,6 +32,13 @@
 //     before hashing (transport-encoding agnostic);
 //   - execution-order projection (parents before children by placement
 //     nesting) and the gate-input projection (root dependency names).
+//
+// SINGLE IDENTITY PER NODE (PR-2 merge-safe round): a node's `node_modules`
+// placement name IS its registry package name — `npm:` ALIASED dependencies
+// (placement name != registry identity) are NOT expressible in this format
+// and are refused at build time (closure-mode builder) and at plan
+// computation (signer side). A future format version may add a separate
+// registry-identity field if aliases ever become necessary.
 
 import { createHash } from "node:crypto";
 

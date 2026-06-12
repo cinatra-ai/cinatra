@@ -21,6 +21,12 @@ contract** — the signer must reproduce them byte-identically.
 The fixture plan covers both duplicate classes (same name at two versions;
 same name@version at two placement paths) and a hoisted edge.
 
+SINGLE IDENTITY PER NODE: a node's `node_modules` placement name IS its
+registry package name. `npm:` ALIASED dependencies (placement name !=
+registry identity) are NOT expressible in `cinatra-materialization-plan/v1`;
+the closure-mode builder refuses them at build time and the signer must
+refuse them at plan computation (alongside git/file/link/workspace sources).
+
 Regeneration (only the derived files — the keypair is stable):
 
 ```

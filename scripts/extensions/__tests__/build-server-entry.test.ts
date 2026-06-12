@@ -723,9 +723,9 @@ describe("closure mode — review r0 refusal pins", () => {
       "git+https://github.com/a/b.git", "github:a/b", "a/b#main",
       "https://example.com/dep.tgz",
       // r1 finding 1 — allowlist coverage: protocols a denylist would miss,
-      // malformed aliases, non-string and empty specs.
+      // non-string and empty specs.
       "portal:../dep", "patch:dep@1.0.0#./p.patch", "catalog:default",
-      "ssh://git@host/a/b.git", "npm:ok-name@file:../x", "npm:Not A Name@^1.0.0",
+      "ssh://git@host/a/b.git",
       "", 7,
     ];
     for (const spec of refused) {
@@ -737,9 +737,22 @@ describe("closure mode — review r0 refusal pins", () => {
       );
       await expect(buildServerEntryPack({ packageDir: src }), `spec ${JSON.stringify(spec)}`).rejects.toThrow(/non-registry spec/);
     }
-    // …and a plain registry range, an x-range, a union, a tag, and a non-peer
-    // alias (with and without a range) all still pass.
-    for (const spec of ["^1.0.0", "1.x", ">=1.0.0 <2", "1.0.0 || 2.0.0", "latest", "*", "npm:other-lib@^2.0.0", "npm:@scope/other-lib"]) {
+    // EVERY non-peer npm: alias is refused — well-formed or not (PR-2
+    // merge-safe round: cinatra-materialization-plan/v1 carries a SINGLE
+    // identity per node — the node_modules placement name IS the registry
+    // package name — so an aliased dependency, whose placement name differs
+    // from its registry identity, is not expressible).
+    for (const spec of ["npm:other-lib@^2.0.0", "npm:@scope/other-lib", "npm:ok-name@file:../x", "npm:Not A Name@^1.0.0"]) {
+      const src = path.join(await tempDir("bse-alias-"), "pkg");
+      await writeFixture(
+        src,
+        { name: "x", version: "0.0.1", dependencies: { dep: spec }, cinatra: { kind: "connector", dependencyMode: "closure" } },
+        {},
+      );
+      await expect(buildServerEntryPack({ packageDir: src }), `spec ${JSON.stringify(spec)}`).rejects.toThrow(/npm: alias/);
+    }
+    // …and a plain registry range, an x-range, a union, and a tag all still pass.
+    for (const spec of ["^1.0.0", "1.x", ">=1.0.0 <2", "1.0.0 || 2.0.0", "latest", "*"]) {
       const src = path.join(await tempDir("bse-reg-"), "pkg");
       await writeFixture(
         src,
