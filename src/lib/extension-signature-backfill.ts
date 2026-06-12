@@ -75,7 +75,7 @@ export type SignatureBackfillDeps = {
    */
   writeBackfilledSignature: (
     id: string,
-    verified: { packageName: string; version: string; integrity: string },
+    verified: { packageName: string; version: string; integrity: string; closureHash?: string | null },
     signature: string,
   ) => Promise<"written" | "skipped-changed">;
   perRowTimeoutMs?: number;
@@ -90,10 +90,10 @@ export type SignatureBackfillDeps = {
  */
 export function casShouldWrite(
   current:
-    | { status: string; source: { type: string; signature?: string; packageName?: string; version?: string; integrity?: string } }
+    | { status: string; source: { type: string; signature?: string; packageName?: string; version?: string; integrity?: string; closureHash?: string } }
     | null
     | undefined,
-  verified: { packageName: string; version: string; integrity: string },
+  verified: { packageName: string; version: string; integrity: string; closureHash?: string | null },
 ): boolean {
   if (!current || current.status !== "active") return false;
   const s = current.source;
@@ -102,7 +102,11 @@ export function casShouldWrite(
     !s.signature &&
     s.packageName === verified.packageName &&
     s.version === verified.version &&
-    s.integrity === verified.integrity
+    s.integrity === verified.integrity &&
+    // cinatra#181: the closureHash the signature was verified against must
+    // still be the row's recorded one — a concurrent closure-state change
+    // between scan and write invalidates the verdict (fail-closed skip).
+    (s.closureHash ?? null) === (verified.closureHash ?? null)
   );
 }
 
@@ -181,7 +185,7 @@ export async function runExtensionSignatureBackfill(
         }
         // COMPARE-AND-SET: re-read + write only if the row still matches what we
         // verified (a concurrent update/reinstall cannot be clobbered).
-        const outcome = await deps.writeBackfilledSignature(row.id, { packageName, version, integrity }, served);
+        const outcome = await deps.writeBackfilledSignature(row.id, { packageName, version, integrity, closureHash }, served);
         if (outcome === "written") written++;
         else {
           skipped++;

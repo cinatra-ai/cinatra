@@ -64,7 +64,7 @@ describe("runExtensionSignatureBackfill — fail-closed instance signature backf
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]).toEqual([
       "inst-1",
-      { packageName: "@cinatra-ai/notes-connector", version: "1.2.0", integrity: "sha512-STORED" },
+      { packageName: "@cinatra-ai/notes-connector", version: "1.2.0", integrity: "sha512-STORED", closureHash: null },
       "SIG-OK",
     ]);
   });

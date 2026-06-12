@@ -360,7 +360,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
       // inert, so there is NO journal row and NOTHING to roll back.
       expect(h.events).not.toContain("begin");
       expect(h.events).not.toContain("phase:rolled_back");
-      expect(h.events).not.toContain("grant:requested");
+      expect(h.events).not.toContain("grant:request");
     } finally {
       if (prev === undefined) delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
       else process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = prev;
