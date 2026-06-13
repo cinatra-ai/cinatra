@@ -207,6 +207,20 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/chat",
     "@cinatra-ai/registries",
   ],
+  async headers() {
+    return [
+      {
+        // cinatra#221: the Connect consent screen issues an authorization code
+        // appended to a cross-origin 302 to the CMS callback. Set
+        // Referrer-Policy: no-referrer so the short-lived code is never leaked
+        // via the Referer header on that hop (belt-and-suspenders on top of the
+        // browser's default cross-origin stripping; covers the dev loopback
+        // same-origin case too). The page carries no other sensitive content.
+        source: "/connect/authorize",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+    ];
+  },
   async redirects() {
     return [
       {
