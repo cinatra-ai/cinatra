@@ -38,6 +38,26 @@ export type {
   HostPortName,
 } from "./host-context";
 
+// Author-facing local test harness (cinatra-engineering#163, SDK-P1). The
+// runtime impl is the dependency-free ./test-host-context.mjs (shared with the
+// release-tooling validator / canary). Also reachable via the
+// `@cinatra-ai/sdk-extensions/test-host-context` subpath.
+export {
+  createTestHostContext,
+  summarizeRecorder,
+  sanitizeAtom,
+  bindTestProviderIdentity,
+  isReservedHostProviderIdentity,
+  TEST_HOST_PORT_NAMES,
+  TEST_AMBIENT_PORTS,
+  HOST_RESERVED_PROVIDER_NAMESPACE,
+} from "./test-host-context";
+export type {
+  TestHostRecorder,
+  CreateTestHostContextOptions,
+  CreateTestHostContextResult,
+} from "./test-host-context";
+
 export {
   SDK_EXTENSIONS_ABI_VERSION,
   EXTENSION_PACKAGE_EXPORT_CONTRACTS,
