@@ -18,7 +18,9 @@ import {
   resolveDependencyMode,
   DEPENDENCY_MODES,
   HOST_PROVIDED_PEERS,
+  KNOWN_OPTIONAL_RESIDUAL_REQUIRES,
   KNOWN_OPTIONAL_NATIVE_ADDONS,
+  isKnownOptionalResidualRequire,
   isKnownOptionalNativeAddon,
   assertAllowlistedAddonsAreGuarded,
 } from "../build-server-entry.mjs";
@@ -105,37 +107,50 @@ describe("inlined resolver parity with the SDK (the §4.1 lockstep pin)", () => 
     expect(new Set(HOST_PROVIDED_PEERS)).toEqual(HOST_PROVIDED_PACKAGES);
   });
 
-  // Known-optional native-addon allowlist (the ONLY residual externals tolerated
-  // besides node builtins): ws's bufferutil/utf-8-validate, loaded via a guarded
-  // require() with a pure-JS fallback. The residual gate stays fail-closed for
-  // everything else — an un-allowlisted native addon, a host peer, a relative.
-  it("the native-addon allowlist is exactly the two ws optional peers, frozen", () => {
-    expect(KNOWN_OPTIONAL_NATIVE_ADDONS).toEqual(["bufferutil", "utf-8-validate"]);
-    expect(Object.isFrozen(KNOWN_OPTIONAL_NATIVE_ADDONS)).toBe(true);
+  // Known-optional residual-require allowlist (the ONLY residual externals
+  // tolerated besides node builtins): ws's bufferutil/utf-8-validate native
+  // addons + debug's pure-JS supports-color, each loaded via a guarded require()
+  // with a working absent-path fallback. The residual gate stays fail-closed for
+  // everything else — an un-allowlisted optional, a host peer, a relative.
+  it("the residual-require allowlist is exactly the three known guarded optionals, frozen", () => {
+    expect(KNOWN_OPTIONAL_RESIDUAL_REQUIRES).toEqual(["bufferutil", "utf-8-validate", "supports-color"]);
+    expect(Object.isFrozen(KNOWN_OPTIONAL_RESIDUAL_REQUIRES)).toBe(true);
+    // Back-compat alias (pre-generalization name from cinatra#207) points at the
+    // SAME frozen array — both the list and the predicate are aliases.
+    expect(KNOWN_OPTIONAL_NATIVE_ADDONS).toBe(KNOWN_OPTIONAL_RESIDUAL_REQUIRES);
+    expect(isKnownOptionalNativeAddon).toBe(isKnownOptionalResidualRequire);
   });
 
-  it("isKnownOptionalNativeAddon accepts ONLY the exact allowlisted addon via a guarded require-call", () => {
+  it("isKnownOptionalResidualRequire accepts ONLY an exact allowlisted optional via a guarded require-call", () => {
     // The verified-safe form: exact specifier, kind: "require-call".
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "require-call" })).toBe(true);
-    expect(isKnownOptionalNativeAddon({ path: "utf-8-validate", kind: "require-call" })).toBe(true);
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil", kind: "require-call" })).toBe(true);
+    expect(isKnownOptionalResidualRequire({ path: "utf-8-validate", kind: "require-call" })).toBe(true);
+    // supports-color (debug's pure-JS optional color probe) — same rule.
+    expect(isKnownOptionalResidualRequire({ path: "supports-color", kind: "require-call" })).toBe(true);
 
-    // fail-closed: a STATIC import (uncatchable → would ENOENT at activation).
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "import-statement" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil", kind: "dynamic-import" })).toBe(false);
+    // fail-closed: a STATIC import (uncatchable → would ENOENT/MODULE_NOT_FOUND).
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil", kind: "import-statement" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "supports-color", kind: "import-statement" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil", kind: "dynamic-import" })).toBe(false);
 
     // fail-closed: any subpath / traversal lookalike never matches (exact-only),
     // so an allowlisted base can never smuggle a host peer or undeclared dep.
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil/fallback", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil/../left-pad", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil/../@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "bufferutil-evil", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil/fallback", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil/../left-pad", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "supports-color/../@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "supports-color/index", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "bufferutil-evil", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "supports-color-evil", kind: "require-call" })).toBe(false);
 
-    // fail-closed: un-allowlisted addon, host peer, relative/absolute, malformed.
-    expect(isKnownOptionalNativeAddon({ path: "better-sqlite3", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon({ path: "./local", kind: "require-call" })).toBe(false);
-    expect(isKnownOptionalNativeAddon(undefined)).toBe(false);
-    expect(isKnownOptionalNativeAddon("bufferutil")).toBe(false);
+    // fail-closed: un-allowlisted optional, host peer, relative/absolute, malformed.
+    expect(isKnownOptionalResidualRequire({ path: "better-sqlite3", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "@cinatra-ai/sdk-extensions", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire({ path: "./local", kind: "require-call" })).toBe(false);
+    expect(isKnownOptionalResidualRequire(undefined)).toBe(false);
+    expect(isKnownOptionalResidualRequire("bufferutil")).toBe(false);
+
+    // back-compat alias behaves identically.
+    expect(isKnownOptionalNativeAddon({ path: "supports-color", kind: "require-call" })).toBe(true);
   });
 
   it("assertAllowlistedAddonsAreGuarded accepts a try-guarded require, refuses an unguarded one", () => {
@@ -177,6 +192,15 @@ describe("inlined resolver parity with the SDK (the §4.1 lockstep pin)", () => 
     // and a STRING "} finally" must not break a real catch.
     const fakeFinallyString = 'try {\n  const b = __require("bufferutil");\n  const s = "} finally";\n} catch (e) {}\n';
     expect(() => assertAllowlistedAddonsAreGuarded(fakeFinallyString, "x")).not.toThrow();
+
+    // supports-color: debug's emitted shape — guarded require inside try { … } catch.
+    const scGuarded =
+      'exports.colors = [6, 2, 3, 4, 5, 1];\ntry {\n  const supportsColor = __require("supports-color");\n  if (supportsColor) exports.colors = [20, 21];\n} catch (error51) {}\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(scGuarded, "x")).not.toThrow();
+
+    // supports-color unguarded → refused (would MODULE_NOT_FOUND at activation).
+    const scUnguarded = 'const sc = __require("supports-color");\n';
+    expect(() => assertAllowlistedAddonsAreGuarded(scUnguarded, "x")).toThrow(/OUTSIDE a try\/catch guard/);
   });
 });
 
@@ -606,6 +630,71 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
     );
     await expect(buildServerEntryPack({ packageDir: src })).rejects.toThrow(
       /imports host ABI peer "@cinatra-ai\/sdk-extensions" at runtime/,
+    );
+  });
+
+  // codex e121 MUST-FIX: the passthrough was previously guard-scanned ONLY via
+  // the residual classifier, which tolerates an allowlisted optional
+  // (supports-color) on the exact-specifier + require-call rule but did NOT
+  // prove it try/catch-guarded. A publisher-prebuilt artifact with an UNGUARDED
+  // require("supports-color") would pass the classifier yet MODULE_NOT_FOUND at
+  // activation. The passthrough now guard-scans the prebuilt artifact text too.
+  it("closure passthrough REFUSES an UNGUARDED allowlisted require (supports-color)", async () => {
+    const src = path.join(await tempDir("bse-closure-sc-unguarded-"), "pkg");
+    const entry =
+      'import { createRequire } from "node:module";\n' +
+      "const __require = createRequire(import.meta.url);\n" +
+      'const sc = __require("supports-color");\n' +
+      "export function register() { void sc; }\n";
+    await writeFixture(
+      src,
+      { name: "x", version: "0.0.1", cinatra: { kind: "connector", serverEntry: "./register.mjs", dependencyMode: "closure" } },
+      { "register.mjs": entry },
+    );
+    await expect(buildServerEntryPack({ packageDir: src })).rejects.toThrow(
+      /require\("supports-color"\) OUTSIDE a try\/catch guard/,
+    );
+  });
+
+  it("closure passthrough ACCEPTS a GUARDED allowlisted require (supports-color)", async () => {
+    const src = path.join(await tempDir("bse-closure-sc-guarded-"), "pkg");
+    const entry =
+      'import { createRequire } from "node:module";\n' +
+      "const __require = createRequire(import.meta.url);\n" +
+      "let sc = null;\n" +
+      'try { sc = __require("supports-color"); } catch (e) {}\n' +
+      "export function register() { void sc; }\n";
+    await writeFixture(
+      src,
+      { name: "x", version: "0.0.1", cinatra: { kind: "connector", serverEntry: "./register.mjs", dependencyMode: "closure" } },
+      { "register.mjs": entry },
+    );
+    const result = await buildServerEntryPack({ packageDir: src });
+    tempDirs.push(path.dirname(result.packDir));
+    expect(result.mode).toBe("passthrough");
+    // verbatim passthrough — the guarded require ships unchanged.
+    expect(await readFile(path.join(result.packDir, "register.mjs"), "utf8")).toBe(entry);
+  });
+
+  // codex e121 r2 MUST-FIX: the passthrough guard-scan must cover the WHOLE
+  // local transitive graph, not just the entry file. An unguarded allowlisted
+  // require hidden in a LOCAL module the entry imports (./probe.mjs) would
+  // otherwise slip the entry-only scan and MODULE_NOT_FOUND at activation.
+  it("closure passthrough REFUSES an UNGUARDED allowlisted require in a TRANSITIVE local module", async () => {
+    const src = path.join(await tempDir("bse-closure-sc-transitive-"), "pkg");
+    const entry =
+      'import { probe } from "./probe.mjs";\n' + "export function register() { void probe; }\n";
+    const probe =
+      'import { createRequire } from "node:module";\n' +
+      "const __require = createRequire(import.meta.url);\n" +
+      'export const probe = __require("supports-color");\n';
+    await writeFixture(
+      src,
+      { name: "x", version: "0.0.1", cinatra: { kind: "connector", serverEntry: "./register.mjs", dependencyMode: "closure" } },
+      { "register.mjs": entry, "probe.mjs": probe },
+    );
+    await expect(buildServerEntryPack({ packageDir: src })).rejects.toThrow(
+      /require\("supports-color"\) OUTSIDE a try\/catch guard/,
     );
   });
 

@@ -174,64 +174,89 @@ function basePackageOfSpecifier(spec) {
 }
 
 // ---------------------------------------------------------------------------
-// Known-optional native-addon allowlist (the ONLY residual externals tolerated
-// besides node builtins). esbuild cannot inline a `.node` native addon, so such
-// a package survives as a residual `require()` in the bundle. The general rule
-// MUST stay fail-closed — an unresolvable bare import would ENOENT at
-// activation — so this allowlist is exhaustively enumerated, never a heuristic.
+// Known-optional residual-require allowlist (the ONLY residual externals
+// tolerated besides node builtins). When a dependency loads an OPTIONAL module
+// that esbuild cannot inline, that module survives as a residual `require()` in
+// the bundle. The general rule MUST stay fail-closed — an unresolvable bare
+// import would ENOENT/MODULE_NOT_FOUND at activation — so this allowlist is
+// exhaustively enumerated, never a heuristic.
 //
-// Each entry is a `ws` OPTIONAL native peer (`ws` is reached transitively
-// through `openai`'s websocket transport) that `ws` loads behind a GUARDED
-// `require()` inside try/catch with an ALREADY-ACTIVE pure-JS fallback:
+// The invariant for EVERY entry, regardless of whether the optional is a native
+// `.node` addon or a pure-JS module, is identical:
+//   (a) EXACT specifier (no subpath surface), loaded as
+//   (b) a GUARDED `require()` inside `try { … } catch` (esbuild emits it as a
+//       `kind: "require-call"` via the module-scoped `createRequire` banner),
+//   (c) with an ALREADY-ACTIVE fallback when the optional is ABSENT (a pure-JS
+//       code path, or a harmless no-op).
 //   try { const x = require('bufferutil'); /* fast path */ }
-//   catch (e) { /* Continue regardless — the pure-JS path stays installed */ }
-// esbuild emits exactly that as a `require-call` (kind: "require-call", via the
-// module-scoped `createRequire` banner), so at runtime in the store dir the
-// require throws, the catch swallows it, and `ws` runs in pure JS. The built
-// `register.mjs` therefore imports cleanly with these addons ABSENT — verified
-// by executing the bundle under bare node with neither addon resolvable.
+//   catch (e) { /* Continue regardless — the fallback path stays installed */ }
+// At runtime in the store dir the require throws, the catch swallows it, and the
+// dependency runs in its fallback. The built `register.mjs` therefore imports
+// cleanly with the optional ABSENT — verified by executing the bundle under bare
+// node with the optional unresolvable.
 //
-// This is NOT a general "allow native addons" relaxation: a native addon loaded
-// via a STATIC/unguarded import (no try/catch fallback) would crash activation,
-// and is correctly still refused because it is not on this list. Any new entry
-// must be re-proven to carry a pure-JS fallback before being added.
+// Current entries:
+//   - `bufferutil` / `utf-8-validate`: `ws`'s optional NATIVE addons (reached
+//     transitively through `openai`'s websocket transport). esbuild cannot
+//     inline a `.node` addon, so it survives as a guarded residual require;
+//     `ws` falls back to pure JS.
+//   - `supports-color`: `debug`'s optional PURE-JS color probe (reached e.g.
+//     through `@nangohq/node → axios → https-proxy-agent → debug`). It is an
+//     UNINSTALLED optional of `debug` (`debug/src/node.js`:
+//       try { const supportsColor = require('supports-color'); … } catch {}),
+//     so it is unresolvable at build, survives as a guarded residual require,
+//     and `debug` falls back to monochrome output when it is absent.
+//
+// This is NOT a general "allow optionals" relaxation: an optional loaded via a
+// STATIC/unguarded import (no try/catch fallback) would crash activation, and is
+// correctly still refused because it is not on this list. Any new entry must be
+// re-proven to carry a working absent-path fallback before being added.
 // ---------------------------------------------------------------------------
-export const KNOWN_OPTIONAL_NATIVE_ADDONS = Object.freeze(["bufferutil", "utf-8-validate"]);
+export const KNOWN_OPTIONAL_RESIDUAL_REQUIRES = Object.freeze(["bufferutil", "utf-8-validate", "supports-color"]);
+
+// Back-compat alias for the pre-generalization name (the list was originally
+// native-addon-only; cinatra#207). Kept so any external importer keeps working;
+// the canonical name is KNOWN_OPTIONAL_RESIDUAL_REQUIRES.
+export const KNOWN_OPTIONAL_NATIVE_ADDONS = KNOWN_OPTIONAL_RESIDUAL_REQUIRES;
 
 /**
  * True ONLY for a residual import that is BOTH:
- *   (1) an EXACT allowlisted specifier — `bufferutil` / `utf-8-validate` with NO
- *       subpath. `ws` loads them as bare `require('bufferutil')`; an addon is a
- *       single `.node` binding with no subpath surface. Exact-match (not
- *       base-package) so a traversal lookalike (`bufferutil/../left-pad`,
- *       `bufferutil/../@cinatra-ai/sdk-extensions`, `bufferutil/foo`) can NEVER
- *       ride the allowlisted base past the host-peer / declared-dep gates
+ *   (1) an EXACT allowlisted specifier — `bufferutil` / `utf-8-validate` /
+ *       `supports-color` with NO subpath. The deps load them as bare
+ *       `require('bufferutil')` / `require('supports-color')`; each is a single
+ *       module with no subpath surface. Exact-match (not base-package) so a
+ *       traversal lookalike (`bufferutil/../left-pad`,
+ *       `supports-color/../@cinatra-ai/sdk-extensions`, `bufferutil/foo`) can
+ *       NEVER ride the allowlisted base past the host-peer / declared-dep gates
  *       (codex r-openai finding 1); AND
  *   (2) a GUARDED `require-call` (esbuild `kind: "require-call"`). The whole
- *       safety property is that the require throws inside ws's try/catch and the
- *       pure-JS fallback takes over. A STATIC `import "bufferutil"` (or any other
- *       kind) is uncatchable at module-eval and would ENOENT at activation, so
- *       it is NOT allowlisted — it stays refused (codex r-openai findings 2/3).
+ *       safety property is that the require throws inside the dep's try/catch and
+ *       the absent-path fallback takes over. A STATIC `import "bufferutil"` (or
+ *       any other kind) is uncatchable at module-eval and would ENOENT /
+ *       MODULE_NOT_FOUND at activation, so it is NOT allowlisted — it stays
+ *       refused (codex r-openai findings 2/3).
  * Fail-closed: anything not exactly enumerated AND require-call returns false.
  * @param {{ path?: unknown, kind?: unknown }} imp - the esbuild metafile import record.
  */
 /**
- * Verify that EVERY occurrence of an allowlisted-addon `require(...)` in the
- * EMITTED bundle text sits inside a `try { … }` block (codex r-openai-2 MED:
- * esbuild's `kind: "require-call"` proves it is a CJS require, not a static
+ * Verify that EVERY occurrence of an allowlisted-optional `require(...)` in the
+ * EMITTED bundle text sits inside a `try { … } catch` block (codex r-openai-2
+ * MED: esbuild's `kind: "require-call"` proves it is a CJS require, not a static
  * import, but does NOT prove it is GUARDED — an UNGUARDED top-level
- * `require("bufferutil")` would still ENOENT at activation when the addon is
- * absent). esbuild emits the inlined CJS guard verbatim as
- *   `try { … const x = <REQ>("bufferutil"); … } catch (e) { … }`
+ * `require("bufferutil")` would still ENOENT/MODULE_NOT_FOUND at activation when
+ * the optional is absent). esbuild emits the inlined CJS guard verbatim as
+ *   `try { … const x = <REQ>("supports-color"); … } catch (e) { … }`
  * where `<REQ>` is the banner's module-scoped require (commonly minified to
  * `__require`). For each match we walk BACKWARD through the brace structure: at
  * every unmatched `{` opener we hit, if its head is a `try` we accept; if we
  * exit the enclosing function/program scope first, the require is UNGUARDED and
- * we refuse. This makes the allowlist mean exactly "ws's guarded optional
- * fallback", fail-closed, instead of "any require-call to these names". Applies
- * to bundles THIS builder emits (inline + closure bundle modes); a verbatim
- * prebuilt closure passthrough is the publisher's own artifact and is bounded
- * by the exact-specifier require-call rule plus the residual scan.
+ * we refuse. This makes the allowlist mean exactly "a guarded optional with a
+ * working absent-path fallback", fail-closed, instead of "any require-call to
+ * these names". Applies UNIFORMLY to EVERY bundle whose residual the allowlist
+ * tolerates — inline mode, closure bundle mode, AND the prebuilt closure
+ * passthrough (codex e121 MUST-FIX: the passthrough guard-scan was previously
+ * absent, so an unguarded allowlisted require in a publisher-prebuilt artifact
+ * could slip the residual classifier; it is now scanned too).
  *
  * @param {string} bundleText  emitted register.mjs source
  * @param {string} packageName for the error message
@@ -249,12 +274,13 @@ export function assertAllowlistedAddonsAreGuarded(bundleText, packageName) {
   // string literal we must see), then reject any match whose require IDENTIFIER
   // lands in a blanked (comment/string) region of the neutralized view.
   const code = neutralizeLiteralsAndComments(bundleText);
-  for (const addon of KNOWN_OPTIONAL_NATIVE_ADDONS) {
+  for (const optional of KNOWN_OPTIONAL_RESIDUAL_REQUIRES) {
     // A `require`-style identifier (require / __require / a-renamed-require) +
-    // `("<addon>")`, matched on the raw bundle. `addon` is FULLY regex-escaped
-    // (every metacharacter incl. backslash) — the allowlist is constant today,
-    // but a partial escape is a latent injection/escaping hazard if it grows.
-    const requireCallRe = new RegExp(`\\b[\\w$]*require[\\w$]*\\s*\\(\\s*(['"])${escapeRegExp(addon)}\\1\\s*\\)`, "g");
+    // `("<optional>")`, matched on the raw bundle. `optional` is FULLY
+    // regex-escaped (every metacharacter incl. backslash) — the allowlist is
+    // constant today, but a partial escape is a latent injection/escaping hazard
+    // if it grows.
+    const requireCallRe = new RegExp(`\\b[\\w$]*require[\\w$]*\\s*\\(\\s*(['"])${escapeRegExp(optional)}\\1\\s*\\)`, "g");
     let m;
     while ((m = requireCallRe.exec(bundleText)) !== null) {
       // A `require` whose identifier sits in a comment/string (blanked) is not a
@@ -262,10 +288,10 @@ export function assertAllowlistedAddonsAreGuarded(bundleText, packageName) {
       if (code[m.index] === " " || code[m.index] === "\n") continue;
       if (!isInsideTryBlock(code, m.index)) {
         throw new Error(
-          `[build-server-entry] ${packageName}: the bundled server entry calls require("${addon}") ` +
-            `OUTSIDE a try/catch guard. The known-optional native-addon allowlist covers ONLY a guarded ` +
-            `optional require with a pure-JS fallback (as \`ws\` ships it); an unguarded require would fail ` +
-            `activation when the addon is absent. Inline it or guard it.`,
+          `[build-server-entry] ${packageName}: the bundled server entry calls require("${optional}") ` +
+            `OUTSIDE a try/catch guard. The known-optional residual-require allowlist covers ONLY a guarded ` +
+            `optional require with a working absent-path fallback (as \`ws\`/\`debug\` ship it); an unguarded ` +
+            `require would fail activation when the optional is absent. Inline it or guard it.`,
         );
       }
     }
@@ -372,13 +398,16 @@ function neutralizeLiteralsAndComments(s) {
   return out;
 }
 
-export function isKnownOptionalNativeAddon(imp) {
+export function isKnownOptionalResidualRequire(imp) {
   if (!imp || typeof imp !== "object") return false;
   if (imp.kind !== "require-call") return false;
-  // EXACT specifier (no subpath) — KNOWN_OPTIONAL_NATIVE_ADDONS holds the only
-  // legal whole specifiers; a subpath/lookalike never matches.
-  return KNOWN_OPTIONAL_NATIVE_ADDONS.includes(imp.path);
+  // EXACT specifier (no subpath) — KNOWN_OPTIONAL_RESIDUAL_REQUIRES holds the
+  // only legal whole specifiers; a subpath/lookalike never matches.
+  return KNOWN_OPTIONAL_RESIDUAL_REQUIRES.includes(imp.path);
 }
+
+// Back-compat alias for the pre-generalization name (cinatra#207).
+export const isKnownOptionalNativeAddon = isKnownOptionalResidualRequire;
 
 // ---------------------------------------------------------------------------
 // Dependency mode (cinatra#181) — inline-and-prune vs declare-and-closure.
@@ -431,13 +460,16 @@ function classifyClosureResidualImport(imp, { declaredDeps }) {
       `(take values via ctx capabilities) in EVERY dependency mode`
     );
   }
-  // Known-optional native addon (e.g. ws's bufferutil/utf-8-validate): allowed
-  // in EVERY dependency mode — but ONLY as the exact specifier via a GUARDED
-  // require-call (the guarded `require()` falls back to pure JS when the addon
-  // is absent from the store dir). A subpath/lookalike or a static import is
-  // NOT allowlisted, so it can never smuggle a peer/undeclared dep past this
-  // gate (the full import record carries `kind`).
-  if (isKnownOptionalNativeAddon(imp)) return null;
+  // Known-optional residual require (e.g. ws's bufferutil/utf-8-validate native
+  // addons, or debug's pure-JS supports-color): allowed in EVERY dependency mode
+  // — but ONLY as the exact specifier via a GUARDED require-call (the guarded
+  // `require()` falls back to its absent-path when the optional is missing from
+  // the store dir). A subpath/lookalike or a static import is NOT allowlisted, so
+  // it can never smuggle a peer/undeclared dep past this gate (the full import
+  // record carries `kind`). The try/catch-guardedness of these residuals is
+  // additionally proven by assertAllowlistedAddonsAreGuarded over the emitted
+  // bundle (inline, closure-bundle, AND closure-passthrough).
+  if (isKnownOptionalResidualRequire(imp)) return null;
   if (base !== null && declaredDeps.has(base)) {
     // Subpath-safety (review r2 finding 1): `dep/../left-pad/...` shares
     // the `dep` base but Node-resolves OUTSIDE the declared package. The
@@ -865,20 +897,21 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
       }
     }
   } else {
-    // Allow node builtins AND the known-optional native-addon allowlist (ws's
-    // bufferutil/utf-8-validate — exact specifier via a GUARDED require-call,
-    // which falls back to pure JS); everything else (host peers, un-inlinable
-    // deps, un-allowlisted native addons, static imports) is refused, fail-closed.
+    // Allow node builtins AND the known-optional residual-require allowlist (ws's
+    // bufferutil/utf-8-validate native addons + debug's pure-JS supports-color —
+    // exact specifier via a GUARDED require-call, which falls back to its
+    // absent-path); everything else (host peers, un-inlinable deps, un-allowlisted
+    // optionals, static imports) is refused, fail-closed.
     const residual = residualImports
-      .filter((imp) => !isNodeBuiltin(imp.path) && !isKnownOptionalNativeAddon(imp))
+      .filter((imp) => !isNodeBuiltin(imp.path) && !isKnownOptionalResidualRequire(imp))
       .map((imp) => imp.path);
     if (residual.length > 0) {
       throw new Error(
         `[build-server-entry] ${name}: the bundled server entry still imports ${residual
           .map((s) => `"${s}"`)
           .join(", ")} at runtime. A publishable server entry may import only node builtins ` +
-          `(plus the known-optional native addons ${KNOWN_OPTIONAL_NATIVE_ADDONS.map((s) => `"${s}"`).join(", ")}, ` +
-          `which fall back to pure JS) — host-provided peers must stay type-only (take values via ctx ` +
+          `(plus the known-optional residual requires ${KNOWN_OPTIONAL_RESIDUAL_REQUIRES.map((s) => `"${s}"`).join(", ")}, ` +
+          `which fall back to an absent-path) — host-provided peers must stay type-only (take values via ctx ` +
           `capabilities), and every other runtime dependency must be inlinable into the bundle.`,
       );
     }
@@ -1023,6 +1056,25 @@ async function validateClosureEntryImports({ esbuild, entryAbs, pkgDir, packageN
         throw new Error(`[build-server-entry] ${packageName}: the prebuilt server entry "${entryRel}" ${refusal}.`);
       }
     }
+  }
+  // Guard-scan the prebuilt closure graph (codex e121 MUST-FIX, r2). The
+  // residual classifier above tolerates an allowlisted optional (e.g.
+  // supports-color) on the exact-specifier + require-call rule, but — unlike
+  // inline/closure-bundle mode — the passthrough was NOT additionally proven
+  // try/catch-guarded. A publisher artifact carrying an UNGUARDED
+  // require("supports-color") — either in the entry OR in any LOCAL module it
+  // imports (e.g. `./dep.cjs`) — would pass the classifier yet still
+  // MODULE_NOT_FOUND at activation when the optional is absent.
+  //
+  // We scan the esbuild `write:false` BUNDLED output: with bundle:true +
+  // packages:"external" every LOCAL (relative/self) module is inlined into the
+  // output while external packages stay as residual requires, so this text is
+  // the full local transitive graph that ships — scanning only the entry file
+  // would miss an unguarded require hidden in a transitively-imported local
+  // module. The "all allowlisted residuals are guarded" invariant therefore
+  // holds in EVERY mode across the WHOLE shipped graph, not just the entry.
+  for (const file of result.outputFiles ?? []) {
+    assertAllowlistedAddonsAreGuarded(file.text, packageName);
   }
 }
 
