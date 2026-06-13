@@ -674,6 +674,10 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
     expect(result.mode).toBe("passthrough");
     // verbatim passthrough — the guarded require ships unchanged.
     expect(await readFile(path.join(result.packDir, "register.mjs"), "utf8")).toBe(entry);
+    // and the emitted artifact ACTIVATES with supports-color absent (the guarded
+    // require falls back) — import it under this process where it is unresolvable.
+    const mod = await import(path.join(result.packDir, "register.mjs"));
+    expect(typeof mod.register).toBe("function");
   });
 
   // codex e121 r2 MUST-FIX: the passthrough guard-scan must cover the WHOLE
@@ -696,6 +700,32 @@ describe("buildServerEntryPack — closure dependency mode (declare-and-closure)
     await expect(buildServerEntryPack({ packageDir: src })).rejects.toThrow(
       /require\("supports-color"\) OUTSIDE a try\/catch guard/,
     );
+  });
+
+  // precision counterpart (codex-rabbit): the whole-graph scan must ACCEPT a
+  // GUARDED allowlisted require in a transitive local module — a regression that
+  // refused ANY allowlisted residual outside the entry would pass the negative
+  // test above but fail here.
+  it("closure passthrough ACCEPTS a GUARDED allowlisted require in a TRANSITIVE local module", async () => {
+    const src = path.join(await tempDir("bse-closure-sc-transitive-guarded-"), "pkg");
+    const entry =
+      'import { probe } from "./probe.mjs";\n' + "export function register() { void probe; }\n";
+    const probe =
+      'import { createRequire } from "node:module";\n' +
+      "const __require = createRequire(import.meta.url);\n" +
+      "let probe = null;\n" +
+      'try { probe = __require("supports-color"); } catch (e) {}\n' +
+      "export { probe };\n";
+    await writeFixture(
+      src,
+      { name: "x", version: "0.0.1", cinatra: { kind: "connector", serverEntry: "./register.mjs", dependencyMode: "closure" } },
+      { "register.mjs": entry, "probe.mjs": probe },
+    );
+    const result = await buildServerEntryPack({ packageDir: src });
+    tempDirs.push(path.dirname(result.packDir));
+    expect(result.mode).toBe("passthrough");
+    // verbatim: the guarded transitive module ships unchanged.
+    expect(await readFile(path.join(result.packDir, "probe.mjs"), "utf8")).toBe(probe);
   });
 
   it("closure BUNDLE still REFUSES a residual host ABI peer value import", async () => {
