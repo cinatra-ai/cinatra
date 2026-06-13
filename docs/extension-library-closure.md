@@ -34,6 +34,15 @@ lockfile ──► canonical PLAN ──► closureHash ──► v2 signature
 
 ## Builder modes (`cinatra.dependencyMode`)
 
+> **Stability: `cinatra.dependencyMode` is a PUBLIC field** (cinatra-engineering#168
+> ruling (e), 2026-06-13). It is **not** gated behind a separate experimental
+> flag: the package is still **v0.1.x**, and the version number already conveys
+> that the contract is not stable. Treat the field as public-but-pre-stable —
+> publishers may declare `"closure"`, but the closure-signing PRODUCER is not
+> shipped yet (see [Signer authority](#signer-authority--which-tool-signs-a-closure-package)),
+> so a closure package cannot actually be signed-and-trusted through any tool
+> available today.
+
 | | `"inline"` (absent = default) | `"closure"` |
 |---|---|---|
 | runtime deps | inlined into the bundle | kept EXTERNAL |
@@ -71,6 +80,34 @@ See `docs/extension-server-entry-contract.md` for the full builder contract.
   A closure package can never reach ANY trusted tier (incl. trusted-bootstrap)
   without a verified v2 binding of the host-recomputed hash. Closure-less
   packages keep v1 semantics byte-for-byte.
+
+## Signer authority — which tool signs a closure package
+
+The host side (this repo) is **complete**: it verifies a v2 closure signature,
+recomputes the `closureHash`, and fails closed on anything less. The **producer**
+side is **pending** — host-side complete, producer pending:
+
+- The **future marketplace publish pipeline's v2 signer is the authoritative
+  closure signer.** When it lands it will emit the v2 payload above
+  (`signExtensionV2`, `src/lib/extension-signature.ts`) and bind the
+  host-recomputed `closureHash`. Until then, **no shipped tool can produce a
+  trusted closure signature.**
+- The marketplace broker signer (`ExtensionSigner.php`,
+  `marketplace/packages/verdaccio-core`) is **v1-only today** — it is NOT yet a
+  v2 closure signer. Do not treat the current broker as the closure authority.
+- The standalone owner tool (`extension-release-tooling/scripts/extension-signer.mjs`)
+  is **v1-only and is NOT a closure signer.** Signing a closure-mode package
+  with it would emit a v1 signature, which the host **rejects** (a closure
+  package can never reach any trusted tier on a v1 signature — see the verdict
+  rule above). To make that failure loud at sign time rather than silent at
+  install time, the standalone signer **refuses** a closure-mode manifest and
+  points at this section (extension-release-tooling change, eng#160 closure
+  half).
+
+End-state statement: **closure verification is host-side complete; closure
+SIGNING is producer-pending** until the marketplace v2 signer ships. When it
+lands, its acceptance tests MUST consume the cinatra normative fixture bytes
+(`src/lib/__tests__/fixtures/materialization-plan/`) verbatim.
 
 ## Install flow (both paths: registry pipeline AND workflow saga)
 
