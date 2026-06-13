@@ -29,6 +29,7 @@ Most AI tools are optimized for individual use and short chat sessions. Cinatra 
 
 ### Core pillars
 
+- **[A built-in AI assistant](https://docs.cinatra.ai/guides/user/built-in-ai-assistant/).** The workspace has a chat assistant that works across its MCP-exposed capabilities — agents, connectors, data, dashboards, files, and artifacts — scoped to what you can access. Describe what you need to build or run, and it can draft agents, workflows, dashboards, and artifacts, dispatch agents, and coordinate with other @-mentioned assistants in the same thread.
 - **[A connected ecosystem of capabilities](https://docs.cinatra.ai/guides/user/connected-ecosystem/).** Agents, connectors, skills, objects, lists, and dashboards live in one capability fabric. Workflows compose across domains instead of living as isolated scripts.
 - **[Human-in-the-loop by design](https://docs.cinatra.ai/guides/user/human-in-the-loop/).** Agents pause at typed HITL gates for review, edits, approvals, or missing context — instead of forcing an all-or-nothing automation model.
 - **[Continuous learning](https://docs.cinatra.ai/guides/user/continuous-learning/).** Prompt edits inside HITL surfaces are captured into per-user, per-agent personal skills that prime the next run. Improvements become reusable operating knowledge instead of getting lost in chat history.
