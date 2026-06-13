@@ -6,6 +6,7 @@ export { ExtensionResolutionPanel } from "./extension-resolution-panel";
 export type { ExtensionResolutionPanelProps } from "./extension-resolution-panel";
 export {
   catalogEntryToCardData,
+  normalizeCardDescription,
   resolveMarketplaceCardCta,
   marketplaceDetailHref,
 } from "./marketplace-card-model";

@@ -95,6 +95,34 @@ export function isValidInstallIdentity(packageName: string, version: string): bo
   );
 }
 
+// A leading markdown ATX heading marker ("# ", "## ", … up to 6, with at least
+// one trailing space/tab). Anchored + bounded, so it's linear (no backtracking).
+const LEADING_ATX_HEADING_RE = /^\s*#{1,6}[ \t]+/;
+
+/**
+ * Normalize a storefront entry description into clean plain text for the card
+ * SUMMARY. The card renders the description raw in a `<p>` (no markdown), and
+ * the storefront flattens each package README into a single-line description
+ * that still carries the leading H1 marker (e.g. `# Email Outreach Agent Run
+ * an outbound…`), so the literal `#` leaks onto every card. Strip ONLY a
+ * leading ATX heading marker — requiring whitespace after the hashes preserves
+ * a legitimate mid/lead token like `#1 ranked` or `#hashtag` — then trim;
+ * a now-empty string collapses to `null` (matching the `string | null`
+ * contract, so an empty summary never renders).
+ *
+ * Card-summary normalization only: the full-markdown README detail view
+ * (cinatra#18/#19) renders elsewhere and is intentionally untouched.
+ */
+export function normalizeCardDescription(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const stripped = raw.replace(LEADING_ATX_HEADING_RE, "").trim();
+  return stripped.length > 0 ? stripped : null;
+}
+
 /**
  * Map a storefront catalog entry to the screen card model.
  *
@@ -116,7 +144,7 @@ export function catalogEntryToCardData(
     packageName,
     packageVersion,
     displayName: entry.display_name || packageName,
-    description: entry.description ?? null,
+    description: normalizeCardDescription(entry.description),
     kindSlug,
     kindLabel: entry.kind_label || KIND_LABELS[kindSlug],
     badge: entry.badge

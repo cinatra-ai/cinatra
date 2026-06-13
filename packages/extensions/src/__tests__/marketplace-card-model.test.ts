@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 import {
   catalogEntryToCardData,
+  normalizeCardDescription,
   resolveMarketplaceCardCta,
   marketplaceDetailHref,
 } from "../screens/marketplace-card-model";
@@ -66,6 +67,55 @@ describe("catalogEntryToCardData", () => {
     expect(card!.badge).toBeNull();
     expect(card!.rating).toBeNull();
     expect(card!.freshnessAt).toBeNull();
+  });
+
+  it("strips the leading markdown heading marker from the card description (cinatra#205)", () => {
+    // Storefront flattens each README into a single-line description that still
+    // carries the leading H1; the card renders it raw, so the `#` must be
+    // stripped at the mapper layer (once), never reach the <p>.
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        description: "# Email Outreach Agent Run an outbound email campaign from scratch.",
+      }),
+    );
+    expect(card!.description).toBe(
+      "Email Outreach Agent Run an outbound email campaign from scratch.",
+    );
+  });
+});
+
+describe("normalizeCardDescription", () => {
+  it("strips a leading ATX heading marker (#…######) and trims", () => {
+    expect(normalizeCardDescription("# Title rest of prose")).toBe("Title rest of prose");
+    expect(normalizeCardDescription("###### Deep heading then text")).toBe(
+      "Deep heading then text",
+    );
+    expect(normalizeCardDescription("   #   Padded heading")).toBe("Padded heading");
+  });
+
+  it("leaves a description with no leading heading untouched (aside from trimming)", () => {
+    expect(normalizeCardDescription("Plain prose description")).toBe(
+      "Plain prose description",
+    );
+    expect(normalizeCardDescription("  spaced prose  ")).toBe("spaced prose");
+  });
+
+  it("preserves a legitimate mid-text or no-space '#' (no false heading strip)", () => {
+    // Requires whitespace after the hashes, so "#1 ranked" / "#hashtag" are NOT
+    // ATX headings and survive intact.
+    expect(normalizeCardDescription("#1 ranked outreach tool")).toBe(
+      "#1 ranked outreach tool",
+    );
+    expect(normalizeCardDescription("Rated #1 by users")).toBe("Rated #1 by users");
+    expect(normalizeCardDescription("#hashtag heavy copy")).toBe("#hashtag heavy copy");
+  });
+
+  it("collapses a heading-only / blank / non-string description to null", () => {
+    expect(normalizeCardDescription("# ")).toBeNull();
+    expect(normalizeCardDescription("   ")).toBeNull();
+    expect(normalizeCardDescription("")).toBeNull();
+    expect(normalizeCardDescription(null)).toBeNull();
+    expect(normalizeCardDescription(undefined)).toBeNull();
   });
 });
 
