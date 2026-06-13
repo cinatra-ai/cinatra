@@ -9,6 +9,7 @@ import { resolveInstallAnchor } from "@/lib/extension-install-anchor";
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
 import {
   installExtensionFromRegistry,
+  makeTestInstallPipelineDeps,
   type InstallPipelineDeps,
 } from "@/lib/extension-install-pipeline";
 
@@ -57,6 +58,7 @@ function makePipelineDeps(
   activateInProcess?: InstallPipelineDeps["activateInProcess"],
 ): InstallPipelineDeps {
   return {
+    ...makeTestInstallPipelineDeps(),
     resolveIntegrity: async () => ({ integrity, registryUrl: REGISTRY }),
     materialize: async (i) => {
       const m = await materializePackageToStore(
@@ -80,6 +82,11 @@ function makePipelineDeps(
     },
     advanceInstallOpPhase: async ({ phase }) => {
       state.journalPhase = phase;
+    },
+    // cinatra#158: the happy-path finalize is the supersession seam; reflect it so
+    // the post-commit activateInProcess hook sees journalPhase === "finalized".
+    finalizeInstallOp: async () => {
+      state.journalPhase = "finalized";
     },
     ...(activateInProcess ? { activateInProcess } : {}),
   };

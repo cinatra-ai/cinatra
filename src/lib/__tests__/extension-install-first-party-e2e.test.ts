@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import * as tar from "tar";
 import { sriForBytes } from "@/lib/extension-package-store-core";
 import { materializePackageToStore } from "@/lib/extension-package-store";
-import { installExtensionFromRegistry, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import { installExtensionFromRegistry,
+  makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import { resolveInstallAnchor } from "@/lib/extension-install-anchor";
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
 import { resolveCapabilityProviders, __resetCapabilityRegistry } from "@/lib/extension-capabilities-registry";
@@ -98,6 +99,7 @@ afterAll(async () => {
 
 function makePipelineDeps(state: InstallState): InstallPipelineDeps {
   return {
+    ...makeTestInstallPipelineDeps(),
     resolveIntegrity: async () => ({ integrity, registryUrl: REGISTRY }),
     materialize: async (i) => {
       const m = await materializePackageToStore(
@@ -131,6 +133,11 @@ function makePipelineDeps(state: InstallState): InstallPipelineDeps {
     },
     advanceInstallOpPhase: async ({ phase }) => {
       state.journalPhase = phase;
+    },
+    // cinatra#158: the happy-path finalize is the supersession seam; reflect it in
+    // the fake journal phase so the post-commit anchor read resolves `finalized`.
+    finalizeInstallOp: async () => {
+      state.journalPhase = "finalized";
     },
     // #180: the REAL dual-read helper over the materialized manifest + a
     // recording persist seam, so the e2e pins that a finalized first-party

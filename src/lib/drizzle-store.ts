@@ -644,11 +644,24 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_pkg_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name)` },
-    // One latest install-op per (package, org) is what the anchor gate reads; a
-    // partial unique index keeps the GLOBAL (org_id IS NULL) journal row unique
-    // (Postgres treats NULLs as distinct under a plain UNIQUE).
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_pkg_org_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_pkg_global_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE org_id IS NULL` },
+    // cinatra#158 — APPEND-ONLY journal: one row per ATTEMPT (PK install_op_id),
+    // not one row per (package, org). The OLD full unique indexes
+    // (..._pkg_org_uniq / ..._pkg_global_uniq) enforced single-row-per-(pkg,org)
+    // and MUST go — append-only legitimately keeps many rows per scope. Drop them
+    // idempotently here too (not only via migration 0005) so an upgraded DB whose
+    // schema-init ensure pass runs converges. (See migrations/core/core__0005.)
+    { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_org_uniq` },
+    { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_global_uniq` },
+    // The TRUST INVARIANT moves to the DB: AT MOST ONE `finalized` op per
+    // (package, org) — that single finalized op IS the install anchor. The
+    // partial unique index makes it provable + serializes concurrent finalizes
+    // (finalizeInstallOp's supersession demotes the prior finalized op first). A
+    // GLOBAL (org_id IS NULL) twin is needed because Postgres treats NULLs as
+    // distinct under a plain unique.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id) WHERE phase = 'finalized'` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_global ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE phase = 'finalized' AND org_id IS NULL` },
+    // Anchor / non-finalized-window / sweeper reads scan by (package, org, phase).
+    { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_scope_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id, phase)` },
     { text: `DO $$
       DECLARE def text;
       BEGIN
@@ -659,10 +672,11 @@ END $$` },
         WHERE n.nspname = '${schemaName.replaceAll("'", "''")}'
           AND t.relname = 'extension_install_ops'
           AND c.conname = 'extension_install_ops_phase_check';
-        -- One-shot migration: a schema created before the 'writing' phase keeps
-        -- the OLD CHECK (without 'writing'), which would reject the saga's
-        -- writing-phase advance. Drop it so the new set is (re)added below.
-        IF def IS NOT NULL AND def NOT LIKE '%writing%' THEN
+        -- One-shot migration: a schema created before a newer phase keeps the OLD
+        -- CHECK, which would reject the new phase. Drop it so the new set is
+        -- (re)added below. cinatra#158 adds 'superseded' (a demoted prior anchor);
+        -- it follows the same widen-the-CHECK pattern that added 'writing'.
+        IF def IS NOT NULL AND def NOT LIKE '%superseded%' THEN
           ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_install_ops"
             DROP CONSTRAINT extension_install_ops_phase_check;
           def := NULL;
@@ -670,7 +684,7 @@ END $$` },
         IF def IS NULL THEN
           ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_install_ops"
             ADD CONSTRAINT extension_install_ops_phase_check
-            CHECK (phase IN ('materialized', 'granted', 'preflighted', 'writing', 'finalized', 'failed', 'rolled_back'));
+            CHECK (phase IN ('materialized', 'granted', 'preflighted', 'writing', 'finalized', 'failed', 'rolled_back', 'superseded'));
         END IF;
       END $$;` },
 
