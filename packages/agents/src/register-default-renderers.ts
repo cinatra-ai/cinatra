@@ -63,8 +63,13 @@ import { SchemaFieldRenderer } from "./schema-field-renderer";
 import {
   GroupedSetupFormRenderer,
   isGroupedSetupFormField,
-  GROUPED_SETUP_FORM_RENDERER_ID,
 } from "./grouped-setup-form-renderer";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  PERSONAL_SKILL_RENDERER_ID,
+  SKILL_SELECTOR_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 import {
   TriggerConfigureFormRenderer,
   TriggerConfirmSummaryRenderer,
@@ -234,14 +239,14 @@ export function ensureDefaultFieldRenderersRegistered(): void {
   });
 
   fieldRendererRegistry.register({
-    id: "@cinatra-ai/agent-builder:personal-skill",
+    id: PERSONAL_SKILL_RENDERER_ID,
     priority: 90,
     condition: isPersonalSkillField,
     renderer: PersonalSkillRenderer,
   });
 
   fieldRendererRegistry.register({
-    id: "@cinatra-ai/agent-builder:skill-selector",
+    id: SKILL_SELECTOR_RENDERER_ID,
     priority: 95,
     condition: isSkillSelectorField,
     renderer: SkillSelectorRenderer,
@@ -249,13 +254,13 @@ export function ensureDefaultFieldRenderersRegistered(): void {
 
   // Fallback renderer for plain JSON Schema fields emitted as
   // setup-field INTERRUPTs. Resolves only when the emitted xRenderer equals
-  // the literal "@cinatra-ai/agent-builder:schema-field-fallback" — custom
-  // renderers (priority 60-100) always win when their condition matches.
+  // SCHEMA_FIELD_FALLBACK_RENDERER_ID — custom renderers (priority 60-100)
+  // always win when their condition matches.
   fieldRendererRegistry.register({
-    id: "@cinatra-ai/agent-builder:schema-field-fallback",
+    id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     priority: 1,
     condition: (_fieldName, schema) =>
-      xRendererOf(schema) === "@cinatra-ai/agent-builder:schema-field-fallback",
+      xRendererOf(schema) === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     renderer: SchemaFieldRenderer,
   });
 

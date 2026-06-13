@@ -16,14 +16,16 @@ import {
 } from "./field-renderer-registry";
 import { jsonSchemaToZod } from "./json-schema-to-zod";
 import { SchemaFieldRenderer } from "./schema-field-renderer";
+import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Registry condition — strict equality so mid-run HITL xRenderers never match.
 // Keep grouped setup renderer matching isolated from regular field renderers.
+// The id authority is ./agent-builder-ids (a pure, environment-neutral module);
+// re-export it here so existing importers of this renderer keep resolving it.
 // ---------------------------------------------------------------------------
 
-export const GROUPED_SETUP_FORM_RENDERER_ID =
-  "@cinatra-ai/agent-builder:grouped-setup-form";
+export { GROUPED_SETUP_FORM_RENDERER_ID };
 
 export const isGroupedSetupFormField: FieldRendererCondition = (_fieldName, schema) => {
   const xRenderer = (schema as { "x-renderer"?: string })["x-renderer"];

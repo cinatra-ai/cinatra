@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AgenticRunPanel } from "./agentic-run-panel";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
+import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 
 type SetupCompletionWatcherProps = {
   runId: string;
@@ -68,7 +69,7 @@ export function SetupCompletionWatcher({
   useEffect(() => {
     // Only track setup-phase interrupts — mid-run HITL interrupts (e.g. recipients,
     // drafts, send) must not trigger the /trigger redirect.
-    if (streamResult.interruptContext?.xRenderer === "@cinatra-ai/agent-builder:grouped-setup-form") {
+    if (streamResult.interruptContext?.xRenderer === GROUPED_SETUP_FORM_RENDERER_ID) {
       setHasSeenInterrupt(true);
     }
   }, [streamResult.interruptContext]);

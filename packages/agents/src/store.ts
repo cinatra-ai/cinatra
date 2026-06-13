@@ -15,6 +15,7 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 // append the `WHERE agent_runs.project_id = $projectId` clause.
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import { db, agentBuilderPool } from "./db";
+import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import {
   agentTemplates,
   agentVersions,
@@ -564,7 +565,7 @@ async function _createAgentTemplateImpl(
   // Dates must be ISO-serialised for JSONB (Drizzle returns Date instances).
   shadowUpsertObject({
     id: record.id,
-    type: "@cinatra-ai/agent-builder:agent-template",
+    type: AGENT_TEMPLATE_TYPE_ID,
     data: {
       ...record,
       createdAt: record.createdAt.toISOString(),
@@ -877,7 +878,7 @@ async function _updateAgentTemplateImpl(
   // re-upsert the mutated agent template.
   shadowUpsertObject({
     id: record.id,
-    type: "@cinatra-ai/agent-builder:agent-template",
+    type: AGENT_TEMPLATE_TYPE_ID,
     data: {
       ...record,
       createdAt: record.createdAt.toISOString(),

@@ -32,6 +32,7 @@ import {
   type AgentRunRecord,
   type AgentTemplateRecord,
 } from "./store";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 
 export type HitlContext = {
   xRenderer: string;
@@ -54,7 +55,7 @@ export type HitlContext = {
 
 /** Renderer id of the generic schema-driven approval form used when no
  *  persisted INTERRUPT is readable for a setup-loop run. */
-const SETUP_FALLBACK_RENDERER = "@cinatra-ai/agent-builder:schema-field-fallback";
+const SETUP_FALLBACK_RENDERER = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
 /**
  * Derive the HITL context for a run, or null when the run is not paused on a

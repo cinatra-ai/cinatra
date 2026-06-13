@@ -380,8 +380,23 @@ export { ensureDefaultFieldRenderersRegistered } from "./register-default-render
 export {
   GroupedSetupFormRenderer,
   isGroupedSetupFormField,
-  GROUPED_SETUP_FORM_RENDERER_ID,
 } from "./grouped-setup-form-renderer";
+
+// Agent-builder identity table — the single authority for every
+// `@cinatra-ai/agent-builder:<id>` x-renderer / skill / object-type id routed
+// within @cinatra-ai/agents (cinatra-engineering#155). Sourced from the pure,
+// environment-neutral ./agent-builder-ids module (NOT through the client
+// renderer barrel), so importing an id never pulls a client/server graph in.
+export {
+  AGENT_BUILDER_ID_SCOPE,
+  AGENT_TEMPLATE_TYPE_ID,
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  PERSONAL_SKILL_RENDERER_ID,
+  SKILL_SELECTOR_RENDERER_ID,
+  TRIGGER_WAIT_STATUS_RENDERER_ID,
+  COMPILER_AGENTIC_SKILL_ID,
+} from "./agent-builder-ids";
 
 // Trigger-agent HITL renderers.
 export {

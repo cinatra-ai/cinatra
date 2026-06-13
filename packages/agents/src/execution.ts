@@ -21,6 +21,10 @@ import {
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 // The run-worker entry reads `run.projectId`
 // from the DB row and wraps the execution body in a fresh
 // mcpRequestContextStorage frame whose `projectContext.projectId` is the
@@ -232,7 +236,7 @@ async function resolveWayflowXRenderer(
   taskId: string,
   approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean }>,
 ): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null }> {
-  const fallback = "@cinatra-ai/agent-builder:schema-field-fallback";
+  const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   // All WayFlow-gated steps ordered by appearance: both self-owned (orchestrator
   // InputMessageNode gates) and child-agent steps. Steps without xRenderer still
   // advance the accumulator correctly (e.g. email-reviewer with no approval gate).
@@ -408,7 +412,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
     // Resolve the xRenderer + stepNumber from the template's approvalPolicy so
     // each child HITL step shows its custom renderer and the stepper advances.
-    let wayflowXRenderer = "@cinatra-ai/agent-builder:schema-field-fallback";
+    let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
     let wayflowStepNumber: number | null = null;
     let wayflowSchema: Record<string, unknown> | null = null;
     try {
@@ -930,8 +934,8 @@ async function runAgentBuilderExecutionJobInner(
   // on at least one of its setup fields. Agents without this decoration keep
   // per-field interrupts regardless of pending-field count — this prevents
   // grouped setup from silently changing setup UX for every agent with ≥2 pending
-  // fields.
-  const GROUPED_SETUP_FORM_RENDERER_ID = "@cinatra-ai/agent-builder:grouped-setup-form";
+  // fields. (GROUPED_SETUP_FORM_RENDERER_ID is imported from ./agent-builder-ids
+  // — the single id authority — rather than re-declared locally.)
 
   const pendingFields = requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
@@ -960,7 +964,7 @@ async function runAgentBuilderExecutionJobInner(
     const fieldSchema = properties[fieldName] ?? {};
     const xRenderer =
       (fieldSchema as { "x-renderer"?: string })["x-renderer"]
-        ?? "@cinatra-ai/agent-builder:schema-field-fallback";
+        ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
     await transitionRunStatus(runId, "queued", "pending_approval");
 
