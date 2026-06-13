@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { createExtensionHostContext } from "@/lib/extension-host-context";
-import { __resetCapabilityRegistry } from "@/lib/extension-capabilities-registry";
+import { createExtensionHostContext, createExtensionProbeHostContext } from "@/lib/extension-host-context";
+import { __resetCapabilityRegistry, resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 describe("createExtensionHostContext — grant-aware ports", () => {
@@ -95,6 +95,87 @@ describe("createExtensionHostContext — grant-aware ports", () => {
   it("only the declared ports are exposed — granting db does NOT expose capabilities", () => {
     const ctx = createExtensionHostContext("@cinatra-ai/x", ["db"]);
     expect(() => ctx.capabilities.resolveProviders("email-send")).toThrow(/NOT GRANTED/);
+  });
+
+  // --- cinatra#150: capability-provider identity is HOST-injected, never caller-supplied ---
+
+  it("an extension CANNOT register a capability under ANOTHER extension's packageName — identity is forced to the registering extension (cinatra#150)", () => {
+    const ctx = createExtensionHostContext("@cinatra-ai/attacker", ["capabilities"]);
+    // The attacker supplies a FOREIGN identity (impersonating the victim).
+    ctx.capabilities.registerProvider("email-send", {
+      packageName: "@cinatra-ai/resend-connector",
+      impl: { evil: true },
+    });
+    const providers = resolveCapabilityProviders("email-send");
+    expect(providers).toHaveLength(1);
+    // The registered identity is the HOST-injected registering package, NOT the
+    // forged one — so the attacker cannot masquerade as the victim provider.
+    expect(providers[0]?.packageName).toBe("@cinatra-ai/attacker");
+    expect(providers.some((p) => p.packageName === "@cinatra-ai/resend-connector")).toBe(false);
+    // A consumer that resolves "the resend-connector provider" never matches the
+    // attacker's registration.
+    expect(
+      resolveCapabilityProviders("email-send").find((p) => p.packageName === "@cinatra-ai/resend-connector"),
+    ).toBeUndefined();
+  });
+
+  it("an extension CANNOT claim the reserved @cinatra-ai/host:* namespace via the capabilities port (cinatra#150)", () => {
+    // An extension whose own (host-injected) identity is the reserved host
+    // namespace is rejected outright — only host-trusted DIRECT registrations
+    // may publish under @cinatra-ai/host[:service].
+    const exactHost = createExtensionHostContext("@cinatra-ai/host", ["capabilities"]);
+    expect(() =>
+      exactHost.capabilities.registerProvider("email-routing", { packageName: "@cinatra-ai/host", impl: {} }),
+    ).toThrow(/reserved/i);
+
+    const hostService = createExtensionHostContext("@cinatra-ai/host:email-routing", ["capabilities"]);
+    expect(() =>
+      hostService.capabilities.registerProvider("email-routing", {
+        packageName: "@cinatra-ai/host:email-routing",
+        impl: {},
+      }),
+    ).toThrow(/reserved/i);
+
+    // Even when a NON-host extension supplies a forged host identity, it is
+    // overridden to the extension's own identity (never lands in the host
+    // namespace) — the registration succeeds under the extension's real name.
+    const ext = createExtensionHostContext("@cinatra-ai/x", ["capabilities"]);
+    ext.capabilities.registerProvider("email-routing", { packageName: "@cinatra-ai/host:email-routing", impl: {} });
+    const routed = resolveCapabilityProviders("email-routing");
+    expect(routed).toHaveLength(1);
+    expect(routed[0]?.packageName).toBe("@cinatra-ai/x");
+  });
+
+  it("legitimate self-registration still works — an extension registering under its OWN identity round-trips (cinatra#150)", () => {
+    const ctx = createExtensionHostContext("@cinatra-ai/resend-connector", ["capabilities"]);
+    ctx.capabilities.registerProvider("email-send", {
+      packageName: "@cinatra-ai/resend-connector",
+      impl: { id: "resend" },
+    });
+    const providers = resolveCapabilityProviders("email-send");
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.packageName).toBe("@cinatra-ai/resend-connector");
+    expect((providers[0]?.impl as { id: string }).id).toBe("resend");
+  });
+
+  it("the hot-update PROBE path enforces the SAME identity binding — forged identity is recorded as the real package, host namespace rejected (cinatra#150)", () => {
+    const { ctx, recorder } = createExtensionProbeHostContext("@cinatra-ai/attacker", ["capabilities"]);
+    // A forged foreign identity in the probe is recorded under the registering
+    // package, not the forgery (so pre-verify reflects the real activation).
+    ctx.capabilities.registerProvider("email-send", {
+      packageName: "@cinatra-ai/resend-connector",
+      impl: { evil: true },
+    });
+    expect(recorder.capabilityProviders).toHaveLength(1);
+    expect((recorder.capabilityProviders[0]?.provider as { packageName: string }).packageName).toBe(
+      "@cinatra-ai/attacker",
+    );
+
+    // A probe whose own identity is the reserved host namespace is rejected too.
+    const hostProbe = createExtensionProbeHostContext("@cinatra-ai/host", ["capabilities"]);
+    expect(() =>
+      hostProbe.ctx.capabilities.registerProvider("email-routing", { packageName: "@cinatra-ai/host", impl: {} }),
+    ).toThrow(/reserved/i);
   });
 
   it("GRANTED settings exposes the real wired port (get/set/delete are functions; ungranted throws)", () => {

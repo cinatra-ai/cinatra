@@ -83,9 +83,51 @@ function makeRuntime(): HostRuntimePort {
 // capabilities — generic, host-owned provider registry (no connector import).
 // ---------------------------------------------------------------------------
 
-function makeCapabilities(): ExtensionHostContext["capabilities"] {
+// The reserved provider-identity namespace for HOST-published services. Only
+// host-trusted DIRECT callers of `registerCapabilityProvider`
+// (`register-host-connector-services` / `register-email-providers` /
+// `register-blog-providers`) may claim it — never an extension via the
+// `ctx.capabilities` port. The exact `@cinatra-ai/host` package and any
+// `@cinatra-ai/host:<service>` id are both reserved.
+const HOST_RESERVED_PROVIDER_NAMESPACE = "@cinatra-ai/host";
+
+function isReservedHostProviderIdentity(packageName: string): boolean {
+  return (
+    packageName === HOST_RESERVED_PROVIDER_NAMESPACE ||
+    packageName.startsWith(`${HOST_RESERVED_PROVIDER_NAMESPACE}:`)
+  );
+}
+
+/**
+ * Bind a capability registration to the HOST-INJECTED `packageName` — the only
+ * authoritative provider identity (cinatra#150). Any caller-supplied
+ * `provider.packageName` is UNTRUSTED extension input and is OVERRIDDEN, never
+ * trusted: without this, an extension could register a provider claiming
+ * ANOTHER package's identity (impersonation) or shadow a host
+ * `@cinatra-ai/host:*` service. The `impl` is preserved; only the identity is
+ * forced. Registering under the reserved host namespace from the extension port
+ * is REJECTED (a real extension's `packageName` can never be the host namespace,
+ * so this is defense-in-depth). Scope: provider-IDENTITY forgery only —
+ * capability-ID squatting (same id, different provider) is out (cinatra#155).
+ */
+function bindProviderIdentity(
+  packageName: string,
+  provider: { packageName: string; impl: unknown },
+): { packageName: string; impl: unknown } {
+  if (isReservedHostProviderIdentity(packageName)) {
+    throw new Error(
+      `[capabilities] "${packageName}" may not register a capability provider via the extension port: the "${HOST_RESERVED_PROVIDER_NAMESPACE}" namespace is reserved for host-published services`,
+    );
+  }
+  // Authoritative identity is the host-injected packageName — caller-supplied
+  // provider.packageName is ignored (override, not merge of identity).
+  return { ...provider, packageName };
+}
+
+function makeCapabilities(packageName: string): ExtensionHostContext["capabilities"] {
   return {
-    registerProvider: (capability, provider) => registerCapabilityProvider(capability, provider),
+    registerProvider: (capability, provider) =>
+      registerCapabilityProvider(capability, bindProviderIdentity(packageName, provider)),
     resolveProviders: (capability) => resolveCapabilityProviders(capability),
   };
 }
@@ -518,7 +560,7 @@ export function createExtensionHostContext(
     jobs: gated("jobs", () => makeJobs(packageName)),
     notifications: gated("notifications", () => makeNotifications(packageName)),
     ui: gated("ui", () => makeUi(packageName)),
-    capabilities: gated("capabilities", () => makeCapabilities()),
+    capabilities: gated("capabilities", () => makeCapabilities(packageName)),
     telemetry: gated("telemetry", () => makeTelemetry(packageName, logger)),
   };
 }
@@ -585,7 +627,15 @@ export function createExtensionProbeHostContext(
   };
   const probeCapabilities: ExtensionHostContext["capabilities"] = {
     registerProvider: (capability, provider) => {
-      recorder.capabilityProviders.push({ capability, provider });
+      // Identity enforcement (cinatra#150) applies to the probe too: a malicious
+      // digest must not pass the hot-update pre-verify by claiming another
+      // package's identity or the reserved host namespace, and the recorder must
+      // reflect the FORCED (authoritative) identity the real activation would
+      // register — so apply the same bind+reservation as the live port.
+      recorder.capabilityProviders.push({
+        capability,
+        provider: bindProviderIdentity(packageName, provider),
+      });
     },
     // READS stay REAL (matching the probe contract: read ports are real, only
     // registration sinks are inert). A register(ctx) that resolves a host
