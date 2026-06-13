@@ -1,7 +1,7 @@
 import "server-only";
 import {
   createHash,
-  createHmac,
+  hkdfSync,
   randomBytes,
   randomUUID,
   timingSafeEqual,
@@ -56,30 +56,41 @@ const TOKEN_RANDOM_BYTES = 32;
 const SUB_MAX_LENGTH = 128;
 const TABLE = "widget_stream_tokens";
 
-// Domain-separation label for the long-lived-key ROTATION FINGERPRINT. The
-// fingerprint is NOT a password hash: it is a deterministic marker of the
-// configured high-entropy machine credential (apiKey = `${uuid}-${uuid}`,
-// ~256 bits) used only to detect that the key changed (mint vs consume
-// equality) — never to authenticate. A keyed HMAC (fast, correct for a
-// high-entropy-value fingerprint) is used instead of a bare hash so the
-// derivation is a recognized keyed-fingerprint construction rather than a
-// password-storage hash. A slow KDF (bcrypt/scrypt) would be WRONG here:
-// there is no low-entropy secret to brute-force-protect, and the value is
-// recomputed on every stream request.
-const KEY_FINGERPRINT_LABEL = "cinatra:widget-stream-token:key-fingerprint:v1";
+// Fixed salt + info label for the long-lived-key ROTATION FINGERPRINT.
+//
+// The fingerprint is NOT a password hash: it is a deterministic marker of the
+// configured HIGH-ENTROPY machine credential (apiKey = `${uuid}-${uuid}`,
+// ~256 bits) used only to detect that the key changed (mint-vs-consume
+// equality) — never to authenticate, never reversed. It is derived with HKDF
+// (RFC 5869), the correct primitive for deriving a fixed-length value from
+// existing key material: it is fast (a couple of HMACs — safe to recompute on
+// every stream request) and is a recognized key-derivation construction, not a
+// password-storage hash. A slow KDF (bcrypt/scrypt) would be WRONG here: there
+// is no low-entropy human secret to brute-force-protect.
+const KEY_FINGERPRINT_SALT = "cinatra:widget-stream-token:key-fingerprint:v1";
+const KEY_FINGERPRINT_INFO = "rotation-fingerprint";
 
-// SHA-256 hex of a HIGH-ENTROPY value. Used for (a) token_hash =
-// SHA-256(rawToken) where rawToken is 32 cryptographically-random bytes, and
-// (b) the request-token lookup. Not a password hash — the input is never a
+// SHA-256 hex of a HIGH-ENTROPY value. Used for token_hash = SHA-256(rawToken)
+// where rawToken is 32 cryptographically-random bytes, and for the
+// request-token lookup. Not a password hash — the input is never a
 // human-chosen low-entropy secret.
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-// Deterministic rotation fingerprint of the configured long-lived key. Keyed
-// HMAC with a fixed domain label (see KEY_FINGERPRINT_LABEL).
+// Deterministic rotation fingerprint of the configured long-lived key, derived
+// with HKDF-SHA256 (32-byte output, hex). Same key → same fingerprint, so a
+// rotated key produces a different fingerprint and invalidates outstanding
+// tokens at consume time.
 function keyFingerprintHex(apiKey: string): string {
-  return createHmac("sha256", KEY_FINGERPRINT_LABEL).update(apiKey, "utf8").digest("hex");
+  const derived = hkdfSync(
+    "sha256",
+    Buffer.from(apiKey, "utf8"),
+    Buffer.from(KEY_FINGERPRINT_SALT, "utf8"),
+    Buffer.from(KEY_FINGERPRINT_INFO, "utf8"),
+    32,
+  );
+  return Buffer.from(derived).toString("hex");
 }
 
 /** `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid. */
