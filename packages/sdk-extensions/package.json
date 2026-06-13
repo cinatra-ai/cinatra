@@ -9,6 +9,10 @@
   "exports": {
     ".": "./src/index.ts",
     "./host-context": "./src/host-context.ts",
+    "./test-host-context": {
+      "types": "./src/test-host-context.d.mts",
+      "default": "./src/test-host-context.mjs"
+    },
     "./email-contract": "./src/email-connector-contract.ts",
     "./register": "./src/register.ts",
     "./registries": "./src/registries.ts",
@@ -23,6 +27,9 @@
   },
   "files": [
     "src/**/*.ts",
+    "src/**/*.mjs",
+    "src/**/*.d.ts",
+    "src/**/*.d.mts",
     "README.md",
     "LICENSE"
   ],
