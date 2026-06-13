@@ -129,6 +129,12 @@ const ALLOWLISTED_FILES = new Set([
   "docs/user/cinatra-in-your-cms.md",
   "tests/e2e/wp-drupal-uat/drupal/drupal-uat.spec.ts",
   "tests/e2e/wp-drupal-uat/global-setup.ts",
+  // cinatra#221 Connect provisioning: the per-client callback contract pins the
+  // Drupal CMS callback path `/admin/config/services/cinatra/connect/callback`
+  // (a Drupal CMS route the redirect_uri must exactly match — NOT a Cinatra
+  // Next.js UI route). Same external-Drupal-admin rationale as the entries
+  // above; the gate's docblock notes Drupal `/admin/...` is unrelated.
+  "src/lib/connect-provisioning.ts",
 ]);
 
 function shouldSkipDir(name) {

@@ -4065,6 +4065,65 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
+    // -----------------------------------------------------------------------
+    // cinatra#221 "Connect with Cinatra" provisioning tables.
+    //
+    // Dedicated tables (NOT TTL-cached connector_config JSON) so single-use
+    // consume, revoke, and lastUsedAt updates are atomic UPDATE...RETURNING
+    // statements free of the read-modify-write lost-update races that JSON-blob
+    // storage would carry. Secrets are NEVER stored in plaintext: only the
+    // sha256 hash of each authorization/install code and per-site credential is
+    // persisted. See src/lib/connect-sites-store.ts and
+    // src/lib/connect-provisioning.ts.
+    //
+    // Table A — short-lived grants (auth codes + install codes). Keyed by the
+    // sha256 code hash; the plaintext code/install-code never touches the DB.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."connect_authorization_codes" (
+      code_hash        text PRIMARY KEY,
+      grant_type       text NOT NULL,
+      client           text NOT NULL,
+      redirect_uri     text,
+      widget_origin    text NOT NULL,
+      callback_origin  text,
+      code_challenge   text,
+      admin_user_id    text,
+      org_id           text,
+      scope            text,
+      created_at       timestamptz NOT NULL DEFAULT now(),
+      expires_at       timestamptz NOT NULL,
+      consumed_at      timestamptz
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS connect_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."connect_authorization_codes" (expires_at)` },
+    // Table B — connected-site source of truth AND the per-site bearer
+    // allowlist (single source of truth, codex High). The partial unique index
+    // enforces at most one ACTIVE (non-revoked) row per (org_id, client,
+    // widget_origin) so a reconnect ROTATES the same row instead of minting a
+    // parallel valid credential.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."connect_sites" (
+      site_id             uuid PRIMARY KEY,
+      client              text NOT NULL,
+      widget_origin       text NOT NULL,
+      callback_origin     text,
+      credential_hash     text NOT NULL,
+      credential_version  int NOT NULL,
+      webhook_secret_hash text,
+      admin_user_id       text,
+      org_id              text,
+      created_at          timestamptz NOT NULL DEFAULT now(),
+      last_exchanged_at   timestamptz,
+      last_used_at        timestamptz,
+      revoked_at          timestamptz,
+      revoked_by          text
+    )` },
+    // NULLS NOT DISTINCT (Postgres 15+) is REQUIRED: without it Postgres treats
+    // NULL org_id as distinct, so two active rows could coexist for a null-org
+    // (org_id, client, widget_origin) tuple — minting parallel valid cnx_
+    // credentials and breaking rotate-in-place (codex High). With NULLS NOT
+    // DISTINCT a null org_id collides like any other value, so reconnect always
+    // rotates the single active row.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS connect_sites_active_uniq ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id, client, widget_origin) NULLS NOT DISTINCT WHERE revoked_at IS NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS connect_sites_org_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id) WHERE revoked_at IS NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS connect_sites_active_origin_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (widget_origin) WHERE revoked_at IS NULL` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already

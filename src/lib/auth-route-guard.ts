@@ -23,6 +23,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/.well-known",  // OAuth / OIDC discovery metadata (RFC 8414, RFC 8707)
   "/api/wordpress/bundle.js", // Assistant widget bundle (public JS; also matcher-excluded as *.js). Precise path — do NOT broaden to /api/wordpress. Widget chat is covered by the generated PUBLIC_AGENT_STREAM_PATHS below.
   "/api/webhooks/wordpress", // WordPress publish-event webhook receiver — auth enforced inside route handler (HMAC-SHA256)
+  "/api/connect/token", // cinatra#221 Connect provisioning code/install-code exchange — server-to-server (CMS backend); auth enforced inside via the authorization-code/PKCE/install-code itself (no session, no cookies), mirrors /api/webhooks/wordpress. NOTE: /connect/authorize is NOT exempted — it stays session-gated (org-admin consent screen).
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available
   "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only, mirrors /api/skills/reset-repo). Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
 ];

@@ -50,6 +50,22 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
     expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
   });
 
+  it("contains /api/connect/token (cinatra#221 connect provisioning exchange; server-to-server, in-handler code/PKCE/install-code auth)", () => {
+    expect(guardSource).toMatch(/"\/api\/connect\/token"/);
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/connect/token"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+  });
+
+  it("does NOT exempt /connect/authorize (the consent screen stays session-gated)", () => {
+    // The authorize page is a server component behind the normal auth-route
+    // guard — it must never appear in the public-path list.
+    expect(guardSource).not.toMatch(/"\/connect\/authorize"/);
+    expect(guardSource).not.toMatch(/"\/api\/connect\/authorize"/);
+  });
+
   it("each prefix has an inline comment documenting that auth is enforced inside the handler", () => {
     // Defense against silent removal: every bridge-route entry must
     // call out the in-handler auth gate so a future contributor doesn't
