@@ -1,5 +1,11 @@
 import "server-only";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { Buffer } from "node:buffer";
 
 import type { GeneratedWidgetStreamAuth } from "@/lib/generated/extensions.server";
@@ -50,8 +56,30 @@ const TOKEN_RANDOM_BYTES = 32;
 const SUB_MAX_LENGTH = 128;
 const TABLE = "widget_stream_tokens";
 
+// Domain-separation label for the long-lived-key ROTATION FINGERPRINT. The
+// fingerprint is NOT a password hash: it is a deterministic marker of the
+// configured high-entropy machine credential (apiKey = `${uuid}-${uuid}`,
+// ~256 bits) used only to detect that the key changed (mint vs consume
+// equality) — never to authenticate. A keyed HMAC (fast, correct for a
+// high-entropy-value fingerprint) is used instead of a bare hash so the
+// derivation is a recognized keyed-fingerprint construction rather than a
+// password-storage hash. A slow KDF (bcrypt/scrypt) would be WRONG here:
+// there is no low-entropy secret to brute-force-protect, and the value is
+// recomputed on every stream request.
+const KEY_FINGERPRINT_LABEL = "cinatra:widget-stream-token:key-fingerprint:v1";
+
+// SHA-256 hex of a HIGH-ENTROPY value. Used for (a) token_hash =
+// SHA-256(rawToken) where rawToken is 32 cryptographically-random bytes, and
+// (b) the request-token lookup. Not a password hash — the input is never a
+// human-chosen low-entropy secret.
 function sha256Hex(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+// Deterministic rotation fingerprint of the configured long-lived key. Keyed
+// HMAC with a fixed domain label (see KEY_FINGERPRINT_LABEL).
+function keyFingerprintHex(apiKey: string): string {
+  return createHmac("sha256", KEY_FINGERPRINT_LABEL).update(apiKey, "utf8").digest("hex");
 }
 
 /** `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid. */
@@ -182,7 +210,7 @@ export function mintWidgetStreamToken(input: {
   const jti = randomUUID();
   const scope = (input.scope ?? `${input.agentSlug}.stream`).slice(0, 128);
   const aud = streamRoutePath(input.agentSlug);
-  const keyFingerprint = sha256Hex(apiKey);
+  const keyFingerprint = keyFingerprintHex(apiKey);
   const sub =
     typeof input.sub === "string" && input.sub.length > 0
       ? input.sub.slice(0, SUB_MAX_LENGTH)
@@ -346,7 +374,7 @@ export function consumeWidgetStreamToken(input: {
   // configured key's fingerprint. Regenerating the long-lived key therefore
   // invalidates ALL outstanding short-lived tokens immediately.
   const currentKey = readLongLivedApiKey(input.auth);
-  if (!currentKey || row.token_key_fingerprint !== sha256Hex(currentKey)) {
+  if (!currentKey || row.token_key_fingerprint !== keyFingerprintHex(currentKey)) {
     return { ok: false, reason: "key_rotated" };
   }
 
