@@ -1,7 +1,11 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getSessionCookie } from "better-auth/cookies";
-import { GENERATED_WIDGET_STREAM_PUBLIC_PATHS } from "@/lib/generated/widget-stream-public-paths";
+import {
+  GENERATED_WIDGET_STREAM_PUBLIC_PATHS,
+  GENERATED_WIDGET_STREAM_TOKEN_PATHS,
+  GENERATED_WIDGET_STREAM_CAPABILITY_PATHS,
+} from "@/lib/generated/widget-stream-public-paths";
 
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
@@ -32,6 +36,18 @@ const PUBLIC_PATH_PREFIXES = [
 // a widget-stream extension requires no edit here. Do NOT generalize to a
 // /api/agents prefix — other agent routes must continue to require a session.
 const PUBLIC_AGENT_STREAM_PATHS = GENERATED_WIDGET_STREAM_PUBLIC_PATHS;
+
+// Token-exchange + capabilities siblings of each widget-stream slug (cinatra#220),
+// GENERATED from the same cinatra.widgetStream declarations as the stream paths.
+// "Public path" here means "skip the Better-Auth session redirect so the route
+// enforces its OWN auth" — a self-authenticating route NOT on this list gets
+// 307'd to /sign-in before its handler runs. Each route still enforces auth:
+//   - .../token: server-to-server long-lived-key Bearer auth INSIDE the handler;
+//   - .../capabilities: AUTH-FREE static contract metadata (leaks no instance data).
+// Exact slug paths only — do NOT broaden to an /api/agents prefix (that would
+// make every agent route public).
+const PUBLIC_AGENT_TOKEN_PATHS = GENERATED_WIDGET_STREAM_TOKEN_PATHS;
+const PUBLIC_AGENT_CAPABILITY_PATHS = GENERATED_WIDGET_STREAM_CAPABILITY_PATHS;
 
 const PUBLIC_EXACT_PATHS = [
   "/favicon.ico",
@@ -94,6 +110,16 @@ function isPublicPath(pathname: string) {
 
   // Only the two CMS content-editor agent stream slugs are widget-public.
   if (PUBLIC_AGENT_STREAM_PATHS.includes(pathname)) {
+    return true;
+  }
+
+  // The token-exchange + capabilities siblings of those exact slugs (cinatra#220).
+  // Each enforces its own auth in-handler (token: long-lived key; capabilities:
+  // auth-free static metadata). Exact-match only — never an /api/agents prefix.
+  if (
+    PUBLIC_AGENT_TOKEN_PATHS.includes(pathname) ||
+    PUBLIC_AGENT_CAPABILITY_PATHS.includes(pathname)
+  ) {
     return true;
   }
 

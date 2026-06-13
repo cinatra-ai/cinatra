@@ -3,6 +3,8 @@ import "server-only";
 import { Validator } from "@cfworker/json-schema";
 
 import authInitSchema from "./wp-drupal-auth-init.schema.json";
+import authInitSchemaV2 from "./wp-drupal-auth-init.v2.schema.json";
+import tokenExchangeRequestSchemaV2 from "./wp-drupal-token-exchange-request.v2.schema.json";
 
 // ---------------------------------------------------------------------------
 // Versioned plugin↔core contract for the WordPress plugin / Drupal module
@@ -24,9 +26,16 @@ import authInitSchema from "./wp-drupal-auth-init.schema.json";
 // validator CORE does not change.
 // ---------------------------------------------------------------------------
 
-export const CURRENT_CONTRACT_VERSION = "v1" as const;
+export const CURRENT_CONTRACT_VERSION = "v2" as const;
 
-export const SUPPORTED_CONTRACT_VERSIONS = ["v1"] as const;
+// v2 (cinatra#220 / wp#4 Option A) adds the apiKey-free local-widget flow:
+// the browser holds NO secret and streams with a short-lived `cit_` token
+// obtained from the same-origin token broker. v1 callers (legacy long-lived
+// flow) remain ACCEPTED — adding a version never breaks the prior one.
+export const SUPPORTED_CONTRACT_VERSIONS = ["v1", "v2"] as const;
+
+export const MIN_CONTRACT_VERSION = "v1" as const;
+export const MAX_CONTRACT_VERSION = "v2" as const;
 
 export type ContractVersion = (typeof SUPPORTED_CONTRACT_VERSIONS)[number];
 
@@ -92,18 +101,75 @@ export function validateContractVersion(received: unknown): ContractCheckResult 
   };
 }
 
-const authInitValidator = new Validator(
-  authInitSchema as unknown as Record<string, unknown>,
+// Per-version auth-init validators. Forward-compatibility rule (unchanged):
+// to add a vN contract, add the enforced schema copy + a map entry here; the
+// validator CORE below does not change.
+const AUTH_INIT_VALIDATORS: Record<ContractVersion, Validator> = {
+  v1: new Validator(authInitSchema as unknown as Record<string, unknown>, "2020-12"),
+  v2: new Validator(authInitSchemaV2 as unknown as Record<string, unknown>, "2020-12"),
+};
+
+const tokenExchangeRequestValidator = new Validator(
+  tokenExchangeRequestSchemaV2 as unknown as Record<string, unknown>,
   "2020-12",
 );
 
 /**
- * Validate a full stream-init (auth-init) request body against the v1 contract.
+ * Validate a token-exchange request body (POST /api/agents/{slug}/token).
+ *
+ * Version is checked first (so the admin-visible message is precise), then the
+ * body is validated against the v2 token-exchange-request schema. Unlike
+ * auth-init, the token-exchange endpoint is a v2-only surface: there is no
+ * legacy unversioned token-exchange caller, so a missing/unknown version is an
+ * error (the endpoint maps a malformed body to a structured 400, never a 500).
+ */
+export function validateTokenExchangeRequest(body: unknown): ContractCheckResult {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_request_shape",
+        message: "Token-exchange request body must be a JSON object.",
+        supportedVersions: [...SUPPORTED_CONTRACT_VERSIONS],
+        received: body,
+      },
+    };
+  }
+
+  const received = (body as { contractVersion?: unknown }).contractVersion;
+  const versionCheck = validateContractVersion(received);
+  if (!versionCheck.ok) {
+    return versionCheck;
+  }
+
+  const result = tokenExchangeRequestValidator.validate(body);
+  if (!result.valid) {
+    const detail = result.errors
+      .map((e) => `${e.instanceLocation || "/"}: ${e.error}`)
+      .slice(0, 5)
+      .join("; ");
+    return {
+      ok: false,
+      error: {
+        code: "invalid_request_shape",
+        message: `Token-exchange request does not conform to the v2 contract: ${detail}`,
+        supportedVersions: [...SUPPORTED_CONTRACT_VERSIONS],
+        received,
+      },
+    };
+  }
+
+  return versionCheck;
+}
+
+/**
+ * Validate a full stream-init (auth-init) request body against the declared
+ * contract version (v1 or v2 — both supported).
  *
  * Version is checked first so the admin-visible message is precise. When a
  * recognised `contractVersion` is present the body is validated against the
- * full auth-init JSON Schema; legacy (unversioned) callers skip strict shape
- * validation so they are not hard-broken.
+ * VERSION-APPROPRIATE auth-init JSON Schema; legacy (unversioned) callers skip
+ * strict shape validation so they are not hard-broken.
  */
 export function validateAuthInitRequest(body: unknown): ContractCheckResult {
   // Non-object bodies (null, arrays, primitives) are never a valid request —
@@ -129,7 +195,10 @@ export function validateAuthInitRequest(body: unknown): ContractCheckResult {
   }
 
   if (!versionCheck.legacy) {
-    const result = authInitValidator.validate(body);
+    // `received` is a supported version here (validateContractVersion passed),
+    // so the version-keyed validator lookup is total.
+    const validator = AUTH_INIT_VALIDATORS[received as ContractVersion];
+    const result = validator.validate(body);
     if (!result.valid) {
       const detail = result.errors
         .map((e) => `${e.instanceLocation || "/"}: ${e.error}`)
@@ -141,7 +210,7 @@ export function validateAuthInitRequest(body: unknown): ContractCheckResult {
           code: "invalid_request_shape",
           message:
             `Assistant request does not conform to contract ` +
-            `${CURRENT_CONTRACT_VERSION}: ${detail}`,
+            `${String(received)}: ${detail}`,
           supportedVersions: [...SUPPORTED_CONTRACT_VERSIONS],
           received,
         },

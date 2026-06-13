@@ -17,6 +17,7 @@ import {
 } from "@/lib/wp-drupal-contract";
 
 import authInitSchema from "../wp-drupal-auth-init.schema.json";
+import authInitSchemaV2 from "../wp-drupal-auth-init.v2.schema.json";
 
 /** Minimal valid v1 auth-init bodies (one per platform context shape). */
 const validWordpressBody = {
@@ -41,20 +42,30 @@ const validDrupalBody = {
   },
 };
 
-describe("wp-drupal contract — enforced schema copy stays in lock-step", () => {
-  it("schema const matches CURRENT_CONTRACT_VERSION", () => {
+describe("wp-drupal contract — enforced schema copies stay in lock-step", () => {
+  it("the v1 enforced copy pins const v1; the v2 enforced copy pins const v2", () => {
     expect(
       (authInitSchema as { properties: { contractVersion: { const: string } } })
         .properties.contractVersion.const,
-    ).toBe(CURRENT_CONTRACT_VERSION);
+    ).toBe("v1");
+    expect(
+      (authInitSchemaV2 as { properties: { contractVersion: { const: string } } })
+        .properties.contractVersion.const,
+    ).toBe("v2");
+  });
+
+  it("CURRENT_CONTRACT_VERSION is v2 and every supported version has an enforced schema const", () => {
+    expect(CURRENT_CONTRACT_VERSION).toBe("v2");
     expect(SUPPORTED_CONTRACT_VERSIONS).toContain(CURRENT_CONTRACT_VERSION);
+    expect(SUPPORTED_CONTRACT_VERSIONS).toEqual(["v1", "v2"]);
   });
 });
 
 describe("wp-drupal contract — runtime validator", () => {
-  it("isSupportedContractVersion accepts v1, rejects others", () => {
+  it("isSupportedContractVersion accepts v1 + v2, rejects others", () => {
     expect(isSupportedContractVersion("v1")).toBe(true);
-    expect(isSupportedContractVersion("v2")).toBe(false);
+    expect(isSupportedContractVersion("v2")).toBe(true);
+    expect(isSupportedContractVersion("v3")).toBe(false);
     expect(isSupportedContractVersion(1)).toBe(false);
     expect(isSupportedContractVersion(undefined)).toBe(false);
   });
@@ -79,6 +90,12 @@ describe("wp-drupal contract — runtime validator", () => {
     expect(r.ok && r.legacy).toBe(true);
   });
 
+  it("validateContractVersion: v2 is ok and not legacy", () => {
+    const r = validateContractVersion("v2");
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.legacy).toBe(false);
+  });
+
   it("validateContractVersion: unknown version is a structured admin-visible error", () => {
     const r = validateContractVersion("v9");
     expect(r.ok).toBe(false);
@@ -95,8 +112,23 @@ describe("wp-drupal contract — runtime validator", () => {
     expect(validateAuthInitRequest(validDrupalBody).ok).toBe(true);
   });
 
-  it("validateAuthInitRequest: unknown version → unsupported_contract_version", () => {
+  it("validateAuthInitRequest: valid v2 body passes (validated against the v2 schema)", () => {
     const r = validateAuthInitRequest({ ...validWordpressBody, contractVersion: "v2" });
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.legacy).toBe(false);
+  });
+
+  it("validateAuthInitRequest: a v2-declared body validated against the wrong const fails shape", () => {
+    // contractVersion is the supported "v2", but suppose the rest is malformed
+    // (empty messages) → invalid_request_shape against the v2 schema, not a
+    // version error.
+    const r = validateAuthInitRequest({ contractVersion: "v2", messages: [] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("invalid_request_shape");
+  });
+
+  it("validateAuthInitRequest: unknown version → unsupported_contract_version", () => {
+    const r = validateAuthInitRequest({ ...validWordpressBody, contractVersion: "v9" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe("unsupported_contract_version");
   });

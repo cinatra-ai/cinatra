@@ -115,6 +115,25 @@ export function createStoreTables(schemaName: string) {
       id: text("id").primaryKey(),
       payload: text("payload").notNull(),
     }),
+    // Short-lived widget-stream tokens (cinatra#220). Hash-at-rest: token_hash
+    // is SHA-256(rawToken); the raw token is NEVER persisted. Runtime
+    // mint/consume go through src/lib/widget-token-broker.ts (raw SQL keyed by
+    // token_hash); this declaration keeps the column-table in the createStoreTables
+    // catalog so its shape is visible to the schema-drift guard.
+    widget_stream_tokens: schema.table("widget_stream_tokens", {
+      tokenHash: text("token_hash").primaryKey(),
+      jti: text("jti").notNull(),
+      agentSlug: text("agent_slug").notNull(),
+      aud: text("aud").notNull(),
+      iss: text("iss").notNull(),
+      origin: text("origin").notNull(),
+      scope: text("scope").notNull(),
+      sub: text("sub"),
+      tokenConfigKey: text("token_config_key").notNull(),
+      tokenKeyFingerprint: text("token_key_fingerprint").notNull(),
+      expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+      createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    }),
   };
 }
 
@@ -4011,6 +4030,27 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_object_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (object_id, created_at DESC)` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_status_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (status, created_at DESC) WHERE status = 'pending'` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_org_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (org_id, created_at DESC) WHERE org_id IS NOT NULL` },
+    // widget_stream_tokens (cinatra#220): short-lived, origin/aud/scope-bound
+    // tokens minted by the token-exchange endpoint and consumed by the
+    // /api/agents/[agentSlug]/stream route. ONLY SHA-256(rawToken) is stored
+    // (hash-at-rest) — a DB/log leak never yields a live credential. Columns
+    // are the persisted token claims (see src/lib/widget-token-broker.ts).
+    // expires_at index drives the on-mint/on-consume sweep (no external cron).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (
+      token_hash text PRIMARY KEY,
+      jti text NOT NULL,
+      agent_slug text NOT NULL,
+      aud text NOT NULL,
+      iss text NOT NULL,
+      origin text NOT NULL,
+      scope text NOT NULL,
+      sub text,
+      token_config_key text NOT NULL,
+      token_key_fingerprint text NOT NULL,
+      expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already
