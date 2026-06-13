@@ -67,7 +67,7 @@ export type InstallPipelineDeps = {
    * the loaders' activation-time ABI gate remains the backstop); the default
    * factory always wires it.
    */
-  readDeclaredCompat?: (storeDir: string) => Promise<{ sdkAbiRange: string | null }>;
+  readDeclaredCompat: (storeDir: string) => Promise<{ sdkAbiRange: string | null }>;
   /**
    * Persist the REAL provenance on the canonical install row — the sha512
    * integrity + content hash (+ the additive sha256 attestation). The default
@@ -107,7 +107,7 @@ export type InstallPipelineDeps = {
    * grant mutation — read-only. Optional so existing unit tests can omit it (then
    * the probe is []); the default factory wires `readGrantForScope`.
    */
-  readGrantForScope?: (
+  readGrantForScope: (
     packageName: string,
     orgId: string | null,
   ) => Promise<{ orgId: string | null; status: string; approvedPorts: string[]; requestedPortsHash: string; approvedBy?: string | null } | null>;
@@ -119,7 +119,7 @@ export type InstallPipelineDeps = {
    * Optional (omitted → the grant is not restored, only the source/journal are); the
    * default factory wires `restoreGrant`.
    */
-  restoreGrant?: (input: {
+  restoreGrant: (input: {
     packageName: string;
     orgId: string | null;
     status: "pending" | "approved" | "revoked";
@@ -139,7 +139,7 @@ export type InstallPipelineDeps = {
    * JSON-DSL field is rejected fail-closed. `ctx.db` stays UNWIRED — the host
    * runs the modules; the extension never gets a DB handle.
    */
-  applyMigrations?: (input: { storeDir: string; packageName: string; version: string; orgId: string | null }) => Promise<void>;
+  applyMigrations: (input: { storeDir: string; packageName: string; version: string; orgId: string | null }) => Promise<void>;
   /**
    * Validate-only migration preflight (#118): returns true when the
    * materialized package DECLARES host migrations (cinatra.migrationsDir),
@@ -150,14 +150,22 @@ export type InstallPipelineDeps = {
    * install that can never activate is a trap. Optional so existing unit
    * tests can omit it; the default factory wires the host preflight.
    */
-  preflightMigrations?: (input: { storeDir: string; packageName: string }) => Promise<boolean>;
+  preflightMigrations: (input: { storeDir: string; packageName: string }) => Promise<boolean>;
   /**
    * Install-op journal hooks (the saga's idempotency + the anchor's `finalized`
-   * trust gate run over these). Optional so existing unit tests can omit them;
-   * the default factory wires the journal store.
+   * trust gate run over these). The default factory wires the journal store.
    */
-  beginInstallOp?: (input: { installOpId: string; packageName: string; orgId: string | null; digest?: string | null }) => Promise<void>;
-  advanceInstallOpPhase?: (input: { installOpId: string; phase: "materialized" | "granted" | "preflighted" | "finalized" | "failed" | "rolled_back"; digest?: string | null }) => Promise<void>;
+  beginInstallOp: (input: { installOpId: string; packageName: string; orgId: string | null; digest?: string | null }) => Promise<void>;
+  advanceInstallOpPhase: (input: { installOpId: string; phase: "materialized" | "granted" | "preflighted" | "finalized" | "failed" | "rolled_back" | "superseded"; digest?: string | null }) => Promise<void>;
+  /**
+   * FINALIZE the install op — the SUPERSESSION seam (cinatra#158). Unlike a plain
+   * `advanceInstallOpPhase({phase:'finalized'})`, this ATOMICALLY demotes the prior
+   * `finalized` op for the same (package, org) to `superseded` and promotes this op
+   * to `finalized`, upholding the DB partial-unique-on-`finalized` invariant (exactly
+   * one anchor per (package, org)). The HAPPY-path finalize MUST route through this,
+   * never the plain advance. The default factory wires `finalizeInstallOp`.
+   */
+  finalizeInstallOp: (installOpId: string) => Promise<void>;
   /**
    * Read the current (package, org) install-op journal row (or null). The update-
    * compensation path captures this BEFORE `beginInstallOp` overwrites the single
@@ -167,7 +175,7 @@ export type InstallPipelineDeps = {
    * the previously-working install boot-anchorable. Optional so existing unit tests
    * can omit it (then no restore runs); the default factory wires the journal read.
    */
-  readInstallOp?: (packageName: string, orgId: string | null) => Promise<{ installOpId: string; phase: string; digest: string | null } | null>;
+  readInstallOp: (packageName: string, orgId: string | null) => Promise<{ installOpId: string; phase: string; digest: string | null } | null>;
   /**
    * Durable-rollback-first: capture the CURRENT canonical source/provenance
    * for the (package, org) BEFORE `recordProvenance` (sourceSwitch) overwrites it. On
@@ -177,7 +185,7 @@ export type InstallPipelineDeps = {
    * post-commit rollback re-records nothing, only the journal/grant restore run);
    * the default factory wires the canonical-store read.
    */
-  readCurrentSource?: (
+  readCurrentSource: (
     packageName: string,
     orgId: string | null,
   ) => Promise<{
@@ -200,7 +208,7 @@ export type InstallPipelineDeps = {
    * edges are not restored on rollback); the default factory wires the
    * canonical-store read.
    */
-  readCurrentDependencies?: (
+  readCurrentDependencies: (
     packageName: string,
     orgId: string | null,
   ) => Promise<ExtensionDependency[] | null>;
@@ -215,7 +223,7 @@ export type InstallPipelineDeps = {
    * `reason:"no-activator"`); the default factory wires
    * `activateInstalledPackageInProcess`.
    */
-  activateInProcess?: (input: {
+  activateInProcess: (input: {
     packageName: string;
     orgId: string | null;
     storeDir: string;
@@ -235,7 +243,7 @@ export type InstallPipelineDeps = {
    * (omitted → falls back to `activateInProcess`); the default factory wires
    * `hotUpdateWithDurableRollback`.
    */
-  activateUpdateWithRollback?: (input: {
+  activateUpdateWithRollback: (input: {
     packageName: string;
     orgId: string | null;
     storeDir: string;
@@ -266,7 +274,7 @@ export type InstallPipelineDeps = {
    * wires the host probe). DO NOT chase probe-vs-live fidelity here — the rollback is
    * the boundary.
    */
-  verifyActivatableBeforeFinalize?: (input: {
+  verifyActivatableBeforeFinalize: (input: {
     packageName: string;
     orgId: string | null;
     storeDir: string;
@@ -282,7 +290,7 @@ export type InstallPipelineDeps = {
    * against the (intact) previous install. Best-effort. Optional (the default
    * factory wires `rm`).
    */
-  gcStoreDir?: (storeDir: string) => Promise<void>;
+  gcStoreDir: (storeDir: string) => Promise<void>;
   /**
    * Read the materialized manifest's dependency edges (#180) — the DUAL-READ
    * helper over the SRI-verified bytes (`cinatra.dependencies` canonical-wins;
@@ -292,7 +300,7 @@ export type InstallPipelineDeps = {
    * refused manifest is fully inert. Optional so existing unit tests can omit
    * it (then no edges are read/persisted); the default factory always wires it.
    */
-  readDependencyEdges?: (storeDir: string) => Promise<ExtensionDependency[]>;
+  readDependencyEdges: (storeDir: string) => Promise<ExtensionDependency[]>;
   /**
    * Persist the manifest edges onto the canonical install row at the SAME
    * (package, org) scope the journal/grant/provenance bind (#180 edge
@@ -304,7 +312,7 @@ export type InstallPipelineDeps = {
    * Optional for unit tests; the default factory wires the sanctioned
    * canonical writer (`recordExtensionDependencies`).
    */
-  persistDependencyEdges?: (input: {
+  persistDependencyEdges: (input: {
     packageName: string;
     orgId: string | null;
     dependencies: ExtensionDependency[];
@@ -320,10 +328,37 @@ export type InstallPipelineDeps = {
    * constraint gating is the version-aware stage of #180). Optional for unit
    * tests; the default factory wires the shared closure gate.
    */
-  assertForwardInstallClosure?: (input: {
+  assertForwardInstallClosure: (input: {
     packageName: string;
     orgId: string | null;
   }) => Promise<void>;
+  /**
+   * Structured operational-event sink (cinatra#158 (d)). Fired when ANY durable
+   * RESTORE step — the OLD provenance / host-port grant / dependency-edges
+   * re-pin — FAILS in either unwind path (the pre-finalize update catch, or the
+   * post-commit hot-update durable rollback). A failed restore leaves the
+   * previous install only PARTIALLY re-pinned; this is the structured parity
+   * with how the hot-update path surfaces `rollbackComplete:false`. Best-effort:
+   * a throw from the sink is swallowed so it never masks the original error. The
+   * default factory wires a stable structured console emitter; tests inject a
+   * spy. Required (the test factory supplies an inert default).
+   */
+  emitOperationalEvent: (event: InstallDurableRestoreFailureEvent) => void;
+};
+
+/**
+ * Structured operational event for a FAILED durable-restore step (cinatra#158).
+ * Log-scrapers / ops alerting key on `event: "install_durable_restore_failed"`.
+ */
+export type InstallDurableRestoreFailureEvent = {
+  event: "install_durable_restore_failed";
+  packageName: string;
+  orgId: string | null;
+  /** Which durable axis failed to restore. */
+  step: "provenance" | "grant" | "dependencies" | "journal";
+  /** Which unwind path raised it. */
+  scope: "pre-finalize" | "post-commit-rollback";
+  reason: string;
 };
 
 export type InstallPipelineResult = {
@@ -361,6 +396,30 @@ export type InstallPipelineResult = {
   /** Machine-readable reason when `activated` is false. */
   reason?: string;
 };
+
+/**
+ * Emit a structured durable-restore-failure operational event (cinatra#158 (d)) and
+ * mirror it to `console.error` (so a deployment without structured-event collection
+ * still surfaces the loud signal). Best-effort: a throwing sink is swallowed so it
+ * never masks the original install error.
+ */
+function emitDurableRestoreFailure(
+  deps: Pick<InstallPipelineDeps, "emitOperationalEvent">,
+  evt: Omit<InstallDurableRestoreFailureEvent, "event">,
+): void {
+  const event: InstallDurableRestoreFailureEvent = { event: "install_durable_restore_failed", ...evt };
+  try {
+    deps.emitOperationalEvent?.(event);
+  } catch {
+    /* sink must never mask the original error */
+  }
+  // eslint-disable-next-line no-console
+  console.error(
+    `[extension-install-pipeline] durable restore FAILED (${event.scope}/${event.step}) for ` +
+      `${event.packageName} (org ${event.orgId ?? "(global)"}) — the previous install may be only ` +
+      `PARTIALLY restored until a successful re-install: ${event.reason}`,
+  );
+}
 
 /**
  * Run the install pipeline. The grant is AUTO-APPROVED only for a `trusted-signed`
@@ -798,48 +857,43 @@ export async function installExtensionFromRegistry(
       });
     }
 
-    await deps.advanceInstallOpPhase?.({ installOpId, phase: "finalized" });
+    // SUPERSESSION SEAM (cinatra#158): finalize through `finalizeInstallOp`, which
+    // atomically demotes any prior `finalized` op for this (package, org) to
+    // `superseded` and promotes THIS op — never a plain phase advance (that would
+    // leave two `finalized` rows and violate the partial-unique invariant).
+    await deps.finalizeInstallOp?.(installOpId);
   } catch (err) {
-    // A post-begin step threw. The dispatcher takes `ownsRollback:false` for an
-    // UPDATE (the old store + provenance are durably preserved), but `beginInstallOp`
-    // above already overwrote the single (package, org) journal row to a NON-terminal
-    // phase for THIS (now-aborted) attempt — destroying the OLD install's `finalized`
-    // op. With no compensation, `resolveInstallAnchor` (requires `phase === 'finalized'`)
-    // would refuse the previously-working install after a restart.
+    // A post-begin step threw. cinatra#158 (append-only journal): `beginInstallOp`
+    // above APPENDED a NEW non-finalized op for THIS attempt; it did NOT touch the
+    // OLD install's `finalized` op (which still exists). So the OLD anchor is intact
+    // with ZERO journal restore — we only TERMINALIZE the NEW op so it can never be
+    // mistaken for the anchor and the boot sweep treats it as settled. THIS replaces
+    // the deleted re-begin+re-finalize "restore choreography".
     //
-    // So on an UPDATE (prior op was `finalized`) RESTORE that op: re-`begin` it at
-    // its ORIGINAL id + digest, then re-advance it to `finalized`, leaving the
-    // (package, org) journal pointing back at the OLD finalized op — the old install
-    // stays boot-anchorable. The old store/provenance are already untouched (the
-    // dispatcher did not roll them back). Best-effort: a restore failure is logged,
-    // never masking the original error.
-    //
-    // On a FRESH install (no prior `finalized` op) DO NOT restore — the non-finalized
-    // row this attempt left is correctly the dispatcher's to roll back / re-run via
-    // the journal-aware check.
-    if (priorOp && priorOp.phase === "finalized") {
-      try {
-        await deps.beginInstallOp?.({
-          installOpId: priorOp.installOpId,
-          packageName: input.packageName,
-          orgId: input.orgId,
-          digest: priorOp.digest,
-        });
-        await deps.advanceInstallOpPhase?.({ installOpId: priorOp.installOpId, phase: "finalized" });
-      } catch (restoreErr) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `[extension-install-pipeline] failed to restore prior finalized install-op ` +
-            `${priorOp.installOpId} for ${input.packageName} after a failed update — the previous ` +
-            `install may not boot-anchor until a successful re-install: ` +
-            `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
-        );
-      }
-      // ALSO restore the OLD host-port grant. `recordRequestedGrant`/`approveGrant`
-      // above mutated the grant (a CHANGED request reset it to pending; a signed
-      // install re-approved it against the new ports) BEFORE this pre-finalize step
-      // threw — so without this the OLD version would restart with the WRONG grant.
-      // A fresh install captured no priorGrant → this is skipped.
+    // On a FRESH install (no prior finalized op) terminalize-NEW also applies: the
+    // non-finalized row is the dispatcher's to roll back via the journal-aware check;
+    // terminalizing it here makes that explicit and keeps the boot sweep clean.
+    try {
+      await deps.advanceInstallOpPhase?.({ installOpId, phase: "failed" });
+      await deps.advanceInstallOpPhase?.({ installOpId, phase: "rolled_back" });
+    } catch (terminalizeErr) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `[extension-install-pipeline] failed to terminalize the aborted install-op ` +
+          `${installOpId} for ${input.packageName} (boot sweep will compensate it): ` +
+          `${terminalizeErr instanceof Error ? terminalizeErr.message : String(terminalizeErr)}`,
+      );
+    }
+    // The OLD install's canonical state (provenance, host-port grant, dependency
+    // edges) may have been OVERWRITTEN by this attempt's late writes BEFORE the
+    // throw — those are SEPARATE durable state on the canonical row / grant row that
+    // the append-only journal does NOT undo. So on an UPDATE (a prior finalized op
+    // existed) RESTORE the captured OLD provenance/grant/edges. Best-effort +
+    // isolated; each FAILED step emits a structured operational event (cinatra#158
+    // (d)) AND logs, never masking the original error. A FRESH install captured none.
+    if (isUpdate) {
+      // ALSO restore the OLD host-port grant — `recordRequestedGrant`/`approveGrant`
+      // may have reset/re-approved it against the new ports before the throw.
       if (priorGrant && deps.restoreGrant) {
         try {
           await deps.restoreGrant({
@@ -851,24 +905,22 @@ export async function installExtensionFromRegistry(
             approvedBy: priorGrant.approvedBy ?? null,
           });
         } catch (restoreErr) {
-          // eslint-disable-next-line no-console
-          console.error(
-            `[extension-install-pipeline] failed to restore prior host-port grant for ` +
-              `${input.packageName} after a failed update — the previous install may carry the ` +
-              `wrong grant until a successful re-install: ` +
-              `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
-          );
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "grant",
+            scope: "pre-finalize",
+            reason: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+          });
         }
       }
-      // ALSO restore the OLD provenance + dependency EDGES (#180). The tail of
-      // the try block is `recordProvenance` → `persistDependencyEdges` →
-      // forward gate → finalize, so a throw in that window can leave the NEW
-      // version's source and/or edges on the canonical row while the journal
-      // (restored above) anchors the OLD install. Re-recording the CAPTURED
-      // prior values is idempotent when the corresponding write never ran
-      // (same-value rewrite), so we restore unconditionally on an update
-      // failure rather than tracking exactly where the throw happened.
-      // Best-effort + isolated, like the journal/grant restores above.
+      // ALSO restore the OLD provenance + dependency EDGES (#180). The tail of the
+      // try block is `recordProvenance` → `persistDependencyEdges` → forward gate →
+      // finalize, so a throw in that window can leave the NEW version's source/edges
+      // on the canonical row while the OLD journal op anchors the OLD install — a
+      // contradiction the loader's digest binding (cinatra#158) refuses, but which we
+      // still re-pin to keep the canonical row coherent. Idempotent same-value
+      // rewrites when the corresponding write never ran.
       if (priorSource) {
         try {
           await deps.recordProvenance({
@@ -880,18 +932,18 @@ export async function installExtensionFromRegistry(
             contentHash: priorSource.contentHash ?? "",
             ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
             ...(priorSource.signature ? { signature: priorSource.signature } : {}),
-            // cinatra#181: the prior install's closureHash MUST ride every
-            // restore — sourceSwitchExtension replaces the WHOLE source
-            // object, so omitting it here would strip the OLD closure anchor
-            // and break (or downgrade) its boot-time v2 re-verification.
+            // cinatra#181: the prior install's closureHash MUST ride every restore —
+            // sourceSwitchExtension replaces the WHOLE source object.
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
           });
         } catch (restoreErr) {
-          console.error(
-            `[extension-install-pipeline] failed to restore prior provenance for ` +
-              `${input.packageName} after a failed update: ` +
-              `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
-          );
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "provenance",
+            scope: "pre-finalize",
+            reason: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+          });
         }
       }
       if (priorEdges !== null && deps.persistDependencyEdges) {
@@ -902,12 +954,13 @@ export async function installExtensionFromRegistry(
             dependencies: priorEdges,
           });
         } catch (restoreErr) {
-          console.error(
-            `[extension-install-pipeline] failed to restore prior dependency edges for ` +
-              `${input.packageName} after a failed update — closure gates may read the failed ` +
-              `version's edges until a successful re-install: ` +
-              `${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}`,
-          );
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "dependencies",
+            scope: "pre-finalize",
+            reason: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+          });
         }
       }
     }
@@ -942,15 +995,28 @@ export async function installExtensionFromRegistry(
   if (isSupersedingUpdate && deps.activateUpdateWithRollback) {
     // Build the DURABLE ROLLBACK closure from the CAPTURED prior state. Runs (only)
     // when the NEW digest fails live activation: re-pins every durable axis to OLD —
-    // provenance/source, the install-op journal op (re-begin its original id + digest,
-    // re-finalize), and the host-port grant (re-write its exact captured state). Each
-    // step is best-effort + isolated so one failure never blocks the others.
-    // Each step records its own success so the closure returns a CLEAN-vs-PARTIAL
-    // verdict: a clean rollback requires EVERY applicable step to succeed.
-    // A step that is not applicable (no prior source / no grant / no restoreGrant
-    // dep) is NOT a failure — it simply has nothing to restore.
+    // provenance/source, the host-port grant, the dependency edges, and the install-op
+    // JOURNAL. cinatra#158 (append-only): the NEW op's `finalizeInstallOp` above
+    // DEMOTED the OLD finalized op to `superseded` and promoted NEW to `finalized`.
+    // So the journal re-pin is NOT the deleted re-begin choreography — it is a single
+    // phase flip of rows that STILL EXIST: terminalize NEW (failed→rolled_back) and
+    // re-promote the OLD `superseded` row back to `finalized`. Each step is
+    // best-effort + isolated; a FAILED restore step emits a structured operational
+    // event (cinatra#158 (d)). The closure returns a CLEAN-vs-PARTIAL verdict (a
+    // clean rollback requires EVERY applicable step to succeed); a not-applicable
+    // step (no prior source / grant / dep) is NOT a failure.
     const restoreDurableAnchor = async (): Promise<{ complete: boolean; reason?: string }> => {
       const failedSteps: string[] = [];
+      const recordFailure = (step: InstallDurableRestoreFailureEvent["step"], e: unknown) => {
+        failedSteps.push(step);
+        emitDurableRestoreFailure(deps, {
+          packageName: input.packageName,
+          orgId: input.orgId,
+          step,
+          scope: "post-commit-rollback",
+          reason: e instanceof Error ? e.message : String(e),
+        });
+      };
       // (i-a) re-record the OLD provenance/source so the canonical row points to OLD.
       if (priorSource) {
         try {
@@ -966,28 +1032,28 @@ export async function installExtensionFromRegistry(
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
           });
         } catch (e) {
-          failedSteps.push("provenance");
-          // eslint-disable-next-line no-console
-          console.error(`[extension-install-pipeline] rollback: re-record OLD provenance for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
+          recordFailure("provenance", e);
         }
       }
-      // (i-b) restore the OLD finalized journal op (re-begin its original id + digest,
-      // then advance to `finalized`) so `resolveInstallAnchor` re-anchors OLD.
+      // (i-b) JOURNAL re-pin (cinatra#158): terminalize the NEW op, then re-promote
+      // the OLD `superseded` op back to `finalized`. With the append-only journal the
+      // OLD row was never destroyed. Re-pin OLD through the ATOMIC supersession seam
+      // `finalizeInstallOp(OLD)` as a SINGLE operation: in ONE transaction it demotes
+      // the CURRENT finalized op for the scope (the NEW op, finalized just above) to
+      // `superseded` and promotes OLD to `finalized` (with 23505 retry). This is
+      // crash-atomic (codex refute finding): there is NEVER a window with ZERO
+      // finalized anchors — either the transaction commits (OLD finalized, NEW
+      // superseded) or it does not (NEW stays finalized — the SAFE direction; the NEW
+      // digest's bytes are quarantined/restored by the activator and the loader's
+      // digest binding refuses a NEW-op-vs-OLD-source mismatch). We deliberately do
+      // NOT pre-terminalize NEW (that two-step left a zero-anchor crash window).
+      // NEW's terminal end-state is `superseded`, which is non-anchorable + never swept.
       try {
-        await deps.beginInstallOp?.({
-          installOpId: priorOp!.installOpId,
-          packageName: input.packageName,
-          orgId: input.orgId,
-          digest: priorOp!.digest,
-        });
-        await deps.advanceInstallOpPhase?.({ installOpId: priorOp!.installOpId, phase: "finalized" });
+        await deps.finalizeInstallOp?.(priorOp!.installOpId);
       } catch (e) {
-        failedSteps.push("journal");
-        // eslint-disable-next-line no-console
-        console.error(`[extension-install-pipeline] rollback: restore OLD journal op ${priorOp!.installOpId} for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
+        recordFailure("journal", e);
       }
-      // (i-c) restore the OLD host-port grant's exact captured state (status +
-      // approvedPorts + requestedPortsHash + approvedBy).
+      // (i-c) restore the OLD host-port grant's exact captured state.
       if (priorGrant && deps.restoreGrant) {
         try {
           await deps.restoreGrant({
@@ -999,15 +1065,12 @@ export async function installExtensionFromRegistry(
             approvedBy: priorGrant.approvedBy ?? null,
           });
         } catch (e) {
-          failedSteps.push("grant");
-          // eslint-disable-next-line no-console
-          console.error(`[extension-install-pipeline] rollback: restore OLD grant for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
+          recordFailure("grant", e);
         }
       }
       // (i-d) restore the OLD dependency EDGES (#180): the finalize seam above
       // persisted the NEW manifest's edges; with the OLD version re-pinned,
-      // leaving them would corrupt every closure gate (boot, archive-blocking,
-      // forward install) that reads the canonical row.
+      // leaving them would corrupt every closure gate that reads the canonical row.
       if (priorEdges !== null && deps.persistDependencyEdges) {
         try {
           await deps.persistDependencyEdges({
@@ -1016,8 +1079,7 @@ export async function installExtensionFromRegistry(
             dependencies: priorEdges,
           });
         } catch (e) {
-          failedSteps.push("dependencies");
-          console.error(`[extension-install-pipeline] rollback: restore OLD dependency edges for ${input.packageName} failed: ${e instanceof Error ? e.message : String(e)}`);
+          recordFailure("dependencies", e);
         }
       }
       return failedSteps.length === 0
@@ -1161,7 +1223,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
   const { resolveExtensionDistIntegrity } = await import("@cinatra-ai/registries");
   const { materializePackageToStore } = await import("@/lib/extension-package-store");
   const { recordRequestedGrant, approveGrant, readGrantForScope, restoreGrant } = await import("@/lib/extension-host-port-grants");
-  const { beginInstallOp, advanceInstallOpPhase, readInstallOp } = await import("@/lib/extension-install-ops");
+  const { beginInstallOp, advanceInstallOpPhase, finalizeInstallOp, readInstallOp } = await import("@/lib/extension-install-ops");
   const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
   const { sourceSwitchExtension } = await import("@cinatra-ai/extensions/lifecycle-primitive");
   const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
@@ -1434,6 +1496,8 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     },
     beginInstallOp: (b) => beginInstallOp(b).then(() => undefined),
     advanceInstallOpPhase: (a) => advanceInstallOpPhase(a).then(() => undefined),
+    // cinatra#158: the SUPERSESSION seam — atomic demote-OLD + promote-NEW.
+    finalizeInstallOp: (id) => finalizeInstallOp(id).then(() => undefined),
     readInstallOp: (pkg, oid) => readInstallOp(pkg, oid),
     verifyActivatableBeforeFinalize: async (i) => {
       // Detect supersession: any materialized store dir for this package that is
@@ -1483,5 +1547,61 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         { ...(i.storeRoot ? { storeRoot: i.storeRoot } : {}) },
       );
     },
+    // cinatra#158 (d): the structured operational-event sink. No central event bus
+    // backs the install path, so the default is the stable structured console
+    // emitter (the same surface the hot-update rollbackComplete signal uses). Ops
+    // alerting keys on `event: "install_durable_restore_failed"`.
+    emitOperationalEvent: (event) => {
+      // eslint-disable-next-line no-console
+      console.error(`[operational-event] ${JSON.stringify(event)}`);
+    },
   };
+}
+
+/**
+ * Fully-wired INERT `InstallPipelineDeps` for unit tests (cinatra#158 (c)). Every
+ * one of the now-REQUIRED deps gets a safe no-op/in-memory default; spread
+ * `overrides` to swap in the specific behaviors a test exercises. This keeps test
+ * call sites terse now that the deps are no longer individually optional. The
+ * inert defaults intentionally disable the saga/gate machinery (no journal, no
+ * activation, no compensation) — exactly the "omit it" behavior tests relied on
+ * when these fields were optional, but now type-safe and explicit.
+ */
+export function makeTestInstallPipelineDeps(
+  overrides: Partial<InstallPipelineDeps> = {},
+): InstallPipelineDeps {
+  const noop = async (): Promise<void> => undefined;
+  const base: InstallPipelineDeps = {
+    resolveIntegrity: async () => ({ integrity: "sha512-test", registryUrl: "https://registry.test" }),
+    materialize: async (i) => ({
+      storeDir: `/tmp/test-store/${i.packageName}/${i.version}`,
+      digest: "testdigest",
+      integrity: i.expectedIntegrity,
+      contentHash: "testcontenthash",
+    }),
+    readRequestedPorts: async () => [],
+    readDeclaredCompat: async () => ({ sdkAbiRange: null }),
+    recordProvenance: noop,
+    recordRequestedGrant: noop,
+    approveGrant: noop,
+    readGrantForScope: async () => null,
+    restoreGrant: noop,
+    applyMigrations: noop,
+    preflightMigrations: async () => false,
+    beginInstallOp: noop,
+    advanceInstallOpPhase: noop,
+    finalizeInstallOp: noop,
+    readInstallOp: async () => null,
+    readCurrentSource: async () => null,
+    readCurrentDependencies: async () => null,
+    activateInProcess: async () => ({ activated: false, reason: "no-activator" }),
+    activateUpdateWithRollback: async () => ({ activated: false, reason: "no-activator" }),
+    verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
+    gcStoreDir: noop,
+    readDependencyEdges: async () => [],
+    persistDependencyEdges: noop,
+    assertForwardInstallClosure: noop,
+    emitOperationalEvent: () => undefined,
+  };
+  return { ...base, ...overrides };
 }

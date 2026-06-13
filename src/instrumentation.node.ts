@@ -349,11 +349,22 @@ export async function register() {
       // the sweeper — the per-op cleanup below must skip them in the SAME
       // pass (collecting after the sweep would un-hide a just-swept member's
       // op and double-compensate it).
-      let activeBatchKeys: Set<string>;
+      // FAIL-CLOSED (cinatra#158 codex refute finding): if the active-batch key
+      // collection FAILS, we cannot tell which orphan ops are owned by a still-active
+      // batch (whose members carry finalized ops invisible to this per-op sweep). A
+      // fail-OPEN empty set would let the per-op cleanup compensate an active batch
+      // member out from under its running install (double-compensation). So on a
+      // collection failure we SKIP the per-op cleanup this boot (it retries next boot)
+      // rather than risk compensating a live batch member.
+      let activeBatchKeys: Set<string> | null;
       try {
         activeBatchKeys = await collectActiveBatchMemberKeys();
-      } catch {
-        activeBatchKeys = new Set();
+      } catch (err) {
+        console.warn(
+          "[boot] active-batch key collection failed — SKIPPING per-op orphan cleanup this boot (fail-closed; retries next boot):",
+          err,
+        );
+        activeBatchKeys = null;
       }
       try {
         const { swept } = await sweepStaleInstallBatches({ olderThanMs: STALE_MS });
@@ -364,9 +375,9 @@ export async function register() {
         console.warn("[boot] install-batch sweep failed (non-fatal):", err);
       }
 
-      const orphansAll = await listUnfinalizedInstallOps(STALE_MS);
+      const orphansAll = activeBatchKeys === null ? [] : await listUnfinalizedInstallOps(STALE_MS);
       const orphans = orphansAll.filter(
-        (op) => !activeBatchKeys.has(`${op.packageName}::${op.orgId ?? "(global)"}`),
+        (op) => !activeBatchKeys!.has(`${op.packageName}::${op.orgId ?? "(global)"}`),
       );
       if (orphans.length) {
         const deps = await makeDefaultWorkflowInstallSagaDeps();

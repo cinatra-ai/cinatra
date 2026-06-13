@@ -5,7 +5,8 @@ import path from "node:path";
 import * as tar from "tar";
 import { sriForBytes } from "@/lib/extension-package-store-core";
 import { materializePackageToStore } from "@/lib/extension-package-store";
-import { installExtensionFromRegistry, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import { installExtensionFromRegistry,
+  makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import { resolveInstallAnchor } from "@/lib/extension-install-anchor";
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
 
@@ -62,6 +63,7 @@ afterAll(async () => {
 
 function makePipelineDeps(state: InstallState): InstallPipelineDeps {
   return {
+    ...makeTestInstallPipelineDeps(),
     resolveIntegrity: async () => ({ integrity, registryUrl: REGISTRY }),
     materialize: async (i) => {
       const m = await materializePackageToStore(
@@ -95,6 +97,11 @@ function makePipelineDeps(state: InstallState): InstallPipelineDeps {
     },
     advanceInstallOpPhase: async ({ phase }) => {
       state.journalPhase = phase;
+    },
+    // cinatra#158: the happy-path finalize is the supersession seam; reflect it in
+    // the fake journal phase so the post-commit anchor read resolves `finalized`.
+    finalizeInstallOp: async () => {
+      state.journalPhase = "finalized";
     },
   };
 }
@@ -245,6 +252,7 @@ describe("dev install E2E — dependency edges + forward gate (#180)", () => {
     const storeRoot = path.join(workDir, "data-depful", "extensions", "packages");
 
     const deps: InstallPipelineDeps = {
+      ...makeTestInstallPipelineDeps(),
       ...makePipelineDeps(state),
       resolveIntegrity: async () => ({ integrity: sri, registryUrl: REGISTRY }),
       materialize: async (i) => {

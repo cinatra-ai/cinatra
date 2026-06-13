@@ -115,6 +115,25 @@ export function createStoreTables(schemaName: string) {
       id: text("id").primaryKey(),
       payload: text("payload").notNull(),
     }),
+    // Short-lived widget-stream tokens (cinatra#220). Hash-at-rest: token_hash
+    // is SHA-256(rawToken); the raw token is NEVER persisted. Runtime
+    // mint/consume go through src/lib/widget-token-broker.ts (raw SQL keyed by
+    // token_hash); this declaration keeps the column-table in the createStoreTables
+    // catalog so its shape is visible to the schema-drift guard.
+    widget_stream_tokens: schema.table("widget_stream_tokens", {
+      tokenHash: text("token_hash").primaryKey(),
+      jti: text("jti").notNull(),
+      agentSlug: text("agent_slug").notNull(),
+      aud: text("aud").notNull(),
+      iss: text("iss").notNull(),
+      origin: text("origin").notNull(),
+      scope: text("scope").notNull(),
+      sub: text("sub"),
+      tokenConfigKey: text("token_config_key").notNull(),
+      tokenKeyFingerprint: text("token_key_fingerprint").notNull(),
+      expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+      createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    }),
   };
 }
 
@@ -644,11 +663,24 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_pkg_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name)` },
-    // One latest install-op per (package, org) is what the anchor gate reads; a
-    // partial unique index keeps the GLOBAL (org_id IS NULL) journal row unique
-    // (Postgres treats NULLs as distinct under a plain UNIQUE).
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_pkg_org_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id)` },
-    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_pkg_global_uniq ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE org_id IS NULL` },
+    // cinatra#158 — APPEND-ONLY journal: one row per ATTEMPT (PK install_op_id),
+    // not one row per (package, org). The OLD full unique indexes
+    // (..._pkg_org_uniq / ..._pkg_global_uniq) enforced single-row-per-(pkg,org)
+    // and MUST go — append-only legitimately keeps many rows per scope. Drop them
+    // idempotently here too (not only via migration 0005) so an upgraded DB whose
+    // schema-init ensure pass runs converges. (See migrations/core/core__0005.)
+    { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_org_uniq` },
+    { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".extension_install_ops_pkg_global_uniq` },
+    // The TRUST INVARIANT moves to the DB: AT MOST ONE `finalized` op per
+    // (package, org) — that single finalized op IS the install anchor. The
+    // partial unique index makes it provable + serializes concurrent finalizes
+    // (finalizeInstallOp's supersession demotes the prior finalized op first). A
+    // GLOBAL (org_id IS NULL) twin is needed because Postgres treats NULLs as
+    // distinct under a plain unique.
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id) WHERE phase = 'finalized'` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS extension_install_ops_one_finalized_global ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name) WHERE phase = 'finalized' AND org_id IS NULL` },
+    // Anchor / non-finalized-window / sweeper reads scan by (package, org, phase).
+    { text: `CREATE INDEX IF NOT EXISTS extension_install_ops_scope_phase_idx ON "${schemaName.replaceAll('"', '""')}"."extension_install_ops" (package_name, org_id, phase)` },
     { text: `DO $$
       DECLARE def text;
       BEGIN
@@ -659,10 +691,11 @@ END $$` },
         WHERE n.nspname = '${schemaName.replaceAll("'", "''")}'
           AND t.relname = 'extension_install_ops'
           AND c.conname = 'extension_install_ops_phase_check';
-        -- One-shot migration: a schema created before the 'writing' phase keeps
-        -- the OLD CHECK (without 'writing'), which would reject the saga's
-        -- writing-phase advance. Drop it so the new set is (re)added below.
-        IF def IS NOT NULL AND def NOT LIKE '%writing%' THEN
+        -- One-shot migration: a schema created before a newer phase keeps the OLD
+        -- CHECK, which would reject the new phase. Drop it so the new set is
+        -- (re)added below. cinatra#158 adds 'superseded' (a demoted prior anchor);
+        -- it follows the same widen-the-CHECK pattern that added 'writing'.
+        IF def IS NOT NULL AND def NOT LIKE '%superseded%' THEN
           ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_install_ops"
             DROP CONSTRAINT extension_install_ops_phase_check;
           def := NULL;
@@ -670,7 +703,7 @@ END $$` },
         IF def IS NULL THEN
           ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_install_ops"
             ADD CONSTRAINT extension_install_ops_phase_check
-            CHECK (phase IN ('materialized', 'granted', 'preflighted', 'writing', 'finalized', 'failed', 'rolled_back'));
+            CHECK (phase IN ('materialized', 'granted', 'preflighted', 'writing', 'finalized', 'failed', 'rolled_back', 'superseded'));
         END IF;
       END $$;` },
 
@@ -4011,6 +4044,27 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_object_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (object_id, created_at DESC)` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_status_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (status, created_at DESC) WHERE status = 'pending'` },
     { text: `CREATE INDEX IF NOT EXISTS merge_proposal_org_idx ON "${schemaName.replaceAll('"', '""')}"."merge_proposal" (org_id, created_at DESC) WHERE org_id IS NOT NULL` },
+    // widget_stream_tokens (cinatra#220): short-lived, origin/aud/scope-bound
+    // tokens minted by the token-exchange endpoint and consumed by the
+    // /api/agents/[agentSlug]/stream route. ONLY SHA-256(rawToken) is stored
+    // (hash-at-rest) — a DB/log leak never yields a live credential. Columns
+    // are the persisted token claims (see src/lib/widget-token-broker.ts).
+    // expires_at index drives the on-mint/on-consume sweep (no external cron).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (
+      token_hash text PRIMARY KEY,
+      jti text NOT NULL,
+      agent_slug text NOT NULL,
+      aud text NOT NULL,
+      iss text NOT NULL,
+      origin text NOT NULL,
+      scope text NOT NULL,
+      sub text,
+      token_config_key text NOT NULL,
+      token_key_fingerprint text NOT NULL,
+      expires_at timestamptz NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already

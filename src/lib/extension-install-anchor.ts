@@ -37,14 +37,19 @@ export type ResolveInstallAnchorDeps = {
   readActiveInstall: (packageName: string, orgId: string | null) => Promise<InstallAnchorRow | null>;
   readGrant: (packageName: string, orgId: string | null) => Promise<InstallAnchorGrant | null>;
   /**
-   * Read the install-op journal phase for the package. The PRIMARY trust gate:
+   * Read the install-op journal ANCHOR for the package. The PRIMARY trust gate:
    * a row only resolves to a trusted anchor when its phase is `finalized`. A
    * half-install (provenance maybe written, but the saga never finalized) is
    * refused here even if the integrity/contentHash belt-and-suspenders check
-   * would otherwise pass. Optional so pure unit tests can omit it (treated as
-   * "no journal row" → refuse).
+   * would otherwise pass. `digest` (cinatra#158) is the tarball digest the
+   * finalized op recorded; it is surfaced on the resolved anchor so the loader
+   * can bind the anchor to the on-disk bytes. Optional so pure unit tests can
+   * omit it (treated as "no journal row" → refuse).
    */
-  readInstallOp?: (packageName: string, orgId: string | null) => Promise<{ phase: string } | null>;
+  readInstallOp?: (
+    packageName: string,
+    orgId: string | null,
+  ) => Promise<{ phase: string; digest?: string | null } | null>;
   orgId?: string | null;
 };
 
@@ -129,6 +134,11 @@ export async function resolveInstallAnchor(
   // → refused, even if provenance happened to land. No journal row → refuse.
   const op = await deps.readInstallOp?.(packageName, deps.orgId ?? null);
   if (!op || op.phase !== "finalized") return null;
+  // cinatra#158: the finalized op's recorded tarball digest binds the anchor to
+  // the on-disk store dir (<pkg>@<ver>/<digest>). Surfaced below; the loader
+  // asserts record.declaredDigest === anchor.digest so an OLD-finalized-op +
+  // NEW-source residue (a crash mid durable-restore) fails closed.
+  const anchorDigest = op.digest ?? null;
 
   const grant = await deps.readGrant(packageName, deps.orgId ?? null);
   // Reject a fallback grant: an org-scoped install must NOT inherit the global
@@ -149,6 +159,9 @@ export async function resolveInstallAnchor(
     approvedPorts: portsApproved ? grantForScope!.approvedPorts : [],
     version: row.source.version ?? null,
     signature: row.source.signature ?? null,
+    // cinatra#158: the finalized journal op's tarball digest — the loader binds
+    // it to the on-disk store dir digest (fail-closed on mismatch).
+    digest: anchorDigest,
     // cinatra#181: the recorded closureHash rides the anchor into the boot/
     // activation v2 signature verdict. The recorded SIGNATURE authenticates it:
     // a tampered hash fails v2 verification, and a NULLED hash flips the

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinatra.ai/contracts/wp-drupal-assistant/v2/auth-init.schema.json",
+  "title": "Cinatra WP/Drupal assistant — authenticated stream-init request (v2)",
+  "description": "POST body the locally-shipped WordPress plugin / Drupal module widget sends to /api/agents/{wordpress,drupal}-content-editor/stream to open an authenticated assistant session. Unchanged in shape from v1 except contractVersion is the const \"v2\". v2 callers stream with a SHORT-LIVED `Authorization: Bearer cit_<...>` token obtained from the same-origin token broker (the long-lived integration key never reaches the browser).",
+  "type": "object",
+  "required": ["contractVersion", "messages"],
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": {
+      "const": "v2",
+      "description": "Pins the plugin↔core wire contract. Cinatra rejects unknown versions with an admin-visible structured error (not a 500)."
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Conversation history. Cinatra retains only the last 20 user/assistant messages.",
+      "items": {
+        "type": "object",
+        "required": ["role", "content"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "enum": ["user", "assistant"] },
+          "content": { "type": "string" }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "description": "Per-page CMS context the assistant edits against. Field set differs by platform (WordPress: postId/postType/postStatus; Drupal: nodeId/nodeBundle/nodeStatus). All fields are string-typed and sanitised server-side before prompt embedding; additional fields are tolerated for forward compatibility.",
+      "additionalProperties": true,
+      "properties": {
+        "href": { "type": "string" },
+        "instanceId": { "type": "string" },
+        "nodeId": { "type": "string" },
+        "nodeBundle": { "type": "string" },
+        "nodeStatus": { "type": "string" },
+        "postId": { "type": "string" },
+        "postType": { "type": "string" },
+        "postStatus": { "type": "string" }
+      }
+    }
+  }
+}

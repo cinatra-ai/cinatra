@@ -1,9 +1,9 @@
-diff --git a/migrations/core/core__0005_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0005_narrow-usage-events-cost-usd.mjs
+diff --git a/migrations/core/core__0006_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0006_narrow-usage-events-cost-usd.mjs
 new file mode 100644
 --- /dev/null
-+++ b/migrations/core/core__0005_narrow-usage-events-cost-usd.mjs
++++ b/migrations/core/core__0006_narrow-usage-events-cost-usd.mjs
 @@ -0,0 +1,16 @@
-+// core__0005 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
++// core__0006 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +// The extra scale was never populated (ingest rounds to 4 decimal places)
 +// and the narrower type matches the rollup views. Safe to re-run: converting
 +// a column to the type it already has succeeds as a no-op.
@@ -22,14 +22,15 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -49,6 +49,13 @@
-       "summary": "Demote the 17 anchor rows the requiredExtensions shrink (cinatra#7) removed from the prod bootable set (33 -> 16): required_in_prod -> false and locked -> active for exactly those rows; archived tombstones stay archived; nothing is uninstalled and all provenance/dependency/owner state is preserved. Fresh databases seed from the current declaration and ledger-fake the chain; idempotent on re-run.",
+@@ -55,6 +55,13 @@
+       "file": "core/core__0005_extension-install-ops-append-only.mjs",
+       "summary": "Convert the extension install-op journal to APPEND-ONLY (cinatra#158): drop the two single-row-per-(package,org) unique indexes (pkg_org_uniq / pkg_global_uniq), add partial-UNIQUE indexes enforcing at most one finalized op per (package,org) (the install anchor) + the global org_id-IS-NULL twin, add a (package_name, org_id, phase) scan index, and widen the phase CHECK to admit the new terminal 'superseded' phase. Existing rows are preserved (append-only is strictly more permissive than single-row, so the new partial-unique-on-finalized cannot collide: a single-row schema had at most one row per (package,org), hence at most one finalized). COORDINATED, NON-ROLLING boundary: apply with pre-0005 writers drained — old reset-on-begin UPDATE keyed by (package,org) could touch multiple appended rows once the full unique indexes are gone.",
        "destructive": true,
-       "tables": ["installed_extension"]
+       "tables": ["extension_install_ops"]
 +    },
 +    {
-+      "seq": "0005",
-+      "file": "core/core__0005_narrow-usage-events-cost-usd.mjs",
++      "seq": "0006",
++      "file": "core/core__0006_narrow-usage-events-cost-usd.mjs",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
@@ -39,7 +40,7 @@ diff --git a/migrations/manifest.json b/migrations/manifest.json
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
-@@ -857,7 +857,7 @@ END $$` },
+@@ -884,7 +884,7 @@ END $$` },
        cached_input_tokens integer NOT NULL DEFAULT 0,
        reasoning_output_tokens integer NOT NULL DEFAULT 0,
        credits_consumed integer NOT NULL DEFAULT 0,
@@ -48,7 +49,7 @@ diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
        idempotency_key text NOT NULL
      )` },
      { text: `CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_key_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (idempotency_key)` },
-@@ -885,7 +885,7 @@ END $$` },
+@@ -912,7 +912,7 @@ END $$` },
        ADD COLUMN IF NOT EXISTS cached_input_tokens integer NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS reasoning_output_tokens integer NOT NULL DEFAULT 0,
        ADD COLUMN IF NOT EXISTS credits_consumed integer NOT NULL DEFAULT 0,

@@ -109,9 +109,24 @@ export type WorkflowInstallSagaDeps = {
 
   // -- journal -----------------------------------------------------------
   beginInstallOp: (input: { installOpId: string; packageName: string; orgId: string | null; digest?: string | null }) => Promise<void>;
-  advanceInstallOpPhase: (input: { installOpId: string; phase: "materialized" | "granted" | "preflighted" | "writing" | "finalized" | "failed" | "rolled_back"; digest?: string | null }) => Promise<void>;
+  advanceInstallOpPhase: (input: { installOpId: string; phase: "materialized" | "granted" | "preflighted" | "writing" | "finalized" | "failed" | "rolled_back" | "superseded"; digest?: string | null }) => Promise<void>;
+  /** FINALIZE — the SUPERSESSION seam (cinatra#158): atomically demote the prior
+   *  finalized op for (package, org) to `superseded` and promote this one. The
+   *  happy-path finalize MUST use this, never a plain advance. */
   finalizeInstallOp: (installOpId: string) => Promise<void>;
   failInstallOp: (installOpId: string) => Promise<void>;
+  /** Structured operational-event sink (cinatra#158 (d)) — fired on a FAILED
+   *  durable-restore step (OLD provenance / dependency edges) in the saga's
+   *  failed-update catch. Best-effort; the default factory wires the structured
+   *  console emitter. */
+  emitOperationalEvent: (event: {
+    event: "install_durable_restore_failed";
+    packageName: string;
+    orgId: string | null;
+    step: "provenance" | "dependencies" | "journal";
+    scope: "saga";
+    reason: string;
+  }) => void;
   /** Read the current op's phase + id (+ digest) for (package, org) — drives the
    *  idempotent short-circuit (a finalized op for the SAME artifact → no-op) AND
    *  the failed-UPDATE restore (re-`begin` the prior finalized op at its original
@@ -516,33 +531,27 @@ export async function installWorkflowExtensionSaga(
       // error. Order is the inverse of the writes: undo dashboards → undo the
       // workflow_template (ONLY the one THIS attempt created).
       await compensate({ deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites });
+      // cinatra#158 (append-only journal): `beginInstallOp` above APPENDED a NEW
+      // non-finalized op for THIS attempt; it did NOT touch the OLD install's
+      // `finalized` op (which still exists). So TERMINALIZE the NEW op
+      // (failed → rolled_back) — the OLD finalized op stays the anchor with ZERO
+      // journal restore. THIS replaces the deleted re-begin+re-finalize "restore
+      // choreography". (A fresh install's terminalized op is the dispatcher's to
+      // roll back via the journal-aware check; the boot sweep treats it as settled.)
+      try {
+        await deps.failInstallOp(installOpId);
+        await deps.advanceInstallOpPhase({ installOpId, phase: "rolled_back" });
+      } catch (journalErr) {
+        console.error(`[workflow-install-saga] journal unwind failed for ${packageName}:`, journalErr);
+      }
       if (isUpdate && existing) {
-        // FAILED UPDATE (#180): `beginInstallOp` above overwrote the OLD
-        // install's `finalized` journal op, and the late writes may have
-        // overwritten its canonical source and/or dependency edges. RESTORE
-        // all three — re-`begin` the prior op at its ORIGINAL id + digest and
-        // re-advance it to `finalized` (the trust anchor requires `finalized`,
-        // so without this the previously-working workflow install would stop
-        // boot-anchoring), then re-record the captured source + edges
-        // (idempotent same-value rewrites when the corresponding write never
-        // ran). Each step is best-effort + isolated; the ORIGINAL error is
-        // always rethrown. The failed attempt's op intentionally vanishes
-        // from the one-row-per-(package, org) journal — exactly the runtime
-        // pipeline's failed-update semantics.
-        try {
-          await deps.beginInstallOp({
-            installOpId: existing.installOpId,
-            packageName,
-            orgId,
-            digest: existing.digest ?? null,
-          });
-          await deps.advanceInstallOpPhase({ installOpId: existing.installOpId, phase: "finalized" });
-        } catch (restoreErr) {
-          console.error(
-            `[workflow-install-saga] failed to restore prior finalized install-op ${existing.installOpId} for ${packageName} after a failed update — the previous install may not boot-anchor until a successful re-install:`,
-            restoreErr,
-          );
-        }
+        // FAILED UPDATE: the OLD install's canonical source and/or dependency
+        // edges may have been OVERWRITTEN by this attempt's late writes (separate
+        // durable state the append-only journal does NOT undo). RESTORE the
+        // captured prior source + edges (idempotent same-value rewrites when the
+        // write never ran). Each step is best-effort + isolated; a FAILED step
+        // emits a structured operational event (cinatra#158 (d)) and logs; the
+        // ORIGINAL error is always rethrown.
         if (priorSource) {
           try {
             await deps.recordProvenance({
@@ -557,6 +566,10 @@ export async function installWorkflowExtensionSaga(
               ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
             });
           } catch (restoreErr) {
+            const reason = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+            try {
+              deps.emitOperationalEvent({ event: "install_durable_restore_failed", packageName, orgId, step: "provenance", scope: "saga", reason });
+            } catch { /* sink must never mask the original error */ }
             console.error(
               `[workflow-install-saga] failed to restore prior provenance for ${packageName} after a failed update:`,
               restoreErr,
@@ -567,18 +580,15 @@ export async function installWorkflowExtensionSaga(
           try {
             await deps.persistDependencyEdges({ packageName, orgId, dependencies: priorEdges });
           } catch (restoreErr) {
+            const reason = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+            try {
+              deps.emitOperationalEvent({ event: "install_durable_restore_failed", packageName, orgId, step: "dependencies", scope: "saga", reason });
+            } catch { /* sink must never mask the original error */ }
             console.error(
               `[workflow-install-saga] failed to restore prior dependency edges for ${packageName} after a failed update — closure gates may read the failed version's edges until a successful re-install:`,
               restoreErr,
             );
           }
-        }
-      } else {
-        try {
-          await deps.failInstallOp(installOpId);
-          await deps.advanceInstallOpPhase({ installOpId, phase: "rolled_back" });
-        } catch (journalErr) {
-          console.error(`[workflow-install-saga] journal unwind failed for ${packageName}:`, journalErr);
         }
       }
       throw err;
@@ -739,6 +749,12 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
     finalizeInstallOp: (id) => finalizeInstallOp(id).then(() => undefined),
     failInstallOp: (id) => failInstallOp(id).then(() => undefined),
     readInstallOp: (pkg, oid) => readInstallOp(pkg, oid),
+    // cinatra#158 (d): structured operational-event sink — the stable structured
+    // console emitter (parity with the runtime pipeline's default).
+    emitOperationalEvent: (event) => {
+      // eslint-disable-next-line no-console
+      console.error(`[operational-event] ${JSON.stringify(event)}`);
+    },
 
     // GATEKEPT-AWARE reads (#180): when the master flag is ON, packument +
     // tarball reads route through the broker via resolveGatekeptInstallConfig

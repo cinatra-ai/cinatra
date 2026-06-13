@@ -18,8 +18,7 @@ import "server-only";
 // store path to the verified tarball, the content hash detects on-disk
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -136,6 +135,19 @@ export type InstallTrustAnchor = {
    * trusted on a v1/absent signature. null/undefined = closure-less.
    */
   closureHash?: string | null;
+  /**
+   * The tarball DIGEST the FINALIZED install-op journal recorded for this anchor
+   * (cinatra#158). The on-disk store dir is `<pkg>@<ver>/<digest>`, so the loader
+   * binds the journal anchor to the actual bytes by asserting
+   * `record.declaredDigest === anchor.digest` — fail-closed on a mismatch. This
+   * closes the append-only residue where an OLD `finalized` journal op could
+   * coexist with a NEW canonical source (a crash mid-restore): NEW bytes verify
+   * against NEW source, but the OLD anchor's digest will not match, so NEW is
+   * refused. null when the finalized op recorded no digest (legacy rows) — the
+   * loader treats a null anchor digest as "unbound" and does not assert (the
+   * integrity/contentHash re-verify remains the backstop).
+   */
+  digest?: string | null;
 };
 
 /** Default fetch — lazily imports the registries package (pacote lives there). */
@@ -279,7 +291,19 @@ export async function materializePackageToStore(
   }
 
   // 3. extract into a temp dir (strip the npm `package/` prefix). No scripts.
-  const tmpRoot = await mkdtemp(path.join(tmpdir(), "cinatra-ext-materialize-"));
+  // cinatra#158 EXDEV FIX: stage on the SAME FILESYSTEM as `targetDir`, NOT under
+  // `os.tmpdir()`. On the typical container topology `storeRoot` (e.g. the `/data`
+  // volume) and `os.tmpdir()` are on DIFFERENT filesystems, so the publish-time
+  // `rename(extractDir, targetDir)` would throw EXDEV (a hazard CI never exercises
+  // because CI runs both on one fs). We stage in a dedicated `.staging` SIBLING of
+  // `storeRoot` (same parent dir → same fs as the target, but OUTSIDE the scanned
+  // store tree, so `discoverPackageStoreRecords` never mistakes a half-extracted
+  // staging dir for a materialized package). The publish rename is then
+  // intra-filesystem (atomic); `atomicReplaceDir` additionally carries an EXDEV
+  // copy-fallback as defense-in-depth.
+  const stagingRoot = path.join(path.dirname(storeRoot), ".cinatra-ext-staging");
+  await mkdir(stagingRoot, { recursive: true });
+  const tmpRoot = await mkdtemp(path.join(stagingRoot, "materialize-"));
   const extractDir = path.join(tmpRoot, "pkg");
   await mkdir(extractDir, { recursive: true });
   try {
@@ -975,9 +999,49 @@ async function resolveSelfPackageImport(
 }
 
 /**
+ * Recursively compare two directory trees by their relative file-path sets (a
+ * stronger post-copy verify than a top-level child count). Throws on any mismatch.
+ */
+async function assertDirTreesMatch(a: string, b: string): Promise<void> {
+  const collect = async (root: string): Promise<Set<string>> => {
+    const out = new Set<string>();
+    const walk = async (dir: string, rel: string): Promise<void> => {
+      for (const ent of await readdir(dir, { withFileTypes: true })) {
+        const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+        if (ent.isDirectory()) {
+          await walk(path.join(dir, ent.name), childRel);
+        } else {
+          out.add(childRel);
+        }
+      }
+    };
+    await walk(root, "");
+    return out;
+  };
+  const [aset, bset] = await Promise.all([collect(a), collect(b)]);
+  if (aset.size !== bset.size) {
+    throw new Error(`EXDEV copy verify failed: source has ${aset.size} files, target has ${bset.size}`);
+  }
+  for (const rel of aset) {
+    if (!bset.has(rel)) throw new Error(`EXDEV copy verify failed: target is missing ${rel}`);
+  }
+}
+
+/**
  * Atomically replace `targetDir` with `sourceDir` via rename. If a prior dir
  * exists, it is renamed aside first and restored on failure (mirrors the agent
  * materializer's temp-sibling-rename + rollback chain).
+ *
+ * cinatra#158 EXDEV FALLBACK (defense-in-depth — the primary fix stages the source
+ * on the target's filesystem). If `rename(sourceDir, targetDir)` throws EXDEV (a
+ * cross-filesystem move on a container+volume topology), fall back to: recursive
+ * COPY into a SAME-PARENT staging dir (`${targetDir}.staging-<rand>`, guaranteed
+ * intra-fs with `targetDir`), recursively VERIFY the copied tree, then an atomic
+ * intra-fs `rename(staging, targetDir)`, then remove the original source. We NEVER
+ * copy straight into `targetDir` (a crash mid-copy would expose a partial target);
+ * the verified staging dir is swapped in atomically. The prior-backup rename
+ * (`targetDir` → `${targetDir}.old`) is always same-parent → never EXDEV.
+ * Mirrors `packages/skills/src/relocate-worker.ts:249`.
  */
 async function atomicReplaceDir(sourceDir: string, targetDir: string): Promise<void> {
   const suffix = randomBytes(4).toString("hex");
@@ -987,7 +1051,23 @@ async function atomicReplaceDir(sourceDir: string, targetDir: string): Promise<v
     await rename(targetDir, priorBackup);
   }
   try {
-    await rename(sourceDir, targetDir);
+    try {
+      await rename(sourceDir, targetDir);
+    } catch (renameErr) {
+      if ((renameErr as NodeJS.ErrnoException).code !== "EXDEV") throw renameErr;
+      // Cross-filesystem: copy → verify → atomic intra-fs swap → drop source.
+      const staging = `${targetDir}.staging-${suffix}`;
+      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      try {
+        await cp(sourceDir, staging, { recursive: true, preserveTimestamps: true });
+        await assertDirTreesMatch(sourceDir, staging);
+        await rename(staging, targetDir); // same parent → intra-fs, atomic.
+      } catch (copyErr) {
+        await rm(staging, { recursive: true, force: true }).catch(() => undefined);
+        throw copyErr;
+      }
+      await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   } catch (error) {
     if (priorBackup) {
       await rename(priorBackup, targetDir).catch((restoreErr) => {
