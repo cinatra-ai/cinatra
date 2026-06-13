@@ -4,7 +4,8 @@
 // closure-awareness. Pure DI tests — no registry, no DB, no filesystem.
 
 import { describe, it, expect, afterEach } from "vitest";
-import { installExtensionFromRegistry, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import { installExtensionFromRegistry,
+  makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import {
   installWorkflowExtensionSaga,
   type WorkflowInstallSagaDeps,
@@ -57,6 +58,7 @@ function signedV2Env(version = VER, closureHash = PLAN_CLOSURE_HASH) {
 function fakePipelineDeps(overrides: Partial<InstallPipelineDeps> = {}) {
   const calls = { materialize: [] as unknown[], provenance: [] as unknown[], approved: [] as unknown[] };
   const deps: InstallPipelineDeps = {
+    ...makeTestInstallPipelineDeps(),
     resolveIntegrity: async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, materializationPlan: transportPlan() }),
     materialize: async (i) => {
       calls.materialize.push(i);
@@ -244,6 +246,7 @@ describe("workflow install saga × materialization plan (the SECOND install path
       advanceInstallOpPhase: async () => undefined,
       finalizeInstallOp: async () => undefined,
       failInstallOp: async () => undefined,
+      emitOperationalEvent: () => undefined,
       readInstallOp: async (pkg, org) => journal.get(`${pkg}::${org}`) ?? null,
       resolveIntegrity:
         resolveOverride ?? (async () => ({ integrity: INTEGRITY, registryUrl: REGISTRY, materializationPlan: transportPlan() })),

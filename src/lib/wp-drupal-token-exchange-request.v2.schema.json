@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinatra.ai/contracts/wp-drupal-assistant/v2/token-exchange-request.schema.json",
+  "title": "Cinatra WP/Drupal assistant — token-exchange request (v2)",
+  "description": "Server-to-server POST body the plugin/module BACKEND (holding the long-lived integration key) sends to POST /api/agents/{slug}/token to mint a short-lived, origin/aud/scope-bound stream token. Sent with `Authorization: Bearer <long-lived integration key>`. NEVER sent by the browser.",
+  "type": "object",
+  "required": ["contractVersion", "origin"],
+  "additionalProperties": false,
+  "properties": {
+    "contractVersion": {
+      "const": "v2",
+      "description": "Pins the wire contract; the response echoes it."
+    },
+    "origin": {
+      "type": "string",
+      "minLength": 1,
+      "description": "EXACT site origin the minted token is bound to — scheme://host[:port], no path/query/hash. Must normalize-match the siteUrl of a valid configured instance."
+    },
+    "sub": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional CMS editor identity for audit; opaque string."
+    },
+    "scope": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional; defaults to `${agentSlug}.stream`."
+    }
+  }
+}

@@ -17,7 +17,19 @@ import {
   validateWidgetStreamToken,
   buildWidgetStreamCorsHeaders,
 } from "@/lib/widget-stream-auth";
+import {
+  consumeWidgetStreamToken,
+  isLongLivedTokenPathEnabled,
+} from "@/lib/widget-token-broker";
 import { validateAuthInitRequest } from "@/lib/wp-drupal-contract";
+
+// Sunset date advertised on the deprecated long-lived path (RFC 1123). The
+// legacy path serves only un-upgraded field installs; once a plugin/module
+// ships the local broker the browser never holds the long-lived key. This is a
+// soft, advisory date (Phase 3 removal is a later major) the local widget reads
+// to surface a one-line admin notice — adjust as the migration window firms up.
+const LONG_LIVED_SUNSET = "Thu, 31 Dec 2026 23:59:59 GMT";
+const SHORT_LIVED_TOKEN_PREFIX = "cit_";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,17 +89,66 @@ export async function POST(
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }
 
-  const allowedOrigin = resolveWidgetStreamOrigin(request.headers.get("Origin"), entry.auth);
-  if (!allowedOrigin) {
-    console.warn(`[agent-stream:${agentSlug}] Origin not allowed:`, request.headers.get("Origin"));
-    return new NextResponse("Origin not allowed", { status: 403 });
-  }
-  const corsHeaders = buildWidgetStreamCorsHeaders(allowedOrigin);
+  // CORS is RESPONSE-HEADER POLICY only — never the authorization mechanism.
+  // We resolve the request Origin against the configured-instance allowlist to
+  // SOURCE the reflected `Access-Control-Allow-Origin` header (and to keep the
+  // legacy long-lived path's defense-in-depth pre-gate). The AUTHORITATIVE gate
+  // is the Bearer token, handled per-path below — for the `cit_` path the
+  // origin authority is the TOKEN-BOUND origin (checked inside
+  // consumeWidgetStreamToken), not this header.
+  const requestOrigin = request.headers.get("Origin");
+  const allowedOrigin = resolveWidgetStreamOrigin(requestOrigin, entry.auth);
+  // Reflect the configured origin when known; otherwise fall back to the raw
+  // request Origin so a client still receives readable CORS headers on an error
+  // response. A non-configured origin is rejected by the token gate below, not
+  // by withholding CORS headers (CORS is not the authz boundary).
+  const corsHeaders = buildWidgetStreamCorsHeaders(allowedOrigin ?? requestOrigin ?? "");
 
   const auth = request.headers.get("Authorization");
   const bearer = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!bearer || !validateWidgetStreamToken(bearer, entry.auth)) {
-    return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
+
+  // Discriminate by Bearer prefix.
+  if (bearer.startsWith(SHORT_LIVED_TOKEN_PREFIX)) {
+    // ----- SHORT-LIVED PATH (preferred). The token is authoritative: it binds
+    // origin/aud/scope/expiry and is re-checked against the STORED row + live
+    // config. CORS plays no part in this decision.
+    const consumed = consumeWidgetStreamToken({
+      token: bearer,
+      agentSlug,
+      auth: entry.auth,
+      routePath: `/api/agents/${agentSlug}/stream`,
+      requestOrigin,
+    });
+    if (!consumed.ok) {
+      console.warn(`[agent-stream:${agentSlug}] short-lived token rejected:`, consumed.reason);
+      return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+  } else {
+    // ----- LEGACY LONG-LIVED PATH (back-compat, DEPRECATED). The browser holds
+    // the long-lived integration key directly. Retain the configured-origin
+    // pre-gate as defense-in-depth (a non-configured origin → 403).
+    if (!allowedOrigin) {
+      console.warn(`[agent-stream:${agentSlug}] Origin not allowed:`, requestOrigin);
+      return new NextResponse("Origin not allowed", { status: 403, headers: corsHeaders });
+    }
+    // Phase-2 kill switch: an operator may disable the legacy path entirely.
+    if (!isLongLivedTokenPathEnabled(entry.auth)) {
+      return new NextResponse(
+        "The long-lived integration key is no longer accepted for this integration. " +
+          "Upgrade the Cinatra plugin/module to use short-lived token exchange.",
+        { status: 403, headers: corsHeaders },
+      );
+    }
+    if (!bearer || !validateWidgetStreamToken(bearer, entry.auth)) {
+      return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+    // Phase-1 deprecation signal: warn + advertise Deprecation/Sunset (exposed
+    // via CORS) so the local widget surfaces a one-line admin notice.
+    console.warn(
+      `[agent-stream:${agentSlug}] long-lived integration key used directly — deprecated, migrate to token exchange`,
+    );
+    corsHeaders.Deprecation = "true";
+    corsHeaders.Sunset = LONG_LIVED_SUNSET;
   }
 
   let body: StreamRequestBody;

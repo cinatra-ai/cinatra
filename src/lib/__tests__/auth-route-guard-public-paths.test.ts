@@ -96,6 +96,17 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
     expect((line ?? "").toLowerCase()).toMatch(/do not broaden/);
   });
 
+  // Helper: extract the array entries of a single generated `export const NAME`
+  // block so each list can be asserted in isolation (cinatra#220 added two more
+  // lists to the same file).
+  function entriesOf(name: string): string[] {
+    const block = widgetPathsSource.match(
+      new RegExp(`export const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\];`),
+    );
+    expect(block, `missing generated list ${name}`).toBeTruthy();
+    return [...(block?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  }
+
   it("widget-public agent streams are exact generated slugs, not a broad /api/agents prefix", () => {
     // The exact-path list is GENERATED from each extension's cinatra.widgetStream
     // declaration; the guard consumes it as PUBLIC_AGENT_STREAM_PATHS. The two
@@ -106,12 +117,12 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
     expect(widgetPathsSource).toMatch(
       /"\/api\/agents\/drupal-content-editor\/stream"/,
     );
-    // ...every generated entry must be a precise /api/agents/<slug>/stream path
+    // ...every STREAM-list entry must be a precise /api/agents/<slug>/stream path
     // (never a prefix), and the file must stay imports-free + slug-only
     // (proxy-bundle-safe; no extension package identifiers).
-    const entries = [...widgetPathsSource.matchAll(/^\s*"([^"]+)",\s*$/gm)].map((m) => m[1]);
-    expect(entries.length).toBeGreaterThanOrEqual(2);
-    for (const e of entries) {
+    const streamEntries = entriesOf("GENERATED_WIDGET_STREAM_PUBLIC_PATHS");
+    expect(streamEntries.length).toBeGreaterThanOrEqual(2);
+    for (const e of streamEntries) {
       expect(e).toMatch(/^\/api\/agents\/[a-z0-9-]+\/stream$/);
     }
     expect(widgetPathsSource).not.toMatch(/^import /m);
@@ -120,5 +131,22 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
     // list (.includes), never collapse into a public `/api/agents` prefix.
     expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_PUBLIC_PATHS/);
     expect(guardSource).not.toMatch(/"\/api\/agents"/);
+  });
+
+  it("token-exchange + capabilities siblings are exact generated slugs (cinatra#220), not prefixes", () => {
+    // Each list is the precise /api/agents/<slug>/{token,capabilities} paths.
+    const tokenEntries = entriesOf("GENERATED_WIDGET_STREAM_TOKEN_PATHS");
+    const capEntries = entriesOf("GENERATED_WIDGET_STREAM_CAPABILITY_PATHS");
+    expect(tokenEntries.length).toBeGreaterThanOrEqual(2);
+    expect(capEntries.length).toBeGreaterThanOrEqual(2);
+    for (const e of tokenEntries) expect(e).toMatch(/^\/api\/agents\/[a-z0-9-]+\/token$/);
+    for (const e of capEntries) expect(e).toMatch(/^\/api\/agents\/[a-z0-9-]+\/capabilities$/);
+    expect(tokenEntries).toContain("/api/agents/wordpress-content-editor/token");
+    expect(tokenEntries).toContain("/api/agents/drupal-content-editor/token");
+    expect(capEntries).toContain("/api/agents/wordpress-content-editor/capabilities");
+    expect(capEntries).toContain("/api/agents/drupal-content-editor/capabilities");
+    // The guard consumes BOTH new lists as exact-match (.includes), never a prefix.
+    expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_TOKEN_PATHS/);
+    expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_CAPABILITY_PATHS/);
   });
 });

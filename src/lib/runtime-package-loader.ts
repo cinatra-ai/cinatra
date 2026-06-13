@@ -164,6 +164,24 @@ export async function loadRuntimePackageExtensions(
       refused.push(`${rec.packageName}: no trusted install record`);
       continue;
     }
+    // cinatra#158 — ANCHOR DIGEST BINDING. With the append-only journal, a NEW
+    // canonical source could (after a crash mid durable-restore) coexist with the
+    // OLD `finalized` journal op. NEW bytes would verify against NEW source, so the
+    // integrity/contentHash re-verify alone is NOT sufficient to refuse them. The
+    // finalized op records the tarball DIGEST of the install it anchored; a
+    // real-pipeline install is ALWAYS digest-pinned on disk (`<pkg>@<ver>/<digest>/`
+    // → rec.declaredDigest). So when the anchor carries a digest we FAIL CLOSED on
+    // BOTH a mismatch AND a MISSING on-disk digest (a flat-layout record that claims
+    // a digest-bound anchor is suspect — never trust it; codex refute finding): a
+    // bound journal anchor must resolve to a digest-pinned dir naming the SAME
+    // install. A null anchor digest (legacy/test rows) is "unbound" → skip (the
+    // integrity/contentHash re-verify remains the backstop).
+    if (anchor.digest && anchor.digest !== rec.declaredDigest) {
+      refused.push(
+        `${rec.packageName}: install-anchor digest binding failed (journal anchor ${anchor.digest} != on-disk ${rec.declaredDigest ?? "(flat/none)"}) — refusing`,
+      );
+      continue;
+    }
     const integrityOk = await verifyMaterializedPackageIntegrity(rec, {
       trustedIntegrity: anchor.integrity,
       trustedContentHash: anchor.contentHash,

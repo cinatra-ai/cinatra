@@ -5,7 +5,8 @@ import {
   applyMigrationsForTrustedRecords,
   preflightExtensionMigrationsFromStore,
 } from "@/lib/extension-migration-host";
-import { installExtensionFromRegistry, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import { installExtensionFromRegistry,
+  makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import { generateExtensionSigningKeyPair, signExtension } from "@/lib/extension-signature";
 
 // Extension-migration ACTIVATION (#118 — the install pipeline + boot pass
@@ -129,6 +130,7 @@ describe("extension migration activation — applyExtensionMigrationsFromStore (
 describe("extension migration activation — install pipeline call-site", () => {
   function baseDeps(overrides: Partial<InstallPipelineDeps>): InstallPipelineDeps {
     return {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: "https://registry.cinatra.ai" }),
       materialize: async () => ({ storeDir: CONSUMER_DIR, digest: "deadbeef", integrity: "sha512-abc", contentHash: "ch" }),
       readRequestedPorts: async () => [],
@@ -169,6 +171,10 @@ describe("extension migration activation — install pipeline call-site", () => 
         applyMigrations,
         advanceInstallOpPhase: async ({ phase }) => {
           phases.push(phase);
+        },
+        // cinatra#158: the happy-path finalize is the supersession seam; record it.
+        finalizeInstallOp: async () => {
+          phases.push("finalized");
         },
       }),
     );
