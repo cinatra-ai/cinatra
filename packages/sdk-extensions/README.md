@@ -20,13 +20,112 @@ privileged host capability through the injected `ctx` ports — never via a
 
 ## ABI version
 
-The SDK ABI is **`2.0.0`** (`SDK_EXTENSIONS_ABI_VERSION`). The MAJOR bumps on any
-breaking change to the author-facing contract (ports, lifecycle, manifest
-fields). `2.0.0` added the `telemetry` host port for metered connectors.
+The SDK ABI is **`2.2.0`** (`SDK_EXTENSIONS_ABI_VERSION` in
+[`src/register.ts`](src/register.ts) — the authoritative source of truth, also
+mirrored as `cinatra.sdkAbiVersion` in this package's `package.json`). A CI gate
+asserts this README, the `register.ts` constant, and the `package.json` field
+all agree, so the documented ABI can never drift from the code.
 
-Server-entry extensions pin a compatible range via `cinatra.sdkAbiRange`
-(e.g. `"^2"`); the loader refuses to activate an extension whose declared range
-the host ABI does not satisfy.
+### Versioning policy
+
+The ABI is semantic-versioned independently of the npm package version (see
+*ABI vs npm version* below):
+
+- **MAJOR** — a breaking change to the author-facing contract: removing or
+  changing the signature of an existing host port or its methods, the
+  `register`/`bootstrap`/`destroy` lifecycle, or a manifest field — **and adding
+  a new host port** (the port set is declared FROZEN in
+  [`src/host-context.ts`](src/host-context.ts): `ExtensionHostContext` exposes
+  every port as a required property, so a new port widens the surface every
+  extension is type-checked against — a breaking change). An extension built
+  against an older MAJOR is not guaranteed to activate.
+- **MINOR** — a backward-compatible, *additive* change: a new **optional** method
+  on an existing host port. Extensions built against an older MINOR keep working
+  unchanged; only those that need the new method must raise their declared range
+  (or feature-detect it).
+- **PATCH** — documentation/typing clarifications with no surface change.
+
+### ABI changelog
+
+- **`2.0.0`** — added the `telemetry` host port (metered connectors).
+- **`2.1.0`** — added optional `mcp.getPublicBaseUrl`.
+- **`2.2.0`** — added optional `nango` render-time getters: `getStatus`,
+  `getFrontendConfig`, `getPrimarySavedConnection(s)`, `listConnectionRecords`.
+
+### Declaring a compatible range (`cinatra.sdkAbiRange`)
+
+A server-entry extension pins the host ABI range it needs via
+`cinatra.sdkAbiRange` in its package manifest; the loader refuses to activate an
+extension whose declared range the host ABI does not satisfy
+(`isSdkAbiRangeSatisfied` in [`src/register.ts`](src/register.ts)). The check is
+**fail-closed**: an unsupported/malformed range, or a host ABI outside the
+range's bounds, is refused.
+
+Supported grammar (exactly what the loader accepts — anything else is rejected):
+
+The bounds are `[lower, upperExclusive)` — the host ABI satisfies the range when
+it is at or above `lower` and strictly below `upper` (a `∞` upper means no
+ceiling):
+
+| Form | Example | Satisfied by host ABI in |
+| --- | --- | --- |
+| Absent / `""` / `*` | *(unset)* | any (unpinned) |
+| Exact | `2.2.0` (or `=2.2.0`) | `[2.2.0, 2.2.1)` |
+| Bare major / x-range | `2`, `2.x`, `2.*` | `[2.0.0, 3.0.0)` |
+| Minor x-range | `2.2`, `2.2.x`, `2.2.*` | `[2.2.0, 2.3.0)` |
+| Caret (major only) | `^2` | `[2.0.0, 3.0.0)` |
+| Caret (minor/patch) | `^2.2`, `^2.2.0` | `[2.2.0, 3.0.0)` |
+| Tilde (major only) | `~2` | `[2.0.0, 3.0.0)` |
+| Tilde (minor/patch) | `~2.2`, `~2.2.0` | `[2.2.0, 2.3.0)` |
+| Minimum | `>=2`, `>=2.2.0` | `[2.0.0, ∞)`, `[2.2.0, ∞)` |
+
+Notes that match the loader exactly:
+
+- An operator may be followed by whitespace (`^ 2.2.0` is accepted).
+- The `=` prefix is optional and equivalent to omitting it: a *full* `=2.2.0`
+  is an exact pin, while a *partial* `=2` / `=2.2` widens exactly like the bare
+  `2` / `2.2` x-range rows above (it does **not** narrow to an exact match).
+  Prefer the bare spellings for clarity.
+- The MAJOR must be **≥ 1** — major-`0` ranges are rejected (the ABI's major-`0`
+  caret semantics differ; fail-closed).
+- Any other comparator — `<`, `>`, `<=`, OR (`||`), hyphen ranges (`1 - 2`), and
+  pre-release/build tags (`-rc.1`, `+meta`) — is **not** supported and is
+  refused. The host ABI version is compared on its `MAJOR.MINOR.PATCH` prefix.
+
+### Range-declaration guidance
+
+Pick the *loosest* range that still guarantees the surface you use:
+
+- Use **only** the frozen base surface? Declare `^2` (or `>=2.0.0`) — you ride
+  every additive MINOR for free and only a MAJOR can lock you out.
+- Need an **optional** method added in a MINOR? Either **feature-detect** it
+  (`if (ctx.mcp.getPublicBaseUrl) …`) and keep `^2`, or declare the floor that
+  guarantees it: `>=2.1.0` for `mcp.getPublicBaseUrl`, `>=2.2.0` for the `nango`
+  render-time getters. Feature-detection keeps your extension installable on
+  older hosts; a hard floor refuses activation there instead.
+- Avoid exact (`2.2.0`) and tilde-minor (`~2.2`) pins unless you genuinely
+  cannot tolerate a forward MINOR — they reject a perfectly compatible newer
+  host.
+
+### ABI vs npm version
+
+The ABI version (`SDK_EXTENSIONS_ABI_VERSION`) and this package's npm `version`
+are **independent** numbers: the ABI tracks the author-facing contract, the npm
+`version` tracks releases of this package. They are not kept in lockstep — read
+the host ABI an extension targets from `cinatra.sdkAbiRange`, never from a
+package version. This package is currently `private: true` (not published); when
+the types-only SDK split ships, the published npm version will carry its own
+semver and the ABI changelog above remains the contract record.
+
+### Testing against the ABI
+
+`register(ctx)` is pure dependency injection — every privileged capability
+arrives on `ctx`. A unit test constructs a fake `ExtensionHostContext` with just
+the ports the extension touches (stub the methods you call; omit the rest) and
+asserts your registrar wires them correctly — no live host, DB, or network. For
+a port whose method talks to a local service in integration tests, point it at a
+mock server on an ephemeral `localhost` port and inject that port through the
+stubbed `ctx`; nothing about the ABI requires a fixed port.
 
 ## `cinatra.serverEntry` — published packages ship BUILT artifacts
 

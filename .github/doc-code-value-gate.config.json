@@ -1,0 +1,25 @@
+[
+  {
+    "label": "sdk-abi-readme==register.ts",
+    "doc": {
+      "file": "packages/sdk-extensions/README.md",
+      "pattern": "The SDK ABI is \\*\\*`(\\d+\\.\\d+\\.\\d+)`\\*\\*"
+    },
+    "code": {
+      "file": "packages/sdk-extensions/src/register.ts",
+      "pattern": "^export const SDK_EXTENSIONS_ABI_VERSION = \"(\\d+\\.\\d+\\.\\d+)\" as const;"
+    }
+  },
+  {
+    "label": "sdk-abi-readme==package.json",
+    "doc": {
+      "file": "packages/sdk-extensions/README.md",
+      "pattern": "The SDK ABI is \\*\\*`(\\d+\\.\\d+\\.\\d+)`\\*\\*"
+    },
+    "code": {
+      "file": "packages/sdk-extensions/package.json",
+      "type": "json",
+      "pointer": "cinatra.sdkAbiVersion"
+    }
+  }
+]

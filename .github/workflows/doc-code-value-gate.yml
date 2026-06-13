@@ -1,0 +1,38 @@
+name: doc-code-value-gate
+
+# Thin caller for the reusable cinatra-ai/ci doc-code-value-gate
+# (cinatra-engineering#152). Dogfoods the org "doc asserts a code value" template
+# against the SDK ABI version: it asserts the @cinatra-ai/sdk-extensions README's
+# canonical "The SDK ABI is **`X`**" statement equals both the
+# SDK_EXTENSIONS_ABI_VERSION const in register.ts and cinatra.sdkAbiVersion in
+# package.json — see .github/doc-code-value-gate.config.json.
+#
+# The AUTHORITATIVE three-way ABI check is the repo-local gate
+# (.github/workflows/sdk-abi-doc-gate.yml → scripts/audit/sdk-abi-readme-gate.mjs);
+# this caller is a generic-template second arm with no cross-repo behavior of its
+# own beyond the pinned engine.
+#
+# Required-check context: a reusable workflow_call surfaces under THIS caller's
+# JOB name, formatted "<caller-job> / <reusable-job>" — here
+# "doc-code-value-gate / doc-code-value-gate" (same convention as
+# "source-leak-gate / source-leak-gate").
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # KEEP this job name stable as `doc-code-value-gate` — it is the required-check
+  # context prefix.
+  doc-code-value-gate:
+    # Double-pin per the eng#61 convention: the workflow ref (@<sha>) and the
+    # `ref` input below are pinned to the SAME cinatra-ai/ci commit, so the gate
+    # engine is never pulled from mutable main.
+    uses: cinatra-ai/ci/.github/workflows/doc-code-value-gate.yml@8abcb8ae394b51f11883abb3f51623b59aa8f958 # v0.1.0
+    with:
+      config: .github/doc-code-value-gate.config.json
+      ref: 8abcb8ae394b51f11883abb3f51623b59aa8f958 # same SHA as the workflow @ref
