@@ -16,7 +16,7 @@
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml",
-      "pinned": "a23068e520c8832a68ea67488cde218cc895acf4"
+      "pinned": "31570d9c772d24ae3f629d7e84483f53d4e10214"
     }
   ],
   "highRiskPaths": [
