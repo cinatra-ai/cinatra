@@ -10,6 +10,17 @@
 // subpath + a loader-map entry in `src/lib/connector-setup-pages.ts` + an extension
 // package at `extensions/cinatra-ai/<slug>/`. The setup-pages-parity host test fails
 // fast if any descriptor lacks a corresponding setup-page loader.
+//
+// IDENTITY SURFACE (cinatra-engineering#155, eng#168(c) "accept the normal"):
+// this file IS the single SANCTIONED hand-maintained slug -> packageId catalog.
+// It is classified `mechanical` in
+// scripts/audit/lib/extension-reference-classification.mjs (a hand catalog, NOT
+// "mechanical at ZERO"): it carries NO concrete extension package-name literal —
+// every packageId is DERIVED from its slug via `packageIdForSlug`, so a rename
+// resolves away from any pinned literal rather than re-pinning it. The package
+// SCOPE (the `@cinatra-ai` org lexeme) is the only org-name reference and is
+// hoisted to the single `CONNECTOR_PACKAGE_SCOPE` constant below so it is named
+// in exactly one place.
 
 /**
  * @typedef {Object} ConnectorDescriptor
@@ -21,13 +32,19 @@
  * @property {string} setupSubroute - dispatch sub-route segment (always `"setup"`; reserved for future use)
  */
 
-// Every catalog entry's packageId equals `@cinatra-ai/<slug>` (the slug is the
+// The single org-scope lexeme for first-party connector packages. Named in ONE
+// place (cinatra-engineering#155 identity-surface decoupling) so the `@cinatra-ai`
+// org name is not re-spelled across every derivation; a scope rename touches this
+// constant only.
+export const CONNECTOR_PACKAGE_SCOPE = "@cinatra-ai";
+
+// Every catalog entry's packageId equals `<scope>/<slug>` (the slug is the
 // extension directory and workspace-package short name), so packageIds are
 // DERIVED from the slug for every entry — the catalog pins no package-name
 // literal in core (cinatra#35 / IOC-44; instance-coupling gate). A
 // rename must resolve away from the pinned literal, not re-pin it under the
 // new name.
-export const packageIdForSlug = (slug) => `@cinatra-ai/${slug}`;
+export const packageIdForSlug = (slug) => `${CONNECTOR_PACKAGE_SCOPE}/${slug}`;
 
 /** @type {Omit<ConnectorDescriptor, "packageId">[]} */
 const RAW_DESCRIPTORS = [

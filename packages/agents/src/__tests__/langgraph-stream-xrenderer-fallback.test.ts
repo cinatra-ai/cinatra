@@ -26,6 +26,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const SRC = readFileSync(
   join(__dirname, "..", "use-ag-ui-run-stream.ts"),
@@ -64,12 +65,22 @@ describe("use-ag-ui-run-stream — empty-string xRenderer fallback guard", () =>
     ).toBe(true);
   });
 
-  it("the fallback ID string is referenced in the INTERRUPT case handler", () => {
-    // The normalization must produce the canonical fallback string.
+  it("the fallback ID is referenced in the INTERRUPT case handler (via the centralized constant)", () => {
+    // The normalization must produce the canonical fallback id. Since the id is
+    // now centralized in ./agent-builder-ids (cinatra-engineering#155), the
+    // handler references the imported SCHEMA_FIELD_FALLBACK_RENDERER_ID constant
+    // rather than the inline literal — accept either form so the test pins the
+    // BEHAVIOR (fallback normalization), not a particular spelling.
+    const referencesFallback =
+      /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(INTERRUPT_BLOCK) ||
+      INTERRUPT_BLOCK.includes(`"${SCHEMA_FIELD_FALLBACK_RENDERER_ID}"`);
     expect(
-      INTERRUPT_BLOCK,
-      'INTERRUPT handler must reference "@cinatra-ai/agent-builder:schema-field-fallback" as the fallback',
-    ).toMatch(/"@cinatra-ai\/agent-builder:schema-field-fallback"/);
+      referencesFallback,
+      "INTERRUPT handler must reference the schema-field-fallback id (constant SCHEMA_FIELD_FALLBACK_RENDERER_ID or its literal) as the fallback. " +
+        "Found INTERRUPT block:\n" + INTERRUPT_BLOCK.slice(0, 500),
+    ).toBe(true);
+    // And the centralized constant must still resolve to the canonical string.
+    expect(SCHEMA_FIELD_FALLBACK_RENDERER_ID).toBe("@cinatra-ai/agent-builder:schema-field-fallback");
   });
 
   it("non-empty xRenderer is not overwritten (positive-control: xRenderer is not hardcoded to fallback)", () => {

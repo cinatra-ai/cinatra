@@ -2,6 +2,7 @@ import { generate } from "@cinatra-ai/llm";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
 import { agentIOSpecSchema, type AgentIOSpec } from "@cinatra-ai/objects";
 import type { CompiledStep } from "./store";
+import { COMPILER_AGENTIC_SKILL_ID } from "./agent-builder-ids";
 
 // Compile result type for the single agentic branch (WayFlow target).
 export type CompileAgenticWorkflowResult = {
@@ -26,8 +27,6 @@ export type CompileWorkflowOptions = {
 // ---------------------------------------------------------------------------
 // LLM compilation helpers
 // ---------------------------------------------------------------------------
-
-const COMPILER_AGENTIC_SKILL_ID = "@cinatra-ai/agent-builder:agent-builder-compiler-agentic";
 
 // Module-level cache so repeated calls in a single process avoid re-reading disk
 let cachedAgenticSkillBody: string | null = null;

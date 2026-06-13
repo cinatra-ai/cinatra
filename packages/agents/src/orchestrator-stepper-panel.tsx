@@ -80,7 +80,10 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
-import { GROUPED_SETUP_FORM_RENDERER_ID } from "./grouped-setup-form-renderer";
+import {
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -636,7 +639,7 @@ function HitlApprovalCard({
   // handleContinue sends the correct { approved: true, approvedAt } payload.
   // Only applies when xRenderer mapped to schema-field-fallback (no custom renderer).
   const isGenericObjectSchema =
-    interruptContext.xRenderer === "@cinatra-ai/agent-builder:schema-field-fallback" &&
+    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object";
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer

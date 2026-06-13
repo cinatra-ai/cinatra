@@ -48,6 +48,10 @@ import {
 // pulling the Zod schema (oas-compiler is host-only too; the type-only import
 // keeps the symbol surface minimal per CONVENTIONS.md).
 import type { OasCinatraLlm } from "./llm-provider-policy";
+import {
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  TRIGGER_WAIT_STATUS_RENDERER_ID,
+} from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1224,7 +1228,7 @@ export async function compileOasAgentJson(opts: {
       const renderer =
         ime.metadata?.cinatra?.inputRenderers?.[field] ??
         ime.metadata?.cinatra?.renderer ??
-        "@cinatra-ai/agent-builder:schema-field-fallback";
+        SCHEMA_FIELD_FALLBACK_RENDERER_ID;
       return {
         nodeType: "input_message",
         stepNumber,
@@ -1443,7 +1447,7 @@ export async function compileOasAgentJson(opts: {
           "Wait for scheduled trigger to fire",
         xRenderer:
           (meta.renderer as string | undefined) ??
-          "@cinatra-ai/agent-builder:trigger-wait-status",
+          TRIGGER_WAIT_STATUS_RENDERER_ID,
       };
     }
 

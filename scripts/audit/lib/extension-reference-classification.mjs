@@ -86,6 +86,19 @@ export const PERMANENT_EXEMPT_FILES = new Set(GENERATED_MANIFEST_FILES);
 // the #35 ruling, the host's eager connector import surface) is NOT
 // allowlisted here — none of it is a data-contract ID. It stays COUNTED in
 // the pinned, shrink-only baselines.
+//
+// IDENTITY SURFACE (cinatra-engineering#155, eng#168(c)): this allowlist
+// exempts only ids that embed a REAL extension package name (the shape +
+// stale self-checks enforce that). The owner-sanctioned identity surfaces
+// (env-var names, role-typed capability ids shared via a single SDK constant,
+// the connector slug catalog, the `@cinatra-ai/<ns>:<id>` object-type ids) embed
+// VIRTUAL scopes / object-type namespaces — NOT real extension dirs — so they
+// are neither counted by this gate nor allowlist candidates; they are written
+// down as the documented exempt class in scripts/audit/extension-coupling-gates.md
+// ("Identity-surface exempt class") and the dangerous subset is guarded by the
+// stateless scripts/audit/identity-coupling-gate.mjs. This Map therefore stays
+// EMPTY unless an owner ruling mints a frozen contract id that embeds a real
+// extension name.
 // ---------------------------------------------------------------------------
 export const DATA_CONTRACT_ID_ALLOWLIST = new Map([]);
 

@@ -61,6 +61,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { resolveAgentInstallDir } from "../agent-install-path";
 import { createZipBuffer } from "../zip-helpers";
+import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 // read the chat-side projectContext frame
 // from the MCP request context (set at the transport boundary by the chat
 // surface). Used by agent_run to tag the new agent_runs row's projectId
@@ -581,7 +582,7 @@ async function handleAgentBuilderSave(
         actor: actorBase as unknown as Parameters<typeof createDeterministicObjectsClient>[0]["actor"],
       });
       await objectsClient.save({
-        typeHint: "@cinatra-ai/agent-builder:agent-template",
+        typeHint: AGENT_TEMPLATE_TYPE_ID,
         rawData: {
           ...template,
           createdAt: template.createdAt.toISOString(),
@@ -1429,7 +1430,7 @@ async function handleAgentBuilderUpdate(
         actor: actorBase as unknown as Parameters<typeof createDeterministicObjectsClient>[0]["actor"],
       });
       await objectsClient.save({
-        typeHint: "@cinatra-ai/agent-builder:agent-template",
+        typeHint: AGENT_TEMPLATE_TYPE_ID,
         rawData: {
           ...updated,
           createdAt: updated.createdAt.toISOString(),

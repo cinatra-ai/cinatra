@@ -21,6 +21,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const SRC = readFileSync(
   join(__dirname, "..", "orchestrator-stepper-panel.tsx"),
@@ -31,9 +32,13 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
   it("defines isGenericObjectSchema as schema-field-fallback xRenderer combined with object type", () => {
     // The condition must check BOTH the xRenderer id AND the schema type.
     // A missing type check would incorrectly show Continue for non-object schemas.
-    expect(SRC).toMatch(
-      /"@cinatra-ai\/agent-builder:schema-field-fallback"/,
-    );
+    // The id is centralized (cinatra-engineering#155): the panel references the
+    // SCHEMA_FIELD_FALLBACK_RENDERER_ID constant rather than the inline literal.
+    const referencesFallback =
+      /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(SRC) ||
+      SRC.includes(`"${SCHEMA_FIELD_FALLBACK_RENDERER_ID}"`);
+    expect(referencesFallback, "panel must reference the schema-field-fallback id").toBe(true);
+    expect(SCHEMA_FIELD_FALLBACK_RENDERER_ID).toBe("@cinatra-ai/agent-builder:schema-field-fallback");
     expect(SRC).toMatch(/type.*===.*"object"|"object".*===.*type/);
 
     // isGenericObjectSchema must be a const derived from interruptContext

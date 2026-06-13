@@ -11,13 +11,16 @@ import {
 } from "@/components/ui/select";
 import type { FieldRendererCondition, FieldRendererProps } from "./field-renderer-registry";
 import { fetchInstalledSkillsForAgent, fetchSkillsBySlug } from "./skill-actions";
+import { SKILL_SELECTOR_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "skill-selector"
+// (the bare "skill-selector" alias is the host-neutral legacy spelling kept
+// for in-flight runs; the namespaced id comes from the id table.)
 // ---------------------------------------------------------------------------
 
 export const isSkillSelectorField: FieldRendererCondition = (_fieldName, schema) =>
-  (["@cinatra-ai/agent-builder:skill-selector","skill-selector"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
+  ([SKILL_SELECTOR_RENDERER_ID, "skill-selector"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
 
 // ---------------------------------------------------------------------------
 // Renderer

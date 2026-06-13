@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PresentationHint } from "./result-renderers";
 import type { DataPartEvent } from "@cinatra-ai/agent-ui-protocol";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -174,7 +175,7 @@ export function useAgUiRunStream(
           setStatus("pending_approval");
           setInterruptContext({
             schema: interruptEvent.schema,
-            xRenderer: interruptEvent.xRenderer || "@cinatra-ai/agent-builder:schema-field-fallback",
+            xRenderer: interruptEvent.xRenderer || SCHEMA_FIELD_FALLBACK_RENDERER_ID,
             values: interruptEvent.values ?? {},
             reviewTaskId: interruptEvent.reviewTaskId,
             fieldName: interruptEvent.fieldName,

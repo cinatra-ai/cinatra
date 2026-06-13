@@ -14,13 +14,16 @@ import {
   fetchPersonalSkillsForAgent,
   fetchInstalledSkillsForAgent,
 } from "./skill-actions";
+import { PERSONAL_SKILL_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "personal-skill"
+// (the bare "personal-skill" alias is the host-neutral legacy spelling kept
+// for in-flight runs; the namespaced id comes from the id table.)
 // ---------------------------------------------------------------------------
 
 export const isPersonalSkillField: FieldRendererCondition = (_fieldName, schema) =>
-  (["@cinatra-ai/agent-builder:personal-skill","personal-skill"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
+  ([PERSONAL_SKILL_RENDERER_ID, "personal-skill"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
 
 // ---------------------------------------------------------------------------
 // Renderer

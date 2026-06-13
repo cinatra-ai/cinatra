@@ -5,10 +5,24 @@ defines the shared reference taxonomy, the strict exemption policy, and the
 **zero-floor end-state** (cinatra#151 Stage 7 — the close of the zero-floor
 IoC epic, built on the zero-tolerance flip cinatra-ai/cinatra#36 that closed
 the IoC Runtime Cutover epic #24 — completed in BOTH directions by the
-cinatra#172 flip): no hand-written host code imports or names a concrete
-extension, no extension imports host `@/` modules / other extensions /
-non-SDK first-party packages, and the gates are pinned so none ever can
-again.
+cinatra#172 flip).
+
+These gates pin a **LEXEME** — a concrete extension package NAME
+(`@scope/ext`) or an `extensions/<scope>/<name>` path/import — not extension
+**IDENTITY**. Under that lexeme reading the zero-floor end-state holds: no
+hand-written host code imports or names a concrete extension package *lexeme*,
+no extension imports host `@/` modules / other extensions / non-SDK
+first-party packages, and the gates are pinned so none ever can again.
+
+What the lexeme gates do NOT cover is the **identity surface**: the parallel
+slug / route / env-var / capability-id strings by which producer and consumer
+match each other BY NAME. The owner ruled (cinatra-engineering#155, eng#168(c)
+"the middle path") that the unavoidable identity references are a documented
+**exempt class** (see [Identity-surface exempt class](#identity-surface-exempt-class-cinatra-engineering155)
+below), and that the two genuinely DANGEROUS identity-coupling kinds are FIXED
+and guarded by the stateless `identity-coupling-gate.mjs`. So the strict
+statements in this document are precise under the lexeme reading and are
+EXPLICITLY bounded that way wherever an identity reading would over-claim.
 
 ## The gates
 
@@ -18,12 +32,15 @@ again.
 | `core-extension-import-ban.mjs` | core (`src/`) importing an extension package | `file -> extension` edges | `core-extension-import-ban.baseline.json` — **PINNED EMPTY** |
 | `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` — **PINNED EMPTY** |
 | `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
+| `identity-coupling-gate.mjs` | IDENTITY surface — auth-route-guard public-route exemptions naming a concrete extension; host `src/` re-declaring an SDK-owned capability id literal | dangerous-class findings | **stateless** (no baseline; every finding is a hard fail) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
 distinct from the baseline, which is pinned EMPTY since the flip — cinatra#36).
 `host-peer-value-import-ban.mjs` holds every serverEntry graph at 0 host-peer
-value imports (SDK peers stay type-only).
+value imports (SDK peers stay type-only). `identity-coupling-gate.mjs` is the
+NEW (cinatra-engineering#155) identity-surface guard — it pins extension
+IDENTITY where the others pin only the lexeme; see the dedicated section below.
 
 ## Enforcement model — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
@@ -80,8 +97,19 @@ by the coupling gates:
   prompt/dispatch literals). The default class; ZERO occurrences remain — any
   reappearance fails the pinned-empty gates.
 - **mechanical** — re-export facades, hand-written inventories/catalogs, and
-  dev-name lists. Counted exactly like runtime-coupling — never exempt; at
-  ZERO since the mechanical-cleanup phase (#35).
+  dev-name lists. Counted exactly like runtime-coupling — never exempt. Every
+  counted *lexeme* (a concrete extension package name) is at ZERO since the
+  mechanical-cleanup phase (#35): the classified mechanical files
+  (`packages/extensions/src/system-extension-inventory.ts`,
+  `src/lib/objects/surface-inventory.ts`,
+  `packages/connectors-catalog/src/descriptors.mjs`) carry no pinned
+  extension-name literal and would hard-fail the pinned-empty gates if one
+  reappeared. NOTE under the IDENTITY reading: `descriptors.mjs` IS a live,
+  hand-maintained slug→packageId catalog (the connector identity surface) —
+  "ZERO" is the count of pinned package-name *lexemes*, not "no hand catalog
+  exists". The catalog is a SANCTIONED identity surface (see the
+  Identity-surface exempt class) and pins no lexeme because every packageId is
+  DERIVED from its slug via `packageIdForSlug`.
 - **permanent-exempt** — never counted. Strict, owner-ruled set; see below.
 
 ## Strict exemption policy
@@ -127,6 +155,69 @@ Permanently exempt are ONLY:
 
 No facades, no inventories, no dev-name lists are exempt — they are counted
 (`mechanical`) and hard-fail if they ever reappear.
+
+## Identity-surface exempt class (cinatra-engineering#155)
+
+The lexeme gates above pin a concrete extension package NAME / path. They do
+NOT see the parallel **identity surface** — the slug / route / env-var /
+capability-id strings by which a producer and a consumer match each other by
+name. The owner ruled (eng#168(c), "the middle path") that the unavoidable
+identity references are SANCTIONED and that only the genuinely dangerous kinds
+get fixed + guarded. The **sanctioned (exempt) identity surfaces** are:
+
+- **Env-var names** (e.g. `NANGO_SECRET_KEY`, `CINATRA_*`). Referring to an
+  environment variable by its stable name is intrinsic; these are sanctioned
+  and not guarded.
+- **Role-typed capability ids shared via a single SDK constant** (e.g.
+  `email-send`, `llm-toolbox`). The SDK (`packages/sdk-extensions`) is the
+  single authority — it exports each id as a `*_CAPABILITY` / `*_CAPABILITY_ID`
+  constant. The capability id STRING is the sanctioned shared identity.
+  CONSUMER side (HOST, `src/`): the host MUST import the SDK constant — what is
+  FORBIDDEN (and guarded by `identity-coupling-gate.mjs`) is a host file
+  RE-DECLARING that literal instead of importing it (precedent:
+  `src/lib/llm-toolbox-providers.ts`, `src/lib/email-send-providers.ts`).
+  PRODUCER side (EXTENSION `serverEntry`): an extension registers the capability
+  via `ctx.capabilities.registerProvider("<id>", …)` using the id LITERAL — by
+  design, NOT a regression. Extension serverEntry graphs keep their
+  `@cinatra-ai/sdk-extensions` imports TYPE-ONLY (held at 0 host-peer VALUE
+  imports by `host-peer-value-import-ban`), so a producer cannot import the
+  VALUE constant without breaking that gate / its compile-against-older-host
+  contract. The id literal at the producer is the frozen serialization contract;
+  the gate scope is therefore HOST `src/` only (the consumer side the SDK
+  constant exists for), not the extension producer side.
+- **The connector slug catalog** (`packages/connectors-catalog/src/descriptors.mjs`):
+  the single sanctioned hand-maintained slug→packageId catalog. It pins no
+  package-name lexeme (every `packageId` is DERIVED from its slug via
+  `packageIdForSlug`, and the org scope is the single `CONNECTOR_PACKAGE_SCOPE`
+  constant), so a rename resolves away rather than re-pinning.
+- **Namespaced object-type ids** (`@cinatra-ai/<ns>:<id>` map KEYS in the
+  taxonomy / retention / new-url maps, e.g. `@cinatra-ai/agent-builder:agent-template`).
+  These are persisted serialization-contract keys, not runtime extension
+  selection; the `@cinatra-ai/agent-builder:*` ids routed WITHIN
+  `packages/agents` are additionally centralized in
+  `packages/agents/src/agent-builder-ids.ts` (the single id authority), so a
+  producer/consumer mismatch is a build error, not a silent string mismatch.
+
+The two DANGEROUS identity-coupling kinds are FIXED and guarded by the
+stateless `identity-coupling-gate.mjs`:
+
+1. **auth-route-guard public-route allowlist naming a concrete extension** — a
+   per-extension public-route exemption is security-adjacent dangling state.
+   The legitimate path is the GENERATED, manifest-derived
+   `GENERATED_WIDGET_STREAM_PUBLIC_PATHS` list (no extension name in the guard
+   source); the gate fails on any hand-pinned literal whose path segment equals
+   a real extension short-name or embeds an extension package id.
+2. **re-declared SDK capability constants** — a host `src/` file that
+   re-declares an SDK-owned capability id literal (or passes it as a string
+   literal to a capability-registry call) instead of importing the SDK
+   `*_CAPABILITY` / `*_CAPABILITY_ID` constant. The gate fails on any such
+   re-declaration (precedent: `src/lib/llm-toolbox-providers.ts` and
+   `src/lib/email-send-providers.ts` both import the SDK constant).
+
+The `DATA_CONTRACT_ID_ALLOWLIST` stays EMPTY: it is the mechanism for a frozen
+contract id that embeds a REAL extension package name; the identity surfaces
+above embed virtual scopes / object-type namespaces (not real extension dirs),
+so they are neither counted by the lexeme gates nor allowlist candidates.
 
 Known, documented residual lexer limitation: JSX TEXT is not modeled by
 `lib/strip-comments.mjs` (that needs a JSX-aware parser), so a named-extension
@@ -269,6 +360,7 @@ node scripts/audit/core-extension-import-ban.mjs
 node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 node scripts/audit/host-peer-value-import-ban.mjs
+node scripts/audit/identity-coupling-gate.mjs                   # identity-surface dangerous-class guard (stateless)
 node scripts/audit/required-extensions-cover-host-imports.mjs   # 8 == 8 == 8
 node scripts/extensions/generate-extension-manifest.mjs --check # fail-closed integrity of the exempt generated tree
 

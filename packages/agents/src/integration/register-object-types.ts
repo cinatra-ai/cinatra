@@ -5,10 +5,11 @@ import {
   AgentTemplateCard,
   AgentTemplateDetail,
 } from "./renderers";
+import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 
 export function registerAgentBuilderObjectTypes() {
   objectTypeRegistry.register({
-    type: "@cinatra-ai/agent-builder:agent-template",
+    type: AGENT_TEMPLATE_TYPE_ID,
     category: "project",
     // Mirrors AgentTemplateRecord in store.ts. Keep these in lock-step when
     // new fields are added — consumers use this schema to validate

@@ -890,6 +890,21 @@ jobs:
       - name: Core -> extension instance-coupling gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
 
+      # Identity-surface coupling gate (cinatra-engineering#155, eng#168(c)).
+      # The pinned-empty coupling gates pin a LEXEME (package name / path), not
+      # extension IDENTITY. This stateless gate blocks the two DANGEROUS
+      # identity-coupling subsets the owner ruling singled out to FIX so they
+      # cannot creep back: (A) an auth-route-guard public-route exemption naming
+      # a concrete extension, and (B) a host src/ file RE-DECLARING an SDK-owned
+      # capability id literal instead of importing the *_CAPABILITY /
+      # *_CAPABILITY_ID constant. Requires the cloned-back extension tree (this
+      # job clones it above) to derive the real-extension identity set.
+      - name: Identity-surface coupling gate (dangerous-class, stateless)
+        run: node scripts/audit/identity-coupling-gate.mjs
+
+      - name: Identity-surface coupling gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/identity-coupling-gate.test.mjs
+
       # Generated-manifest integrity gate (cinatra#36). The generated
       # src/lib/generated/** tree is the coupling gates' ONE permanent-exempt
       # class, so its integrity is load-bearing: this step fails CI when any
