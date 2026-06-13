@@ -48,7 +48,14 @@ export type CreateTestHostContextOptions = {
   flags?: Record<string, boolean>;
   /** `runtime.publicBaseUrl()` value. */
   publicBaseUrl?: string | null;
-  /** Explicit `db` override for a non-production test; otherwise `db` is fail-loud. */
+  /**
+   * Explicit `db` override. GRANT-GATED: rejected (throws) unless "db" is in
+   * `grants`. Even then, `db` stays fail-loud in author mode — production never
+   * hands back a usable db (the port is RESERVED / not implemented in the host),
+   * so the override CANNOT make `ctx.db` usable. Author code that touches `ctx.db`
+   * still throws (prod parity); the option exists only to assert the grant
+   * relationship without a false-pass.
+   */
   db?: unknown;
   /**
    * INERT mode (release-time activation smoke — canary-verify): grant every port

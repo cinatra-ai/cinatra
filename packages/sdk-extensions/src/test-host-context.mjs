@@ -13,9 +13,12 @@
 //     (any real method access throws a named, actionable error), exactly as the
 //     host's `unavailablePort` does. The author sees least-privilege failures
 //     locally instead of in production. Ambient ports (`logger`/`runtime`) are
-//     always granted; `db` is fail-loud even when granted (it is RESERVED / not
-//     implemented in the host — see host-context.ts HostDbPort — unless the
-//     caller passes `db: <stub>` to override for a non-production test).
+//     always granted; `db` is fail-loud ALWAYS — "not-granted" when ungranted,
+//     "not-implemented" even when granted (it is RESERVED / not implemented in the
+//     host — see host-context.ts HostDbPort). A `db:` override is grant-gated (it
+//     is rejected when "db" is not granted) and STILL does not make the port
+//     usable: production never hands back a working db, so the harness must not
+//     either — otherwise a register that touches db would false-pass locally.
 //
 //   • IDENTITY ASSERTIONS — `capabilities.registerProvider` FORCES the host-
 //     injected `packageName` onto the provider identity and REJECTS the reserved
@@ -110,6 +113,63 @@ function makeChainableSink() {
   return sink;
 }
 
+// Per-array SNAPSHOT key index. The host registries are keyed Maps whose keys are
+// FROZEN at insertion (`map.set(name, ...)` snapshots `name`). To mirror that
+// EXACTLY — and not re-derive a key from a stored entry the author may have
+// mutated after registering it (codex parity finding) — each recorder array keeps
+// its own private `Map<snapshotKey, index>` here, never recomputing from the
+// stored object. WeakMap so it is GC'd with the recorder.
+const _keyIndexes = new WeakMap();
+function _indexFor(arr) {
+  let m = _keyIndexes.get(arr);
+  if (!m) {
+    m = new Map();
+    _keyIndexes.set(arr, m);
+  }
+  return m;
+}
+
+/**
+ * Upsert `value` into the recorder array `arr` REPLACE-BY-KEY using the SNAPSHOT
+ * `key` (computed once by the caller, frozen here): if that key was already
+ * registered, replace the entry at its original slot; otherwise append and record
+ * the slot. Mirrors the host registries, which are all keyed Maps (extension-mcp-
+ * registry keys by tool.name, extension-ui-registry keys actions by id + surfaces
+ * by surfaceId) whose keys are immutable once inserted — a re-registration is an
+ * idempotent replace, NOT a duplicate append, and a later mutation of a stored
+ * entry's key field does NOT move it (a Map key never changes). The recorder stays
+ * an array (its public ABI), so counts match what production ends up with.
+ */
+function replaceByKey(arr, key, value) {
+  const idx = _indexFor(arr);
+  const existing = idx.get(key);
+  if (existing !== undefined) {
+    arr[existing] = value;
+  } else {
+    idx.set(key, arr.length);
+    arr.push(value);
+  }
+}
+
+/**
+ * Derive the host UI registry's surface identity (extension-ui-registry.ts
+ * surfaceId): an explicit string `id`, else a string `title`, else a structural
+ * JSON key. Surfaces are replace-by-this-key in the host, so the recorder must be
+ * too (a re-registered surface replaces, never duplicates).
+ */
+function surfaceKey(surface) {
+  if (surface && typeof surface === "object") {
+    const rec = surface;
+    if (typeof rec.id === "string" && rec.id) return rec.id;
+    if (typeof rec.title === "string" && rec.title) return rec.title;
+  }
+  try {
+    return JSON.stringify(surface) ?? String(surface);
+  } catch {
+    return String(surface);
+  }
+}
+
 /** True iff `packageName` is (or is under) the reserved host namespace. */
 export function isReservedHostProviderIdentity(packageName) {
   return (
@@ -186,7 +246,7 @@ function unavailableTestPort(packageName, port, reason) {
  *   runtimeMode?: "development"|"production",
  *   flags?: Record<string, boolean>,
  *   publicBaseUrl?: string|null,
- *   db?: unknown,
+ *   db?: unknown, // grant-gated, never usable in author mode (prod parity)
  *   inert?: boolean,
  * }} [opts]
  * @returns {{ ctx: object, recorder: object, diagnostics: string[] }}
@@ -202,7 +262,7 @@ export function createTestHostContext(opts = {}) {
     runtimeMode = "development",
     flags = {},
     publicBaseUrl = null,
-    db, // explicit non-production override only
+    db, // explicit non-production override — grant-gated + reserved (see below)
     // INERT mode (the release-time activation smoke — canary-verify): grant EVERY
     // port inertly (nothing fail-louds), `db` becomes a benign inert read handle,
     // and `runtime.mode` defaults to "production". This is NOT the grant-aware
@@ -227,6 +287,22 @@ export function createTestHostContext(opts = {}) {
   }
   if (capabilities == null || typeof capabilities !== "object" || Array.isArray(capabilities)) {
     throw new Error(`[testHostContext] ${packageName}: { capabilities } must be an object of capabilityId -> provider[]`);
+  }
+  // FIDELITY (codex DO-NOT-APPROVE #225): a `db:` override must NOT bypass the
+  // grant gate. Production (extension-host-context.ts) NEVER hands back a usable
+  // db: an ungranted db fail-louds "not-granted", a GRANTED db fail-louds
+  // "not-implemented" (the port is the deliberate scoped escape hatch, unwired
+  // until a real consumer needs it). So an override on an UNGRANTED db is a
+  // contradiction prod would reject — throw, instead of silently making the
+  // ungranted port freely usable. (INERT release-smoke is exempt: it grants every
+  // port and is not grant-aware — a packument read cannot prove grants.)
+  if (db !== undefined && !inert && !grants.includes("db")) {
+    throw new Error(
+      `[testHostContext] ${packageName}: a { db } override was passed but "db" is NOT in { grants } — ` +
+        `production fail-louds an ungranted db port (least-privilege). Add "db" to grants. ` +
+        `Note: even a GRANTED db is RESERVED / not implemented in the host (see HostDbPort docs), ` +
+        `so the override cannot make db a freely-usable port — author code that touches ctx.db will still throw.`,
+    );
   }
 
   // INERT mode grants every port (the release smoke is not grant-aware);
@@ -277,10 +353,12 @@ export function createTestHostContext(opts = {}) {
     );
   }
   // Providers registered THROUGH this ctx, so self-register-then-resolve works.
+  // Mirrors the host registry shape: capability -> (packageName -> provider), so
+  // re-registering the same package replaces (idempotent), never duplicates.
   const liveProviders = new Map();
   const resolveProviders = (capability) => {
     const seeded = seededProviders.get(capability) ?? [];
-    const live = liveProviders.get(capability) ?? [];
+    const live = [...(liveProviders.get(capability)?.values() ?? [])];
     const all = [...seeded, ...live];
     if (all.length === 0) {
       const safe = sanitizeAtom(capability);
@@ -364,7 +442,24 @@ export function createTestHostContext(opts = {}) {
           },
     mcp: () => ({
       registerTool: (tool) => {
-        recorder.mcpTools.push(tool);
+        // VALIDATE exactly like the host extension-mcp-registry.register(): a
+        // missing/non-string name or a non-function handler is what production
+        // THROWS on, so the harness must too — else a structurally-broken tool
+        // false-passes locally (codex DO-NOT-APPROVE #225). Then store
+        // REPLACE-BY-NAME (the host registry is a Map keyed by tool.name; a
+        // re-register of the same name replaces, never appends a duplicate).
+        const name = tool == null ? undefined : tool.name;
+        if (!name || typeof name !== "string") {
+          throw new Error(
+            `[testHostContext] ${packageName}: ctx.mcp.registerTool received an MCP tool with no name`,
+          );
+        }
+        if (typeof (tool && tool.handler) !== "function") {
+          throw new Error(
+            `[testHostContext] ${packageName}: ctx.mcp.registerTool tool "${name}" has no handler (must be a function)`,
+          );
+        }
+        replaceByKey(recorder.mcpTools, name, tool);
       },
       // INERT (canary parity): the old probe's callPrimitive was an async noop
       // (returns undefined, never throws). Author mode fail-louds (no live MCP).
@@ -424,14 +519,18 @@ export function createTestHostContext(opts = {}) {
       },
     }),
     ui: () => ({
+      // REPLACE-BY-KEY parity with the host UI registry (extension-ui-registry.ts):
+      // surfaces are keyed by surfaceId (explicit id, then title, then structural
+      // key) and actions by action.id — a re-register REPLACES, never appends a
+      // duplicate, so recorder counts match production (codex DO-NOT-APPROVE #225).
       registerSetupSurface: (surface) => {
-        recorder.uiSetupSurfaces.push(surface);
+        replaceByKey(recorder.uiSetupSurfaces, surfaceKey(surface), surface);
       },
       registerSettingsSurface: (surface) => {
-        recorder.uiSettingsSurfaces.push(surface);
+        replaceByKey(recorder.uiSettingsSurfaces, surfaceKey(surface), surface);
       },
       registerAction: (action) => {
-        recorder.uiActions.push(action);
+        replaceByKey(recorder.uiActions, action && action.id, action);
       },
     }),
     capabilities: () =>
@@ -447,10 +546,18 @@ export function createTestHostContext(opts = {}) {
               // Identity enforcement parity with the host (cinatra#150): force
               // identity, reject the reserved host namespace + non-object provider.
               const bound = bindTestProviderIdentity(packageName, provider);
-              recorder.capabilityProviders.push({ capability, provider: bound });
-              const arr = liveProviders.get(capability) ?? [];
-              arr.push(bound);
-              liveProviders.set(capability, arr);
+              // REPLACE-BY-PACKAGE parity with the host capability registry
+              // (extension-capabilities-registry.ts: capability -> packageName ->
+              // provider; byPackage.set(provider.packageName, ...)). ONE provider
+              // per package per capability — a re-registration REPLACES, never
+              // appends a duplicate, so counts match production (codex
+              // DO-NOT-APPROVE #225). Identity is FORCED to packageName, so the
+              // dedup key is (capability, bound.packageName).
+              const capKey = capability + " " + bound.packageName;
+              replaceByKey(recorder.capabilityProviders, capKey, { capability, provider: bound });
+              const byPackage = liveProviders.get(capability) ?? new Map();
+              byPackage.set(bound.packageName, bound);
+              liveProviders.set(capability, byPackage);
             },
             resolveProviders,
           },
@@ -469,18 +576,20 @@ export function createTestHostContext(opts = {}) {
     packageName,
     logger,
     runtime,
-    // `db` is RESERVED / not implemented in the host even when granted. Fail loud
-    // here too (production parity) UNLESS the caller passes an explicit override
-    // for a non-production test (codex HIGH), or in INERT mode where the release
-    // smoke uses a benign inert read handle (it does not exercise grants).
-    db:
-      db !== undefined
-        ? db
-        : inert
-          ? { query: async () => [], schema: "inert" }
-          : granted.has("db")
-            ? unavailableTestPort(packageName, "db", "not-implemented")
-            : unavailableTestPort(packageName, "db", "not-granted"),
+    // `db` mirrors the host EXACTLY (extension-host-context.ts): it is ALWAYS
+    // fail-loud in the grant-aware author harness — "not-implemented" when granted
+    // (RESERVED / unwired scoped escape hatch) and "not-granted" otherwise. A
+    // `db:` override does NOT make it usable: production never hands back a working
+    // db, so honoring an override here would let a register that touches db
+    // FALSE-PASS locally. The override is grant-gated above (rejected when "db" is
+    // ungranted); a granted+overridden db still throws not-implemented, exactly as
+    // prod does. Only INERT mode (release smoke — not grant-aware) uses a benign
+    // inert read handle.
+    db: inert
+      ? { query: async () => [], schema: "inert" }
+      : granted.has("db")
+        ? unavailableTestPort(packageName, "db", "not-implemented")
+        : unavailableTestPort(packageName, "db", "not-granted"),
     settings: gated("settings"),
     secrets: gated("secrets"),
     nango: gated("nango"),

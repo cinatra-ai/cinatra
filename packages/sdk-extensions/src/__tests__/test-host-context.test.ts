@@ -77,13 +77,34 @@ describe("createTestHostContext — author-facing local test harness", () => {
       expect(() => ctx.db.query("select 1")).toThrow(/RESERVED \/ not implemented/);
     });
 
-    it("db can be overridden explicitly for a non-production test", async () => {
+    it("ungranted db is fail-loud not-granted (host parity)", () => {
+      const { ctx } = createTestHostContext({ packageName: "@x/y-connector", grants: [] });
+      expect(() => ctx.db.query("select 1")).toThrow(/NOT GRANTED — add "db"/);
+    });
+
+    // FIDELITY (codex DO-NOT-APPROVE #225, finding 1): production NEVER hands back
+    // a usable db port. The harness must not let a `db:` override bypass the grant
+    // gate, and a granted+overridden db must STILL fail loud (not-implemented) so a
+    // register touching ctx.db cannot false-pass locally.
+    it("a db override WITHOUT the db grant is rejected (no grant-gate bypass)", () => {
+      expect(() =>
+        createTestHostContext({
+          packageName: "@x/y-connector",
+          grants: [],
+          db: { query: async () => [{ ok: true }] },
+        }),
+      ).toThrow(/a \{ db \} override was passed but "db" is NOT in \{ grants \}/);
+    });
+
+    it("a db override WITH the db grant still fail-louds (prod parity, not a usable fake)", () => {
       const { ctx } = createTestHostContext({
         packageName: "@x/y-connector",
         grants: ["db"],
         db: { query: async () => [{ ok: true }], schema: "test" },
       });
-      expect(await ctx.db.query("select 1")).toEqual([{ ok: true }]);
+      // The override does NOT make db usable — production reserves/does-not-wire db,
+      // so a register that touches ctx.db must throw here exactly as it would in prod.
+      expect(() => ctx.db.query("select 1")).toThrow(/RESERVED \/ not implemented/);
     });
   });
 
@@ -190,6 +211,126 @@ describe("createTestHostContext — author-facing local test harness", () => {
     it("jobs.registerWorker is unsupported (host parity)", () => {
       const { ctx } = createTestHostContext({ packageName: "@x/y-connector", grants: ["jobs"] });
       expect(() => ctx.jobs.registerWorker("w", async () => {})).toThrow(/registerWorker is not supported/);
+    });
+  });
+
+  // FIDELITY (codex DO-NOT-APPROVE #225, finding 2): the recorder must mirror the
+  // live host registries EXACTLY — mcp.registerTool VALIDATES like
+  // extension-mcp-registry.register(), and capabilities/ui are replace-by-key
+  // (idempotent), NOT append, so re-registration does not inflate counts.
+  describe("registration semantics parity with the live host (finding 2)", () => {
+    describe("mcp.registerTool validates like extension-mcp-registry.register()", () => {
+      it("throws on a missing/non-string tool name", () => {
+        const { ctx } = createTestHostContext({ packageName: "@x/y-connector", grants: ["mcp"] });
+        // @ts-expect-error name is required
+        expect(() => ctx.mcp.registerTool({ handler: () => ({}) })).toThrow(/with no name/);
+        // @ts-expect-error name must be a string
+        expect(() => ctx.mcp.registerTool({ name: 123, handler: () => ({}) })).toThrow(/with no name/);
+        // empty string is type-valid but a runtime fidelity reject (host parity).
+        expect(() => ctx.mcp.registerTool({ name: "", handler: () => ({}) })).toThrow(/with no name/);
+      });
+
+      it("throws on a non-function handler", () => {
+        const { ctx } = createTestHostContext({ packageName: "@x/y-connector", grants: ["mcp"] });
+        // @ts-expect-error handler is required
+        expect(() => ctx.mcp.registerTool({ name: "t" })).toThrow(/has no handler/);
+        // @ts-expect-error handler must be a function
+        expect(() => ctx.mcp.registerTool({ name: "t", handler: "nope" })).toThrow(/has no handler/);
+      });
+
+      it("re-registering the same tool name REPLACES (not append) — count matches prod", () => {
+        const { ctx, recorder } = createTestHostContext({ packageName: "@x/y-connector", grants: ["mcp"] });
+        ctx.mcp.registerTool({ name: "do_thing", handler: () => ({ v: 1 }) });
+        ctx.mcp.registerTool({ name: "do_thing", handler: () => ({ v: 2 }) });
+        ctx.mcp.registerTool({ name: "other", handler: () => ({}) });
+        expect(recorder.mcpTools).toHaveLength(2);
+        const doThing = recorder.mcpTools.find((t) => t.name === "do_thing");
+        expect(doThing?.handler(undefined)).toEqual({ v: 2 }); // last write wins (replace)
+      });
+
+      // The host registry is a Map whose key is FROZEN at insertion. Mutating a
+      // registered tool's name afterwards must NOT move its slot, so re-registering
+      // the ORIGINAL name still replaces (codex parity edge #225): prod ends with 1.
+      it("a registered tool's slot is keyed by the SNAPSHOT name (post-mutation safe)", () => {
+        const { ctx, recorder } = createTestHostContext({ packageName: "@x/y-connector", grants: ["mcp"] });
+        const tool = { name: "a", handler: () => ({ v: 1 }) };
+        ctx.mcp.registerTool(tool);
+        tool.name = "b"; // author mutates the object after registering it
+        ctx.mcp.registerTool({ name: "a", handler: () => ({ v: 2 }) });
+        // Snapshot key "a" still owns the slot — replace, not append. Prod: 1 tool.
+        expect(recorder.mcpTools).toHaveLength(1);
+        expect(recorder.mcpTools[0].handler(undefined)).toEqual({ v: 2 });
+      });
+    });
+
+    describe("capabilities are ONE provider per package per capability (replace-by-package)", () => {
+      it("re-registering the same package/capability REPLACES (not append)", () => {
+        const { ctx, recorder } = createTestHostContext({
+          packageName: "@x/y-connector",
+          grants: ["capabilities"],
+        });
+        ctx.capabilities.registerProvider("email-send", { packageName: "@x/y-connector", impl: { v: 1 } });
+        ctx.capabilities.registerProvider("email-send", { packageName: "@x/y-connector", impl: { v: 2 } });
+        // ONE provider per package per capability — the recorder must not inflate.
+        expect(recorder.capabilityProviders).toHaveLength(1);
+        expect(
+          (recorder.capabilityProviders[0].provider.impl as { v: number }).v,
+        ).toBe(2); // replaced
+        // resolveProviders mirrors it: a single live provider (no duplicate).
+        expect(ctx.capabilities.resolveProviders("email-send")).toHaveLength(1);
+      });
+
+      it("identity is forced, so two registrations claiming different packages still collapse to one", () => {
+        const { ctx, recorder } = createTestHostContext({
+          packageName: "@x/y-connector",
+          grants: ["capabilities"],
+        });
+        // Both get identity FORCED to @x/y-connector (cinatra#150), so both target
+        // the same (capability, packageName) key — the second replaces the first.
+        ctx.capabilities.registerProvider("c", { packageName: "@evil/a", impl: { v: 1 } });
+        ctx.capabilities.registerProvider("c", { packageName: "@evil/b", impl: { v: 2 } });
+        expect(recorder.capabilityProviders).toHaveLength(1);
+        expect(recorder.capabilityProviders[0].provider.packageName).toBe("@x/y-connector");
+        expect(ctx.capabilities.resolveProviders("c")).toHaveLength(1);
+      });
+
+      it("self-registered provider still adds to distinct SEEDED providers on resolve", () => {
+        const { ctx } = createTestHostContext({
+          packageName: "@x/y-connector",
+          grants: ["capabilities"],
+          capabilities: { cap: [{ packageName: "@cinatra-ai/seeded", impl: { a: 1 } }] },
+        });
+        ctx.capabilities.registerProvider("cap", { packageName: "@x/y-connector", impl: { b: 2 } });
+        // seeded (1) + this ctx's own (1) = 2 distinct providers; a re-register of
+        // the ctx's own does NOT push the count to 3.
+        ctx.capabilities.registerProvider("cap", { packageName: "@x/y-connector", impl: { b: 3 } });
+        expect(ctx.capabilities.resolveProviders("cap")).toHaveLength(2);
+      });
+    });
+
+    describe("ui surfaces/actions are replace-by-id/key (not append)", () => {
+      it("re-registering an action id REPLACES (not append)", () => {
+        const { ctx, recorder } = createTestHostContext({ packageName: "@x/y-connector", grants: ["ui"] });
+        const h1 = async () => ({ v: 1 });
+        const h2 = async () => ({ v: 2 });
+        ctx.ui.registerAction({ id: "act", handler: h1 });
+        ctx.ui.registerAction({ id: "act", handler: h2 });
+        ctx.ui.registerAction({ id: "other", handler: h1 });
+        expect(recorder.uiActions).toHaveLength(2);
+        expect(recorder.uiActions.find((a) => a.id === "act")?.handler).toBe(h2);
+      });
+
+      it("re-registering a setup/settings surface by id/title REPLACES (not append)", () => {
+        const { ctx, recorder } = createTestHostContext({ packageName: "@x/y-connector", grants: ["ui"] });
+        ctx.ui.registerSetupSurface({ id: "setup", v: 1 });
+        ctx.ui.registerSetupSurface({ id: "setup", v: 2 });
+        ctx.ui.registerSettingsSurface({ title: "Settings", v: 1 });
+        ctx.ui.registerSettingsSurface({ title: "Settings", v: 2 });
+        expect(recorder.uiSetupSurfaces).toHaveLength(1);
+        expect((recorder.uiSetupSurfaces[0] as { v: number }).v).toBe(2);
+        expect(recorder.uiSettingsSurfaces).toHaveLength(1);
+        expect((recorder.uiSettingsSurfaces[0] as { v: number }).v).toBe(2);
+      });
     });
   });
 
