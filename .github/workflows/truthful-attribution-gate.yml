@@ -35,10 +35,16 @@ permissions:
   contents: read
   pull-requests: read
   checks: read
+  # actions:read is required by the re-pinned reusable engine (ci@8eede102): it
+  # resolves a reusable-workflow check-run to its Actions run (GET
+  # /actions/runs/{id}) to verify referenced_workflows[] at the pinned SHA. A
+  # called reusable workflow's permissions cannot EXCEED the caller's grant, so
+  # the caller must grant actions:read or the run fails to start (startup_failure).
+  actions: read
 
 jobs:
   truthful-attribution-gate:
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@31570d9c772d24ae3f629d7e84483f53d4e10214 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@8eede1022e835997d94974e4bd6205daf72131a2 # v0.1.0
     with:
       mode: enforce
-      ref: 31570d9c772d24ae3f629d7e84483f53d4e10214
+      ref: 8eede1022e835997d94974e4bd6205daf72131a2
