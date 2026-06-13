@@ -11,13 +11,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // extensibility only (adding a widget agent = a manifest entry, no host edit) —
 // NOT a generalized widget wire protocol (the request/SSE contract stays the
 // frozen WP/Drupal v1 shape).
-const { buildSkillTools, streamMock, ensureSkillForCapabilityMock, readConnectorConfigMock } =
-  vi.hoisted(() => ({
-    buildSkillTools: vi.fn(),
-    streamMock: vi.fn(),
-    ensureSkillForCapabilityMock: vi.fn(),
-    readConnectorConfigMock: vi.fn(),
-  }));
+const {
+  buildSkillTools,
+  streamMock,
+  ensureSkillForCapabilityMock,
+  readConnectorConfigMock,
+  readMetadataValueMock,
+  runPostgresQueriesSyncMock,
+} = vi.hoisted(() => ({
+  buildSkillTools: vi.fn(),
+  streamMock: vi.fn(),
+  ensureSkillForCapabilityMock: vi.fn(),
+  readConnectorConfigMock: vi.fn(),
+  readMetadataValueMock: vi.fn(),
+  runPostgresQueriesSyncMock: vi.fn(),
+}));
 
 vi.mock("@cinatra-ai/llm", () => ({
   stream: streamMock,
@@ -28,6 +36,19 @@ vi.mock("@cinatra-ai/skills", () => ({
 }));
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: readConnectorConfigMock,
+  readMetadataValueFromDatabase: readMetadataValueMock,
+}));
+// The widget-token-broker (cit_ path) DB layer — mocked as an in-memory store.
+vi.mock("@/lib/postgres-config", () => ({
+  getPostgresConnectionString: () => "postgres://test",
+  postgresSchema: "test_schema",
+}));
+vi.mock("@/lib/postgres-schema-init", () => ({
+  ensurePostgresSchema: vi.fn(),
+}));
+vi.mock("@/lib/postgres-sync", () => ({
+  runPostgresQueriesSync: runPostgresQueriesSyncMock,
+  quotePostgresIdentifier: (v: string) => `"${v}"`,
 }));
 
 const WP_ORIGIN = "https://wp.test";
@@ -92,27 +113,81 @@ vi.mock("@/lib/generated/extensions.server", () => ({
 }));
 
 import { OPTIONS, POST } from "../route";
+import { mintWidgetStreamToken } from "@/lib/widget-token-broker";
 
-// connector_config fixtures keyed exactly like prod rows.
-const CONNECTOR_CONFIG: Record<string, unknown> = {
-  wordpress: {
-    instances: [
-      {
-        id: "wp-1",
-        name: "WP Site",
-        siteUrl: WP_ORIGIN,
-        username: "admin",
-        applicationPassword: "secret",
-      },
-      // Half-configured row (no applicationPassword): must NOT broaden the
-      // origin allowlist (requiredInstanceFields filter).
-      { id: "wp-2", name: "Half", siteUrl: "https://half.test", username: "x" },
-    ],
-  },
-  wordpress_widget_auth: { apiKey: "test-key" },
-  acme: { instances: [{ id: "acme-1", siteUrl: ACME_ORIGIN }] },
-  acme_widget_auth: { apiKey: "acme-key" },
-};
+// In-memory widget_stream_tokens store for the cit_ path (keyed by token_hash),
+// driven by the mocked runPostgresQueriesSync. Mirrors the broker SQL coarsely.
+type TokenRow = Record<string, unknown> & { token_hash: string; expires_at_ms: number };
+const tokenStore = new Map<string, TokenRow>();
+let tokenNowMs = Date.now();
+function brokerRunQueries(input: { queries: Array<{ text: string; values?: unknown[] }> }) {
+  return input.queries.map((q) => {
+    const text = q.text;
+    const values = q.values ?? [];
+    if (text.includes("DELETE FROM") && text.includes("expires_at < now()")) {
+      for (const [h, r] of [...tokenStore]) if (r.expires_at_ms < tokenNowMs) tokenStore.delete(h);
+      return { rows: [], rowCount: 0 };
+    }
+    if (text.startsWith("INSERT INTO")) {
+      // expires_at = now() + make_interval(secs => $11) (DB clock); mirror it.
+      const [
+        token_hash, jti, agent_slug, aud, iss, origin, scope, sub,
+        token_config_key, token_key_fingerprint, ttl_secs,
+      ] = values as [
+        string, string, string, string, string, string, string,
+        string | null, string, string, number,
+      ];
+      tokenStore.set(token_hash, {
+        token_hash, jti, agent_slug, aud, iss, origin, scope,
+        sub: sub ?? null, token_config_key, token_key_fingerprint,
+        expires_at_ms: tokenNowMs + Number(ttl_secs) * 1000,
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    if (text.startsWith("SELECT") && text.includes("WHERE token_hash =")) {
+      const r = tokenStore.get(values[0] as string);
+      if (!r) return { rows: [], rowCount: 0 };
+      return {
+        rows: [{
+          jti: r.jti, agent_slug: r.agent_slug, aud: r.aud, origin: r.origin,
+          scope: r.scope, sub: r.sub, token_key_fingerprint: r.token_key_fingerprint,
+          not_expired: r.expires_at_ms > tokenNowMs,
+        }],
+        rowCount: 1,
+      };
+    }
+    if (text.startsWith("DELETE FROM") && text.includes("WHERE token_hash =")) {
+      tokenStore.delete(values[0] as string);
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+}
+
+// connector_config fixtures keyed exactly like prod rows. Rebuilt fresh in
+// beforeEach (some dual-path tests mutate it — e.g. key rotation, flag flip).
+function freshConnectorConfig(): Record<string, unknown> {
+  return {
+    wordpress: {
+      instances: [
+        {
+          id: "wp-1",
+          name: "WP Site",
+          siteUrl: WP_ORIGIN,
+          username: "admin",
+          applicationPassword: "secret",
+        },
+        // Half-configured row (no applicationPassword): must NOT broaden the
+        // origin allowlist (requiredInstanceFields filter).
+        { id: "wp-2", name: "Half", siteUrl: "https://half.test", username: "x" },
+      ],
+    },
+    wordpress_widget_auth: { apiKey: "test-key" },
+    acme: { instances: [{ id: "acme-1", siteUrl: ACME_ORIGIN }] },
+    acme_widget_auth: { apiKey: "acme-key" },
+  };
+}
+let CONNECTOR_CONFIG: Record<string, unknown> = freshConnectorConfig();
 
 function wpRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
@@ -153,10 +228,22 @@ beforeEach(() => {
   streamMock.mockReset();
   ensureSkillForCapabilityMock.mockReset();
   ensureSkillForCapabilityMock.mockImplementation(async (cap: string) => `${cap}:skill-id`);
+  CONNECTOR_CONFIG = freshConnectorConfig();
   readConnectorConfigMock.mockReset();
   readConnectorConfigMock.mockImplementation(
     (key: string, fallback: unknown) => CONNECTOR_CONFIG[key] ?? fallback,
   );
+  // Fresh (uncached) reads — broker key-auth/mint/kill-switch + forceFresh
+  // configured-origin re-check — keyed by `connector_config:<id>`.
+  readMetadataValueMock.mockReset();
+  readMetadataValueMock.mockImplementation((key: string, fallback: unknown) => {
+    const id = key.startsWith("connector_config:") ? key.slice("connector_config:".length) : key;
+    return CONNECTOR_CONFIG[id] ?? fallback;
+  });
+  tokenStore.clear();
+  tokenNowMs = Date.now();
+  runPostgresQueriesSyncMock.mockReset();
+  runPostgresQueriesSyncMock.mockImplementation(brokerRunQueries);
 });
 
 describe("widget stream route — manifest-driven resolution + auth", () => {
@@ -228,7 +315,7 @@ describe("widget stream route — manifest-driven resolution + auth", () => {
 describe("widget stream route — contract gate wiring", () => {
   it("rejects an unknown contractVersion with a 400 structured error + CORS headers", async () => {
     const res = await POST(
-      wpRequest({ contractVersion: "v2", messages: [{ role: "user", content: "hi" }] }),
+      wpRequest({ contractVersion: "v9", messages: [{ role: "user", content: "hi" }] }),
       wpParams,
     );
     expect(res.status).toBe(400);
@@ -376,5 +463,101 @@ describe("widget stream route — host extensibility (synthetic third agent)", (
     expect(streamArgs.system).toContain("current page");
     expect(streamArgs.system).toContain("Current AcmeCMS context:");
     expect(streamArgs.system).toContain("- pageId:");
+  });
+});
+
+describe("widget stream route — dual-path auth (cinatra#220)", () => {
+  // Mint a real cit_ token through the broker (the broker's DB is mocked to the
+  // in-memory tokenStore above), then present it to the stream route.
+  function mintCit(origin = WP_ORIGIN) {
+    const minted = mintWidgetStreamToken({
+      agentSlug: "wordpress-content-editor",
+      auth: CONNECTOR_CONFIG.wordpress_widget_auth
+        ? {
+            tokenConfigKey: "wordpress_widget_auth",
+            instancesConfigKey: "wordpress",
+            requiredInstanceFields: ["id", "name", "username", "applicationPassword"],
+          }
+        : (undefined as never),
+      origin,
+      issuerBaseUrl: "https://instance.cinatra.ai",
+    });
+    if (!minted) throw new Error("mint failed in test setup");
+    return minted.token;
+  }
+
+  function streamRequestWith(token: string, headers: Record<string, string> = {}) {
+    return new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+      method: "POST",
+      headers: {
+        Origin: WP_ORIGIN,
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify({ contractVersion: "v1", messages: [{ role: "user", content: "hi" }] }),
+    });
+  }
+
+  it("accepts a short-lived cit_ token (no Deprecation header on the modern path)", async () => {
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
+    streamMock.mockImplementationOnce(async (opts: { onTextDelta?: (d: string) => void }) => {
+      opts.onTextDelta?.("hi");
+    });
+    const token = mintCit();
+    const res = await POST(streamRequestWith(token), wpParams);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Deprecation")).toBeNull();
+    expect(res.headers.get("Sunset")).toBeNull();
+  });
+
+  it("401s a cit_ token whose bound origin ≠ the request Origin (token-bound origin is authoritative)", async () => {
+    const token = mintCit(WP_ORIGIN);
+    // Present the token from a DIFFERENT (but still-configured) site? Only one
+    // configured site exists; spoof the request Origin to a non-bound value.
+    const res = await POST(streamRequestWith(token, { Origin: "https://half.test" }), wpParams);
+    // half.test is half-configured → not a valid CORS allowlist origin either,
+    // but the cit_ path's authority is the token-bound origin mismatch → 401.
+    expect(res.status).toBe(401);
+    expect(buildSkillTools).not.toHaveBeenCalled();
+  });
+
+  it("401s a cit_ token after the long-lived key is rotated (fingerprint mismatch)", async () => {
+    const token = mintCit();
+    // Rotate the key AFTER mint.
+    CONNECTOR_CONFIG.wordpress_widget_auth = { apiKey: "rotated-key" };
+    const res = await POST(streamRequestWith(token), wpParams);
+    expect(res.status).toBe(401);
+  });
+
+  it("legacy long-lived path: accepted + emits Deprecation/Sunset (exposed via CORS)", async () => {
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
+    streamMock.mockImplementationOnce(async (opts: { onTextDelta?: (d: string) => void }) => {
+      opts.onTextDelta?.("hi");
+    });
+    const res = await POST(streamRequestWith("test-key"), wpParams);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Deprecation")).toBe("true");
+    expect(res.headers.get("Sunset")).toBeTruthy();
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Deprecation");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("Sunset");
+  });
+
+  it("legacy long-lived path: 403 when widgetLongLivedTokenEnabled=false", async () => {
+    CONNECTOR_CONFIG.wordpress_widget_auth = {
+      apiKey: "test-key",
+      widgetLongLivedTokenEnabled: false,
+    };
+    const res = await POST(streamRequestWith("test-key"), wpParams);
+    expect(res.status).toBe(403);
+    expect(buildSkillTools).not.toHaveBeenCalled();
+  });
+
+  it("legacy long-lived path: rotating the key immediately 401s the old key (fresh read, no cache)", async () => {
+    // The validator reads UNCACHED, so the rotated key takes effect at once.
+    CONNECTOR_CONFIG.wordpress_widget_auth = { apiKey: "rotated-legacy-key" };
+    const res = await POST(streamRequestWith("test-key"), wpParams);
+    expect(res.status).toBe(401);
+    expect(buildSkillTools).not.toHaveBeenCalled();
   });
 });

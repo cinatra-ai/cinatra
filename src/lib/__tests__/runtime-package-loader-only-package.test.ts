@@ -183,4 +183,41 @@ describe("loadRuntimePackageExtensions — onlyPackage targeted activation (DI-u
     expect(classifyExtensionTrust).not.toHaveBeenCalled();
     expect(runRuntimePackageActivation).not.toHaveBeenCalled();
   });
+
+  // cinatra#158 — ANCHOR DIGEST BINDING (fail-closed). The finalized journal op's
+  // digest must name the SAME install as the on-disk digest-pinned store dir.
+  describe("install-anchor digest binding (cinatra#158)", () => {
+    const recWithDigest = (name: string, declaredDigest?: string): PackageStoreRecord =>
+      ({ packageName: name, serverEntry: "./register", requestedHostPorts: [], sdkAbiRange: "^2", storeDir: `/store/${name}`, ...(declaredDigest ? { declaredDigest } : {}) }) as PackageStoreRecord;
+    const anchorWithDigest = (name: string, digest: string | null) => ({ ...anchor(name), digest });
+
+    it("ACTIVATES when the anchor digest matches the on-disk declaredDigest", async () => {
+      discoverPackageStoreRecords.mockResolvedValue([recWithDigest("@cinatra-ai/d", "abc123")]);
+      runRuntimePackageActivation.mockResolvedValue([{ packageName: "@cinatra-ai/d", status: "registered" }]);
+      const results = await loadRuntimePackageExtensions("/store", { resolveInstallAnchor: async (n) => anchorWithDigest(n, "abc123") });
+      expect(results.some((r) => r.packageName === "@cinatra-ai/d")).toBe(true);
+      expect(runRuntimePackageActivation).toHaveBeenCalledTimes(1);
+    });
+
+    it("REFUSES (fail-closed) when the anchor digest does NOT match the on-disk declaredDigest", async () => {
+      discoverPackageStoreRecords.mockResolvedValue([recWithDigest("@cinatra-ai/d", "ON-DISK-NEW")]);
+      const results = await loadRuntimePackageExtensions("/store", { resolveInstallAnchor: async (n) => anchorWithDigest(n, "OLD-ANCHOR") });
+      expect(results).toEqual([]); // refused before activation
+      expect(runRuntimePackageActivation).not.toHaveBeenCalled();
+    });
+
+    it("REFUSES (fail-closed) a FLAT record (no declaredDigest) when the anchor IS digest-bound — a real-pipeline install is always digest-pinned", async () => {
+      discoverPackageStoreRecords.mockResolvedValue([recWithDigest("@cinatra-ai/d" /* no declaredDigest */)]);
+      const results = await loadRuntimePackageExtensions("/store", { resolveInstallAnchor: async (n) => anchorWithDigest(n, "BOUND") });
+      expect(results).toEqual([]);
+      expect(runRuntimePackageActivation).not.toHaveBeenCalled();
+    });
+
+    it("does NOT enforce binding when the anchor has NO digest (legacy/unbound) — the integrity re-verify is the backstop", async () => {
+      discoverPackageStoreRecords.mockResolvedValue([recWithDigest("@cinatra-ai/d", "abc123")]);
+      runRuntimePackageActivation.mockResolvedValue([{ packageName: "@cinatra-ai/d", status: "registered" }]);
+      const results = await loadRuntimePackageExtensions("/store", { resolveInstallAnchor: async (n) => anchorWithDigest(n, null) });
+      expect(results.some((r) => r.packageName === "@cinatra-ai/d")).toBe(true);
+    });
+  });
 });

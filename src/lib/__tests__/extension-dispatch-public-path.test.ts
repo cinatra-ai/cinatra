@@ -162,6 +162,7 @@ vi.mock("@cinatra-ai/agents", () => ({
 import { extensionRegistry, setExtensionActivateHook } from "@cinatra-ai/extensions";
 import {
   installExtensionFromRegistry,
+  makeTestInstallPipelineDeps,
   type InstallPipelineDeps,
 } from "@/lib/extension-install-pipeline";
 import { createConnectorExtensionHandler, ConnectorRequiresRebuildError } from "@cinatra-ai/extensions/connector-handler";
@@ -187,6 +188,7 @@ function wireRealActivateHook(pipelineLeaves: () => Partial<InstallPipelineDeps>
     const version = target.source.version || "0.0.0";
     try {
       const deps: InstallPipelineDeps = {
+        ...makeTestInstallPipelineDeps(),
         resolveIntegrity: async () => ({ integrity: "sha512-real", registryUrl: "https://registry.cinatra.ai" }),
         materialize: async () => ({ storeDir: `/store/${packageName}/digest`, digest: "digest", integrity: "sha512-real", contentHash: "real-content-hash" }),
         readRequestedPorts: async () => [],
@@ -202,6 +204,9 @@ function wireRealActivateHook(pipelineLeaves: () => Partial<InstallPipelineDeps>
         approveGrant: async () => {},
         beginInstallOp: async () => { events.push(`journal:begin:${packageName}`); },
         advanceInstallOpPhase: async ({ phase }) => { events.push(`journal:${phase}:${packageName}`); },
+        // cinatra#158: the happy-path finalize is the supersession seam; record it
+        // with the same `journal:finalized:<pkg>` event the prior advance emitted.
+        finalizeInstallOp: async () => { events.push(`journal:finalized:${packageName}`); },
         ...pipelineLeaves(),
       };
       const result = await installExtensionFromRegistry({ packageName, version, orgId: orgId ?? null }, deps);
@@ -573,8 +578,12 @@ describe("public dispatch — UPDATE re-runs the pipeline; a failing new digest 
       // A fresh install: no superseding digest → the gate is a no-op (supersedes:false).
       verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
       advanceInstallOpPhase: async ({ phase }: { phase: string }) => {
-        if (phase === "finalized") finalizeReached = true;
         events.push(`journal:${phase}:@v/fresh-prefinalize-connector`);
+      },
+      // cinatra#158: the happy-path finalize is the supersession seam.
+      finalizeInstallOp: async () => {
+        finalizeReached = true;
+        events.push(`journal:finalized:@v/fresh-prefinalize-connector`);
       },
       activateInProcess: async () => ({ activated: true }),
     }));

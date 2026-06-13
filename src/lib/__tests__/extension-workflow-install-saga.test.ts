@@ -18,43 +18,68 @@ import { listUnfinalizedInstallOps, type InstallOpsDeps } from "@/lib/extension-
 
 const TRUSTED_PKG = "@cinatra-ai/wf-ext"; // from the marketplace host; UNSIGNED → trusted-bootstrap (imports; ports stay pending under the capability split)
 
+type JournalRow = { installOpId: string; phase: string; packageName: string; orgId: string | null };
 type Harness = {
   deps: WorkflowInstallSagaDeps;
   events: string[];
-  journal: Map<string, { installOpId: string; phase: string }>;
+  journal: Map<string, JournalRow>;
+  /** Seed a prior op (cinatra#158 append-only: keyed by op id). */
+  seedOp: (pkg: string, org: string | null, installOpId: string, phase: string) => void;
+  /** The anchor op (finalized-else-latest) for a (pkg, org), or undefined. */
+  anchorOf: (pkg: string, org: string | null) => JournalRow | undefined;
   templates: Set<string>;
 };
 
 function makeHarness(overrides: Partial<WorkflowInstallSagaDeps> = {}, opts: { preExistingTemplate?: boolean } = {}): Harness {
   const events: string[] = [];
-  const journal = new Map<string, { installOpId: string; phase: string }>();
+  // cinatra#158 APPEND-ONLY journal: keyed by install_op_id (one row per attempt),
+  // each row carries its (pkg, org). `journal.set(opId, {...})` seeds a prior op.
+  const journal = new Map<string, { installOpId: string; phase: string; packageName: string; orgId: string | null }>();
   const templates = new Set<string>(opts.preExistingTemplate ? ["tpl-existing"] : []);
 
   const key = (pkg: string, org: string | null) => `${pkg}::${org ?? "(global)"}`;
+  const scopeOf = (row: { packageName: string; orgId: string | null }) => key(row.packageName, row.orgId);
+  // ANCHOR reader: the single finalized op for the scope, else the latest seeded.
+  const anchorFor = (pkg: string, org: string | null) => {
+    const matching = [...journal.values()].filter((r) => scopeOf(r) === key(pkg, org));
+    return matching.find((r) => r.phase === "finalized") ?? matching[matching.length - 1] ?? null;
+  };
 
   const base: WorkflowInstallSagaDeps = {
     withInstallLock: async (_pkg, fn) => fn(),
 
     beginInstallOp: async ({ installOpId, packageName, orgId }) => {
       events.push("begin");
-      journal.set(key(packageName, orgId), { installOpId, phase: "materialized" });
+      // APPEND: never destroy a sibling op for the same (pkg, org).
+      journal.set(installOpId, { installOpId, phase: "materialized", packageName, orgId: orgId ?? null });
     },
     advanceInstallOpPhase: async ({ installOpId, phase }) => {
       events.push(`phase:${phase}`);
-      for (const [, row] of journal) if (row.installOpId === installOpId) row.phase = phase;
+      const row = journal.get(installOpId);
+      if (row) row.phase = phase;
     },
+    // cinatra#158: finalize is the SUPERSESSION seam — demote the prior finalized
+    // op for the same (pkg, org), then promote this op.
     finalizeInstallOp: async (installOpId) => {
       events.push("finalize");
-      for (const [, row] of journal) if (row.installOpId === installOpId) row.phase = "finalized";
+      const self = journal.get(installOpId);
+      if (!self) throw new Error(`finalize: no op ${installOpId}`);
+      for (const row of journal.values()) {
+        if (row.installOpId !== installOpId && scopeOf(row) === scopeOf(self) && row.phase === "finalized") row.phase = "superseded";
+      }
+      self.phase = "finalized";
     },
     failInstallOp: async (installOpId) => {
       events.push("fail");
-      for (const [, row] of journal) if (row.installOpId === installOpId) row.phase = "failed";
+      const row = journal.get(installOpId);
+      if (row) row.phase = "failed";
     },
     readInstallOp: async (pkg, org) => {
-      const row = journal.get(key(pkg, org));
+      const row = anchorFor(pkg, org ?? null);
       return row ? { phase: row.phase, installOpId: row.installOpId } : null;
     },
+    // cinatra#158 (d): structured operational-event sink (spy).
+    emitOperationalEvent: (e) => { events.push(`op-event:${e.step}`); },
 
     resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: "https://registry.cinatra.ai", sha256: "deadbeef" }),
     materialize: async () => {
@@ -104,7 +129,10 @@ function makeHarness(overrides: Partial<WorkflowInstallSagaDeps> = {}, opts: { p
     },
   };
 
-  return { deps: { ...base, ...overrides }, events, journal, templates };
+  const seedOp = (pkg: string, org: string | null, installOpId: string, phase: string) =>
+    journal.set(installOpId, { installOpId, phase, packageName: pkg, orgId: org });
+  const anchorOf = (pkg: string, org: string | null) => anchorFor(pkg, org) ?? undefined;
+  return { deps: { ...base, ...overrides }, events, journal, seedOp, anchorOf, templates };
 }
 
 const actor = { userId: "u1", orgId: "org-1" };
@@ -327,7 +355,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
     const h = makeHarness();
     // Seed a finalized journal row whose install-op id MATCHES this exact
     // (package, version, org) — the only case that is a true idempotent no-op.
-    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: `${TRUSTED_PKG}@1.0.0:wf:org-1`, phase: "finalized" });
+    h.seedOp(TRUSTED_PKG, "org-1", `${TRUSTED_PKG}@1.0.0:wf:org-1`, "finalized");
 
     const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
     expect(res.status).toBe("already-finalized");
@@ -338,7 +366,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
     const h = makeHarness();
     // A finalized row for v1.0.0; installing v1.0.1 must proceed (re-materialize,
     // preflight, write the new template/dashboards) rather than no-op.
-    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: `${TRUSTED_PKG}@1.0.0:wf:org-1`, phase: "finalized" });
+    h.seedOp(TRUSTED_PKG, "org-1", `${TRUSTED_PKG}@1.0.0:wf:org-1`, "finalized");
     const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.1", actor }, h.deps);
     expect(res.status).toBe("installed");
     expect(h.events).toContain("finalize");
@@ -369,7 +397,7 @@ describe("installWorkflowExtensionSaga — idempotent finalize", () => {
 
   it("re-converges a non-finalized (preflighted) op rather than short-circuiting", async () => {
     const h = makeHarness();
-    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: "stale", phase: "preflighted" });
+    h.seedOp(TRUSTED_PKG, "org-1", "stale", "preflighted");
     const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
     expect(res.status).toBe("installed");
     expect(h.events).toContain("finalize");
@@ -560,7 +588,7 @@ describe("installWorkflowExtensionSaga — HOST-COMPAT GATE (cinatra.sdkAbiRange
     // Seed a PRIOR finalized op for this (package, org) at a DIFFERENT version —
     // the update target (2.0.0) must not destroy it on refusal.
     const priorOpId = `${TRUSTED_PKG}@1.0.0:wf:${actor.orgId}`;
-    h.journal.set(`${TRUSTED_PKG}::${actor.orgId}`, { installOpId: priorOpId, phase: "finalized" });
+    h.seedOp(TRUSTED_PKG, actor.orgId, priorOpId, "finalized");
 
     let caught: unknown;
     try {
@@ -572,8 +600,8 @@ describe("installWorkflowExtensionSaga — HOST-COMPAT GATE (cinatra.sdkAbiRange
     expect((caught as Error).message).toContain("update of @cinatra-ai/wf-ext@2.0.0 refused");
 
     // The prior finalized op is untouched — the previous install stays
-    // boot-anchorable (begin never ran, so the single-row journal was never reset).
-    expect(h.journal.get(`${TRUSTED_PKG}::${actor.orgId}`)).toEqual({
+    // boot-anchorable (begin never ran; append-only would not have destroyed it anyway).
+    expect(h.anchorOf(TRUSTED_PKG, actor.orgId)).toMatchObject({
       installOpId: priorOpId,
       phase: "finalized",
     });
@@ -691,7 +719,7 @@ describe("installWorkflowExtensionSaga — dependency edges become real (#180)",
   it("an UPDATE (prior finalized op, different version) refreshes edges but skips the forward gate", async () => {
     const h = makeHarness();
     // Seed a PRIOR finalized op at a DIFFERENT version's op id.
-    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: `${TRUSTED_PKG}@0.9.0:wf:org-1`, phase: "finalized" });
+    h.seedOp(TRUSTED_PKG, "org-1", `${TRUSTED_PKG}@0.9.0:wf:org-1`, "finalized");
     const { persisted, gated } = withEdgeSeams(h);
     const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
     expect(res.status).toBe("installed");
@@ -699,7 +727,7 @@ describe("installWorkflowExtensionSaga — dependency edges become real (#180)",
     expect(gated).toEqual([]);
   });
 
-  it("R1 HIGH 2: a FAILED UPDATE restores the prior FINALIZED journal op + provenance + edges (the old install stays boot-anchorable; no fail/rolled_back marking)", async () => {
+  it("cinatra#158: a FAILED UPDATE terminalizes the NEW op + leaves the OLD finalized op intact (no re-begin) + restores OLD provenance/edges", async () => {
     const OLD_EDGES = [
       {
         packageName: "@cinatra-ai/old-dep",
@@ -734,17 +762,20 @@ describe("installWorkflowExtensionSaga — dependency edges become real (#180)",
       },
     });
     // A prior FINALIZED install at 1.0.0; this attempt is the 1.0.1 UPDATE.
-    h.journal.set(`${TRUSTED_PKG}::org-1`, { installOpId: priorOpId, phase: "finalized" });
+    h.seedOp(TRUSTED_PKG, "org-1", priorOpId, "finalized");
 
     await expect(
       installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.1", actor }, h.deps),
     ).rejects.toThrow("finalize-failed");
 
-    // The journal points back at the OLD finalized op (trust-anchorable again)…
-    expect(h.journal.get(`${TRUSTED_PKG}::org-1`)).toEqual({ installOpId: priorOpId, phase: "finalized" });
-    // …the failed attempt was NOT marked fail/rolled_back over the restored row…
-    expect(h.events).not.toContain("fail");
-    expect(h.events).not.toContain("phase:rolled_back");
+    // cinatra#158: the OLD finalized op is UNTOUCHED (append-only never destroyed
+    // it) and is the anchor — NOT re-begun, NOT re-finalized.
+    expect(h.anchorOf(TRUSTED_PKG, "org-1")).toMatchObject({ installOpId: priorOpId, phase: "finalized" });
+    // The NEW attempt's op was TERMINALIZED (fail → rolled_back).
+    const newOpId = `${TRUSTED_PKG}@1.0.1:wf:org-1`;
+    expect(h.journal.get(newOpId)?.phase).toBe("rolled_back");
+    expect(h.events).toContain("fail");
+    expect(h.events).toContain("phase:rolled_back");
     // …the OLD provenance was re-recorded (forward write was 1.0.1, restore is 1.0.0)…
     expect(provenanceVersions[provenanceVersions.length - 1]).toBe("1.0.0");
     // …and the OLD edges were re-persisted LAST (the failed version's edges never survive).

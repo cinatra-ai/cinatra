@@ -58,10 +58,17 @@ export function wireExtensionActivateHook(): void {
   // host's `extension_install_ops` store — which `@cinatra-ai/extensions` cannot
   // import directly. Returns the phase string, or null (no journal row / read
   // failure → the dispatcher falls back to the integrity check).
+  //
+  // cinatra#158: use the NON-FINALIZED-WINDOW reader (`readLatestInstallOpPhase`),
+  // NOT the anchor reader. With the append-only journal, a healthy install keeps
+  // its `finalized` op while a newer FAILED attempt is terminalized
+  // (`superseded`/`failed`/`rolled_back`); the window reader returns `finalized`
+  // whenever a finalized op exists (so the retained anchor never looks broken) and
+  // otherwise the latest attempt's phase (so a mid-flight or only-ever-terminal
+  // half-install is still flagged non-finalized → rollbackable).
   setExtensionInstallOpPhaseReader(async (packageName, orgId) => {
-    const { readInstallOp } = await import("@/lib/extension-install-ops");
-    const op = await readInstallOp(packageName, orgId);
-    return op?.phase ?? null;
+    const { readLatestInstallOpPhase } = await import("@/lib/extension-install-ops");
+    return (await readLatestInstallOpPhase(packageName, orgId)) ?? null;
   });
 }
 

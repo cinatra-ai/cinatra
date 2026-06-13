@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { resolveInstallAnchor, pickSingleActiveRow, type ResolveInstallAnchorDeps } from "@/lib/extension-install-anchor";
-import { installExtensionFromRegistry, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
+import { installExtensionFromRegistry, makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import { generateExtensionSigningKeyPair, signExtension } from "@/lib/extension-signature";
 import { computeRequestedPortsHash } from "@/lib/extension-host-port-grants";
 
@@ -28,6 +28,9 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
       approvedPorts: ["settings"],
       version: null,
       signature: null,
+      // cinatra#158: the anchor surfaces the finalized op's digest (null when the
+      // test's readInstallOp returns no digest).
+      digest: null,
       closureHash: null,
     });
   });
@@ -178,6 +181,7 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
       journal: [] as Array<{ kind: string; phase?: string }>,
     };
     const deps: InstallPipelineDeps = {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/digest", digest: "digest", integrity: "sha512-abc", contentHash: "ch" }),
       readRequestedPorts: async () => ["settings", "secrets"],
@@ -186,6 +190,9 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
       approveGrant: async (i) => { order.push("approved"); calls.approved.push(i); },
       beginInstallOp: async () => { order.push("begin"); calls.journal.push({ kind: "begin" }); },
       advanceInstallOpPhase: async (i) => { order.push(`phase:${i.phase}`); calls.journal.push({ kind: "advance", phase: i.phase }); },
+      // cinatra#158: the happy-path finalize is the SUPERSESSION seam; record it
+      // as phase:finalized so existing order/journal assertions still hold.
+      finalizeInstallOp: async () => { order.push("phase:finalized"); calls.journal.push({ kind: "advance", phase: "finalized" }); },
       ...overrides,
     };
     return { deps, calls, order };
@@ -313,45 +320,73 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
     expect(r).toMatchObject({ storeDir: "/store/foo/digest", integrity: "sha512-abc", contentHash: "ch", requestedPorts: ["settings", "secrets"] });
   });
 
-  it("works with the journal hooks omitted (optional deps are a no-op); signed → approved", async () => {
-    const { deps } = withSignedDeps("@cinatra-ai/foo", "1.0.0", "sha512-abc", { beginInstallOp: undefined, advanceInstallOpPhase: undefined });
+  it("works with inert journal hooks (no-op deps); signed → approved", async () => {
+    // cinatra#158: the journal deps are now REQUIRED — "omitted" is expressed as the
+    // test factory's inert no-op defaults rather than `undefined`.
+    const noop = async () => undefined;
+    const { deps } = withSignedDeps("@cinatra-ai/foo", "1.0.0", "sha512-abc", {
+      beginInstallOp: noop,
+      advanceInstallOpPhase: noop,
+      finalizeInstallOp: noop,
+    });
     const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
     expect(r.grantStatus).toBe("approved");
   });
 });
 
-describe("installExtensionFromRegistry — journal compensation on a FAILED hot-update", () => {
-  // A DI-faked install-op journal store: one row per (package, org) with begin
-  // UPSERT semantics (mirrors the real store), so the RESTORE of a prior finalized
-  // op is OBSERVABLE. `readInstallOp` returns the live (package, org) row.
+describe("installExtensionFromRegistry — APPEND-ONLY journal unwind on a FAILED hot-update (cinatra#158)", () => {
+  // A DI-faked APPEND-ONLY install-op journal: ONE ROW PER ATTEMPT (keyed by
+  // install_op_id). `beginInstallOp` APPENDS (never destroys a sibling op);
+  // `finalizeInstallOp` is the SUPERSESSION seam (demote the prior finalized op for
+  // the (pkg,org) to `superseded`, promote this one); `readInstallOp` is the ANCHOR
+  // reader (the single finalized op, else the latest attempt). So a failed update
+  // leaves the OLD finalized op INTACT with ZERO journal restore — only the NEW op
+  // is terminalized.
   function fakeJournal(seed?: { installOpId: string; phase: string; digest: string | null }) {
-    const key = (pkg: string, org: string | null) => `${pkg}::${org ?? "(global)"}`;
-    const rows = new Map<string, { installOpId: string; phase: string; digest: string | null }>();
-    if (seed) rows.set(key("@cinatra-ai/foo", null), { ...seed });
-    const begins: Array<{ installOpId: string; phase: string; digest: string | null }> = [];
+    type Row = { installOpId: string; packageName: string; orgId: string | null; phase: string; digest: string | null; seq: number };
+    const rows: Row[] = [];
+    let seq = 0;
+    if (seed) rows.push({ ...seed, packageName: "@cinatra-ai/foo", orgId: null, seq: seq++ });
+    const begins: Array<{ installOpId: string; digest: string | null }> = [];
     const advances: Array<{ installOpId: string; phase: string }> = [];
+    const scope = (pkg: string, org: string | null) => `${pkg}::${org ?? "(global)"}`;
 
     const journalDeps: Partial<InstallPipelineDeps> = {
-      // begin UPSERTs the single (package, org) row to the new op id + phase.
       beginInstallOp: async (i) => {
-        rows.set(key(i.packageName, i.orgId), { installOpId: i.installOpId, phase: "materialized", digest: i.digest ?? null });
-        begins.push({ installOpId: i.installOpId, phase: "materialized", digest: i.digest ?? null });
+        const existing = rows.find((r) => r.installOpId === i.installOpId);
+        if (existing) { existing.phase = "materialized"; existing.digest = i.digest ?? null; }
+        else rows.push({ installOpId: i.installOpId, packageName: i.packageName, orgId: i.orgId, phase: "materialized", digest: i.digest ?? null, seq: seq++ });
+        begins.push({ installOpId: i.installOpId, digest: i.digest ?? null });
       },
-      // advance matches by install_op_id (the real store does too).
       advanceInstallOpPhase: async (i) => {
-        for (const row of rows.values()) if (row.installOpId === i.installOpId) row.phase = i.phase;
+        const row = rows.find((r) => r.installOpId === i.installOpId);
+        if (row) { row.phase = i.phase; if (i.digest !== undefined) row.digest = i.digest; }
         advances.push({ installOpId: i.installOpId, phase: i.phase });
       },
+      // SUPERSESSION seam: demote the prior finalized op for the scope, promote self.
+      finalizeInstallOp: async (id) => {
+        const self = rows.find((r) => r.installOpId === id);
+        if (!self) throw new Error(`finalize: no row ${id}`);
+        for (const r of rows) {
+          if (r.installOpId !== id && scope(r.packageName, r.orgId) === scope(self.packageName, self.orgId) && r.phase === "finalized") r.phase = "superseded";
+        }
+        self.phase = "finalized";
+        advances.push({ installOpId: id, phase: "finalized" });
+      },
+      // ANCHOR reader: the single finalized op for the scope, else the latest attempt.
       readInstallOp: async (pkg, org) => {
-        const row = rows.get(key(pkg, org));
-        return row ? { installOpId: row.installOpId, phase: row.phase, digest: row.digest } : null;
+        const matching = rows.filter((r) => scope(r.packageName, r.orgId) === scope(pkg, org));
+        const fin = matching.find((r) => r.phase === "finalized");
+        const pick = fin ?? [...matching].sort((a, b) => b.seq - a.seq)[0];
+        return pick ? { installOpId: pick.installOpId, phase: pick.phase, digest: pick.digest } : null;
       },
     };
-    return { journalDeps, rows, begins, advances, key };
+    return { journalDeps, rows, begins, advances, scope };
   }
 
   function baseDeps(over: Partial<InstallPipelineDeps>): InstallPipelineDeps {
     return {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-new", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/new-digest", digest: "new-digest", integrity: "sha512-new", contentHash: "ch-new" }),
       readRequestedPorts: async () => ["settings"],
@@ -367,8 +402,8 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
     delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
   });
 
-  it("RESTORES the prior finalized op when recordProvenance throws on an UPDATE (old install stays anchorable)", async () => {
-    const { journalDeps, rows, begins, advances, key } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
+  it("LEAVES the OLD finalized op INTACT (no journal restore) + terminalizes the NEW op when recordProvenance throws on an UPDATE", async () => {
+    const { journalDeps, rows, begins, advances, scope } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
     const deps = baseDeps({
       ...journalDeps,
       recordProvenance: async () => { throw new Error("provenance write failed mid-update"); },
@@ -378,22 +413,20 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
       installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps),
     ).rejects.toThrow("provenance write failed mid-update");
 
-    // The (package, org) journal row is the OLD op id, re-finalized — so
-    // resolveInstallAnchor (requires phase 'finalized') still anchors the OLD install.
-    const row = rows.get(key("@cinatra-ai/foo", null));
-    expect(row).toEqual({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
-    // The restore re-created the prior op at its ORIGINAL id + digest, then re-finalized it.
-    expect(begins).toContainEqual({ installOpId: "old-op", phase: "materialized", digest: "old-digest" });
-    expect(advances).toContainEqual({ installOpId: "old-op", phase: "finalized" });
+    // The OLD finalized op is UNTOUCHED — still the anchor (append-only never destroyed it).
+    const old = rows.find((r) => r.installOpId === "old-op");
+    expect(old).toMatchObject({ phase: "finalized", digest: "old-digest" });
+    // The NEW attempt's op is TERMINALIZED (rolled_back) — never mistaken for the anchor.
+    const matching = rows.filter((r) => scope(r.packageName, r.orgId) === scope("@cinatra-ai/foo", null));
+    const newOp = matching.find((r) => r.installOpId !== "old-op");
+    expect(newOp?.phase).toBe("rolled_back");
+    // The OLD op was NEVER re-begun and NEVER re-finalized (the deleted choreography).
+    expect(begins).not.toContainEqual(expect.objectContaining({ installOpId: "old-op" }));
+    expect(advances).not.toContainEqual({ installOpId: "old-op", phase: "finalized" });
   });
 
-  it("HIGH 2: a pre-finalize throw AFTER the grant mutation on an UPDATE restores BOTH the OLD finalized journal op AND the OLD grant row", async () => {
-    // recordProvenance throws AFTER recordRequestedGrant (which, here, CHANGES the
-    // requested-ports hash → resets the live grant to pending). Without the grant
-    // restore, the previously-working OLD install would restart with the WRONG
-    // (now-pending) grant. The pre-finalize compensation catch must restore BOTH the
-    // journal op AND the captured prior grant (provenance is untouched pre-finalize).
-    const { journalDeps, rows, advances, key } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
+  it("restores the OLD grant on an UPDATE pre-finalize throw (separate durable state the journal does not undo)", async () => {
+    const { journalDeps, rows } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
     const restoredGrants: unknown[] = [];
     const PRIOR_GRANT = {
       orgId: null,
@@ -404,14 +437,9 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
     };
     const deps = baseDeps({
       ...journalDeps,
-      // The new install requests DIFFERENT ports than the prior grant's hash, so the
-      // forward recordRequestedGrant would reset the live grant to pending.
       readRequestedPorts: async () => ["settings"],
-      // CAPTURE: the OLD grant row (read BEFORE the grant mutation) — used by the
-      // pre-finalize compensation catch to restore the OLD grant.
       readGrantForScope: async () => ({ ...PRIOR_GRANT }),
       restoreGrant: async (i) => { restoredGrants.push(i); },
-      // The pre-finalize step that throws AFTER the grant mutation.
       recordProvenance: async () => { throw new Error("provenance write failed mid-update"); },
     });
 
@@ -419,13 +447,8 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
       installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps),
     ).rejects.toThrow("provenance write failed mid-update");
 
-    // The OLD finalized journal op is restored (so resolveInstallAnchor re-anchors OLD).
-    const row = rows.get(key("@cinatra-ai/foo", null));
-    expect(row).toEqual({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
-    expect(advances).toContainEqual({ installOpId: "old-op", phase: "finalized" });
-
-    // AND the OLD grant row is restored to its exact captured state (HIGH 2) — so the
-    // restarted OLD install carries the RIGHT grant, not the reset-to-pending one.
+    // OLD finalized op intact (no journal restore); the OLD grant row IS restored.
+    expect(rows.find((r) => r.installOpId === "old-op")).toMatchObject({ phase: "finalized" });
     expect(restoredGrants).toEqual([
       {
         packageName: "@cinatra-ai/foo",
@@ -438,9 +461,7 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
     ]);
   });
 
-  it("HIGH 2: a FRESH install pre-finalize throw does NOT restore a grant (no priorGrant captured)", async () => {
-    // No prior finalized op → not an update → no priorGrant capture → restoreGrant
-    // must NOT be called (there is no old grant to restore).
+  it("a FRESH install pre-finalize throw does NOT restore a grant (no priorGrant captured)", async () => {
     const { journalDeps } = fakeJournal(/* no prior op */);
     const restoredGrants: unknown[] = [];
     const deps = baseDeps({
@@ -457,16 +478,37 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
     expect(restoredGrants, "no grant restore on a fresh-install failure").toEqual([]);
   });
 
-  it("RESTORES the prior finalized op when approveGrant throws on an UPDATE", async () => {
-    // Capability split: approveGrant only runs for a `trusted-signed`
-    // package (`autoGrantPrivileged`). A bootstrap/unsigned install never calls
-    // approveGrant, so to exercise THIS post-begin-failure restore path the
-    // package must be SIGNED — otherwise the install would simply finalize
-    // `pending` and approveGrant would never throw.
+  it("emits a structured operational event when a durable-restore step FAILS (cinatra#158 (d))", async () => {
+    const { journalDeps } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
+    const events: unknown[] = [];
+    const deps = baseDeps({
+      ...journalDeps,
+      readGrantForScope: async () => ({ orgId: null, status: "approved", approvedPorts: ["settings"], requestedPortsHash: computeRequestedPortsHash(["settings", "secrets"]), approvedBy: "admin-old" }),
+      // The grant RESTORE itself fails → the structured event must fire.
+      restoreGrant: async () => { throw new Error("grant restore failed"); },
+      recordProvenance: async () => { throw new Error("provenance write failed mid-update"); },
+      emitOperationalEvent: (e) => { events.push(e); },
+    });
+
+    await expect(
+      installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps),
+    ).rejects.toThrow("provenance write failed mid-update");
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "install_durable_restore_failed",
+        packageName: "@cinatra-ai/foo",
+        step: "grant",
+        scope: "pre-finalize",
+      }),
+    );
+  });
+
+  it("LEAVES the OLD finalized op intact when approveGrant throws on an UPDATE (signed)", async () => {
     const kp = generateExtensionSigningKeyPair();
     const signature = signExtension({ packageName: "@cinatra-ai/foo", version: "2.0.0", integrity: "sha512-new" }, kp.privateKeyPkcs8DerB64);
     process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = kp.publicKeyDerB64;
-    const { journalDeps, rows, advances, key } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
+    const { journalDeps, rows, advances } = fakeJournal({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
     const deps = baseDeps({
       ...journalDeps,
       resolveIntegrity: async () => ({ integrity: "sha512-new", registryUrl: REGISTRY, signature }),
@@ -477,13 +519,12 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
       installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null }, deps),
     ).rejects.toThrow("grant approval failed mid-update");
 
-    const row = rows.get(key("@cinatra-ai/foo", null));
-    expect(row).toEqual({ installOpId: "old-op", phase: "finalized", digest: "old-digest" });
-    expect(advances).toContainEqual({ installOpId: "old-op", phase: "finalized" });
+    expect(rows.find((r) => r.installOpId === "old-op")).toMatchObject({ phase: "finalized", digest: "old-digest" });
+    expect(advances).not.toContainEqual({ installOpId: "old-op", phase: "finalized" });
   });
 
-  it("does NOT restore on a FRESH install post-begin failure — leaves the non-finalized row for the dispatcher", async () => {
-    const { journalDeps, rows, begins, advances, key } = fakeJournal(/* no prior op */);
+  it("terminalizes the NEW op on a FRESH install post-begin failure — leaves it for the dispatcher", async () => {
+    const { journalDeps, rows, begins, advances, scope } = fakeJournal(/* no prior op */);
     const deps = baseDeps({
       ...journalDeps,
       recordProvenance: async () => { throw new Error("provenance write failed on fresh install"); },
@@ -493,14 +534,12 @@ describe("installExtensionFromRegistry — journal compensation on a FAILED hot-
       installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps),
     ).rejects.toThrow("provenance write failed on fresh install");
 
-    // No prior finalized op to restore — the row is THIS attempt's non-finalized
-    // op (the dispatcher rolls it back / re-runs it via the journal-aware check).
-    // recordProvenance throws AFTER the `granted` advance, so the row sits at
-    // `granted` — non-terminal, refused by the anchor, re-runnable by the dispatcher.
-    const row = rows.get(key("@cinatra-ai/foo", null));
-    expect(row?.phase).not.toBe("finalized");
-    expect(row?.phase).toBe("granted");
-    // The only begin is this fresh attempt's; nothing was "restored" (no re-finalize).
+    // No prior finalized op; THIS attempt's op is terminalized (rolled_back) — the
+    // boot sweep treats it as settled, the dispatcher re-runs the pipeline via the
+    // journal-aware non-finalized check. There is exactly one begin (this attempt).
+    const matching = rows.filter((r) => scope(r.packageName, r.orgId) === scope("@cinatra-ai/foo", null));
+    expect(matching).toHaveLength(1);
+    expect(matching[0]?.phase).toBe("rolled_back");
     expect(begins).toHaveLength(1);
     expect(advances).not.toContainEqual(expect.objectContaining({ phase: "finalized" }));
   });
@@ -533,6 +572,7 @@ describe("installExtensionFromRegistry — hot-UPDATE probe == activation's EFFE
   function probeCapturingDeps(over: Partial<InstallPipelineDeps> = {}) {
     const probeApprovedPorts: string[][] = [];
     const deps: InstallPipelineDeps = {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-new", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/new-digest", digest: "new-digest", integrity: "sha512-new", contentHash: "ch-new" }),
       readRequestedPorts: async () => [...REQUESTED],
@@ -688,6 +728,7 @@ describe("installExtensionFromRegistry — hot-UPDATE probe == activation's EFFE
 describe("installExtensionFromRegistry — Design B durable-rollback routing + restore closure", () => {
   function updateBaseDeps(over: Partial<InstallPipelineDeps>): InstallPipelineDeps {
     return {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-new", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/new-digest", digest: "new-digest", integrity: "sha512-new", contentHash: "ch-new" }),
       readRequestedPorts: async () => ["settings"],
@@ -696,6 +737,7 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
       approveGrant: async () => {},
       beginInstallOp: async () => {},
       advanceInstallOpPhase: async () => {},
+      finalizeInstallOp: async () => {},
       // A prior FINALIZED op with a DIFFERENT digest = a real superseding UPDATE.
       readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "old-digest" }),
       ...over,
@@ -741,10 +783,11 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
     expect(r.rolledBack).toBeUndefined();
   });
 
-  it("the restoreDurableAnchor closure re-records OLD provenance + restores the OLD finalized journal op + restores the OLD grant", async () => {
+  it("the restoreDurableAnchor closure re-records OLD provenance + re-pins the OLD journal anchor (terminalize NEW + re-promote OLD) + restores the OLD grant", async () => {
     const provenanceCalls: unknown[] = [];
     const begins: unknown[] = [];
-    const advances: unknown[] = [];
+    const advances: Array<{ installOpId: string; phase: string }> = [];
+    const finalizes: string[] = [];
     const restoredGrants: unknown[] = [];
     // recordProvenance is called once on the FORWARD path (the new source) and once
     // by the rollback (the OLD source). We distinguish by the version/integrity.
@@ -752,6 +795,9 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
       recordProvenance: async (i) => { provenanceCalls.push(i); },
       beginInstallOp: async (i) => { begins.push(i); },
       advanceInstallOpPhase: async (i) => { advances.push(i); },
+      // The forward finalize (new-op) + the rollback's ATOMIC re-pin of OLD both
+      // route through finalizeInstallOp (the supersession seam).
+      finalizeInstallOp: async (id) => { finalizes.push(id); },
       // CAPTURE: the OLD canonical source (read BEFORE the forward provenance write).
       readCurrentSource: async () => ({
         registryUrl: REGISTRY,
@@ -790,12 +836,18 @@ describe("installExtensionFromRegistry — Design B durable-rollback routing + r
       contentHash: "ch-old",
       signature: "old-sig",
     });
-    // The OLD finalized journal op was restored: re-begun at its ORIGINAL id + digest,
-    // then advanced to `finalized`.
-    expect(begins, "OLD journal op re-begun at its original id + digest").toContainEqual(
-      expect.objectContaining({ installOpId: "old-op", digest: "old-digest" }),
+    // cinatra#158: the OLD journal op was NEVER re-begun (append-only never destroyed
+    // it). The rollback TERMINALIZES the NEW op (failed → rolled_back) and re-promotes
+    // the OLD op back to `finalized` (a single phase flip of an existing row).
+    expect(begins, "OLD journal op is NOT re-begun under append-only").not.toContainEqual(
+      expect.objectContaining({ installOpId: "old-op" }),
     );
-    expect(advances, "OLD journal op re-finalized").toContainEqual({ installOpId: "old-op", phase: "finalized" });
+    // cinatra#158 (codex refute finding): the rollback re-pins OLD via a SINGLE
+    // ATOMIC finalizeInstallOp(OLD) — it demotes NEW→superseded and promotes OLD in
+    // one transaction, so there is never a zero-finalized-anchor window. We do NOT
+    // pre-terminalize NEW with a separate advance (the deleted two-step).
+    expect(finalizes, "OLD journal op re-pinned through finalizeInstallOp (atomic)").toContain("old-op");
+    expect(advances, "NEW op is NOT pre-terminalized by a separate advance").not.toContainEqual({ installOpId: "new-op", phase: "rolled_back" });
     // The OLD grant was restored to its exact captured state.
     expect(restoredGrants).toEqual([
       {
@@ -984,6 +1036,7 @@ describe("installExtensionFromRegistry — HOST-COMPAT GATE (cinatra.sdkAbiRange
   ) {
     const calls = { begin: 0, requested: 0, approved: 0, provenance: 0, gc: [] as string[] };
     const deps: InstallPipelineDeps = {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/new-digest", digest: "new-digest", integrity: "sha512-abc", contentHash: "ch" }),
       readRequestedPorts: async () => [],
@@ -1099,6 +1152,7 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
     const gated: unknown[] = [];
     const gcd: string[] = [];
     const deps: InstallPipelineDeps = {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/digest", digest: "digest", integrity: "sha512-abc", contentHash: "ch" }),
       readRequestedPorts: async () => [],
@@ -1107,6 +1161,9 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
       approveGrant: async () => { order.push("approved"); },
       beginInstallOp: async () => { order.push("begin"); },
       advanceInstallOpPhase: async (i) => { order.push(`phase:${i.phase}`); },
+      // cinatra#158: the happy-path finalize is the SUPERSESSION seam — record it as
+      // phase:finalized so the finalize-order assertion still holds.
+      finalizeInstallOp: async () => { order.push("phase:finalized"); },
       readDependencyEdges: async (storeDir) => { order.push(`readEdges:${storeDir}`); return EDGES; },
       persistDependencyEdges: async (i) => { order.push("persistEdges"); persisted.push(i); },
       assertForwardInstallClosure: async (i) => { order.push("forwardGate"); gated.push(i); },
@@ -1156,13 +1213,14 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
     expect(order).toContain("phase:finalized");
   });
 
-  it("R1 HIGH 1: an UPDATE that throws AFTER the finalize seam (pre-finalize catch) restores the OLD provenance + OLD edges alongside the OLD journal op", async () => {
+  it("cinatra#158: an UPDATE whose finalize-seam THROWS terminalizes the NEW op + leaves the OLD finalized op intact + restores OLD provenance/edges", async () => {
     const OLD_EDGES: Edge[] = [
       { packageName: "@cinatra-ai/old-dep", edgeType: "runtime", versionConstraint: { kind: "semver-range", range: "*" }, requirement: "required" },
     ];
     const provenanceVersions: string[] = [];
     const persisted: unknown[] = [];
     const begins: unknown[] = [];
+    const advances: Array<{ installOpId: string; phase: string }> = [];
     const { deps } = depsWithEdges({
       // A prior FINALIZED op = a real UPDATE.
       readInstallOp: async () => ({ installOpId: "old-op", phase: "finalized", digest: "old-digest" }),
@@ -1171,17 +1229,17 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
       recordProvenance: async (i) => { provenanceVersions.push(i.version); },
       persistDependencyEdges: async (i) => { persisted.push(i.dependencies); },
       beginInstallOp: async (i) => { begins.push(i); },
-      // The NEW attempt's finalize advance FAILS; the restore's re-finalize of
-      // the OLD op (different id) succeeds.
-      advanceInstallOpPhase: async (i) => {
-        if (i.phase === "finalized" && i.installOpId !== "old-op") throw new Error("finalize-advance-failed");
-      },
+      advanceInstallOpPhase: async (i) => { advances.push({ installOpId: i.installOpId, phase: i.phase }); },
+      // The NEW attempt's finalize (the supersession seam) FAILS.
+      finalizeInstallOp: async () => { throw new Error("finalize-failed"); },
     });
     await expect(
       installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "2.0.0", orgId: null, installOpId: "new-op" }, deps),
-    ).rejects.toThrow("finalize-advance-failed");
-    // Journal restored to the OLD finalized op…
-    expect(begins).toContainEqual(expect.objectContaining({ installOpId: "old-op", digest: "old-digest" }));
+    ).rejects.toThrow("finalize-failed");
+    // cinatra#158: the OLD op is NOT re-begun (append-only never destroyed it)…
+    expect(begins).not.toContainEqual(expect.objectContaining({ installOpId: "old-op" }));
+    // …the NEW op is terminalized (failed → rolled_back)…
+    expect(advances).toContainEqual({ installOpId: "new-op", phase: "rolled_back" });
     // …the OLD provenance was re-recorded (forward write was 2.0.0, restore is 1.0.0)…
     expect(provenanceVersions[provenanceVersions.length - 1]).toBe("1.0.0");
     // …and the OLD edges were re-persisted LAST (the failed version's edges never survive).
@@ -1214,11 +1272,14 @@ describe("installExtensionFromRegistry — dependency edges become real (#180)",
     expect(gcd).toEqual([]); // the dir IS the live install's dir — never GC'd
   });
 
-  it("deps without the #180 seams (older unit harnesses) behave exactly as before", async () => {
+  it("inert #180 seams (no edges read → nothing persisted) behave exactly as before", async () => {
+    // cinatra#158: the #180 seams are now REQUIRED — "omitted" is expressed as inert
+    // defaults. `readDependencyEdges` returns [] (no edges), so the persist seam never
+    // records and the forward gate is a no-op.
     const { deps, order } = depsWithEdges({
-      readDependencyEdges: undefined,
-      persistDependencyEdges: undefined,
-      assertForwardInstallClosure: undefined,
+      readDependencyEdges: async () => [],
+      persistDependencyEdges: async () => { /* inert: never records */ },
+      assertForwardInstallClosure: async () => { /* inert */ },
     });
     const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
     expect(r.installed).toBe(true);

@@ -10,6 +10,7 @@ import {
 } from "@/lib/extension-install-anchor";
 import {
   installExtensionFromRegistry,
+  makeTestInstallPipelineDeps,
   type InstallPipelineDeps,
 } from "@/lib/extension-install-pipeline";
 import { applyExtensionMigrationsFromStore } from "@/lib/extension-migration-host";
@@ -129,6 +130,7 @@ describe("resolveInstallAnchor — accepts active|locked, refuses non-finalized 
 describe("installExtensionFromRegistry — post-commit activation throw is NON-FATAL", () => {
   function committedDeps(activateInProcess?: InstallPipelineDeps["activateInProcess"]): InstallPipelineDeps {
     return {
+      ...makeTestInstallPipelineDeps(),
       resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY }),
       materialize: async () => ({ storeDir: "/store/foo/digest", digest: "digest", integrity: "sha512-abc", contentHash: "ch" }),
       readRequestedPorts: async () => [],
@@ -253,6 +255,8 @@ describe("installExtensionFromRegistry — post-commit activation throw is NON-F
       advanceInstallOpPhase: async ({ phase }) => {
         phases.push(phase);
       },
+      // cinatra#158: the happy-path finalize is the supersession seam; record it.
+      finalizeInstallOp: async () => { phases.push("finalized"); },
       verifyActivatableBeforeFinalize: async () => ({ supersedes: false }),
     };
 
@@ -276,6 +280,8 @@ describe("installExtensionFromRegistry — post-commit activation throw is NON-F
       advanceInstallOpPhase: async ({ phase }) => {
         phases.push(phase);
       },
+      // cinatra#158: the happy-path finalize is the supersession seam; record it.
+      finalizeInstallOp: async () => { phases.push("finalized"); },
       verifyActivatableBeforeFinalize: async () => ({ supersedes: true, ok: true }),
     };
 

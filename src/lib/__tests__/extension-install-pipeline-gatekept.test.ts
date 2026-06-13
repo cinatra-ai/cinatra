@@ -63,6 +63,8 @@ vi.mock("@/lib/extension-host-port-grants", () => ({
 vi.mock("@/lib/extension-install-ops", () => ({
   beginInstallOp: vi.fn(async () => {}),
   advanceInstallOpPhase: vi.fn(async () => {}),
+  // cinatra#158: the SUPERSESSION seam (the happy-path finalize routes through it).
+  finalizeInstallOp: vi.fn(async () => {}),
   // The update-compensation path reads the prior (package, org) journal op; a fresh
   // gatekept install has none → null.
   readInstallOp: vi.fn(async () => null),
