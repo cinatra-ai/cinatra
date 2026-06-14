@@ -110,7 +110,7 @@ describe("@cinatra-ai/sdk-extensions public surface fence", () => {
   });
 
   it("KEEPS the ABI-evolution policy metadata reachable on the root (HOST_PORT_TIER et al.)", () => {
-    // The port-tier table (eng#159 #13) is author-facing POLICY metadata about the
+    // The port-tier table is author-facing POLICY metadata about the
     // frozen surface, NOT a host-bus addressing constant — so it intentionally
     // lives on the public root and does NOT trip the capability-id fence above.
     expect(publicRoot.HOST_PORT_TIER).toBeTruthy();

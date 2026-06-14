@@ -8,8 +8,8 @@ import "server-only";
 // declared it in `requestedHostPorts`; otherwise it is FAIL-LOUD (throws on
 // access) — distinguishing "not granted" (least-privilege denial) from
 // "not implemented" (a granted `reserved`-tier port the host factory has not
-// wired; driven by HOST_PORT_TIER, eng#159 #13). Ambient ports (logger/runtime)
-// are always available.
+// wired; driven by the canonical HOST_PORT_TIER table). Ambient ports
+// (logger/runtime) are always available.
 //
 // The prototype is now the REAL host. Every privileged port
 // connectors consume is wired to its host service through trusted, org-scoped
@@ -28,8 +28,8 @@ import type {
   HostPortName,
   HostUsageEvent,
 } from "@cinatra-ai/sdk-extensions";
-// The per-port ABI tier table (eng#159 #13) — the single source of truth for the
-// fail-loud "not-implemented" branch below (a granted `reserved`-tier port is
+// The per-port ABI tier table — the canonical source for the fail-loud
+// "not-implemented" branch below (a granted `reserved`-tier port is
 // wired-but-unavailable until a future MINOR flips its tier to `stable`).
 import { HOST_PORT_TIER } from "@cinatra-ai/sdk-extensions";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
@@ -544,7 +544,7 @@ export function createExtensionHostContext(
   const logger = makeLogger(packageName);
 
   // A privileged port is the real wired impl only when GRANTED and its ABI tier
-  // is `stable`. Three states (see ABI-evolution policy, eng#159 #13):
+  // is `stable`. Three states (see the ABI-evolution port-tiering policy):
   //   - not granted                  → fail-loud "not-granted" (least-privilege).
   //   - granted + `reserved` tier     → fail-loud "not-implemented" (declared in
   //                                     the frozen surface but not wired yet).

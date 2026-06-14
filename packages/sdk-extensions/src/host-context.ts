@@ -342,12 +342,16 @@ export const HOST_PORT_NAMES = [
 export type HostPortName = (typeof HOST_PORT_NAMES)[number];
 
 // ---------------------------------------------------------------------------
-// ABI-evolution policy: per-port lifecycle TIER (cinatra-engineering#159 #13,
-// ruling cinatra-engineering#183). Codifies "reserved-port tiering" as DATA —
-// today it lives only as prose in the `db` TSDoc above + a hardcoded
-// `"not-implemented"` branch in the host factory
-// (src/lib/extension-host-context.ts). This table is the single source of truth
-// both key off, so wiring a reserved port is a one-line tier flip here.
+// ABI-evolution policy: per-port lifecycle TIER. Codifies "reserved-port
+// tiering" as DATA — previously it lived only as prose in the `db` TSDoc above +
+// a hardcoded `"not-implemented"` branch in the host factory
+// (src/lib/extension-host-context.ts). This TS table is the CANONICAL source: the
+// host factory imports it directly to drive its `"not-implemented"` branch, so
+// wiring a reserved port is a one-line tier flip here. The build-time manifest
+// generator runs under bare Node and cannot import this TS module, so it keeps a
+// literal mirror of the derived reserved set — a guarded-parity copy, asserted to
+// match this table by a vitest parity test (drift fails CI), NOT a second source
+// of truth.
 //
 // ADDITIVE / NON-BREAKING: this changes NO existing type. `ExtensionHostContext`
 // keeps every port a required property (the deliberate type-model decision in the
@@ -372,8 +376,9 @@ export type HostPortTier = (typeof HOST_PORT_TIERS)[number];
  *    fail-loud (`"not-implemented"`) until a future MINOR wires it.
  *
  * Today only `db` is reserved (the scoped escape hatch; see its TSDoc above).
- * The host factory's not-implemented branch and the manifest generator's tier
- * parity check both derive from THIS map.
+ * The host factory's not-implemented branch derives from THIS map directly (a TS
+ * import); the bare-Node manifest generator keeps a literal mirror guarded by a
+ * parity test that asserts it equals the derived `RESERVED_HOST_PORTS` below.
  */
 export const HOST_PORT_TIER: Readonly<Record<HostPortName, HostPortTier>> = {
   db: "reserved",

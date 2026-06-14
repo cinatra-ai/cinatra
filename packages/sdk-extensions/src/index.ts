@@ -15,8 +15,8 @@ export type { AgentIOSpec, AgentIOPort, AgentOutputPort, InputCardinality, Outpu
 // subpath is a possible future cleanup (not ABI-breaking).
 // ---------------------------------------------------------------------------
 export { HOST_PORT_NAMES } from "./host-context";
-// ABI-evolution policy: per-port lifecycle tier metadata (eng#159 #13). These
-// are author-facing POLICY values describing the frozen surface, NOT host-bus
+// ABI-evolution policy: per-port lifecycle tier metadata. These are
+// author-facing POLICY values describing the frozen surface, NOT host-bus
 // addressing constants, so they belong on the public root (and do not trip the
 // public-surface ban, which targets `*_CAPABILITY` / `*_CAPABILITY_ID` only).
 export { HOST_PORT_TIERS, HOST_PORT_TIER, RESERVED_HOST_PORTS } from "./host-context";

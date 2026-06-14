@@ -7,10 +7,10 @@ import {
 } from "../index";
 import type { HostPortName, HostPortTier } from "../index";
 
-// ABI-evolution policy: per-port lifecycle tier (cinatra-engineering#159 #13,
-// ruling cinatra-engineering#183). Locks the tier table as the single source of
-// truth the host factory + manifest generator derive from. ADDITIVE — no ABI
-// bump (it adds no port and wires none; it is metadata about the frozen surface).
+// ABI-evolution policy: per-port lifecycle tier. Locks the tier table as the
+// canonical source the host factory imports directly (the manifest generator
+// keeps a parity-guarded mirror; see host-port-tiers-parity.test.ts). ADDITIVE —
+// no ABI bump (it adds no port and wires none; it is metadata about the frozen surface).
 
 describe("host port ABI tiers", () => {
   it("declares exactly the two tiers", () => {

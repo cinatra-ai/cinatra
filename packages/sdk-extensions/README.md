@@ -79,10 +79,16 @@ How the tier governs the version bump:
 - **Removing or reshaping a port** (changing its method signatures or privilege
   model) → ABI **MAJOR**.
 
-`HOST_PORT_TIER` is the single source of truth: the host's grant-aware factory
-derives its `"not-implemented"` branch from it, and the manifest generator
-mirrors the `reserved` set for its warning. Wiring a reserved port is a one-line
-tier flip plus the real impl — no fan-out edits.
+`HOST_PORT_TIER` is the **canonical** tier table. The host's grant-aware factory
+derives its `"not-implemented"` branch directly from it (in-process, a real TS
+import). The build-time manifest generator (`scripts/extensions/generate-extension-manifest.mjs`)
+runs under bare Node and cannot import the TS SDK, so it keeps a **literal mirror**
+of the derived `reserved` set for its warning — that mirror is not trusted blindly:
+a vitest parity test (`scripts/extensions/__tests__/host-port-tiers-parity.test.ts`)
+asserts it exactly equals the SDK's derived `RESERVED_HOST_PORTS`, so any drift
+fails CI. Wiring a reserved port is a one-line tier flip in `HOST_PORT_TIER` (the
+host factory follows automatically); the generator's mirror is the one parity-guarded
+copy you also update, and the test will flag it if you forget.
 
 #### Future direction (not yet built)
 
