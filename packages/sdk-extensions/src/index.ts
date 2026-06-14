@@ -437,6 +437,7 @@ export type {
 // — extensions keep this surface TYPE-ONLY (host-peer-value-import ban).
 export type {
   NangoConnectorKey,
+  ConnectorVendorKey,
   NangoConnectionIdKey,
   NangoSettings,
   NangoFrontendConfig,
@@ -449,6 +450,12 @@ export type {
   NangoRouteResult,
   NangoSystemSurface,
 } from "./nango-system-contract";
+
+// `asConnectorVendorKey` is a PURE (non-validating) brand cast — zero runtime
+// footprint, no roster, no membership gate (vendor-identity validation lives at
+// the host manifest/gate boundary, not the SDK). It is NOT a host capability-id
+// constant, so it is a legitimate value export on the types-first public root.
+export { asConnectorVendorKey } from "./nango-system-contract";
 
 // The typed capability-id -> contract-surface map: compile-time ergonomics for
 // `ctx.capabilities.resolveProviders(<known-id>)` (the `impl` narrows to the
