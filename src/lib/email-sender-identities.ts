@@ -13,11 +13,11 @@ import "server-only";
 //   - failure isolation: a throwing/rejecting provider is skipped with a
 //     warning — it must never fail the loader (degraded -> fewer/empty apps).
 
-import {
-  EMAIL_SENDER_IDENTITIES_CAPABILITY_ID,
-  type EmailSenderIdentitiesProvider,
-  type EmailSenderIdentity,
+import type {
+  EmailSenderIdentitiesProvider,
+  EmailSenderIdentity,
 } from "@cinatra-ai/sdk-extensions";
+import { EMAIL_SENDER_IDENTITIES_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 function isEmailSenderIdentitiesProvider(impl: unknown): impl is EmailSenderIdentitiesProvider {

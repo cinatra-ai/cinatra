@@ -28,7 +28,7 @@ import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,
 } from "@/lib/extension-capabilities-registry";
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 
 beforeEach(() => {

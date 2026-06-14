@@ -1,6 +1,6 @@
 {
   "name": "@cinatra-ai/sdk-extensions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cinatra extension SDK — the frozen author-facing ABI: the register(ctx) host-port surface (ExtensionHostContext), the extension manifest + dependency contracts, and the loader/registry types. The only first-party code dependency a Cinatra extension may have (alongside @cinatra-ai/sdk-ui).",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
@@ -8,6 +8,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./internal": "./src/internal.ts",
     "./host-context": "./src/host-context.ts",
     "./test-host-context": {
       "types": "./src/test-host-context.d.mts",

@@ -327,8 +327,6 @@ vi.mock("@/lib/drupal-widget-auth", () => ({
 }));
 
 import {
-  HOST_CONNECTOR_SERVICE_CAPABILITIES,
-  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
   type HostConnectorConfigService,
   type NangoConnectionMaterializer,
   type HostMcpPaginationService,
@@ -345,6 +343,10 @@ import {
   type HostOpenAIConnectionService,
   type HostAnthropicConnectionService,
 } from "@cinatra-ai/sdk-extensions";
+import {
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
+} from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 function resolveSingle<T>(capability: string): T {

@@ -7,9 +7,15 @@ name: SDK ABI Doc Gate
 #   - packages/sdk-extensions/package.json      (cinatra.sdkAbiVersion)
 #   - packages/sdk-extensions/README.md         ("The SDK ABI is **`X`**")
 #
+# Also hosts the SDK PUBLIC-SURFACE FENCE (SDK-P2): the public author root
+# (src/index.ts) must re-export NO host service-bus capability-id constant as a
+# value — those stay behind the host-only ./internal subpath. Wired here (not
+# build-image.yml) because both gates run pure Node on committed files with NO
+# pnpm install. (The runtime reachability twin lives in the package's vitest
+# suite, run by build-image.yml's `packages/sdk-extensions/src` step.)
+#
 # Dedicated workflow (not a build-image.yml job) because build-image.yml's
-# paths-ignore excludes **/*.md, and the README is half the contract here.
-# This gate runs pure Node on committed files — no pnpm install needed.
+# paths-ignore excludes **/*.md, and the README is half the ABI contract here.
 
 on:
   push:
@@ -18,8 +24,12 @@ on:
       - 'packages/sdk-extensions/README.md'
       - 'packages/sdk-extensions/package.json'
       - 'packages/sdk-extensions/src/register.ts'
+      - 'packages/sdk-extensions/src/index.ts'
+      - 'packages/sdk-extensions/src/internal.ts'
       - 'scripts/audit/sdk-abi-readme-gate.mjs'
+      - 'scripts/audit/sdk-public-surface-ban.mjs'
       - 'scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs'
+      - 'scripts/audit/__tests__/sdk-public-surface-ban.test.mjs'
       - '.github/workflows/sdk-abi-doc-gate.yml'
   pull_request:
     branches: [main]
@@ -27,8 +37,12 @@ on:
       - 'packages/sdk-extensions/README.md'
       - 'packages/sdk-extensions/package.json'
       - 'packages/sdk-extensions/src/register.ts'
+      - 'packages/sdk-extensions/src/index.ts'
+      - 'packages/sdk-extensions/src/internal.ts'
       - 'scripts/audit/sdk-abi-readme-gate.mjs'
+      - 'scripts/audit/sdk-public-surface-ban.mjs'
       - 'scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs'
+      - 'scripts/audit/__tests__/sdk-public-surface-ban.test.mjs'
       - '.github/workflows/sdk-abi-doc-gate.yml'
 
 concurrency:
@@ -54,6 +68,9 @@ jobs:
       - name: Run gate
         run: node scripts/audit/sdk-abi-readme-gate.mjs
 
+      - name: Run SDK public-surface fence (no host capability-id leak on root)
+        run: node scripts/audit/sdk-public-surface-ban.mjs
+
   tests:
     name: SDK ABI doc gate — extractor tests
     runs-on: ubuntu-latest
@@ -68,3 +85,6 @@ jobs:
 
       - name: Run tests
         run: node --test scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs
+
+      - name: Run public-surface-ban extractor tests
+        run: node --test scripts/audit/__tests__/sdk-public-surface-ban.test.mjs

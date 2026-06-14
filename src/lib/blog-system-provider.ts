@@ -13,10 +13,8 @@ import "server-only";
 // their existing failure paths; the WP content-convert primitive falls back
 // to its passthrough result).
 
-import {
-  BLOG_SYSTEM_CAPABILITY,
-  type BlogSystemProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { BlogSystemProvider } from "@cinatra-ai/sdk-extensions";
+import { BLOG_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract.

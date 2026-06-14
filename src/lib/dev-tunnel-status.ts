@@ -10,10 +10,8 @@ import "server-only";
 // throwing → `{ connected: false, funnelUrlPreview: null }`, which the page
 // already renders as its "connect Tailscale" state.
 
-import {
-  DEV_TUNNEL_STATUS_CAPABILITY,
-  type DevTunnelStatusProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { DevTunnelStatusProvider } from "@cinatra-ai/sdk-extensions";
+import { DEV_TUNNEL_STATUS_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 export type DevTunnelStatus = {

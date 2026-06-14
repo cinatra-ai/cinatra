@@ -18,14 +18,16 @@ import "server-only";
 // `ensureCrmSyncRegistrations()` is a no-op and `resolveCrmPointerWriter()`
 // returns null — callers warn and complete instead of crashing the worker.
 
+import type {
+  CrmSyncBootstrapProvider,
+  CrmPointerWriterProvider,
+  CrmListReader,
+} from "@cinatra-ai/sdk-extensions";
 import {
   CRM_SYNC_BOOTSTRAP_CAPABILITY,
   CRM_POINTER_WRITER_CAPABILITY,
   CRM_LIST_READER_CAPABILITY_ID,
-  type CrmSyncBootstrapProvider,
-  type CrmPointerWriterProvider,
-  type CrmListReader,
-} from "@cinatra-ai/sdk-extensions";
+} from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guards: a capability impl is `unknown` by contract.

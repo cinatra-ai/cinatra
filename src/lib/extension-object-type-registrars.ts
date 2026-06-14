@@ -15,10 +15,8 @@ import "server-only";
 // Degraded mode: with no provider registered (extension absent / not yet
 // activated) only the host-owned object types register — callers proceed.
 
-import {
-  OBJECT_TYPE_REGISTRAR_CAPABILITY,
-  type ObjectTypeRegistrarProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { ObjectTypeRegistrarProvider } from "@cinatra-ai/sdk-extensions";
+import { OBJECT_TYPE_REGISTRAR_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract.

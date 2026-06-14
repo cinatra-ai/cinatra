@@ -14,9 +14,9 @@ import "server-only";
 
 import {
   setCrmProviderExternalResolver,
-  CRM_PROVIDER_CAPABILITY,
   type CrmConnector,
 } from "@cinatra-ai/sdk-extensions";
+import { CRM_PROVIDER_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability registered under `crm-provider` carries an

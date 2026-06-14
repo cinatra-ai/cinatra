@@ -137,6 +137,26 @@ TypeScript source, extensionless, and missing entries are refused at install
 time. Full normative contract, error families, and the operator refresh
 runbook: [`docs/extension-server-entry-contract.md`](../../docs/extension-server-entry-contract.md).
 
+## Public surface is types-first (the host bus stays fenced)
+
+The package root (`@cinatra-ai/sdk-extensions`) is the **types-first author
+surface**: the `register(ctx)` ports, the manifest/dependency contracts, the
+loader/register helpers, and the per-concern `Host*Service` / provider **TYPES**
+an extension uses to type a capability `impl` resolved from `ctx.capabilities`.
+
+The host service-bus **addressing constants** — the `@cinatra-ai/host:*`
+capability ids the host registers per-concern service impls under
+(`HOST_CONNECTOR_SERVICE_CAPABILITIES`, `NANGO_SYSTEM_CAPABILITY`,
+`*_CAPABILITY` / `*_CAPABILITY_ID`) — are **host-internal** and are NOT on the
+public root. They live behind the host-only `@cinatra-ai/sdk-extensions/internal`
+subpath. An extension never value-imports them: it inlines the capability-id
+string literal (the host-peer value-import ban) and types the `impl` against the
+public TYPE. Two gates keep the root constant-free:
+
+- `scripts/audit/sdk-public-surface-ban.mjs` — static source-text gate over
+  `src/index.ts` (fail-closed for any `*_CAPABILITY` / `*_CAPABILITY_ID`),
+- `src/__tests__/public-surface.test.ts` — runtime reachability proof.
+
 ## Allowed first-party dependencies
 
 A Cinatra extension's only permitted `@cinatra-ai/*` **code** dependencies are

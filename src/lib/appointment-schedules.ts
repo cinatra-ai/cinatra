@@ -15,11 +15,11 @@ import "server-only";
 //     provider registered (connector absent/inactive — it is acquirable-on-
 //     demand, not required) the result is simply [].
 
-import {
-  APPOINTMENT_SCHEDULES_CAPABILITY_ID,
-  type AppointmentScheduleEntry,
-  type AppointmentSchedulesProvider,
+import type {
+  AppointmentScheduleEntry,
+  AppointmentSchedulesProvider,
 } from "@cinatra-ai/sdk-extensions";
+import { APPOINTMENT_SCHEDULES_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 function isAppointmentSchedulesProvider(impl: unknown): impl is AppointmentSchedulesProvider {

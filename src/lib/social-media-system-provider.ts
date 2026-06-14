@@ -9,10 +9,8 @@ import "server-only";
 // Degraded mode: provider absent → null; the publish step fails with a
 // descriptive error through its existing per-step failure path.
 
-import {
-  SOCIAL_MEDIA_SYSTEM_CAPABILITY,
-  type SocialMediaSystemProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { SocialMediaSystemProvider } from "@cinatra-ai/sdk-extensions";
+import { SOCIAL_MEDIA_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract.

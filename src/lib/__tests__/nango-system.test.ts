@@ -20,7 +20,7 @@ import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
   NANGO_CONNECTOR_DEFINITIONS,
 } from "@/lib/nango-system";
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 
 function fakeSurface() {
   const calls: string[] = [];

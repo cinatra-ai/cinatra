@@ -12,10 +12,8 @@ import "server-only";
 // omitted from lists; each consumer degrades per feature (a 400/disabled row/
 // not-ready state/descriptive error — never a crash).
 
-import {
-  LLM_PROVIDER_SURFACE_CAPABILITY,
-  type LlmProviderSurface,
-} from "@cinatra-ai/sdk-extensions";
+import type { LlmProviderSurface } from "@cinatra-ai/sdk-extensions";
+import { LLM_PROVIDER_SURFACE_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract. Members are

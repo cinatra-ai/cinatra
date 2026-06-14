@@ -17,7 +17,7 @@ import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,
 } from "@/lib/extension-capabilities-registry";
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { POST as sessionPOST } from "@/app/api/nango/connect/session/route";
 import { POST as savePOST } from "@/app/api/nango/connections/save/route";
 import { POST as webhookPOST } from "@/app/api/nango/webhook/route";

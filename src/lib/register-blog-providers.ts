@@ -19,7 +19,8 @@ import "server-only";
 // never matters.
 // ---------------------------------------------------------------------------
 
-import { setBlogConnectorProvider, HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
+import { setBlogConnectorProvider } from "@cinatra-ai/sdk-extensions";
+import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
 import { materializeBlogImageArtifact } from "@/lib/blog-image-materializer";
 import { createBlogProjectStore } from "@/lib/blog-project-store";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";

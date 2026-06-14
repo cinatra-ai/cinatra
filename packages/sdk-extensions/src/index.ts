@@ -347,25 +347,13 @@ export {
 export type { BlogConnectorProvider } from "./blog-connector-provider-contract";
 
 // Host connector-services capability contracts (the transport-registration cutover — transport/provider
-// registration via capabilities). Type-only for extensions; the host imports
-// the capability-id constants as values when registering the per-concern impls.
-export {
-  HOST_CONNECTOR_SERVICE_CAPABILITIES,
-  NANGO_CONNECTION_SAVED_CAPABILITY,
-  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
-  LLM_TOOLBOX_CAPABILITY,
-  SOCIAL_POST_CAPABILITY,
-  CRM_PROVIDER_CAPABILITY,
-  EMAIL_SEND_CAPABILITY,
-  OBJECT_TYPE_REGISTRAR_CAPABILITY,
-  CRM_SYNC_BOOTSTRAP_CAPABILITY,
-  CRM_POINTER_WRITER_CAPABILITY,
-  DEV_TUNNEL_STATUS_CAPABILITY,
-  BLOG_SYSTEM_CAPABILITY,
-  SOCIAL_MEDIA_SYSTEM_CAPABILITY,
-  EMAIL_SYSTEM_CAPABILITY,
-  LLM_PROVIDER_SURFACE_CAPABILITY,
-} from "./host-connector-services-contract";
+// registration via capabilities). Type-only for extensions: an extension types
+// the capability `impl` it resolves from `ctx.capabilities` against these shapes
+// and INLINES the capability-id string literal. The host value-imports the
+// capability-id CONSTANTS from the host-only `@cinatra-ai/sdk-extensions/internal`
+// subpath (src/internal.ts) — they are deliberately NOT re-exported here so the
+// public root carries no host service-bus addressing scheme (enforced by
+// scripts/audit/sdk-public-surface-ban.mjs + src/__tests__/public-surface.test.ts).
 export type {
   HostConnectorConfigService,
   HostMcpPaginationService,
@@ -419,8 +407,9 @@ export type {
 // Chat user-context contribution: a connector contributes pre-formatted chat
 // system-prompt sections through the generic capability registry (see the
 // trust-boundary note in the contract module) instead of the chat runner
-// importing the connector package by name.
-export { CHAT_USER_CONTEXT_CAPABILITY_ID } from "./chat-user-context-contract";
+// importing the connector package by name. The capability-id CONSTANT is
+// host-only (resolved via `@cinatra-ai/sdk-extensions/internal`); only the
+// contributor TYPES are public.
 export type {
   ChatUserContextContributor,
   ChatUserContextProviderRecord,
@@ -428,15 +417,14 @@ export type {
 
 // Structured per-connector contribution surfaces (cinatra#151 Stage 4): the
 // packages/agents consumers resolve these capability ids instead of
-// value-importing crm/gmail/google-calendar connector packages by name.
-export { CRM_LIST_READER_CAPABILITY_ID } from "./crm-list-reader-contract";
+// value-importing crm/gmail/google-calendar connector packages by name. The
+// capability-id CONSTANTS are host-only (`@cinatra-ai/sdk-extensions/internal`);
+// only the provider/reader TYPES are public.
 export type { CrmListReader } from "./crm-list-reader-contract";
-export { EMAIL_SENDER_IDENTITIES_CAPABILITY_ID } from "./email-sender-identities-contract";
 export type {
   EmailSenderIdentity,
   EmailSenderIdentitiesProvider,
 } from "./email-sender-identities-contract";
-export { APPOINTMENT_SCHEDULES_CAPABILITY_ID } from "./appointment-schedules-contract";
 export type {
   AppointmentScheduleEntry,
   AppointmentSchedulesProvider,
@@ -444,9 +432,9 @@ export type {
 
 // The nango-system capability contract (the nango serverEntry cutover): the
 // nango gateway registers its full host-facing surface from `register(ctx)`;
-// the host resolver (src/lib/nango-system.ts) imports the id constant + types
-// — extensions keep this import TYPE-ONLY (host-peer-value-import ban).
-export { NANGO_SYSTEM_CAPABILITY } from "./nango-system-contract";
+// the host resolver (src/lib/nango-system.ts) imports the id CONSTANT from the
+// host-only `@cinatra-ai/sdk-extensions/internal` subpath + the TYPES from here
+// — extensions keep this surface TYPE-ONLY (host-peer-value-import ban).
 export type {
   NangoConnectorKey,
   NangoConnectionIdKey,
