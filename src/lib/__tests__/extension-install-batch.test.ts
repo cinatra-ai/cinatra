@@ -21,8 +21,8 @@ import {
   computeClosureHash,
   refreshGatekeptInstallGrant,
   // Re-exported from the host-side gatekept-install module so the real refresh
-  // function can be driven against a real refusal WITHOUT a direct vendored
-  // `@cinatra-ai/marketplace-mcp-client` import (the audit gate bans new sites).
+  // function can be driven against a real refusal WITHOUT a direct import of the
+  // vendored marketplace transport package (the audit gate bans new sites).
   MarketplaceMcpError,
 } from "@/lib/gatekept-install";
 import type { Actor } from "@cinatra-ai/extension-types";
@@ -488,7 +488,7 @@ describe("installExtensionWithDependencies — grant TTL / refresh (P2-5)", () =
 // ability, validates the closure-hash binding + re-mint/version/closure
 // invariants, and maps refusal-class errors. The marketplace ability is faked by
 // an INLINE refresh-client (so this non-allowlisted test never imports the
-// vendored `@cinatra-ai/marketplace-mcp-client` name); the grant crosses its TTL
+// vendored marketplace transport package by name); the grant crosses its TTL
 // mid-batch and the batch either completes under the refreshed grant (positive)
 // or compensates on a real-mapped refusal (negative).
 describe("installExtensionWithDependencies — REAL refreshGatekeptInstallGrant through the saga (P2-5 e2e)", () => {
