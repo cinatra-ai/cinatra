@@ -290,3 +290,92 @@ describe("planDependencyInstall — kinds", () => {
     expect(plan.memberKinds.get("@cinatra-ai/a")).toBe("connector");
   });
 });
+
+describe("planDependencyInstall — #157 dependency-confusion scope gate", () => {
+  it("REFUSES an out-of-scope dependency on the dev path (manifest-walk)", async () => {
+    // Root is @cinatra-ai/*; a manifest edge points at an attacker-chosen scope.
+    const { deps } = makeDeps({
+      [ROOT]: { version: "1.0.0", dependencies: [edge("@evil/dep")] },
+      "@evil/dep": { version: "9.9.9" },
+    });
+    await expect(
+      planDependencyInstall(
+        { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
+  });
+
+  it("ALLOWS the root's OWN vendor scope and the first-party base scope", async () => {
+    // A non-cinatra vendor root may depend on its own scope AND on @cinatra-ai/*.
+    const VENDOR_ROOT = "@acme/root";
+    const { deps } = makeDeps({
+      [VENDOR_ROOT]: {
+        version: "1.0.0",
+        dependencies: [edge("@acme/lib"), edge("@cinatra-ai/base")],
+      },
+      "@acme/lib": { version: "1.0.0" },
+      "@cinatra-ai/base": { version: "1.0.0" },
+    });
+    const plan = await planDependencyInstall(
+      { root: { packageName: VENDOR_ROOT, version: "1.0.0" }, orgId: null, closure: null },
+      deps,
+    );
+    // All three resolved (root + own-scope dep + first-party dep); the root is
+    // ALWAYS last in the install order, deps precede it.
+    expect(new Set(plan.ordered.map((m) => m.packageName))).toEqual(
+      new Set(["@acme/lib", "@cinatra-ai/base", VENDOR_ROOT]),
+    );
+    expect(plan.ordered[plan.ordered.length - 1]!.packageName).toBe(VENDOR_ROOT);
+  });
+
+  it("REFUSES a vendor root depending on a DIFFERENT vendor's scope", async () => {
+    const VENDOR_ROOT = "@acme/root";
+    const { deps } = makeDeps({
+      [VENDOR_ROOT]: { version: "1.0.0", dependencies: [edge("@other-vendor/dep")] },
+      "@other-vendor/dep": { version: "1.0.0" },
+    });
+    await expect(
+      planDependencyInstall(
+        { root: { packageName: VENDOR_ROOT, version: "1.0.0" }, orgId: null, closure: null },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
+  });
+
+  it("gates the LEGACY agentDependencies projection too (out-of-scope edge refused)", async () => {
+    // Build a manifest that carries ONLY legacy cinatra.agentDependencies (no
+    // canonical cinatra.dependencies) — the dual-read projects it to edges, and
+    // the scope gate must still apply.
+    const legacyDeps: DependencyPlanDeps = {
+      fetchSummary: vi.fn(async (packageName: string): Promise<MemberSummary> => {
+        if (packageName === ROOT) {
+          return {
+            resolvedVersion: "1.0.0",
+            kind: "agent",
+            manifest: {
+              name: ROOT,
+              version: "1.0.0",
+              cinatra: { kind: "agent", agentDependencies: { "@evil/dep": "1.0.0" } },
+            },
+          };
+        }
+        return {
+          resolvedVersion: "1.0.0",
+          kind: "agent",
+          manifest: { name: packageName, version: "1.0.0", cinatra: { kind: "agent" } },
+        };
+      }),
+      parseEdges: (manifest, packageName) =>
+        parseManifestDependencyEdges(manifest, { packageName }).edges,
+      isAutoInstallableEdge,
+      readInstalledRows: async () => [],
+    };
+    await expect(
+      planDependencyInstall(
+        { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+        legacyDeps,
+      ),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
+  });
+});

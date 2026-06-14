@@ -118,10 +118,28 @@ export type InstallBatchSagaDeps = {
     orgId: string | null;
     closure: GatekeptInstallResolution["authorize"]["closure"] | null;
   }) => Promise<DependencyInstallPlan>;
+  /**
+   * Run `fn` with the SAGA-OWNED-FAN-OUT context active (#157). The agent
+   * extension handler, dispatched per-member by `installMember` inside this
+   * scope, installs ONLY the root package it is handed (it does NOT re-run the
+   * @cinatra-ai/registries dep-resolver) — the saga owns the dependency
+   * fan-out. Defaults to the real `withSagaOwnedFanout` from @cinatra-ai/agents.
+   */
+  withSagaOwnedFanout: <T>(rootPackageName: string, fn: () => Promise<T>) => Promise<T>;
   /** Install ONE package through the real dispatcher. */
   installMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /** Uninstall ONE package through the real dispatcher (compensation inverse). */
   uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
+  /**
+   * Fire the SINGLE WayFlow agent-runtime reload at the batch SUCCESS boundary
+   * (#157). The agent handler no longer reloads per-member (it installs
+   * root-only under the saga), and `installAgentFromPackage` never reloads on
+   * its own, so the saga is now the canonical single-shot reload trigger when
+   * an agent member was installed. Best-effort: a reload failure is logged, not
+   * fatal (the durable DB + disk writes already succeeded). Defaults to the
+   * real `triggerWayflowReload` from @cinatra-ai/agents.
+   */
+  triggerAgentRuntimeReload: () => Promise<{ ok: boolean; reason?: string; detail?: string }>;
   /** Pre-state reads (canonical row + install-op journal). */
   readLiveRowVersion: (packageName: string, orgId: string | null) => Promise<{ present: boolean; version?: string }>;
   readInstallOp: (packageName: string, orgId: string | null) => Promise<{ installOpId: string; phase: string } | null>;
@@ -235,6 +253,14 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
       const { withGlobalExtensionLifecycleLock } = await import("@cinatra-ai/agents");
       return withGlobalExtensionLifecycleLock(fn);
     },
+    withSagaOwnedFanout: async (rootPackageName, fn) => {
+      const { withSagaOwnedFanout } = await import("@cinatra-ai/agents");
+      return withSagaOwnedFanout({ rootPackageName }, fn);
+    },
+    triggerAgentRuntimeReload: async () => {
+      const { triggerWayflowReload } = await import("@cinatra-ai/agents");
+      return triggerWayflowReload();
+    },
     plan: (input) => planDependencyInstall(input, planDeps),
     installMember: async (member, actor) => {
       const { extensionRegistry } = await import("@cinatra-ai/extensions");
@@ -308,6 +334,48 @@ export async function installExtensionWithDependencies(
     : (input.version ?? "latest");
 
   const runBatch = async (): Promise<BatchInstallResult> => {
+    // #157: fire the SINGLE agent-runtime reload iff at least one agent member
+    // was installed this run. Best-effort — a reload failure is logged, never
+    // fatal (the durable DB + disk writes already succeeded). Called once at the
+    // batch success boundary; replaces the per-tree reload that
+    // installAgentPackageWithDependencies used to fire (the agent handler now
+    // installs root-only under the saga and never reloads on its own).
+    const maybeReloadAgentRuntime = async (
+      installed: { typeId: string; packageName: string }[],
+    ): Promise<void> => {
+      if (!installed.some((m) => m.typeId === "agent")) return;
+      // STRICTLY best-effort: the durable DB + disk writes already landed and
+      // the batch is finalized. A reload that returns ok:false OR THROWS (a
+      // rejected dynamic import, a network error) must NOT fail the completed
+      // install — both are logged identically and swallowed.
+      try {
+        const reload = await deps.triggerAgentRuntimeReload();
+        if (!reload.ok) {
+          // Dynamic values (package name, broker-derived reason/detail) are
+          // passed as console SUBSTITUTION ARGUMENTS, never spliced into the
+          // format-string position — a format string built from
+          // externally-influenced input is a CodeQL js/tainted-format-string
+          // hazard, and these values are not trusted to be %-clean.
+          console.warn(
+            "[extension-install-batch] agent runtime reload returned ok:false " +
+              "reason=%s detail=%s (root %s is installed but the runtime may need " +
+              "a restart or another reload trigger)",
+            reload.reason ?? "—",
+            reload.detail ?? "—",
+            input.packageName,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          "[extension-install-batch] agent runtime reload threw (best-effort, " +
+            "swallowed): root %s is installed but the runtime may need a restart " +
+            "or another reload trigger:",
+          input.packageName,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    };
+
     // 2. PLAN (+ pre-state capture + overlap guard + ledger begin) under the
     //    GLOBAL lifecycle lock — then release it before installing members
     //    (each member install takes its own per-package lock; holding the
@@ -384,10 +452,17 @@ export async function installExtensionWithDependencies(
     const { batch, toInstall, alreadyInstalled } = planned;
     void planned.plan; // (plan retained on `planned` for the result's resolved root version)
 
-    // ROOT-ONLY FAST PATH (no ledger).
+    // ROOT-ONLY FAST PATH (no ledger). Still runs inside the saga-owned-fan-out
+    // context (#157): even a depless root must install root-only so the agent
+    // handler does not re-fan-out via the second registries resolver. The
+    // single agent reload fires here at the success boundary when the root is
+    // an agent (installAgentFromPackage does not reload on its own).
     if (batch === null) {
       const root = toInstall[0]!;
-      await deps.installMember(root, input.actor);
+      await deps.withSagaOwnedFanout(input.packageName, () =>
+        deps.installMember(root, input.actor),
+      );
+      await maybeReloadAgentRuntime([root]);
       return {
         rootPackage: input.packageName,
         // The PLANNED root version (dev "latest" already resolved concrete).
@@ -447,7 +522,12 @@ export async function installExtensionWithDependencies(
         }
 
         await deps.ledger.updateMember(batch.batchId, member.packageName, { status: "installing" });
-        await deps.installMember(member, input.actor);
+        // #157: the agent handler dispatched here installs ROOT-ONLY under the
+        // saga-owned-fan-out context — the saga (this loop) owns the dependency
+        // fan-out, so no second registries dep-resolver runs per member.
+        await deps.withSagaOwnedFanout(input.packageName, () =>
+          deps.installMember(member, input.actor),
+        );
         // Track the durable install IMMEDIATELY — before the ledger write —
         // so a ledger failure right after a successful member install still
         // compensates that member (it IS installed, whatever the ledger says).
@@ -472,6 +552,13 @@ export async function installExtensionWithDependencies(
       await abortAndCompensate(input.packageName, err);
       throw err; // unreachable — defensive.
     }
+    // #157: SINGLE agent-runtime reload at the batch success boundary. The
+    // agent handler installed root-only per member (no per-member reload) and
+    // installAgentFromPackage never reloads on its own, so the saga is now the
+    // canonical single-shot reload. Fires ONCE for the whole batch iff an agent
+    // member was installed this run; best-effort (durable writes already
+    // landed). After `finalized` so a reload failure never un-finalizes a batch.
+    await maybeReloadAgentRuntime(installedThisBatch);
     return {
       rootPackage: input.packageName,
       // The PLANNED root version — concrete on both paths (gatekept authorize

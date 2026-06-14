@@ -187,6 +187,14 @@ export {
   installAgentFromPackage,
   installAgentPackageWithDependencies,
 } from "./install-from-package";
+// #157: saga-owned-fan-out context. The batch saga enters this around its
+// member-install sequence so the agent handler installs root-only (the saga
+// owns the dependency fan-out) instead of running the second registries
+// dep-resolver.
+export {
+  withSagaOwnedFanout,
+  isSagaOwnedFanoutActive,
+} from "./saga-install-context";
 export type {
   InstallAgentFromPackageInput,
   InstallAgentFromPackageResult,

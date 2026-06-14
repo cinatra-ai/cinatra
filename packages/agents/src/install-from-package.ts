@@ -648,7 +648,21 @@ async function _installAgentPackageWithDependenciesImpl(
   // even when the surrounding caller (extensionRegistry.install via
   // packages/extensions/actions.ts) discards the wayflowReload field on its
   // way to a `{ success: true }` response.
-  const wayflowReload = await triggerWayflowReload();
+  // triggerWayflowReload is designed to return a typed { ok:false } instead of
+  // throwing, but guard defensively (#157): a thrown reload (e.g. an
+  // unexpected client error) must NEVER fail a completed full-tree install —
+  // the durable DB + disk writes already landed. A throw is mapped to the
+  // typed network-failure shape so the return contract is preserved.
+  let wayflowReload: ReloadResult;
+  try {
+    wayflowReload = await triggerWayflowReload();
+  } catch (reloadErr) {
+    wayflowReload = {
+      ok: false,
+      reason: "network",
+      detail: reloadErr instanceof Error ? reloadErr.message : String(reloadErr),
+    };
+  }
   if (!wayflowReload.ok) {
     console.warn(
       `[installAgentPackageWithDependencies] wayflow reload returned ok:false reason=${wayflowReload.reason} detail=${wayflowReload.detail ?? "—"} (extension ${input.packageName} is published+installed but the runtime may need a restart or another reload trigger)`,

@@ -13,6 +13,10 @@ vi.mock("node:fs/promises", () => ({
 
 vi.mock("@cinatra-ai/agents", () => ({
   installAgentPackageWithDependencies: vi.fn(),
+  installAgentFromPackage: vi.fn(),
+  // No saga context active in these tests → handler takes the full-tree path
+  // (these tests assert installAgentPackageWithDependencies is called).
+  isSagaOwnedFanoutActive: vi.fn(() => false),
   extractAgentPackage: vi.fn(),
   cleanupExtractedAgentPackage: vi.fn(),
   deleteAgentTemplate: vi.fn(),

@@ -21,6 +21,7 @@
 // the worker dynamically imports the connector's register/sync code.
 
 import type { ObjectSyncAdapter, ObjectTypeDefinition } from "./objects-contract";
+import { createHostDepsSlot } from "./dependencies";
 
 /**
  * The actor-scoped result of an `objects_save` pointer write. Mirrors the host
@@ -93,9 +94,11 @@ export interface ObjectsProvider {
 // into more than one module instance (server / RSC / route segments / the BullMQ
 // worker bundle). Same cross-compilation reason as the action-guard + the other
 // DI contracts.
-const OBJECTS_PROVIDER_KEY = Symbol.for("@cinatra-ai/sdk-extensions:objects-provider/v1");
-type ProviderHolder = { [k: symbol]: ObjectsProvider | null | undefined };
-const _holder = globalThis as unknown as ProviderHolder;
+// Built on the shared `createHostDepsSlot` primitive (see ./dependencies); the
+// slot identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<ObjectsProvider>(
+  "@cinatra-ai/sdk-extensions:objects-provider/v1",
+);
 
 /**
  * Wire the host objects provider. Called exactly once at boot (host
@@ -103,12 +106,12 @@ const _holder = globalThis as unknown as ProviderHolder;
  * previous impl — tests can swap a stub between blocks.
  */
 export function setObjectsProvider(impl: ObjectsProvider): void {
-  _holder[OBJECTS_PROVIDER_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the provider so a fresh wiring is required. */
 export function _resetObjectsProviderForTests(): void {
-  _holder[OBJECTS_PROVIDER_KEY] = null;
+  _slot.reset();
 }
 
 /**
@@ -117,15 +120,11 @@ export function _resetObjectsProviderForTests(): void {
  * that could strand a pointer row unprojected or mis-scoped.
  */
 export function requireObjectsProvider(): ObjectsProvider {
-  const provider = _holder[OBJECTS_PROVIDER_KEY];
-  if (!provider) {
-    throw new Error(
-      "[sdk-extensions] requireObjectsProvider() was called before the host wired the objects " +
-        "provider. The host must call setObjectsProvider(...) at boot " +
-        "(src/lib/register-objects-provider.ts, imported from instrumentation.node.ts).",
-    );
-  }
-  return provider;
+  return _slot.require(
+    "[sdk-extensions] requireObjectsProvider() was called before the host wired the objects " +
+      "provider. The host must call setObjectsProvider(...) at boot " +
+      "(src/lib/register-objects-provider.ts, imported from instrumentation.node.ts).",
+  );
 }
 
 /**
@@ -139,5 +138,5 @@ export function requireObjectsProvider(): ObjectsProvider {
  * worker, so this resolves the real provider when the connector actually registers.
  */
 export function getObjectsProviderOrNull(): ObjectsProvider | null {
-  return _holder[OBJECTS_PROVIDER_KEY] ?? null;
+  return _slot.get();
 }

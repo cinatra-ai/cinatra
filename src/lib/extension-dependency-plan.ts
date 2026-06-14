@@ -31,7 +31,7 @@ import "server-only";
 //    appended in lexicographic order with a loud warning — the per-member
 //    forward install gate stays the enforcement boundary.
 
-import { satisfiesVersionRange } from "@cinatra-ai/registries";
+import { satisfiesVersionRange, dependencyScopePrefixesFor } from "@cinatra-ai/registries";
 import type { ExtensionDependency, InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 
 /** One exact-pinned closure member ({name, version}) — structurally identical
@@ -47,7 +47,8 @@ export class DependencyPlanError extends Error {
       | "RANGE_VIOLATION"
       | "INSTALLED_VERSION_CONFLICT"
       | "UNSUPPORTED_CONSTRAINT"
-      | "MEMBER_UNRESOLVABLE",
+      | "MEMBER_UNRESOLVABLE"
+      | "DEPENDENCY_SCOPE",
     message: string,
   ) {
     super(message);
@@ -191,6 +192,31 @@ export async function planDependencyInstall(
   const closureByName = new Map((closure ?? []).map((c) => [c.name, c]));
   const installedRows = await deps.readInstalledRows();
 
+  // DEPENDENCY-CONFUSION GATE (#157 / #103): confine the resolved tree to the
+  // ROOT package's own vendor scope + the first-party base scope. The agent
+  // resolver this planner SUPERSEDES inside the saga (installPackageWithDependencies)
+  // applied this exact allowlist to every resolved node; without it here, a
+  // saga-driven install (notably the dev/non-gatekept path, which has no
+  // marketplace-closure membership gate) could auto-install an arbitrary,
+  // attacker-chosen package scope a manifest edge names. Keyed on the root —
+  // not on the installing instance's namespace — so ANY instance can install
+  // first-party @cinatra-ai/* deps and a vendor package can depend on the
+  // first-party base layer (issue #103). The gatekept path's
+  // AUTHORIZATION_MISMATCH closure check is strictly stronger and runs in
+  // addition; this gate is the floor for every path.
+  const scopePrefixes = dependencyScopePrefixesFor(root.packageName);
+  const assertInDependencyScope = (packageName: string, requestedFrom: string): void => {
+    if (!scopePrefixes.some((prefix) => packageName.startsWith(prefix))) {
+      throw new DependencyPlanError(
+        "DEPENDENCY_SCOPE",
+        `${requestedFrom} requires ${packageName}, which is outside the dependency-scope ` +
+          `allowlist for ${root.packageName} (${scopePrefixes.join(", ")}) — refusing ` +
+          `(dependency-confusion mitigation: an install's dependency tree is confined to the ` +
+          `root package's own vendor scope plus the first-party base scope).`,
+      );
+    }
+  };
+
   // node name -> resolved member info (root included; resolution memoized).
   const resolved = new Map<string, PlannedMember>();
   const memberKinds: DependencyInstallPlan["memberKinds"] = new Map();
@@ -204,6 +230,15 @@ export async function planDependencyInstall(
       if (requestedBy) assertPinSatisfiesConstraint(requestedBy.from, requestedBy.edge, memo.version);
       return memo;
     }
+
+    // 0. DEPENDENCY-CONFUSION GATE: every node — root AND every transitive
+    //    dependency — must fall under the root's dependency-scope allowlist
+    //    (mirrors the registries resolver this planner replaces inside the
+    //    saga). A SCOPED root passes via its own scope (always in the
+    //    allowlist); an UNSCOPED/malformed root is intentionally refused (same
+    //    as the old resolver's root check). The gate's teeth are on
+    //    out-of-scope dependency edges.
+    assertInDependencyScope(packageName, requestedBy?.from ?? root.packageName);
 
     // 1. Determine the exact pin. The ROOT is exact-pinned ONLY on the
     //    gatekept path (the authorize result resolved the listed version); on
