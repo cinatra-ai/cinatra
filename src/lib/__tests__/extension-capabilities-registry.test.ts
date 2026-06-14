@@ -22,7 +22,11 @@ describe("extension-capabilities-registry", () => {
     registerCapabilityProvider("email-send", { packageName: "@cinatra-ai/x", impl: { v: 2 } });
     const providers = resolveCapabilityProviders("email-send");
     expect(providers).toHaveLength(1);
-    expect((providers[0]?.impl as { v: number }).v).toBe(2);
+    // This test exercises the generic registry dedupe/replace semantics with an
+    // opaque placeholder impl, not the email-send surface — cast through unknown
+    // (the typed `resolveProviders("email-send")` overload now narrows `impl` to
+    // the mapped EmailConnector surface, which the placeholder doesn't satisfy).
+    expect((providers[0]?.impl as unknown as { v: number }).v).toBe(2);
   });
 
   it("rejects a provider with no packageName", () => {

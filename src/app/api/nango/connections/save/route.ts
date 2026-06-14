@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { getNangoSystem } from "@/lib/nango-system";
-import {
-  NANGO_CONNECTION_SAVED_CAPABILITY,
-  type NangoConnectionSavedHook,
-} from "@cinatra-ai/sdk-extensions";
+import type { NangoConnectionSavedHook } from "@cinatra-ai/sdk-extensions";
+import { NANGO_CONNECTION_SAVED_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { getAuthSession } from "@/lib/auth-session";
 

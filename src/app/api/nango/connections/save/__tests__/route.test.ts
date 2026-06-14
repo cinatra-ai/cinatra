@@ -10,7 +10,7 @@ vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(async () => ({ user: { id: "user-1" } })),
 }));
 
-import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,

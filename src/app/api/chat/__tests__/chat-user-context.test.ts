@@ -20,7 +20,7 @@ import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,
 } from "@/lib/extension-capabilities-registry";
-import { CHAT_USER_CONTEXT_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions";
+import { CHAT_USER_CONTEXT_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions/internal";
 import { buildChatUserContextSections } from "../chat-user-context";
 
 afterEach(() => {

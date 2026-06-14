@@ -71,7 +71,8 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { buildActorContextFromPrimitive } from "./auth-policy";
 // Config-driven dispatch resolver + sentinel for "anthropic + empty skills"
 // dispatch-abort. Replaces the hardcoded `provider:"openai", model:"gpt-5"`
-// block.
+// block with config-driven provider/model selection (operator-configured
+// OpenAI default, canonical "gpt-5.5" fallback — never base gpt-5).
 import {
   resolveAgentCreationDispatch,
   AgentCreationDispatchAbortError,
@@ -427,8 +428,8 @@ const FALLBACK_PLANNER_PROMPT =
 // `resolve-agent-creation-dispatch.ts`):
 //
 //   - When `isAgentCreationPinActive()` returns false, the resolver returns
-//     byte-for-byte openai/gpt-5 — backwards compat preserved, the existing
-//     tests stay green.
+//     provider openai with the operator-configured OpenAI default model
+//     (canonical "gpt-5.5" fallback) — never base gpt-5.
 //   - When ACTIVE, the resolver returns the admin-configured provider/model
 //     (`agent_creation_llm_provider` + `agent_creation_model`). For Anthropic
 //     the dispatch is ALWAYS routed via `runSkillAwareDeterministicLlmTask`
@@ -717,7 +718,8 @@ export async function handleAgentCreationReview(
   // blocker (both surface as `errorResult`-style `MergedReviewReport` with
   // severity:"blocker", source:"deterministic"). When `isAgentCreationPinActive()`
   // returns false, this is a no-op pass-through
-  // and dispatch continues on openai/gpt-5 — the existing 26 tests stay green.
+  // and dispatch continues on the operator-configured OpenAI default model
+  // (canonical "gpt-5.5" fallback — never base gpt-5).
   //
   // Only run the STRICT resolver (which RETHROWS
   // catalog errors) when the pin is ACTIVE — that's where `catalog_unavailable`

@@ -171,9 +171,9 @@ beforeEach(() => {
   mockLlmTask.mockReset();
   mockSkillAwareLlmTask.mockReset();
   // Default: every reviewer returns an empty array (no findings). Skill-aware
-  // path is reset but the existing 26 tests run on the pin-INACTIVE default
-  // (openai/gpt-5, deterministic path) — they don't need the skill-aware mock
-  // to be primed.
+  // path is reset but the existing tests run on the pin-INACTIVE default
+  // (openai + the canonical OpenAI default model "gpt-5.5", deterministic
+  // path) — they don't need the skill-aware mock to be primed.
   mockLlmTask.mockResolvedValue({ content: "[]" });
   mockSkillAwareLlmTask.mockResolvedValue({ content: "[]" });
 });
@@ -490,8 +490,11 @@ describe("reviewer-agent OAS shape contract", () => {
 // ---------------------------------------------------------------------------
 
 describe("agent_creation_review — dispatch contract", () => {
-  it("PARITY: pin INACTIVE → each lane uses runDeterministicLlmTask with provider:openai, model:gpt-5", async () => {
+  it("DEFAULT: pin INACTIVE → each lane uses runDeterministicLlmTask with provider:openai + the canonical OpenAI default model (gpt-5.5, never base gpt-5)", async () => {
     // Default beforeEach: mockLlmTask returns "[]"; skill-aware mock unused.
+    // Real @/lib/database: pin inactive + no stored openai_connection ⇒ the
+    // inactive resolver reads readOpenAIConnectionFromDatabase().defaultModel,
+    // which falls back to the canonical DEFAULT_OPENAI_MODEL_ID ("gpt-5.5").
     await handleAgentCreationReview({
       input: { oasJson: JSON.stringify(NON_TRIVIAL_OAS_WITH_HITL_GATE) },
     });
@@ -499,7 +502,8 @@ describe("agent_creation_review — dispatch contract", () => {
     expect(mockSkillAwareLlmTask).not.toHaveBeenCalled();
     // Inspect the first invocation's call shape.
     const firstCall = mockLlmTask.mock.calls[0]?.[0];
-    expect(firstCall).toMatchObject({ provider: "openai", model: "gpt-5" });
+    expect(firstCall).toMatchObject({ provider: "openai", model: "gpt-5.5" });
+    expect((firstCall as { model: string }).model).not.toBe("gpt-5");
   });
 
   it("REGRESSION: preflight ok:false short-circuits before any LLM call (deterministic blocker)", async () => {

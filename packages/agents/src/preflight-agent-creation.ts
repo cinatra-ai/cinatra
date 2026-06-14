@@ -13,8 +13,9 @@
  * blocker stream as a lint blocker.
  *
  * Standing invariants honoured:
- *   - NO-OP when `isAgentCreationPinActive()` is false; the dispatch site keeps
- *     using openai/gpt-5.
+ *   - NO-OP when `isAgentCreationPinActive()` is false; the dispatch site uses
+ *     the operator-configured OpenAI default model (canonical "gpt-5.5"
+ *     fallback — never base gpt-5).
  *   - When pinned on Anthropic, EVERY required skill must be: synced (row
  *     exists) + not stale + content-hash matches + governance permits +
  *     under the 30MB per-skill cap + the per-request set is ≤8.
@@ -78,8 +79,9 @@ export type AgentCreationPreflightInput = {
  * writes. Returns all failures (not first-only).
  *
  * When `isAgentCreationPinActive()` returns false, no checks run and
- * `{ok:true, pinActive:false}` is returned — the dispatch site keeps using
- * openai/gpt-5.
+ * `{ok:true, pinActive:false}` is returned — the dispatch site uses the
+ * operator-configured OpenAI default model (canonical "gpt-5.5" fallback —
+ * never base gpt-5).
  */
 export async function preflightAgentCreation(
   input: AgentCreationPreflightInput,

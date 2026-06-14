@@ -72,7 +72,16 @@ async function writeOpenAILogFile(input: {
 }
 
 const MAX_TOOL_RESULT_CHARS = 8000;
-const DEFAULT_MODEL = "gpt-5";
+// Canonical OpenAI fallback model when a connection carries no `defaultModel`.
+// MUST stay equal to `DEFAULT_OPENAI_MODEL_ID` in
+// `packages/agents/src/llm-provider-policy.ts` ("gpt-5.5"). We duplicate the
+// literal instead of importing it because `@cinatra-ai/agents` depends on
+// `@cinatra-ai/llm`, so importing the policy here would create a circular
+// dependency (cf. the layering note in `openai-model-capabilities.ts`). NEVER
+// base `gpt-5`: the operator-configured `connection.defaultModel` always wins,
+// and absent that we fall back to the canonical default, never the
+// shell-incompatible base model.
+const DEFAULT_MODEL = "gpt-5.5";
 const MAX_FUNCTION_TOOLS = 128;
 
 // ---------------------------------------------------------------------------

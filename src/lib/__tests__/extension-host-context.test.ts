@@ -155,7 +155,10 @@ describe("createExtensionHostContext — grant-aware ports", () => {
     const providers = resolveCapabilityProviders("email-send");
     expect(providers).toHaveLength(1);
     expect(providers[0]?.packageName).toBe("@cinatra-ai/resend-connector");
-    expect((providers[0]?.impl as { id: string }).id).toBe("resend");
+    // Opaque placeholder impl — this test exercises identity-bound self-
+    // registration round-trip, not the email-send surface; cast through unknown
+    // (the typed overload narrows `impl` to the mapped EmailConnector surface).
+    expect((providers[0]?.impl as unknown as { id: string }).id).toBe("resend");
   });
 
   it("the hot-update PROBE path enforces the SAME identity binding — forged identity is recorded as the real package, host namespace rejected (cinatra#150)", () => {

@@ -10,10 +10,8 @@ import "server-only";
 // resolution and `mcp-access.ts`'s legacy always-inject set) resolve declared
 // toolbox ids HERE — never by branching on a hardcoded connector id.
 
-import {
-  LLM_TOOLBOX_CAPABILITY,
-  type LlmToolboxProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { LlmToolboxProvider } from "@cinatra-ai/sdk-extensions";
+import { LLM_TOOLBOX_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import type { LlmMcpServerTool, LlmProvider } from "@cinatra-ai/llm";
 

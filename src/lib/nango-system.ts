@@ -23,13 +23,13 @@ import "server-only";
 // inside function bodies (verified — the design's call-time audit), so
 // property access resolves the surface at call time, never at module eval.
 
-import {
-  NANGO_SYSTEM_CAPABILITY,
-  type NangoConnectorKey,
-  type NangoConnectionIdKey,
-  type NangoConnectorDefinition,
-  type NangoSystemSurface,
+import type {
+  NangoConnectorKey,
+  NangoConnectionIdKey,
+  NangoConnectorDefinition,
+  NangoSystemSurface,
 } from "@cinatra-ai/sdk-extensions";
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract — trust it only

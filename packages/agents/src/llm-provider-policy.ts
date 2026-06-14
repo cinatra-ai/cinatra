@@ -38,9 +38,12 @@ export type LlmCapability = (typeof LLM_CAPABILITIES)[number];
 // add ids speculatively; they will surface at compile time only.
 //
 // Defaults pulled from each provider adapter file:
-//   packages/llm/src/providers/openai.ts:32      → "gpt-5"
-//   packages/llm/src/providers/anthropic.ts:42   → "claude-sonnet-4-6"
-//   packages/llm/src/providers/gemini.ts:21      → "gemini-2.5-flash"
+//   packages/llm/src/providers/openai.ts (DEFAULT_MODEL)  → "gpt-5.5"
+//     (kept in lock-step with DEFAULT_OPENAI_MODEL_ID below; the adapter
+//      duplicates the literal because @cinatra-ai/llm cannot import this
+//      package without a circular dependency).
+//   packages/llm/src/providers/anthropic.ts (DEFAULT_MODEL) → "claude-sonnet-4-6"
+//   packages/llm/src/providers/gemini.ts (DEFAULT_MODEL)    → "gemini-2.5-flash"
 // ---------------------------------------------------------------------------
 
 export const ALLOWED_MODEL_IDS: Record<LlmProvider, readonly string[]> = {

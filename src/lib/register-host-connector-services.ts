@@ -48,8 +48,6 @@ import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { createNotification } from "@/lib/notifications";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 import {
-  HOST_CONNECTOR_SERVICE_CAPABILITIES,
-  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
   type NangoConnectionMaterializer,
   type NangoConnectionMaterializerInput,
   type HostMcpPaginationService,
@@ -73,6 +71,10 @@ import {
   lookupCrmProvider,
   requireExtensionAction,
 } from "@cinatra-ai/sdk-extensions";
+import {
+  HOST_CONNECTOR_SERVICE_CAPABILITIES,
+  NANGO_CONNECTION_MATERIALIZER_CAPABILITY,
+} from "@cinatra-ai/sdk-extensions/internal";
 import {
   getGoogleOAuthStatus,
   googleApiFetch,

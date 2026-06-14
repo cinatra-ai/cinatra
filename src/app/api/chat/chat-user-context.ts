@@ -17,10 +17,8 @@ import "server-only";
 //     unwired in some boot configurations).
 
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-import {
-  CHAT_USER_CONTEXT_CAPABILITY_ID,
-  type ChatUserContextContributor,
-} from "@cinatra-ai/sdk-extensions";
+import type { ChatUserContextContributor } from "@cinatra-ai/sdk-extensions";
+import { CHAT_USER_CONTEXT_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions/internal";
 
 /**
  * Resolve the live chat-user-context providers and collect their sections for

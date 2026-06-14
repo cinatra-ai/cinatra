@@ -25,7 +25,7 @@ import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { createSessionObjectsClient } from "@cinatra-ai/objects";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
-import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions";
+import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
 
 /**
  * These sender-identity reads run on a system/registration path with no user

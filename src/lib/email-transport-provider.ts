@@ -14,10 +14,8 @@ import "server-only";
 // Degraded mode: provider absent → null; the trigger send fails with a
 // descriptive error (same failure class as "No connected email connector").
 
-import {
-  EMAIL_SYSTEM_CAPABILITY,
-  type EmailSystemProvider,
-} from "@cinatra-ai/sdk-extensions";
+import type { EmailSystemProvider } from "@cinatra-ai/sdk-extensions";
+import { EMAIL_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 
 // Structural guard: a capability impl is `unknown` by contract.

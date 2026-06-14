@@ -26,7 +26,7 @@ import {
   CRM_LIST_READER_CAPABILITY_ID,
   EMAIL_SENDER_IDENTITIES_CAPABILITY_ID,
   APPOINTMENT_SCHEDULES_CAPABILITY_ID,
-} from "@cinatra-ai/sdk-extensions";
+} from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { listAppointmentSchedules } from "@/lib/appointment-schedules";
