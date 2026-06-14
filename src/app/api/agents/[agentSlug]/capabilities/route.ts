@@ -6,12 +6,12 @@ import { buildCapabilities } from "@/lib/widget-capabilities";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// The local widget fetches this cross-origin at boot, so CORS headers are
-// required or the browser blocks the response and the widget wrongly falls back
-// to the legacy long-lived flow (codex finding). The body is fully-public
-// static contract metadata (no instance data, no secret), so a wildcard
-// allow-origin is appropriate and avoids reading any instance config here. No
-// credentials are used; GET is the only data method.
+// The local widget fetches this cross-origin at boot. CORS headers are REQUIRED:
+// without them the browser blocks the response, which the widget treats as a
+// negotiation failure and refuses to mount (showing the unavailable chrome). The
+// body is fully-public static contract metadata (no instance data, no secret),
+// so a wildcard allow-origin is appropriate and avoids reading any instance
+// config here. No credentials are used; GET is the only data method.
 const CAPABILITIES_CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
@@ -30,10 +30,14 @@ const CAPABILITIES_CORS_HEADERS: Record<string, string> = {
 // the middleware public-path allowlist (GENERATED_WIDGET_STREAM_CAPABILITY_PATHS)
 // so the session redirect is suppressed.
 //
-// A locally-shipped widget calls this once at boot to pick the highest
-// mutually-supported contract version and to gate optional UX (apply-changes,
-// token exchange) by the returned flags. An older instance with no capabilities
-// endpoint answers 404, which the widget treats as v1-only + no token exchange.
+// A locally-shipped widget calls this once at boot as a HARD PREREQUISITE: it
+// picks the highest mutually-supported contract version and gates optional UX
+// (apply-changes, markdown) on the returned forward flags. Any failure to fetch
+// or validate this response — 404 / 5xx / network / timeout / malformed JSON /
+// no mutual version / supportsTokenExchange !== true — makes the widget
+// UNAVAILABLE; there is NO optimistic default and NO legacy long-lived fallback.
+// (An UNKNOWN agent slug still returns 404 here; that is a server-side not-found,
+// which the client likewise treats as unavailable.)
 // ---------------------------------------------------------------------------
 
 export async function OPTIONS(
