@@ -22,9 +22,10 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-import type {
-  MarketplaceExtensionInstallAuthorizeOutput,
-  MarketplaceMcpClient,
+import {
+  MarketplaceMcpError,
+  type MarketplaceExtensionInstallAuthorizeOutput,
+  type MarketplaceMcpClient,
 } from "@cinatra-ai/marketplace-mcp-client";
 import { vendorScopeOfPackage, type VerdaccioConfig } from "@cinatra-ai/registries";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -268,14 +269,38 @@ async function deriveResolutionFromContext(
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown when a grant refresh is needed but the marketplace ability is not
- * yet available. The batch saga treats this as ABORT + COMPENSATE — it never
- * proceeds into (or resumes) a batch under an expired root grant.
+ * Thrown when a grant refresh CANNOT be obtained for a transport/availability
+ * reason — the marketplace ability is unreachable, returns a 5xx/503, has no
+ * backing method (501), the response is malformed, or the refreshed grant's
+ * expiry is unparseable/non-future (fail-closed: a grant we cannot trust to be
+ * valid is treated as no grant). The batch saga treats this as ABORT +
+ * COMPENSATE — it never proceeds into (or resumes) a batch under an expired or
+ * untrustworthy root grant.
  */
 export class GrantRefreshUnavailableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GrantRefreshUnavailableError";
+  }
+}
+
+/**
+ * Thrown when the marketplace REFUSED to refresh the grant — a deliberate,
+ * auditable decision rather than an availability failure: closure_changed
+ * (409), rate_limited (429), or op_deadline/forbidden (403); OR the host's own
+ * post-refresh binding check failed (the refreshed closure / closure-hash /
+ * root version drifted from the authorized set). A refusal still ABORTS +
+ * COMPENSATES the batch — distinguishing it from {@link GrantRefreshUnavailableError}
+ * keeps the trust-floor decision auditable (the grant was actively denied, not
+ * merely unreachable) and never lets a refused/drifted grant look usable.
+ */
+export class GrantRefreshRefusedError extends Error {
+  /** The upstream HTTP status when the refusal came from the marketplace (else null). */
+  readonly httpStatus: number | null;
+  constructor(message: string, httpStatus: number | null = null) {
+    super(message);
+    this.name = "GrantRefreshRefusedError";
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -286,10 +311,15 @@ export class GrantRefreshUnavailableError extends Error {
  * own claims; the host never parses the token); the HOST-side bindings are
  * the root coordinates and the `closureHash` (stable hash over the sorted
  * name@version closure) the marketplace cross-checks before extending.
+ *
+ * The optional `client` keeps the seam injectable for tests; the batch saga
+ * calls it positionally as `(current, root)` and the default builds an HTTP
+ * client (an extra OPTIONAL param stays assignable to this type).
  */
 export type GatekeptGrantRefresh = (
   current: GatekeptInstallResolution,
   root: { packageName: string; version: string; closureHash: string },
+  client?: MarketplaceMcpClient,
 ) => Promise<GatekeptInstallResolution>;
 
 /**
@@ -308,29 +338,223 @@ export function computeClosureHash(
   return createHash("sha256").update(basis).digest("hex");
 }
 
+/** Refresh-margin guard: a refreshed grant must outlast the saga's near-expiry
+ *  margin, else the batch would immediately try to refresh again (or run under a
+ *  grant already inside the margin). Mirrors GRANT_REFRESH_MARGIN_MS in the saga. */
+const REFRESH_MIN_REMAINING_MS = 60_000;
+
+/** Sanity ceiling on a refreshed grant's remaining lifetime. Install grants are
+ *  SHORT-TTL (minutes); a remaining lifetime far beyond this signals a unit-drift
+ *  bug (e.g. a MILLISECOND-shaped `expires_at` re-multiplied by 1000 → a date
+ *  thousands of years out) or a clock-skew anomaly. Either way the grant is not
+ *  trustworthy as a short-lived install grant, so we fail closed. 24h is well
+ *  above any legitimate grant TTL yet far below the ms-misunit blowup. */
+const REFRESH_MAX_REMAINING_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Refresh the root install grant per the P2-5 contract: the marketplace
- * exposes a rate-limited grant-REFRESH ability bound to {subject, root
- * package, closure-hash, original grant jti} — it extends an in-progress
- * batch's read window WITHOUT enlarging any single token's replay window and
- * WITHOUT re-running entitlement (the closure must be byte-identical; a
- * changed closure refuses the refresh).
+ * grant-REFRESH ability (`extension_install_grant_refresh`, LIVE) is bound to
+ * {subject, root package, op, op_iat, closure-hash, original grant jti} — it
+ * extends an in-progress batch's read window WITHOUT enlarging any single
+ * token's replay window and WITHOUT re-running entitlement (the closure must be
+ * byte-identical; a changed closure refuses the refresh with 409).
  *
- * The ability is NOT yet live on the marketplace side (tracked as an
- * integration-proof obligation on the host issue): this default
- * implementation fails closed with {@link GrantRefreshUnavailableError}, and
- * the batch saga compensates. The seam is injectable so the batch's refresh
- * behavior (refresh-when-near-expiry, refuse-on-closure-drift) is test-pinned
- * against the contract today and binds to the real ability when it ships.
+ * This calls the real ability with the CURRENT opaque grant
+ * (`current.config.token`) and maps the refreshed output back into a
+ * {@link GatekeptInstallResolution}, FAILING CLOSED on any of:
+ *  - transport/5xx/501/malformed response → {@link GrantRefreshUnavailableError};
+ *  - marketplace refusal (409 closure_changed / 429 rate_limited / 403
+ *    op_deadline) → {@link GrantRefreshRefusedError};
+ *  - host-side binding drift (refreshed closure / closure-hash / root version ≠
+ *    the authorized set, or the bound `root.closureHash` ≠ the current closure)
+ *    → {@link GrantRefreshRefusedError};
+ *  - an unparseable / non-integer / non-future / still-inside-margin expiry, or
+ *    a missing required field → {@link GrantRefreshUnavailableError}.
+ *
+ * CRITICAL wire-shape reconciliation: the ability's `expires_at` is Unix epoch
+ * SECONDS (PHP `time()+GRANT_TTL`), but `GatekeptInstallAuthorizeMetadata.expiresAt`
+ * is an ISO string the batch saga parses with `Date.parse(...)`. We convert
+ * (`new Date(expires_at*1000).toISOString()`); a raw integer would `Date.parse`
+ * to `NaN`, skip the near-expiry refresh, and let the batch run until the grant
+ * expired mid-install — a real trust-floor weakening. `kind` is NOT in the
+ * refresh output, so it is preserved from the current authorize metadata.
+ *
+ * The seam stays injectable (`client`) for tests; the default builds the HTTP
+ * client from the instance's resolved marketplace bearer.
  */
 export async function refreshGatekeptInstallGrant(
-  _current: GatekeptInstallResolution,
+  current: GatekeptInstallResolution,
   root: { packageName: string; version: string; closureHash: string },
+  client?: MarketplaceMcpClient,
 ): Promise<GatekeptInstallResolution> {
-  throw new GrantRefreshUnavailableError(
-    `[gatekept-install] the root grant for ${root.packageName}@${root.version} needs a ` +
-      `refresh to continue this batch, but the marketplace grant-refresh ability is not ` +
-      `yet available on this host — aborting the batch (newly-installed members are ` +
-      `compensated; retry the install to authorize a fresh grant).`,
-  );
+  const where = `${root.packageName}@${root.version}`;
+  const compensationNote =
+    `aborting the batch (newly-installed members are compensated; retry the install ` +
+    `to authorize a fresh grant)`;
+
+  // BINDING PRECONDITION: the bound hash the caller asks us to refresh under must
+  // describe the CURRENT authorized closure — a mismatch means the saga's view of
+  // the closure already drifted; refuse before presenting anything to the market.
+  const currentClosureHash = computeClosureHash(current.authorize.closure);
+  if (root.closureHash !== currentClosureHash) {
+    throw new GrantRefreshRefusedError(
+      `[gatekept-install] refusing to refresh the grant for ${where}: the requested ` +
+        `binding closure-hash does not match the current authorized closure — ${compensationNote}.`,
+    );
+  }
+
+  // The presented grant is the CURRENT opaque token. A null/empty token means
+  // there is no grant to refresh — fail closed rather than present garbage.
+  const currentGrant = current.config.token;
+  if (typeof currentGrant !== "string" || currentGrant.trim() === "") {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] cannot refresh the grant for ${where}: the current resolution has ` +
+        `no install grant to present — failing closed; ${compensationNote}.`,
+    );
+  }
+
+  const mcpClient = client ?? buildDefaultClient();
+
+  let out: import("@cinatra-ai/marketplace-mcp-client").MarketplaceExtensionInstallGrantRefreshOutput;
+  try {
+    out = await mcpClient.extensionInstallGrantRefresh({ grant: currentGrant });
+  } catch (e) {
+    if (e instanceof MarketplaceMcpError) {
+      // 409 closure_changed / 429 rate_limited / 403 op_deadline → an auditable
+      // REFUSAL. Everything else (5xx/503, 501 no-method, transport, unknown) is
+      // an availability failure. Both abort+compensate; the class distinguishes
+      // "actively denied" from "could not reach".
+      if (e.httpStatus === 409 || e.httpStatus === 429 || e.httpStatus === 403) {
+        throw new GrantRefreshRefusedError(
+          `[gatekept-install] the marketplace REFUSED to refresh the grant for ${where} ` +
+            `(status ${e.httpStatus}: ${e.message}) — ${compensationNote}.`,
+          e.httpStatus,
+        );
+      }
+      throw new GrantRefreshUnavailableError(
+        `[gatekept-install] the root grant for ${where} needs a refresh to continue this ` +
+          `batch, but the marketplace grant-refresh ability returned an error ` +
+          `(status ${e.httpStatus}: ${e.message}) — ${compensationNote}.`,
+      );
+    }
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the root grant for ${where} needs a refresh to continue this ` +
+        `batch, but the marketplace grant-refresh ability could not be reached ` +
+        `(${e instanceof Error ? e.message : String(e)}) — ${compensationNote}.`,
+    );
+  }
+
+  // ---- Validate the refreshed grant before producing a usable resolution ----
+
+  // Required runtime strings must be present + non-empty.
+  for (const [field, value] of [
+    ["grant", out.grant],
+    ["broker_base_url", out.broker_base_url],
+    ["resolved_version", out.resolved_version],
+    ["op", out.op],
+  ] as const) {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new GrantRefreshUnavailableError(
+        `[gatekept-install] the grant-refresh response for ${where} is missing a usable ` +
+          `"${field}" — failing closed; ${compensationNote}.`,
+      );
+    }
+  }
+
+  // RE-MINT invariant: a refresh MUST produce a FRESH grant (new iat/exp/jti). If
+  // the ability echoes the SAME opaque token back, treat it as no refresh — a
+  // near-expiry current grant dressed with future metadata must NOT look usable.
+  if (out.grant === currentGrant) {
+    throw new GrantRefreshRefusedError(
+      `[gatekept-install] the grant-refresh for ${where} returned the SAME grant that was ` +
+        `presented — refusing (a refresh must re-mint a fresh token); ${compensationNote}.`,
+    );
+  }
+
+  // ROOT-VERSION drift: refresh must NOT change the authorized version (the saga
+  // catches a changed closure ARRAY but not a same-closure root-version drift).
+  if (out.resolved_version !== current.authorize.resolvedVersion) {
+    throw new GrantRefreshRefusedError(
+      `[gatekept-install] the grant-refresh for ${where} returned resolved_version ` +
+        `"${out.resolved_version}" but the batch authorized "${current.authorize.resolvedVersion}" ` +
+        `— refusing (a refresh must re-mint the SAME authorization); ${compensationNote}.`,
+    );
+  }
+
+  // CLOSURE drift: the refreshed closure must hash-equal the authorized closure,
+  // AND the marketplace's own bound closure_hash must equal that hash. Validate
+  // the SHAPE first so a malformed (non-array) closure fails closed as documented
+  // (an Unavailable response), not as a raw TypeError from the hash basis.
+  if (!Array.isArray(out.closure)) {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the grant-refresh response for ${where} returned a malformed closure ` +
+        `(not an array) — failing closed; ${compensationNote}.`,
+    );
+  }
+  const refreshedClosureHash = computeClosureHash(out.closure);
+  if (refreshedClosureHash !== currentClosureHash) {
+    throw new GrantRefreshRefusedError(
+      `[gatekept-install] the grant-refresh for ${where} returned a DIFFERENT closure than ` +
+        `the authorized set — refusing (the closure-hash binding must hold); ${compensationNote}.`,
+    );
+  }
+  if (out.closure_hash !== currentClosureHash) {
+    throw new GrantRefreshRefusedError(
+      `[gatekept-install] the grant-refresh for ${where} reported a closure_hash that does ` +
+        `not match the authorized closure — refusing; ${compensationNote}.`,
+    );
+  }
+
+  // EXPIRY: epoch SECONDS → ISO. Fail closed on non-integer / non-finite /
+  // non-future / still-inside-the-refresh-margin (an immediately-stale grant is
+  // no better than an expired one).
+  if (typeof out.expires_at !== "number" || !Number.isInteger(out.expires_at) || out.expires_at <= 0) {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the grant-refresh for ${where} returned an unparseable expiry ` +
+        `(${String(out.expires_at)}) — failing closed; ${compensationNote}.`,
+    );
+  }
+  const expiresAtMs = out.expires_at * 1000;
+  const expiresDate = new Date(expiresAtMs);
+  if (Number.isNaN(expiresDate.getTime())) {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the grant-refresh for ${where} returned an invalid expiry ` +
+        `(${String(out.expires_at)}) — failing closed; ${compensationNote}.`,
+    );
+  }
+  const remainingMs = expiresAtMs - Date.now();
+  if (remainingMs < REFRESH_MIN_REMAINING_MS) {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the grant-refresh for ${where} returned a grant already at/inside ` +
+        `the near-expiry margin — failing closed (refusing to proceed under a stale grant); ` +
+        `${compensationNote}.`,
+    );
+  }
+  if (remainingMs > REFRESH_MAX_REMAINING_MS) {
+    throw new GrantRefreshUnavailableError(
+      `[gatekept-install] the grant-refresh for ${where} returned an implausibly far-future expiry ` +
+        `(${String(out.expires_at)}s) — failing closed (likely a unit/skew anomaly; an install grant ` +
+        `is short-lived); ${compensationNote}.`,
+    );
+  }
+
+  const config: VerdaccioConfig = {
+    registryUrl: out.broker_base_url,
+    // The REFRESH is the ROOT grant; keep the root's scope. Members derive their
+    // own scope from the broker base + this token via deriveMemberInstallConfig.
+    packageScope: current.config.packageScope,
+    token: out.grant,
+    uiUrl: null,
+  };
+
+  return {
+    config,
+    authorize: {
+      // Refresh has NO kind — preserve the current authorize metadata's kind.
+      kind: current.authorize.kind,
+      resolvedVersion: out.resolved_version,
+      closure: out.closure,
+      expiresAt: expiresDate.toISOString(),
+    },
+  };
 }

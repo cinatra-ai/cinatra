@@ -30,6 +30,11 @@ import type {
 import {
   isGatekeptInstallEnabled,
   resolveGatekeptInstallConfig,
+  refreshGatekeptInstallGrant,
+  computeClosureHash,
+  GrantRefreshUnavailableError,
+  GrantRefreshRefusedError,
+  type GatekeptInstallResolution,
 } from "@/lib/gatekept-install";
 
 /**
@@ -269,5 +274,106 @@ describe("resolveGatekeptInstallConfig", () => {
     expect(resolveTokenMock).toHaveBeenCalledWith({ instanceNamespace: "acme" });
     expect(createHttpClientMock).toHaveBeenCalledWith({ token: "instance-bearer-token" });
     expect(out.config.token).toBe("default.grant");
+  });
+});
+
+describe("refreshGatekeptInstallGrant — default-client wiring", () => {
+  function currentResolution(): GatekeptInstallResolution {
+    return {
+      config: {
+        registryUrl: "https://broker.example/install",
+        packageScope: "@scope",
+        token: "current-opaque-grant",
+        uiUrl: null,
+      },
+      authorize: {
+        kind: "connector",
+        resolvedVersion: "1.2.3",
+        closure: [{ name: "@scope/dep", version: "1.0.0" }],
+        expiresAt: "2026-06-04T00:02:00Z",
+      },
+    };
+  }
+
+  it("builds the default HTTP client and presents the CURRENT grant to the refresh ability", async () => {
+    readInstanceIdentityMock.mockReturnValue({ instanceNamespace: "acme" });
+    resolveTokenMock.mockReturnValue("instance-bearer-token");
+
+    const current = currentResolution();
+    const closureHash = computeClosureHash(current.authorize.closure);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const refreshSpy = vi.fn(async () => ({
+      grant: "refreshed-opaque-grant",
+      resolved_version: "1.2.3",
+      broker_base_url: "https://broker.example/install",
+      closure: [{ name: "@scope/dep", version: "1.0.0" }],
+      expires_at: nowSec + 3600,
+      closure_hash: closureHash,
+      op: "op-xyz",
+    }));
+    createHttpClientMock.mockReturnValue({ extensionInstallGrantRefresh: refreshSpy });
+
+    const res = await refreshGatekeptInstallGrant(current, {
+      packageName: "@scope/ext",
+      version: "1.2.3",
+      closureHash,
+    });
+
+    // Default client built from the resolved instance bearer.
+    expect(resolveTokenMock).toHaveBeenCalledWith({ instanceNamespace: "acme" });
+    expect(createHttpClientMock).toHaveBeenCalledWith({ token: "instance-bearer-token" });
+    // The CURRENT opaque grant was presented (never decoded).
+    expect(refreshSpy).toHaveBeenCalledWith({ grant: "current-opaque-grant" });
+    // Mapped result.
+    expect(res.config.token).toBe("refreshed-opaque-grant");
+    expect(res.authorize.kind).toBe("connector"); // preserved from current
+    expect(Number.isNaN(Date.parse(res.authorize.expiresAt))).toBe(false);
+  });
+
+  // Status-class mapping lives HERE (not in extension-install-grant-context.test.ts)
+  // because it is the allowlisted call site for the vendored MarketplaceMcpError.
+  function refreshClientThrowing(err: unknown): MarketplaceMcpClient {
+    return {
+      extensionInstallGrantRefresh: vi.fn(async () => {
+        throw err;
+      }),
+    } as unknown as MarketplaceMcpClient;
+  }
+
+  it.each([
+    [409, "closure_changed"],
+    [429, "rate_limited"],
+    [403, "op_deadline"],
+  ])("a %s MarketplaceMcpError maps to GrantRefreshRefusedError (status preserved)", async (status, code) => {
+    const current = currentResolution();
+    const binding = {
+      packageName: "@scope/ext",
+      version: "1.2.3",
+      closureHash: computeClosureHash(current.authorize.closure),
+    };
+    const err = await refreshGatekeptInstallGrant(
+      current,
+      binding,
+      refreshClientThrowing(new MarketplaceMcpError(code, status, "")),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(GrantRefreshRefusedError);
+    expect((err as GrantRefreshRefusedError).httpStatus).toBe(status);
+  });
+
+  it("a 503 internal MarketplaceMcpError maps to GrantRefreshUnavailableError (not a refusal)", async () => {
+    const current = currentResolution();
+    const binding = {
+      packageName: "@scope/ext",
+      version: "1.2.3",
+      closureHash: computeClosureHash(current.authorize.closure),
+    };
+    const err = await refreshGatekeptInstallGrant(
+      current,
+      binding,
+      refreshClientThrowing(new MarketplaceMcpError("internal", 503, "")),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(GrantRefreshUnavailableError);
+    expect((err as Error).message).toContain("@scope/ext@1.2.3");
+    expect((err as Error).message).toContain("compensated");
   });
 });

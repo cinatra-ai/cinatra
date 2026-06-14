@@ -1,7 +1,8 @@
-// #180 PR-2: the batch grant context — `resolveGatekeptInstallConfig` DERIVES
-// member resolutions from the ROOT grant inside a batch (per-member authorize
-// is structurally impossible), and the P2-5 refresh seam fails closed until
-// the marketplace ability ships.
+// #180 PR-2 / #162: the batch grant context — `resolveGatekeptInstallConfig`
+// DERIVES member resolutions from the ROOT grant inside a batch (per-member
+// authorize is structurally impossible), and the P2-5 refresh seam calls the
+// LIVE marketplace ability, mapping epoch-seconds → ISO, preserving kind, and
+// failing closed on drift / refusal / unparseable expiry.
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -9,6 +10,7 @@ import {
   refreshGatekeptInstallGrant,
   computeClosureHash,
   GrantRefreshUnavailableError,
+  GrantRefreshRefusedError,
   type GatekeptInstallResolution,
 } from "@/lib/gatekept-install";
 import {
@@ -52,6 +54,18 @@ function forbiddenClient(): MarketplaceMcpClient {
     extensionGet: vi.fn(async () => {
       throw new Error("FORBIDDEN: extensionGet called inside an active batch grant context");
     }),
+  } as unknown as MarketplaceMcpClient;
+}
+
+/**
+ * A marketplace client stub exposing ONLY `extensionInstallGrantRefresh`, for
+ * the refresh-seam tests. `refresh` is invoked with the presented-grant input.
+ */
+function refreshClient(
+  refresh: (input: { grant: string }) => Promise<unknown>,
+): MarketplaceMcpClient {
+  return {
+    extensionInstallGrantRefresh: vi.fn(refresh),
   } as unknown as MarketplaceMcpClient;
 }
 
@@ -145,19 +159,155 @@ describe("computeClosureHash (P2-5 binding basis)", () => {
   });
 });
 
-describe("refreshGatekeptInstallGrant (P2-5 — marketplace ability not yet live)", () => {
-  it("fails CLOSED with GrantRefreshUnavailableError naming the root and the compensation consequence", async () => {
-    try {
-      await refreshGatekeptInstallGrant(rootResolution(), {
-        packageName: ROOT,
-        version: "2.0.0",
-        closureHash: computeClosureHash(rootResolution().authorize.closure),
-      });
-      expect.unreachable("must fail closed");
-    } catch (e) {
-      expect(e).toBeInstanceOf(GrantRefreshUnavailableError);
-      expect((e as Error).message).toContain(`${ROOT}@2.0.0`);
-      expect((e as Error).message).toContain("compensated");
-    }
+describe("refreshGatekeptInstallGrant (P2-5 — calls the LIVE marketplace ability)", () => {
+  const CLOSURE_HASH = computeClosureHash(rootResolution().authorize.closure);
+  const rootBinding = { packageName: ROOT, version: "2.0.0", closureHash: CLOSURE_HASH };
+
+  /** A well-formed refreshed-output factory (epoch SECONDS expiry, same closure). */
+  function refreshedOut(over: Partial<Record<string, unknown>> = {}) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    return {
+      grant: "opaque-refreshed-grant",
+      resolved_version: "2.0.0",
+      broker_base_url: "https://broker.example/install",
+      closure: [{ name: "@cinatra-ai/member", version: "1.1.0" }],
+      expires_at: nowSec + 3600,
+      closure_hash: CLOSURE_HASH,
+      op: "op-123",
+      ...over,
+    };
+  }
+
+  it("SUCCESS: maps epoch-seconds expiry → ISO, preserves kind, presents the CURRENT grant, returns the new token/broker", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const client = refreshClient(async () => refreshedOut({ expires_at: nowSec + 3600 }));
+    const res = await refreshGatekeptInstallGrant(rootResolution(), rootBinding, client);
+
+    // Presented the CURRENT opaque grant (config.token), not anything decoded.
+    expect(client.extensionInstallGrantRefresh).toHaveBeenCalledWith({
+      grant: "opaque-root-grant",
+    });
+    // New token + broker mapped into the resolution.
+    expect(res.config.token).toBe("opaque-refreshed-grant");
+    expect(res.config.registryUrl).toBe("https://broker.example/install");
+    expect(res.config.packageScope).toBe("@cinatra-ai"); // root scope preserved
+    // kind preserved from the CURRENT authorize metadata (refresh has no kind).
+    expect(res.authorize.kind).toBe("agent");
+    expect(res.authorize.resolvedVersion).toBe("2.0.0");
+    // expires_at converted to an ISO string the saga's Date.parse can read.
+    expect(typeof res.authorize.expiresAt).toBe("string");
+    expect(Number.isNaN(Date.parse(res.authorize.expiresAt))).toBe(false);
+    expect(Date.parse(res.authorize.expiresAt)).toBe((nowSec + 3600) * 1000);
   });
+
+  it("CLOSURE drift (different closure array) is REFUSED (GrantRefreshRefusedError)", async () => {
+    const client = refreshClient(async () =>
+      refreshedOut({
+        closure: [{ name: "@cinatra-ai/member", version: "9.9.9" }],
+        // The server even reports a matching hash for its (drifted) closure —
+        // the host still refuses because it ≠ the AUTHORIZED closure's hash.
+        closure_hash: computeClosureHash([{ name: "@cinatra-ai/member", version: "9.9.9" }]),
+      }),
+    );
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshRefusedError);
+  });
+
+  it("ROOT-VERSION drift (same closure, different resolved_version) is REFUSED", async () => {
+    const client = refreshClient(async () => refreshedOut({ resolved_version: "3.0.0" }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshRefusedError);
+  });
+
+  it("server closure_hash mismatch (closure array OK) is REFUSED", async () => {
+    const client = refreshClient(async () => refreshedOut({ closure_hash: "deadbeef" }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshRefusedError);
+  });
+
+  it("a requested binding hash that does not describe the current closure is REFUSED (no call to the market)", async () => {
+    const refreshFn = vi.fn(async () => refreshedOut());
+    const client = refreshClient(refreshFn);
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), { ...rootBinding, closureHash: "wrong" }, client),
+    ).rejects.toBeInstanceOf(GrantRefreshRefusedError);
+    expect(refreshFn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["zero", 0],
+    ["negative", -1],
+    ["non-integer", 1.5],
+    ["NaN", Number.NaN],
+  ])("invalid expiry (%s) FAILS CLOSED with GrantRefreshUnavailableError", async (_label, bad) => {
+    const client = refreshClient(async () => refreshedOut({ expires_at: bad }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  it("an expiry already inside the near-expiry margin FAILS CLOSED (refuses a stale grant)", async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const client = refreshClient(async () => refreshedOut({ expires_at: nowSec + 1 }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  it("a MILLISECOND-shaped expires_at FAILS CLOSED (implausibly far-future after *1000)", async () => {
+    // A ms epoch (~1.78e12) re-multiplied by 1000 lands ~50,000 years out.
+    const client = refreshClient(async () => refreshedOut({ expires_at: Date.now() }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  it("a refresh that echoes the SAME grant back is REFUSED (re-mint invariant)", async () => {
+    const client = refreshClient(async () => refreshedOut({ grant: "opaque-root-grant" }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshRefusedError);
+  });
+
+  it("a malformed (non-array) closure FAILS CLOSED with GrantRefreshUnavailableError (not a raw TypeError)", async () => {
+    const client = refreshClient(async () =>
+      refreshedOut({ closure: null as unknown as [] }),
+    );
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  it.each([
+    ["grant", ""],
+    ["broker_base_url", ""],
+    ["resolved_version", ""],
+    ["op", ""],
+  ])("a missing/empty %s FAILS CLOSED with GrantRefreshUnavailableError", async (field, value) => {
+    // resolved_version must stay valid for the version check to be reached; when
+    // testing resolved_version itself an empty string trips the required-string
+    // guard first, which is the intended fail-closed.
+    const client = refreshClient(async () => refreshedOut({ [field]: value }));
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  it("a non-MCP transport throw is UNAVAILABLE", async () => {
+    const client = refreshClient(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    await expect(
+      refreshGatekeptInstallGrant(rootResolution(), rootBinding, client),
+    ).rejects.toBeInstanceOf(GrantRefreshUnavailableError);
+  });
+
+  // NOTE: the marketplace-error status-class mapping (409/429/403 → refused,
+  // 503 → unavailable) is exercised in gatekept-install.test.ts, which is the
+  // allowlisted call site for the vendored MarketplaceMcpError type (this file
+  // deliberately avoids importing the vendored package — see the
+  // marketplace-mcp-client-banned regression guard).
 });

@@ -492,7 +492,19 @@ export async function installExtensionWithDependencies(
         // P2-5 GRANT TTL: refresh near expiry; refusal/unavailability aborts.
         if (resolution) {
           const expiresAt = Date.parse(resolution.authorize.expiresAt);
-          if (Number.isFinite(expiresAt) && expiresAt - deps.now() < GRANT_REFRESH_MARGIN_MS) {
+          // FAIL CLOSED on an unparseable expiry: we cannot prove the grant is
+          // still valid, so we must NOT proceed under it. (An unparseable expiry
+          // would otherwise skip the near-expiry check and run the batch until
+          // the grant expired mid-install — a trust-floor weakening.)
+          if (!Number.isFinite(expiresAt)) {
+            throw new Error(
+              `[extension-install-batch] the active grant for ${input.packageName}@${rootVersion} ` +
+                `has an unparseable expiry (${String(resolution.authorize.expiresAt)}) — refusing ` +
+                `to continue the batch (newly-installed members are compensated; retry to ` +
+                `authorize a fresh grant).`,
+            );
+          }
+          if (expiresAt - deps.now() < GRANT_REFRESH_MARGIN_MS) {
             const { computeClosureHash } = await import("@/lib/gatekept-install");
             const refreshed = await deps.refreshGrant(resolution, {
               packageName: input.packageName,

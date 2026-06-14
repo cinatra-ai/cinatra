@@ -21,6 +21,8 @@ import type {
   MarketplaceExtensionGetOutput,
   MarketplaceExtensionInstallAuthorizeInput,
   MarketplaceExtensionInstallAuthorizeOutput,
+  MarketplaceExtensionInstallGrantRefreshInput,
+  MarketplaceExtensionInstallGrantRefreshOutput,
   MarketplaceExtensionListInput,
   MarketplaceExtensionListOutput,
   MarketplaceExtensionSubmissionApproveInput,
@@ -84,6 +86,21 @@ export interface MarketplaceMcpClient {
   extensionInstallAuthorize(
     input: MarketplaceExtensionInstallAuthorizeInput,
   ): Promise<MarketplaceExtensionInstallAuthorizeOutput>;
+  /**
+   * Marketplace-gatekept install grant REFRESH (#162 / P2-5). Extends an
+   * in-progress batch's read window by re-minting the ROOT grant bound to the
+   * SAME {subject, root, op, op_iat, closure_hash}. Entitlement is NOT re-run;
+   * a changed closure is refused (409). The presented `grant` is the CURRENT
+   * opaque grant; the returned `grant` is opaque too.
+   *
+   * NOTE the wire-shape differences vs `extensionInstallAuthorize`: refresh has
+   * NO `kind`, and its `expires_at` is an INTEGER (Unix epoch SECONDS), not an
+   * ISO string. Callers (gatekept-install) reconcile both before mapping into a
+   * `GatekeptInstallResolution`.
+   */
+  extensionInstallGrantRefresh(
+    input: MarketplaceExtensionInstallGrantRefreshInput,
+  ): Promise<MarketplaceExtensionInstallGrantRefreshOutput>;
   vendorGet(input: MarketplaceVendorGetInput): Promise<MarketplaceVendorGetOutput>;
   vendorApply(input: MarketplaceVendorApplyInput): Promise<MarketplaceVendorApplyOutput>;
   packageSyncFromRegistry(
@@ -189,6 +206,19 @@ export interface MockFixtures {
   >;
   /** Optional spy — invoked on every `extensionInstallAuthorize` call. */
   onInstallAuthorize?: (input: MarketplaceExtensionInstallAuthorizeInput) => void;
+  /**
+   * Grant-refresh fixtures for `extensionInstallGrantRefresh`, keyed by the
+   * presented grant (`input.grant`). When no fixture matches, the mock
+   * auto-extends a deterministic stub. Supply a fixture to assert the refreshed
+   * closure/expiry, or a `MarketplaceMcpError` to simulate a refusal (it is
+   * thrown — e.g. `httpStatus 409` closure_changed, `429` rate_limited).
+   */
+  installGrantRefreshes?: Record<
+    string,
+    MarketplaceExtensionInstallGrantRefreshOutput | MarketplaceMcpError
+  >;
+  /** Optional spy — invoked on every `extensionInstallGrantRefresh` call. */
+  onInstallGrantRefresh?: (input: MarketplaceExtensionInstallGrantRefreshInput) => void;
 }
 
 const DEFAULT_SELF: MarketplaceVendorGetSelfOutput = {
@@ -259,6 +289,31 @@ export function createMockMarketplaceMcpClient(fixtures: MockFixtures = {}): Mar
         broker_base_url: "https://marketplace.cinatra.ai/install/v1",
         closure: [],
         expires_at: new Date(now + 120_000).toISOString(),
+      };
+    },
+    async extensionInstallGrantRefresh(input) {
+      fixtures.onInstallGrantRefresh?.(input);
+      const fixture = fixtures.installGrantRefreshes?.[input.grant];
+      if (fixture instanceof MarketplaceMcpError) {
+        throw fixture;
+      }
+      if (fixture) {
+        return fixture;
+      }
+      // No fixture → auto-extend a deterministic stub. `expires_at` is Unix epoch
+      // SECONDS (matching the PHP ability), NOT an ISO string. The empty-closure
+      // `closure_hash` is the sha256 of the empty closure basis (the host
+      // recomputes + cross-checks it).
+      const nowSec = Math.floor(Date.now() / 1000);
+      return {
+        grant: `mock-refreshed-grant.${input.grant}.${nowSec}`,
+        resolved_version: "1.0.0",
+        broker_base_url: "https://marketplace.cinatra.ai/install/v1",
+        closure: [],
+        expires_at: nowSec + 120,
+        // sha256("") — the basis for an empty (newline-joined) closure.
+        closure_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        op: `mock-op.${input.grant}`,
       };
     },
     async vendorGet(input) {

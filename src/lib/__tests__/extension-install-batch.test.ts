@@ -15,6 +15,7 @@ import type {
 } from "@/lib/extension-install-batch-ops";
 import type { DependencyInstallPlan, PlannedMember } from "@/lib/extension-dependency-plan";
 import type { GatekeptInstallResolution } from "@/lib/gatekept-install";
+import { GrantRefreshRefusedError } from "@/lib/gatekept-install";
 import type { Actor } from "@cinatra-ai/extension-types";
 
 const actor: Actor = { actorType: "human", source: "ui", userId: "u1", orgId: null };
@@ -417,6 +418,57 @@ describe("installExtensionWithDependencies — grant TTL / refresh (P2-5)", () =
     await expect(
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
+  });
+
+  it("a rate-limited refresh refusal near expiry ⇒ abort + compensate (never proceeds)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() }),
+      refreshGrant: async () => {
+        throw new GrantRefreshRefusedError("rate_limited", 429);
+      },
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Refusal hits the FIRST member's TTL check → nothing installed yet.
+    expect(h.events.filter((e) => e.startsWith("install:"))).toEqual([]);
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(["compensated", "failed"]).toContain(batch.phase);
+  });
+
+  it("an op-deadline refresh refusal near expiry ⇒ abort + compensate", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() }),
+      refreshGrant: async () => {
+        throw new GrantRefreshRefusedError("op_deadline", 403);
+      },
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+  });
+
+  it("an UNPARSEABLE active grant expiry ⇒ abort + compensate (never proceeds; refresh NOT even attempted)", async () => {
+    const refresh = vi.fn(async () => resolution());
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      gatekept: true,
+      // A garbage expiry that Date.parse → NaN: the saga must fail closed, NOT
+      // silently skip the TTL check and run under an unprovable grant.
+      authorize: async () => resolution({ expiresAt: "not-a-date" }),
+      refreshGrant: refresh,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    expect(h.events.filter((e) => e.startsWith("install:"))).toEqual([]);
+    expect(refresh).not.toHaveBeenCalled();
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(["compensated", "failed"]).toContain(batch.phase);
   });
 });
 

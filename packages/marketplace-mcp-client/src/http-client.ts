@@ -30,6 +30,8 @@ import type {
   MarketplaceExtensionGetWire,
   MarketplaceExtensionInstallAuthorizeInput,
   MarketplaceExtensionInstallAuthorizeOutput,
+  MarketplaceExtensionInstallGrantRefreshInput,
+  MarketplaceExtensionInstallGrantRefreshOutput,
   MarketplaceExtensionListInput,
   MarketplaceExtensionListOutput,
   MarketplaceExtensionSubmissionApproveInput,
@@ -250,6 +252,18 @@ async function callMarketplaceTool<TOutput>(
   abilityKey: string,
   args: Record<string, unknown>,
   opts: HttpMarketplaceClientOptions,
+  /**
+   * Extra HTTP statuses (beyond the default 404 not-found signal) that this
+   * tool wants PRESERVED on the thrown `MarketplaceMcpError.httpStatus` when the
+   * ability returns a structured error. Without this, every non-404 tool error
+   * collapses to 502 — which is correct for the catalog/detail surfaces but
+   * loses the refusal class (409 closure_changed / 429 rate_limited / 403
+   * op_deadline / 503 internal) the gatekept grant-refresh seam must distinguish
+   * to abort-and-compensate auditably. Per-method (NOT a shared widen), so the
+   * conservative 502 default — and the `extensionGet` 403→502 regression guard —
+   * is untouched.
+   */
+  preserveErrorStatuses: readonly number[] = [],
 ): Promise<TOutput> {
   const baseUrl = resolveMarketplaceBaseUrl(opts.baseUrl);
   const endpoint = new URL(baseUrl + MCP_ROUTE);
@@ -264,11 +278,19 @@ async function callMarketplaceTool<TOutput>(
     if ((result as { isError?: boolean }).isError) {
       // Preserve a genuine not-found signal as httpStatus 404 (the detail page
       // relies on MarketplaceMcpError.httpStatus === 404 to call notFound() for
-      // an unlisted/private/missing package). Every other tool error stays 502.
-      // Conservative: only a structured 404 / explicit not-found marker maps to
-      // 404 — ambiguous errors are NOT downgraded.
+      // an unlisted/private/missing package). Beyond 404, a method MAY opt-in
+      // (via `preserveErrorStatuses`) to keep specific structured statuses; every
+      // other tool error stays 502. Conservative: only a structured status /
+      // explicit not-found marker is honored — ambiguous errors are NOT mapped.
       const detail = extractText(result) ?? "";
-      const httpStatus = isNotFoundError(result) ? 404 : 502;
+      const allowed = new Set([404, ...preserveErrorStatuses]);
+      const structuredStatus = extractStructuredStatus(result);
+      const httpStatus =
+        structuredStatus != null && allowed.has(structuredStatus)
+          ? structuredStatus
+          : isNotFoundError(result)
+            ? 404
+            : 502;
       throw new MarketplaceMcpError(
         `Marketplace ${abilityKey} returned an error: ${detail || "unknown"}`,
         httpStatus,
@@ -399,6 +421,49 @@ function matchesNotFoundShape(candidate: unknown): boolean {
 }
 
 /**
+ * Extract a numeric HTTP status from an `isError` MCP result's STRUCTURED error
+ * metadata — the same conservative traversal as {@link isNotFoundError} (the
+ * result envelope, its `structuredContent`, and a JSON-parsed text block; the
+ * WP `data`/`error` nestings), but returning the status value rather than a
+ * boolean. Used to PRESERVE a method's opted-in refusal statuses (e.g. the
+ * grant-refresh seam's 409/429/403/503). Prose text is intentionally NOT
+ * scanned — only structured `status`/`http_status`/`statusCode` fields count
+ * (WP_Error places the HTTP status under `data.status`).
+ */
+function extractStructuredStatus(result: unknown): number | null {
+  const direct =
+    structuredStatusOf((result as { structuredContent?: unknown }).structuredContent) ??
+    structuredStatusOf(result);
+  if (direct != null) {
+    return direct;
+  }
+  const text = extractText(result);
+  if (text != null) {
+    try {
+      return structuredStatusOf(JSON.parse(text) as unknown);
+    } catch {
+      // Not JSON — no prose scan.
+    }
+  }
+  return null;
+}
+
+/** First numeric `status`/`statusCode`/`http_status` over a candidate + its `data`/`error` nestings. */
+function structuredStatusOf(candidate: unknown): number | null {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const obj = candidate as Record<string, unknown>;
+  for (const key of ["status", "statusCode", "httpStatus", "http_status"]) {
+    const value = obj[key];
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+  }
+  return structuredStatusOf(obj.data) ?? structuredStatusOf(obj.error);
+}
+
+/**
  * Map the snake_case `extension_get` ability wire output to the camelCase
  * {@link MarketplaceExtensionGetOutput} the cinatra-side consumers read (the
  * detail page reads `kind` / `latestVersion` / `currentVisibility`; gatekept-
@@ -498,6 +563,20 @@ export function createHttpMarketplaceMcpClient(
         "extension_install_authorize",
         input as unknown as Record<string, unknown>,
         opts,
+      ),
+
+    // Marketplace-gatekept install grant REFRESH. Tool
+    // `cinatra-extension-install-grant-refresh`. Returns a re-minted opaque
+    // grant. The refusal classes are PRESERVED on `MarketplaceMcpError.httpStatus`
+    // (409 closure_changed / 429 rate_limited / 403 op_deadline / 503 internal)
+    // so gatekept-install can distinguish a REFUSAL (auditable) from transport
+    // UNAVAILABILITY — both abort+compensate the batch.
+    extensionInstallGrantRefresh: (input: MarketplaceExtensionInstallGrantRefreshInput) =>
+      callMarketplaceTool<MarketplaceExtensionInstallGrantRefreshOutput>(
+        "extension_install_grant_refresh",
+        input as unknown as Record<string, unknown>,
+        opts,
+        [403, 404, 409, 429, 503],
       ),
 
     vendorApply: (input: MarketplaceVendorApplyInput) =>

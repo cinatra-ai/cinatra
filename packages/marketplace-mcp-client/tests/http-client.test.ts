@@ -557,6 +557,96 @@ describe("createHttpMarketplaceMcpClient", () => {
     ).rejects.toBeInstanceOf(MarketplaceMcpError);
   });
 
+  it("extensionInstallGrantRefresh targets cinatra-extension-install-grant-refresh with {grant} and maps the integer expiry", async () => {
+    callToolMock.mockResolvedValue({
+      structuredContent: {
+        grant: "refreshed.opaque.grant",
+        resolved_version: "1.2.3",
+        broker_base_url: "https://marketplace.cinatra.ai/install/v1",
+        closure: [{ name: "@scope/dep", version: "1.0.0" }],
+        expires_at: 1_780_000_000,
+        closure_hash: "a".repeat(64),
+        op: "op-123",
+      },
+    });
+    const client = createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" });
+    const out = await client.extensionInstallGrantRefresh({ grant: "current.opaque.grant" });
+    expect(callToolMock).toHaveBeenCalledWith({
+      name: "cinatra-extension-install-grant-refresh",
+      arguments: { grant: "current.opaque.grant" },
+    });
+    expect(out.grant).toBe("refreshed.opaque.grant");
+    // expires_at is an INTEGER (epoch seconds), not an ISO string.
+    expect(out.expires_at).toBe(1_780_000_000);
+    expect(out.closure_hash).toBe("a".repeat(64));
+    expect(out.op).toBe("op-123");
+  });
+
+  it("extensionInstallGrantRefresh preserves a 409 closure_changed on httpStatus", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: "cinatra.install_closure_changed", data: { status: 409 } },
+      content: [{ type: "text", text: "closure changed" }],
+    });
+    const promise = createHttpMarketplaceMcpClient({
+      baseUrl: "https://mk.test",
+    }).extensionInstallGrantRefresh({ grant: "g" });
+    await expect(promise).rejects.toBeInstanceOf(MarketplaceMcpError);
+    await expect(promise).rejects.toMatchObject({ httpStatus: 409 });
+  });
+
+  it("extensionInstallGrantRefresh preserves a 429 rate_limited on httpStatus", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { code: "cinatra.install_refresh_rate_limited", status: 429 },
+      content: [{ type: "text", text: "rate limited" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionInstallGrantRefresh({
+        grant: "g",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 429 });
+  });
+
+  it("extensionInstallGrantRefresh preserves a 403 op_deadline on httpStatus", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      content: [{ type: "text", text: '{"status":403,"code":"op_deadline"}' }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionInstallGrantRefresh({
+        grant: "g",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+
+  it("extensionInstallGrantRefresh preserves a 503 internal on httpStatus", async () => {
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { status: 503, code: "internal" },
+      content: [{ type: "text", text: "internal" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionInstallGrantRefresh({
+        grant: "g",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 503 });
+  });
+
+  it("extensionInstallGrantRefresh keeps an UNLISTED status at 502 (only the allowlist is preserved)", async () => {
+    // 418 is not in the refresh allowlist {403,404,409,429,503} → collapses to 502.
+    callToolMock.mockResolvedValue({
+      isError: true,
+      structuredContent: { status: 418, code: "teapot" },
+      content: [{ type: "text", text: "teapot" }],
+    });
+    await expect(
+      createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).extensionInstallGrantRefresh({
+        grant: "g",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 502 });
+  });
+
   it("instanceAttachSelf forwards the gatekept_install flag verbatim when supplied", async () => {
     callToolMock.mockResolvedValue({
       structuredContent: {

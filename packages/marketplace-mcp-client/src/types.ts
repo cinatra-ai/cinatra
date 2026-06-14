@@ -262,6 +262,62 @@ export interface MarketplaceExtensionInstallAuthorizeOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Gatekept-install grant-REFRESH primitive (#162 / PLAN P2-5)
+//
+// `extension_install_grant_refresh` extends an in-progress batch's read window
+// by re-minting the ROOT grant bound to the SAME {subject, root, op, op_iat,
+// closure_hash} — it does NOT re-run entitlement and a changed closure is
+// refused (409 closure_changed). The presented grant is the CURRENT (opaque)
+// install grant; the refreshed `grant` is opaque too (never parsed here).
+//
+// WIRE-SHAPE CAUTION: unlike `extension_install_authorize` (whose `expires_at`
+// is an ISO-8601 STRING), the refresh ability's `expires_at` is an INTEGER —
+// Unix epoch SECONDS (PHP `time() + GRANT_TTL_SECONDS`). The host MUST convert
+// it (`new Date(expires_at * 1000).toISOString()`) before populating the
+// ISO-typed `GatekeptInstallAuthorizeMetadata.expiresAt`, or the batch saga's
+// `Date.parse(...)` near-expiry check yields `NaN` and silently skips refresh.
+// The refresh output also has NO `kind` (authorize does) — the host preserves
+// the kind from the current authorize metadata.
+// ---------------------------------------------------------------------------
+
+export interface MarketplaceExtensionInstallGrantRefreshInput {
+  /**
+   * The CURRENT install grant (the opaque bearer in the active resolution's
+   * `config.token`) — unexpired, or expired no longer than the refresh grace.
+   * It carries the op/op_iat/closure_hash binding claims the ability re-checks.
+   */
+  grant: string;
+}
+
+export interface MarketplaceExtensionInstallGrantRefreshOutput {
+  /**
+   * Re-minted OPAQUE bearer grant (RS256 compact JWS) — same sub/root/closure/
+   * op/op_iat/closure_hash as the presented grant, fresh iat/exp/jti. NEVER
+   * parsed/decoded on the cinatra side; NEVER logged.
+   */
+  grant: string;
+  /** The storefront-listed version the grant authorizes (must equal the original). */
+  resolved_version: string;
+  /** Broker install read-proxy base URL — the registry the install reads through. */
+  broker_base_url: string;
+  /** Transitive dependency closure, exact-version-pinned (must equal the original). */
+  closure: MarketplaceInstallClosureEntry[];
+  /**
+   * Grant expiry as Unix epoch SECONDS (NOT an ISO string) — PHP
+   * `time() + GRANT_TTL_SECONDS`. Convert to ISO before host presentational use.
+   */
+  expires_at: number;
+  /**
+   * The op-bound closure hash the marketplace cross-checked before re-minting —
+   * a stable hash over the sorted `name@version` closure. The host verifies it
+   * matches the recomputed hash of `closure` (drift refusal, belt-and-suspenders).
+   */
+  closure_hash: string;
+  /** The install-operation id the grant is bound to (audit correlation). */
+  op: string;
+}
+
+// ---------------------------------------------------------------------------
 // Vendor primitives
 // ---------------------------------------------------------------------------
 
