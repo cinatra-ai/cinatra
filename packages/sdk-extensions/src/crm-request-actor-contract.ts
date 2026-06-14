@@ -18,6 +18,8 @@
 // the BullMQ worker replay path already carries orgId/userId in its job payload
 // and rebuilds the actor without touching the request store.
 
+import { createHostDepsSlot } from "./dependencies";
+
 /** The request identity the crm-connector needs to mint a pointer-write actor. */
 export type CrmRequestActor = {
   userId: string | null;
@@ -35,23 +37,23 @@ export interface CrmRequestActorResolver {
   getActor(): CrmRequestActor | null;
 }
 
-const CRM_REQUEST_ACTOR_RESOLVER_KEY = Symbol.for(
+// Built on the shared `createHostDepsSlot` primitive (see ./dependencies); the
+// slot identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<CrmRequestActorResolver>(
   "@cinatra-ai/sdk-extensions:crm-request-actor-resolver/v1",
 );
-type ResolverHolder = { [k: symbol]: CrmRequestActorResolver | null | undefined };
-const _holder = globalThis as unknown as ResolverHolder;
 
 /**
  * Wire the host CRM request-actor resolver. Called exactly once at boot (host
  * instrumentation). Re-calling replaces — tests can swap a stub between blocks.
  */
 export function setCrmRequestActorResolver(impl: CrmRequestActorResolver): void {
-  _holder[CRM_REQUEST_ACTOR_RESOLVER_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the resolver so a fresh wiring is required. */
 export function _resetCrmRequestActorResolverForTests(): void {
-  _holder[CRM_REQUEST_ACTOR_RESOLVER_KEY] = null;
+  _slot.reset();
 }
 
 /**
@@ -60,13 +62,9 @@ export function _resetCrmRequestActorResolverForTests(): void {
  * no-op that could mint a mis-scoped pointer-write actor.
  */
 export function requireCrmRequestActorResolver(): CrmRequestActorResolver {
-  const resolver = _holder[CRM_REQUEST_ACTOR_RESOLVER_KEY];
-  if (!resolver) {
-    throw new Error(
-      "[sdk-extensions] requireCrmRequestActorResolver() was called before the host wired the CRM " +
-        "request-actor resolver. The host must call setCrmRequestActorResolver(...) at boot " +
-        "(src/lib/register-crm-request-actor.ts, imported from instrumentation.node.ts).",
-    );
-  }
-  return resolver;
+  return _slot.require(
+    "[sdk-extensions] requireCrmRequestActorResolver() was called before the host wired the CRM " +
+      "request-actor resolver. The host must call setCrmRequestActorResolver(...) at boot " +
+      "(src/lib/register-crm-request-actor.ts, imported from instrumentation.node.ts).",
+  );
 }

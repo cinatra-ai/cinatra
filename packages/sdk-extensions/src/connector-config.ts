@@ -17,6 +17,8 @@
 // the storage. The `packageId` is carried for future per-extension scoping/audit;
 // the legacy global-key storage uses the `key` directly today.
 
+import { createHostDepsSlot } from "./dependencies";
+
 export type ExtensionConnectorConfigStore = {
   get<T>(packageId: string, key: string, fallback: T): T;
   set(packageId: string, key: string, value: unknown): void;
@@ -26,32 +28,28 @@ export type ExtensionConnectorConfigStore = {
 // Anchor on `globalThis` via a namespaced+versioned Symbol so the host boot call
 // and an extension's call resolve the SAME slot even when Next.js compiles
 // `@cinatra-ai/sdk-extensions` into more than one module instance (server / RSC /
-// route segments) — same cross-compilation reason as the action-guard.
-const CONNECTOR_CONFIG_STORE_KEY = Symbol.for(
+// route segments) — same cross-compilation reason as the action-guard. Built on
+// the shared `createHostDepsSlot` primitive (see ./dependencies); the slot
+// identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<ExtensionConnectorConfigStore>(
   "@cinatra-ai/sdk-extensions:connector-config-store/v1",
 );
-type StoreHolder = { [k: symbol]: ExtensionConnectorConfigStore | null | undefined };
-const _holder = globalThis as unknown as StoreHolder;
 
 /** Wire the host storage. Called exactly once at boot (host instrumentation). */
 export function setExtensionConnectorConfigStore(impl: ExtensionConnectorConfigStore): void {
-  _holder[CONNECTOR_CONFIG_STORE_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the store so a fresh wiring is required. */
 export function _resetExtensionConnectorConfigStoreForTests(): void {
-  _holder[CONNECTOR_CONFIG_STORE_KEY] = null;
+  _slot.reset();
 }
 
 function requireStore(): ExtensionConnectorConfigStore {
-  const store = _holder[CONNECTOR_CONFIG_STORE_KEY];
-  if (!store) {
-    throw new Error(
-      "[sdk-extensions] getExtensionConnectorConfig/setExtensionConnectorConfig was called before the " +
-        "host wired the connector-config store. The host must call setExtensionConnectorConfigStore(...) at boot.",
-    );
-  }
-  return store;
+  return _slot.require(
+    "[sdk-extensions] getExtensionConnectorConfig/setExtensionConnectorConfig was called before the " +
+      "host wired the connector-config store. The host must call setExtensionConnectorConfigStore(...) at boot.",
+  );
 }
 
 export function getExtensionConnectorConfig<T>(packageId: string, key: string, fallback: T): T {

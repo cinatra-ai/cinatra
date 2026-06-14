@@ -18,6 +18,7 @@
 // cross-compilation reasoning as the action-guard + a2a/google-oauth DI contracts.
 
 import type { CrmConnector } from "./crm-connector-contract";
+import { createHostDepsSlot } from "./dependencies";
 
 const CRM_PROVIDER_REGISTRY_KEY = Symbol.for(
   "@cinatra-ai/sdk-extensions:crm-provider-registry/v1",
@@ -41,13 +42,13 @@ function registry(): Map<string, CrmConnector> {
 // every lookup so teardown (capability invalidation) is reflected immediately
 // and activation order never matters. Anchored on globalThis for the same
 // cross-compilation reason as the Map above.
-const CRM_PROVIDER_EXTERNAL_RESOLVER_KEY = Symbol.for(
+// The external-resolver slot is a single nullable value, so it uses the shared
+// `createHostDepsSlot` primitive (see ./dependencies); the slot identity (the
+// `Symbol.for` key) is unchanged. The provider Map above stays a hand-rolled
+// registry (a keyed collection, not a single-value slot).
+const _externalResolverSlot = createHostDepsSlot<() => readonly CrmConnector[]>(
   "@cinatra-ai/sdk-extensions:crm-provider-external-resolver/v1",
 );
-type ResolverHolder = {
-  [k: symbol]: (() => readonly CrmConnector[]) | null | undefined;
-};
-const _resolverHolder = globalThis as unknown as ResolverHolder;
 
 /**
  * Bind (or clear) the host's lazy external CRM-provider resolver. Called once
@@ -57,11 +58,11 @@ const _resolverHolder = globalThis as unknown as ResolverHolder;
 export function setCrmProviderExternalResolver(
   resolver: (() => readonly CrmConnector[]) | null,
 ): void {
-  _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY] = resolver;
+  _externalResolverSlot.set(resolver);
 }
 
 function externalProviders(): readonly CrmConnector[] {
-  const resolver = _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY];
+  const resolver = _externalResolverSlot.get();
   if (!resolver) return [];
   try {
     return resolver();
@@ -103,5 +104,5 @@ export function listCrmProviders(): CrmConnector[] {
 /** @internal test-only — clear the registry so a fresh wiring is required. */
 export function _resetCrmProviderRegistry(): void {
   registry().clear();
-  _resolverHolder[CRM_PROVIDER_EXTERNAL_RESOLVER_KEY] = null;
+  _externalResolverSlot.reset();
 }

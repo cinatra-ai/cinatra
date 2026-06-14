@@ -6,6 +6,7 @@ import {
   registerCrmProvider,
   lookupCrmProvider,
   listCrmProviders,
+  setCrmProviderExternalResolver,
   _resetCrmProviderRegistry,
 } from "../crm-provider-registry-contract";
 import type { CrmConnector } from "../crm-connector-contract";
@@ -43,6 +44,46 @@ describe("crm-provider-registry-contract — SDK-hosted provider registry", () =
     registerCrmProvider(fakeProvider("twenty"));
     registerCrmProvider(fakeProvider("hubspot"));
     expect(listCrmProviders().map((p) => p.providerId).sort()).toEqual(["hubspot", "twenty"]);
+  });
+
+  // The external-resolver sub-slot is migrated onto createHostDepsSlot; these
+  // assertions pin its lazy-pull, direct-override, throw-swallow, and reset
+  // behavior (unchanged by the migration).
+  describe("external resolver (capability-registry providers)", () => {
+    it("surfaces external providers via lookup/list, pulled lazily on each call", () => {
+      let calls = 0;
+      setCrmProviderExternalResolver(() => {
+        calls++;
+        return [fakeProvider("twenty")];
+      });
+      expect(lookupCrmProvider("twenty")?.providerId).toBe("twenty");
+      expect(listCrmProviders().map((p) => p.providerId)).toEqual(["twenty"]);
+      expect(calls).toBeGreaterThanOrEqual(2); // pulled lazily on each resolve
+    });
+
+    it("direct registrations win over external providers with the same id", () => {
+      const direct = fakeProvider("twenty");
+      registerCrmProvider(direct);
+      setCrmProviderExternalResolver(() => [fakeProvider("twenty")]);
+      expect(lookupCrmProvider("twenty")).toBe(direct);
+      expect(listCrmProviders()).toHaveLength(1);
+      expect(lookupCrmProvider("twenty")).toBe(direct);
+    });
+
+    it("a throwing external resolver never takes down direct registrations", () => {
+      registerCrmProvider(fakeProvider("hubspot"));
+      setCrmProviderExternalResolver(() => {
+        throw new Error("broken external resolver");
+      });
+      expect(lookupCrmProvider("hubspot")?.providerId).toBe("hubspot");
+      expect(lookupCrmProvider("twenty")).toBeNull();
+    });
+
+    it("reset clears the external resolver", () => {
+      setCrmProviderExternalResolver(() => [fakeProvider("twenty")]);
+      _resetCrmProviderRegistry();
+      expect(lookupCrmProvider("twenty")).toBeNull();
+    });
   });
 
   it("shares the registry across SEPARATE module instances (globalThis-anchored)", async () => {

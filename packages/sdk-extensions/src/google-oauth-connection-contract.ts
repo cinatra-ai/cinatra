@@ -16,6 +16,8 @@
 // `action-guard` / `a2a-connection`), NOT a new `ctx` host-port, so it does not
 // bump the SDK ABI version.
 
+import { createHostDepsSlot } from "./dependencies";
+
 /**
  * The host-supplied Google-OAuth client-credential facade. Bound once at boot to
  * the real `@cinatra-ai/google-oauth-connection` runtime. `saveSettings` MUST be
@@ -56,11 +58,11 @@ export interface GoogleOAuthConnectionProvider {
 // when Next.js compiles `@cinatra-ai/sdk-extensions` into more than one module
 // instance (server / RSC / route segments). Same cross-compilation reason as the
 // action-guard + a2a-connection contracts.
-const GOOGLE_OAUTH_CONNECTION_PROVIDER_KEY = Symbol.for(
+// Built on the shared `createHostDepsSlot` primitive (see ./dependencies); the
+// slot identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<GoogleOAuthConnectionProvider>(
   "@cinatra-ai/sdk-extensions:google-oauth-connection-provider/v1",
 );
-type ProviderHolder = { [k: symbol]: GoogleOAuthConnectionProvider | null | undefined };
-const _holder = globalThis as unknown as ProviderHolder;
 
 /**
  * Wire the host Google-OAuth connection provider. Called exactly once at boot
@@ -68,12 +70,12 @@ const _holder = globalThis as unknown as ProviderHolder;
  * a stub between blocks.
  */
 export function setGoogleOAuthConnectionProvider(impl: GoogleOAuthConnectionProvider): void {
-  _holder[GOOGLE_OAUTH_CONNECTION_PROVIDER_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the provider so a fresh wiring is required. */
 export function _resetGoogleOAuthConnectionProviderForTests(): void {
-  _holder[GOOGLE_OAUTH_CONNECTION_PROVIDER_KEY] = null;
+  _slot.reset();
 }
 
 /**
@@ -82,13 +84,9 @@ export function _resetGoogleOAuthConnectionProviderForTests(): void {
  * silent no-op that could drop a credential save.
  */
 export function requireGoogleOAuthConnectionProvider(): GoogleOAuthConnectionProvider {
-  const provider = _holder[GOOGLE_OAUTH_CONNECTION_PROVIDER_KEY];
-  if (!provider) {
-    throw new Error(
-      "[sdk-extensions] requireGoogleOAuthConnectionProvider() was called before the host wired " +
-        "the Google-OAuth connection provider. The host must call setGoogleOAuthConnectionProvider(...) " +
-        "at boot (src/lib/register-google-oauth-provider.ts, imported from instrumentation.node.ts).",
-    );
-  }
-  return provider;
+  return _slot.require(
+    "[sdk-extensions] requireGoogleOAuthConnectionProvider() was called before the host wired " +
+      "the Google-OAuth connection provider. The host must call setGoogleOAuthConnectionProvider(...) " +
+      "at boot (src/lib/register-google-oauth-provider.ts, imported from instrumentation.node.ts).",
+  );
 }

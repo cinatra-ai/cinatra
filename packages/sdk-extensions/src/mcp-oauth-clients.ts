@@ -16,6 +16,8 @@
 // `action-guard` / `connector-config` / `a2a-connection-contract`), NOT a new
 // `ctx` host-port, so it does not bump the SDK ABI version.
 
+import { createHostDepsSlot } from "./dependencies";
+
 /** An externally-registered MCP OAuth client. */
 export type ExternalMcpOAuthClient = {
   id: string;
@@ -46,32 +48,27 @@ export type ExtensionMcpOAuthClientStore = {
 // host boot call and the connector's calls resolve the SAME slot even when
 // Next.js compiles `@cinatra-ai/sdk-extensions` into more than one module
 // instance (server / RSC / route segments) — same cross-compilation reason as
-// the action-guard.
-const MCP_OAUTH_CLIENT_STORE_KEY = Symbol.for(
+// the action-guard. Built on the shared `createHostDepsSlot` primitive (see
+// ./dependencies); the slot identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<ExtensionMcpOAuthClientStore>(
   "@cinatra-ai/sdk-extensions:mcp-oauth-client-store/v1",
 );
-type StoreHolder = { [k: symbol]: ExtensionMcpOAuthClientStore | null | undefined };
-const _holder = globalThis as unknown as StoreHolder;
 
 /** Wire the host store. Called exactly once at boot (host instrumentation). */
 export function setExtensionMcpOAuthClientStore(impl: ExtensionMcpOAuthClientStore): void {
-  _holder[MCP_OAUTH_CLIENT_STORE_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the store so a fresh wiring is required. */
 export function _resetExtensionMcpOAuthClientStoreForTests(): void {
-  _holder[MCP_OAUTH_CLIENT_STORE_KEY] = null;
+  _slot.reset();
 }
 
 function requireStore(): ExtensionMcpOAuthClientStore {
-  const store = _holder[MCP_OAUTH_CLIENT_STORE_KEY];
-  if (!store) {
-    throw new Error(
-      "[sdk-extensions] listExternalMcpOAuthClients/deleteExternalMcpOAuthClient was called before " +
-        "the host wired the MCP OAuth-client store. The host must call setExtensionMcpOAuthClientStore(...) at boot.",
-    );
-  }
-  return store;
+  return _slot.require(
+    "[sdk-extensions] listExternalMcpOAuthClients/deleteExternalMcpOAuthClient was called before " +
+      "the host wired the MCP OAuth-client store. The host must call setExtensionMcpOAuthClientStore(...) at boot.",
+  );
 }
 
 // `async` so an unwired store always surfaces as a rejected promise (the

@@ -130,3 +130,85 @@ export function normalizeLegacyDependencies(
 export function isExtensionKind(value: unknown): value is ExtensionKind {
   return typeof value === "string" && (EXTENSION_KINDS as readonly string[]).includes(value);
 }
+
+// ---------------------------------------------------------------------------
+// createHostDepsSlot — the ONE host-dependency-slot primitive (eng#159 #11).
+//
+// MANY SDK contracts wire a SINGLE host-injected value (a store / provider /
+// resolver / guard) by anchoring it on `globalThis` under a namespaced+versioned
+// `Symbol.for(...)` key. The `globalThis` anchor (not a plain module binding) is
+// LOAD-BEARING: Next.js compiles `@cinatra-ai/sdk-extensions` into more than one
+// module instance (server / RSC / route segments / the BullMQ worker bundle), so
+// the host's boot-time `setX(...)` and an extension's later resolve MUST meet at a
+// process-global slot, not a per-instance one. The `Symbol.for(key)` global symbol
+// registry is what makes that slot identical across every compiled instance.
+//
+// Before this helper, every such contract hand-rolled the SAME four moves:
+//   const KEY = Symbol.for("@cinatra-ai/sdk-extensions:<name>/v1");
+//   type Holder = { [k: symbol]: T | null | undefined };
+//   const _holder = globalThis as unknown as Holder;
+//   set / reset / require / getOrNull
+// `createHostDepsSlot<T>(key)` is that move extracted ONCE: namespaced+versioned
+// Symbol anchoring + probe-gating (`get` non-throwing probe, `require` fail-closed)
+// baked in. It changes NO behavior — callers keep their exact public function
+// names, signatures, and error messages and delegate to a slot built with their
+// EXACT existing key string (so the cross-instance + any persisted slot is
+// byte-identical to before).
+//
+// SCOPE NOTE: this is the mechanical extraction only. Whether typed ctx ports or
+// the capability registry is the permanent host->extension spine — and how these
+// slots fold into it — is the architecture decision deferred to an owner ruling
+// (eng#159 #11/#12/#13), NOT settled here.
+
+/**
+ * A single host-injected dependency value anchored on `globalThis` under a
+ * process-global `Symbol.for(key)`. `T` is the NON-NULL implementation type; the
+ * slot owns the unset (`null`) state.
+ */
+export type HostDepsSlot<T> = {
+  /** Non-throwing probe: the wired value, or `null` when unset. */
+  get(): T | null;
+  /** Wire the value at boot (or `null` to clear). */
+  set(value: T | null): void;
+  /** Clear the slot (equivalent to `set(null)`) — the test-reset move. */
+  reset(): void;
+  /**
+   * Fail-closed resolve: returns the wired value, or throws `Error(message)`
+   * when the slot is unset. The caller supplies the message so each contract
+   * keeps its exact (and possibly dynamic) error text.
+   */
+  require(message: string): T;
+};
+
+/**
+ * Build a `globalThis`-anchored host-dependency slot.
+ *
+ * `key` MUST be the FULL namespaced+versioned string (e.g.
+ * `"@cinatra-ai/sdk-extensions:action-guard/v1"`); it is passed verbatim to
+ * `Symbol.for(key)` so the slot meets the same backing entry across every
+ * compiled module instance. Pass the literal existing key when migrating an
+ * existing slot so its identity is unchanged.
+ */
+export function createHostDepsSlot<T>(key: string): HostDepsSlot<T> {
+  const KEY = Symbol.for(key);
+  type Holder = { [k: symbol]: T | null | undefined };
+  const holder = globalThis as unknown as Holder;
+  return {
+    get(): T | null {
+      return holder[KEY] ?? null;
+    },
+    set(value: T | null): void {
+      holder[KEY] = value;
+    },
+    reset(): void {
+      holder[KEY] = null;
+    },
+    require(message: string): T {
+      const value = holder[KEY];
+      if (value === null || value === undefined) {
+        throw new Error(message);
+      }
+      return value;
+    },
+  };
+}

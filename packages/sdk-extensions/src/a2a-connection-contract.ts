@@ -16,6 +16,8 @@
 // a DI slot (same class as `action-guard` / `connector-config`), NOT a new
 // `ctx` host-port, so it does not bump the SDK ABI version.
 
+import { createHostDepsSlot } from "./dependencies";
+
 /**
  * The host-supplied A2A connection-storage surface. Bound once at boot to the
  * real Nango connection-record store + the external-agent-template store. All
@@ -60,9 +62,11 @@ export interface A2AConnectionProvider {
 // Next.js compiles `@cinatra-ai/sdk-extensions` into more than one module
 // instance (server / RSC / route segments). Same cross-compilation reason as
 // the action-guard + extension-mcp-registry.
-const A2A_CONNECTION_PROVIDER_KEY = Symbol.for("@cinatra-ai/sdk-extensions:a2a-connection-provider/v1");
-type ProviderHolder = { [k: symbol]: A2AConnectionProvider | null | undefined };
-const _holder = globalThis as unknown as ProviderHolder;
+// Built on the shared `createHostDepsSlot` primitive (see ./dependencies); the
+// slot identity (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<A2AConnectionProvider>(
+  "@cinatra-ai/sdk-extensions:a2a-connection-provider/v1",
+);
 
 /**
  * Wire the host A2A connection provider. Called exactly once at boot (host
@@ -70,12 +74,12 @@ const _holder = globalThis as unknown as ProviderHolder;
  * stub between blocks.
  */
 export function setA2AConnectionProvider(impl: A2AConnectionProvider): void {
-  _holder[A2A_CONNECTION_PROVIDER_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the provider so a fresh wiring is required. */
 export function _resetA2AConnectionProviderForTests(): void {
-  _holder[A2A_CONNECTION_PROVIDER_KEY] = null;
+  _slot.reset();
 }
 
 /**
@@ -84,13 +88,9 @@ export function _resetA2AConnectionProviderForTests(): void {
  * no-op that could strand a connection in a half-written state.
  */
 export function requireA2AConnectionProvider(): A2AConnectionProvider {
-  const provider = _holder[A2A_CONNECTION_PROVIDER_KEY];
-  if (!provider) {
-    throw new Error(
-      "[sdk-extensions] requireA2AConnectionProvider() was called before the host wired the A2A " +
-        "connection provider. The host must call setA2AConnectionProvider(...) at boot " +
-        "(src/lib/register-a2a-connection-provider.ts, imported from instrumentation.node.ts).",
-    );
-  }
-  return provider;
+  return _slot.require(
+    "[sdk-extensions] requireA2AConnectionProvider() was called before the host wired the A2A " +
+      "connection provider. The host must call setA2AConnectionProvider(...) at boot " +
+      "(src/lib/register-a2a-connection-provider.ts, imported from instrumentation.node.ts).",
+  );
 }
