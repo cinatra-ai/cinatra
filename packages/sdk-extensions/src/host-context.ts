@@ -340,3 +340,59 @@ export const HOST_PORT_NAMES = [
 ] as const;
 
 export type HostPortName = (typeof HOST_PORT_NAMES)[number];
+
+// ---------------------------------------------------------------------------
+// ABI-evolution policy: per-port lifecycle TIER (cinatra-engineering#159 #13,
+// ruling cinatra-engineering#183). Codifies "reserved-port tiering" as DATA —
+// today it lives only as prose in the `db` TSDoc above + a hardcoded
+// `"not-implemented"` branch in the host factory
+// (src/lib/extension-host-context.ts). This table is the single source of truth
+// both key off, so wiring a reserved port is a one-line tier flip here.
+//
+// ADDITIVE / NON-BREAKING: this changes NO existing type. `ExtensionHostContext`
+// keeps every port a required property (the deliberate type-model decision in the
+// file header at the top) — the tier is METADATA *about* a port, not a change to
+// the surface. No ABI bump: declaring a tier adds no port and wires none.
+//
+// EVOLUTION RULE (the policy this codifies):
+//   - adding a NEW port              → ABI MAJOR.
+//   - wiring a `reserved` → `stable` → ABI MINOR (the port already exists; an
+//                                      older host just fail-louds it).
+//   - removing / reshaping a port    → ABI MAJOR.
+// ---------------------------------------------------------------------------
+
+/** ABI lifecycle tier of a host port. */
+export const HOST_PORT_TIERS = ["stable", "reserved"] as const;
+export type HostPortTier = (typeof HOST_PORT_TIERS)[number];
+
+/**
+ * Per-port ABI tier.
+ *  - `stable`   — wired, frozen, safe to grant. The real host impl is returned.
+ *  - `reserved` — declared in the frozen surface but NOT wired. Granting it is
+ *    fail-loud (`"not-implemented"`) until a future MINOR wires it.
+ *
+ * Today only `db` is reserved (the scoped escape hatch; see its TSDoc above).
+ * The host factory's not-implemented branch and the manifest generator's tier
+ * parity check both derive from THIS map.
+ */
+export const HOST_PORT_TIER: Readonly<Record<HostPortName, HostPortTier>> = {
+  db: "reserved",
+  settings: "stable",
+  secrets: "stable",
+  nango: "stable",
+  authSession: "stable",
+  mcp: "stable",
+  objects: "stable",
+  jobs: "stable",
+  notifications: "stable",
+  ui: "stable",
+  logger: "stable",
+  runtime: "stable",
+  capabilities: "stable",
+  telemetry: "stable",
+} as const;
+
+/** The reserved-tier ports, derived from `HOST_PORT_TIER` (today: `["db"]`). */
+export const RESERVED_HOST_PORTS: readonly HostPortName[] = HOST_PORT_NAMES.filter(
+  (p) => HOST_PORT_TIER[p] === "reserved",
+);

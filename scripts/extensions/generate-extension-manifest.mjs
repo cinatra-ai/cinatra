@@ -86,6 +86,16 @@ const VALID_HOST_PORTS = new Set([
   "telemetry",
 ]);
 
+// RESERVED-tier ports — MUST mirror RESERVED_HOST_PORTS in
+// @cinatra-ai/sdk-extensions (host-context.ts: the ports whose HOST_PORT_TIER is
+// "reserved"). Same literal-copy convention as VALID_HOST_PORTS (the .mjs build
+// script can't import the TS SDK). A manifest declaring a reserved port in
+// requestedHostPorts is WARNED (not failed) by checkParity(): the port exists in
+// the frozen surface but is not wired, so accessing it fail-louds at runtime —
+// pre-declaring it for a future wiring is tolerated (matches the existing
+// granted-but-unwired tolerance), not build-blocked. Today: ["db"].
+const RESERVED_HOST_PORTS = new Set(["db"]);
+
 // Read the `cinatra` manifest block of an extension for the loader fields
 // (serverEntry / requestedHostPorts) the inventory doesn't surface.
 function readCinatraManifest(dir) {
@@ -1551,11 +1561,18 @@ export async function checkParity({ presenceAware = false } = {}) {
   if (names.size !== records.length) problems.push("duplicate package in manifest");
 
   // 3) every declared requestedHostPort must be a real host-port name (catch typos
-  //    at generation rather than silently granting nothing at runtime).
+  //    at generation rather than silently granting nothing at runtime). A declared
+  //    RESERVED-tier port (ABI-evolution policy, eng#159 #13) is WARNED, not failed:
+  //    the port is real but unwired, so it fail-louds ("not-implemented") at runtime
+  //    — pre-declaring it for a future wiring is allowed, never build-blocked.
   for (const r of records) {
     for (const port of r.requestedHostPorts) {
       if (!VALID_HOST_PORTS.has(port)) {
         problems.push(`${r.packageName} declares unknown requestedHostPort "${port}" (not a HOST_PORT_NAMES value)`);
+      } else if (RESERVED_HOST_PORTS.has(port)) {
+        console.warn(
+          `[extension-manifest] WARN ${r.packageName} declares RESERVED requestedHostPort "${port}" — it is not wired and will fail-loud ("not-implemented") if accessed at runtime (HOST_PORT_TIER."${port}" = reserved).`,
+        );
       }
     }
   }
