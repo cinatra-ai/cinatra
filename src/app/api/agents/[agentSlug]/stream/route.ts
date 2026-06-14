@@ -6,6 +6,7 @@ import {
 } from "@cinatra-ai/llm";
 import type { LlmTool } from "@cinatra-ai/llm";
 import { ensureSkillForCapability } from "@cinatra-ai/skills";
+import { buildActorContextFromPrimitive } from "@cinatra-ai/agents/auth-policy";
 
 import {
   resolveWidgetStreamAgent,
@@ -282,6 +283,20 @@ export async function POST(
   }
   const tools: LlmTool[] = [tool, ...skillTools];
 
+  // Establish the LLM actor frame. The widget SSE stream is an UNAUTHENTICATED
+  // in-CMS embed — there is no Better Auth session, so no human/org ALS frame
+  // exists. `stream()` is wrapped by `requireActorFrame`, which throws
+  // ACTOR_CONTEXT_MISSING in production when neither an ALS frame nor an
+  // explicit `actorContext` is present. Supply the SAME roleless internal-model
+  // service-account actor that `buildSkillTools` already used to resolve the
+  // widget skill above (no org/user identity → it passes only the narrow
+  // internal-model carve-outs, never org/workspace-scoped reads). The widget's
+  // skill content was already resolved + auth-checked before this stream opens.
+  const widgetActorContext = buildActorContextFromPrimitive({
+    actorType: "model",
+    source: "agent",
+  });
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -295,6 +310,7 @@ export async function POST(
 
       try {
         await orchestrateStream({
+          actorContext: widgetActorContext,
           system: systemPrompt,
           // Sanitize: drop system-role injection attacks, bound history to last
           // 20 messages, drop messages with non-string content.

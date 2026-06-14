@@ -120,6 +120,17 @@ export type SkillResourceRef = {
   visibility?: AgentAuthPolicyVisibility;
   organizationId?: string;
   ownerId?: string;
+  /**
+   * AUTHORITATIVE flag: this skill is the `widget-chat.*`-capability skill of
+   * an active extension, i.e. the SYSTEM PROMPT served to an UNAUTHENTICATED
+   * in-CMS widget chat. Set ONLY by the skills layer from the extension
+   * manifest's `cinatra.capabilities` (see `isWidgetChatSkillId`) — NEVER from
+   * a slug/id naming convention. When true, the narrow roleless-internal-model
+   * read carve-out in `requireResourceAccess` applies (the unauthenticated
+   * widget stream has no org/user identity). Defaults to `false` for every
+   * other workspace skill, which stays org-gated.
+   */
+  isWidgetChatSkill?: boolean;
 };
 
 /**
@@ -145,7 +156,18 @@ export type SkillResourceRef = {
  * tautology.
  */
 export function buildSkillResourceRef(
-  skill: { id: string; level?: string; scope?: string | null },
+  skill: {
+    id: string;
+    level?: string;
+    scope?: string | null;
+    /**
+     * AUTHORITATIVE widget-chat marker, resolved by the skills layer from the
+     * extension manifest (`isWidgetChatSkillId`). Threaded through so the
+     * workspace-read carve-out is keyed on the manifest capability contract,
+     * never on the skill id's shape. Omitted ⇒ `false`.
+     */
+    isWidgetChatSkill?: boolean;
+  },
 ): SkillResourceRef {
   return {
     resourceType: "skill",
@@ -156,6 +178,7 @@ export function buildSkillResourceRef(
     // compares against the skill's owning org. For every other level the
     // policy branch ignores this field — undefined makes that explicit.
     organizationId: skill.level === "organization" ? (skill.scope ?? undefined) : undefined,
+    isWidgetChatSkill: skill.isWidgetChatSkill ?? false,
   };
 }
 
@@ -228,7 +251,29 @@ export function requireResourceAccess(
       resource.resourceType === "skill" &&
       typeof resource.resourceId === "string" &&
       resource.resourceId.startsWith("@cinatra-ai/chat:chat-");
-    if (mode === "read" && (hasWorkspacePrincipal || isInternalModelChatSkillRead)) return;
+    // The unauthenticated in-CMS widget chat (WordPress/Drupal content-editor
+    // SSE stream) has NO human session — `buildSkillTools` resolves its
+    // widget-chat SKILL.md through the SAME roleless internal-model
+    // service-account actor. Allow that exact shape to read a widget-chat
+    // skill, gated on the AUTHORITATIVE `isWidgetChatSkill` flag stamped by the
+    // skills layer from the extension manifest's `widget-chat.*` capability
+    // (NOT the id's shape) — so an arbitrary workspace skill whose id merely
+    // resembles a widget skill is NOT exposed and the cross-org workspace-read
+    // enumeration guard holds. Manage stays admin.
+    const isInternalModelWidgetChatSkillRead =
+      mode === "read" &&
+      actor.principalType === "ServiceAccount" &&
+      actor.authSource === "mcp" &&
+      actor.principalId === "system" &&
+      resource.resourceType === "skill" &&
+      resource.isWidgetChatSkill === true;
+    if (
+      mode === "read" &&
+      (hasWorkspacePrincipal ||
+        isInternalModelChatSkillRead ||
+        isInternalModelWidgetChatSkillRead)
+    )
+      return;
     if (mode === "manage") {
       if (actor.orgRole === "org_admin" || actor.orgRole === "org_owner") return;
     }

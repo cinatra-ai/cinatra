@@ -21,6 +21,7 @@ import {
   resolveCustomSkillContent,
 } from "../personal-skills";
 import { getInstalledSkillById, listInstalledSkills, listInstalledSkillPackages, parseFrontmatter } from "../skills-registry";
+import { isWidgetChatSkillId } from "../extension-skill-resolver";
 import { getAssignedSkillIdsForAgent, matchAgentsToSkills } from "@/lib/agents-store";
 // Fan out scoped re-evaluation jobs on install / personal-skill upsert events
 // and purge skill_matches rows on package uninstall.
@@ -515,11 +516,19 @@ export function createSkillsPrimitiveHandlers() {
           request.actor as { orgId?: string | null } | undefined,
         );
         const actorCtx = await actorContextFromMcpRequest(request.actor as PrimitiveActorContext, orgId);
+        // Stamp whether this is an unauthenticated in-CMS widget-chat skill —
+        // the AUTHORITATIVE flag (derived from the active extensions'
+        // `cinatra.capabilities` keyed `widget-chat.*`, NOT a slug naming
+        // convention) that lets `requireResourceAccess` apply the narrow
+        // roleless-internal-model carve-out for the unauthenticated widget SSE
+        // stream. Any other workspace skill stays org-gated.
+        const isWidgetChatSkill = await isWidgetChatSkillId(skill.id);
         // Use the auth-policy resource-ref builder for consistent scope.
         requireResourceAccess(actorCtx, buildSkillResourceRef({
           id: skill.id,
           level: skill.level,
           scope: skill.scope ?? null,
+          isWidgetChatSkill,
         }));
       } catch (err) {
         if (err instanceof AuthzError) return null; // 404 semantics — same wire shape as not-found

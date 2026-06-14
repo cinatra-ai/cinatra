@@ -15,6 +15,7 @@ const {
   buildSkillTools,
   streamMock,
   ensureSkillForCapabilityMock,
+  buildActorContextFromPrimitiveMock,
   readConnectorConfigMock,
   readMetadataValueMock,
   runPostgresQueriesSyncMock,
@@ -22,6 +23,7 @@ const {
   buildSkillTools: vi.fn(),
   streamMock: vi.fn(),
   ensureSkillForCapabilityMock: vi.fn(),
+  buildActorContextFromPrimitiveMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
   readMetadataValueMock: vi.fn(),
   runPostgresQueriesSyncMock: vi.fn(),
@@ -33,6 +35,13 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 vi.mock("@cinatra-ai/skills", () => ({
   ensureSkillForCapability: ensureSkillForCapabilityMock,
+}));
+// The route builds the unauthenticated-widget actor frame from this; mock it as
+// the roleless internal-model service-account shape the real builder produces
+// for `{ actorType:"model", source:"agent" }` so the actorContext-threading
+// assertion is exact without pulling the server-only auth kernel.
+vi.mock("@cinatra-ai/agents/auth-policy", () => ({
+  buildActorContextFromPrimitive: buildActorContextFromPrimitiveMock,
 }));
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: readConnectorConfigMock,
@@ -228,6 +237,13 @@ beforeEach(() => {
   streamMock.mockReset();
   ensureSkillForCapabilityMock.mockReset();
   ensureSkillForCapabilityMock.mockImplementation(async (cap: string) => `${cap}:skill-id`);
+  buildActorContextFromPrimitiveMock.mockReset();
+  buildActorContextFromPrimitiveMock.mockReturnValue({
+    principalType: "ServiceAccount",
+    principalId: "system",
+    authSource: "mcp",
+    policyVersion: "v2",
+  });
   CONNECTOR_CONFIG = freshConnectorConfig();
   readConnectorConfigMock.mockReset();
   readConnectorConfigMock.mockImplementation(
@@ -407,6 +423,34 @@ describe("widget stream route — SSE tool-result mapping (frozen wire format)",
     expect(body).toContain("event: changes");
     expect(body).toContain('"fields"');
     expect(body).toContain('"postId":"42"');
+  });
+
+  it("threads the roleless internal-model actorContext into stream (prod ACTOR_CONTEXT_MISSING guard)", async () => {
+    // The widget SSE stream is unauthenticated — no ALS frame exists, so
+    // `stream()` (wrapped by requireActorFrame) would throw
+    // ACTOR_CONTEXT_MISSING in production unless the route supplies an explicit
+    // actorContext. The route must build it from the roleless internal-model
+    // primitive and pass it to stream.
+    buildSkillTools.mockResolvedValueOnce([mountedSkillShellTool]);
+    streamMock.mockImplementationOnce(async () => {});
+    await POST(
+      wpRequest({ contractVersion: "v1", messages: [{ role: "user", content: "hi" }] }),
+      wpParams,
+    );
+    expect(buildActorContextFromPrimitiveMock).toHaveBeenCalledWith({
+      actorType: "model",
+      source: "agent",
+    });
+    const streamArgs = streamMock.mock.calls[0]![0] as {
+      actorContext?: { principalType?: string; principalId?: string; authSource?: string };
+    };
+    expect(streamArgs.actorContext).toEqual(
+      expect.objectContaining({
+        principalType: "ServiceAccount",
+        principalId: "system",
+        authSource: "mcp",
+      }),
+    );
   });
 
   it("a foreign tool result (name ≠ the built widget tool's name) is ignored", async () => {

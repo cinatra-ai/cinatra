@@ -184,4 +184,29 @@ describe("buildSkillTools soft-fallback", () => {
     );
     warnSpy.mockRestore();
   });
+
+  // Regression: the in-CMS widget SSE stream's success contract. Once the
+  // widget-chat skill resolves through the deterministic client (i.e. the
+  // skills_installed_get auth carve-out lets the roleless model actor read it),
+  // buildSkillTools MUST return a mountable shell tool so the route does NOT
+  // 500 with "Widget skill is unavailable". A null here = the 403→null→[] path
+  // that this fix closes.
+  it("returns a mountable shell tool for a resolvable widget-chat skill (widget stream contract)", async () => {
+    for (const widgetSkillId of [
+      "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+      "@cinatra-ai/drupal-skills:drupal-widget-chat",
+    ]) {
+      installedGetMock.mockReset();
+      installedGetMock.mockResolvedValueOnce({
+        id: widgetSkillId,
+        name: "widget-chat",
+        slug: widgetSkillId.split(":")[1],
+        description: "in-CMS widget chat routing skill",
+        sourcePath: "/abs/path/to/widget/SKILL.md",
+      });
+      const tools = await buildSkillTools({ skillIds: [widgetSkillId] });
+      expect(tools).toHaveLength(1);
+      expect((tools[0] as { type: string }).type).toBe("shell");
+    }
+  });
 });
