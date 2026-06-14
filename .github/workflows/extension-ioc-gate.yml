@@ -1,0 +1,140 @@
+name: Extension IoC Gate
+
+# Reference consumer of the org-wide, reusable extension->host IoC conformance
+# gate that lives in cinatra-ai/ci. It runs the self-contained, host-tree-
+# INDEPENDENT gate over EACH in-tree extension package (extensions/cinatra-ai/
+# <slug>), demonstrating the shared gate against the canonical extension set. The
+# host-monorepo's own per-package audit gates (import-ban, host-peer-value-import-
+# ban, deps, readme, license — run in build-image.yml) remain the authoritative
+# enforcement for the monorepo; this consumer pins the SHARED gate by SHA so the
+# two cannot drift (guarded cross-repo by ci's parity test).
+#
+# POSTURE: detection/report. It SUMMARIZES per-package findings and does not block
+# the merge — the org-wide ENFORCE rollout to the extension repos is a separate
+# follow-on. Set IOC_ENFORCE=1 in that follow-on once each package is conformant.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extensions/**/package.json'
+      - 'extensions/**/*.ts'
+      - 'extensions/**/*.tsx'
+      - 'extensions/**/*.mjs'
+      - 'extensions/**/*.cjs'
+      - 'extensions/**/*.mts'
+      - 'extensions/**/*.cts'
+      - 'extensions/**/README.md'
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'package.json'
+      - '.github/workflows/extension-ioc-gate.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'extensions/**/package.json'
+      - 'extensions/**/*.ts'
+      - 'extensions/**/*.tsx'
+      - 'extensions/**/*.mjs'
+      - 'extensions/**/*.cjs'
+      - 'extensions/**/*.mts'
+      - 'extensions/**/*.cts'
+      - 'extensions/**/README.md'
+      - 'cinatra-required-extensions.lock.json'
+      - 'cinatra-dev-extensions.lock.json'
+      - '.github/actions/clone-extensions/**'
+      - 'scripts/ci/sync-dev-extensions.mjs'
+      - 'package.json'
+      - '.github/workflows/extension-ioc-gate.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  extension-ioc-gate:
+    name: Extension IoC gate (reference consumer)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # POSTURE: report-only for the FOUNDATION. Set IOC_ENFORCE=1 to block.
+    env:
+      IOC_ENFORCE: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout the shared IoC gate
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: cinatra-ai/ci
+          # Pinned to a merged cinatra-ai/ci SHA. ci's cross-repo parity test keeps
+          # this gate in lockstep with the monorepo source of truth.
+          ref: 7e6e94c95390c73a252a2cf40a643b5033f93ff0
+          path: .extension-ioc-gate
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Run the shared IoC gate over each in-tree extension
+        run: |
+          set -u
+          GATE=.extension-ioc-gate/scripts/extension-ioc-gate.mjs
+          # Preflight: the shared gate must exist (a moved/renamed gate is an INFRA
+          # failure, never a silent pass).
+          if [ ! -f "$GATE" ]; then
+            echo "::error::shared IoC gate not found at $GATE (ci checkout/path broken)"
+            exit 1
+          fi
+          fail=0
+          broke=0
+          count=0
+          shopt -s nullglob
+          for pkg in extensions/cinatra-ai/*/package.json; do
+            dir="$(dirname "$pkg")"
+            count=$((count + 1))
+            echo "::group::extension-ioc-gate $dir"
+            # The gate exits 0=conform, 1=findings, 2=internal/usage error. A 2 is
+            # an INFRA failure (broken gate / unreadable package), distinct from a
+            # conformance finding, and always fails the job. The `|| rc=$?` keeps a
+            # non-zero exit from tripping the step's `bash -e` errexit so the loop
+            # accumulates results across ALL packages.
+            rc=0
+            node "$GATE" --package "$dir" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              echo "  conform"
+            elif [ "$rc" -eq 1 ]; then
+              fail=$((fail + 1))
+              echo "::warning title=extension-ioc-gate::extension has IoC conformance finding(s)"
+            else
+              broke=$((broke + 1))
+              echo "::error title=extension-ioc-gate::gate errored (exit $rc) on an extension package"
+            fi
+            echo "::endgroup::"
+          done
+          echo "extension-ioc-gate: scanned $count package(s), $fail with finding(s), $broke gate-error(s)."
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no extension packages materialized under extensions/cinatra-ai/ (clone-back failed?)"
+            exit 1
+          fi
+          if [ "$broke" -gt 0 ]; then
+            echo "::error::extension-ioc-gate: $broke package(s) errored the gate (infra failure)."
+            exit 1
+          fi
+          if [ "$fail" -gt 0 ] && [ "${IOC_ENFORCE}" = "1" ]; then
+            echo "::error::extension-ioc-gate: $fail package(s) failed (enforce mode)."
+            exit 1
+          fi
