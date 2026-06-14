@@ -42,7 +42,7 @@ jobs:
     # Double-pin per the eng#61 convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the v2 gate),
     # so the gate code is never pulled from mutable main.
-    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@6e417652524f6449db681034f2cb67e177adc6f6 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
     with:
       # assistant-skills pin: points at the commit that carries the skills'
       # `cinatra-watches` declarations (assistant-skills@4dd273d). This LEADS the
