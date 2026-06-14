@@ -1,10 +1,15 @@
-// Gatekept-install: the agent extension handler must thread the
-// install ref's VERSION into resolveInstallEnvironment so the gatekept-install
-// path (when enabled) authorizes the EXACT listed version. On the legacy path
-// the version is simply ignored, so this is non-breaking. The resolved config
-// (broker + grant when gatekept) is reused for BOTH the dep install and the
-// skill-scan SECOND root fetch — covered here by asserting both
-// installAgentPackageWithDependencies and extractAgentPackage receive it.
+// #157 — COLLAPSE THE SECOND RESOLVER.
+//
+// The agent extension handler must install ROOT-ONLY when the batch saga owns
+// the dependency fan-out (isSagaOwnedFanoutActive() === true) — calling
+// installAgentFromPackage (single package) and NEVER the second
+// @cinatra-ai/registries dep-resolver (installAgentPackageWithDependencies).
+//
+// Outside the saga (the direct extensionRegistry.install/update callers: UI
+// extension update, MCP extensions_update, reinstall-latest) the context is
+// absent and the handler keeps its full-tree behavior — installs via
+// installAgentPackageWithDependencies — so those paths still pull in
+// newly-required dependencies.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -15,25 +20,27 @@ vi.mock("@cinatra-ai/extensions/destination-resolver", () => ({
   resolveInstallEnvironment: resolveInstallEnvironmentMock,
 }));
 
+// No skills/ dir → registerSkillsFromPackage is a clean no-op.
 vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(async () => {
     const err = new Error("ENOENT") as Error & { code: string };
     err.code = "ENOENT";
-    throw err; // no skills/ dir → registerSkillsFromPackage is a clean no-op
+    throw err;
   }),
   readFile: vi.fn(),
 }));
 
+// The saga-owned-fan-out toggle is driven per-test via this hoisted spy.
+const { sagaActiveSpy } = vi.hoisted(() => ({ sagaActiveSpy: vi.fn(() => false) }));
+
 vi.mock("@cinatra-ai/agents", () => ({
   installAgentPackageWithDependencies: vi.fn(async () => ({
-    rootTemplateId: "tpl-1",
-    installedTemplateIds: ["tpl-1"],
+    rootTemplateId: "tpl-tree",
+    installedTemplateIds: ["tpl-tree"],
     tree: {},
   })),
-  installAgentFromPackage: vi.fn(async () => ({ templateId: "tpl-1" })),
-  // No saga context active in these tests → handler takes the full-tree path,
-  // exactly as asserted below.
-  isSagaOwnedFanoutActive: vi.fn(() => false),
+  installAgentFromPackage: vi.fn(async () => ({ templateId: "tpl-root" })),
+  isSagaOwnedFanoutActive: () => sagaActiveSpy(),
   extractAgentPackage: vi.fn(async () => ({
     packageName: "@scope/ext",
     packageVersion: "1.2.3",
@@ -58,9 +65,6 @@ vi.mock("@cinatra-ai/skills", () => ({
 }));
 
 vi.mock("@cinatra-ai/registries", async () => {
-  // Real (pure, dependency-free) vendor-scope helpers — the handler keys the
-  // install config's packageScope on the PACKAGE's own scope, never on the
-  // instance identity (issue #103).
   const scope = await vi.importActual<typeof import("../../../registries/src/scope")>(
     "../../../registries/src/scope",
   );
@@ -75,17 +79,17 @@ vi.mock("../materialize-agent-package", () => ({
 
 import { createAgentExtensionHandler } from "../extension-handler";
 import {
+  installAgentFromPackage,
   installAgentPackageWithDependencies,
-  extractAgentPackage,
 } from "@cinatra-ai/agents";
 
 const BROKER_URL = "https://marketplace.cinatra.ai/install/v1";
 const mockActor = { userId: "u1", organizationId: "org-1", source: "ui" as const, actorType: "human" as const };
 
-describe("createAgentExtensionHandler — gatekept version threading", () => {
+describe("createAgentExtensionHandler — #157 saga collapses the second resolver", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Broker-pointed install env: the _authToken arg carries the opaque grant.
+    sagaActiveSpy.mockReturnValue(false);
     resolveInstallEnvironmentMock.mockResolvedValue({
       args: [`--registry=${BROKER_URL}`, `--//marketplace.cinatra.ai/:_authToken=opaque.grant`],
       registryUrl: BROKER_URL,
@@ -93,36 +97,44 @@ describe("createAgentExtensionHandler — gatekept version threading", () => {
     });
   });
 
-  it("install threads ref.version into resolveInstallEnvironment", async () => {
+  it("INSIDE the saga (fan-out active): install is ROOT-ONLY — installAgentFromPackage, NOT the second resolver", async () => {
+    sagaActiveSpy.mockReturnValue(true);
     const handler = createAgentExtensionHandler();
     await handler.install({ packageName: "@scope/ext", version: "1.2.3" } as never, mockActor as never);
-    expect(resolveInstallEnvironmentMock).toHaveBeenCalledWith("@scope/ext", "1.2.3");
+
+    expect(installAgentFromPackage).toHaveBeenCalledTimes(1);
+    expect(installAgentFromPackage).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: "@scope/ext", packageVersion: "1.2.3" }),
+      expect.anything(),
+    );
+    // The second registries dep-resolver MUST NOT run inside the saga.
+    expect(installAgentPackageWithDependencies).not.toHaveBeenCalled();
   });
 
-  it("update threads ref.version into resolveInstallEnvironment", async () => {
+  it("INSIDE the saga: update is also ROOT-ONLY", async () => {
+    sagaActiveSpy.mockReturnValue(true);
     const handler = createAgentExtensionHandler();
     await handler.update({ packageName: "@scope/ext", version: "2.0.0" } as never, mockActor as never);
-    expect(resolveInstallEnvironmentMock).toHaveBeenCalledWith("@scope/ext", "2.0.0");
+
+    expect(installAgentFromPackage).toHaveBeenCalledTimes(1);
+    expect(installAgentPackageWithDependencies).not.toHaveBeenCalled();
   });
 
-  it("reuses the resolved (broker+grant) config for BOTH the dep install and the skill-scan root fetch", async () => {
+  it("OUTSIDE the saga (fan-out inactive): install keeps the full-tree resolver — direct paths still pull in deps", async () => {
+    sagaActiveSpy.mockReturnValue(false);
     const handler = createAgentExtensionHandler();
     await handler.install({ packageName: "@scope/ext", version: "1.2.3" } as never, mockActor as never);
 
-    // Dep install received the broker config (registryUrl = broker, token = grant).
-    const installCfg = vi.mocked(installAgentPackageWithDependencies).mock.calls[0]?.[1] as {
-      registryUrl: string;
-      token: string;
-    };
-    expect(installCfg.registryUrl).toBe(BROKER_URL);
-    expect(installCfg.token).toBe("opaque.grant");
+    expect(installAgentPackageWithDependencies).toHaveBeenCalledTimes(1);
+    expect(installAgentFromPackage).not.toHaveBeenCalled();
+  });
 
-    // Skill-scan SECOND root fetch (extractAgentPackage) received the SAME config.
-    const extractCfg = vi.mocked(extractAgentPackage).mock.calls[0]?.[1] as {
-      registryUrl: string;
-      token: string;
-    };
-    expect(extractCfg.registryUrl).toBe(BROKER_URL);
-    expect(extractCfg.token).toBe("opaque.grant");
+  it("OUTSIDE the saga: update keeps the full-tree resolver", async () => {
+    sagaActiveSpy.mockReturnValue(false);
+    const handler = createAgentExtensionHandler();
+    await handler.update({ packageName: "@scope/ext", version: "2.0.0" } as never, mockActor as never);
+
+    expect(installAgentPackageWithDependencies).toHaveBeenCalledTimes(1);
+    expect(installAgentFromPackage).not.toHaveBeenCalled();
   });
 });
