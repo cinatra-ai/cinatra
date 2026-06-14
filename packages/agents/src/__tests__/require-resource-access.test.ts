@@ -252,6 +252,100 @@ describe("requireResourceAccess", () => {
     ).toThrow(expect.objectContaining({ statusCode: 403 }));
   });
 
+  // ---- widget-chat carve-out (unauthenticated in-CMS widget SSE stream) ----
+  // The roleless internal-model actor may read a workspace skill ONLY when the
+  // resource carries the AUTHORITATIVE `isWidgetChatSkill` flag (stamped by the
+  // skills layer from the extension manifest's `widget-chat.*` capability, NOT
+  // the id shape). This is what unblocks the WordPress/Drupal widget stream.
+  const internalModelActor = (): ActorContext =>
+    ({
+      platformRole: "user",
+      principalType: "ServiceAccount",
+      principalId: "system",
+      authSource: "mcp",
+    }) as unknown as ActorContext;
+
+  it("allows the internal model actor reading a widget-chat skill (isWidgetChatSkill flag)", () => {
+    for (const resourceId of [
+      "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+      "@cinatra-ai/drupal-skills:drupal-widget-chat",
+    ]) {
+      expect(() =>
+        requireResourceAccess(internalModelActor(), {
+          resourceType: "skill",
+          resourceId,
+          level: "workspace",
+          isWidgetChatSkill: true,
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it("denies the internal model actor when isWidgetChatSkill is NOT set, even for a widget-shaped id", () => {
+    // The id LOOKS like a widget skill but the manifest-derived flag is absent
+    // (the skills layer did not recognise it as a widget-chat capability skill)
+    // → must stay denied. The auth boundary is the flag, never the id shape.
+    for (const resourceId of [
+      "@some-other/workspace:evil-widget-chat",
+      "custom:any:evil-widget-chat",
+      "@some-other/pkg:widget-chat",
+    ]) {
+      expect(() =>
+        requireResourceAccess(internalModelActor(), {
+          resourceType: "skill",
+          resourceId,
+          level: "workspace",
+          // isWidgetChatSkill omitted → defaults to deny
+        }),
+      ).toThrow(expect.objectContaining({ statusCode: 403 }));
+      // And explicit false is also denied.
+      expect(() =>
+        requireResourceAccess(internalModelActor(), {
+          resourceType: "skill",
+          resourceId,
+          level: "workspace",
+          isWidgetChatSkill: false,
+        }),
+      ).toThrow(expect.objectContaining({ statusCode: 403 }));
+    }
+  });
+
+  it("denies a NON-internal-model actor reading a widget-chat skill (carve-out is shape-gated)", () => {
+    // The flag alone is not enough — the carve-out still requires the exact
+    // roleless MCP service-account shape. A wrong-shaped org-less actor with a
+    // widget-chat resource must NOT pass.
+    const wrongShape = {
+      platformRole: "user",
+      principalType: "HumanUser",
+      principalId: "p1",
+      authSource: "ui",
+      // no organizationId
+    } as unknown as ActorContext;
+    expect(() =>
+      requireResourceAccess(wrongShape, {
+        resourceType: "skill",
+        resourceId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+        level: "workspace",
+        isWidgetChatSkill: true,
+      }),
+    ).toThrow(expect.objectContaining({ statusCode: 403 }));
+  });
+
+  it("denies MANAGE of a widget-chat skill for the internal model actor (manage stays admin)", () => {
+    expect(() =>
+      requireResourceAccess(
+        internalModelActor(),
+        {
+          resourceType: "skill",
+          resourceId: "@cinatra-ai/wordpress-mcp-connector:wordpress-widget-chat",
+          level: "workspace",
+          isWidgetChatSkill: true,
+        },
+        "manage",
+      ),
+    ).toThrow(expect.objectContaining({ statusCode: 403 }));
+  });
+
   // owner short-circuit × 1
   it("allows owner via principalId === ownerId short-circuit when no level matched", () => {
     const actor = {
