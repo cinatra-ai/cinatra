@@ -40,6 +40,51 @@ export type NangoConnectorKey =
   | "wordpress"
   | "youtube";
 
+// ---------------------------------------------------------------------------
+// ConnectorVendorKey — a TYPE-ONLY branded vendor-key SHAPE (#12 12a).
+//
+// ADDITIVE + NON-BREAKING. `NangoConnectorKey` is unchanged: every call site
+// keeps passing bare string literals (`"github"`, `"a2aServer"`, …) into a
+// `connectorKey: NangoConnectorKey` param, and a persisted
+// `SavedNangoConnection.connectorKey` (a plain string on disk) still reads back
+// as a `NangoConnectorKey`.
+//
+// RULING (vendor-list freeze): the SDK exposes only a branded vendor-key SHAPE —
+// it must NOT carry an authoritative vendor ROSTER or any runtime membership /
+// vendor-enumeration gate. Vendor-identity validation belongs at the host
+// manifest/gate boundary, never in the SDK. So this brand is the SHAPE a value
+// can carry once a boundary that DOES own the authoritative list has accepted it;
+// the SDK provides only the type and a pure (non-validating) cast.
+//
+// The brand is a phantom property keyed by a `unique symbol` — it is erased at
+// build, has zero runtime footprint, and a branded value is the identical string
+// at runtime (round-trips through JSON/persistence unchanged).
+// ---------------------------------------------------------------------------
+
+declare const ConnectorVendorKeyBrand: unique symbol;
+
+/**
+ * A connector vendor key that a trust boundary has accepted as a vendor identity.
+ * Structurally a `NangoConnectorKey` carrying a compile-time-only phantom brand;
+ * read-compat — assignable TO `NangoConnectorKey` and to `string` without a cast.
+ * The brand only narrows the OTHER direction: a bare string is NOT a
+ * `ConnectorVendorKey` until cast. The SDK holds no authoritative vendor list —
+ * membership validation lives at the host manifest/gate boundary.
+ */
+export type ConnectorVendorKey = NangoConnectorKey & {
+  readonly [ConnectorVendorKeyBrand]: true;
+};
+
+/**
+ * PURE cast: brand a `NangoConnectorKey` as a `ConnectorVendorKey`. Performs NO
+ * membership check and consults NO roster (the SDK owns no authoritative vendor
+ * list). The caller asserts the value was already accepted by the boundary that
+ * owns vendor identity (the host manifest/gate). Identity at runtime — returns
+ * the same value.
+ */
+export const asConnectorVendorKey = (key: NangoConnectorKey): ConnectorVendorKey =>
+  key as ConnectorVendorKey;
+
 export type NangoSettings = {
   secretKey?: string;
   serverUrl?: string;
