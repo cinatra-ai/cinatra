@@ -13,6 +13,8 @@
 // extension access policy, failing closed (redirect/throw) on denial. The SDK
 // stays a leaf contract — it owns the shape, the host owns the enforcement.
 
+import { createHostDepsSlot } from "./dependencies";
+
 export type ExtensionActionMode = "read" | "manage";
 
 /**
@@ -32,22 +34,24 @@ export type ExtensionActionGuard = (
 // into more than one module instance (server / RSC / route segments). A plain
 // module-level binding would leave the extension's instance unwired → the guard
 // would fail closed and break every gated action. (Same cross-compilation reason
-// as the email-connector registry + host extension-mcp-registry.)
-const ACTION_GUARD_KEY = Symbol.for("@cinatra-ai/sdk-extensions:action-guard/v1");
-type GuardHolder = { [k: symbol]: ExtensionActionGuard | null | undefined };
-const _holder = globalThis as unknown as GuardHolder;
+// as the email-connector registry + host extension-mcp-registry.) Built on the
+// shared `createHostDepsSlot` primitive (see ./dependencies); the slot identity
+// (the `Symbol.for` key) is unchanged.
+const _slot = createHostDepsSlot<ExtensionActionGuard>(
+  "@cinatra-ai/sdk-extensions:action-guard/v1",
+);
 
 /**
  * Wire the host enforcement. Called exactly once at boot (host instrumentation).
  * Re-calling replaces the previous impl — tests can swap a stub between blocks.
  */
 export function setExtensionActionGuard(impl: ExtensionActionGuard): void {
-  _holder[ACTION_GUARD_KEY] = impl;
+  _slot.set(impl);
 }
 
 /** @internal test-only — clear the guard so a fresh wiring is required. */
 export function _resetExtensionActionGuardForTests(): void {
-  _holder[ACTION_GUARD_KEY] = null;
+  _slot.reset();
 }
 
 /**
@@ -60,12 +64,9 @@ export async function requireExtensionAction(
   packageId: string,
   mode: ExtensionActionMode = "manage",
 ): Promise<void> {
-  const guard = _holder[ACTION_GUARD_KEY];
-  if (!guard) {
-    throw new Error(
-      `[sdk-extensions] requireExtensionAction("${packageId}", "${mode}") was called before the host ` +
-        `wired the action guard. The host must call setExtensionActionGuard(...) at boot.`,
-    );
-  }
+  const guard = _slot.require(
+    `[sdk-extensions] requireExtensionAction("${packageId}", "${mode}") was called before the host ` +
+      `wired the action guard. The host must call setExtensionActionGuard(...) at boot.`,
+  );
   await guard(packageId, mode);
 }
