@@ -15,6 +15,20 @@ export type PluginTypeConfig = {
   scopePrefixes: readonly string[];
   /** Packument key holding the dependency map. E.g. "agentDependencies" */
   packumentDepKey: string;
+  /**
+   * Optional override for HOW the resolver reads a node's transitive dependency
+   * map from its packument version entry. When provided, the resolver uses this
+   * INSTEAD of `cinatra[packumentDepKey]` at every read site (initial enqueue,
+   * newer-pick re-enqueue, and the self-describing second pass), so a plugin
+   * type can resolve from the canonical `cinatra.dependencies` vocabulary while
+   * the legacy `packumentDepKey` path stays the default for callers that do not
+   * supply it. The returned map is the SAME `{ packageName: semverRange }` shape
+   * the resolver already consumes — the override is responsible for any
+   * vocabulary projection (e.g. canonical edge → range) and for fail-loud
+   * validation. Receives the full version entry so the override can surface the
+   * package name in its diagnostics.
+   */
+  readPackumentDeps?: (entry: PackumentVersionEntry) => Record<string, string>;
 };
 
 export type ResolvedNode = {
