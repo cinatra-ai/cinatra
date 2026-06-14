@@ -31,6 +31,17 @@ import { vendorScopeOfPackage, type VerdaccioConfig } from "@cinatra-ai/registri
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { resolveConsumerOrVendorMarketplaceToken } from "@/lib/marketplace-credentials";
 
+// Re-export the marketplace transport error class through THIS host-side module
+// so consumers that map/assert on the refusal classes (the install-batch saga's
+// TTL-crossing integration proof) can construct a real `MarketplaceMcpError`
+// WITHOUT a direct vendored `@cinatra-ai/marketplace-mcp-client` import — keeping
+// the vendored-import audit (`marketplace-mcp-client-banned.mjs`) at one fewer
+// call site. `gatekept-install.ts` already owns the refusal mapping that depends
+// on this class (the `instanceof MarketplaceMcpError` branch below), so exposing
+// it here is the coherent host seam, and it moves to the published contract
+// alongside the rest of the swap.
+export { MarketplaceMcpError };
+
 /**
  * Master flag. When `false` (default), gatekept install is OFF and the legacy
  * direct-registry-read path is used unchanged. When `true`, install reads route
