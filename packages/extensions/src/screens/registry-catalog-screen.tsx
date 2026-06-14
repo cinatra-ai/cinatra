@@ -161,10 +161,26 @@ export async function RegistryCatalogScreen({
     // the durable `extension_install_batches` ledger drives the per-member
     // install progress + the batch compensation outcomes. READ-ONLY; a depless
     // single-package install never wrote a ledger row, so this is empty for an
-    // instance that only installed extensions without dependencies. Best-effort:
-    // a ledger read failure must never blank the Extensions list, so it degrades
-    // to "no recent installs" with a logged warning.
-    listRecentInstallBatches({ limit: 10 }).catch((err: unknown) => {
+    // instance that only installed extensions without dependencies.
+    //
+    // ORG-SCOPED (security): pass the actor's active org so this read returns
+    // ONLY the current organization's batches — never another tenant's. The
+    // screen is gated by requireAuthSession() alone (isAdmin only gates the
+    // Promote/Demote row actions), so an unscoped read would expose org B's
+    // root+dependency package names and per-member progress/compensation detail
+    // to any authenticated member of org A. `scope.organizationId` is the SAME
+    // active-org id the sibling `discoverActiveExtensionCapabilities({ scope })`
+    // read uses and the value the saga persists to `org_id` (saga:
+    // `input.actor.orgId ?? null`), so the read matches what was written. The
+    // ops layer filters NULL-safe (`org_id IS NOT DISTINCT FROM $1`), so a
+    // member with no active org (`null`) correctly sees only platform-scoped
+    // batches — mirroring the saga's own `(b.orgId ?? null) !== orgId` scoping.
+    // NOTE: we deliberately do NOT read cross-org here even for a platform_admin;
+    // a genuine cross-tenant operator view must be a separate, explicitly
+    // isAdmin-gated surface, not the default per-member screen.
+    // Best-effort: a ledger read failure must never blank the Extensions list,
+    // so it degrades to "no recent installs" with a logged warning.
+    listRecentInstallBatches({ limit: 10, orgId: scope.organizationId }).catch((err: unknown) => {
       console.warn(
         "[registry-catalog] could not read recent install batches (panel omitted):",
         err instanceof Error ? err.message : err,

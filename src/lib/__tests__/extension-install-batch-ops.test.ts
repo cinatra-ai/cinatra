@@ -140,6 +140,52 @@ describe("extension-install-batch-ops", () => {
     expect(query.mock.calls[1]![1]?.[0]).toBeNull();
   });
 
+  it("listRecentInstallBatches with orgId exposes NO cross-org rows (cinatra #209 item 2 leak fix)", async () => {
+    // Regression guard for the registry-catalog screen's batch read: the screen
+    // is gated by requireAuthSession() alone, so the read MUST be org-scoped or
+    // a member of org A sees org B's batches. Model a ledger that spans two orgs
+    // plus a platform-scoped (org_id null) batch; the SQL the screen drives must
+    // filter to the actor's org with the NULL-safe predicate so the DB never
+    // returns another org's rows. We assert the predicate + bound org value
+    // (the actual isolation lives in `org_id IS NOT DISTINCT FROM $1`), then
+    // confirm that a query honoring that predicate yields only the actor's org.
+    const ledger = [
+      row({ batch_id: "b-A1", org_id: "org-A", root_package: "@acme/root" }),
+      row({ batch_id: "b-B1", org_id: "org-B", root_package: "@beta/secret-root" }),
+      row({ batch_id: "b-plat", org_id: null, root_package: "@cinatra-ai/platform" }),
+    ];
+    query.mockImplementationOnce(async (sql: string, values: unknown[]) => {
+      // The store must scope by org; emulate the DB applying that predicate.
+      expect(sql).toContain("org_id IS NOT DISTINCT FROM $1");
+      const wantOrg = values[0] as string | null;
+      return ledger.filter((r) => (r.org_id ?? null) === (wantOrg ?? null));
+    });
+
+    const visible = await listRecentInstallBatches({ limit: 10, orgId: "org-A" }, deps);
+
+    // Only org-A's batch is returned — org-B's and the platform batch are not.
+    expect(visible.map((b) => b.batchId)).toEqual(["b-A1"]);
+    expect(visible.some((b) => b.orgId === "org-B")).toBe(false);
+    expect(visible.some((b) => b.rootPackage.includes("secret"))).toBe(false);
+  });
+
+  it("listRecentInstallBatches with a null active org sees only platform-scoped batches, not other orgs", async () => {
+    // A member with no active org must NOT fall through to a cross-org read;
+    // null scopes to platform-scoped (org_id IS NULL) batches only — mirroring
+    // the saga's `(b.orgId ?? null) !== orgId` scoping.
+    const ledger = [
+      row({ batch_id: "b-A1", org_id: "org-A" }),
+      row({ batch_id: "b-plat", org_id: null }),
+    ];
+    query.mockImplementationOnce(async (sql: string, values: unknown[]) => {
+      expect(sql).toContain("org_id IS NOT DISTINCT FROM $1");
+      const wantOrg = values[0] as string | null;
+      return ledger.filter((r) => (r.org_id ?? null) === (wantOrg ?? null));
+    });
+    const visible = await listRecentInstallBatches({ limit: 10, orgId: null }, deps);
+    expect(visible.map((b) => b.batchId)).toEqual(["b-plat"]);
+  });
+
   it("listRecentInstallBatches clamps the limit into [1, 200]", async () => {
     query.mockResolvedValueOnce([]);
     await listRecentInstallBatches({ limit: 9999 }, deps);
