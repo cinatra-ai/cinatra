@@ -85,6 +85,14 @@ function makeHarness(opts: {
       events.push("global-lock");
       return fn();
     },
+    withSagaOwnedFanout: async (_root, fn) => {
+      events.push("saga-fanout-context");
+      return fn();
+    },
+    triggerAgentRuntimeReload: vi.fn(async () => {
+      events.push("agent-reload");
+      return { ok: true as const };
+    }),
     plan: async () => {
       events.push("plan");
       const plan: DependencyInstallPlan = {
@@ -203,6 +211,80 @@ describe("installExtensionWithDependencies — happy path", () => {
     );
     expect(h.events).not.toContain("install:@cinatra-ai/dep-a");
     expect(res.alreadyInstalled).toEqual(["@cinatra-ai/dep-a"]);
+  });
+});
+
+describe("installExtensionWithDependencies — #157 saga owns fan-out + single agent reload", () => {
+  it("every member install runs INSIDE the saga-owned-fan-out context (agent handler installs root-only)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+    });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    // The fan-out context wraps EACH install dispatch.
+    const fanoutEnters = h.events.filter((e) => e === "saga-fanout-context").length;
+    const installs = h.events.filter((e) => e.startsWith("install:")).length;
+    expect(installs).toBe(3);
+    expect(fanoutEnters).toBe(3);
+  });
+
+  it("fires the SINGLE agent reload ONCE when an agent member is installed — after finalize", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a", { typeId: "skill" }), member(ROOT, { typeId: "agent" })],
+    });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(h.events.filter((e) => e === "agent-reload")).toHaveLength(1);
+    // Reload is the LAST step (after the batch is finalized).
+    expect(h.events.indexOf("agent-reload")).toBeGreaterThan(h.events.indexOf("ledger:phase:finalized"));
+  });
+
+  it("does NOT reload when NO agent member was installed (connector/skill-only batch)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a", { typeId: "skill" }), member(ROOT, { typeId: "connector" })],
+    });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(h.events).not.toContain("agent-reload");
+  });
+
+  it("ROOT-ONLY fast path: an agent root reloads exactly once", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { typeId: "agent" })] });
+    const res = await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(res.batchId).toBeNull();
+    expect(h.events.filter((e) => e === "saga-fanout-context")).toHaveLength(1);
+    expect(h.events.filter((e) => e === "agent-reload")).toHaveLength(1);
+  });
+
+  it("ROOT-ONLY fast path: a NON-agent root does not reload", async () => {
+    const h = makeHarness({ plan: [member(ROOT, { typeId: "connector" })] });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(h.events).not.toContain("agent-reload");
+  });
+
+  it("does NOT reload when a member install FAILS (batch compensates instead)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a", { typeId: "agent" }), member(ROOT, { typeId: "agent" })],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow();
+    expect(h.events).not.toContain("agent-reload");
+  });
+
+  it("a reload that THROWS is best-effort: the completed install still succeeds", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a", { typeId: "skill" }), member(ROOT, { typeId: "agent" })],
+    });
+    // The reload seam REJECTS (not just ok:false) — must be swallowed.
+    h.deps.triggerAgentRuntimeReload = vi.fn(async () => {
+      throw new Error("wayflow unreachable");
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    );
+    // Batch finalized + returned despite the reload throw.
+    expect(res.batchId).not.toBeNull();
+    expect(h.events).toContain("ledger:phase:finalized");
   });
 });
 

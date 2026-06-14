@@ -4,7 +4,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
+  installAgentFromPackage,
   installAgentPackageWithDependencies,
+  isSagaOwnedFanoutActive,
   extractAgentPackage,
   cleanupExtractedAgentPackage,
   deleteAgentTemplate,
@@ -179,14 +181,48 @@ async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "pub
     throw e;
   }
 
-  const result = await installAgentPackageWithDependencies(
-    {
-      packageName: ref.packageName,
-      packageVersion: ref.version,
-      status,
-    },
-    config,
-  );
+  // #157: COLLAPSE THE SECOND RESOLVER. When the batch saga drives this
+  // install (it has already PLANNED + topo-ordered the whole closure and
+  // dispatches each member ROOT-ONLY through extensionRegistry.install), the
+  // handler must NOT re-fan-out the tree via the @cinatra-ai/registries
+  // dep-resolver — that second walk uses a DIFFERENT conflict policy
+  // ("prefer-newer" vs the saga's exact pins) and is the two-resolver-
+  // disagreement risk. Inside the saga context we install ONLY the root
+  // package; the saga installs the dependencies (and fires the single WayFlow
+  // reload at its success boundary). Outside the saga (UI extension update,
+  // MCP extensions_update, reinstall-latest, or any other direct
+  // extensionRegistry.install/update caller) the context is absent and we keep
+  // the full-tree installer — those paths do NOT route through the saga and
+  // still depend on the handler to pull in newly-required dependencies.
+  const sagaOwnsFanout = isSagaOwnedFanoutActive();
+  const result = sagaOwnsFanout
+    ? await (async () => {
+        const single = await installAgentFromPackage(
+          {
+            packageName: ref.packageName,
+            packageVersion: ref.version,
+            status,
+          },
+          config,
+        );
+        // Root-only shape: the saga owns the dependency fan-out, so the only
+        // template this handler call installed is the root. The single WayFlow
+        // reload is fired ONCE by the saga after the whole batch succeeds — not
+        // per member — so it is intentionally absent here.
+        return {
+          rootTemplateId: single.templateId,
+          installedTemplateIds: [single.templateId],
+          wayflowReload: undefined,
+        };
+      })()
+    : await installAgentPackageWithDependencies(
+        {
+          packageName: ref.packageName,
+          packageVersion: ref.version,
+          status,
+        },
+        config,
+      );
 
   try {
     await registerSkillsFromPackage(ref.packageName, ref.version, config);
