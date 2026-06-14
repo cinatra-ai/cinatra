@@ -16,7 +16,6 @@
     },
     "./email-contract": "./src/email-connector-contract.ts",
     "./register": "./src/register.ts",
-    "./registries": "./src/registries.ts",
     "./manifest": "./src/manifest.ts",
     "./dependencies": "./src/dependencies.ts",
     "./social-contract": "./src/social-media-connector-contract.ts",

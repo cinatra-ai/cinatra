@@ -449,3 +449,16 @@ export type {
   NangoRouteResult,
   NangoSystemSurface,
 } from "./nango-system-contract";
+
+// The typed capability-id -> contract-surface map: compile-time ergonomics for
+// `ctx.capabilities.resolveProviders(<known-id>)` (the `impl` narrows to the
+// mapped surface). TYPE-ONLY and ADDITIVE — the capabilities port keeps its open
+// `string` signature, the registry still stores `unknown`, and the host's
+// structural guards remain the runtime trust boundary. The capability-id
+// CONSTANTS stay fenced behind `@cinatra-ai/sdk-extensions/internal`; only this
+// type map is public.
+export type {
+  CapabilityContractMap,
+  KnownCapabilityId,
+  ResolvedCapabilityProvider,
+} from "./capability-contract-map";

@@ -33,6 +33,15 @@
 // `@cinatra-ai/sdk-*` only (see package.json), so host-specific shapes are kept
 // opaque here and refined when the ABI freezes.
 
+// Type-only: the capability-id -> contract-surface map (compile-time ergonomics
+// for the capabilities port; see `HostCapabilitiesPort.resolveProviders`). This
+// is a `import type` of pure types — host-agnostic, no value import, so the
+// "type-only, no host internals" invariant above holds.
+import type {
+  KnownCapabilityId,
+  ResolvedCapabilityProvider,
+} from "./capability-contract-map";
+
 /**
  * Opaque scoped DB handle. Least-privilege; most extensions never need it.
  *
@@ -213,8 +222,19 @@ export type HostRuntimePort = {
  * capability-based dependency model). This is how a connector advertises what it
  * can DO without dependents pinning a concrete provider.
  */
+// `resolveProviders` carries an ADDITIVE typed overload: for a first-party
+// capability id KNOWN to `CapabilityContractMap` it returns providers whose
+// `impl` is the mapped surface type (compile-time ergonomics — callers no longer
+// hand-cast `impl as Partial<TSurface>`); the open `string` overload is kept so
+// ANY capability id still resolves to `{ packageName; impl: unknown }[]`. The
+// registry stores `unknown` either way — the typed overload narrows the COMPILE
+// type only, so the host's structural `isXSurface` guards remain the runtime
+// trust boundary (this is NOT a runtime validator and NOT a closed roster).
 export type HostCapabilitiesPort = {
   registerProvider(capability: string, provider: { packageName: string; impl: unknown }): void;
+  resolveProviders<Id extends KnownCapabilityId>(
+    capability: Id,
+  ): ResolvedCapabilityProvider<Id>[];
   resolveProviders(capability: string): { packageName: string; impl: unknown }[];
 };
 
