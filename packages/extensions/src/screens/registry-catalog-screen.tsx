@@ -57,6 +57,8 @@ import {
   ToolbarSeparator,
 } from "@/components/ui/toolbar";
 import { ExtensionsTabSelect } from "@/components/extensions/extensions-tab-select";
+import { InstallBatchPanel } from "@/components/extensions/install-batch-panel";
+import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -148,13 +150,27 @@ export async function RegistryCatalogScreen({
     vendorScope ?? null,
   );
 
-  const [available, discovered, archivedTemplates] = await Promise.all([
+  const [available, discovered, archivedTemplates, recentBatches] = await Promise.all([
     listAgentPackages({ query, limit: 200, viewerScope: vendorScope }, verdaccioConfig),
     // Active = canonical dispatcher: installed_extension (active|locked) gate ∩
     // the agent kind's visibility reader. A published template with no live
     // manifest (never-installed) is correctly excluded — it is not "active".
     discoverActiveExtensionCapabilities({ kind: "agent", actor, scope }),
     readArchivedExtensionTemplates(vendorScope),
+    // Recent dependency-install batches (cinatra #209 item 2, surfaces 2 & 3):
+    // the durable `extension_install_batches` ledger drives the per-member
+    // install progress + the batch compensation outcomes. READ-ONLY; a depless
+    // single-package install never wrote a ledger row, so this is empty for an
+    // instance that only installed extensions without dependencies. Best-effort:
+    // a ledger read failure must never blank the Extensions list, so it degrades
+    // to "no recent installs" with a logged warning.
+    listRecentInstallBatches({ limit: 10 }).catch((err: unknown) => {
+      console.warn(
+        "[registry-catalog] could not read recent install batches (panel omitted):",
+        err instanceof Error ? err.message : err,
+      );
+      return [] as Awaited<ReturnType<typeof listRecentInstallBatches>>;
+    }),
   ]);
   const activeTemplates = (discovered.byKind.agent ?? []) as AgentTemplateRecord[];
   // Fail loud, never silent: `unmigratedKinds` contains "agent" only when the
@@ -237,7 +253,12 @@ export async function RegistryCatalogScreen({
         </Toolbar>
 
         {tab === "active" ? (
-          <div>
+          <div className="flex flex-col gap-6">
+            {/* Recent dependency-install batches: per-member progress +
+                compensation outcomes from the durable ledger (cinatra #209
+                item 2, surfaces 2 & 3). Renders nothing when there are no
+                batches. */}
+            <InstallBatchPanel batches={recentBatches} />
             {activeRowsWithVariant.length === 0 ? (
               <ActiveEmptyState />
             ) : (

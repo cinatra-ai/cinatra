@@ -49,6 +49,9 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MarketplaceReadmeMarkdownSection } from "@/components/marketplace-readme-section";
+import { RequiredDependenciesSection } from "@/components/extensions/required-dependencies-section";
+import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
+import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { Tabs, TabsContent, TabsList, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ImportAgentForm } from "./import-form";
@@ -587,6 +590,27 @@ export async function RegistryEntryDetailSections({
   // Detail-screen single-key lookup (NOT bulk reader).
   const installedTemplate = await readAgentTemplateByPackageName(entry.packageName);
 
+  // Pre-install "A requires B, C" (cinatra #209 item 2, surface 1): derive the
+  // requires summary from the SAME manifest edges the install gates and the
+  // dependency planner read (`parseManifestDependencyEdges`), so the surface
+  // can never promise an install behavior the saga does not perform. This is a
+  // DISPLAY-ONLY read; a malformed-edge manifest must not crash the detail page
+  // (the per-member forward install gate stays the real enforcement boundary),
+  // so a parse failure degrades to "no requires shown" with a logged warning.
+  let requiredDependencies = summarizeRequiredDependencies([]);
+  try {
+    const { edges } = parseManifestDependencyEdges(entry.manifest, {
+      packageName: entry.packageName,
+    });
+    requiredDependencies = summarizeRequiredDependencies(edges);
+  } catch (depErr) {
+    console.warn(
+      "[registry-detail] could not parse dependency edges for %s (requires surface omitted):",
+      entry.packageName,
+      depErr instanceof Error ? depErr.message : depErr,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Server-side compute of install picker rows.
   //
@@ -811,6 +835,11 @@ export async function RegistryEntryDetailSections({
           <p className="text-sm text-muted-foreground">No approval gates required.</p>
         )}
       </section>
+
+      {/* Pre-install "A requires B, C" — surfaced immediately above the install
+          controls so the operator sees what an install pulls in BEFORE they
+          commit. Renders nothing when the package declares no dependencies. */}
+      <RequiredDependenciesSection summary={requiredDependencies} />
 
       <section className="soft-panel rounded-card px-6 py-5">
         <h2 className="text-sm font-semibold text-foreground mb-4">Install</h2>

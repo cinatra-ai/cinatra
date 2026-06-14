@@ -9,6 +9,7 @@ import {
   readInstallBatch,
   listActiveInstallBatches,
   listStaleInstallBatches,
+  listRecentInstallBatches,
   type InstallBatchMember,
   type InstallBatchOpsDeps,
 } from "@/lib/extension-install-batch-ops";
@@ -112,5 +113,39 @@ describe("extension-install-batch-ops", () => {
     await listStaleInstallBatches(60_000, deps);
     expect(query.mock.calls[1]![0]).toContain("milliseconds");
     expect(query.mock.calls[1]![1]?.[1]).toBe("60000");
+  });
+
+  it("listRecentInstallBatches orders by updated_at DESC, clamps the limit, and is unscoped by default", async () => {
+    query.mockResolvedValueOnce([row({ phase: "finalized" })]);
+    const batches = await listRecentInstallBatches({ limit: 10 }, deps);
+    expect(batches[0]!.phase).toBe("finalized");
+    const [sql, values] = query.mock.calls[0]!;
+    expect(sql).toContain("ORDER BY updated_at DESC");
+    expect(sql).toContain("LIMIT $1");
+    expect(sql).not.toContain("phase = ANY"); // any phase, including terminal
+    expect(values?.[0]).toBe(10);
+  });
+
+  it("listRecentInstallBatches scopes by org_id (NULL-safe) when orgId is provided", async () => {
+    query.mockResolvedValueOnce([row({ org_id: "org-1" })]);
+    await listRecentInstallBatches({ limit: 5, orgId: "org-1" }, deps);
+    const [sql, values] = query.mock.calls[0]!;
+    expect(sql).toContain("org_id IS NOT DISTINCT FROM $1");
+    expect(values?.[0]).toBe("org-1");
+    expect(values?.[1]).toBe(5);
+
+    // Explicit null scope → platform-scoped batches.
+    query.mockResolvedValueOnce([row({ org_id: null })]);
+    await listRecentInstallBatches({ orgId: null }, deps);
+    expect(query.mock.calls[1]![1]?.[0]).toBeNull();
+  });
+
+  it("listRecentInstallBatches clamps the limit into [1, 200]", async () => {
+    query.mockResolvedValueOnce([]);
+    await listRecentInstallBatches({ limit: 9999 }, deps);
+    expect(query.mock.calls[0]![1]?.[0]).toBe(200);
+    query.mockResolvedValueOnce([]);
+    await listRecentInstallBatches({ limit: 0 }, deps);
+    expect(query.mock.calls[1]![1]?.[0]).toBe(1);
   });
 });
