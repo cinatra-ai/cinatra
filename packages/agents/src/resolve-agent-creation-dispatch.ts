@@ -6,7 +6,9 @@
  * and `readAgentCreationModelFromDatabase` in `src/lib/database.ts`.
  *
  * Standing invariants honoured:
- *   1. INACTIVE pin -> byte-for-byte openai/gpt-5 default behavior.
+ *   1. INACTIVE pin -> provider openai with the operator-configured OpenAI
+ *      default model (openai_connection.defaultModel), falling back to the
+ *      canonical DEFAULT_OPENAI_MODEL_ID ("gpt-5.5") — never base gpt-5.
  *   2. ACTIVE pin -> admin-configured provider/model. Anthropic ALWAYS routes
  *      via the skill-aware path (SkillDeliveryAdapter container.skills) - never
  *      function tools. The dispatch site also refuses to fire when provider
@@ -21,6 +23,12 @@
  */
 
 import "server-only";
+
+// Canonical OpenAI fallback model id — same package, no circular import. Used
+// as the last-resort default when the inactive-pin path cannot read the
+// operator-configured openai_connection.defaultModel (e.g. DB unavailable), so
+// dispatch NEVER falls through to base gpt-5.
+import { DEFAULT_OPENAI_MODEL_ID } from "./llm-provider-policy";
 
 // ---------------------------------------------------------------------------
 // Sentinel error classes
@@ -67,9 +75,10 @@ const VALID_PROVIDERS: ReadonlySet<string> = new Set(["openai", "anthropic", "ge
 /**
  * Resolve the agent-creation LLM dispatch parameters.
  *
- *   - When `isAgentCreationPinActive()` returns false, returns openai/gpt-5
- *     with `useSkillAware` mirroring the caller hint, preserving the default
- *     hardcoded behavior.
+ *   - When `isAgentCreationPinActive()` returns false, returns provider openai
+ *     with the operator-configured OpenAI default model (or the canonical
+ *     `DEFAULT_OPENAI_MODEL_ID` fallback) and `useSkillAware` mirroring the
+ *     caller hint.
  *
  *   - When ACTIVE, reads `agent_creation_llm_provider` +
  *     `agent_creation_model`. Returns those values; for Anthropic,
@@ -98,14 +107,31 @@ export async function resolveAgentCreationDispatch(input: {
     isAgentCreationPinActive,
     readAgentCreationLlmProviderFromDatabase,
     readAgentCreationModelFromDatabase,
+    readOpenAIConnectionFromDatabase,
   } = await getDatabaseModule();
 
   if (!isAgentCreationPinActive()) {
-    // INACTIVE - byte-for-byte default. Matches the hardcoded
-    // `provider:"openai", model:"gpt-5"` literal.
+    // INACTIVE pin (the live default today — `isAgentCreationPinActive`
+    // returns false unconditionally). Provider stays openai, but the MODEL
+    // honors the operator-configured OpenAI default
+    // (`cinatra.metadata openai_connection.defaultModel`, set via /setup/ai +
+    // /configuration/llm). `readOpenAIConnectionFromDatabase` resolves that
+    // stored value and itself falls back to the canonical
+    // `DEFAULT_OPENAI_MODEL_ID` ("gpt-5.5") when unset.
+    //
+    // The read can throw if the DB is unavailable (this path previously read
+    // no config and never threw); a throw must still NOT fall through to base
+    // gpt-5, so we catch and use the canonical default. Either way the model is
+    // the operator-configured value or "gpt-5.5" — never base gpt-5.
+    let model: string;
+    try {
+      model = readOpenAIConnectionFromDatabase().defaultModel;
+    } catch {
+      model = DEFAULT_OPENAI_MODEL_ID;
+    }
     return {
       provider: "openai",
-      model: "gpt-5",
+      model,
       useSkillAware: input.hasSkillIds,
     };
   }
