@@ -98,7 +98,7 @@ function makeDocker({ running = [], plugins = [], modules = [] } = {}) {
   return function dockerImpl(args) {
     if (args[0] === "ps") {
       const filter = args.find((a) => a.startsWith("name=^/"));
-      const name = filter ? filter.replace("name=^/", "").replace("$", "") : "";
+      const name = filter ? filter.replace("name=^/", "").replaceAll("$", "") : "";
       return { status: 0, stdout: running.includes(name) ? name : "" };
     }
     if (args[0] === "exec" && args.includes("plugin")) {
