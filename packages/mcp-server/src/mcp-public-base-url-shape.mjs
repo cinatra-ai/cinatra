@@ -61,7 +61,13 @@ export function normaliseMcpPublicBaseUrl(input, options) {
   if (typeof input !== "string") {
     return { url: null, source: "unknown" };
   }
-  const trimmed = input.trim().replace(/\/+$/, "");
+  // Strip trailing slashes via a LINEAR char-index trim. The previous
+  // `/\/+$/` is an anchored greedy slash-repetition — polynomial-ReDoS on
+  // input with many trailing slashes (CodeQL js/polynomial-redos, high).
+  const trimmedInput = input.trim();
+  let trimEnd = trimmedInput.length;
+  while (trimEnd > 0 && trimmedInput.charCodeAt(trimEnd - 1) === 47) trimEnd--; // 47 = "/"
+  const trimmed = trimmedInput.slice(0, trimEnd);
   if (trimmed.length === 0) return { url: null, source: "unknown" };
 
   let parsed;
