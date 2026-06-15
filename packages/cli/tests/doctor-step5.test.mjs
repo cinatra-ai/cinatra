@@ -268,7 +268,7 @@ describe("gatherDoctorReport — full report", () => {
       "POST http://localhost:3000/api/auth/oauth2/token": () =>
         jsonResponse(200, { access_token: TOKEN }),
       "POST http://localhost:3000/api/mcp": () =>
-        jsonResponse(200, { result: { tools: [{ name: "blog_post_publish_wordpress_start" }, { name: "contacts_list" }] } }),
+        jsonResponse(200, { result: { tools: [{ name: "blog_post_publish_wordpress_start" }, { name: "crm_contact_search" }] } }),
       "POST https://node.example.ts.net/api/mcp": () =>
         jsonResponse(200, { result: { tools: [{ name: "blog_post_update" }] } }),
     });
@@ -334,7 +334,7 @@ describe("gatherDoctorReport — full report", () => {
       "POST http://localhost:3000/api/auth/oauth2/token": () => jsonResponse(200, { access_token: "t" }),
       "POST http://localhost:3000/api/mcp": () =>
         // a LinkedIn publish tool must NOT satisfy the CMS-write requirement
-        jsonResponse(200, { result: { tools: [{ name: "blog_post_publish_linkedin_start" }, { name: "contacts_list" }] } }),
+        jsonResponse(200, { result: { tools: [{ name: "blog_post_publish_linkedin_start" }, { name: "crm_contact_search" }] } }),
       "POST https://node.example.ts.net/api/mcp": () => jsonResponse(200, { result: { tools: [] } }),
     });
     const report = await gatherDoctorReport({
@@ -440,7 +440,7 @@ describe("gatherDoctorReport — full report", () => {
       // public endpoint answers but exposes only generic tools (e.g. a stale,
       // wrong instance) — must NOT pass the provider-facing gate.
       "POST https://node.example.ts.net/api/mcp": () =>
-        jsonResponse(200, { result: { tools: [{ name: "contacts_list" }, { name: "accounts_list" }] } }),
+        jsonResponse(200, { result: { tools: [{ name: "crm_contact_search" }, { name: "crm_account_search" }] } }),
     });
     const report = await gatherDoctorReport({
       client: createMetadataClient(baseStore()),
