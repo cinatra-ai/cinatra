@@ -48,9 +48,67 @@ import "server-only";
 // the loader's own fail-open path and the post-boot required-set activation
 // assertion of the registration cutover are the backstops.
 
+import { isInstallBlockingEdge } from "@cinatra-ai/extensions/dependency-closure";
+import type { NormalizedExtensionRecord } from "@cinatra-ai/sdk-extensions";
+
 import {
   STATIC_EXTENSION_RECORDS,
 } from "@/lib/generated/extensions.server";
+
+/**
+ * The transitive REQUIRED-dependency closure of a seed set, over the bundled
+ * registry's dependency edges.
+ *
+ * The boot closure gate (extension-closure-boot-gate.ts → dependency-closure.ts
+ * `findBrokenClosures`/`computeClosure`) fails a prod boot closed when an
+ * `active|locked` row holds an INSTALL-BLOCKING edge (a `required`, non-`peer`
+ * runtime/install-time edge — `isInstallBlockingEdge`) whose target has no live
+ * row. A bundled serverEntry/required-in-prod record is anchored (seeded) and so
+ * gets a live row; but its OWN install-blocking targets are not necessarily
+ * seeded by the base filter — a target with `serverEntry=null` that is not
+ * itself required-in-prod (e.g. a host-only OAuth/UI connector) gets no anchor,
+ * so the seeded dependent's edge to it is unsatisfiable and the boot throws.
+ *
+ * Seeding the transitive install-blocking closure of the seed set closes that
+ * gap PRINCIPALLY: every package the boot gate would walk as a required edge
+ * from a seeded row is itself anchored, so seeding and the assert agree. We key
+ * on the SAME predicate (`isInstallBlockingEdge`) and the SAME edge source
+ * (`record.dependencies`, an `ExtensionDependency[]`) the boot gate uses — peer
+ * and optional edges are deliberately NOT followed (they are never
+ * install/boot-blocking), so this never over-anchors. Cycles are handled (the
+ * visited set), and edges to packages outside the bundled registry are ignored
+ * (an unbundled target cannot be anchored from here — the boot gate surfaces it
+ * the same way regardless).
+ */
+export function transitiveRequiredClosure(
+  seedPackageNames: Iterable<string>,
+  records: readonly NormalizedExtensionRecord[],
+): Set<string> {
+  const byName = new Map(records.map((r) => [r.packageName, r] as const));
+  const closure = new Set<string>();
+  const stack: string[] = [];
+  for (const name of seedPackageNames) {
+    if (byName.has(name) && !closure.has(name)) {
+      closure.add(name);
+      stack.push(name);
+    }
+  }
+  while (stack.length > 0) {
+    const rec = byName.get(stack.pop()!);
+    if (!rec) continue;
+    for (const dep of rec.dependencies ?? []) {
+      // Only follow edges the boot closure gate would treat as blocking
+      // (required, non-peer). Optional/peer edges never break a boot, so
+      // following them would anchor records the gate does not require.
+      if (!isInstallBlockingEdge(dep)) continue;
+      if (!byName.has(dep.packageName)) continue; // unbundled target — cannot anchor here
+      if (closure.has(dep.packageName)) continue; // cycle / already queued
+      closure.add(dep.packageName);
+      stack.push(dep.packageName);
+    }
+  }
+  return closure;
+}
 
 export type StaticBundleLifecycleResult = {
   /** Packages whose anchor was created/adopted live (active, or locked in prod). */
@@ -88,11 +146,26 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   const { isExtensionKind } = await import("@cinatra-ai/extensions/canonical-types");
   const { randomUUID } = await import("node:crypto");
 
-  const records = STATIC_EXTENSION_RECORDS.filter(
+  // Base seed set: bundled serverEntry packages + bundled required-in-prod
+  // packages (unchanged from PR #204).
+  const baseSeed = STATIC_EXTENSION_RECORDS.filter(
     (r) =>
       (typeof r.serverEntry === "string" && r.serverEntry.length > 0) ||
       isPackageRequiredInProd(r.packageName),
   );
+  // Transitive REQUIRED-closure seeding: a record is ALSO anchored when it is a
+  // required (non-peer, non-optional) dependency — transitively — of any
+  // base-seed record. This makes serverEntry-less required targets (e.g. a
+  // host-only OAuth connector that a seeded connector requires) get a DB anchor,
+  // so the boot closure gate's required edge to them resolves instead of failing
+  // closed (fixes the linkedin-oauth-connector boot crash; see PR #204, #253).
+  // We follow the SAME install-blocking edge predicate and edge source the boot
+  // gate uses, so seeding and the assert agree and nothing is over-anchored.
+  const anchorNames = transitiveRequiredClosure(
+    baseSeed.map((r) => r.packageName),
+    STATIC_EXTENSION_RECORDS,
+  );
+  const records = STATIC_EXTENSION_RECORDS.filter((r) => anchorNames.has(r.packageName));
   if (records.length === 0) return result;
 
   const actorOpts = {
