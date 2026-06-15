@@ -1716,7 +1716,13 @@ function resolveLocalOrigin(env) {
     env.BETTER_AUTH_URL ??
     env.NEXT_PUBLIC_BETTER_AUTH_URL ??
     "http://localhost:3000";
-  return String(raw).trim().replace(/\/+$/, "");
+  // strip trailing slashes via a LINEAR char-index trim — an anchored greedy
+  // slash-repetition (`/\/+$/`) is polynomial-ReDoS on many trailing slashes
+  // (CodeQL js/polynomial-redos, high).
+  const s = String(raw).trim();
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return s.slice(0, end);
 }
 
 // Bounded timeout for the token-mint probe. A reachable-but-stalled token route
