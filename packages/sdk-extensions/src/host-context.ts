@@ -33,6 +33,15 @@
 // `@cinatra-ai/sdk-*` only (see package.json), so host-specific shapes are kept
 // opaque here and refined when the ABI freezes.
 
+// Type-only: the capability-id -> contract-surface map (compile-time ergonomics
+// for the capabilities port; see `HostCapabilitiesPort.resolveProviders`). This
+// is a `import type` of pure types — host-agnostic, no value import, so the
+// "type-only, no host internals" invariant above holds.
+import type {
+  KnownCapabilityId,
+  ResolvedCapabilityProvider,
+} from "./capability-contract-map";
+
 /**
  * Opaque scoped DB handle. Least-privilege; most extensions never need it.
  *
@@ -213,8 +222,19 @@ export type HostRuntimePort = {
  * capability-based dependency model). This is how a connector advertises what it
  * can DO without dependents pinning a concrete provider.
  */
+// `resolveProviders` carries an ADDITIVE typed overload: for a first-party
+// capability id KNOWN to `CapabilityContractMap` it returns providers whose
+// `impl` is the mapped surface type (compile-time ergonomics — callers no longer
+// hand-cast `impl as Partial<TSurface>`); the open `string` overload is kept so
+// ANY capability id still resolves to `{ packageName; impl: unknown }[]`. The
+// registry stores `unknown` either way — the typed overload narrows the COMPILE
+// type only, so the host's structural `isXSurface` guards remain the runtime
+// trust boundary (this is NOT a runtime validator and NOT a closed roster).
 export type HostCapabilitiesPort = {
   registerProvider(capability: string, provider: { packageName: string; impl: unknown }): void;
+  resolveProviders<Id extends KnownCapabilityId>(
+    capability: Id,
+  ): ResolvedCapabilityProvider<Id>[];
   resolveProviders(capability: string): { packageName: string; impl: unknown }[];
 };
 
@@ -320,3 +340,64 @@ export const HOST_PORT_NAMES = [
 ] as const;
 
 export type HostPortName = (typeof HOST_PORT_NAMES)[number];
+
+// ---------------------------------------------------------------------------
+// ABI-evolution policy: per-port lifecycle TIER. Codifies "reserved-port
+// tiering" as DATA — previously it lived only as prose in the `db` TSDoc above +
+// a hardcoded `"not-implemented"` branch in the host factory
+// (src/lib/extension-host-context.ts). This TS table is the CANONICAL source: the
+// host factory imports it directly to drive its `"not-implemented"` branch, so
+// wiring a reserved port is a one-line tier flip here. The build-time manifest
+// generator runs under bare Node and cannot import this TS module, so it keeps a
+// literal mirror of the derived reserved set — a guarded-parity copy, asserted to
+// match this table by a vitest parity test (drift fails CI), NOT a second source
+// of truth.
+//
+// ADDITIVE / NON-BREAKING: this changes NO existing type. `ExtensionHostContext`
+// keeps every port a required property (the deliberate type-model decision in the
+// file header at the top) — the tier is METADATA *about* a port, not a change to
+// the surface. No ABI bump: declaring a tier adds no port and wires none.
+//
+// EVOLUTION RULE (the policy this codifies):
+//   - adding a NEW port              → ABI MAJOR.
+//   - wiring a `reserved` → `stable` → ABI MINOR (the port already exists; an
+//                                      older host just fail-louds it).
+//   - removing / reshaping a port    → ABI MAJOR.
+// ---------------------------------------------------------------------------
+
+/** ABI lifecycle tier of a host port. */
+export const HOST_PORT_TIERS = ["stable", "reserved"] as const;
+export type HostPortTier = (typeof HOST_PORT_TIERS)[number];
+
+/**
+ * Per-port ABI tier.
+ *  - `stable`   — wired, frozen, safe to grant. The real host impl is returned.
+ *  - `reserved` — declared in the frozen surface but NOT wired. Granting it is
+ *    fail-loud (`"not-implemented"`) until a future MINOR wires it.
+ *
+ * Today only `db` is reserved (the scoped escape hatch; see its TSDoc above).
+ * The host factory's not-implemented branch derives from THIS map directly (a TS
+ * import); the bare-Node manifest generator keeps a literal mirror guarded by a
+ * parity test that asserts it equals the derived `RESERVED_HOST_PORTS` below.
+ */
+export const HOST_PORT_TIER: Readonly<Record<HostPortName, HostPortTier>> = {
+  db: "reserved",
+  settings: "stable",
+  secrets: "stable",
+  nango: "stable",
+  authSession: "stable",
+  mcp: "stable",
+  objects: "stable",
+  jobs: "stable",
+  notifications: "stable",
+  ui: "stable",
+  logger: "stable",
+  runtime: "stable",
+  capabilities: "stable",
+  telemetry: "stable",
+} as const;
+
+/** The reserved-tier ports, derived from `HOST_PORT_TIER` (today: `["db"]`). */
+export const RESERVED_HOST_PORTS: readonly HostPortName[] = HOST_PORT_NAMES.filter(
+  (p) => HOST_PORT_TIER[p] === "reserved",
+);

@@ -274,6 +274,40 @@ export async function listActiveInstallBatches(
 }
 
 /**
+ * Recent batches (any phase) for the extensions admin view — most-recently
+ * updated first, capped. READ-ONLY surface over the existing ledger: it
+ * supplies the per-member install progress + the batch compensation outcomes
+ * the admin UX renders (cinatra #209 item 2). When `orgId` is provided only
+ * that org's batches are returned (`null` = platform-scoped batches); omit it
+ * to read across scopes (a platform_admin operator view).
+ */
+export async function listRecentInstallBatches(
+  opts?: { limit?: number; orgId?: string | null },
+  deps?: InstallBatchOpsDeps,
+): Promise<InstallBatch[]> {
+  const { query, schema } = await resolveDeps(deps);
+  const limit = Math.min(Math.max(1, Math.trunc(opts?.limit ?? 25)), 200);
+  const scopeProvided = opts !== undefined && "orgId" in opts;
+  if (scopeProvided) {
+    const rows = await query<BatchRow>(
+      `SELECT ${SELECT_COLUMNS} FROM ${qualifiedTable(schema)}
+        WHERE org_id IS NOT DISTINCT FROM $1
+        ORDER BY updated_at DESC
+        LIMIT $2`,
+      [opts!.orgId ?? null, limit],
+    );
+    return rows.map(rowToBatch);
+  }
+  const rows = await query<BatchRow>(
+    `SELECT ${SELECT_COLUMNS} FROM ${qualifiedTable(schema)}
+      ORDER BY updated_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows.map(rowToBatch);
+}
+
+/**
  * ACTIVE batches idle for ≥ `olderThanMs` — the boot sweeper's read (a batch
  * in-flight in another worker keeps advancing `updated_at` via member
  * patches, so a fresh threshold never sweeps a live batch).

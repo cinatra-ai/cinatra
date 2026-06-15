@@ -7,7 +7,8 @@ import "server-only";
 // GRANT-AWARE: a privileged port is the real wired impl ONLY when the extension
 // declared it in `requestedHostPorts`; otherwise it is FAIL-LOUD (throws on
 // access) — distinguishing "not granted" (least-privilege denial) from
-// "not implemented" (a port the host factory has not wired). Ambient ports
+// "not implemented" (a granted `reserved`-tier port the host factory has not
+// wired; driven by the canonical HOST_PORT_TIER table). Ambient ports
 // (logger/runtime) are always available.
 //
 // The prototype is now the REAL host. Every privileged port
@@ -27,6 +28,10 @@ import type {
   HostPortName,
   HostUsageEvent,
 } from "@cinatra-ai/sdk-extensions";
+// The per-port ABI tier table — the canonical source for the fail-loud
+// "not-implemented" branch below (a granted `reserved`-tier port is
+// wired-but-unavailable until a future MINOR flips its tier to `stable`).
+import { HOST_PORT_TIER } from "@cinatra-ai/sdk-extensions";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
 import { registerExtensionMcpTool } from "@/lib/extension-mcp-registry";
 import { deleteConnectorConfig, readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
@@ -490,8 +495,9 @@ const SERIALIZATION_PROBE_PROPS: ReadonlySet<string> = new Set([
  * Fail-loud placeholder for a privileged port the extension cannot use. Any
  * property access throws. Two distinct reasons:
  *  - "not-granted": the port is not in the extension's `requestedHostPorts`.
- *  - "not-implemented": granted, but not wired (only `db` is in this state — the
- *    scoped escape hatch deliberately stays unwired until a real consumer needs it).
+ *  - "not-implemented": granted, but its ABI tier is `reserved` — declared in the
+ *    frozen surface yet not wired (driven by HOST_PORT_TIER; today only `db`, the
+ *    scoped escape hatch, which stays unwired until a real consumer needs it).
  */
 function unavailablePort(
   packageName: string,
@@ -537,20 +543,35 @@ export function createExtensionHostContext(
   const granted = new Set<HostPortName>([...grantedPorts, ...AMBIENT_PORTS]);
   const logger = makeLogger(packageName);
 
-  // A privileged port wired to its real impl only when granted, else fail-loud.
-  const gated = <K extends HostPortName>(port: K, build: () => ExtensionHostContext[K]): ExtensionHostContext[K] =>
-    (granted.has(port) ? build() : unavailablePort(packageName, port, "not-granted")) as ExtensionHostContext[K];
+  // A privileged port is the real wired impl only when GRANTED and its ABI tier
+  // is `stable`. Three states (see the ABI-evolution port-tiering policy):
+  //   - not granted                  → fail-loud "not-granted" (least-privilege).
+  //   - granted + `reserved` tier     → fail-loud "not-implemented" (declared in
+  //                                     the frozen surface but not wired yet).
+  //   - granted + `stable` tier       → the real impl.
+  // Today only `db` is `reserved`, so this is behavior-preserving; wiring it later
+  // is a one-line tier flip in HOST_PORT_TIER (no host-factory edit needed).
+  const gated = <K extends HostPortName>(port: K, build: () => ExtensionHostContext[K]): ExtensionHostContext[K] => {
+    if (!granted.has(port)) return unavailablePort(packageName, port, "not-granted") as ExtensionHostContext[K];
+    if (HOST_PORT_TIER[port] === "reserved")
+      return unavailablePort(packageName, port, "not-implemented") as ExtensionHostContext[K];
+    return build() as ExtensionHostContext[K];
+  };
 
   return {
     abiVersion: ABI_VERSION,
     packageName,
     logger,
     runtime: makeRuntime(),
-    // `db` is the deliberate scoped escape hatch — unwired until a real consumer
-    // needs it (no in-scope connector uses ctx.db). Granted-but-unwired → fail-loud.
-    db: (granted.has("db")
-      ? unavailablePort(packageName, "db", "not-implemented")
-      : unavailablePort(packageName, "db", "not-granted")) as ExtensionHostContext["db"],
+    // `db` is the deliberate scoped escape hatch — a `reserved`-tier port, unwired
+    // until a real consumer needs it. The tier-aware `gated` helper fail-louds it
+    // ("not-implemented" when granted, "not-granted" otherwise); the `build()`
+    // throws so a future wiring never silently activates an un-flipped reserved port.
+    db: gated("db", () => {
+      throw new Error(
+        `[ExtensionHostContext] ${packageName}: reserved port "db" has no wired impl — flip HOST_PORT_TIER.db to "stable" when wiring it.`,
+      );
+    }),
     settings: gated("settings", () => makeSettings(packageName)),
     secrets: gated("secrets", () => makeSecrets(packageName)),
     nango: gated("nango", () => makeNango()),

@@ -324,6 +324,35 @@ export async function filterRetiredSkillExtensions(
 }
 
 /**
+ * FAIL-CLOSED liveness check for ONE extension, for the auth carve-out path.
+ *
+ * Unlike `filterRetiredSkillExtensions` (fail-OPEN: a degraded lifecycle-status
+ * read keeps every extension), this denies on ANY of:
+ *   - the lifecycle-status read failing (`null` from the fail-open reader), or
+ *   - the extension being explicitly tombstoned (`archived` with no `active`).
+ *
+ * It returns `true` ONLY when the status store affirmatively reports the owning
+ * package live — OR reports NO lifecycle rows at all (the bundled-image floor:
+ * image-shipped extensions like the WordPress/Drupal connectors have no
+ * `installed_extension` rows; the no-row case is "live by being on disk", same
+ * rule the scan filter uses, but here a READ FAILURE is NOT conflated with
+ * no-rows). The widget carve-out must never widen on a degraded status store.
+ */
+async function isSkillExtensionLiveFailClosed(
+  ext: SkillExtensionDescriptor,
+): Promise<boolean> {
+  const candidates = resolveSkillOwnerPackageCandidates({ packageName: ext.pkgName });
+  const statusMap = await readLifecycleStatusFailOpen([...new Set(candidates)]);
+  if (statusMap === null) return false; // read failed → fail CLOSED (deny)
+  const statuses = candidates
+    .map((c) => statusMap.get(c))
+    .filter((s): s is "active" | "archived" => s !== undefined);
+  if (statuses.includes("active")) return true; // affirmatively live
+  if (statuses.includes("archived")) return false; // tombstoned → deny
+  return true; // no lifecycle rows → image-shipped floor (live by being on disk)
+}
+
+/**
  * The subset of `skillIds` whose OWNER package is explicitly tombstoned.
  * Owner identity is derived from the skillId's package prefix (`@scope/pkg:slug`)
  * through the same candidate union as the scan filter; the assistant-skills
@@ -559,6 +588,63 @@ export async function resolveSkillIdForCapability(
     return deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId;
   }
   return null;
+}
+
+/**
+ * Capability-key prefix that marks an unauthenticated in-CMS widget-chat skill
+ * (e.g. `widget-chat.wordpress-content-editor`). The widget SSE stream serves
+ * an UNAUTHENTICATED browser embed, so its skill must be resolvable by the
+ * roleless internal-model actor with no org/user identity. That read is
+ * authorized by a narrow carve-out in `requireResourceAccess`; this prefix is
+ * the AUTHORITATIVE source of truth for which skill ids that carve-out covers.
+ */
+const WIDGET_CHAT_CAPABILITY_PREFIX = "widget-chat.";
+
+/**
+ * AUTHORITATIVE predicate: is `skillId` the skill of an ACTIVE extension that
+ * declares it under a `widget-chat.*` capability key AND ships a bundled
+ * `SKILL.md` for that slug?
+ *
+ * The auth boundary is the deliberate manifest contract (`cinatra.capabilities`
+ * keyed `widget-chat.*`), NOT a string/slug naming convention — an arbitrary
+ * workspace skill whose id merely LOOKS like a widget skill is not covered.
+ * Scans extensions of BOTH `skill` and `connector` kinds (a widget-chat skill
+ * may be co-located in a connector — e.g. WordPress — or in a sibling skill
+ * package — e.g. Drupal).
+ *
+ * FAIL-CLOSED — this feeds an AUTHORIZATION carve-out, so it is stricter than
+ * the lazy-registration scan:
+ *   - Any scan/IO error ⇒ `false` (deny).
+ *   - The matched capability slug MUST be a real co-located skill dir with a
+ *     bundled `SKILL.md` (`ext.slugs.includes(slug)`); a manifest pointer alone
+ *     is not enough (keeps the invariant "package-bundled widget prompt").
+ *   - The owning extension MUST be verifiably live: a tombstoned (archived)
+ *     extension is denied, AND a FAILED lifecycle-status read is ALSO denied
+ *     (unlike `filterRetiredSkillExtensions`, which is fail-OPEN for the
+ *     non-auth registration path). A widget-chat skill resolving for an
+ *     unauthenticated embed must never depend on a degraded status store.
+ */
+export async function isWidgetChatSkillId(skillId: string): Promise<boolean> {
+  try {
+    const exts = await scanSkillExtensions();
+    for (const ext of exts) {
+      if (ext.kind !== "skill" && ext.kind !== "connector") continue;
+      for (const [capabilityKey, slug] of Object.entries(ext.capabilities)) {
+        if (!capabilityKey.startsWith(WIDGET_CHAT_CAPABILITY_PREFIX)) continue;
+        if (deriveSkillRegistration(ext.pkgName, ext.pkgDirName, slug).skillId !== skillId) {
+          continue;
+        }
+        // The capability must point at a slug that actually ships a bundled
+        // SKILL.md (scanSkillExtensions only lists slugs with a SKILL.md).
+        if (!ext.slugs.includes(slug)) continue;
+        // Fail-CLOSED liveness: a degraded status read denies (does not allow).
+        if (await isSkillExtensionLiveFailClosed(ext)) return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**

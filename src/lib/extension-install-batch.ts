@@ -90,7 +90,11 @@ export type InstallBatchSagaDeps = {
     packageName: string,
     version?: string,
   ) => Promise<GatekeptInstallResolution>;
-  /** The P2-5 grant-refresh seam (default fails closed until the ability ships). */
+  /** The P2-5 grant-refresh seam. The default is the LIVE wired
+   *  `refreshGatekeptInstallGrant` (it calls the marketplace
+   *  `extension_install_grant_refresh` ability with the current opaque grant and
+   *  enforces the closure-hash binding); tests inject a stub or wrap the real
+   *  function with a mock client. */
   refreshGrant: GatekeptGrantRefresh;
   /** Run `fn` inside the install-grant context (root grant + member kinds). */
   withGrantContext: <T>(

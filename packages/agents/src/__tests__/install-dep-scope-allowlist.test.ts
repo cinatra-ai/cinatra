@@ -7,8 +7,9 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { installPackageWithDependenciesMock } = vi.hoisted(() => ({
+const { installPackageWithDependenciesMock, triggerWayflowReloadMock } = vi.hoisted(() => ({
   installPackageWithDependenciesMock: vi.fn(),
+  triggerWayflowReloadMock: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/registries", async () => {
@@ -53,7 +54,7 @@ vi.mock("../materialize-agent-package", () => ({
   withGlobalExtensionLifecycleLock: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock("../wayflow-reload-client", () => ({
-  triggerWayflowReload: vi.fn(async () => ({ ok: true })),
+  triggerWayflowReload: triggerWayflowReloadMock,
 }));
 
 import { installAgentPackageWithDependencies } from "../install-from-package";
@@ -86,6 +87,10 @@ function mockResolvedTree(rootName: string) {
 describe("installAgentPackageWithDependencies — dep-scope allowlist derivation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default the reload to success so the scope-allowlist tests below (which do
+    // not care about the reload) are unaffected; reload-surfacing tests override
+    // this per-call with mockResolvedValueOnce / mockRejectedValueOnce.
+    triggerWayflowReloadMock.mockResolvedValue({ ok: true });
   });
 
   it("keys the allowlist on a FIRST-PARTY root's scope, not the instance namespace", async () => {
@@ -114,5 +119,37 @@ describe("installAgentPackageWithDependencies — dep-scope allowlist derivation
     expect([...arg.typeConfig.scopePrefixes].sort()).toEqual(["@acme/", "@cinatra-ai/"]);
     // The instance-namespace scope must never appear in the allowlist.
     expect(arg.typeConfig.scopePrefixes).not.toContain("@curly-african-blonde/");
+  });
+});
+
+describe("installAgentPackageWithDependencies — reload result surfacing (#157)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("surfaces a NON-THROWING {ok:false} reload result verbatim (reason NOT remapped)", async () => {
+    mockResolvedTree("@cinatra-ai/some-agent");
+    triggerWayflowReloadMock.mockResolvedValueOnce({ ok: false, reason: "timeout", detail: "aborted" });
+    const res = await installAgentPackageWithDependencies(
+      { packageName: "@cinatra-ai/some-agent" },
+      INSTANCE_SCOPED_CONFIG,
+    );
+    // Install completed despite reload failure (durable writes already landed).
+    expect(res.rootTemplateId).toBe("tpl-1");
+    // The reloader's own result passes straight through VERBATIM — both reason
+    // and detail are preserved, NOT remapped to the "network" thrown-error shape.
+    expect(res.wayflowReload).toMatchObject({ ok: false, reason: "timeout", detail: "aborted" });
+  });
+
+  it("maps a THROWN reload error to the typed {ok:false, reason:'network'} shape and still resolves", async () => {
+    mockResolvedTree("@cinatra-ai/some-agent");
+    triggerWayflowReloadMock.mockRejectedValueOnce(new Error("socket hang up"));
+    const res = await installAgentPackageWithDependencies(
+      { packageName: "@cinatra-ai/some-agent" },
+      INSTANCE_SCOPED_CONFIG,
+    );
+    expect(res.rootTemplateId).toBe("tpl-1");
+    expect(res.wayflowReload).toMatchObject({ ok: false, reason: "network" });
+    expect((res.wayflowReload as { detail?: string }).detail).toContain("socket hang up");
   });
 });

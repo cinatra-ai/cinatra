@@ -169,7 +169,6 @@
       "@cinatra-ai/sdk-extensions/blog-contract": ["./packages/sdk-extensions/src/blog-connector-contract.ts"],
       "@cinatra-ai/sdk-extensions/mcp-contract": ["./packages/sdk-extensions/src/mcp-connector-contract.ts"],
       "@cinatra-ai/sdk-extensions/artifact-contract": ["./packages/sdk-extensions/src/artifact-contract.ts"],
-      "@cinatra-ai/sdk-extensions/registries": ["./packages/sdk-extensions/src/registries.ts"],
       "@cinatra-ai/sdk-dashboard": ["./packages/sdk-dashboard/src/index.ts"],
       "@cinatra-ai/sdk-dashboard/types": ["./packages/sdk-dashboard/src/types/index.ts"],
       "@cinatra-ai/sdk-dashboard/adapters/drizzle-cube": ["./packages/sdk-dashboard/src/adapters/drizzle-cube/index.ts"],

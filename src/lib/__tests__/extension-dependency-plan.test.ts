@@ -378,4 +378,34 @@ describe("planDependencyInstall — #157 dependency-confusion scope gate", () =>
       ),
     ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
   });
+
+  it("REFUSES an UNSCOPED root (every allowlist prefix starts with @)", async () => {
+    // An unscoped root collapses the allowlist to just ["@cinatra-ai/"]
+    // (vendorScopeOfPackage returns null), and "lodash" does not start with
+    // "@cinatra-ai/". The root is the FIRST node the scope gate checks, so the
+    // rejection fires before fetchSummary is ever consulted.
+    const { deps, fetched } = makeDeps({ lodash: { version: "1.0.0" } });
+    await expect(
+      planDependencyInstall(
+        { root: { packageName: "lodash", version: "1.0.0" }, orgId: null, closure: null },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
+    // The gate fires on the root BEFORE any registry read — no fetch happened.
+    expect(fetched).toEqual([]);
+  });
+
+  it("REFUSES a MALFORMED root scope (@/x has no vendor between @ and /)", async () => {
+    // "@/x" has nothing between "@" and "/", so vendorScopeOfPackage returns
+    // null too — same ["@cinatra-ai/"]-only allowlist, same refusal.
+    const { deps, fetched } = makeDeps({ "@/x": { version: "1.0.0" } });
+    await expect(
+      planDependencyInstall(
+        { root: { packageName: "@/x", version: "1.0.0" }, orgId: null, closure: null },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "DEPENDENCY_SCOPE" });
+    // Same root-first gate: refused before any registry read.
+    expect(fetched).toEqual([]);
+  });
 });

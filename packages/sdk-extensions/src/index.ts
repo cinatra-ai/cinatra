@@ -15,6 +15,11 @@ export type { AgentIOSpec, AgentIOPort, AgentOutputPort, InputCardinality, Outpu
 // subpath is a possible future cleanup (not ABI-breaking).
 // ---------------------------------------------------------------------------
 export { HOST_PORT_NAMES } from "./host-context";
+// ABI-evolution policy: per-port lifecycle tier metadata. These are
+// author-facing POLICY values describing the frozen surface, NOT host-bus
+// addressing constants, so they belong on the public root (and do not trip the
+// public-surface ban, which targets `*_CAPABILITY` / `*_CAPABILITY_ID` only).
+export { HOST_PORT_TIERS, HOST_PORT_TIER, RESERVED_HOST_PORTS } from "./host-context";
 export type {
   HostDbPort,
   HostSettingsPort,
@@ -36,6 +41,7 @@ export type {
   HostApolloUsageEvent,
   ExtensionHostContext,
   HostPortName,
+  HostPortTier,
 } from "./host-context";
 
 // Author-facing local test harness (cinatra-engineering#163, SDK-P1). The
@@ -437,6 +443,7 @@ export type {
 // — extensions keep this surface TYPE-ONLY (host-peer-value-import ban).
 export type {
   NangoConnectorKey,
+  ConnectorVendorKey,
   NangoConnectionIdKey,
   NangoSettings,
   NangoFrontendConfig,
@@ -449,3 +456,22 @@ export type {
   NangoRouteResult,
   NangoSystemSurface,
 } from "./nango-system-contract";
+
+// `asConnectorVendorKey` is a PURE (non-validating) brand cast — zero runtime
+// footprint, no roster, no membership gate (vendor-identity validation lives at
+// the host manifest/gate boundary, not the SDK). It is NOT a host capability-id
+// constant, so it is a legitimate value export on the types-first public root.
+export { asConnectorVendorKey } from "./nango-system-contract";
+
+// The typed capability-id -> contract-surface map: compile-time ergonomics for
+// `ctx.capabilities.resolveProviders(<known-id>)` (the `impl` narrows to the
+// mapped surface). TYPE-ONLY and ADDITIVE — the capabilities port keeps its open
+// `string` signature, the registry still stores `unknown`, and the host's
+// structural guards remain the runtime trust boundary. The capability-id
+// CONSTANTS stay fenced behind `@cinatra-ai/sdk-extensions/internal`; only this
+// type map is public.
+export type {
+  CapabilityContractMap,
+  KnownCapabilityId,
+  ResolvedCapabilityProvider,
+} from "./capability-contract-map";

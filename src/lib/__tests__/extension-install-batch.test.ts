@@ -15,7 +15,16 @@ import type {
 } from "@/lib/extension-install-batch-ops";
 import type { DependencyInstallPlan, PlannedMember } from "@/lib/extension-dependency-plan";
 import type { GatekeptInstallResolution } from "@/lib/gatekept-install";
-import { GrantRefreshRefusedError } from "@/lib/gatekept-install";
+import {
+  GrantRefreshRefusedError,
+  GrantRefreshUnavailableError,
+  computeClosureHash,
+  refreshGatekeptInstallGrant,
+  // Re-exported from the host-side gatekept-install module so the real refresh
+  // function can be driven against a real refusal WITHOUT a direct import of the
+  // vendored marketplace transport package (the audit gate bans new sites).
+  MarketplaceMcpError,
+} from "@/lib/gatekept-install";
 import type { Actor } from "@cinatra-ai/extension-types";
 
 const actor: Actor = { actorType: "human", source: "ui", userId: "u1", orgId: null };
@@ -469,6 +478,181 @@ describe("installExtensionWithDependencies — grant TTL / refresh (P2-5)", () =
     expect(refresh).not.toHaveBeenCalled();
     const batch = [...h.ledgerRows.values()][0]!;
     expect(["compensated", "failed"]).toContain(batch.phase);
+  });
+});
+
+// END-TO-END TTL-CROSSING PROOF (#209.1): unlike the stub-seam tests above (which
+// inject a `vi.fn` for `deps.refreshGrant`), these drive the REAL
+// `refreshGatekeptInstallGrant` through the saga — the actual wire path that
+// presents the opaque grant to the marketplace `extension_install_grant_refresh`
+// ability, validates the closure-hash binding + re-mint/version/closure
+// invariants, and maps refusal-class errors. The marketplace ability is faked by
+// an INLINE refresh-client (so this non-allowlisted test never imports the
+// vendored marketplace transport package by name); the grant crosses its TTL
+// mid-batch and the batch either completes under the refreshed grant (positive)
+// or compensates on a real-mapped refusal (negative).
+describe("installExtensionWithDependencies — REAL refreshGatekeptInstallGrant through the saga (P2-5 e2e)", () => {
+  // The 3rd param of `refreshGatekeptInstallGrant` is the injectable marketplace
+  // client; deriving the type from the function signature avoids naming the
+  // vendored package (the import-ban audit forbids new vendored call sites here).
+  type RefreshClient = NonNullable<Parameters<typeof refreshGatekeptInstallGrant>[2]>;
+  type RefreshOutput = Awaited<ReturnType<RefreshClient["extensionInstallGrantRefresh"]>>;
+
+  /** The closure the harness `resolution()` authorizes (dep-a@1.0.0, dep-b@1.0.0). */
+  const CLOSURE = [
+    { name: "@cinatra-ai/dep-a", version: "1.0.0" },
+    { name: "@cinatra-ai/dep-b", version: "1.0.0" },
+  ];
+  const CLOSURE_HASH = computeClosureHash(CLOSURE);
+
+  /** An inline marketplace refresh-client whose single tool the real function calls. */
+  function refreshClient(
+    impl: (input: { grant: string }) => Promise<RefreshOutput>,
+  ): { client: RefreshClient; spy: ReturnType<typeof vi.fn> } {
+    const spy = vi.fn(impl);
+    return { client: { extensionInstallGrantRefresh: spy } as unknown as RefreshClient, spy };
+  }
+
+  it("a batch that CROSSES the grant TTL drives the real refresh: presents the opaque grant, swaps it in-place, and completes", async () => {
+    const refreshedGrant = "refreshed-opaque-grant";
+    const { client, spy } = refreshClient(async () => ({
+      grant: refreshedGrant,
+      resolved_version: "1.0.0",
+      broker_base_url: "https://broker.example/install/refreshed",
+      closure: CLOSURE,
+      // Epoch SECONDS well past the 60s near-expiry margin (the real function
+      // converts *1000 → ISO and rejects anything still inside the margin).
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      closure_hash: CLOSURE_HASH,
+      op: "op-refresh-xyz",
+    }));
+
+    // Capture the SAME resolution object the saga holds by reference (it mutates
+    // `config`/`authorize` in place after a refresh), expiring inside the margin.
+    const current = resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() });
+    current.config.token = "original-opaque-grant";
+
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => current,
+      // The DEFAULT factory passes refreshGrant positionally as (current, root);
+      // wrap the REAL function with the inline client (its optional 3rd param).
+      refreshGrant: (cur, root) => refreshGatekeptInstallGrant(cur, root, client),
+    });
+
+    // Observe the grant token the saga has live at each member install — proves
+    // the in-place mutation reached member reads BEFORE the install dispatched.
+    const tokensAtInstall: string[] = [];
+    const baseInstall = h.deps.installMember;
+    h.deps.installMember = async (m, a) => {
+      tokensAtInstall.push(current.config.token!);
+      return baseInstall(m, a);
+    };
+
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+
+    // The REAL wire call fired with the ORIGINAL opaque grant (presented, never decoded).
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith({ grant: "original-opaque-grant" });
+    // In-place mutation: the saga swapped the resolution to the refreshed grant.
+    expect(current.config.token).toBe(refreshedGrant);
+    expect(current.config.registryUrl).toBe("https://broker.example/install/refreshed");
+    // Every member install ran under the REFRESHED grant (the first member's TTL
+    // check refreshed before any install dispatched).
+    expect(tokensAtInstall).toEqual([refreshedGrant, refreshedGrant]);
+    // The batch completed.
+    expect(h.events).toContain(`install:${ROOT}`);
+    expect(h.events).toContain("ledger:phase:finalized");
+  });
+
+  it("a rate-limited (429) marketplace refusal flows through the REAL function ⇒ GrantRefreshRefusedError ⇒ abort + compensate (nothing installed)", async () => {
+    const { client, spy } = refreshClient(async () => {
+      throw new MarketplaceMcpError("rate_limited", 429, "");
+    });
+    const current = resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() });
+    current.config.token = "original-opaque-grant";
+
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => current,
+      refreshGrant: (cur, root) => refreshGatekeptInstallGrant(cur, root, client),
+    });
+
+    const err = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    ).catch((e) => e);
+
+    // The real function mapped the 429 into the REFUSAL class; the saga wrapped
+    // the abort into a BatchMemberInstallError whose cause is that refusal.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(BatchMemberInstallError);
+    expect((err as BatchMemberInstallError).cause).toBeInstanceOf(GrantRefreshRefusedError);
+    expect(((err as BatchMemberInstallError).cause as GrantRefreshRefusedError).httpStatus).toBe(429);
+    // Refusal hit the FIRST member's TTL check → nothing installed yet.
+    expect(h.events.filter((e) => e.startsWith("install:"))).toEqual([]);
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(["compensated", "failed"]).toContain(batch.phase);
+  });
+
+  it("a 503 (unreachable) refusal flows through the REAL function ⇒ GrantRefreshUnavailableError ⇒ abort + compensate", async () => {
+    const { client } = refreshClient(async () => {
+      throw new MarketplaceMcpError("internal", 503, "");
+    });
+    const current = resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() });
+    current.config.token = "original-opaque-grant";
+
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => current,
+      refreshGrant: (cur, root) => refreshGatekeptInstallGrant(cur, root, client),
+    });
+
+    const err = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    ).catch((e) => e);
+
+    expect(err).toBeInstanceOf(BatchMemberInstallError);
+    expect((err as BatchMemberInstallError).cause).toBeInstanceOf(GrantRefreshUnavailableError);
+    expect(h.events.filter((e) => e.startsWith("install:"))).toEqual([]);
+  });
+
+  it("a refresh that re-mints a DIFFERENT closure is refused by the REAL function (closure-hash binding) ⇒ abort + compensate", async () => {
+    const { client, spy } = refreshClient(async () => ({
+      grant: "refreshed-opaque-grant",
+      resolved_version: "1.0.0",
+      // A closure that does NOT hash-equal the authorized set.
+      closure: [{ name: "@cinatra-ai/dep-a", version: "9.9.9" }],
+      broker_base_url: "https://broker.example/install/refreshed",
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      closure_hash: computeClosureHash([{ name: "@cinatra-ai/dep-a", version: "9.9.9" }]),
+      op: "op-refresh-xyz",
+    }));
+    const current = resolution({ expiresAt: new Date(Date.now() + 10_000).toISOString() });
+    current.config.token = "original-opaque-grant";
+
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      gatekept: true,
+      authorize: async () => current,
+      refreshGrant: (cur, root) => refreshGatekeptInstallGrant(cur, root, client),
+    });
+
+    const err = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    ).catch((e) => e);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(BatchMemberInstallError);
+    expect((err as BatchMemberInstallError).cause).toBeInstanceOf(GrantRefreshRefusedError);
+    expect(h.events.filter((e) => e.startsWith("install:"))).toEqual([]);
+    // The original grant was never swapped — the saga still holds it.
+    expect(current.config.token).toBe("original-opaque-grant");
   });
 });
 

@@ -13,9 +13,19 @@ import {
   extractAgentPackage,
   installPackageWithDependencies,
   type DependencyTree,
+  type PackumentVersionEntry,
   type PluginTypeConfig,
   type VerdaccioConfig,
 } from "@cinatra-ai/registries";
+// Canonical dependency-vocabulary reader (cinatra.dependencies wins; legacy
+// cinatra.agentDependencies projected) + the shared auto-install predicate.
+// These are pure leaf subpaths (manifest-dependencies imports only
+// canonical-types; dependency-closure imports only @cinatra-ai/registries +
+// canonical-types) — NOT the @cinatra-ai/extensions main entry, so the static
+// agents->extensions index cycle does not apply and these can be imported
+// synchronously (the resolver reads deps in a sync callback).
+import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
+import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import {
   agentPackageManifestSchema,
   agentPackagePayloadSchema,
@@ -77,6 +87,13 @@ export type InstallAgentFromPackageResult = {
   versionId: string;
   packageName: string;
   packageVersion: string;
+  /**
+   * @deprecated DECLARE/WRITE surface for the legacy `cinatra.agentDependencies`
+   * vocabulary. The canonical replacement is `cinatra.dependencies` (read via
+   * `parseManifestDependencyEdges`). This field is kept during the deprecation
+   * window for back-compat; new callers should consume the canonical dependency
+   * edges instead. (Removal tracked as a follow-up milestone.)
+   */
   agentDependencies: Record<string, string>;
   /** Runtime files materialized to the WayFlow mount. */
   materialized?: {
@@ -524,6 +541,66 @@ async function registerDeclaredObjectTypes(opts: {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical dependency-vocabulary reader for the shared resolver
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a packument version entry's transitive AGENT dependencies using the
+ * SAME canonical vocabulary the batch-install saga plans with
+ * (`parseManifestDependencyEdges`: `cinatra.dependencies` wins, legacy
+ * `cinatra.agentDependencies` projected, BOTH-present must agree fail-loud).
+ * This is the read seam injected into the shared `resolveDependencyTree` so the
+ * direct full-tree agent installer and the saga planner resolve from ONE
+ * source-of-truth instead of two divergent dependency keys.
+ *
+ * Returns the `{ packageName: semverRange }` map the resolver already consumes.
+ * Only edges this direct path can actually install are projected:
+ *   - auto-installable (required && non-peer) — the shared predicate the saga's
+ *     dependency phase uses; peer/optional edges are never auto-installed.
+ *   - AGENT-kind (or kind-undefined, the legacy `agentDependencies` shape that
+ *     never declared a kind). The direct full-tree path installs each node via
+ *     `installAgentFromPackage`, an AGENT-only installer; a CROSS-KIND edge
+ *     (connector/skill/artifact/workflow) cannot be satisfied here, so it is
+ *     fail-loud rather than handed to the agent installer. Cross-kind closures
+ *     route through the kind-aware batch saga, not this direct adapter.
+ *
+ * Version constraints are projected to a range string: `semver-range` → range,
+ * `exact` → the exact version (a valid singleton range), `git-ref` → fail-loud
+ * (the registry resolver resolves semver against published versions, not refs).
+ */
+function readAgentPackumentDeps(entry: PackumentVersionEntry): Record<string, string> {
+  // parseManifestDependencyEdges reads `manifest.cinatra.{dependencies,
+  // agentDependencies}` and derives the package name from `manifest.name` for
+  // its self-edge diagnostics. Shape the version entry into that manifest form.
+  const { edges } = parseManifestDependencyEdges(
+    { name: entry.name, cinatra: entry.cinatra },
+    { packageName: entry.name },
+  );
+  const out: Record<string, string> = {};
+  for (const edge of edges) {
+    if (!isAutoInstallableEdge(edge)) continue;
+    if (edge.kind !== undefined && edge.kind !== "agent") {
+      throw new Error(
+        `[installAgentPackageWithDependencies] ${entry.name} declares a required ${edge.kind} dependency on ${edge.packageName}; the direct agent full-tree installer can only install agent dependencies. Install cross-kind closures through the batch install saga.`,
+      );
+    }
+    const vc = edge.versionConstraint;
+    let range: string;
+    if (vc.kind === "semver-range") {
+      range = vc.range;
+    } else if (vc.kind === "exact") {
+      range = vc.version;
+    } else {
+      throw new Error(
+        `[installAgentPackageWithDependencies] ${entry.name} declares a git-ref dependency on ${edge.packageName}; the registry resolver resolves semver against published versions, not git refs.`,
+      );
+    }
+    out[edge.packageName] = range;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // installAgentPackageWithDependencies
 // ---------------------------------------------------------------------------
 
@@ -600,7 +677,13 @@ async function _installAgentPackageWithDependenciesImpl(
   const typeConfig: PluginTypeConfig = {
     type: "agent",
     scopePrefixes: dependencyScopePrefixesFor(input.packageName),
+    // packumentDepKey is the legacy default; readPackumentDeps OVERRIDES it so
+    // the shared resolver walks the canonical `cinatra.dependencies` vocabulary
+    // (legacy `agentDependencies` projected) — the SAME source-of-truth the
+    // batch-install saga plans with. ONE installer, ONE dependency vocabulary.
+    // packumentDepKey is retained as the documented fallback semantics.
     packumentDepKey: "agentDependencies",
+    readPackumentDeps: readAgentPackumentDeps,
   };
   const { tree, results } = await installPackageWithDependencies<string>({
     packageName: input.packageName,

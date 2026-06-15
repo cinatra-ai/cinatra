@@ -1,5 +1,10 @@
 import "server-only";
 
+import type {
+  KnownCapabilityId,
+  ResolvedCapabilityProvider,
+} from "@cinatra-ai/sdk-extensions";
+
 // Generic, host-owned capability-provider registry.
 //
 // A connector advertises what it can DO behind a CAPABILITY facade (e.g. the
@@ -84,7 +89,19 @@ export function registerCapabilityProvider(
  * set (registration is activation-gated; teardown invalidates), so this returns
  * a fresh array of the registered providers (callers may sort/filter without
  * mutating the registry).
+ *
+ * ADDITIVE typed overload (mirrors `HostCapabilitiesPort.resolveProviders`): for
+ * a first-party capability id KNOWN to `CapabilityContractMap` the returned
+ * `impl` is typed to the mapped surface, so the host's resolver modules stop
+ * hand-writing `impl as Partial<TSurface>`. The open `string` overload is kept
+ * (returns `impl: unknown`). This narrows the COMPILE type only — the registry
+ * still stores `unknown`, so the structural `isXSurface` guards in those modules
+ * remain the runtime trust boundary.
  */
+export function resolveCapabilityProviders<Id extends KnownCapabilityId>(
+  capability: Id,
+): ResolvedCapabilityProvider<Id>[];
+export function resolveCapabilityProviders(capability: string): CapabilityProvider[];
 export function resolveCapabilityProviders(capability: string): CapabilityProvider[] {
   const byPackage = registry.get(capability);
   if (!byPackage) return [];
