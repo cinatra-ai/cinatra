@@ -589,10 +589,18 @@ function buildTimestampLabel() {
 }
 
 function sanitizeBackupFilename(value) {
-  return String(value)
-    .trim()
-    .replace(/[^a-z0-9._-]+/gi, "-")
-    .replace(/^-+|-+$/g, "") || `cinatra-backup-${buildTimestampLabel()}${DEFAULT_BACKUP_EXTENSION}`;
+  // Collapse runs of disallowed chars to a single "-", then strip leading/
+  // trailing dashes via a LINEAR char-index trim. The previous `/^-+|-+$/g`
+  // is an anchored greedy repetition that is polynomial-ReDoS on all-dash
+  // input (CodeQL js/polynomial-redos, high) — pre-existing, surfaced here by
+  // line-shift; remediated in place. Behavior is unchanged: collapse, then
+  // trim only leading/trailing dashes (interior dashes preserved).
+  const collapsed = String(value).trim().replace(/[^a-z0-9._-]+/gi, "-");
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed.charCodeAt(start) === 45) start++; // 45 = "-"
+  while (end > start && collapsed.charCodeAt(end - 1) === 45) end--;
+  return collapsed.slice(start, end) || `cinatra-backup-${buildTimestampLabel()}${DEFAULT_BACKUP_EXTENSION}`;
 }
 
 function normalizeBackupFilename(value) {
