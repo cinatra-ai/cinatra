@@ -114,6 +114,8 @@ import {
   ensureDrupalRemoteKeyReconciled,
   ensureWordPressAppPasswordReconciled,
   firstWireWordPressInstance,
+  probeHttpAnswered,
+  probeHttpReachableWithRetry,
 } from "@/lib/dev-auto-setup";
 
 const WIDGET_UUID = "widget-uuid-aaaa";
@@ -627,5 +629,106 @@ describe("firstWireWordPressInstance — resilient first wire", () => {
     // unpersisted instance.
     expect(r.reason).toBe("saveWordPressInstance failed (first wire)");
     expect(r.reason).not.toContain(FIRST_WIRE_PW);
+  });
+});
+
+// ===========================================================================
+// Drupal reachability — resilient retry + any-HTTP-answer success criterion
+// (Step 8, #260). Root cause: the container is `drush`-ready (CI readiness gate
+// polls pm:list INSIDE the container) while external Apache is still settling
+// after site:install; the one-shot `curl -f` probe ran too early AND treated a
+// non-2xx (redirect/403/5xx) as unreachable → wiring skipped permanently.
+// ===========================================================================
+
+describe("probeHttpAnswered — any HTTP response counts as reachable", () => {
+  it("a non-2xx answer (redirect / 403 / 5xx) is REACHABLE (the over-strict `curl -f` bug)", () => {
+    // curl -sS -w '%{http_code}' exits 0 on any received response and prints the
+    // status code; a 403 (e.g. a freshly installed Drupal) must count as up.
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from("403") as never);
+    expect(probeHttpAnswered("http://localhost:8082/")).toBe(true);
+  });
+
+  it("a 2xx answer is REACHABLE", () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from("200") as never);
+    expect(probeHttpAnswered("http://localhost:8082/")).toBe(true);
+  });
+
+  it("curl '000' (no HTTP response received) is UNREACHABLE", () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from("000") as never);
+    expect(probeHttpAnswered("http://localhost:8082/")).toBe(false);
+  });
+
+  it("a connection-level failure (curl throws → execSync throws) is UNREACHABLE", () => {
+    vi.mocked(execSync).mockImplementationOnce(() => {
+      throw new Error("curl: (7) Failed to connect");
+    });
+    expect(probeHttpAnswered("http://localhost:8082/")).toBe(false);
+  });
+});
+
+describe("probeHttpReachableWithRetry — bounded backoff until Apache answers", () => {
+  it("retries past early misses and succeeds once Drupal's HTTP server answers", async () => {
+    // First 2 attempts: connection refused (Apache still settling). 3rd: 200.
+    vi.mocked(execSync)
+      .mockImplementationOnce(() => {
+        throw new Error("curl: (7) connection refused");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("curl: (7) connection refused");
+      })
+      .mockReturnValueOnce(Buffer.from("200") as never);
+
+    const reachable = await probeHttpReachableWithRetry("http://localhost:8082/", {
+      attempts: 5,
+      delayMs: 0,
+    });
+
+    expect(reachable).toBe(true);
+    expect(vi.mocked(execSync)).toHaveBeenCalledTimes(3); // stopped as soon as it answered
+  });
+
+  it("a transient 5xx IS reachable (Apache answered) — short-circuits without waiting for a 2xx", async () => {
+    vi.mocked(execSync)
+      .mockReturnValueOnce(Buffer.from("000") as never) // no response yet
+      .mockReturnValueOnce(Buffer.from("503") as never); // Apache up, app warming → still reachable
+
+    // The 503 already satisfies "answered"; assert it short-circuits there (so
+    // no stale Once value leaks into a later test).
+    const reachable = await probeHttpReachableWithRetry("http://localhost:8082/", {
+      attempts: 5,
+      delayMs: 0,
+    });
+
+    expect(reachable).toBe(true);
+    expect(vi.mocked(execSync)).toHaveBeenCalledTimes(2); // 000 then 503 (answered)
+  });
+
+  it("returns false only after the WHOLE bounded window is exhausted (genuine unreachable)", async () => {
+    // Full reset so no leftover `mockReturnValueOnce` from a prior test takes
+    // precedence over the persistent throwing implementation set below.
+    vi.mocked(execSync).mockReset();
+    vi.mocked(execSync).mockImplementation(() => {
+      throw new Error("curl: (7) connection refused");
+    });
+
+    const reachable = await probeHttpReachableWithRetry("http://localhost:8082/", {
+      attempts: 4,
+      delayMs: 0,
+    });
+
+    expect(reachable).toBe(false);
+    expect(vi.mocked(execSync)).toHaveBeenCalledTimes(4); // exhausted every attempt, never threw
+  });
+
+  it("a single attempt still probes exactly once (no off-by-one, never throws)", async () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from("200") as never);
+
+    const reachable = await probeHttpReachableWithRetry("http://localhost:8082/", {
+      attempts: 1,
+      delayMs: 0,
+    });
+
+    expect(reachable).toBe(true);
+    expect(vi.mocked(execSync)).toHaveBeenCalledTimes(1);
   });
 });

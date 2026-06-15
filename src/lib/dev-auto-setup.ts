@@ -111,6 +111,69 @@ function probeHttp(url: string, timeoutSeconds = 3): boolean {
 }
 
 /**
+ * Liveness probe that succeeds when the HTTP server ANSWERS — including a
+ * redirect / 403 / 5xx — not only on a 2xx. `probeHttp` uses `curl -f`, which
+ * treats every status >= 400 as a hard failure (exit 22); a freshly installed
+ * Drupal serves a redirect / non-2xx for a window after `drush site:install`
+ * (and right after Apache restarts) even though the server is genuinely up and
+ * the subsequent wiring runs over in-container `drush`, not this HTTP path.
+ * Requiring a 2xx here would skip a perfectly wireable Drupal. We therefore
+ * treat ANY HTTP response as reachable and only count a connection
+ * refusal / timeout / DNS failure as unreachable.
+ *
+ * Implementation: `curl -sS -o /dev/null -w %{http_code}` exits 0 on any
+ * received response; a connection-level failure makes curl exit non-zero
+ * (execSync throws). All inputs are controlled (`http://localhost:<port>/`).
+ */
+export function probeHttpAnswered(url: string, timeoutSeconds = 3): boolean {
+  try {
+    const code = execSync(
+      `curl -sS -o /dev/null -w '%{http_code}' --max-time ${timeoutSeconds} ${url}`,
+      { stdio: ["ignore", "pipe", "pipe"] },
+    )
+      .toString()
+      .trim();
+    // curl prints "000" when it received no HTTP response at all (it still
+    // exits 0 for some non-transfer conditions); treat that as unreachable.
+    return code !== "" && code !== "000";
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve after `ms` milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Resilient reachability probe with bounded linear backoff. Mirrors Step 7's
+ * WP first-wire discipline: Drupal's container can be `drush`-ready (the CI
+ * readiness gate polls `drush pm:list` INSIDE the container) while its external
+ * Apache at `http://localhost:<port>/` is still settling — the one-shot probe
+ * that ran at app boot fired too early and skipped wiring permanently for that
+ * boot (`[dev-auto-setup:drupal] skipped: ... not reachable`). Polls
+ * `probeHttpAnswered` up to `attempts` times, sleeping `delayMs` between tries,
+ * and returns true as soon as the server answers. Returns false only when the
+ * server never answered across the whole bounded window (genuine
+ * unreachable → caller soft-skips with a warn, never crashes).
+ *
+ * Dev-only timing helper; idempotent; secret-safe (probes a controlled
+ * localhost URL, never logs credentials).
+ */
+export async function probeHttpReachableWithRetry(
+  url: string,
+  { attempts = 12, delayMs = 2500, timeoutSeconds = 3 }: { attempts?: number; delayMs?: number; timeoutSeconds?: number } = {},
+): Promise<boolean> {
+  const total = Math.max(1, attempts);
+  for (let i = 0; i < total; i++) {
+    if (probeHttpAnswered(url, timeoutSeconds)) return true;
+    if (i < total - 1) await sleep(delayMs);
+  }
+  return false;
+}
+
+/**
  * Browser-reachable Cinatra origin for the CMS widget config.
  *
  * The widget bundle + SSE stream are loaded by the admin's BROWSER (on the
@@ -336,8 +399,16 @@ async function autoSetupLocalDrupal(): Promise<Status> {
   if (!probeDockerContainer(LOCAL_DRUPAL.containerName)) {
     return { status: "skipped", reason: `${LOCAL_DRUPAL.containerName} not running (run docker compose --profile drupal up -d)` };
   }
-  if (!probeHttp(LOCAL_DRUPAL.siteUrl + "/")) {
-    return { status: "skipped", reason: `${LOCAL_DRUPAL.siteUrl} not reachable` };
+  // Resilient reachability: the container is up + `drush`-ready (the readiness
+  // gate confirms `pm:list` INSIDE the container), but Drupal's external Apache
+  // can still be settling after `site:install` / an Apache restart. Retry with
+  // bounded backoff and accept ANY HTTP answer (a fresh Drupal serves a
+  // redirect / non-2xx before it stabilises) instead of skipping on the first
+  // miss. Soft-skip only after the whole window is exhausted (genuine
+  // unreachable), so the wiring lands url/key/instance when Drupal is genuinely
+  // up. See probeHttpReachableWithRetry / probeHttpAnswered above.
+  if (!(await probeHttpReachableWithRetry(LOCAL_DRUPAL.siteUrl + "/"))) {
+    return { status: "skipped", reason: `${LOCAL_DRUPAL.siteUrl} not reachable (after bounded retries; Apache may still be settling)` };
   }
 
   // The Drupal module is consumed as a local clone of cinatra-ai/drupal-module
