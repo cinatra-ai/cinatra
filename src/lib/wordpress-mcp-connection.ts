@@ -67,12 +67,23 @@ export function isPrivateUrl(siteUrl: string): boolean {
 }
 
 /**
+ * Strip trailing slashes via a LINEAR char-index trim. The anchored greedy
+ * `/\/+$/` is polynomial-ReDoS on input with many trailing slashes (CodeQL
+ * `js/polynomial-redos`, high) — the codebase standardises on this linear form.
+ */
+function trimTrailingSlashes(input: string): string {
+  let end = input.length;
+  while (end > 0 && input.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return input.slice(0, end);
+}
+
+/**
  * Resolve the pretty-permalink MCP endpoint URL for a given WP instance.
  * This is the canonical form shown in the UI and used for the MCP server URL
  * when pretty permalinks are enabled.
  */
 export function resolveWordPressMcpEndpoint(siteUrl: string): string {
-  const trimmed = siteUrl.replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(siteUrl);
   return `${trimmed}/wp-json${WP_MCP_ADAPTER_ROUTE}`;
 }
 
@@ -83,7 +94,7 @@ export function resolveWordPressMcpEndpoint(siteUrl: string): string {
  * wordpress-mcp-connector toolbox consumes it via its host-bound deps.
  */
 export function resolveWordPressMcpFallbackEndpoint(siteUrl: string): string {
-  const trimmed = siteUrl.replace(/\/+$/, "");
+  const trimmed = trimTrailingSlashes(siteUrl);
   return `${trimmed}/index.php?rest_route=${WP_MCP_ADAPTER_ROUTE}`;
 }
 
@@ -204,6 +215,18 @@ export async function probeWordPressInstanceMcpAdapter(
 ): Promise<WordPressMcpAdapterStatus> {
   const authHeader = buildBasicAuthHeader(instance);
   return probeWordPressMcpAdapter(instance.siteUrl, authHeader);
+}
+
+/**
+ * Evict the URL-keyed mcp-adapter probe-cache entry for a site. The cache is
+ * keyed by site URL, NOT by credential, so after an application-password
+ * rotation a stale `auth_error` verdict would otherwise be served for up to
+ * PROBE_TTL_MS. The dev-auto-setup reconcile calls this on every WordPress
+ * credential rotate so the next probe re-evaluates against the fresh
+ * application password. Idempotent; safe when the entry is absent.
+ */
+export function invalidateWordPressMcpProbeCache(siteUrl: string): void {
+  probeCache.delete(siteUrl);
 }
 
 // NOTE: the LLM toolbox builder that used to live here moved into the

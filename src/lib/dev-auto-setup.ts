@@ -1,6 +1,7 @@
 import "server-only";
 import { execSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { Buffer } from "node:buffer";
 import path from "node:path";
 
 import { saveDrupalInstance, listDrupalInstances } from "@/lib/drupal-api";
@@ -8,7 +9,16 @@ import {
   generateDrupalWidgetAuthConfig,
   readDrupalWidgetAuthConfig,
 } from "@/lib/drupal-widget-auth";
-import { saveWordPressInstance, listWordPressInstances } from "@/lib/wordpress-api";
+import {
+  probeDrupalMcpWithBearer,
+  invalidateDrupalMcpProbeCache,
+} from "@/lib/drupal-mcp-connection";
+import {
+  saveWordPressInstance,
+  listWordPressInstances,
+  readWordPressInstanceById,
+} from "@/lib/wordpress-api";
+import { invalidateWordPressMcpProbeCache } from "@/lib/wordpress-mcp-connection";
 import {
   generateWidgetAuthConfig,
   readWidgetAuthConfig,
@@ -18,6 +28,7 @@ import {
   ensureNangoIntegration,
   importNangoConnection,
   getNangoCredentials,
+  CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
 } from "@/lib/nango-system";
 import { listConnectorDescriptors } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { setExtensionInstallAccess } from "@cinatra-ai/extensions/install-access-contract";
@@ -111,10 +122,196 @@ function cinatraBrowserBaseUrl(): string {
   return `http://localhost:${process.env.PORT ?? "3000"}`;
 }
 
+/**
+ * Strip trailing slashes via a LINEAR char-index trim. The anchored greedy
+ * `/\/+$/` is polynomial-ReDoS on input with many trailing slashes (CodeQL
+ * `js/polynomial-redos`, high) — the codebase has standardised on this linear
+ * form (see `resolveLocalOrigin` in packages/cli and
+ * `normaliseMcpPublicBaseUrl` in packages/mcp-server). Never use `/\/+$/`.
+ */
+export function trimTrailingSlashes(input: string): string {
+  let end = input.length;
+  while (end > 0 && input.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return input.slice(0, end);
+}
+
 function drushExec(args: string): void {
   execSync(`docker exec ${LOCAL_DRUPAL.containerName} drush --root=/drupal/web ${args}`, {
     stdio: "pipe",
   });
+}
+
+/** Capture-mode drush exec (combined stdout+stderr) for porcelain reads. */
+function drushExecCapture(args: string[]): { code: number; out: string } {
+  const r = spawnSync(
+    "docker",
+    ["exec", LOCAL_DRUPAL.containerName, "drush", "--root=/drupal/web", ...args],
+    { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+  );
+  return { code: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+}
+
+const DRUPAL_REMOTE_KEY_LABEL = "cinatra-dev";
+
+/**
+ * Extract the Bearer remote key from `drush mcp-tools:remote-key-create` output.
+ *
+ * The command prints the key (often with surrounding log lines). We take the
+ * last non-empty trimmed line and accept it only if it is a single opaque token
+ * of plausible length. The validation regex is intentionally LINEAR (anchored
+ * both ends, one character class, no nested quantifier) — `js/polynomial-redos`
+ * safe. Returns null when no token-shaped line is present (caller soft-skips —
+ * a failed mint must NEVER overwrite a working key).
+ *
+ * SECRET BOUNDARY: the returned value is the Bearer; callers must never log it.
+ */
+export function parseDrupalRemoteKey(out: string): string | null {
+  const lines = out.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    // A valid remote key is a single opaque token (no whitespace), reasonable
+    // length. `[A-Za-z0-9._=+/-]` is a single character class; the bounded
+    // quantifier `{16,512}` is anchored and non-nested → linear, ReDoS-safe.
+    if (/^[A-Za-z0-9._=+/-]{16,512}$/.test(line)) return line;
+    // First non-empty line from the bottom that isn't token-shaped (e.g. a
+    // human log line) means the porcelain token wasn't the last line — stop:
+    // we only trust a clean trailing token.
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Mint a fresh Drupal `mcp_tools_remote` Bearer via drush, returning the opaque
+ * key or null on any failure. Never throws; never logs the key.
+ */
+function mintDrupalRemoteKey(): string | null {
+  try {
+    const r = drushExecCapture([
+      "mcp-tools:remote-key-create",
+      `--label=${DRUPAL_REMOTE_KEY_LABEL}`,
+      "--scopes=read,write",
+    ]);
+    if (r.code !== 0) return null;
+    return parseDrupalRemoteKey(r.out);
+  } catch {
+    return null;
+  }
+}
+
+type DrupalReconcileOutcome = {
+  // The reconcile reached a state where the stored Nango Bearer should
+  // authenticate against Drupal `/_mcp_tools` (reused-OK, kept-on-transient, or
+  // freshly minted + readback-verified). False = the connector will 401.
+  working: boolean;
+  rotated: boolean;
+  note?: string;
+};
+
+/**
+ * Reconcile the Drupal Nango connection's stored credential to the value
+ * Drupal's `mcp_tools_remote` actually validates — the
+ * `drush mcp-tools:remote-key-create` Bearer — NOT the cinatra widget UUID
+ * (`drupal_widget_auth.apiKey`) the connection stored historically (split-brain).
+ *
+ * Reuse-first / probe-then-rotate, mirroring `ensureTwentyBearerAttached`:
+ *   1. Resolve the stored Bearer from Nango (forceRefresh — bypass the cred
+ *      cache so a prior rotate is reflected). If unresolved (null/throw) →
+ *      TRANSIENT: keep, soft-skip (never mint on a transient Nango blip).
+ *   2. Legacy split-brain: if the stored value is EXACTLY the widget UUID, the
+ *      connection holds the wrong secret → rotate.
+ *   3. Otherwise probe HEAD `${siteUrl}/_mcp_tools` with the stored Bearer
+ *      (live, cache-bypassing). Rotate ONLY on a definite `auth_error`
+ *      (401/403). `registered` → reuse; `not_installed`/`unreachable` →
+ *      keep + soft-skip (NEVER rotate on transient/unreachable).
+ *   4. Rotate = mint a fresh key, then re-import via `saveDrupalInstance`
+ *      (which readback-verifies the new key in Nango BEFORE it persists, so a
+ *      failed mint/import can never overwrite the working stored key). On
+ *      success, invalidate the URL-keyed probe cache.
+ *
+ * Soft-fails: never throws. SECRET BOUNDARY: only statuses/booleans surfaced.
+ */
+export async function ensureDrupalRemoteKeyReconciled(input: {
+  instanceId: string;
+  instanceName: string;
+  siteUrl: string;
+  widgetApiKey: string;
+}): Promise<DrupalReconcileOutcome> {
+  const providerConfigKey = CINATRA_NANGO_PROVIDER_CONFIG_KEYS.drupal;
+
+  const rotate = async (reason: string): Promise<DrupalReconcileOutcome> => {
+    const minted = mintDrupalRemoteKey();
+    if (!minted) {
+      // Mint failed — keep the existing stored credential untouched.
+      return { working: false, rotated: false, note: `mint-failed (${reason}; kept existing)` };
+    }
+    try {
+      // saveDrupalInstance does ensure → import → forceRefresh readback-verify
+      // (throws on mismatch) → persist → saveNangoConnectionRecord. The
+      // readback gate means a bad key never lands in the local row/pointer.
+      await saveDrupalInstance({
+        id: input.instanceId,
+        name: input.instanceName,
+        siteUrl: input.siteUrl,
+        mcpApiKey: minted,
+      });
+    } catch {
+      // SECRET BOUNDARY: do NOT forward the raw error message — saveDrupalInstance
+      // errors can carry lower-layer (Nango import / readback) text. Surface only
+      // a fixed host-owned label. The detail is recoverable from app logs at the
+      // throwing layer if needed.
+      return { working: false, rotated: false, note: `re-import-failed (${reason})` };
+    }
+    // Rotation succeeded: evict the URL-keyed probe cache so the next
+    // UI/injection probe re-evaluates against the fresh Bearer.
+    invalidateDrupalMcpProbeCache(input.siteUrl);
+    return { working: true, rotated: true, note: `rotated (${reason})` };
+  };
+
+  // 1. Resolve the stored Bearer (forceRefresh — bypass the cred cache).
+  let storedBearer: string | null;
+  try {
+    const cred = await getNangoCredentials(providerConfigKey, input.instanceId, {
+      forceRefresh: true,
+    });
+    storedBearer =
+      cred && typeof cred === "object" && "apiKey" in cred
+        ? ((cred as { apiKey?: unknown }).apiKey as string | undefined) ?? null
+        : typeof cred === "string"
+          ? cred
+          : null;
+  } catch {
+    // Transient Nango read failure — keep, do NOT mint a duplicate.
+    return { working: false, rotated: false, note: "credential-resolve-error (kept existing)" };
+  }
+
+  if (!storedBearer) {
+    // Could be a transient null OR a genuinely missing credential. With an
+    // existing instance present we mirror Twenty: do NOT mint on an
+    // unresolved read (avoids minting a fresh key every boot on a Nango blip).
+    return { working: false, rotated: false, note: "credential-unresolved (kept; not minting)" };
+  }
+
+  // 2. Legacy split-brain — the connection literally stores the widget UUID.
+  //    Exact equality (NOT a UUID-shape regex): if the historical wrong value
+  //    is present, it can never validate against `mcp_tools_remote` → rotate.
+  if (storedBearer === input.widgetApiKey) {
+    return rotate("split-brain: widget-uuid stored");
+  }
+
+  // 3. Probe live with the stored Bearer (cache-bypassing).
+  const status = await probeDrupalMcpWithBearer(input.siteUrl, storedBearer);
+  if (status === "registered") {
+    return { working: true, rotated: false };
+  }
+  if (status === "auth_error") {
+    // Definite 401/403 — the stored key is genuinely stale → rotate.
+    return rotate("probe-401/403");
+  }
+  // not_installed (404) / unreachable (timeout/5xx/network): NEVER rotate on a
+  // transient or non-auth condition — keep the existing key, soft-skip.
+  return { working: false, rotated: false, note: `probe-${status} (kept existing; not rotating)` };
 }
 
 function probeDockerContainer(name: string): boolean {
@@ -156,12 +353,19 @@ async function autoSetupLocalDrupal(): Promise<Status> {
     return { status: "skipped", reason: "Nango not configured (run cinatra setup nango first)" };
   }
 
-  // Cinatra-side: generate or reuse the UUID-pair api_key (lives in connector_config:drupal_widget_auth)
+  // Cinatra-side: generate or reuse the UUID-pair api_key (lives in
+  // connector_config:drupal_widget_auth). This is the WIDGET Bearer (the
+  // browser→cinatra direction); it is NOT the credential Drupal's
+  // `mcp_tools_remote` validates (that is the `drush mcp-tools:remote-key-create`
+  // Bearer). The Nango `cinatra-drupal` connection must hold the LATTER.
   const auth = readDrupalWidgetAuthConfig() ?? generateDrupalWidgetAuthConfig();
 
   // Ensure the cinatra-side instance exists (create on first run; reuse after).
   // saveDrupalInstance does the ensureIntegration → importNangoConnection →
-  // readback dance internally.
+  // readback dance internally. On FIRST create, seed the Nango connection with a
+  // freshly minted remote-key Bearer (NOT the widget UUID — that historical
+  // value was the split-brain bug); if the mint is unavailable, soft-skip the
+  // create this boot rather than persist a wrong credential.
   const existing = (await listDrupalInstances()).find((i) => i.siteUrl === LOCAL_DRUPAL.siteUrl);
   let instanceId: string;
   let created: boolean;
@@ -169,20 +373,43 @@ async function autoSetupLocalDrupal(): Promise<Status> {
     instanceId = existing.id;
     created = false;
   } else {
+    const seedBearer = mintDrupalRemoteKey();
+    if (!seedBearer) {
+      return {
+        status: "skipped",
+        reason:
+          "Drupal mcp-tools:remote-key-create did not yield a key (module may still be installing). " +
+          "Re-run once the drupal container has finished provisioning.",
+      };
+    }
     try {
       const saved = await saveDrupalInstance({
         name: LOCAL_DRUPAL.instanceName,
         siteUrl: LOCAL_DRUPAL.siteUrl,
-        mcpApiKey: auth.apiKey,
+        mcpApiKey: seedBearer,
       });
       instanceId = saved.id;
       created = true;
-    } catch (err) {
-      return {
-        status: "error",
-        reason: `saveDrupalInstance failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
+    } catch {
+      // SECRET BOUNDARY: saveDrupalInstance errors can carry lower-layer (Nango
+      // import / readback) text — surface only a fixed host-owned reason.
+      return { status: "error", reason: "saveDrupalInstance failed (first wire)" };
     }
+  }
+
+  // Reconcile the stored Nango Bearer to the value Drupal validates — runs on
+  // EVERY wire (create OR reuse). Reuse-first / probe-then-rotate; soft-fails.
+  const reconcile = await ensureDrupalRemoteKeyReconciled({
+    instanceId,
+    instanceName: existing?.name ?? LOCAL_DRUPAL.instanceName,
+    siteUrl: LOCAL_DRUPAL.siteUrl,
+    widgetApiKey: auth.apiKey,
+  });
+  if (!reconcile.working) {
+    console.log(
+      `[dev-auto-setup:drupal] remote-key reconcile did not confirm a working Bearer (${reconcile.note ?? "unknown"}). ` +
+        "Drupal MCP writes 401 until a valid remote key is stored; re-run once Drupal is fully up.",
+    );
   }
 
   // Drupal-side: push the widget config on EVERY run (create OR reuse) so a
@@ -203,9 +430,19 @@ async function autoSetupLocalDrupal(): Promise<Status> {
     };
   }
 
+  const reconcileNote = reconcile.rotated
+    ? "remote-key rotated"
+    : reconcile.working
+      ? "remote-key valid"
+      : `remote-key unconfirmed (${reconcile.note ?? "unknown"})`;
+
   return created
-    ? { status: "created", siteUrl: LOCAL_DRUPAL.siteUrl, detail: `instance ${instanceId}` }
-    : { status: "already-wired", siteUrl: LOCAL_DRUPAL.siteUrl, detail: `instance ${instanceId} (config re-pushed)` };
+    ? { status: "created", siteUrl: LOCAL_DRUPAL.siteUrl, detail: `instance ${instanceId} (${reconcileNote})` }
+    : {
+        status: "already-wired",
+        siteUrl: LOCAL_DRUPAL.siteUrl,
+        detail: `instance ${instanceId} (config re-pushed; ${reconcileNote})`,
+      };
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +454,268 @@ function wpCli(args: string): string {
     `docker exec ${LOCAL_WORDPRESS.containerName} wp ${args} --allow-root 2>&1`,
     { stdio: ["ignore", "pipe", "pipe"] },
   ).toString();
+}
+
+type WordPressAuthProbe = "ok" | "unauthorized" | "unreachable";
+
+/**
+ * Probe WordPress REST authentication for a username + application password.
+ * Hits `/users/me?context=edit` (the same endpoint saveWordPressInstance
+ * validates against) over the rest_route query form so it works without pretty
+ * permalinks. Classifies the result conservatively:
+ *   - 200             → "ok" (credential authenticates)
+ *   - 401 / 403       → "unauthorized" (DEFINITE auth failure → rotate trigger)
+ *   - anything else / network error / timeout → "unreachable" (transient — NEVER
+ *     rotate; minting a fresh app-password on a blip would litter the list)
+ * Never throws. SECRET BOUNDARY: builds the Basic header locally; never logs it.
+ */
+async function probeWordPressAuth(
+  siteUrl: string,
+  username: string,
+  applicationPassword: string,
+): Promise<WordPressAuthProbe> {
+  const base = trimTrailingSlashes(siteUrl);
+  const endpoint = `${base}/index.php?rest_route=/wp/v2/users/me&context=edit`;
+  const authHeader = `Basic ${Buffer.from(`${username}:${applicationPassword}`).toString("base64")}`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetch(endpoint, {
+        method: "GET",
+        headers: { Authorization: authHeader, Accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (res.status === 200) return "ok";
+      if (res.status === 401 || res.status === 403) return "unauthorized";
+      return "unreachable";
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return "unreachable";
+  }
+}
+
+/** Mint a fresh WordPress application password via wp-cli (porcelain). */
+function mintWordPressAppPassword(): string | null {
+  try {
+    const out = wpCli(
+      `user application-password create ${LOCAL_WORDPRESS.adminUser} ${LOCAL_WORDPRESS.appPasswordLabel} --porcelain`,
+    ).trim();
+    if (!out || /Error/i.test(out)) return null;
+    // The porcelain output is the bare application password (a single token).
+    return out.split("\n").pop()?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+type WordPressReconcileOutcome = {
+  // True when the instance's stored credential should authenticate against WP
+  // REST (reused-OK, kept-on-transient, or freshly minted + both-halves-verified).
+  working: boolean;
+  rotated: boolean;
+  note?: string;
+};
+
+/**
+ * Reconcile a WordPress instance's stored application password — runs on EVERY
+ * wire (reuse path included), replacing the old create-only-once branch.
+ *
+ * Reuse-first / probe-then-rotate, mirroring `ensureTwentyBearerAttached`:
+ *   1. Resolve the stored Basic creds from Nango (forceRefresh — bypass the
+ *      cred cache). If unresolved (null/throw) → TRANSIENT: keep, soft-skip.
+ *   2. Probe WP REST auth. `ok` → reuse. `unreachable` → keep + soft-skip
+ *      (NEVER mint on a transient/non-auth condition → no app-password churn).
+ *   3. `unauthorized` (definite 401/403) ONLY → mint a fresh application
+ *      password and re-save via `saveWordPressInstance` (re-validates over the
+ *      network, then best-effort syncs Nango).
+ *   4. BOTH-HALVES check (codex must-fix): saveWordPressInstance SWALLOWS a
+ *      Nango-sync failure (wordpress-api.ts:472), so after the save we read the
+ *      Nango credential back (forceRefresh) and equality-check username+password.
+ *      A mismatch means connector-metadata and Nango diverged → report
+ *      not-working (do NOT claim success). On a verified rotate, invalidate the
+ *      URL-keyed probe cache.
+ *
+ * Soft-fails: never throws. SECRET BOUNDARY: only statuses/booleans surfaced.
+ */
+export async function ensureWordPressAppPasswordReconciled(input: {
+  instanceId: string;
+  siteUrl: string;
+  username: string;
+  providerConfigKey: string;
+  connectionId: string;
+}): Promise<WordPressReconcileOutcome> {
+  // Read the Nango-resolved Basic credential the connector actually uses.
+  let resolved: { username: string; password: string } | null;
+  try {
+    const cred = await getNangoCredentials(input.providerConfigKey, input.connectionId, {
+      forceRefresh: true,
+    });
+    resolved =
+      cred &&
+      typeof cred === "object" &&
+      "username" in cred &&
+      "password" in cred &&
+      typeof (cred as { username?: unknown }).username === "string" &&
+      typeof (cred as { password?: unknown }).password === "string"
+        ? {
+            username: (cred as { username: string }).username,
+            password: (cred as { password: string }).password,
+          }
+        : null;
+  } catch {
+    return { working: false, rotated: false, note: "credential-resolve-error (kept existing)" };
+  }
+
+  if (!resolved) {
+    // Nango resolved to nothing. This is EITHER a transient Nango blip OR the
+    // connection went fully missing (e.g. a prior rotate wrote a fresh local
+    // password but its best-effort Nango sync never landed). We must NOT mint on
+    // an unresolved read (a fresh mint every boot would litter the WP
+    // app-password list). BUT if the LOCAL connector-metadata already holds a
+    // usable password, re-sync Nango FROM it (idempotent, no mint) so a fully
+    // missing Nango connection self-heals from the credential we already have.
+    const localOnly = readWordPressInstanceById(input.instanceId);
+    const localOnlyPw = localOnly?.applicationPassword?.trim() || "";
+    if (localOnlyPw) {
+      try {
+        await saveWordPressInstance({
+          id: input.instanceId,
+          siteUrl: input.siteUrl,
+          username: localOnly?.username ?? input.username,
+          applicationPassword: localOnlyPw,
+        });
+      } catch {
+        return { working: false, rotated: false, note: "credential-unresolved; re-sync-failed" };
+      }
+      const reSynced = await verifyWordPressNangoBothHalves(
+        input,
+        localOnly?.username ?? input.username,
+        localOnlyPw,
+      );
+      if (!reSynced) {
+        return { working: false, rotated: false, note: "credential-unresolved; re-sync did not land" };
+      }
+      invalidateWordPressMcpProbeCache(input.siteUrl);
+      return { working: true, rotated: false, note: "nango-resynced-from-local (was unresolved; no mint)" };
+    }
+    // No local credential to repair from — keep, do not mint.
+    return { working: false, rotated: false, note: "credential-unresolved (kept; not minting)" };
+  }
+
+  // Probe with the resolved credential.
+  const probe = await probeWordPressAuth(input.siteUrl, resolved.username, resolved.password);
+  if (probe === "ok") {
+    return { working: true, rotated: false };
+  }
+  if (probe === "unreachable") {
+    // Indeterminate — keep the existing app-password; NEVER mint on a blip.
+    return { working: true, rotated: false, note: "probe-unreachable (kept existing)" };
+  }
+
+  // probe === "unauthorized" → definite 401/403.
+  //
+  // CHURN GUARD: before minting, check whether the LOCAL connector-metadata
+  // password differs from the (stale) Nango-resolved one. If it does, a PRIOR
+  // rotate already wrote a fresh password into the local row but its best-effort
+  // Nango sync failed (saveWordPressInstance swallows that at wordpress-api.ts:472).
+  // Minting again would litter the WP app-password list on every boot. Instead,
+  // re-sync Nango FROM the existing local credential (idempotent, no mint) — this
+  // breaks the loop. Only when local and Nango agree (both genuinely stale) do we
+  // mint a fresh app-password.
+  const local = readWordPressInstanceById(input.instanceId);
+  const localPw = local?.applicationPassword?.trim() || "";
+  if (localPw && localPw !== resolved.password) {
+    // Re-push the local credential into Nango (no new mint). saveWordPressInstance
+    // with the existing local password re-validates + re-runs the Nango sync.
+    try {
+      await saveWordPressInstance({
+        id: input.instanceId,
+        siteUrl: input.siteUrl,
+        username: local?.username ?? input.username,
+        applicationPassword: localPw,
+      });
+    } catch {
+      return { working: false, rotated: false, note: "re-sync-failed" };
+    }
+    const reSynced = await verifyWordPressNangoBothHalves(input, local?.username ?? input.username, localPw);
+    if (!reSynced) {
+      return { working: false, rotated: false, note: "nango-sync-failed (re-sync of local credential did not land)" };
+    }
+    // Nango now matches the local fresh credential — the halves are back in sync
+    // WITHOUT a new mint. Not a fresh rotate; evict the probe cache so the next
+    // probe re-evaluates against the re-synced credential.
+    invalidateWordPressMcpProbeCache(input.siteUrl);
+    return { working: true, rotated: false, note: "nango-resynced-from-local (no mint)" };
+  }
+
+  // Local and Nango agree (or no local pw) → genuinely stale → mint fresh.
+  const fresh = mintWordPressAppPassword();
+  if (!fresh) {
+    return { working: false, rotated: false, note: "mint-failed (kept existing)" };
+  }
+
+  try {
+    await saveWordPressInstance({
+      id: input.instanceId,
+      siteUrl: input.siteUrl,
+      username: input.username,
+      applicationPassword: fresh,
+    });
+  } catch {
+    // SECRET BOUNDARY: saveWordPressInstance re-validates over the network and
+    // can throw with remote WordPress response-body text — never forward it into
+    // a logged/returned note. Surface only a fixed host-owned label.
+    return { working: false, rotated: false, note: "re-save-failed" };
+  }
+
+  // BOTH-HALVES verify — saveWordPressInstance swallows Nango-sync failure, so
+  // confirm Nango now holds the fresh credential (connector metadata is already
+  // written by the save). forceRefresh bypasses the cred cache so we see the
+  // post-rotate value, not a stale one.
+  const synced = await verifyWordPressNangoBothHalves(input, input.username, fresh);
+  if (!synced) {
+    // Connector metadata rotated but Nango did NOT — the two halves are out of
+    // sync. The next boot's churn guard will re-sync from local (no re-mint).
+    return {
+      working: false,
+      rotated: false,
+      note: "nango-sync-failed (connector metadata + Nango out of sync)",
+    };
+  }
+
+  // Verified rotate — evict the URL-keyed probe cache.
+  invalidateWordPressMcpProbeCache(input.siteUrl);
+  return { working: true, rotated: true, note: "rotated" };
+}
+
+/**
+ * Confirm Nango now resolves to the expected username+password (both halves in
+ * sync), bypassing the cred cache (forceRefresh). Never throws.
+ */
+async function verifyWordPressNangoBothHalves(
+  input: { providerConfigKey: string; connectionId: string },
+  expectedUsername: string,
+  expectedPassword: string,
+): Promise<boolean> {
+  try {
+    const after = await getNangoCredentials(input.providerConfigKey, input.connectionId, {
+      forceRefresh: true,
+    });
+    return (
+      !!after &&
+      typeof after === "object" &&
+      "password" in after &&
+      (after as { password?: unknown }).password === expectedPassword &&
+      "username" in after &&
+      (after as { username?: unknown }).username === expectedUsername
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function autoSetupLocalWordPress(): Promise<Status> {
@@ -250,29 +749,37 @@ async function autoSetupLocalWordPress(): Promise<Status> {
   const auth = readWidgetAuthConfig() ?? generateWidgetAuthConfig();
 
   // Ensure the cinatra-side instance exists (create on first run; reuse after).
-  // The WP application password (cinatra→WP MCP direction) is created ONCE on
-  // first wire — its plaintext is only shown at creation and re-creating one
-  // every boot would litter the admin's application-password list.
+  // The WP application password (cinatra→WP MCP direction) is minted ONCE on
+  // first wire; on subsequent wires the reconcile (below) probes REST auth and
+  // re-mints ONLY on a definite 401 — re-creating one every boot would litter
+  // the admin's application-password list.
   const existing = (await listWordPressInstances()).find((i) => i.siteUrl === LOCAL_WORDPRESS.siteUrl);
   let instanceId: string;
   let created: boolean;
+  let reconcile: WordPressReconcileOutcome;
   if (existing) {
     instanceId = existing.id;
     created = false;
+    // Reuse-first / probe-then-rotate against the existing instance.
+    reconcile = await ensureWordPressAppPasswordReconciled({
+      instanceId: existing.id,
+      siteUrl: LOCAL_WORDPRESS.siteUrl,
+      username: existing.username,
+      providerConfigKey: existing.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.wordpress,
+      connectionId: existing.connectionId ?? existing.id,
+    });
+    if (!reconcile.working) {
+      console.log(
+        `[dev-auto-setup:wordpress] app-password reconcile did not confirm a working credential (${reconcile.note ?? "unknown"}). ` +
+          "WordPress MCP writes 401 until a valid application password is stored; re-run once WordPress is reachable.",
+      );
+    }
   } else {
-    let appPassword: string;
-    try {
-      const out = wpCli(
-        `user application-password create ${LOCAL_WORDPRESS.adminUser} ${LOCAL_WORDPRESS.appPasswordLabel} --porcelain`,
-      ).trim();
-      if (!out || /Error/i.test(out)) {
-        throw new Error(`wp-cli returned: ${out.slice(0, 200)}`);
-      }
-      appPassword = out;
-    } catch (err) {
+    const appPassword = mintWordPressAppPassword();
+    if (!appPassword) {
       return {
         status: "error",
-        reason: `wp user application-password create failed: ${err instanceof Error ? err.message : String(err)}`,
+        reason: "wp user application-password create failed (no porcelain output)",
       };
     }
     try {
@@ -283,11 +790,37 @@ async function autoSetupLocalWordPress(): Promise<Status> {
       });
       instanceId = saved.id;
       created = true;
-    } catch (err) {
-      return {
-        status: "error",
-        reason: `saveWordPressInstance failed: ${err instanceof Error ? err.message : String(err)}`,
-      };
+    } catch {
+      // SECRET BOUNDARY: saveWordPressInstance re-validates over the network and
+      // can throw with remote WordPress response-body text — surface only a fixed
+      // host-owned reason.
+      return { status: "error", reason: "saveWordPressInstance failed (first wire)" };
+    }
+    // First-wire BOTH-HALVES verify: saveWordPressInstance swallows a Nango-sync
+    // failure, so confirm Nango actually holds the freshly minted credential.
+    let synced = false;
+    try {
+      const after = await getNangoCredentials(
+        CINATRA_NANGO_PROVIDER_CONFIG_KEYS.wordpress,
+        instanceId,
+        { forceRefresh: true },
+      );
+      synced =
+        !!after &&
+        typeof after === "object" &&
+        "password" in after &&
+        (after as { password?: unknown }).password === appPassword;
+    } catch {
+      synced = false;
+    }
+    reconcile = synced
+      ? { working: true, rotated: false, note: "first-wire minted + nango-synced" }
+      : { working: false, rotated: false, note: "nango-sync-failed (connector metadata + Nango out of sync)" };
+    if (!synced) {
+      console.log(
+        "[dev-auto-setup:wordpress] first-wire app-password minted but Nango sync could not be confirmed. " +
+          "WordPress MCP writes 401 until the credential is in Nango; re-run once Nango is reachable.",
+      );
     }
   }
 
@@ -306,9 +839,24 @@ async function autoSetupLocalWordPress(): Promise<Status> {
     };
   }
 
+  // Distinguish a POSITIVELY-confirmed credential (200 probe, no note) from a
+  // kept-but-unconfirmed one (e.g. probe-unreachable: working stays true to
+  // avoid a false 401 hint + churn, but we must NOT overstate it as "valid").
+  const reconcileNote = reconcile.rotated
+    ? "app-password rotated"
+    : reconcile.working
+      ? reconcile.note
+        ? `app-password kept, unconfirmed (${reconcile.note})`
+        : "app-password valid"
+      : `app-password unconfirmed (${reconcile.note ?? "unknown"})`;
+
   return created
-    ? { status: "created", siteUrl: LOCAL_WORDPRESS.siteUrl, detail: `instance ${instanceId}` }
-    : { status: "already-wired", siteUrl: LOCAL_WORDPRESS.siteUrl, detail: `instance ${instanceId} (config re-pushed)` };
+    ? { status: "created", siteUrl: LOCAL_WORDPRESS.siteUrl, detail: `instance ${instanceId} (${reconcileNote})` }
+    : {
+        status: "already-wired",
+        siteUrl: LOCAL_WORDPRESS.siteUrl,
+        detail: `instance ${instanceId} (config re-pushed; ${reconcileNote})`,
+      };
 }
 
 // ---------------------------------------------------------------------------

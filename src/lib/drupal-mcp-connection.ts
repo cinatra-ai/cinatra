@@ -20,7 +20,12 @@ const MCP_TOOLS_PATH = "/_mcp_tools";
  * host-bound deps; this file owns the route constant).
  */
 export function resolveDrupalMcpServerUrl(siteUrl: string): string {
-  return siteUrl.replace(/\/+$/, "") + MCP_TOOLS_PATH;
+  // Strip trailing slashes via a LINEAR char-index trim. The anchored greedy
+  // `/\/+$/` is polynomial-ReDoS on many trailing slashes (CodeQL
+  // `js/polynomial-redos`, high) — the codebase standardises on this linear form.
+  let end = siteUrl.length;
+  while (end > 0 && siteUrl.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return siteUrl.slice(0, end) + MCP_TOOLS_PATH;
 }
 
 export type DrupalMcpStatus = "registered" | "not_installed" | "auth_error" | "unreachable";
@@ -54,6 +59,17 @@ function classifyStatus(code: number): DrupalMcpStatus {
   return "unreachable";
 }
 
+/**
+ * Exported classification of a raw HTTP status into the DrupalMcpStatus the
+ * dev-auto-setup reconcile keys its reuse-vs-rotate decision on. Sharing the
+ * single classifier here keeps the "only a definite 401/403 = auth_error"
+ * boundary in ONE place (it must NEVER drift between the UI status path and the
+ * reconcile rotate trigger).
+ */
+export function classifyDrupalMcpStatus(code: number): DrupalMcpStatus {
+  return classifyStatus(code);
+}
+
 export async function probeDrupalMcp(
   siteUrl: string,
   authHeader: string,
@@ -67,6 +83,33 @@ export async function probeDrupalMcp(
   const status = classifyStatus(code);
   probeCache.set(cacheKey, { status, expiresAt: Date.now() + PROBE_TTL_MS });
   return status;
+}
+
+/**
+ * Probe a Drupal `/_mcp_tools` endpoint with an EXPLICIT Bearer token, bypassing
+ * the URL-keyed `probeCache` entirely (it always issues a live HEAD). The
+ * dev-auto-setup reconcile uses this — its reuse-vs-rotate decision must reflect
+ * the CURRENT credential, not a status the cache memoised under a previous
+ * (possibly rotated) key. Returns the classified status; never throws.
+ */
+export async function probeDrupalMcpWithBearer(
+  siteUrl: string,
+  bearer: string,
+): Promise<DrupalMcpStatus> {
+  const endpoint = resolveDrupalMcpServerUrl(siteUrl);
+  const code = await headProbe(endpoint, `Bearer ${bearer}`);
+  return classifyStatus(code);
+}
+
+/**
+ * Evict the URL-keyed probe-cache entry for a site. The cache is keyed by site
+ * URL, NOT by credential, so after a credential rotation a stale `auth_error`
+ * (or `registered`) verdict would otherwise be served for up to PROBE_TTL_MS.
+ * The reconcile calls this on every rotate so the next UI/injection probe
+ * re-evaluates against the fresh key. Idempotent; safe when absent.
+ */
+export function invalidateDrupalMcpProbeCache(siteUrl: string): void {
+  probeCache.delete(resolveDrupalMcpServerUrl(siteUrl));
 }
 
 export type DrupalMcpInstanceStatus = {
