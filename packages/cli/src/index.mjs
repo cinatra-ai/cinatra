@@ -10,7 +10,7 @@ import net from "node:net";
 import pg from "pg";
 import { resolveTeardownNames } from "./teardown-config.mjs";
 import { runCoreMigrations, runNamespacedMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
-import { syncDevApps } from "./dev-apps.mjs";
+import { syncDevApps, readDevAppsConfig } from "./dev-apps.mjs";
 import { syncCinatraDevExtensions } from "./cinatra-dev-extensions.mjs";
 import { parseDevRefreshFlags, describeDockerDecision } from "./dev-refresh.mjs";
 import {
@@ -298,6 +298,7 @@ Usage:
   cinatra extensions acquire-prod
   cinatra mcp llm-access setup
   cinatra mcp llm-access refresh
+  cinatra doctor [--strict]
   cinatra agent export <id-or-name> [--file <output.zip>]
   cinatra agent import <file.zip> [--name <override-name>]
   cinatra agents install [<name>[@<range>]] [options]
@@ -465,6 +466,20 @@ Commands:
   mcp llm-access setup     Provision OAuth clients for OpenAI, Anthropic, and Gemini
                             with restricted MCP permissions (dev only).
   mcp llm-access refresh   Rotate all LLM provider client secrets.
+  mcp llm-access verify    Alias for \`cinatra doctor\` (below).
+
+  doctor            READ-ONLY content-editor write-path self-check (the "done"
+                    gate). Asserts PASS/FAIL/SKIP, per assertion: LLM MCP access
+                    (creds AND public URL, one AND), a token-mint smoke, local +
+                    public /api/mcp tools/list (incl. a CMS-write tool), WordPress
+                    + Drupal container/plugin readiness, and dev-app clone
+                    presence. Mutates nothing; never prints a token/secret. A
+                    check that cannot prove itself because a dependency is down
+                    (app, CMS container, public URL) is SKIPPED, never passed —
+                    re-run after \`pnpm dev\` is up. This is the authoritative
+                    post-boot gate. It also runs (non-fatal) at the tail of
+                    \`cinatra setup dev\`.
+                    --strict          Exit non-zero on any SKIP (default: only FAIL).
 
   agent export <id-or-name>
                     Export an agent template to a portable ZIP archive.
@@ -2451,6 +2466,777 @@ async function gatherStatus(client, schemaName) {
   };
 }
 
+// ===========================================================================
+// `cinatra doctor` — content-editor write-path self-check (cinatra#260 Step 5)
+// ===========================================================================
+//
+// A READ-ONLY, idempotent self-check that proves the full LLM→CMS write path the
+// other four steps provision piecemeal: token mint → public URL → provider
+// reaches /api/mcp → CMS write. It mutates NOTHING (no rotate, no DDL, no
+// credential writes) and never prints a token/secret/Bearer/app-password — only
+// statuses, booleans, and HTTP status codes.
+//
+// Each assertion yields { id, label, verdict, detail, remediation }:
+//   - "pass"  the chain link is PROVEN true.
+//   - "fail"  the chain link is PROVEN false (a real provisioning gap).
+//   - "skip"  the link could NOT be proven because a dependency is down (app
+//             not running, CMS container down, public URL unreachable, docker
+//             absent). A SKIP is NEVER a PASS — the operator is told to re-run
+//             `cinatra doctor` once the relevant service is up. The standalone
+//             subcommand is the authoritative post-boot gate.
+//
+// The CLI is a plain .mjs with no Next path aliases and no `server-only`
+// runtime, so it CANNOT import the TS credential helpers in packages/llm/** or
+// packages/mcp-server/** (forbidden to modify), nor the host-app TS probes in
+// src/lib/**. The doctor therefore re-derives the same read-only logic over
+// direct DB reads + HTTP/docker probes. Where a TS helper is the model, the
+// behavior is mirrored (not imported) and the source is cited.
+
+// Bounded timeout for every doctor HTTP probe. A reachable-but-stalled endpoint
+// must never hang setup or the standalone command.
+const DOCTOR_HTTP_TIMEOUT_MS = 5000;
+
+// The content-editor CMS-write MCP tools the doctor requires in tools/list. An
+// EXACT allowlist (not a `blog_post_publish_` prefix, which would false-pass on
+// `blog_post_publish_linkedin_*` — codex must-fix). Presence of ANY one of these
+// proves the CMS-write surface is exposed on the MCP server.
+const DOCTOR_CMS_WRITE_TOOLS = ["blog_post_publish_wordpress_start", "blog_post_update"];
+
+// Local CMS endpoints + the container names `src/lib/dev-auto-setup.ts` expects
+// (default compose naming `<project>-<service>-<N>`; the boot auto-setup path
+// hardcodes these, so the doctor mirrors that expectation rather than guessing).
+const DOCTOR_WORDPRESS = {
+  containerName: "cinatra-wordpress-1",
+  siteUrl: "http://localhost:8080",
+  // Routes probed WITHOUT a secret — pure reachability/route-presence (codex
+  // must-fix: a bare /wp/v2 root would not catch the abilities-api/mcp-adapter
+  // boot failure the uat-gate hit). `/mcp/mcp-adapter-default-server` is served
+  // only when the mcp-adapter plugin is active (see src/lib/wordpress-mcp-connection.ts).
+  restRootPath: "/index.php?rest_route=/wp/v2",
+  mcpAdapterPath: "/index.php?rest_route=/mcp/mcp-adapter-default-server",
+  // Plugins that must be ACTIVE for the WP MCP write path (codex must-fix).
+  requiredPlugins: ["cinatra", "abilities-api", "mcp-adapter"],
+};
+const DOCTOR_DRUPAL = {
+  containerName: "cinatra-drupal-1",
+  siteUrl: "http://localhost:8082",
+  // `/_mcp_tools` is served only when the cinatra mcp_tools route is installed
+  // (see src/lib/drupal-mcp-connection.ts classifier).
+  mcpToolsPath: "/_mcp_tools",
+  requiredModule: "cinatra",
+};
+
+function makeAssertion(id, label, verdict, detail, remediation) {
+  return { id, label, verdict, detail, remediation: remediation ?? null };
+}
+
+// Derive the configured public MCP server URL the SAME way the runtime read does
+// (packages/mcp-server/src/llm-credentials.ts getMcpPublicBaseUrl + getPublicMcpServerUrl):
+// drop source==="cli" (retired tunnel), URL-parse to origin-only (a legacy
+// pathful row is normalized, NOT rejected — `normalizeOptionalUrl` would drift
+// from runtime here, codex must-fix), then append /api/mcp. Returns null when no
+// usable URL is configured. Pure; no network.
+function deriveConfiguredPublicMcpUrl(mcpServerSettings) {
+  const raw = mcpServerSettings ?? {};
+  if (raw.publicBaseUrlSource === "cli") return null;
+  const value = typeof raw.publicBaseUrl === "string" ? raw.publicBaseUrl.trim() : "";
+  if (!value) return null;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return `${parsed.protocol}//${parsed.host}/api/mcp`;
+}
+
+// Assertions 1+2 — creds provisioned AND public URL set, asserted as ONE AND
+// (this IS hasLlmMcpAccess(): two independent green lines are the documented
+// false-PASS trap — never repeat it). Pure DB reads.
+async function doctorAssertLlmMcpAccess(client, schemaName) {
+  const llmAccess = await readMetadataValue(client, schemaName, LLM_MCP_SETTINGS_KEY, {});
+  const providerIds = Object.keys(llmAccess?.providers ?? {});
+  const hasCredentials = providerIds.length > 0;
+
+  const mcpServer = await readMetadataValue(client, schemaName, MCP_SETTINGS_KEY, {});
+  const publicMcpUrl = deriveConfiguredPublicMcpUrl(mcpServer);
+  const hasPublicUrl = Boolean(publicMcpUrl);
+
+  // SINGLE AND. hasLlmMcpAccess === hasCredentials && hasPublicUrl.
+  const ok = hasCredentials && hasPublicUrl;
+
+  let detail;
+  if (ok) {
+    detail = `${providerIds.length} provider(s); public MCP URL configured`;
+  } else if (hasCredentials && !hasPublicUrl) {
+    detail = `${providerIds.length} provider(s) provisioned, but NO public MCP URL is set`;
+  } else if (!hasCredentials && hasPublicUrl) {
+    detail = "public MCP URL set, but NO LLM provider credentials are provisioned";
+  } else {
+    detail = "no LLM provider credentials and no public MCP URL";
+  }
+
+  return {
+    assertion: makeAssertion(
+      "llm-mcp-access",
+      "LLM MCP access (creds AND public URL — single AND)",
+      ok ? "pass" : "fail",
+      detail,
+      ok
+        ? null
+        : "Run `cinatra setup dev` (provisions provider creds), then `cinatra dev tunnel start` " +
+          "(or paste a public URL at /configuration/development?tab=tunnel) to set the public MCP URL.",
+    ),
+    // Surfaced to later assertions; never logged.
+    providers: llmAccess?.providers ?? {},
+    publicMcpUrl,
+  };
+}
+
+// Internal-only token mint that RETURNS the minted token so assertions 4+5 can
+// reuse it. Kept private to gatherDoctorReport — the token is NEVER placed in an
+// assertion object or any log (the public `probeTokenMint` deliberately returns
+// no token; codex must-fix). Mirrors exchangeClientCredentials in
+// src/app/configuration/mcp/llm-access/test/route.ts.
+async function doctorMintToken({ origin, clientId, clientSecret, scope, fetchImpl }) {
+  const tokenEndpoint = `${origin}/api/auth/oauth2/token`;
+  const resource = `${origin}/api/mcp`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOCTOR_HTTP_TIMEOUT_MS);
+  try {
+    let response;
+    try {
+      const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      response = await fetchImpl(tokenEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${basic}`,
+        },
+        body: new URLSearchParams({ grant_type: "client_credentials", scope, resource }),
+        signal: controller.signal,
+      });
+    } catch {
+      // Transport failure or request-phase timeout → app is down/unreachable.
+      return { outcome: "app-down", token: null };
+    }
+    if (!response.ok) {
+      return { outcome: "error", status: response.status, token: null };
+    }
+    let tokenData = null;
+    try {
+      tokenData = await response.json();
+    } catch (err) {
+      if (err && (err.name === "AbortError" || controller.signal.aborted)) {
+        return { outcome: "app-down", token: null };
+      }
+      tokenData = null;
+    }
+    if (tokenData && typeof tokenData.access_token === "string" && tokenData.access_token.length > 0) {
+      return { outcome: "ok", status: response.status, token: tokenData.access_token };
+    }
+    return { outcome: "error", status: response.status, token: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Assertion 3 — token-mint smoke. Reports HTTP status + token-present boolean
+// ONLY. Returns the token privately for 4+5. SKIP (never PASS) when the app/token
+// endpoint is unreachable.
+async function doctorAssertTokenMint({ origin, providers, fetchImpl }) {
+  // Pick the first provisioned provider with a usable client_credentials pair.
+  const entry = Object.values(providers ?? {}).find(
+    (p) => p && typeof p.clientId === "string" && typeof p.clientSecret === "string" && p.clientId && p.clientSecret,
+  );
+  if (!entry) {
+    return {
+      assertion: makeAssertion(
+        "token-mint",
+        "Token-mint smoke (client_credentials)",
+        "skip",
+        "no LLM provider credentials to mint with",
+        "Run `cinatra setup dev` to provision LLM provider OAuth clients first.",
+      ),
+      token: null,
+    };
+  }
+  const scope = typeof entry.scope === "string" && entry.scope ? entry.scope : LLM_MCP_CLIENT_SCOPE;
+  const result = await doctorMintToken({
+    origin,
+    clientId: entry.clientId,
+    clientSecret: entry.clientSecret,
+    scope,
+    fetchImpl,
+  });
+  if (result.outcome === "ok") {
+    return {
+      assertion: makeAssertion(
+        "token-mint",
+        "Token-mint smoke (client_credentials)",
+        "pass",
+        `HTTP ${result.status}; access_token present: true`,
+      ),
+      token: result.token,
+    };
+  }
+  if (result.outcome === "app-down") {
+    return {
+      assertion: makeAssertion(
+        "token-mint",
+        "Token-mint smoke (client_credentials)",
+        "skip",
+        `local token endpoint at ${origin} unreachable or timed out`,
+        "Start the app (`pnpm dev`), then re-run `cinatra doctor`.",
+      ),
+      token: null,
+    };
+  }
+  return {
+    assertion: makeAssertion(
+      "token-mint",
+      "Token-mint smoke (client_credentials)",
+      "fail",
+      `HTTP ${result.status ?? "?"}; access_token present: false`,
+      "Token mint failed. Check the OAuth client/scope and JWKS decryptability " +
+        "(`cinatra setup dev` self-heals JWKS once the app is up).",
+    ),
+    token: null,
+  };
+}
+
+// POST a JSON-RPC tools/list with a Bearer and classify. Returns
+// { outcome: "ok"|"unreachable"|"error", status?, tools?: string[] }. Bounded
+// timeout. The Bearer + response body are NEVER logged.
+async function doctorToolsList({ url, token, fetchImpl }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOCTOR_HTTP_TIMEOUT_MS);
+  try {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+        signal: controller.signal,
+      });
+    } catch {
+      return { outcome: "unreachable" };
+    }
+    if (!response.ok) {
+      return { outcome: "error", status: response.status };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (err) {
+      if (err && (err.name === "AbortError" || controller.signal.aborted)) {
+        return { outcome: "unreachable" };
+      }
+      return { outcome: "error", status: response.status };
+    }
+    const tools = Array.isArray(data?.result?.tools)
+      ? data.result.tools.map((t) => (t && typeof t.name === "string" ? t.name : "")).filter(Boolean)
+      : [];
+    return { outcome: "ok", status: response.status, tools };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Assertion 4 — LOCAL /api/mcp tools/list incl. a CMS-write tool. SKIP when no
+// token (depends on 3) or the endpoint is unreachable.
+async function doctorAssertLocalToolsList({ origin, token, fetchImpl }) {
+  if (!token) {
+    return makeAssertion(
+      "local-tools-list",
+      "Local /api/mcp tools/list (incl. CMS-write tool)",
+      "skip",
+      "no minted token (token-mint did not succeed)",
+      "Start the app (`pnpm dev`), then re-run `cinatra doctor`.",
+    );
+  }
+  const result = await doctorToolsList({ url: `${origin}/api/mcp`, token, fetchImpl });
+  if (result.outcome === "unreachable") {
+    return makeAssertion(
+      "local-tools-list",
+      "Local /api/mcp tools/list (incl. CMS-write tool)",
+      "skip",
+      `local /api/mcp at ${origin} unreachable or timed out`,
+      "Start the app (`pnpm dev`), then re-run `cinatra doctor`.",
+    );
+  }
+  if (result.outcome === "error") {
+    return makeAssertion(
+      "local-tools-list",
+      "Local /api/mcp tools/list (incl. CMS-write tool)",
+      "fail",
+      `tools/list returned HTTP ${result.status}`,
+      "The MCP server rejected the minted Bearer. Re-run `cinatra setup dev` once the app is up.",
+    );
+  }
+  const hasTools = result.tools.length > 0;
+  const cmsWriteTool = result.tools.find((name) => DOCTOR_CMS_WRITE_TOOLS.includes(name));
+  if (hasTools && cmsWriteTool) {
+    return makeAssertion(
+      "local-tools-list",
+      "Local /api/mcp tools/list (incl. CMS-write tool)",
+      "pass",
+      `${result.tools.length} tool(s); CMS-write tool present (${cmsWriteTool})`,
+    );
+  }
+  return makeAssertion(
+    "local-tools-list",
+    "Local /api/mcp tools/list (incl. CMS-write tool)",
+    "fail",
+    hasTools
+      ? `${result.tools.length} tool(s) but no CMS-write tool (expected one of: ${DOCTOR_CMS_WRITE_TOOLS.join(", ")})`
+      : "tools/list returned 0 tools",
+    "Verify the content-publishing extension is installed/active and the MCP scope is correct.",
+  );
+}
+
+// Assertion 5 — PUBLIC reachability (codex must-fix: a real e2e proof, not just
+// local). POST the CONFIGURED public MCP URL with the minted Bearer. SKIP when no
+// public URL (covered by the 1+2 FAIL) or no token, or when the hosted endpoint
+// is unreachable. PASS requires the public endpoint to actually answer tools/list.
+async function doctorAssertPublicReachability({ publicMcpUrl, token, fetchImpl }) {
+  if (!publicMcpUrl) {
+    return makeAssertion(
+      "public-reachability",
+      "Public MCP URL reachability (provider-facing tools/list)",
+      "skip",
+      "no public MCP URL configured (see the LLM-MCP-access assertion)",
+      "Set a public MCP URL via `cinatra dev tunnel start` or the dev tunnel tab, then re-run `cinatra doctor`.",
+    );
+  }
+  if (!token) {
+    return makeAssertion(
+      "public-reachability",
+      "Public MCP URL reachability (provider-facing tools/list)",
+      "skip",
+      "no minted token (token-mint did not succeed)",
+      "Start the app (`pnpm dev`), then re-run `cinatra doctor`.",
+    );
+  }
+  const result = await doctorToolsList({ url: publicMcpUrl, token, fetchImpl });
+  if (result.outcome === "unreachable") {
+    return makeAssertion(
+      "public-reachability",
+      "Public MCP URL reachability (provider-facing tools/list)",
+      "skip",
+      "the configured public MCP URL is unreachable or timed out (DNS/cert may still be propagating)",
+      "Confirm the public URL is live (`cinatra dev tunnel status`), then re-run `cinatra doctor`.",
+    );
+  }
+  if (result.outcome === "error") {
+    return makeAssertion(
+      "public-reachability",
+      "Public MCP URL reachability (provider-facing tools/list)",
+      "fail",
+      `public tools/list returned HTTP ${result.status}`,
+      "The hosted endpoint rejected the minted Bearer (origin/audience mismatch). " +
+        "Re-run `cinatra setup dev` so the public URL + trusted origins reconcile.",
+    );
+  }
+  // Require the SAME exact CMS-write tool as the local check (codex must-fix: a
+  // stale/wrong public endpoint exposing only generic tools must NOT pass the
+  // provider-facing half of the content-editor gate).
+  const cmsWriteTool = result.tools.find((name) => DOCTOR_CMS_WRITE_TOOLS.includes(name));
+  if (result.tools.length > 0 && cmsWriteTool) {
+    return makeAssertion(
+      "public-reachability",
+      "Public MCP URL reachability (provider-facing tools/list)",
+      "pass",
+      `public endpoint answered tools/list with ${result.tools.length} tool(s); CMS-write tool present (${cmsWriteTool})`,
+    );
+  }
+  return makeAssertion(
+    "public-reachability",
+    "Public MCP URL reachability (provider-facing tools/list)",
+    "fail",
+    result.tools.length === 0
+      ? "public tools/list returned 0 tools"
+      : `public tools/list has ${result.tools.length} tool(s) but no CMS-write tool (expected one of: ${DOCTOR_CMS_WRITE_TOOLS.join(", ")}) — the public endpoint may be stale/wrong`,
+    "Confirm the public MCP URL points at THIS instance and the content-publishing extension is active; re-run `cinatra setup dev`.",
+  );
+}
+
+// Run a docker read (`docker ps` / `docker exec ... <read-only command>`) via the
+// injected runner. Returns { ok, stdout } — never throws. Read-only only.
+function doctorDockerRun(dockerImpl, args) {
+  try {
+    const r = dockerImpl(args);
+    return { ok: (r?.status ?? -1) === 0, stdout: typeof r?.stdout === "string" ? r.stdout : "" };
+  } catch {
+    return { ok: false, stdout: "" };
+  }
+}
+
+function doctorContainerRunning(dockerImpl, containerName) {
+  const r = doctorDockerRun(dockerImpl, [
+    "ps",
+    "--filter",
+    `name=^/${containerName}$`,
+    "--format",
+    "{{.Names}}",
+  ]);
+  return r.ok && r.stdout.trim() === containerName;
+}
+
+// HEAD/GET an HTTP path without a secret, returning the status code (or null on a
+// transport error/timeout). Read-only reachability/route-presence only.
+async function doctorHttpStatus({ url, fetchImpl, method = "GET" }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOCTOR_HTTP_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(url, { method, signal: controller.signal });
+    return response.status;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Classify a no-secret route-presence probe like the runtime classifiers
+// (src/lib/drupal-mcp-connection.ts, src/lib/wordpress-mcp-connection.ts):
+//   - 200 / 401 / 403 / 405 → "present" (the route exists; auth-gated or
+//     HEAD-unsupported still proves the plugin/module is installed)
+//   - 404                   → "not-installed" (the route/plugin is absent → FAIL)
+//   - null (transport/timeout) OR ANY OTHER status (5xx, 3xx, unexpected) →
+//     "unreachable" (codex must-fix: a 500/502/503/3xx is NOT proof of presence
+//     and must SKIP, never PASS).
+function classifyRouteStatus(status) {
+  if (status === null || status === undefined) return "unreachable";
+  if (status === 200 || status === 401 || status === 403 || status === 405) return "present";
+  if (status === 404) return "not-installed";
+  return "unreachable";
+}
+
+// Assertions 6+7 — WP container + plugin readiness (read-only). Probes WITHOUT
+// any secret (codex must-fix: this is a READINESS proxy, NOT a credential-validity
+// claim — a .mjs cannot read the Nango-stored secret). SKIP (never PASS) when
+// docker/container/CMS is down.
+async function doctorAssertWordPressReadiness({ fetchImpl, dockerImpl }) {
+  const id = "wordpress-readiness";
+  const label = "WordPress container + plugin readiness (read-only)";
+  if (!doctorContainerRunning(dockerImpl, DOCTOR_WORDPRESS.containerName)) {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `${DOCTOR_WORDPRESS.containerName} not running`,
+      "Start the WordPress dev container (`docker compose --profile wordpress up -d`), then re-run `cinatra doctor`.",
+    );
+  }
+  // Route-presence probe (no secret), classified like the runtime classifier:
+  // 200/401/403/405 = present, 404 = not-installed (FAIL), null/5xx/3xx/other =
+  // unreachable → SKIP (codex must-fix: a 500/502/503/3xx is NOT proof of presence).
+  const adapterStatus = await doctorHttpStatus({
+    url: `${DOCTOR_WORDPRESS.siteUrl}${DOCTOR_WORDPRESS.mcpAdapterPath}`,
+    fetchImpl,
+  });
+  const adapterClass = classifyRouteStatus(adapterStatus);
+  if (adapterClass === "unreachable") {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `${DOCTOR_WORDPRESS.siteUrl} not answering the mcp-adapter route (HTTP ${adapterStatus ?? "no-response"}) — container booting?`,
+      "Wait for WordPress to finish booting, then re-run `cinatra doctor`.",
+    );
+  }
+  if (adapterClass === "not-installed") {
+    return makeAssertion(
+      id,
+      label,
+      "fail",
+      `mcp-adapter route absent (HTTP ${adapterStatus}) — the WP MCP plugins are not active`,
+      "Re-run the WP container entrypoint / `cinatra setup dev`; ensure cinatra, abilities-api, and mcp-adapter are active.",
+    );
+  }
+  // Read-only plugin-active list via wp-cli.
+  const pluginList = doctorDockerRun(dockerImpl, [
+    "exec",
+    DOCTOR_WORDPRESS.containerName,
+    "wp",
+    "plugin",
+    "list",
+    "--status=active",
+    "--field=name",
+    "--allow-root",
+  ]);
+  const activePlugins = pluginList.ok
+    ? pluginList.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+    : null;
+  const missingPlugins =
+    activePlugins === null
+      ? null
+      : DOCTOR_WORDPRESS.requiredPlugins.filter((p) => !activePlugins.includes(p));
+  if (missingPlugins === null) {
+    // Route present but couldn't list plugins (wp-cli unavailable) — readiness
+    // is partially proven; do not claim PASS, warn.
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `mcp-adapter route present (HTTP ${adapterStatus}) but wp-cli plugin list was unavailable`,
+      "Re-run `cinatra doctor` once wp-cli is reachable in the container.",
+    );
+  }
+  if (missingPlugins.length > 0) {
+    return makeAssertion(
+      id,
+      label,
+      "fail",
+      `inactive required plugin(s): ${missingPlugins.join(", ")}`,
+      "Activate the missing plugin(s) or re-run the WP entrypoint / `cinatra setup dev`.",
+    );
+  }
+  return makeAssertion(
+    id,
+    label,
+    "pass",
+    `container up; mcp-adapter route present (HTTP ${adapterStatus}); active: ${DOCTOR_WORDPRESS.requiredPlugins.join(", ")}`,
+  );
+}
+
+// Drupal container + module readiness (read-only, no secret).
+async function doctorAssertDrupalReadiness({ fetchImpl, dockerImpl }) {
+  const id = "drupal-readiness";
+  const label = "Drupal container + module readiness (read-only)";
+  if (!doctorContainerRunning(dockerImpl, DOCTOR_DRUPAL.containerName)) {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `${DOCTOR_DRUPAL.containerName} not running`,
+      "Start the Drupal dev container (`docker compose --profile drupal up -d`), then re-run `cinatra doctor`.",
+    );
+  }
+  // `/_mcp_tools` is served only when the cinatra mcp_tools route is installed.
+  // Classify like src/lib/drupal-mcp-connection.ts: 200/401/403/405 = present,
+  // 404 = not_installed (FAIL), null/5xx/3xx/other = unreachable → SKIP (codex
+  // must-fix: a 500/502/503/3xx is NOT proof of presence).
+  const status = await doctorHttpStatus({
+    url: `${DOCTOR_DRUPAL.siteUrl}${DOCTOR_DRUPAL.mcpToolsPath}`,
+    fetchImpl,
+  });
+  const routeClass = classifyRouteStatus(status);
+  if (routeClass === "unreachable") {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `${DOCTOR_DRUPAL.siteUrl} not answering /_mcp_tools (HTTP ${status ?? "no-response"}) — container booting?`,
+      "Wait for Drupal to finish booting, then re-run `cinatra doctor`.",
+    );
+  }
+  if (routeClass === "not-installed") {
+    return makeAssertion(
+      id,
+      label,
+      "fail",
+      `/_mcp_tools route absent (HTTP ${status}) — the cinatra module is not enabled`,
+      "Enable the cinatra Drupal module or re-run the Drupal entrypoint / `cinatra setup dev`.",
+    );
+  }
+  const moduleList = doctorDockerRun(dockerImpl, [
+    "exec",
+    DOCTOR_DRUPAL.containerName,
+    "drush",
+    "--root=/drupal/web",
+    "pm:list",
+    "--status=enabled",
+    "--field=name",
+  ]);
+  const enabledModules = moduleList.ok
+    ? moduleList.stdout.split("\n").map((l) => l.trim()).filter(Boolean)
+    : null;
+  if (enabledModules === null) {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      `/_mcp_tools route present (HTTP ${status}) but drush module list was unavailable`,
+      "Re-run `cinatra doctor` once drush is reachable in the container.",
+    );
+  }
+  if (!enabledModules.includes(DOCTOR_DRUPAL.requiredModule)) {
+    return makeAssertion(
+      id,
+      label,
+      "fail",
+      `the "${DOCTOR_DRUPAL.requiredModule}" module is not enabled`,
+      "Enable the cinatra Drupal module (`drush en cinatra`) or re-run `cinatra setup dev`.",
+    );
+  }
+  return makeAssertion(
+    id,
+    label,
+    "pass",
+    `container up; /_mcp_tools route present (HTTP ${status}); "${DOCTOR_DRUPAL.requiredModule}" module enabled`,
+  );
+}
+
+// Assertion 8 — dev-app clone presence. The WP plugin + Drupal module clones must
+// exist on disk (they are gitignored; `cinatra setup dev` syncs them). Pure fs.
+function doctorAssertDevAppsPresence(repoRoot) {
+  const config = readDevAppsConfig(repoRoot);
+  const id = "dev-apps-presence";
+  const label = "Dev-app clones present (wordpress-plugin + drupal-module)";
+  if (!config) {
+    return makeAssertion(
+      id,
+      label,
+      "skip",
+      "no cinatra.devApps config found in package.json",
+      null,
+    );
+  }
+  // The two CMS dev-apps Step 5 is scoped to MUST both be declared AND present.
+  // Codex must-fix: do NOT filter out an absent config ENTRY — a config that
+  // exists but omits the WordPress or Drupal entry is itself a provisioning gap
+  // (FAIL), not a silent pass on a partial set.
+  const required = [
+    { name: "@cinatra-ai/wordpress-plugin", relPath: config["@cinatra-ai/wordpress-plugin"]?.path },
+    { name: "@cinatra-ai/drupal-module", relPath: config["@cinatra-ai/drupal-module"]?.path },
+  ];
+  const undeclared = required.filter((r) => typeof r.relPath !== "string" || !r.relPath);
+  const missingClones = required.filter(
+    (r) => typeof r.relPath === "string" && r.relPath && !existsSync(path.resolve(repoRoot, r.relPath)),
+  );
+  if (undeclared.length > 0 || missingClones.length > 0) {
+    const undeclaredNote =
+      undeclared.length > 0 ? `undeclared in cinatra.devApps: ${undeclared.map((r) => r.name).join(", ")}` : "";
+    const missingNote =
+      missingClones.length > 0 ? `missing clone(s): ${missingClones.map((m) => m.relPath).join(", ")}` : "";
+    return makeAssertion(
+      id,
+      label,
+      "fail",
+      [undeclaredNote, missingNote].filter(Boolean).join("; "),
+      "Run `cinatra setup dev` (without --skip-dev-apps) to clone the WordPress plugin + Drupal module " +
+        "(and ensure both are declared in package.json `cinatra.devApps`).",
+    );
+  }
+  return makeAssertion(
+    id,
+    label,
+    "pass",
+    `present: ${required.map((r) => r.relPath).join(", ")}`,
+  );
+}
+
+// Run the full content-editor self-check. READ-ONLY. Returns
+// { assertions: [...], counts: { pass, fail, skip } }. Dependencies (fetch,
+// docker) are injectable for hermetic tests. Never throws past its boundary.
+async function gatherDoctorReport({
+  client,
+  schemaName,
+  env,
+  repoRoot,
+  fetchImpl = globalThis.fetch.bind(globalThis),
+  dockerImpl = defaultDoctorDockerImpl,
+} = {}) {
+  const origin = resolveLocalOrigin(env);
+  const assertions = [];
+
+  // 1+2 — single AND.
+  const access = await doctorAssertLlmMcpAccess(client, schemaName);
+  assertions.push(access.assertion);
+
+  // 3 — token mint (returns the token privately for 4+5).
+  const mint = await doctorAssertTokenMint({ origin, providers: access.providers, fetchImpl });
+  assertions.push(mint.assertion);
+
+  // 4 — local tools/list.
+  assertions.push(await doctorAssertLocalToolsList({ origin, token: mint.token, fetchImpl }));
+
+  // 5 — public reachability (real e2e proof).
+  assertions.push(
+    await doctorAssertPublicReachability({ publicMcpUrl: access.publicMcpUrl, token: mint.token, fetchImpl }),
+  );
+
+  // 6+7 — WP/Drupal container + plugin/module readiness.
+  assertions.push(await doctorAssertWordPressReadiness({ fetchImpl, dockerImpl }));
+  assertions.push(await doctorAssertDrupalReadiness({ fetchImpl, dockerImpl }));
+
+  // 8 — dev-app clone presence.
+  assertions.push(doctorAssertDevAppsPresence(repoRoot));
+
+  const counts = { pass: 0, fail: 0, skip: 0 };
+  for (const a of assertions) counts[a.verdict] += 1;
+  return { assertions, counts };
+}
+
+// Default read-only docker runner (spawnSync). Overridable in tests.
+function defaultDoctorDockerImpl(args) {
+  return spawnSync("docker", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: DOCKER_CLI_PROBE_TIMEOUT_MS,
+  });
+}
+
+// Pretty-print one assertion line. Statuses/booleans only — never a secret.
+function printDoctorAssertion(a) {
+  const glyph = a.verdict === "pass" ? "✓" : a.verdict === "fail" ? "✗" : "⚠";
+  const tag = a.verdict.toUpperCase();
+  console.log(`  ${glyph} [${tag}] ${a.label}: ${a.detail}`);
+  if (a.verdict !== "pass" && a.remediation) {
+    console.log(`        ↳ ${a.remediation}`);
+  }
+}
+
+// Print the report. `tail` mode (setup tail) frames it as a non-fatal self-check;
+// standalone mode frames it as the authoritative gate.
+function printDoctorReport(report, { mode } = {}) {
+  console.log(
+    mode === "tail"
+      ? "\n- Content-editor self-check (`cinatra doctor`):"
+      : "Cinatra content-editor write-path self-check:",
+  );
+  for (const a of report.assertions) printDoctorAssertion(a);
+  console.log(
+    `  Summary: ${report.counts.pass} pass, ${report.counts.fail} fail, ${report.counts.skip} skip.`,
+  );
+  if (report.counts.skip > 0) {
+    console.log(
+      "  Some checks were SKIPPED (a dependency was down — they are NOT passes). " +
+        "Re-run `cinatra doctor` after `pnpm dev` (and the CMS containers) are up; " +
+        "it is the authoritative post-boot gate.",
+    );
+  }
+}
+
+// Standalone `cinatra doctor` (alias: `cinatra mcp llm-access verify`). Opens its
+// own pg client, prints the report, and exits non-zero on any FAIL (the
+// authoritative post-boot gate). A SKIP alone warns + exits 0 unless --strict.
+async function runDoctor(rest = []) {
+  const strict = rest.includes("--strict");
+  const repoRoot = getRepoRoot();
+  const env = collectEnvironment(repoRoot);
+  const connectionString = requiredEnv(env, "SUPABASE_DB_URL");
+  const schemaName = env.SUPABASE_SCHEMA?.trim() || "cinatra";
+  const client = createClient(connectionString);
+  await client.connect();
+  let report;
+  try {
+    report = await gatherDoctorReport({ client, schemaName, env, repoRoot });
+  } finally {
+    await client.end();
+  }
+  printDoctorReport(report, { mode: "standalone" });
+  if (report.counts.fail > 0) {
+    process.exitCode = 1;
+  } else if (strict && report.counts.skip > 0) {
+    process.exitCode = 1;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Post-extension-sync workspace re-link
 // ---------------------------------------------------------------------------
@@ -2901,6 +3687,52 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       console.log(
         "- Dev auto-setup: local docker Drupal + WordPress will be auto-wired on next `pnpm dev` boot (idempotent; see src/lib/dev-auto-setup.ts).",
       );
+
+      // cinatra#260 Step 5 — content-editor write-path self-check (the "done"
+      // gate). READ-ONLY + idempotent. NON-FATAL at the setup tail: a FAIL or a
+      // (meaningful) SKIP warns and sets process.exitCode = 1 but NEVER aborts —
+      // matching the existing loud-non-fatal dev-app pattern above, so a
+      // developer who only ran setup for a local dev DB is never blocked. The
+      // standalone `cinatra doctor` is the authoritative post-boot gate. Wrapped
+      // defensively: any escape from the helper must not undo the completed setup.
+      try {
+        const report = await gatherDoctorReport({
+          client,
+          schemaName,
+          env,
+          repoRoot,
+        });
+        printDoctorReport(report, { mode: "tail" });
+        // codex must-fix — exit-code discipline at the SETUP TAIL: most chain
+        // FAILs here are pre-boot-NORMAL (the app/CMS are not started by setup, a
+        // public URL may not be established yet) and must NOT turn a successful
+        // `cinatra setup dev` into a non-zero exit — that would block a developer
+        // who only ran setup for a local dev DB. Those are surfaced as warnings
+        // in the report; the STANDALONE `cinatra doctor` is the authoritative gate
+        // that exits non-zero on every FAIL once the app is up. The ONE FAIL that
+        // is an app-independent, always-real provisioning gap at setup time is the
+        // dev-app clone presence — that flips the exit code, mirroring the
+        // existing loud-non-fatal `process.exitCode = 1` of the dev-app sync above.
+        // codex round-2 must-fix: when dev-apps are INTENTIONALLY skipped
+        // (`--skip-dev-apps`, or `dev refresh` which passes skipDevApps:true),
+        // the clones are absent BY DESIGN — that FAIL must NOT flip the exit
+        // code (the warning still prints). Only flip when the clones were
+        // expected to be synced this run.
+        const devAppsIntentionallySkipped =
+          skipDevApps || process.argv.slice(2).includes("--skip-dev-apps");
+        const devAppsFail = report.assertions.find(
+          (a) => a.id === "dev-apps-presence" && a.verdict === "fail",
+        );
+        if (devAppsFail && !devAppsIntentionallySkipped) {
+          process.exitCode = 1;
+        }
+      } catch (err) {
+        console.warn(
+          `⚠ Content-editor self-check failed unexpectedly (continuing; setup is complete): ${
+            err && err.message ? err.message : err
+          }`,
+        );
+      }
     }
   } finally {
     await client.end();
@@ -7864,6 +8696,11 @@ export {
   deleteLatestJwksRow,
   resolveLocalOrigin,
   gatherStatus,
+  gatherDoctorReport,
+  deriveConfiguredPublicMcpUrl,
+  doctorAssertLlmMcpAccess,
+  doctorAssertDevAppsPresence,
+  DOCTOR_CMS_WRITE_TOOLS,
   SELF_MCP_CLIENT_ID,
   SELF_MCP_CLIENT_SCOPE,
   SELF_MCP_CLIENT_SCOPES,
@@ -8038,6 +8875,17 @@ export async function runCli(argv) {
 
   if (command === "mcp" && mode === "llm-access" && rest[0] === "refresh") {
     await runLlmMcpAccessRefresh();
+    return;
+  }
+
+  // cinatra#260 Step 5 — content-editor write-path self-check.
+  if (command === "doctor") {
+    await runDoctor(rest);
+    return;
+  }
+  // Alias: `cinatra mcp llm-access verify`.
+  if (command === "mcp" && mode === "llm-access" && rest[0] === "verify") {
+    await runDoctor(rest.slice(1));
     return;
   }
 
