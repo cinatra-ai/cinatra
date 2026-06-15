@@ -127,7 +127,19 @@ services:
 
   wordpress:
     profiles: ["wordpress"]
-    image: wordpress:6.8-php8.3-apache
+    # Custom dev image (docker/wordpress/Dockerfile) bakes git/composer/wp-cli +
+    # WordPress/abilities-api + WordPress/mcp-adapter at BUILD time, so the slow
+    # clone+composer work no longer runs inside the uat-gate's ~5-min readiness
+    # window (#260 Step 6). `docker compose up` builds a missing image before the
+    # readiness poll begins; pull_policy: build prevents a stale registry image
+    # from shadowing a rebuild. Mirrors the docker/drupal/Dockerfile bake pattern.
+    build:
+      context: ./docker/wordpress
+      args:
+        ABILITIES_API_VERSION: "0.4.0"
+        MCP_ADAPTER_VERSION: "0.4.1"
+    image: cinatra-wordpress-dev:6.8-php8.3
+    pull_policy: build
     ports:
       - "8080:80"
     environment:
@@ -141,7 +153,9 @@ services:
       WP_DEV_URL: http://localhost:8080
       WP_DEV_ADMIN_USER: admin
       WP_DEV_ADMIN_PASS: admin
-      WP_DEV_ADMIN_EMAIL: dev@localhost
+      # Reserved example.com TLD — `dev@localhost` (no dot) fails WordPress
+      # is_email(), so `wp core install` errors and the site never installs.
+      WP_DEV_ADMIN_EMAIL: dev@example.com
     volumes:
       - cinatra-wordpress:/var/www/html
       - ./dev/wordpress-plugin:/var/www/html/wp-content/plugins/cinatra

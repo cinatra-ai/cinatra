@@ -4,12 +4,27 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Cinatra WordPress dev container entrypoint wrapper.
 #
-# Runs BEFORE the official wordpress image's docker-entrypoint.sh. Installs
-# wp-cli + git + composer (idempotent), then backgrounds a watcher that waits
-# for core files + DB, runs `wp core install` if needed, clones the WordPress
-# Abilities API + MCP adapter plugins, and activates abilities-api, cinatra, and
+# Runs BEFORE the official wordpress image's docker-entrypoint.sh, then
+# backgrounds a watcher that waits for core files + DB, runs `wp core install`
+# if needed, ENSURES the WordPress Abilities API + MCP adapter plugins are
+# present at the pinned refs, and activates abilities-api, cinatra, and
 # mcp-adapter (abilities-api first — mcp-adapter requires wp_register_ability()).
 # Finally exec's the original docker-entrypoint.sh so Apache boots normally.
+#
+# BOOT SPEED (#260 Step 6): the cinatra dev image (docker/wordpress/Dockerfile)
+# BAKES git/composer/wp-cli + both plugins (clone + `composer install`) at build
+# time, into the /usr/src/wordpress staging tree. On a fresh volume the official
+# entrypoint tars them into /var/www/html, so by the time this watcher runs the
+# plugins already exist + `composer install` is done — the slow network/composer
+# work never competes with the uat-gate's ~5-min readiness window. install_tools
+# + ensure_plugin below are then fast no-ops (guarded on what already exists).
+#
+# The ensure_plugin clone-if-missing/repair-if-incomplete path is the FALLBACK
+# for (a) warm named volumes created before this image existed (the bake never
+# reaches an already-populated volume), and (b) the stock `wordpress:` image if
+# someone runs compose without building. It is idempotent: a complete plugin dir
+# at the pinned ref is left untouched; an incomplete or wrong-ref dir is
+# re-cloned + re-composed.
 # -----------------------------------------------------------------------------
 
 # Version pins are bare (no leading "v"); the git tag is derived as v<version>.
@@ -28,7 +43,12 @@ ABILITIES_API_REF="${ABILITIES_API_REF:-v${ABILITIES_API_VERSION}}"
 WP_DEV_URL="${WP_DEV_URL:-http://localhost:8080}"
 WP_DEV_ADMIN_USER="${WP_DEV_ADMIN_USER:-admin}"
 WP_DEV_ADMIN_PASS="${WP_DEV_ADMIN_PASS:-admin}"
-WP_DEV_ADMIN_EMAIL="${WP_DEV_ADMIN_EMAIL:-dev@localhost}"
+# `dev@localhost` has no TLD dot, so WordPress's is_email() rejects it and
+# `wp core install` fails ("email address is invalid") — leaving the site
+# uninstalled and the cinatra plugin un-activatable, which is exactly the
+# uat-gate "site you have requested is not installed" failure. Use the reserved
+# example.com TLD so a FRESH install (every CI run) actually succeeds (#260 Step 6).
+WP_DEV_ADMIN_EMAIL="${WP_DEV_ADMIN_EMAIL:-dev@example.com}"
 
 WP_PATH=/var/www/html
 PLUGINS_DIR="$WP_PATH/wp-content/plugins"
@@ -122,51 +142,93 @@ install_wp_core_if_needed() {
     --skip-email
 }
 
-install_abilities_api() {
+plugin_is_complete() {
+  # Completeness signal for a baked/copied/cloned plugin dir. A dir is COMPLETE
+  # when its main plugin file exists AND (if it needs a composer vendor tree)
+  # vendor/autoload.php exists. This is what the .git-only check missed: a baked
+  # image may strip .git, and an interrupted clone can leave .git present but
+  # vendor/ absent. Args: <dir> <main-file-basename> <needs-vendor:0|1>.
+  local dir="$1" main_file="$2" needs_vendor="$3"
+  [ -f "$dir/$main_file" ] || return 1
+  if [ "$needs_vendor" = "1" ] && [ ! -f "$dir/vendor/autoload.php" ]; then
+    return 1
+  fi
+  return 0
+}
+
+ensure_plugin() {
+  # Idempotent ensure-at-pinned-ref. FAST-PATH: when the cinatra dev image baked
+  # the plugin (docker/wordpress/Dockerfile) the official entrypoint has already
+  # copied a COMPLETE dir into the volume — and if .git survived, it is at the
+  # pinned ref — so we skip without any network call. FALLBACK (warm pre-bake
+  # volume, or stock `wordpress:` image): clone --depth 1 --single-branch + run
+  # composer install. A wrong-ref or INCOMPLETE dir is removed and re-cloned.
+  #
+  # Args: <name> <dir> <repo-url> <ref> <main-file-basename> <needs-vendor:0|1>
+  local name="$1" dir="$2" repo="$3" ref="$4" main_file="$5" needs_vendor="$6"
+
+  if [ -d "$dir/.git" ]; then
+    # The entrypoint runs as root but a baked/copied plugin is owned by www-data,
+    # so git 2.35+ refuses to operate ("dubious ownership") and `describe` would
+    # report the wrong ref. Mark it safe (idempotent, --add is harmless to repeat)
+    # so the ref check is meaningful instead of always falling to "unknown".
+    git config --global --add safe.directory "$dir" 2>/dev/null || true
+    local current_ref
+    current_ref=$(git -C "$dir" describe --tags --always 2>/dev/null || echo "unknown")
+    if plugin_is_complete "$dir" "$main_file" "$needs_vendor" \
+       && { [ "$current_ref" = "$ref" ] || [ "$current_ref" = "unknown" ]; }; then
+      # Skip when complete AND (at the pinned ref OR the ref is unresolvable on a
+      # shallow/baked clone — completeness already proves it is the baked, pinned
+      # copy; re-cloning a good dir would just burn readiness time).
+      log "$name complete (ref=$current_ref), skipping clone."
+      return 0
+    fi
+    log "$name at ref=$current_ref (incomplete or wrong ref) — removing and re-cloning $ref..."
+    rm -rf "$dir"
+  elif [ -d "$dir" ]; then
+    # Dir exists without .git — either a baked plugin whose .git was stripped, or
+    # a leftover partial. If complete, trust it (the baked image is ref-pinned);
+    # otherwise remove + re-clone.
+    if plugin_is_complete "$dir" "$main_file" "$needs_vendor"; then
+      log "$name present (baked, complete), skipping clone."
+      return 0
+    fi
+    log "$name dir exists but is incomplete — removing and re-cloning $ref..."
+    rm -rf "$dir"
+  fi
+
+  log "Cloning $name@$ref..."
+  git -c advice.detachedHead=false clone --depth 1 --single-branch --branch "$ref" \
+    "$repo" "$dir"
+
+  log "Running composer install inside $name..."
+  # Mirror the build-time flags: --prefer-dist (zip, no per-package git clones),
+  # --no-scripts (neither plugin defines composer install-event scripts at these
+  # pins — only dev lint/test commands). (No --no-audit: `composer install` runs
+  # no audit by default and rejects the flag — it is update/require-only.)
+  (cd "$dir" && COMPOSER_ALLOW_SUPERUSER=1 composer install \
+    --no-dev --no-interaction --no-progress --prefer-dist --no-scripts)
+
+  chown -R www-data:www-data "$dir"
+}
+
+ensure_abilities_api() {
   # WordPress/abilities-api is a hard prerequisite for mcp-adapter (it provides
   # wp_register_ability()). It must be present + activated BEFORE mcp-adapter so
   # the `mcp_adapter_init` action can register the default MCP server route.
-  if [ -d "$ABILITIES_DIR/.git" ]; then
-    local current_ref
-    current_ref=$(git -C "$ABILITIES_DIR" describe --tags --always 2>/dev/null || echo "unknown")
-    if [ "$current_ref" = "$ABILITIES_API_REF" ]; then
-      log "abilities-api already at $ABILITIES_API_REF, skipping clone."
-      return 0
-    fi
-    log "abilities-api at $current_ref, removing and re-cloning $ABILITIES_API_REF..."
-    rm -rf "$ABILITIES_DIR"
-  fi
-
-  log "Cloning WordPress/abilities-api@$ABILITIES_API_REF..."
-  git -c advice.detachedHead=false clone --depth 1 --branch "$ABILITIES_API_REF" \
-    https://github.com/WordPress/abilities-api.git "$ABILITIES_DIR"
-
-  log "Running composer install inside abilities-api..."
-  (cd "$ABILITIES_DIR" && composer install --no-dev --no-interaction --no-progress)
-
-  chown -R www-data:www-data "$ABILITIES_DIR"
+  # Its main file loads includes/bootstrap.php directly (not vendor/autoload),
+  # so vendor is not strictly required for runtime — needs_vendor=0.
+  ensure_plugin "abilities-api" "$ABILITIES_DIR" \
+    "https://github.com/WordPress/abilities-api.git" "$ABILITIES_API_REF" \
+    "abilities-api.php" "0"
 }
 
-install_mcp_adapter() {
-  if [ -d "$ADAPTER_DIR/.git" ]; then
-    local current_ref
-    current_ref=$(git -C "$ADAPTER_DIR" describe --tags --always 2>/dev/null || echo "unknown")
-    if [ "$current_ref" = "$MCP_ADAPTER_REF" ]; then
-      log "mcp-adapter already at $MCP_ADAPTER_REF, skipping clone."
-      return 0
-    fi
-    log "mcp-adapter at $current_ref, removing and re-cloning $MCP_ADAPTER_REF..."
-    rm -rf "$ADAPTER_DIR"
-  fi
-
-  log "Cloning WordPress/mcp-adapter@$MCP_ADAPTER_REF..."
-  git -c advice.detachedHead=false clone --depth 1 --branch "$MCP_ADAPTER_REF" \
-    https://github.com/WordPress/mcp-adapter.git "$ADAPTER_DIR"
-
-  log "Running composer install inside mcp-adapter..."
-  (cd "$ADAPTER_DIR" && composer install --no-dev --no-interaction --no-progress)
-
-  chown -R www-data:www-data "$ADAPTER_DIR"
+ensure_mcp_adapter() {
+  # mcp-adapter's Autoloader fatals if vendor/autoload.php is missing ("make sure
+  # to run composer install"), so vendor IS required — needs_vendor=1.
+  ensure_plugin "mcp-adapter" "$ADAPTER_DIR" \
+    "https://github.com/WordPress/mcp-adapter.git" "$MCP_ADAPTER_REF" \
+    "mcp-adapter.php" "1"
 }
 
 activate_plugins() {
@@ -204,8 +266,8 @@ bootstrap() {
   wait_for_config || return 0
   wait_for_db || return 0
   install_wp_core_if_needed || log "WARN: wp core install failed"
-  install_abilities_api || log "WARN: abilities-api install failed"
-  install_mcp_adapter || log "WARN: mcp-adapter install failed"
+  ensure_abilities_api || log "WARN: abilities-api ensure failed"
+  ensure_mcp_adapter || log "WARN: mcp-adapter ensure failed"
   activate_plugins
   seed_content
   log "Bootstrap complete."
