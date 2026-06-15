@@ -46,6 +46,7 @@ import {
   saveDrupalInstance,
   deleteDrupalInstance,
   getDrupalAPISettings,
+  persistLocalDevDrupalInstanceUnvalidated,
 } from "@/lib/drupal-api";
 
 const KEY = "drush-generated-bearer-token-xyz123";
@@ -341,5 +342,70 @@ describe("getDrupalAPISettings filter", () => {
     const result = getDrupalAPISettings();
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0].id).toBe("migrated");
+  });
+});
+
+describe("persistLocalDevDrupalInstanceUnvalidated — localhost no-Nango first wire", () => {
+  it("lands a COMPLETE row (nangoConnectionId=id, lastValidatedAt UNSET) WITHOUT any Nango side effect", async () => {
+    vi.mocked(isNangoConfigured).mockReturnValue(false);
+
+    const row = await persistLocalDevDrupalInstanceUnvalidated({
+      name: "Local Drupal (dev auto)",
+      siteUrl: "http://localhost:8082/",
+    });
+
+    // Complete row: id, name, siteUrl (trailing slash trimmed), nangoConnectionId=id.
+    expect(row.id).toBeTruthy();
+    expect(row.nangoConnectionId).toBe(row.id);
+    expect(row.siteUrl).toBe("http://localhost:8082");
+    expect(row.providerConfigKey).toBe("cinatra-drupal");
+    // NOT validated — no false attribution.
+    expect(row.lastValidatedAt).toBeUndefined();
+    // Listed by getDrupalAPISettings (its filter requires a non-empty nangoConnectionId).
+    expect(getDrupalAPISettings().instances.some((i) => i.id === row.id)).toBe(true);
+    // NO Nango pointer / import was written (a pointer with no readback-verified
+    // Bearer would dangle).
+    expect(importNangoConnection).not.toHaveBeenCalled();
+    expect(saveNangoConnectionRecord).not.toHaveBeenCalled();
+    expect(ensureNangoConnectorIntegration).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — reuses the existing row id (by siteUrl) and does not duplicate", async () => {
+    vi.mocked(isNangoConfigured).mockReturnValue(false);
+    const first = await persistLocalDevDrupalInstanceUnvalidated({
+      name: "Local Drupal (dev auto)",
+      siteUrl: "http://localhost:8082",
+    });
+    const second = await persistLocalDevDrupalInstanceUnvalidated({
+      name: "Local Drupal (dev auto)",
+      siteUrl: "http://localhost:8082",
+    });
+    expect(second.id).toBe(first.id);
+    expect(second.createdAt).toBe(first.createdAt); // createdAt preserved
+    expect(getDrupalAPISettings().instances.filter((i) => i.siteUrl === "http://localhost:8082")).toHaveLength(1);
+  });
+
+  it("accepts 127.0.0.1 and the [::1] IPv6 loopback form", async () => {
+    vi.mocked(isNangoConfigured).mockReturnValue(false);
+    await expect(
+      persistLocalDevDrupalInstanceUnvalidated({ name: "n", siteUrl: "http://127.0.0.1:8082" }),
+    ).resolves.toMatchObject({ siteUrl: "http://127.0.0.1:8082" });
+    await expect(
+      persistLocalDevDrupalInstanceUnvalidated({ name: "n", siteUrl: "http://[::1]:8082" }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("REFUSES a non-local site URL (hard localhost gate; never a production affordance)", async () => {
+    await expect(
+      persistLocalDevDrupalInstanceUnvalidated({ name: "n", siteUrl: "https://drupal.example.com" }),
+    ).rejects.toThrow(/local-dev only/);
+    // Nothing persisted.
+    expect(getDrupalAPISettings().instances).toHaveLength(0);
+  });
+
+  it("REFUSES a missing instance name", async () => {
+    await expect(
+      persistLocalDevDrupalInstanceUnvalidated({ name: "  ", siteUrl: "http://localhost:8082" }),
+    ).rejects.toThrow(/name is required/i);
   });
 });

@@ -214,6 +214,101 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
 }
 
 /**
+ * Strip trailing slashes via a LINEAR char-index trim. The module-local
+ * `normalizeSiteUrl` uses the anchored greedy `/\/+$/`, which is
+ * polynomial-ReDoS on input with many trailing slashes (CodeQL
+ * `js/polynomial-redos`). New code must use this linear form.
+ */
+function trimTrailingSlashesLinear(input: string): string {
+  let end = input.length;
+  while (end > 0 && input.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return input.slice(0, end);
+}
+
+/**
+ * LOCAL-DEV-ONLY recovery persist for `dev-auto-setup`.
+ *
+ * `saveDrupalInstance` THROWS when Nango is not configured (it requires a
+ * `drush mcp-tools:remote-key-create` Bearer to import + readback-verify into
+ * the Nango vault). The UAT / a fresh dev box can run with NO Nango (only
+ * placeholder LLM creds), so the FIRST Drupal wire never lands a configured
+ * instance row, which in turn blocks `dev-auto-setup` from pushing the browser
+ * widget config (`cinatra.settings cinatra_url`/`api_key`/`instance_id`).
+ *
+ * The browser→cinatra WIDGET direction (validated by `widget-stream-auth`
+ * against `drupal_widget_auth.apiKey`) does NOT depend on the cinatra→Drupal
+ * `mcp_tools_remote` Bearer being stored. So this helper lets `dev-auto-setup`
+ * persist a COMPLETE local-dev instance row WITHOUT any Nango side effect, then
+ * push the widget config. The MCP WRITE path stays unconfigured (writes 401)
+ * until Nango is configured — at which point the next boot's reconcile /
+ * local-dev transition mints + imports the remote-key Bearer.
+ *
+ * `lastValidatedAt` is intentionally left UNSET (the row was NOT
+ * network/Nango validated — no false attribution). `nangoConnectionId` is set
+ * to the per-instance id ONLY so `getDrupalAPISettings`' Nango-pointer filter
+ * lists the row; no actual Nango connection exists yet (credential lookups
+ * fail-to-resolve → 401 until the transition runs). There is deliberately NO
+ * `saveNangoConnectionRecord` / `importNangoConnection` here — a Nango pointer
+ * with no readback-verified Bearer would be a corrupt/dangling pointer.
+ *
+ * HARD-GATED to localhost: `server-only` is not a dev boundary, so this
+ * NON-VALIDATING exported persist refuses any non-local site URL. It must never
+ * become a general production affordance.
+ *
+ * SECRET BOUNDARY: writes no credential (none is involved) and logs nothing.
+ */
+export async function persistLocalDevDrupalInstanceUnvalidated(input: {
+  id?: string;
+  name: string;
+  siteUrl: string;
+}): Promise<DrupalInstanceSettings> {
+  const siteUrl = trimTrailingSlashesLinear(input.siteUrl.trim());
+  const host = (() => {
+    try {
+      // `new URL("http://[::1]:8082").hostname` returns "[::1]" (brackets kept).
+      // Strip the brackets so the IPv6 loopback compares cleanly.
+      const h = new URL(siteUrl).hostname.toLowerCase();
+      return h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+    } catch {
+      return "";
+    }
+  })();
+  if (!["localhost", "127.0.0.1", "::1"].includes(host)) {
+    throw new Error("Unvalidated Drupal instance persistence is local-dev only.");
+  }
+
+  const trimmedName = input.name.trim();
+  if (!trimmedName) {
+    throw new Error("Instance name is required.");
+  }
+
+  const current = getDrupalAPISettings();
+  const existing = input.id
+    ? current.instances.find((i) => i.id === input.id)
+    : current.instances.find((i) => i.siteUrl === siteUrl);
+
+  const now = new Date().toISOString();
+  const id = input.id?.trim() || existing?.id || randomUUID();
+  const next: DrupalInstanceSettings = {
+    id,
+    name: trimmedName,
+    siteUrl,
+    // Set ONLY so getDrupalAPISettings lists the row; no real Nango connection
+    // exists yet — the local-dev transition imports a Bearer once Nango is on.
+    nangoConnectionId: id,
+    providerConfigKey: existing?.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.drupal,
+    // lastValidatedAt intentionally omitted — this row was NOT validated.
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  const remaining = current.instances.filter((i) => i.id !== next.id && i.siteUrl !== next.siteUrl);
+  writeSettings({ instances: [next, ...remaining] });
+
+  return next;
+}
+
+/**
  * Delete instance + clean up Nango pointer + best-effort remote connection
  * delete. Errors during Nango cleanup are swallowed with a warning (Nango may
  * be unreachable or the connection may already be gone).

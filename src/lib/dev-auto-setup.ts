@@ -4,7 +4,11 @@ import { existsSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import path from "node:path";
 
-import { saveDrupalInstance, listDrupalInstances } from "@/lib/drupal-api";
+import {
+  saveDrupalInstance,
+  listDrupalInstances,
+  persistLocalDevDrupalInstanceUnvalidated,
+} from "@/lib/drupal-api";
 import {
   generateDrupalWidgetAuthConfig,
   readDrupalWidgetAuthConfig,
@@ -27,6 +31,7 @@ import {
 import {
   isNangoConfigured,
   ensureNangoIntegration,
+  ensureNangoConnectorIntegration,
   importNangoConnection,
   getNangoCredentials,
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
@@ -391,11 +396,101 @@ function probeDockerContainer(name: string): boolean {
   }
 }
 
+/**
+ * True when the URL's host is a loopback address. Used to HARD-GATE the
+ * non-validating local-dev fallbacks to localhost — they must never become a
+ * general production affordance. `new URL("http://[::1]:p").hostname` returns
+ * "[::1]" (brackets kept), so strip the brackets before comparing.
+ */
+function isLocalhostUrl(url: string): boolean {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    const host = h.startsWith("[") && h.endsWith("]") ? h.slice(1, -1) : h;
+    return ["localhost", "127.0.0.1", "::1"].includes(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Push the Drupal browser widget config via drush (idempotent — `config:set`
+ * is a no-op when unchanged). `cinatra_url` is the BROWSER-reachable origin
+ * (localhost:PORT) — the widget bundle + SSE load from it in the admin's
+ * browser. All values are controlled (localhost:PORT + UUIDs).
+ *
+ * SECRET BOUNDARY: the api_key is on the drush command line; callers MUST catch
+ * and surface only a fixed host-owned reason (an execSync error can echo the
+ * failed command). This helper does not log.
+ */
+function pushDrupalWidgetConfig(widgetApiKey: string, instanceId: string): void {
+  drushExec(`config:set cinatra.settings cinatra_url ${cinatraBrowserBaseUrl()} -y`);
+  drushExec(`config:set cinatra.settings api_key ${widgetApiKey} -y`);
+  drushExec(`config:set cinatra.settings instance_id ${instanceId} -y`);
+  drushExec(`cr`);
+}
+
+/**
+ * LOCALHOST + NO-NANGO fallback wire for Drupal (mirrors Step 7's WP
+ * first-wire). Lands a COMPLETE local-dev instance row WITHOUT any Nango side
+ * effect, then pushes the browser widget config so the widget wires. The MCP
+ * write path stays unconfigured (writes 401) until Nango is configured — the
+ * next boot's local-dev transition then mints + imports the remote-key Bearer.
+ *
+ * GUARD (mirrors WP #267): never push the widget config for an instance row we
+ * did not actually persist — a `config:set instance_id` pointing at no
+ * configured-instance row would dangle (widget-stream auth has no instance to
+ * authorize). So a persist failure returns a hard `error` and pushes NOTHING.
+ *
+ * SECRET BOUNDARY: no credential is involved (the widget api_key is a UUID
+ * pair, not a vault secret); failure reasons are fixed host-owned labels.
+ */
+export async function wireLocalDrupalWithoutNango(widgetApiKey: string): Promise<Status> {
+  const existing = (await listDrupalInstances()).find((i) => i.siteUrl === LOCAL_DRUPAL.siteUrl);
+
+  let instanceId: string;
+  let created: boolean;
+  try {
+    const persisted = await persistLocalDevDrupalInstanceUnvalidated({
+      id: existing?.id,
+      name: existing?.name ?? LOCAL_DRUPAL.instanceName,
+      siteUrl: LOCAL_DRUPAL.siteUrl,
+    });
+    instanceId = persisted.id;
+    created = !existing;
+  } catch {
+    // No COMPLETE instance row landed — hard-error and do NOT push the widget
+    // config (a dangling instance_id would never authorize). SECRET BOUNDARY:
+    // surface only a fixed host-owned reason.
+    return { status: "error", reason: "persistLocalDevDrupalInstanceUnvalidated failed (no-Nango first wire)" };
+  }
+
+  try {
+    pushDrupalWidgetConfig(widgetApiKey, instanceId);
+  } catch {
+    // SECRET BOUNDARY: see pushDrupalWidgetConfig — never forward the raw error.
+    return { status: "error", reason: "drush config:set cinatra.settings failed" };
+  }
+
+  console.log(
+    "[dev-auto-setup:drupal] Nango not configured; persisted a local-dev instance + pushed the widget config anyway. " +
+      "Drupal MCP writes 401 until Nango is configured; the next boot mints + imports the remote-key.",
+  );
+
+  const note = "widget wired; MCP remote-key unconfigured (no Nango)";
+  return created
+    ? { status: "created", siteUrl: LOCAL_DRUPAL.siteUrl, detail: `instance ${instanceId} (${note})` }
+    : {
+        status: "already-wired",
+        siteUrl: LOCAL_DRUPAL.siteUrl,
+        detail: `instance ${instanceId} (config re-pushed; ${note})`,
+      };
+}
+
 // ---------------------------------------------------------------------------
 // Drupal
 // ---------------------------------------------------------------------------
 
-async function autoSetupLocalDrupal(): Promise<Status> {
+export async function autoSetupLocalDrupal(): Promise<Status> {
   if (!probeDockerContainer(LOCAL_DRUPAL.containerName)) {
     return { status: "skipped", reason: `${LOCAL_DRUPAL.containerName} not running (run docker compose --profile drupal up -d)` };
   }
@@ -420,17 +515,31 @@ async function autoSetupLocalDrupal(): Promise<Status> {
     };
   }
 
-  // saveDrupalInstance requires Nango; gracefully skip if not yet configured.
-  if (!isNangoConfigured()) {
-    return { status: "skipped", reason: "Nango not configured (run cinatra setup nango first)" };
-  }
-
   // Cinatra-side: generate or reuse the UUID-pair api_key (lives in
   // connector_config:drupal_widget_auth). This is the WIDGET Bearer (the
   // browser→cinatra direction); it is NOT the credential Drupal's
   // `mcp_tools_remote` validates (that is the `drush mcp-tools:remote-key-create`
   // Bearer). The Nango `cinatra-drupal` connection must hold the LATTER.
   const auth = readDrupalWidgetAuthConfig() ?? generateDrupalWidgetAuthConfig();
+
+  const isLocalhostDrupal = isLocalhostUrl(LOCAL_DRUPAL.siteUrl);
+
+  // `saveDrupalInstance` REQUIRES Nango (it imports + readback-verifies a
+  // remote-key Bearer into the Nango vault). When Nango is NOT configured, the
+  // happy path can't land a configured instance row — but the browser→cinatra
+  // WIDGET direction (validated by widget-stream-auth against
+  // `drupal_widget_auth.apiKey`) does not depend on the cinatra→Drupal
+  // `mcp_tools_remote` Bearer. So on LOCALHOST, fall back to a NON-VALIDATING
+  // local-dev persist + push the widget config anyway (mirrors Step 7's WP
+  // first-wire). MCP writes stay 401 until Nango is configured; the next boot's
+  // reconcile / local-dev transition then mints + imports the remote-key.
+  // OFF localhost we keep refusing (no general production affordance).
+  if (!isNangoConfigured()) {
+    if (!isLocalhostDrupal) {
+      return { status: "skipped", reason: "Nango not configured (run cinatra setup nango first)" };
+    }
+    return wireLocalDrupalWithoutNango(auth.apiKey);
+  }
 
   // Ensure the cinatra-side instance exists (create on first run; reuse after).
   // saveDrupalInstance does the ensureIntegration → importNangoConnection →
@@ -471,12 +580,64 @@ async function autoSetupLocalDrupal(): Promise<Status> {
 
   // Reconcile the stored Nango Bearer to the value Drupal validates — runs on
   // EVERY wire (create OR reuse). Reuse-first / probe-then-rotate; soft-fails.
-  const reconcile = await ensureDrupalRemoteKeyReconciled({
+  let reconcile = await ensureDrupalRemoteKeyReconciled({
     instanceId,
     instanceName: existing?.name ?? LOCAL_DRUPAL.instanceName,
     siteUrl: LOCAL_DRUPAL.siteUrl,
     widgetApiKey: auth.apiKey,
   });
+
+  // LOCAL-DEV NANGO-LATER TRANSITION: a row first wired WITHOUT Nango (via the
+  // no-Nango fallback above) carries `nangoConnectionId=id` but NO actual Nango
+  // credential, so `ensureDrupalRemoteKeyReconciled` resolves nothing and — by
+  // design — does NOT mint (it must never mint every boot on a transient Nango
+  // blip for an established instance). Unlike WordPress (whose row stores the
+  // app password locally and can re-sync Nango from it), a Drupal row keeps no
+  // local Bearer, so the ONLY way to heal an unresolved credential once Nango
+  // is configured is to mint a fresh remote-key + import it. Gate this to:
+  //   - localhost only (dev affordance, never production),
+  //   - an EXISTING row (not the first-wire create, which already minted a seed),
+  //   - a `credential-unresolved` reconcile note (NOT a probe-401, which the
+  //     reconcile already rotates, and NOT probe-unreachable, which keeps
+  //     working=true so we never enter here on a transient blip),
+  //   - AND a successful Nango writeability PREFLIGHT
+  //     (`ensureNangoConnectorIntegration`) — if Nango itself is unreachable,
+  //     the unresolved credential is a transient outage, so we must NOT mint a
+  //     fresh key (it would churn one key per boot, then fail to import).
+  if (
+    isLocalhostDrupal &&
+    existing &&
+    !reconcile.working &&
+    (reconcile.note ?? "").startsWith("credential-unresolved")
+  ) {
+    let nangoWriteable = false;
+    try {
+      await ensureNangoConnectorIntegration("drupal");
+      nangoWriteable = true;
+    } catch {
+      // Nango not actually writeable → the unresolved credential is a transient
+      // outage, not a genuine first-time import. Do NOT mint. Keep soft-warn.
+    }
+    if (nangoWriteable) {
+      const minted = mintDrupalRemoteKey();
+      if (minted) {
+        try {
+          await saveDrupalInstance({
+            id: instanceId,
+            name: existing.name,
+            siteUrl: LOCAL_DRUPAL.siteUrl,
+            mcpApiKey: minted,
+          });
+          reconcile = { working: true, rotated: true, note: "local-dev transition: minted + imported (Nango now configured)" };
+        } catch {
+          // SECRET BOUNDARY: saveDrupalInstance errors can carry lower-layer
+          // (Nango import / readback) text — surface only a fixed host-owned note.
+          reconcile = { working: false, rotated: false, note: "local-dev transition: re-import failed (kept; re-run once Drupal is fully up)" };
+        }
+      }
+    }
+  }
+
   if (!reconcile.working) {
     console.log(
       `[dev-auto-setup:drupal] remote-key reconcile did not confirm a working Bearer (${reconcile.note ?? "unknown"}). ` +
@@ -491,15 +652,13 @@ async function autoSetupLocalDrupal(): Promise<Status> {
   // Drush command reads CINATRA_BASE_URL instead. config:set is a no-op when the
   // value is unchanged. All values are controlled (localhost:PORT + UUIDs).
   try {
-    drushExec(`config:set cinatra.settings cinatra_url ${cinatraBrowserBaseUrl()} -y`);
-    drushExec(`config:set cinatra.settings api_key ${auth.apiKey} -y`);
-    drushExec(`config:set cinatra.settings instance_id ${instanceId} -y`);
-    drushExec(`cr`);
-  } catch (err) {
-    return {
-      status: "error",
-      reason: `drush config:set cinatra.settings failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    pushDrupalWidgetConfig(auth.apiKey, instanceId);
+  } catch {
+    // SECRET BOUNDARY: the drush command line embeds the widget api_key
+    // (`config:set cinatra.settings api_key <key>`), and an execSync failure can
+    // echo the failed command in its error message — surface only a fixed
+    // host-owned reason, never the raw error.
+    return { status: "error", reason: "drush config:set cinatra.settings failed" };
   }
 
   const reconcileNote = reconcile.rotated
