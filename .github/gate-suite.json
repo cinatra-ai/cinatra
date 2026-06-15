@@ -1,7 +1,7 @@
 {
   "$comment": "Named, versioned machine-verification suite for cinatra-ai/cinatra — the gate-arm half of the truthful verification-record model (ratified spec cinatra-engineering#119 §4). The truthful-attribution-gate reads THIS file at the merged SHA (authoritative, no TOCTOU) when a merge record carries a Gate-suite arm: the cited suiteId@version must equal this file's, the Accountable trailer must equal accountable{github,name,email}, and every requiredContexts entry must have concluded success on the reviewed head. highRiskPaths EXTENDS the central cinatra-ai/ci defaults (the gate verifies the effective set is a superset). High-risk changes (this file is itself one — see **/gate-suite.json in the defaults) require the HUMAN arm at tier=maintainer; the gate arm alone is rejected, so this file's birth carries a maintainer Reviewed-by, not a self-blessing gate arm. lastAuditedAt + auditEvidence are the §4 monthly-audit record; the Accountable engineer re-audits monthly and bumps BOTH coupled in one commit (the gate warns >35d, fails the gate arm >65d; the human arm is always still available).",
   "suiteId": "cinatra-core",
-  "version": "2026.06.1",
+  "version": "2026.06.2",
   "accountable": {
     "name": "Sandro Groganz",
     "email": "sandro@cinatra.ai",
@@ -11,12 +11,12 @@
     {
       "context": "source-leak-gate / source-leak-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/source-leak-gate.yml",
-      "pinned": "4c903fe9ca71ad47752a2bc92b72893e5f7c9814"
+      "pinned": "7e6e94c95390c73a252a2cf40a643b5033f93ff0"
     },
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml",
-      "pinned": "8eede1022e835997d94974e4bd6205daf72131a2",
+      "pinned": "7e6e94c95390c73a252a2cf40a643b5033f93ff0",
       "callerPath": ".github/workflows/truthful-attribution-gate.yml",
       "allowedEvents": ["pull_request", "push"]
     }
@@ -51,6 +51,6 @@
     "**/capability-registry/**",
     "**/transport-registry/**"
   ],
-  "lastAuditedAt": "2026-06-13",
-  "auditEvidence": "2026-06-13 re-pin: truthful-attribution-gate context moved to the fixed ci engine 8eede1022e835997d94974e4bd6205daf72131a2 (machine-arm reusable-workflow check-run resolution fix) and F1 caller-identity verification enabled via callerPath/allowedEvents — see this PR."
+  "lastAuditedAt": "2026-06-15",
+  "auditEvidence": "2026-06-15 re-pin (pin-drift repair): PR #243's github-actions group bump moved both gate callers' uses:@ to cinatra-ai/ci@7e6e94c95390c73a252a2cf40a643b5033f93ff0 (the SHA referenced_workflows reports and the machine arm verifies) while leaving each caller's with.ref engine-checkout pin at the prior audited SHA (source-leak 4c903fe9, attribution 8eede102). requiredContexts[].pinned must equal the referenced_workflows uses:@ SHA, so both are realigned to 7e6e94c9; the engine itself stays separately pinned via the callers' with.ref and is protected by the high-risk-path review on .github/workflows/**. 7e6e94c9 is a clean descendant of both prior pins (ahead of 8eede102 by 3: ci #21/#23/#24 doc-code-value + extension-IoC gates; ahead of 4c903fe9 by 17), retaining the machine-arm reusable-workflow check-run resolution fix. version bumped 2026.06.1->2026.06.2 because the pinned content changed (suiteId@version must be immutable per content)."
 }
