@@ -1096,6 +1096,20 @@ async function readUserCount(client) {
   return Number(result.rows[0]?.count ?? "0");
 }
 
+// DB-derived JWKS health for `gatherStatus` / `cinatra status`. This is a
+// PRESENCE read only — it does NOT mint a token (status is a no-network read),
+// so it cannot prove decryptability. The authoritative decrypt probe + self-
+// heal lives in `ensureDecryptableJwks` (runSetup, dev). Returns the key count
+// (or null when the jwks table is absent — fresh/unmigrated schema).
+async function readJwksRowCount(client) {
+  const tableState = await readAuthTableState(client);
+  if (!tableState.present.includes("jwks")) {
+    return null;
+  }
+  const result = await client.query(`select count(*)::text as count from public."jwks"`);
+  return Number(result.rows[0]?.count ?? "0");
+}
+
 async function ensureStoreSchema(client, schemaName) {
   await client.query(`create schema if not exists ${quoteIdentifier(schemaName)}`);
 
@@ -1264,23 +1278,86 @@ function createClientSecret() {
   return randomBytes(24).toString("base64url");
 }
 
-async function ensureSelfMcpClient(client, schemaName, mcpSettings) {
-  await client.query(
-    `
-      delete from public."oauthClient"
-      where "clientId" <> $1
-        and (
-          "referenceId" = 'cinatra-app'
-          or "name" = $2
-          or "clientId" = $3
-        )
-    `,
-    [SELF_MCP_CLIENT_ID, SELF_MCP_CLIENT_NAME, mcpSettings.current?.selfClient?.clientId ?? ""],
-  );
+// Better Auth's EXACT client-secret hash recipe (SHA-256, base64url). MUST stay
+// byte-identical to the `clientSecretHashed` derivation in the oauthClient
+// upserts below — the verify-before-reuse check (hashClientSecret(plaintext) ===
+// row.clientSecret) compares against the SAME function the writer used, so a
+// hash-recipe drift can never cause a false rotation.
+function hashClientSecret(plaintext) {
+  return createHash("sha256").update(plaintext, "utf8").digest("base64url");
+}
 
+// Normalize a stored jsonb array column (grantTypes / scopes) that pg may hand
+// back as a parsed array OR (when stored as a json string) a string. Used by
+// the verify-before-reuse checks so a metadata/row drift in either shape is
+// compared apples-to-apples.
+function asStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v));
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map((v) => String(v)) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function sameUnorderedStringSet(a, b) {
+  const sa = asStringArray(a);
+  const sb = asStringArray(b);
+  if (sa.length !== sb.length) return false;
+  const setA = new Set(sa);
+  return sb.every((v) => setA.has(v));
+}
+
+function sameExactStringArray(a, b) {
+  const sa = asStringArray(a);
+  const sb = asStringArray(b);
+  if (sa.length !== sb.length) return false;
+  return sa.every((v, i) => v === sb[i]);
+}
+
+/**
+ * Verify-before-reuse predicate for a managed `client_credentials` OAuth client.
+ *
+ * Reuse the stored plaintext secret ONLY when ALL hold:
+ *   - a `clientSecret` plaintext is present in metadata
+ *   - the oauthClient row exists
+ *   - hashClientSecret(plaintext) === row.clientSecret (Better Auth's exact
+ *     recipe — same fn the writer uses, so no false rotation)
+ *   - grantTypes === ["client_credentials"] (exact)
+ *   - scopes match the expected set (unordered)
+ *   - disabled === false
+ *
+ * Returns a boolean only; never logs/echoes the secret. The caller mints fresh
+ * and rewrites BOTH halves (metadata plaintext + hashed row) in a transaction
+ * when this returns false.
+ *
+ * @param {object} args
+ * @param {string|null} args.plaintext           stored plaintext secret (metadata)
+ * @param {object|undefined} args.row            oauthClient row { clientSecret, grantTypes, scopes, disabled }
+ * @param {string[]} args.expectedScopes         the scopes this managed client must carry
+ */
+function canReuseClientCredentials({ plaintext, row, expectedScopes }) {
+  if (typeof plaintext !== "string" || plaintext.length === 0) return false;
+  if (!row) return false;
+  if (typeof row.clientSecret !== "string" || row.clientSecret.length === 0) return false;
+  if (hashClientSecret(plaintext) !== row.clientSecret) return false;
+  if (!sameExactStringArray(row.grantTypes, ["client_credentials"])) return false;
+  if (!sameUnorderedStringSet(row.scopes, expectedScopes)) return false;
+  // `disabled` is a boolean column; treat any non-false value as disabled.
+  if (row.disabled !== false) return false;
+  return true;
+}
+
+async function ensureSelfMcpClient(client, schemaName, mcpSettings) {
   const existingClientResult = await client.query(
     `
-      select "id", "clientSecret", "createdAt"
+      select "id", "clientSecret", "createdAt", "grantTypes", "scopes", "disabled"
       from public."oauthClient"
       where "clientId" = $1
       limit 1
@@ -1295,103 +1372,24 @@ async function ensureSelfMcpClient(client, schemaName, mcpSettings) {
     typeof mcpSettings.current?.selfClient?.clientSecret === "string" && mcpSettings.current.selfClient.clientSecret.length > 0
       ? mcpSettings.current.selfClient.clientSecret
       : null;
-  const clientSecret = configuredSecret ?? createClientSecret();
+  // Verify-before-reuse: keep the stored plaintext ONLY when the metadata half
+  // and the oauthClient row still agree (same secret hash + grant/scope/enabled
+  // shape). Any drift between the two tables → mint fresh and rewrite both
+  // halves in one transaction so they can never diverge again.
+  const reuseSelfSecret = canReuseClientCredentials({
+    plaintext: configuredSecret,
+    row: existingClient,
+    expectedScopes: SELF_MCP_CLIENT_SCOPES,
+  });
+  const clientSecret = reuseSelfSecret ? configuredSecret : createClientSecret();
   // Hash the secret before storing in oauthClient (Better Auth uses SHA-256 base64url).
-  const clientSecretHashed = createHash("sha256").update(clientSecret, "utf8").digest("base64url");
+  const clientSecretHashed = hashClientSecret(clientSecret);
   const now = new Date();
   const createdAt = existingClient?.createdAt instanceof Date ? existingClient.createdAt : now;
   const metadata = {
     managedBy: "cinatra-cli",
     purpose: "self-mcp-access",
   };
-
-  await client.query(
-    `
-      insert into public."oauthClient" (
-        "id",
-        "clientId",
-        "clientSecret",
-        "disabled",
-        "skipConsent",
-        "enableEndSession",
-        "subjectType",
-        "scopes",
-        "userId",
-        "createdAt",
-        "updatedAt",
-        "name",
-        "redirectUris",
-        "postLogoutRedirectUris",
-        "tokenEndpointAuthMethod",
-        "grantTypes",
-        "responseTypes",
-        "public",
-        "type",
-        "requirePKCE",
-        "referenceId",
-        "metadata"
-      )
-      values (
-        $1,
-        $2,
-        $3,
-        false,
-        true,
-        false,
-        'public',
-        $4::jsonb,
-        null,
-        $5,
-        $6,
-        $7,
-        $8::jsonb,
-        $9::jsonb,
-        $10,
-        $11::jsonb,
-        $12::jsonb,
-        false,
-        'web',
-        false,
-        'cinatra-app',
-        $13::jsonb
-      )
-      on conflict ("clientId") do update
-      set
-        "clientSecret" = excluded."clientSecret",
-        "disabled" = excluded."disabled",
-        "skipConsent" = excluded."skipConsent",
-        "enableEndSession" = excluded."enableEndSession",
-        "subjectType" = excluded."subjectType",
-        "scopes" = excluded."scopes",
-        "updatedAt" = excluded."updatedAt",
-        "name" = excluded."name",
-        "redirectUris" = excluded."redirectUris",
-        "postLogoutRedirectUris" = excluded."postLogoutRedirectUris",
-        "tokenEndpointAuthMethod" = excluded."tokenEndpointAuthMethod",
-        "grantTypes" = excluded."grantTypes",
-        "responseTypes" = excluded."responseTypes",
-        "public" = excluded."public",
-        "type" = excluded."type",
-        "requirePKCE" = excluded."requirePKCE",
-        "referenceId" = excluded."referenceId",
-        "metadata" = excluded."metadata"
-    `,
-    [
-      existingClient?.id ?? randomUUID(),
-      SELF_MCP_CLIENT_ID,
-      clientSecretHashed,
-      JSON.stringify(SELF_MCP_CLIENT_SCOPES),
-      createdAt,
-      now,
-      SELF_MCP_CLIENT_NAME,
-      JSON.stringify([]),
-      JSON.stringify([]),
-      "client_secret_basic",
-      JSON.stringify(["client_credentials"]),
-      JSON.stringify([]),
-      JSON.stringify(metadata),
-    ],
-  );
 
   const nextSettings = {
     ...mcpSettings.next,
@@ -1409,7 +1407,122 @@ async function ensureSelfMcpClient(client, schemaName, mcpSettings) {
     updatedAt: now.toISOString(),
   };
 
-  await writeMetadataValue(client, schemaName, MCP_SETTINGS_KEY, nextSettings);
+  // Write all three statements (legacy-row cleanup + hashed oauthClient row +
+  // plaintext metadata) in ONE transaction so the two tables can never diverge:
+  // the stale-row DELETE must roll back alongside the upsert/metadata write, or
+  // a later failure could leave metadata pointing at a row already deleted.
+  await client.query("begin");
+  try {
+    // Drop legacy/stale self-client rows that point at the old clientId / name
+    // but are NOT the canonical self client we are about to (re)write.
+    await client.query(
+      `
+        delete from public."oauthClient"
+        where "clientId" <> $1
+          and (
+            "referenceId" = 'cinatra-app'
+            or "name" = $2
+            or "clientId" = $3
+          )
+      `,
+      [SELF_MCP_CLIENT_ID, SELF_MCP_CLIENT_NAME, mcpSettings.current?.selfClient?.clientId ?? ""],
+    );
+
+    await client.query(
+      `
+        insert into public."oauthClient" (
+          "id",
+          "clientId",
+          "clientSecret",
+          "disabled",
+          "skipConsent",
+          "enableEndSession",
+          "subjectType",
+          "scopes",
+          "userId",
+          "createdAt",
+          "updatedAt",
+          "name",
+          "redirectUris",
+          "postLogoutRedirectUris",
+          "tokenEndpointAuthMethod",
+          "grantTypes",
+          "responseTypes",
+          "public",
+          "type",
+          "requirePKCE",
+          "referenceId",
+          "metadata"
+        )
+        values (
+          $1,
+          $2,
+          $3,
+          false,
+          true,
+          false,
+          'public',
+          $4::jsonb,
+          null,
+          $5,
+          $6,
+          $7,
+          $8::jsonb,
+          $9::jsonb,
+          $10,
+          $11::jsonb,
+          $12::jsonb,
+          false,
+          'web',
+          false,
+          'cinatra-app',
+          $13::jsonb
+        )
+        on conflict ("clientId") do update
+        set
+          "clientSecret" = excluded."clientSecret",
+          "disabled" = excluded."disabled",
+          "skipConsent" = excluded."skipConsent",
+          "enableEndSession" = excluded."enableEndSession",
+          "subjectType" = excluded."subjectType",
+          "scopes" = excluded."scopes",
+          "updatedAt" = excluded."updatedAt",
+          "name" = excluded."name",
+          "redirectUris" = excluded."redirectUris",
+          "postLogoutRedirectUris" = excluded."postLogoutRedirectUris",
+          "tokenEndpointAuthMethod" = excluded."tokenEndpointAuthMethod",
+          "grantTypes" = excluded."grantTypes",
+          "responseTypes" = excluded."responseTypes",
+          "public" = excluded."public",
+          "type" = excluded."type",
+          "requirePKCE" = excluded."requirePKCE",
+          "referenceId" = excluded."referenceId",
+          "metadata" = excluded."metadata"
+      `,
+      [
+        existingClient?.id ?? randomUUID(),
+        SELF_MCP_CLIENT_ID,
+        clientSecretHashed,
+        JSON.stringify(SELF_MCP_CLIENT_SCOPES),
+        createdAt,
+        now,
+        SELF_MCP_CLIENT_NAME,
+        JSON.stringify([]),
+        JSON.stringify([]),
+        "client_secret_basic",
+        JSON.stringify(["client_credentials"]),
+        JSON.stringify([]),
+        JSON.stringify(metadata),
+      ],
+    );
+
+    await writeMetadataValue(client, schemaName, MCP_SETTINGS_KEY, nextSettings);
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  }
+
   return nextSettings.selfClient;
 }
 
@@ -1455,94 +1568,352 @@ async function ensureLlmMcpAccess(client, schemaName, mcpSettings, mode) {
   const now = new Date();
   const providers = {};
 
-  for (const provider of LLM_MCP_PROVIDERS) {
-    // Reuse existing secret if available, otherwise generate
-    const existingProvider = existing?.providers?.[provider.id];
-    const existingSecret =
-      typeof existingProvider?.clientSecret === "string" && existingProvider.clientSecret.length > 0
-        ? existingProvider.clientSecret
-        : null;
-    const clientSecret = existingSecret ?? createClientSecret();
-    // Hash the secret before storing in oauthClient (Better Auth uses SHA-256 base64url).
-    const clientSecretHashed = createHash("sha256").update(clientSecret, "utf8").digest("base64url");
+  // Write BOTH halves (every provider's hashed oauthClient row + the plaintext
+  // metadata index) in ONE transaction so the two tables can never diverge — a
+  // partial write that rewrote a row but not the metadata (or vice versa) is
+  // exactly the two-table drift this guards.
+  await client.query("begin");
+  try {
+    for (const provider of LLM_MCP_PROVIDERS) {
+      const existingProvider = existing?.providers?.[provider.id];
+      const existingSecret =
+        typeof existingProvider?.clientSecret === "string" && existingProvider.clientSecret.length > 0
+          ? existingProvider.clientSecret
+          : null;
 
-    // Look up existing OAuth client row
-    const existingClientResult = await client.query(
-      `select "id", "createdAt" from public."oauthClient" where "clientId" = $1 limit 1`,
-      [provider.clientId],
-    );
-    const existingRow = existingClientResult.rows[0];
-    const createdAt = existingRow?.createdAt instanceof Date ? existingRow.createdAt : now;
-    const metadata = {
-      managedBy: "cinatra-cli",
-      purpose: "llm-mcp-access",
-      provider: provider.id,
-      blockedToolPatterns: LLM_MCP_BLOCKED_TOOL_PATTERNS,
-    };
+      // Look up existing OAuth client row (widened for verify-before-reuse).
+      const existingClientResult = await client.query(
+        `select "id", "createdAt", "clientSecret", "grantTypes", "scopes", "disabled" from public."oauthClient" where "clientId" = $1 limit 1`,
+        [provider.clientId],
+      );
+      const existingRow = existingClientResult.rows[0];
 
-    await client.query(
-      `
-        insert into public."oauthClient" (
-          "id", "clientId", "clientSecret", "disabled", "skipConsent", "enableEndSession",
-          "subjectType", "scopes", "userId", "createdAt", "updatedAt", "name",
-          "redirectUris", "postLogoutRedirectUris", "tokenEndpointAuthMethod",
-          "grantTypes", "responseTypes", "public", "type", "requirePKCE",
-          "referenceId", "metadata"
-        )
-        values (
-          $1, $2, $3, false, true, false, 'public', $4::jsonb, null, $5, $6, $7,
-          $8::jsonb, $9::jsonb, $10, $11::jsonb, $12::jsonb, false, 'web', false,
-          $13, $14::jsonb
-        )
-        on conflict ("clientId") do update
-        set
-          "clientSecret" = excluded."clientSecret",
-          "disabled" = excluded."disabled",
-          "skipConsent" = excluded."skipConsent",
-          "scopes" = excluded."scopes",
-          "updatedAt" = excluded."updatedAt",
-          "name" = excluded."name",
-          "tokenEndpointAuthMethod" = excluded."tokenEndpointAuthMethod",
-          "grantTypes" = excluded."grantTypes",
-          "referenceId" = excluded."referenceId",
-          "metadata" = excluded."metadata"
-      `,
-      [
-        existingRow?.id ?? randomUUID(),
-        provider.clientId,
-        clientSecretHashed,
-        JSON.stringify(LLM_MCP_CLIENT_SCOPES),
-        createdAt,
-        now,
-        provider.name,
-        JSON.stringify([]),
-        JSON.stringify([]),
-        "client_secret_basic",
-        JSON.stringify(["client_credentials"]),
-        JSON.stringify([]),
-        `cinatra-llm-${provider.id}`,
-        JSON.stringify(metadata),
-      ],
-    );
+      // Verify-before-reuse: keep the stored plaintext ONLY when the metadata
+      // half and the oauthClient row still agree (same secret hash + grant/
+      // scope/enabled shape). Any drift → mint fresh and rewrite both halves.
+      const reuseSecret = canReuseClientCredentials({
+        plaintext: existingSecret,
+        row: existingRow,
+        expectedScopes: LLM_MCP_CLIENT_SCOPES,
+      });
+      const clientSecret = reuseSecret ? existingSecret : createClientSecret();
+      // Hash the secret before storing in oauthClient (Better Auth uses SHA-256 base64url).
+      const clientSecretHashed = hashClientSecret(clientSecret);
 
-    providers[provider.id] = {
-      clientId: provider.clientId,
-      clientSecret,
-      clientName: provider.name,
-      scope: LLM_MCP_CLIENT_SCOPE,
-      blockedToolPatterns: LLM_MCP_BLOCKED_TOOL_PATTERNS,
-      createdAt: createdAt.toISOString(),
+      const createdAt = existingRow?.createdAt instanceof Date ? existingRow.createdAt : now;
+      const metadata = {
+        managedBy: "cinatra-cli",
+        purpose: "llm-mcp-access",
+        provider: provider.id,
+        blockedToolPatterns: LLM_MCP_BLOCKED_TOOL_PATTERNS,
+      };
+
+      await client.query(
+        `
+          insert into public."oauthClient" (
+            "id", "clientId", "clientSecret", "disabled", "skipConsent", "enableEndSession",
+            "subjectType", "scopes", "userId", "createdAt", "updatedAt", "name",
+            "redirectUris", "postLogoutRedirectUris", "tokenEndpointAuthMethod",
+            "grantTypes", "responseTypes", "public", "type", "requirePKCE",
+            "referenceId", "metadata"
+          )
+          values (
+            $1, $2, $3, false, true, false, 'public', $4::jsonb, null, $5, $6, $7,
+            $8::jsonb, $9::jsonb, $10, $11::jsonb, $12::jsonb, false, 'web', false,
+            $13, $14::jsonb
+          )
+          on conflict ("clientId") do update
+          set
+            "clientSecret" = excluded."clientSecret",
+            "disabled" = excluded."disabled",
+            "skipConsent" = excluded."skipConsent",
+            "scopes" = excluded."scopes",
+            "updatedAt" = excluded."updatedAt",
+            "name" = excluded."name",
+            "tokenEndpointAuthMethod" = excluded."tokenEndpointAuthMethod",
+            "grantTypes" = excluded."grantTypes",
+            "referenceId" = excluded."referenceId",
+            "metadata" = excluded."metadata"
+        `,
+        [
+          existingRow?.id ?? randomUUID(),
+          provider.clientId,
+          clientSecretHashed,
+          JSON.stringify(LLM_MCP_CLIENT_SCOPES),
+          createdAt,
+          now,
+          provider.name,
+          JSON.stringify([]),
+          JSON.stringify([]),
+          "client_secret_basic",
+          JSON.stringify(["client_credentials"]),
+          JSON.stringify([]),
+          `cinatra-llm-${provider.id}`,
+          JSON.stringify(metadata),
+        ],
+      );
+
+      providers[provider.id] = {
+        clientId: provider.clientId,
+        clientSecret,
+        clientName: provider.name,
+        scope: LLM_MCP_CLIENT_SCOPE,
+        blockedToolPatterns: LLM_MCP_BLOCKED_TOOL_PATTERNS,
+        createdAt: createdAt.toISOString(),
+        updatedAt: now.toISOString(),
+      };
+    }
+
+    const settings = {
+      providers,
       updatedAt: now.toISOString(),
     };
+
+    await writeMetadataValue(client, schemaName, LLM_MCP_SETTINGS_KEY, settings);
+    await client.query("commit");
+    return settings;
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Self-healing decryptable JWKS (dev only) — cinatra#260 Step 1
+// ---------------------------------------------------------------------------
+//
+// Better Auth encrypts each `public.jwks` private key with BETTER_AUTH_SECRET.
+// If the secret rotated (or a stale row survived a reset) the key can no longer
+// be decrypted, and EVERY `client_credentials` token mint fails with a 500 whose
+// body carries the exact Better Auth message "Failed to decrypt private key".
+// Because Better Auth's `signJWT` only ever reads the LATEST key
+// (`getLatestKey` sorts createdAt DESC and takes [0]) and lazily regenerates via
+// `createJwk` when no usable key exists, deleting the proven-bad latest row lets
+// the next mint regenerate a fresh key under the ACTIVE secret.
+//
+// This is a self-heal, not a re-derivation: we never touch Better Auth's
+// symmetric crypto. The probe is the authoritative source of truth — one real
+// token mint at the local OAuth token endpoint. The DELETE fires ONLY on the
+// definite decrypt error; transient/connection/other-status outcomes never
+// delete anything (loud-but-non-fatal). Dev-only by call site.
+
+const JWKS_DECRYPT_ERROR_MARKER = "Failed to decrypt private key";
+
+// Resolve the local origin the dev app serves on. Mirrors
+// packages/mcp-server/src/llm-credentials.ts getLocalTokenEndpointUrl WITHOUT
+// importing it (CLI must not pull server-only modules) — same precedence so the
+// token issuer matches what the MCP server expects.
+function resolveLocalOrigin(env) {
+  const raw =
+    env.BETTER_AUTH_URL ??
+    env.NEXT_PUBLIC_BETTER_AUTH_URL ??
+    "http://localhost:3000";
+  return String(raw).trim().replace(/\/+$/, "");
+}
+
+// Bounded timeout for the token-mint probe. A reachable-but-stalled token route
+// must NOT hang `cinatra setup dev` — on timeout we classify "app-down" (the
+// JWKS state is unknown, so we never heal/delete) and let setup continue.
+const TOKEN_MINT_PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Mint one real `client_credentials` token at the local OAuth token endpoint
+ * and classify the outcome. Pure HTTP — no server-only imports, no secret in
+ * the returned value or any log.
+ *
+ * @returns {Promise<{ outcome: "ok" | "decrypt-error" | "app-down" | "error", status?: number }>}
+ *   - "ok"            mint returned a real access_token → JWKS decryptable, nothing to heal
+ *   - "decrypt-error" 5xx whose body carries the exact decrypt marker → heal
+ *   - "app-down"      the local app / token endpoint is unreachable OR timed out → skip
+ *   - "error"         any other non-2xx, a 2xx without access_token, or unexpected failure → warn, do NOT heal
+ */
+async function probeTokenMint({ origin, clientId, clientSecret, scope, timeoutMs = TOKEN_MINT_PROBE_TIMEOUT_MS }) {
+  const tokenEndpoint = `${origin}/api/auth/oauth2/token`;
+  const resource = `${origin}/api/mcp`;
+  const controller = new AbortController();
+  // The timer covers the ENTIRE operation — request AND body read — and is
+  // cleared only at the very end. A server that sends headers then stalls the
+  // body would otherwise hang `cinatra setup dev` indefinitely once the timer
+  // was cleared after fetch() resolved. The abort signal propagates to the body
+  // stream, so response.json()/text() reject with AbortError on a body stall.
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let response;
+    try {
+      const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+      response = await fetch(tokenEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${basic}`,
+        },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          scope,
+          resource,
+        }),
+        signal: controller.signal,
+      });
+    } catch {
+      // fetch threw → the endpoint is unreachable (app not running, DNS/connect
+      // failure) OR the request phase timed out (AbortError). NEVER heal on a
+      // transport failure or stall — the JWKS state is unknown, setup must not hang.
+      return { outcome: "app-down" };
+    }
+
+    if (response.ok) {
+      // An authoritative mint must return a real access_token. A misrouted 200
+      // (HTML page, empty body, or a JSON without access_token) is NOT proof the
+      // signing key is decryptable — treat it as a non-healing "error", not "ok".
+      let tokenData = null;
+      try {
+        tokenData = await response.json();
+      } catch (err) {
+        // A body-read abort (the timer fired while the body stalled) is a stall,
+        // not a malformed body → classify "app-down" (never heal/delete).
+        if (err && (err.name === "AbortError" || controller.signal.aborted)) {
+          return { outcome: "app-down" };
+        }
+        tokenData = null;
+      }
+      if (tokenData && typeof tokenData.access_token === "string" && tokenData.access_token.length > 0) {
+        return { outcome: "ok", status: response.status };
+      }
+      return { outcome: "error", status: response.status };
+    }
+
+    let bodyText = "";
+    try {
+      bodyText = await response.text();
+    } catch (err) {
+      if (err && (err.name === "AbortError" || controller.signal.aborted)) {
+        return { outcome: "app-down" };
+      }
+      bodyText = "";
+    }
+
+    // The ONE condition that authorizes a DELETE: a server error (5xx) whose body
+    // carries Better Auth's exact decrypt message. A 4xx (bad/disabled client,
+    // wrong scope) is NOT a JWKS problem and must never delete a key.
+    if (response.status >= 500 && bodyText.includes(JWKS_DECRYPT_ERROR_MARKER)) {
+      return { outcome: "decrypt-error", status: response.status };
+    }
+
+    return { outcome: "error", status: response.status };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Delete the LATEST jwks row (the only one Better Auth's signJWT reads). Scoped
+// to the single proven-bad row by createdAt DESC, not a blanket truncate, so a
+// concurrently-good key is never collateral. Returns the number of rows deleted.
+async function deleteLatestJwksRow(client) {
+  const result = await client.query(
+    `
+      delete from public."jwks"
+      where "id" = (
+        select "id" from public."jwks"
+        order by "createdAt" desc
+        limit 1
+      )
+    `,
+  );
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Idempotent self-heal for an undecryptable JWKS (dev only).
+ *
+ * Probes authoritatively via a real token mint. On the definite decrypt error
+ * (and ONLY then) deletes the proven-bad latest jwks row so Better Auth's lazy
+ * createJwk regenerates under the active BETTER_AUTH_SECRET on the next mint,
+ * then re-probes once (bounded single retry). Loud-but-non-fatal: every failure
+ * path warns and returns a status object — it NEVER aborts setup.
+ *
+ * Sequenced AFTER ensureSelfMcpClient (it needs a valid client_credentials
+ * client to mint). Skips with a warning when the local app / token endpoint is
+ * not running — `cinatra setup dev` does not guarantee the server is up.
+ *
+ * SECRET BOUNDARY: never logs the client secret or any minted token. Statuses
+ * and counts only.
+ *
+ * @returns {Promise<{ status: string, deleted?: number, retriedOk?: boolean }>}
+ */
+async function ensureDecryptableJwks(client, env, selfClient) {
+  const clientId = selfClient?.clientId;
+  const clientSecret = selfClient?.clientSecret;
+  const scope = selfClient?.scope ?? SELF_MCP_CLIENT_SCOPE;
+  if (!clientId || !clientSecret) {
+    console.warn(
+      "⚠ JWKS self-heal skipped: no self MCP client credentials available to probe with.",
+    );
+    return { status: "skipped-no-client" };
   }
 
-  const settings = {
-    providers,
-    updatedAt: now.toISOString(),
-  };
+  const origin = resolveLocalOrigin(env);
+  const probe = await probeTokenMint({ origin, clientId, clientSecret, scope });
 
-  await writeMetadataValue(client, schemaName, LLM_MCP_SETTINGS_KEY, settings);
-  return settings;
+  if (probe.outcome === "ok") {
+    return { status: "healthy" };
+  }
+
+  if (probe.outcome === "app-down") {
+    console.warn(
+      `⚠ JWKS self-heal skipped: the local app/token endpoint at ${origin} is not reachable or timed out ` +
+        "(setup does not start the server). Re-run `cinatra setup dev` once `pnpm dev` is up so the token-mint " +
+        "probe can verify (and, if needed, self-heal) JWKS decryptability.",
+    );
+    return { status: "skipped-app-down" };
+  }
+
+  if (probe.outcome === "error") {
+    console.warn(
+      `⚠ JWKS self-heal: token mint returned HTTP ${probe.status} without the decrypt-error signature — ` +
+        "not a JWKS-decrypt fault, leaving keys untouched. If MCP token mints keep failing, investigate the OAuth client/scope.",
+    );
+    return { status: "probe-error", deleted: 0 };
+  }
+
+  // outcome === "decrypt-error": the ONE case that authorizes a heal.
+  console.warn(
+    "⚠ JWKS self-heal: the local token endpoint reported \"Failed to decrypt private key\" — " +
+      "the stored signing key cannot be decrypted under the active BETTER_AUTH_SECRET. " +
+      "Deleting the proven-bad latest key so Better Auth regenerates it on the next mint.",
+  );
+
+  let deleted = 0;
+  try {
+    deleted = await deleteLatestJwksRow(client);
+  } catch (err) {
+    console.warn(
+      `⚠ JWKS self-heal: failed to delete the undecryptable key: ${err && err.message ? err.message : err}. ` +
+        "Leaving setup otherwise complete; remove the stale public.jwks row manually if MCP token mints keep failing.",
+    );
+    return { status: "delete-failed", deleted: 0 };
+  }
+
+  if (deleted === 0) {
+    console.warn(
+      "⚠ JWKS self-heal: decrypt error reported but no jwks row was present to delete — " +
+        "leaving setup otherwise complete; re-run once the app is up.",
+    );
+    return { status: "decrypt-error-no-row", deleted: 0 };
+  }
+
+  // Bounded single retry: confirm regeneration produced a decryptable key.
+  const retry = await probeTokenMint({ origin, clientId, clientSecret, scope });
+  if (retry.outcome === "ok") {
+    console.log(`- JWKS self-heal: removed ${deleted} undecryptable key; a fresh key was regenerated and verified.`);
+    return { status: "healed", deleted, retriedOk: true };
+  }
+
+  console.warn(
+    `⚠ JWKS self-heal: removed ${deleted} undecryptable key, but the verification mint did not succeed ` +
+      `(outcome=${retry.outcome}${retry.status ? `, HTTP ${retry.status}` : ""}). ` +
+      "Better Auth should regenerate on the next mint; re-run `cinatra setup dev` once the app has served a request to re-verify.",
+  );
+  return { status: "healed-unverified", deleted, retriedOk: false };
 }
 
 async function ensureDefaultOrganization(client) {
@@ -2011,6 +2382,14 @@ async function gatherStatus(client, schemaName) {
   const authTableState = await readAuthTableState(client);
   const userCount = await readUserCount(client);
   const mcpSettings = await readMetadataValue(client, schemaName, MCP_SETTINGS_KEY, {});
+  const jwksRowCount = await readJwksRowCount(client);
+
+  // DB-presence health only (no network mint): "absent" = jwks table missing,
+  // "no-keys" = table present but empty (Better Auth will lazily createJwk on
+  // first sign), "present" = at least one key row. Decryptability is proven by
+  // the live token-mint probe in `ensureDecryptableJwks` (runSetup), not here.
+  const jwksHealth =
+    jwksRowCount === null ? "absent" : jwksRowCount === 0 ? "no-keys" : "present";
 
   return {
     authTablesPresent: authTableState.present,
@@ -2018,6 +2397,8 @@ async function gatherStatus(client, schemaName) {
     userCount,
     mcpPublicBaseUrl: mcpSettings?.publicBaseUrl ?? null,
     selfMcpClientId: mcpSettings?.selfClient?.clientId ?? null,
+    jwksHealth,
+    jwksKeyCount: jwksRowCount,
   };
 }
 
@@ -2248,6 +2629,20 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     const mcpSettings = await ensureMcpSettings(client, schemaName, publicBaseUrl);
     const selfClient = await ensureSelfMcpClient(client, schemaName, mcpSettings);
     const llmAccess = await ensureLlmMcpAccess(client, schemaName, mcpSettings, mode);
+    // Self-healing decryptable JWKS (dev only). Sequenced AFTER the OAuth-client
+    // sync because it probes authoritatively via a real client_credentials token
+    // mint (needs `selfClient`). Loud-but-non-fatal: an undecryptable-key heal,
+    // an unreachable app, or any probe hiccup warns but never aborts setup.
+    let jwksHeal = null;
+    if (mode === "dev") {
+      try {
+        jwksHeal = await ensureDecryptableJwks(client, env, selfClient);
+      } catch (err) {
+        console.warn(
+          `⚠ JWKS self-heal failed unexpectedly (continuing): ${err && err.message ? err.message : err}`,
+        );
+      }
+    }
     const userCount = await readUserCount(client);
 
     // Auto-register agent skills from <repoRoot>/agents/.
@@ -2292,6 +2687,9 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       console.log(`- LLM MCP access: ${LLM_MCP_PROVIDERS.map((p) => p.id).join(", ")} (dev only)`);
     } else {
       console.log(`- LLM MCP access: skipped (production mode)`);
+    }
+    if (jwksHeal) {
+      console.log(`- JWKS health: ${jwksHeal.status}${typeof jwksHeal.deleted === "number" && jwksHeal.deleted > 0 ? ` (regenerated ${jwksHeal.deleted})` : ""}`);
     }
     console.log(
       userCount === 0
@@ -6939,6 +7337,31 @@ async function runAgentImport(argv) {
     await client.end();
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only surface (cinatra#260 Steps 1+2). Exported so the package vitest
+// suite can exercise the verify-before-reuse predicate, the two-table OAuth
+// sync, and the JWKS decrypt-error→delete-once self-heal against a mocked pg
+// client + mocked token mint — without booting the app or a live DB.
+// ---------------------------------------------------------------------------
+export {
+  hashClientSecret,
+  canReuseClientCredentials,
+  ensureSelfMcpClient,
+  ensureLlmMcpAccess,
+  ensureDecryptableJwks,
+  probeTokenMint,
+  deleteLatestJwksRow,
+  resolveLocalOrigin,
+  gatherStatus,
+  SELF_MCP_CLIENT_ID,
+  SELF_MCP_CLIENT_SCOPE,
+  SELF_MCP_CLIENT_SCOPES,
+  LLM_MCP_PROVIDERS,
+  LLM_MCP_CLIENT_SCOPES,
+  LLM_MCP_SETTINGS_KEY,
+  MCP_SETTINGS_KEY,
+};
 
 export async function runCli(argv) {
   const [command, mode, ...rest] = argv;
