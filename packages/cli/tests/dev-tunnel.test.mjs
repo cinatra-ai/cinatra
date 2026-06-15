@@ -146,7 +146,9 @@ describe("dev tunnel — matches runCloneStart hostname and public URL behavior"
       ),
     ).toBe(true);
     expect(
-      body.includes("await writeClonePublicBaseUrl(mainDbUrl, funnelUrl, { source: urlSource })"),
+      body.includes(
+        "await writeClonePublicBaseUrl(mainDbUrl, funnelUrl, { source: urlSource, schemaName: mainSchema })",
+      ),
     ).toBe(true);
   });
 
@@ -156,6 +158,18 @@ describe("dev tunnel — matches runCloneStart hostname and public URL behavior"
         'tailscaleAuthkeySource === "nango" ? "tailscale-auto" : "tailscale-funnel"',
       ),
     ).toBe(true);
+  });
+
+  it("honors the resolved SUPABASE_SCHEMA in EVERY main-DB metadata read/write — never a hardcoded \"cinatra\" (Step 3 must-fix)", () => {
+    // No main-DB metadata read/write inside runDevTunnel may pass the hardcoded
+    // schema literal `"cinatra"`. The start-path write threads `schemaName:
+    // mainSchema`; the status/stop reads pass `mainSchema` as the schema arg.
+    expect(body.includes('readMetadataValue(\n          client,\n          mainSchema,')).toBe(true);
+    expect(body.includes("{ schemaName: mainSchema }")).toBe(true);
+    expect(body.includes("schemaName: mainSchema })")).toBe(true);
+    // The only remaining `"cinatra"` is the env fallback default, never a
+    // metadata-call schema argument.
+    expect(body.includes('readMetadataValue(\n          client,\n          "cinatra"')).toBe(false);
   });
 
   it("emits ONE honest informational log line, NOT a probe", () => {
@@ -212,5 +226,112 @@ describe("dev tunnel — matches runCloneStart hostname and public URL behavior"
     expect(
       body.includes("getClone(readRegistry(defaultRegistryPath()), DEV_MAIN_SLUG)"),
     ).toBe(true);
+  });
+});
+
+// --- 4. Step 3 helper preserves the poller-removal invariant --------------
+//
+// cinatra#260 Step 3 adds `ensureDevPublicMcpUrl`, which reads the live Funnel
+// ONE-SHOT at setup and may auto-bring-up the tunnel. It must NOT reintroduce
+// the dead detached poll the dev-tunnel work removed: no setTimeout, no
+// background IIFE, no reachability poll. Asserted from the helper's SOURCE.
+
+describe("ensureDevPublicMcpUrl — one-shot read, NO reintroduced poller", () => {
+  const start = INDEX_SRC.indexOf("async function ensureDevPublicMcpUrl(");
+  const nextFn = INDEX_SRC.indexOf("\nasync function runCloneStart(", start);
+  const body = INDEX_SRC.slice(start, nextFn);
+
+  it("the helper is defined exactly once", () => {
+    expect(defCount("ensureDevPublicMcpUrl")).toBe(1);
+    expect(start).toBeGreaterThan(-1);
+    expect(nextFn).toBeGreaterThan(start);
+  });
+
+  it("contains NO background-poll signatures (the dead detached poll stays removed)", () => {
+    expect(body.includes("void (async () => {")).toBe(false);
+    expect(body.includes("setTimeout(")).toBe(false);
+    expect(body.includes("setInterval(")).toBe(false);
+    expect(body.includes(".unref(")).toBe(false);
+    expect(body.includes("pollFunnelUrl")).toBe(false);
+    expect(body.includes("pollProjectName")).toBe(false);
+    // No reachability / HTTP probe of the funnel URL (ownership ≠ reachability).
+    expect(body.includes("probeHttp(")).toBe(false);
+    expect(body.includes("/api/mcp/health")).toBe(false);
+    expect(body.includes("fetch(")).toBe(false);
+  });
+
+  it("reuses the shared ownership-decision helpers by reference", () => {
+    expect(body.includes("verifyRegisteredHostnameMatchesPrediction")).toBe(true);
+    expect(body.includes("shouldWritePublicBaseUrl(")).toBe(true);
+    expect(body.includes("waitForTailscaleFunnelUrl")).toBe(true);
+  });
+
+  it("brings the tunnel up via runDevTunnel(['start']) — never forks tunnel logic", () => {
+    expect(body.includes('bringUpTunnel(["start"])')).toBe(true);
+  });
+
+  it("uses a BOUNDED short read (timeoutMs), not an unbounded loop", () => {
+    expect(body.includes("timeoutMs: 3_000")).toBe(true);
+  });
+});
+
+// --- 5. Step 3 auto-bring-up Docker spawns are BOUNDED (no setup hang) -----
+//
+// codex must-fix: the auto-bring-up path (`cinatra setup dev` → runDevTunnel
+// "start") calls `docker build` (ensureWayflowImage) and `docker compose up`.
+// Both must carry a finite `timeout` so a hung docker can never block setup.
+
+describe("auto-bring-up Docker spawns carry a finite timeout (Step 3 must-fix)", () => {
+  it("defines finite bound constants for the build + compose-up", () => {
+    expect(INDEX_SRC.includes("const WAYFLOW_BUILD_TIMEOUT_MS = 600_000;")).toBe(true);
+    expect(INDEX_SRC.includes("const COMPOSE_UP_TIMEOUT_MS = 120_000;")).toBe(true);
+  });
+
+  it("bounds the wayflow image build spawn", () => {
+    const i = INDEX_SRC.indexOf('"build", "-t", "cinatra-wayflow:local"');
+    expect(i).toBeGreaterThan(-1);
+    // Window covers the spawnSync options block (a comment sits between the
+    // args array and the options, so reach past it).
+    const window = INDEX_SRC.slice(i, i + 900);
+    expect(window.includes("timeout: WAYFLOW_BUILD_TIMEOUT_MS")).toBe(true);
+  });
+
+  it("bounds the dev-tunnel `compose up -d tailscale` spawn", () => {
+    const start = INDEX_SRC.indexOf("async function runDevTunnel(");
+    const nextFn = INDEX_SRC.indexOf("\nfunction readPidFromFile(", start);
+    const devBody = INDEX_SRC.slice(start, nextFn);
+    expect(devBody.includes("timeout: COMPOSE_UP_TIMEOUT_MS")).toBe(true);
+    // The bring-up throw recognizes the timeout case so it surfaces as a
+    // soft-failed bring-up, not a silent success.
+    expect(devBody.includes('upResult.error?.code === "ETIMEDOUT"')).toBe(true);
+  });
+
+  it("bounds the inner `tailscale status` exec so the Funnel-wait loop can never hang", () => {
+    // codex must-fix: a HUNG `docker compose exec … tailscale status` would
+    // never let the timeoutMs loop deadline be reached → setup auto-bring-up
+    // could hang. The per-spawn timeout kills a stuck exec.
+    expect(INDEX_SRC.includes("const TAILSCALE_STATUS_SPAWN_TIMEOUT_MS = 10_000;")).toBe(true);
+    const i = INDEX_SRC.indexOf("async function waitForTailscaleFunnelUrl(");
+    expect(i).toBeGreaterThan(-1);
+    const window = INDEX_SRC.slice(i, i + 1200);
+    expect(window.includes("timeout: TAILSCALE_STATUS_SPAWN_TIMEOUT_MS")).toBe(true);
+  });
+
+  it("bounds the fast docker-CLI metadata probes reached by setup auto-bring-up", () => {
+    // codex round-3 must-fix: `compose version` (isComposeAvailable),
+    // `compose ps` (isComposeProjectUp), and `image inspect` (ensureWayflowImage)
+    // are now on the `cinatra setup dev` path before the bounded build/up/status
+    // calls. A hung docker CLI must not block setup.
+    expect(INDEX_SRC.includes("const DOCKER_CLI_PROBE_TIMEOUT_MS = 15_000;")).toBe(true);
+    for (const anchor of [
+      "function isComposeAvailable(",
+      "function isComposeProjectUp(",
+      '"image", "inspect", "cinatra-wayflow:local"',
+    ]) {
+      const i = INDEX_SRC.indexOf(anchor);
+      expect(i).toBeGreaterThan(-1);
+      const window = INDEX_SRC.slice(i, i + 500);
+      expect(window.includes("timeout: DOCKER_CLI_PROBE_TIMEOUT_MS")).toBe(true);
+    }
   });
 });

@@ -25,6 +25,8 @@ import {
   ensureSelfMcpClient,
   ensureLlmMcpAccess,
   ensureDecryptableJwks,
+  ensureMcpSettings,
+  ensureDevPublicMcpUrl,
   probeTokenMint,
   resolveLocalOrigin,
   SELF_MCP_CLIENT_ID,
@@ -737,5 +739,466 @@ describe("ensureDecryptableJwks — decrypt-error → delete-once self-heal", ()
     expect(r.status).toBe("skipped-no-client");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(jwksDeleteCalls(client)).toHaveLength(0);
+  });
+});
+
+// =========================================================================
+// Step 3 — ensureMcpSettings ownership-gated "preserve existing" branch
+// =========================================================================
+//
+// The carry-forward must RELEASE a dead auto-provisioned (tailscale-auto /
+// tailscale-funnel) URL when the later ensureDevPublicMcpUrl step owns
+// re-validation (dev + no operator URL), so a dead hostname is replaced rather
+// than survive a re-run. Operator ("manual") + legacy URLs still preserve.
+
+describe("ensureMcpSettings — ownership-gated preserve (Step 3 item 3)", () => {
+  function clientWithStored(row) {
+    return createMockClient({
+      select(sql, params) {
+        if (/from .*\.metadata/i.test(sql) && params?.[0] === MCP_SETTINGS_KEY) {
+          return { rows: [{ value: JSON.stringify(row) }], rowCount: 1 };
+        }
+        return undefined;
+      },
+    });
+  }
+
+  it("preserves an auto-provisioned URL by DEFAULT (no ownership gate)", async () => {
+    const client = clientWithStored({
+      publicBaseUrl: "https://cinatra-main.foo.ts.net",
+      publicBaseUrlSource: "tailscale-auto",
+    });
+    const r = await ensureMcpSettings(client, "cinatra", null);
+    expect(r.next.publicBaseUrl).toBe("https://cinatra-main.foo.ts.net");
+  });
+
+  it("RELEASES a dead auto-provisioned URL when ownershipGated (so Step 3 re-validates)", async () => {
+    const client = clientWithStored({
+      publicBaseUrl: "https://cinatra-main.foo.ts.net",
+      publicBaseUrlSource: "tailscale-auto",
+    });
+    const r = await ensureMcpSettings(client, "cinatra", null, { ownershipGated: true });
+    // Released → next is null (no incoming URL), so Step 3 owns re-establish.
+    expect(r.next.publicBaseUrl).toBeNull();
+  });
+
+  it("STILL preserves an operator 'manual' URL even when ownershipGated", async () => {
+    const client = clientWithStored({
+      publicBaseUrl: "https://my-named-tunnel.example.com",
+      publicBaseUrlSource: "manual",
+    });
+    const r = await ensureMcpSettings(client, "cinatra", null, { ownershipGated: true });
+    expect(r.next.publicBaseUrl).toBe("https://my-named-tunnel.example.com");
+  });
+
+  it("STILL preserves a legacy/external URL even when ownershipGated", async () => {
+    const client = clientWithStored({
+      publicBaseUrl: "https://legacy.example.com",
+      publicBaseUrlSource: "external",
+    });
+    const r = await ensureMcpSettings(client, "cinatra", null, { ownershipGated: true });
+    expect(r.next.publicBaseUrl).toBe("https://legacy.example.com");
+  });
+});
+
+// =========================================================================
+// Step 3 — ensureDevPublicMcpUrl (self-establishing + self-healing URL)
+// =========================================================================
+//
+// All hermetic: the Docker / Tailscale / tunnel-bring-up / DB boundaries are
+// injected via `deps`. No Docker, no Tailscale, no live DB, no poller.
+
+describe("ensureDevPublicMcpUrl — Step 3 self-establish + self-heal", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // A `deps` factory whose defaults make the helper behave as "sidecar down,
+  // nothing established". Each test overrides only the seams it exercises.
+  function makeDeps(overrides = {}) {
+    return {
+      composePathExists: () => true,
+      composeAvailable: () => true,
+      composeProjectUp: () => false, // sidecar down by default
+      waitForTailscaleFunnelUrl: async () => null,
+      verifyRegisteredHostnameMatchesPrediction: async () => ({
+        ok: false,
+        predicted: "cinatra-main",
+        registered: "",
+      }),
+      runDevTunnel: vi.fn(async () => undefined),
+      writeClonePublicBaseUrl: vi.fn(async () => undefined),
+      readStoredMcpSettings: async () => ({}),
+      ...overrides,
+    };
+  }
+
+  // --- honor operator / env URLs -----------------------------------------
+
+  it("HONORS an explicit env MCP_PUBLIC_BASE_URL — no docker, no bring-up, and RECONCILES the DB to it", async () => {
+    const deps = makeDeps();
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: { MCP_PUBLIC_BASE_URL: "https://operator.example.com" },
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("operator-url");
+    expect(r.owned).toBe(true);
+    expect(r.publicBaseUrl).toBe("https://operator.example.com");
+    expect(deps.runDevTunnel).not.toHaveBeenCalled();
+    // codex must-fix: a stale auto row must not survive while the summary shows
+    // the operator URL → the DB is reconciled to the operator URL, source
+    // "manual", in the resolved schema.
+    expect(deps.writeClonePublicBaseUrl).toHaveBeenCalledTimes(1);
+    expect(deps.writeClonePublicBaseUrl.mock.calls[0][1]).toBe("https://operator.example.com");
+    expect(deps.writeClonePublicBaseUrl.mock.calls[0][2]).toMatchObject({
+      source: "manual",
+      schemaName: "cinatra",
+    });
+  });
+
+  it("reconciles the operator URL into the RESOLVED schema, never a hardcoded 'cinatra'", async () => {
+    const deps = makeDeps();
+    await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "branch_7",
+      env: { MCP_PUBLIC_BASE_URL: "https://operator.example.com" },
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(deps.writeClonePublicBaseUrl.mock.calls[0][2]).toMatchObject({
+      schemaName: "branch_7",
+    });
+  });
+
+  it("does NOT treat a localhost BETTER_AUTH_URL fallback as an operator URL", async () => {
+    // A localhost APP_PUBLIC_URL must NOT count as operator intent to publish,
+    // so the self-establish path proceeds (here: bring-up, which we let fail).
+    const deps = makeDeps({ runDevTunnel: vi.fn(async () => { throw new Error("no authkey"); }) });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: { APP_PUBLIC_URL: "http://localhost:3000" },
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("bring-up-failed");
+    expect(deps.runDevTunnel).toHaveBeenCalledTimes(1);
+  });
+
+  it("HONORS a stored operator 'manual' URL — never overrides it", async () => {
+    const deps = makeDeps({
+      readStoredMcpSettings: async () => ({
+        publicBaseUrl: "https://operator-pasted.example.com",
+        publicBaseUrlSource: "manual",
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("operator-url");
+    expect(r.publicBaseUrl).toBe("https://operator-pasted.example.com");
+    expect(deps.runDevTunnel).not.toHaveBeenCalled();
+    expect(deps.writeClonePublicBaseUrl).not.toHaveBeenCalled();
+  });
+
+  // --- ownership validation (source/ownership, NOT reachability) ----------
+
+  it("OWNED: sidecar up + funnel matches prediction → rewrites the live URL (no bring-up)", async () => {
+    const deps = makeDeps({
+      composeProjectUp: () => true,
+      waitForTailscaleFunnelUrl: async () => ({
+        url: "https://cinatra-main.foo.ts.net",
+        registeredDnsName: "cinatra-main.foo.ts.net.",
+      }),
+      verifyRegisteredHostnameMatchesPrediction: async () => ({
+        ok: true,
+        predicted: "cinatra-main",
+        registered: "cinatra-main",
+      }),
+      readStoredMcpSettings: async () => ({
+        publicBaseUrl: "https://cinatra-main.foo.ts.net",
+        publicBaseUrlSource: "tailscale-auto",
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.owned).toBe(true);
+    expect(r.status).toBe("owned"); // stored === live → idempotent rewrite
+    expect(r.broughtUp).toBe(false);
+    expect(deps.runDevTunnel).not.toHaveBeenCalled();
+    expect(deps.writeClonePublicBaseUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("OWNED but the write FAILS → reported NOT owned (loud warning fires; codex must-fix #2)", async () => {
+    // The sidecar-already-up owned path: a write failure must NOT be reported
+    // owned/established, or the loud summary warning (gated on !owned) is
+    // suppressed — especially when ensureMcpSettings just released the old auto
+    // URL, leaving the DB row empty.
+    const deps = makeDeps({
+      composeProjectUp: () => true,
+      waitForTailscaleFunnelUrl: async () => ({
+        url: "https://cinatra-main.foo.ts.net",
+        registeredDnsName: "cinatra-main.foo.ts.net.",
+      }),
+      verifyRegisteredHostnameMatchesPrediction: async () => ({
+        ok: true,
+        predicted: "cinatra-main",
+        registered: "cinatra-main",
+      }),
+      readStoredMcpSettings: async () => ({}), // released → empty
+      writeClonePublicBaseUrl: vi.fn(async () => {
+        throw new Error("owned-path write boom");
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("write-failed");
+    expect(r.owned).toBe(false);
+    expect(r.publicBaseUrl).toBeNull();
+    expect(r.fixHint).toBe("cinatra dev tunnel start");
+  });
+
+  it("FRESH-NXDOMAIN-NOT-DEAD: a just-provisioned (un-propagated) matching URL is OWNED, never torn down", async () => {
+    // The point of source/ownership validation: even though this URL would
+    // NXDOMAIN (no reachability probe is performed), the node identity matches
+    // the prediction, so it is owned and (re)written — NOT classified dead.
+    const writeSpy = vi.fn(async () => undefined);
+    const deps = makeDeps({
+      composeProjectUp: () => true,
+      waitForTailscaleFunnelUrl: async () => ({
+        url: "https://cinatra-main.foo.ts.net",
+        registeredDnsName: "cinatra-main.foo.ts.net.",
+      }),
+      verifyRegisteredHostnameMatchesPrediction: async () => ({
+        ok: true,
+        predicted: "cinatra-main",
+        registered: "cinatra-main",
+      }),
+      // Stored URL is empty → the live owned URL must be written, not skipped.
+      readStoredMcpSettings: async () => ({}),
+      writeClonePublicBaseUrl: writeSpy,
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.owned).toBe(true);
+    expect(r.status).toBe("rewritten"); // was missing → now established from live
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy.mock.calls[0][1]).toBe("https://cinatra-main.foo.ts.net");
+  });
+
+  it("HOSTNAME-MISMATCH: sidecar up but registered hostname collides → NO bring-up, NO write, loud fixHint", async () => {
+    const deps = makeDeps({
+      composeProjectUp: () => true,
+      waitForTailscaleFunnelUrl: async () => ({
+        url: "https://cinatra-main-1.foo.ts.net",
+        registeredDnsName: "cinatra-main-1.foo.ts.net.",
+      }),
+      verifyRegisteredHostnameMatchesPrediction: async () => ({
+        ok: false,
+        predicted: "cinatra-main",
+        registered: "cinatra-main-1",
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.owned).toBe(false);
+    expect(r.status).toBe("hostname-mismatch");
+    // fixHint must be an ESTABLISHING command, not the diagnostic `status`.
+    expect(r.fixHint).toBe("cinatra dev tunnel stop && cinatra dev tunnel start");
+    expect(r.fixHint).not.toContain("status");
+    expect(deps.runDevTunnel).not.toHaveBeenCalled();
+    expect(deps.writeClonePublicBaseUrl).not.toHaveBeenCalled();
+  });
+
+  // --- auto-bring-up (conditional + soft-fail) ----------------------------
+
+  it("AUTO-BRING-UP: sidecar down → calls runDevTunnel(['start']) then writes the established URL", async () => {
+    let up = false;
+    const deps = makeDeps({
+      composeProjectUp: () => up, // down until runDevTunnel flips it
+      runDevTunnel: vi.fn(async (argv) => {
+        expect(argv).toEqual(["start"]);
+        up = true;
+      }),
+      waitForTailscaleFunnelUrl: async () =>
+        up
+          ? { url: "https://cinatra-main.foo.ts.net", registeredDnsName: "cinatra-main.foo.ts.net." }
+          : null,
+      verifyRegisteredHostnameMatchesPrediction: async ({ registered }) =>
+        registered
+          ? { ok: true, predicted: "cinatra-main", registered: "cinatra-main" }
+          : { ok: false, predicted: "cinatra-main", registered: "" },
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(deps.runDevTunnel).toHaveBeenCalledTimes(1);
+    expect(r.broughtUp).toBe(true);
+    expect(r.owned).toBe(true);
+    expect(r.status).toBe("established");
+    expect(deps.writeClonePublicBaseUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("AUTO-BRING-UP SOFT-FAIL: runDevTunnel throws → status bring-up-failed, fixHint set, NEVER throws", async () => {
+    const deps = makeDeps({
+      runDevTunnel: vi.fn(async () => {
+        throw new Error("No Tailscale auth-key: set TS_AUTHKEY or connect Tailscale");
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("bring-up-failed");
+    expect(r.owned).toBe(false);
+    expect(r.broughtUp).toBe(false);
+    expect(r.fixHint).toBe("cinatra dev tunnel start");
+    expect(deps.writeClonePublicBaseUrl).not.toHaveBeenCalled();
+  });
+
+  it("BROUGHT UP but no owned URL surfaced (collision/propagation) → established-unverified, soft-fail", async () => {
+    let up = false; // down initially → takes the bring-up path
+    const deps = makeDeps({
+      composeProjectUp: () => up,
+      runDevTunnel: vi.fn(async () => {
+        up = true; // up after bring-up, but the funnel never surfaces a DNSName
+      }),
+      waitForTailscaleFunnelUrl: async () => null, // never surfaces a DNSName in the bound
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.broughtUp).toBe(true);
+    expect(r.owned).toBe(false);
+    expect(r.status).toBe("established-unverified");
+    // fixHint names the ESTABLISHING command (not the diagnostic `status`).
+    expect(r.fixHint).toBe("cinatra dev tunnel start");
+    expect(deps.writeClonePublicBaseUrl).not.toHaveBeenCalled();
+  });
+
+  it("BROUGHT UP + owned, but the RESOLVED-SCHEMA write FAILS → reported NOT established (loud warning fires)", async () => {
+    // codex must-fix: a write failure must NOT be reported as established/owned,
+    // or the loud summary warning (gated on !owned) would be suppressed.
+    let up = false;
+    const deps = makeDeps({
+      composeProjectUp: () => up,
+      runDevTunnel: vi.fn(async () => {
+        up = true;
+      }),
+      waitForTailscaleFunnelUrl: async () =>
+        up
+          ? { url: "https://cinatra-main.foo.ts.net", registeredDnsName: "cinatra-main.foo.ts.net." }
+          : null,
+      verifyRegisteredHostnameMatchesPrediction: async ({ registered }) =>
+        registered
+          ? { ok: true, predicted: "cinatra-main", registered: "cinatra-main" }
+          : { ok: false, predicted: "cinatra-main", registered: "" },
+      writeClonePublicBaseUrl: vi.fn(async () => {
+        throw new Error("resolved-schema write boom");
+      }),
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.broughtUp).toBe(true);
+    expect(r.owned).toBe(false); // NOT owned → loud summary warning will fire
+    expect(r.status).toBe("established-write-failed");
+    expect(r.fixHint).toBe("cinatra dev tunnel start");
+  });
+
+  // --- honor schemaName (codex must-fix) ----------------------------------
+
+  it("HONORS schemaName: the read AND the write use the RESOLVED schema, never a hardcoded 'cinatra'", async () => {
+    const readSchemas = [];
+    const writeSpy = vi.fn(async () => undefined);
+    const verifySchemas = [];
+    const deps = makeDeps({
+      composeProjectUp: () => true,
+      readStoredMcpSettings: async (_conn, schema) => {
+        readSchemas.push(schema);
+        return {};
+      },
+      waitForTailscaleFunnelUrl: async () => ({
+        url: "https://cinatra-myschema.foo.ts.net",
+        registeredDnsName: "cinatra-myschema.foo.ts.net.",
+      }),
+      verifyRegisteredHostnameMatchesPrediction: async ({ schema }) => {
+        verifySchemas.push(schema);
+        return { ok: true, predicted: "cinatra-myschema", registered: "cinatra-myschema" };
+      },
+      writeClonePublicBaseUrl: writeSpy,
+    });
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: "postgres://x",
+      schemaName: "branch_42",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.owned).toBe(true);
+    expect(readSchemas).toContain("branch_42");
+    expect(verifySchemas).toContain("branch_42");
+    // The write must thread the resolved schema (codex must-fix).
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy.mock.calls[0][2]).toMatchObject({ schemaName: "branch_42" });
+  });
+
+  it("skips cleanly with no DB url (no docker, no bring-up)", async () => {
+    const deps = makeDeps();
+    const r = await ensureDevPublicMcpUrl({
+      dbUrl: null,
+      schemaName: "cinatra",
+      env: {},
+      operatorUrl: { url: null },
+      deps,
+    });
+    expect(r.status).toBe("skipped-no-db");
+    expect(deps.runDevTunnel).not.toHaveBeenCalled();
   });
 });

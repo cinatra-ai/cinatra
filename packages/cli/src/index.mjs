@@ -1214,7 +1214,7 @@ function isLocalhostUrl(url) {
   }
 }
 
-async function ensureMcpSettings(client, schemaName, publicBaseUrl) {
+async function ensureMcpSettings(client, schemaName, publicBaseUrl, options = {}) {
   const current = await readMetadataValue(client, schemaName, MCP_SETTINGS_KEY, {});
   const currentPublicBaseUrl = normalizeOptionalUrl(current?.publicBaseUrl);
   // Preserve any existing operator-supplied URL across a setup re-run. The only
@@ -1222,8 +1222,24 @@ async function ensureMcpSettings(client, schemaName, publicBaseUrl) {
   // no longer runs); every other source ("manual" from the dev tab, plus
   // legacy "external" / "tailscale-funnel" / similar operator-managed rows) is
   // a live URL and must NOT be clobbered by a setup re-run.
+  //
+  // cinatra#260 Step 3 — OWNERSHIP-GATED preserve. When the later
+  // `ensureDevPublicMcpUrl` step is the authority for the auto-provisioned
+  // dev-main Funnel (dev mode + no operator URL), the "preserve existing"
+  // branch must NOT carry forward an auto-provisioned URL whose liveness has
+  // not yet been re-validated — a dead `tailscale-auto`/`tailscale-funnel`
+  // hostname would otherwise survive the re-run. Those sources are released
+  // here; the Step-3 helper re-validates by source/ownership and rewrites or
+  // replaces. Operator-managed ("manual") + legacy sources still carry forward.
+  const autoProvisionedSource =
+    current?.publicBaseUrlSource === "tailscale-auto" ||
+    current?.publicBaseUrlSource === "tailscale-funnel";
+  const releaseForOwnershipReValidation =
+    options.ownershipGated === true && autoProvisionedSource;
   const currentIsUsable =
-    current?.publicBaseUrlSource !== "cli" && Boolean(currentPublicBaseUrl);
+    current?.publicBaseUrlSource !== "cli" &&
+    !releaseForOwnershipReValidation &&
+    Boolean(currentPublicBaseUrl);
   // Never auto-promote a localhost URL to "manual" — `publicBaseUrl` falls
   // back to BETTER_AUTH_URL which defaults to http://localhost:3000. Marking
   // localhost as the public MCP URL would point hosted LLM MCP clients at
@@ -1729,6 +1745,25 @@ function resolveLocalOrigin(env) {
 // must NOT hang `cinatra setup dev` — on timeout we classify "app-down" (the
 // JWKS state is unknown, so we never heal/delete) and let setup continue.
 const TOKEN_MINT_PROBE_TIMEOUT_MS = 5000;
+
+// cinatra#260 Step 3 — finite safety bounds for the Docker steps invoked by
+// the dev-tunnel auto-bring-up path (`cinatra setup dev` → ensureDevPublicMcpUrl
+// → runDevTunnel("start")). These are NOT normal-case limits (a cold image
+// build legitimately takes minutes); they exist so a HUNG docker can never
+// block setup indefinitely. On timeout spawnSync kills the child and returns
+// `error.code === "ETIMEDOUT"`, surfaced as a soft-failed bring-up.
+const WAYFLOW_BUILD_TIMEOUT_MS = 600_000; // 10m — cold image build ceiling
+const COMPOSE_UP_TIMEOUT_MS = 120_000; // 2m — `compose up -d tailscale` ceiling
+// Per-`docker compose exec … tailscale status` ceiling. A single status read
+// is sub-second; cap it so a HUNG exec is killed and the polling loop's
+// `timeoutMs` deadline always stays reachable (a stuck exec must never make
+// `waitForTailscaleFunnelUrl` — and thus setup — hang).
+const TAILSCALE_STATUS_SPAWN_TIMEOUT_MS = 10_000; // 10s
+// Ceiling for the fast docker-CLI metadata probes (`compose version`,
+// `compose ps`, `image inspect`) that the setup auto-bring-up path now reaches
+// before the build/up/status calls. Sub-second normally; a hung docker CLI is
+// killed so `cinatra setup dev` can never block on these probes.
+const DOCKER_CLI_PROBE_TIMEOUT_MS = 15_000; // 15s
 
 /**
  * Mint one real `client_credentials` token at the local OAuth token endpoint
@@ -2585,6 +2620,16 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       env.BETTER_AUTH_URL ??
       env.NEXT_PUBLIC_BETTER_AUTH_URL,
   );
+  // cinatra#260 Step 3 — an EXPLICIT public MCP URL the operator set via env.
+  // Distinct from `publicBaseUrl`, which falls back to the localhost
+  // BETTER_AUTH_URL; only `MCP_PUBLIC_BASE_URL` / `APP_PUBLIC_URL` are operator
+  // intent to PUBLISH. When present (and non-localhost) the dev-main
+  // self-establish step stands down (codex must-fix: respect operator URLs).
+  const explicitOperatorPublicUrl =
+    normalizeOptionalUrl(env.MCP_PUBLIC_BASE_URL) ??
+    normalizeOptionalUrl(env.APP_PUBLIC_URL);
+  const hasExplicitOperatorPublicUrl =
+    Boolean(explicitOperatorPublicUrl) && !isLocalhostUrl(explicitOperatorPublicUrl);
   const expectedRuntimeMode = mode === "prod" ? "production" : "development";
 
   if (runtimeMode !== expectedRuntimeMode) {
@@ -2640,7 +2685,18 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     });
     const defaultOrg = await ensureDefaultOrganization(client);
     const nangoSettings = await ensureNangoSettings(client, schemaName, bootstrapNangoSettings);
-    const mcpSettings = await ensureMcpSettings(client, schemaName, publicBaseUrl);
+    // cinatra#260 Step 3 — ownership-gate the "preserve existing" branch so a
+    // dead auto-provisioned (tailscale-auto/-funnel) URL is NOT carried forward
+    // in dev mode: it is ALWAYS superseded — either by an incoming explicit
+    // operator URL (which then wins via the `incomingIsUsable` branch) or by
+    // the later `ensureDevPublicMcpUrl` re-validation. Releasing it here (vs
+    // preserving) is what lets an operator's `MCP_PUBLIC_BASE_URL` actually
+    // replace a stale auto URL in the DB (codex must-fix). Operator-managed
+    // ("manual") + legacy URLs still preserve as before.
+    const ownershipGated = mode === "dev";
+    const mcpSettings = await ensureMcpSettings(client, schemaName, publicBaseUrl, {
+      ownershipGated,
+    });
     const selfClient = await ensureSelfMcpClient(client, schemaName, mcpSettings);
     const llmAccess = await ensureLlmMcpAccess(client, schemaName, mcpSettings, mode);
     // Self-healing decryptable JWKS (dev only). Sequenced AFTER the OAuth-client
@@ -2655,6 +2711,40 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
         console.warn(
           `⚠ JWKS self-heal failed unexpectedly (continuing): ${err && err.message ? err.message : err}`,
         );
+      }
+    }
+    // cinatra#260 Step 3 — self-establishing + self-healing public MCP URL
+    // (dev only). Sequenced AFTER the OAuth/JWKS steps. Verifies the stored
+    // `publicBaseUrl` is OWNED by source/ownership validation (live registered
+    // Self.DNSName matches the predicted hostname — NOT a reachability probe,
+    // so a fresh un-propagated URL is never torn down), (re)writes it from the
+    // live DNSName when owned, and AUTO-BRINGS-UP the dev-main Funnel when it
+    // is missing/down (owner decision). Strictly conditional + soft-fail: a
+    // bring-up failure becomes a LOUD warning below, NEVER an aborted setup.
+    let publicMcpUrl = null;
+    if (mode === "dev") {
+      try {
+        publicMcpUrl = await ensureDevPublicMcpUrl({
+          dbUrl: connectionString,
+          schemaName,
+          env,
+          operatorUrl: { url: hasExplicitOperatorPublicUrl ? explicitOperatorPublicUrl : null },
+        });
+      } catch (err) {
+        // Defensive — the helper never throws past its boundary, but any
+        // escape must not abort setup.
+        console.warn(
+          `⚠ Public MCP URL self-establish failed unexpectedly (continuing): ${
+            err && err.message ? err.message : err
+          }`,
+        );
+        publicMcpUrl = {
+          status: "errored",
+          owned: false,
+          broughtUp: false,
+          publicBaseUrl: null,
+          fixHint: "cinatra dev tunnel start",
+        };
       }
     }
     const userCount = await readUserCount(client);
@@ -2695,7 +2785,19 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
           : "not configured"
       }`,
     );
-    console.log(`- MCP public base URL: ${mcpSettings.next.publicBaseUrl ?? "not configured"}`);
+    // Step 3 establishes/re-validates the URL AFTER `mcpSettings.next` was
+    // computed, so prefer its result for the summary. `null` means the step
+    // did not establish an owned URL → fall back to the row value.
+    const effectivePublicBaseUrl =
+      (publicMcpUrl && publicMcpUrl.publicBaseUrl) ?? mcpSettings.next.publicBaseUrl ?? null;
+    console.log(`- MCP public base URL: ${effectivePublicBaseUrl ?? "not configured"}`);
+    if (publicMcpUrl) {
+      console.log(
+        `- Public MCP URL health: ${publicMcpUrl.status}${
+          publicMcpUrl.broughtUp ? " (auto-brought-up the dev-main Funnel)" : ""
+        }`,
+      );
+    }
     console.log(`- MCP self client: ${selfClient.clientId}`);
     if (llmAccess) {
       console.log(`- LLM MCP access: ${LLM_MCP_PROVIDERS.map((p) => p.id).join(", ")} (dev only)`);
@@ -2704,6 +2806,21 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
     }
     if (jwksHeal) {
       console.log(`- JWKS health: ${jwksHeal.status}${typeof jwksHeal.deleted === "number" && jwksHeal.deleted > 0 ? ` (regenerated ${jwksHeal.deleted})` : ""}`);
+    }
+    // cinatra#260 Step 3 — LOUD actionable warning when no public MCP URL could
+    // be established. Naming the ONE command to fix it keeps setup usable for
+    // developers who don't need the public URL (they get this warning, not a
+    // failure or hang). Suppressed when an operator URL is in force or an owned
+    // URL was (re)established.
+    if (publicMcpUrl && !publicMcpUrl.owned && publicMcpUrl.fixHint) {
+      console.warn(
+        `\n⚠ Public MCP URL not established (status: ${publicMcpUrl.status}).\n` +
+          `  Hosted LLM MCP clients (e.g. the OpenAI connector) cannot reach this\n` +
+          `  dev instance until a public URL is set. To establish it, run:\n` +
+          `      ${publicMcpUrl.fixHint}\n` +
+          `  (Or paste an operator-managed public URL at\n` +
+          `   /configuration/development?tab=tunnel.) Setup is otherwise complete.\n`,
+      );
     }
     console.log(
       userCount === 0
@@ -5037,6 +5154,11 @@ function isComposeAvailable() {
     const out = spawnSync("docker", ["compose", "version"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      // Bounded (cinatra#260 Step 3): this metadata probe is now on the
+      // `cinatra setup dev` auto-bring-up path — a hung docker CLI must not
+      // block setup. On timeout spawnSync returns non-zero/`error` → treated as
+      // "not available" by the `status === 0` check.
+      timeout: DOCKER_CLI_PROBE_TIMEOUT_MS,
     });
     return out.status === 0;
   } catch {
@@ -5074,9 +5196,11 @@ function isComposeProjectUp(projectName) {
   const result = spawnSync(
     "docker",
     ["compose", "-p", projectName, "ps", "--status=running", "--format", "{{.Name}}"],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    // Bounded (cinatra#260 Step 3): now on the setup auto-bring-up path. On
+    // timeout, non-zero/`error` status → treated as "not up".
+    { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: DOCKER_CLI_PROBE_TIMEOUT_MS },
   );
-  if (result.status !== 0) return false;
+  if (result.error || result.status !== 0) return false;
   const lines = (result.stdout ?? "").trim().split("\n").filter((l) => l.length > 0);
   return lines.length > 0;
 }
@@ -5112,18 +5236,27 @@ function ensureWayflowImage({ forceRebuild = false, repoRoot } = {}) {
   const inspect = spawnSync(
     "docker",
     ["image", "inspect", "cinatra-wayflow:local"],
-    { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" },
+    // Bounded (cinatra#260 Step 3): now on the setup auto-bring-up path. On
+    // timeout, non-zero/`error` → falls through to the (bounded) build.
+    { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: DOCKER_CLI_PROBE_TIMEOUT_MS },
   );
   if (inspect.status === 0 && !forceRebuild) return;
   console.log("Building cinatra-wayflow:local image (one-time per host)...");
   const build = spawnSync(
     "docker",
     ["build", "-t", "cinatra-wayflow:local", path.join(repoRoot, "docker", "wayflow")],
-    { stdio: ["ignore", "inherit", "inherit"] },
+    // Finite safety bound (cinatra#260 Step 3): a HUNG docker build must not
+    // block forever — the dev-tunnel auto-bring-up from `cinatra setup dev`
+    // calls this path, and setup must never hang. Generous (10m) so a normal
+    // cold build is unaffected; on timeout spawnSync kills the child and
+    // returns a non-zero/`error` result → the throw below surfaces it.
+    { stdio: ["ignore", "inherit", "inherit"], timeout: WAYFLOW_BUILD_TIMEOUT_MS },
   );
-  if (build.status !== 0) {
+  if (build.error || build.status !== 0) {
     throw new Error(
-      "docker build of cinatra-wayflow:local failed. Re-run with --rebuild-wayflow once the underlying error is fixed.",
+      "docker build of cinatra-wayflow:local failed" +
+        (build.error?.code === "ETIMEDOUT" ? " (timed out)" : "") +
+        ". Re-run with --rebuild-wayflow once the underlying error is fixed.",
     );
   }
 }
@@ -5202,6 +5335,337 @@ function loadTailscaleApiModule() {
 }
 function loadTailscaleHostnameModule() {
   return loadDevCliModule("tailscale-hostname");
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#260 Step 3 — self-establishing + self-healing public MCP URL.
+//
+// `runSetup("dev")` calls `ensureDevPublicMcpUrl` AFTER the OAuth/JWKS steps.
+// The write path (token mint → public URL → provider reaches /api/mcp → CMS
+// write) silently rots when the stored `publicBaseUrl` points at a node that
+// is no longer registered (a torn-down or never-established dev-main Funnel).
+// This step makes the URL VERIFY-BEFORE-REUSE and SELF-HEAL.
+//
+// HARD GATES (all must hold, else the helper SKIPS without side effect):
+//   - dev mode only (caller passes mode === "dev"),
+//   - NO operator/env override (`MCP_PUBLIC_BASE_URL` / `APP_PUBLIC_URL`, or a
+//     stored `publicBaseUrlSource === "manual"`) — we never clobber a URL the
+//     operator manages by hand,
+//   - the runtime config + DB connection are dev-shaped.
+//
+// OWNERSHIP / LIVENESS — codex must-fix: a fresh node's Funnel URL is written
+// OPTIMISTICALLY before DNS/cert propagation, so a just-provisioned URL that
+// NXDOMAINs is NOT dead. We therefore validate by SOURCE/OWNERSHIP (does the
+// node's live registered `Self.DNSName` match `deriveDevTailscaleHostname`?),
+// reusing `waitForTailscaleFunnelUrl` + `verifyRegisteredHostnameMatchesPrediction`
+// — NEVER a reachability/HTTP probe. No poller: ONE bounded read at setup.
+//
+// OWNER DECISION — AUTO-BRING-UP: when the URL is missing/unowned and the
+// dev-main sidecar is DOWN, setup brings the Funnel up via `runDevTunnel("start")`
+// (bounded by its existing 60s `waitForTailscaleFunnelUrl` cap). Strictly
+// conditional + soft-fail: any failure → a LOUD actionable warning, NEVER an
+// aborted setup. Setup stays usable for developers who don't need the public
+// URL (they get a warning, not a hang/failure).
+//
+// Returns a status object (never throws past this boundary) for the runSetup
+// summary. SECRET BOUNDARY: statuses/booleans/hostnames only — never a token.
+//
+// @param {object} args
+// @param {string} args.dbUrl  resolved SUPABASE_DB_URL
+// @param {string} args.schemaName  resolved SUPABASE_SCHEMA (codex must-fix:
+//   the write uses THIS, never a hardcoded "cinatra")
+// @param {Record<string,string>} args.env  collectEnvironment(repoRoot)
+// @param {{ url: string | null }} args.operatorUrl  the operator/env override
+//   resolved by runSetup (null when none / localhost-only)
+// @param {object} [args.deps]  test seams for the non-pure boundaries (Docker /
+//   Tailscale / tunnel bring-up / DB). DEFAULTS wire to the real module
+//   functions so production behavior is identical; the vitest suite overrides
+//   them to drive every branch hermetically (no Docker, no live DB).
+// @returns {Promise<{ status: string, owned: boolean, broughtUp: boolean,
+//   publicBaseUrl: string | null, fixHint: string | null }>}
+async function ensureDevPublicMcpUrl({ dbUrl, schemaName, env, operatorUrl, deps = {} }) {
+  const resolvedSchema = schemaName?.trim() || "cinatra";
+
+  // Non-pure boundaries, injectable for hermetic tests. Each defaults to the
+  // real implementation — production callers pass no `deps`.
+  const composePathExists = deps.composePathExists ?? ((p) => existsSync(p));
+  const composeAvailable = deps.composeAvailable ?? (() => isComposeAvailable());
+  const composeProjectUp = deps.composeProjectUp ?? ((p) => isComposeProjectUp(p));
+  const readFunnel = deps.waitForTailscaleFunnelUrl ?? waitForTailscaleFunnelUrl;
+  const verifyHostname =
+    deps.verifyRegisteredHostnameMatchesPrediction ??
+    verifyRegisteredHostnameMatchesPrediction;
+  const bringUpTunnel = deps.runDevTunnel ?? runDevTunnel;
+  const writeUrl = deps.writeClonePublicBaseUrl ?? writeClonePublicBaseUrl;
+  const readStoredSettings =
+    deps.readStoredMcpSettings ??
+    (async (connString, schema) => {
+      const client = createClient(connString);
+      try {
+        await client.connect();
+        return await readMetadataValue(client, schema, MCP_SETTINGS_KEY, {});
+      } catch {
+        return {};
+      } finally {
+        await client.end().catch(() => null);
+      }
+    });
+
+  // GATE 1 — operator-supplied env URL wins.
+  // Only an EXPLICIT public URL counts as operator-supplied. BETTER_AUTH_URL /
+  // NEXT_PUBLIC_BETTER_AUTH_URL default to http://localhost:3000, which is NOT
+  // a public MCP URL — runSetup already folds those into `operatorUrl`, but we
+  // re-derive the explicit signal here so a localhost fallback never blocks
+  // self-heal.
+  const explicitOperatorUrl =
+    normalizeOptionalUrl(env.MCP_PUBLIC_BASE_URL) ??
+    normalizeOptionalUrl(env.APP_PUBLIC_URL) ??
+    // Belt-and-suspenders: honor any operator URL runSetup already resolved.
+    (operatorUrl?.url ?? null);
+  if (explicitOperatorUrl && !isLocalhostUrl(explicitOperatorUrl)) {
+    // RECONCILE the DB to the operator URL (codex must-fix): a stale
+    // auto-provisioned (tailscale-auto/-funnel) row must not survive while the
+    // summary reports the operator URL. ensureMcpSettings already releases the
+    // auto row + writes the incoming operator URL earlier in runSetup, but we
+    // re-assert it here into the RESOLVED schema, tagged "manual" (operator-
+    // owned), so the DB is authoritatively the operator URL. Soft-fail.
+    if (dbUrl) {
+      try {
+        await writeUrl(dbUrl, explicitOperatorUrl, {
+          source: "manual",
+          schemaName: resolvedSchema,
+        });
+      } catch (err) {
+        console.warn(
+          `⚠ Public MCP URL: failed to reconcile the operator URL into the DB (continuing): ${
+            err && err.message ? err.message : err
+          }`,
+        );
+      }
+    }
+    return {
+      status: "operator-url",
+      owned: true,
+      broughtUp: false,
+      publicBaseUrl: explicitOperatorUrl,
+      fixHint: null,
+    };
+  }
+
+  if (!dbUrl) {
+    return {
+      status: "skipped-no-db",
+      owned: false,
+      broughtUp: false,
+      publicBaseUrl: null,
+      fixHint: null,
+    };
+  }
+
+  // Read the currently-stored URL + its source from THIS schema's metadata.
+  const current = (await readStoredSettings(dbUrl, resolvedSchema)) ?? {};
+  const storedUrl = normalizeOptionalUrl(current?.publicBaseUrl);
+  const storedSource =
+    current && typeof current === "object" ? current.publicBaseUrlSource ?? null : null;
+
+  // GATE 2 — a stored operator-managed ("manual") URL is the operator's to
+  // own. Never override it (codex must-fix: respect operator URLs). A null /
+  // localhost manual URL is not a real public URL, so it does NOT block heal.
+  if (storedSource === "manual" && storedUrl && !isLocalhostUrl(storedUrl)) {
+    return {
+      status: "operator-url",
+      owned: true,
+      broughtUp: false,
+      publicBaseUrl: storedUrl,
+      fixHint: null,
+    };
+  }
+
+  // --- Ownership read: is the dev-main Funnel up AND registered under the
+  // predicted hostname? Reuse the dev-tunnel slug + path builders so this
+  // reads the EXACT compose project the tunnel manages.
+  const DEV_MAIN_SLUG = "dev-main";
+  const DEV_MAIN_INDEX = 0;
+  const composePath = cloneComposePath(DEV_MAIN_SLUG);
+  const projectName = cloneComposeProjectName(DEV_MAIN_SLUG, DEV_MAIN_INDEX);
+
+  // Probe the live registered DNSName ONLY when the project is up — a cheap
+  // `isComposeProjectUp` short-circuit avoids the ~3s wait loop when down.
+  let registeredDnsName = null;
+  let funnelUrl = null;
+  const sidecarUp =
+    composePathExists(composePath) && composeAvailable() && composeProjectUp(projectName);
+  if (sidecarUp) {
+    try {
+      const tailscaleFunnel = await readFunnel({
+        projectName,
+        composePath,
+        composeEnv: process.env,
+        // Short bounded READ — the node is already registered if up; we are not
+        // waiting for a fresh join (that is auto-bring-up's job, with its own
+        // 60s cap). One-shot, NOT a poller.
+        timeoutMs: 3_000,
+      });
+      registeredDnsName = tailscaleFunnel?.registeredDnsName ?? null;
+      funnelUrl = tailscaleFunnel?.url ?? null;
+    } catch {
+      registeredDnsName = null;
+      funnelUrl = null;
+    }
+  }
+
+  // SOURCE/OWNERSHIP validation — NOT reachability. Matches → owned; a fresh
+  // un-propagated URL still validates here because we compare node identity,
+  // never DNS resolution.
+  const hostnameCheck = await verifyHostname({
+    registered: registeredDnsName,
+    dbUrl,
+    schema: resolvedSchema,
+  });
+
+  if (sidecarUp && shouldWritePublicBaseUrl({ funnelUrl, hostnameCheck })) {
+    // OWNED. (Re)write `publicBaseUrl` from the live DNSName into THIS schema —
+    // idempotent: a matching stored URL is rewritten to the identical value; a
+    // missing/dead one is replaced. Tagged `tailscale-auto` (the dev-main
+    // self-establish source; same tag the dev tab uses for auto-provisioned).
+    try {
+      await writeUrl(dbUrl, funnelUrl, {
+        source: "tailscale-auto",
+        schemaName: resolvedSchema,
+      });
+      return {
+        status: storedUrl === funnelUrl ? "owned" : "rewritten",
+        owned: true,
+        broughtUp: false,
+        publicBaseUrl: funnelUrl,
+        fixHint: null,
+      };
+    } catch (err) {
+      // Ownership was confirmed but the AUTHORITATIVE write failed → nothing
+      // was reliably (re)established in THIS schema's DB row (the prior auto URL
+      // may have just been released by ensureMcpSettings, leaving it empty).
+      // Report NOT owned so the loud summary warning fires (codex must-fix: a
+      // write failure must never be reported as established/owned).
+      console.warn(
+        `⚠ Public MCP URL: ownership confirmed but the write failed (continuing): ${
+          err && err.message ? err.message : err
+        }`,
+      );
+      return {
+        status: "write-failed",
+        owned: false,
+        broughtUp: false,
+        publicBaseUrl: null,
+        fixHint: "cinatra dev tunnel start",
+      };
+    }
+  }
+
+  // --- NOT owned. Either nothing is up, or the up node's hostname does not
+  // match (a collision-suffixed dead URL). AUTO-BRING-UP the Funnel (owner
+  // decision). Strictly conditional (dev + no operator URL + definite
+  // ownership failure, all already established above) + SOFT-FAIL.
+  if (sidecarUp && !hostnameCheck.ok) {
+    // Sidecar up but hostname mismatched (MagicDNS collision): a (re)start is
+    // unlikely to fix a collision and could surprise the operator. Do NOT
+    // auto-restart; warn loud + name an ACTIONABLE fix command. The collision
+    // wants a tunnel stop+start (drops the colliding node, re-registers under
+    // the predicted hostname), so `dev tunnel stop && dev tunnel start` is the
+    // establishing command — NOT `status`, which only diagnoses.
+    return {
+      status: "hostname-mismatch",
+      owned: false,
+      broughtUp: false,
+      publicBaseUrl: null,
+      fixHint: "cinatra dev tunnel stop && cinatra dev tunnel start",
+    };
+  }
+
+  // Sidecar down → bring it up. `runDevTunnel("start")` owns the bounded 60s
+  // wait + its own optimistic write; it throws on no-authkey / docker errors.
+  let broughtUp = false;
+  try {
+    await bringUpTunnel(["start"]);
+    broughtUp = true;
+  } catch (err) {
+    return {
+      status: "bring-up-failed",
+      owned: false,
+      broughtUp: false,
+      publicBaseUrl: null,
+      fixHint: "cinatra dev tunnel start",
+      reason: err && err.message ? err.message : String(err),
+    };
+  }
+
+  // After bring-up, re-derive ownership ONE-SHOT and write the URL into the
+  // RESOLVED schema (runDevTunnel writes into the hardcoded "cinatra" schema;
+  // when this dev instance uses a different schema, THIS write is the
+  // authoritative one — codex must-fix: honor schemaName).
+  let postRegistered = null;
+  let postFunnelUrl = null;
+  if (composePathExists(composePath) && composeAvailable() && composeProjectUp(projectName)) {
+    try {
+      const tailscaleFunnel = await readFunnel({
+        projectName,
+        composePath,
+        composeEnv: process.env,
+        timeoutMs: 3_000,
+      });
+      postRegistered = tailscaleFunnel?.registeredDnsName ?? null;
+      postFunnelUrl = tailscaleFunnel?.url ?? null;
+    } catch {
+      postRegistered = null;
+      postFunnelUrl = null;
+    }
+  }
+  const postCheck = await verifyHostname({
+    registered: postRegistered,
+    dbUrl,
+    schema: resolvedSchema,
+  });
+  if (shouldWritePublicBaseUrl({ funnelUrl: postFunnelUrl, hostnameCheck: postCheck })) {
+    try {
+      await writeUrl(dbUrl, postFunnelUrl, {
+        source: "tailscale-auto",
+        schemaName: resolvedSchema,
+      });
+    } catch (err) {
+      // The Funnel is up + owned, but the AUTHORITATIVE resolved-schema write
+      // failed — so NOTHING was established in THIS schema. Report it as
+      // not-owned so the loud summary warning fires (codex must-fix: a write
+      // failure must not be reported as "established").
+      console.warn(
+        `⚠ Public MCP URL: brought the Funnel up but the schema-resolved write failed (continuing): ${
+          err && err.message ? err.message : err
+        }`,
+      );
+      return {
+        status: "established-write-failed",
+        owned: false,
+        broughtUp,
+        publicBaseUrl: null,
+        fixHint: "cinatra dev tunnel start",
+      };
+    }
+    return {
+      status: "established",
+      owned: true,
+      broughtUp,
+      publicBaseUrl: postFunnelUrl,
+      fixHint: null,
+    };
+  }
+
+  // Brought up but no owned URL surfaced within the bound (propagation timing
+  // or collision). Soft-fail → warn + name the establishing fix command.
+  return {
+    status: "established-unverified",
+    owned: false,
+    broughtUp,
+    publicBaseUrl: null,
+    fixHint: "cinatra dev tunnel start",
+  };
 }
 
 async function runCloneStart(argv) {
@@ -5834,7 +6298,7 @@ async function runDevTunnel(argv) {
         await client.connect();
         const current = await readMetadataValue(
           client,
-          "cinatra",
+          mainSchema,
           MCP_SETTINGS_KEY,
           {},
         );
@@ -5892,7 +6356,7 @@ async function runDevTunnel(argv) {
         await client.connect();
         const current = await readMetadataValue(
           client,
-          "cinatra",
+          mainSchema,
           MCP_SETTINGS_KEY,
           {},
         );
@@ -5907,7 +6371,7 @@ async function runDevTunnel(argv) {
       }
       if (src === "tailscale-auto" || src === "tailscale-funnel") {
         try {
-          await writeClonePublicBaseUrl(mainDbUrl, null);
+          await writeClonePublicBaseUrl(mainDbUrl, null, { schemaName: mainSchema });
           console.log(
             "cinatra dev tunnel stopped for main; publicBaseUrl cleared.",
           );
@@ -6056,13 +6520,22 @@ async function runDevTunnel(argv) {
     env: composeEnv,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    // Finite safety bound (cinatra#260 Step 3): the auto-bring-up from `cinatra
+    // setup dev` calls this — a hung `compose up` must not block setup forever.
+    // On timeout spawnSync kills the child; the throw below surfaces it (soft-
+    // failed by the setup caller).
+    timeout: COMPOSE_UP_TIMEOUT_MS,
   });
   const upStdout = scrubTailscaleAuthkey(upResult.stdout ?? "", tsAuthkey);
   const upStderr = scrubTailscaleAuthkey(upResult.stderr ?? "", tsAuthkey);
   if (upStdout) process.stdout.write(upStdout);
   if (upStderr) process.stderr.write(upStderr);
-  if (upResult.status !== 0) {
-    throw new Error(`docker compose up failed (exit ${upResult.status}).`);
+  if (upResult.error || upResult.status !== 0) {
+    throw new Error(
+      `docker compose up failed${
+        upResult.error?.code === "ETIMEDOUT" ? " (timed out)" : ` (exit ${upResult.status})`
+      }.`,
+    );
   }
 
   // Same shared path as runCloneStart: derive funnelUrl → guard on the RAW
@@ -6092,7 +6565,10 @@ async function runDevTunnel(argv) {
     const urlSource =
       tailscaleAuthkeySource === "nango" ? "tailscale-auto" : "tailscale-funnel";
     if (shouldWritePublicBaseUrl({ funnelUrl, hostnameCheck })) {
-      await writeClonePublicBaseUrl(mainDbUrl, funnelUrl, { source: urlSource });
+      // Honor the resolved SUPABASE_SCHEMA (cinatra#260 Step 3 codex must-fix):
+      // a non-default-schema dev main must NOT have its publicBaseUrl written
+      // into a hardcoded "cinatra" schema as a side effect.
+      await writeClonePublicBaseUrl(mainDbUrl, funnelUrl, { source: urlSource, schemaName: mainSchema });
       // A detached reachability poll is architecturally incoherent in a
       // one-shot non-daemon CLI: the process exits on event-loop drain and the
       // unref'd inter-iteration timer makes the loop unreachable after the
@@ -6194,7 +6670,17 @@ async function waitForTailscaleFunnelUrl({ projectName, composePath, composeEnv,
     const result = spawnSync(
       "docker",
       ["compose", "-p", projectName, "-f", composePath, "exec", "-T", "tailscale", "tailscale", "status", "--json"],
-      { env: composeEnv, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      // Per-spawn timeout (cinatra#260 Step 3 codex must-fix): a HUNG
+      // `docker compose exec` would otherwise never let the `timeoutMs` loop
+      // deadline be reached, so `cinatra setup dev` auto-bring-up could hang.
+      // A single status read is fast; cap it well under the loop interval so a
+      // stuck exec is killed and the loop's deadline check stays authoritative.
+      {
+        env: composeEnv,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: TAILSCALE_STATUS_SPAWN_TIMEOUT_MS,
+      },
     );
     if (result.status === 0 && result.stdout) {
       try {
@@ -6428,17 +6914,25 @@ async function autoMintTailscaleAuthKeyFromNango(cloneConnString) {
  * `{ source: "tailscale-auto" }` so the dev tab can distinguish
  * operator-pasted from auto-provisioned URLs.
  *
+ * `options.schemaName` selects the workspace schema the metadata row lives in.
+ * It DEFAULTS to `"cinatra"` so every pre-existing caller (clone start/stop,
+ * dev-tunnel) is byte-unchanged. The `cinatra#260` Step-3 setup helper
+ * (`ensureDevPublicMcpUrl`) passes the runtime-resolved `SUPABASE_SCHEMA` so a
+ * non-default-schema dev instance writes the URL into its OWN schema, never a
+ * hardcoded `"cinatra"` (codex must-fix).
+ *
  * @param {string} cloneConnString
  * @param {string | null} url
- * @param {{ source?: "manual" | "tailscale-auto" | "tailscale-funnel" }} [options]
+ * @param {{ source?: "manual" | "tailscale-auto" | "tailscale-funnel", schemaName?: string }} [options]
  */
 async function writeClonePublicBaseUrl(cloneConnString, url, options) {
+  const schemaName = options?.schemaName?.trim() || "cinatra";
   const client = createClient(cloneConnString);
   await client.connect();
   try {
-    const current = await readMetadataValue(client, "cinatra", MCP_SETTINGS_KEY, {});
+    const current = await readMetadataValue(client, schemaName, MCP_SETTINGS_KEY, {});
     const next = buildMcpPublicBaseUrlRow(current, url, options);
-    await writeMetadataValue(client, "cinatra", MCP_SETTINGS_KEY, next);
+    await writeMetadataValue(client, schemaName, MCP_SETTINGS_KEY, next);
   } finally {
     await client.end().catch(() => null);
   }
@@ -7364,6 +7858,8 @@ export {
   ensureSelfMcpClient,
   ensureLlmMcpAccess,
   ensureDecryptableJwks,
+  ensureMcpSettings,
+  ensureDevPublicMcpUrl,
   probeTokenMint,
   deleteLatestJwksRow,
   resolveLocalOrigin,
