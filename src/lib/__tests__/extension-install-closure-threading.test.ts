@@ -327,21 +327,30 @@ describe("workflow install saga × materialization plan (the SECOND install path
   });
 });
 
-describe("signature backfill × closure rows", () => {
-  it("threads a row's recorded closureHash into the verdict: a served v1 signature can NEVER backfill a closure row", async () => {
+describe("signature backfill \u00d7 closure rows", () => {
+  it("recomputes the closureHash from the served plan, threads it into the verdict: a served v1 signature can NEVER backfill a closure row", async () => {
     const kp = generateExtensionSigningKeyPair();
     const v1 = signExtension({ packageName: PKG, version: VER, integrity: INTEGRITY }, kp.privateKeyPkcs8DerB64);
     const writes: unknown[] = [];
     const seenFields: unknown[] = [];
     const result = await runExtensionSignatureBackfill({
       loadTrustedKeyCount: () => 1,
-      listActiveVerdaccioRowsMissingSignature: async () => [
+      listLiveVerdaccioRowsMissingSignature: async () => [
         {
           id: "row-1",
           source: { type: "verdaccio", registryUrl: REGISTRY, packageName: PKG, version: VER, integrity: INTEGRITY, closureHash: PLAN_CLOSURE_HASH },
         },
       ],
-      resolveServedSignature: async () => v1,
+      // the registry serves the matching plan (so the recomputed hash === the
+      // row's recorded one, Case C) but only a v1 signature.
+      resolveServed: async () => ({ signature: v1, materializationPlan: transportPlan() }),
+      recomputeClosureHash: (plan, expected) => {
+        const parsed = parseMaterializationPlan(plan);
+        if (parsed.package.name !== expected.packageName || parsed.package.version !== expected.version) {
+          throw new Error("plan identity mismatch");
+        }
+        return computeClosureHash(parsed);
+      },
       verifySignature: (fields, signature) => {
         seenFields.push(fields);
         return resolveSignatureVerdict(
@@ -354,6 +363,7 @@ describe("signature backfill × closure rows", () => {
         return "written";
       },
     });
+    // the verdict was computed against the RECOMPUTED hash (not the row's trust)
     expect(seenFields[0]).toMatchObject({ closureHash: PLAN_CLOSURE_HASH });
     expect(result.written).toBe(0); // the v1 signature was REFUSED for the closure row
     expect(result.skipped).toBe(1);

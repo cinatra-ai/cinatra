@@ -64,12 +64,15 @@ const GEN_DIR = join(REPO_ROOT, "src/lib/generated");
 // loadable extension, so it remains in the manifest. The private vendor scope is in-tree.
 const fileExists = (p) => existsSync(join(REPO_ROOT, p));
 
-// Canonical host-port names — MUST mirror HOST_PORT_NAMES in
-// @cinatra-ai/sdk-extensions (host-context.ts). Kept as a literal here because
-// this is a plain .mjs build script that can't import the TS SDK; a manifest
-// declaring an unknown requestedHostPort is flagged by checkParity() so typos
-// are caught at generation, not silently treated as an ungranted (no-op) port.
-const VALID_HOST_PORTS = new Set([
+// Host-port names — a LITERAL MIRROR of HOST_PORT_NAMES in
+// @cinatra-ai/sdk-extensions (host-context.ts). The TS table is canonical; this
+// plain .mjs build script can't import the TS SDK, so it keeps a hand-maintained
+// copy. The copy is GUARDED, not trusted: a vitest parity test
+// (scripts/extensions/__tests__/host-port-tiers-parity.test.ts) imports this Set
+// and asserts it exactly equals HOST_PORT_NAMES, so any drift fails CI. A
+// manifest declaring an unknown requestedHostPort is flagged by checkParity() so
+// typos are caught at generation, not silently treated as an ungranted (no-op) port.
+export const VALID_HOST_PORTS = new Set([
   "db",
   "settings",
   "secrets",
@@ -85,6 +88,20 @@ const VALID_HOST_PORTS = new Set([
   "capabilities",
   "telemetry",
 ]);
+
+// RESERVED-tier ports — a LITERAL MIRROR of RESERVED_HOST_PORTS in
+// @cinatra-ai/sdk-extensions (host-context.ts: the ports whose HOST_PORT_TIER is
+// "reserved"). The TS HOST_PORT_TIER table is canonical; this is the same
+// guarded-parity mirror convention as VALID_HOST_PORTS above (the .mjs build
+// script can't import the TS SDK). Drift is CAUGHT, not silent: the same vitest
+// parity test (host-port-tiers-parity.test.ts) asserts this Set exactly equals
+// the SDK's derived RESERVED_HOST_PORTS, so changing the TS tier table without
+// updating this copy fails CI. A manifest declaring a reserved port in
+// requestedHostPorts is WARNED (not failed) by checkParity(): the port exists in
+// the frozen surface but is not wired, so accessing it fail-louds at runtime —
+// pre-declaring it for a future wiring is tolerated (matches the existing
+// granted-but-unwired tolerance), not build-blocked. Today: ["db"].
+export const RESERVED_HOST_PORTS = new Set(["db"]);
 
 // Read the `cinatra` manifest block of an extension for the loader fields
 // (serverEntry / requestedHostPorts) the inventory doesn't surface.
@@ -1551,11 +1568,18 @@ export async function checkParity({ presenceAware = false } = {}) {
   if (names.size !== records.length) problems.push("duplicate package in manifest");
 
   // 3) every declared requestedHostPort must be a real host-port name (catch typos
-  //    at generation rather than silently granting nothing at runtime).
+  //    at generation rather than silently granting nothing at runtime). A declared
+  //    RESERVED-tier port (the ABI-evolution port-tiering policy) is WARNED, not failed:
+  //    the port is real but unwired, so it fail-louds ("not-implemented") at runtime
+  //    — pre-declaring it for a future wiring is allowed, never build-blocked.
   for (const r of records) {
     for (const port of r.requestedHostPorts) {
       if (!VALID_HOST_PORTS.has(port)) {
         problems.push(`${r.packageName} declares unknown requestedHostPort "${port}" (not a HOST_PORT_NAMES value)`);
+      } else if (RESERVED_HOST_PORTS.has(port)) {
+        console.warn(
+          `[extension-manifest] WARN ${r.packageName} declares RESERVED requestedHostPort "${port}" — it is not wired and will fail-loud ("not-implemented") if accessed at runtime (HOST_PORT_TIER."${port}" = reserved).`,
+        );
       }
     }
   }

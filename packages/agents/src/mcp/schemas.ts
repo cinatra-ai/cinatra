@@ -180,7 +180,13 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
       type: z.enum(["leaf", "proxy", "orchestrator", "parallel", "supervisor", "iterative", "flow", "node"]).optional().describe("Agent type classification. Use to promote/demote an existing template between 'leaf' (direct execution), 'proxy' (installed external agent), and 'orchestrator' (multi-agent coordinator). 'parallel' = fan-out/map-reduce; 'supervisor' = LLM supervisor loop; 'iterative' = refinement loop. 'flow' = WayFlow multi-step orchestrator (OAS 26.1.0+). 'node' = WayFlow single-step node (OAS 26.1.0+)."),
       executionProvider: z.enum(["wayflow"]).optional().describe("Execution backend. Only 'wayflow' is accepted because LangGraph is retired. Existing DB rows with 'langgraph' or 'default' values remain readable but cannot be written via this tool."),
       packageName: z.string().optional().describe("Set the stable package identity for a proxy_v1 agent (e.g. '@cinatra/my-agent'). Can only be set once — rejected with an error if packageName is already set on the template."),
-      agentDependencies: z.record(z.string(), z.string()).optional().describe("Child agent dependencies for orchestrator templates. Maps packageName to semver range (e.g. { '@cinatra/stage-1': '^1.0.0' }). Pass {} to clear all dependencies."),
+      /**
+       * @deprecated DECLARE/WRITE surface for the legacy `cinatra.agentDependencies`
+       * vocabulary. The canonical replacement is `cinatra.dependencies`. Kept
+       * during the deprecation window for back-compat. (Removal tracked as a
+       * follow-up milestone.)
+       */
+      agentDependencies: z.record(z.string(), z.string()).optional().describe("[DEPRECATED — use the canonical cinatra.dependencies vocabulary] Child agent dependencies for orchestrator templates. Maps packageName to semver range (e.g. { '@cinatra/stage-1': '^1.0.0' }). Pass {} to clear all dependencies."),
       approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package."),
     }),
   },

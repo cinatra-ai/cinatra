@@ -108,4 +108,17 @@ describe("@cinatra-ai/sdk-extensions public surface fence", () => {
     expect(typeof publicRoot.isSdkAbiRangeSatisfied).toBe("function");
     expect(publicRoot.SDK_EXTENSIONS_ABI_VERSION).toBe("2.2.0");
   });
+
+  it("KEEPS the ABI-evolution policy metadata reachable on the root (HOST_PORT_TIER et al.)", () => {
+    // The port-tier table is author-facing POLICY metadata about the
+    // frozen surface, NOT a host-bus addressing constant — so it intentionally
+    // lives on the public root and does NOT trip the capability-id fence above.
+    expect(publicRoot.HOST_PORT_TIER).toBeTruthy();
+    expect(publicRoot.HOST_PORT_TIERS).toBeTruthy();
+    expect(publicRoot.RESERVED_HOST_PORTS).toBeTruthy();
+    // And the fence's pattern does not (and must not) match these names.
+    for (const name of ["HOST_PORT_TIER", "HOST_PORT_TIERS", "RESERVED_HOST_PORTS"]) {
+      expect(CAPABILITY_KEY_PATTERN.test(name)).toBe(false);
+    }
+  });
 });
