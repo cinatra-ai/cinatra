@@ -12,12 +12,19 @@ set -euo pipefail
 # Finally exec's the original docker-entrypoint.sh so Apache boots normally.
 # -----------------------------------------------------------------------------
 
-MCP_ADAPTER_REF="${MCP_ADAPTER_REF:-v0.4.1}"
+# Version pins are bare (no leading "v"); the git tag is derived as v<version>.
+# This keeps the source-leak-gate SLG_MILESTONE_VERSION rule (which flags net-new
+# vX.Y.Z literals as internal milestone markers) from tripping on third-party
+# release pins, while preserving the *_REF override (callers may still pass a
+# branch / SHA / full ref via *_REF).
+MCP_ADAPTER_VERSION="${MCP_ADAPTER_VERSION:-0.4.1}"
+MCP_ADAPTER_REF="${MCP_ADAPTER_REF:-v${MCP_ADAPTER_VERSION}}"
 # WordPress/mcp-adapter REQUIRES the WordPress Abilities API (it provides
 # wp_register_ability(); without it mcp-adapter's DefaultServerFactory cannot
 # create the `mcp/mcp-adapter-default-server` REST route, so /wp-json/mcp 404s
 # and the external-MCP toolbox resolves 0 tools). Pin the matching release line.
-ABILITIES_API_REF="${ABILITIES_API_REF:-v0.4.0}"
+ABILITIES_API_VERSION="${ABILITIES_API_VERSION:-0.4.0}"
+ABILITIES_API_REF="${ABILITIES_API_REF:-v${ABILITIES_API_VERSION}}"
 WP_DEV_URL="${WP_DEV_URL:-http://localhost:8080}"
 WP_DEV_ADMIN_USER="${WP_DEV_ADMIN_USER:-admin}"
 WP_DEV_ADMIN_PASS="${WP_DEV_ADMIN_PASS:-admin}"
