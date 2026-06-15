@@ -60,11 +60,20 @@ export function createBlogContentPrimitiveHandlers() {
     },
 
     "blog_post_update": async (request: PrimitiveInvocationRequest<unknown>) => {
-      // Two mutually-exclusive shapes: raw-content (re-materializes)
-      // vs refs-only (swaps the post object's artifact refs, no re-materialization).
+      // Two mutually-exclusive shapes: raw-content (re-materializes) vs refs-only
+      // (swaps the post object's artifact refs, no re-materialization). The advertised
+      // tool schema (blogPostUpdateToolSchema) is a single flat object (no top-level
+      // anyOf — OpenAI's Responses API rejects that), so the shapes are NOT separated
+      // at the schema layer: discriminate here by the PRESENCE of ANY field from
+      // either family (NOT just postArtifactId — otherwise e.g. { content,
+      // imageArtifactId } would fall into the content branch and silently drop the
+      // ref), then validate the chosen branch with its strict schema, which rejects
+      // mixed/partial payloads before any mutation.
       const raw = request.input as Record<string, unknown> | null;
-      const hasRefs = !!raw && typeof raw.postArtifactId === "string";
-      const hasContent = !!raw && (typeof raw.content === "string" || typeof raw.title === "string" || typeof raw.excerpt === "string");
+      const REFS_FIELDS = ["postArtifactId", "postRepresentationRevisionId", "imageArtifactId", "imageRepresentationRevisionId"] as const;
+      const CONTENT_FIELDS = ["title", "excerpt", "content"] as const;
+      const hasRefs = !!raw && REFS_FIELDS.some((f) => raw[f] !== undefined);
+      const hasContent = !!raw && CONTENT_FIELDS.some((f) => raw[f] !== undefined);
       if (hasRefs && hasContent) {
         return { error: "Provide either raw content OR artifact refs, not both.", code: "blog_post_update_mixed_input" };
       }

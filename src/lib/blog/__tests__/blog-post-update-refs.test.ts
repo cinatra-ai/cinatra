@@ -6,6 +6,8 @@
  *   - a MIXED input is rejected with blog_post_update_mixed_input
  */
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
+import * as updateSchemas from "../mcp/schemas";
 
 vi.mock("../store", () => ({
   readBlogPostsProjects: vi.fn(),
@@ -87,5 +89,42 @@ describe("blog_post_update refs-only", () => {
     expect(res.code).toBe("blog_post_update_mixed_input");
     expect(store.updateBlogPostDraftRefs).not.toHaveBeenCalled();
     expect(store.updateBlogPostDraftContent).not.toHaveBeenCalled();
+  });
+
+  // cinatra#246 hardening: the advertised flat schema (no top-level anyOf) widened
+  // the accepted input, so the handler must discriminate by ANY field in either
+  // family — a mix that OMITS postArtifactId must still be rejected, never silently
+  // routed to the content branch (which would strip the ref). These fail under the
+  // old postArtifactId-only guard.
+  it("handler: MIXED via content + imageArtifactId (no postArtifactId) → mixed_input, neither writer called", async () => {
+    vi.mocked(store.updateBlogPostDraftRefs).mockClear();
+    vi.mocked(store.updateBlogPostDraftContent).mockClear();
+    const res = (await call({ projectId: "p", postId: "po", content: "C", imageArtifactId: "img1" })) as Record<string, unknown>;
+    expect(res.code).toBe("blog_post_update_mixed_input");
+    expect(store.updateBlogPostDraftRefs).not.toHaveBeenCalled();
+    expect(store.updateBlogPostDraftContent).not.toHaveBeenCalled();
+  });
+
+  it("handler: MIXED via title + postRepresentationRevisionId (no postArtifactId) → mixed_input, neither writer called", async () => {
+    vi.mocked(store.updateBlogPostDraftRefs).mockClear();
+    vi.mocked(store.updateBlogPostDraftContent).mockClear();
+    const res = (await call({ projectId: "p", postId: "po", title: "T", postRepresentationRevisionId: "r9" })) as Record<string, unknown>;
+    expect(res.code).toBe("blog_post_update_mixed_input");
+    expect(store.updateBlogPostDraftRefs).not.toHaveBeenCalled();
+    expect(store.updateBlogPostDraftContent).not.toHaveBeenCalled();
+  });
+});
+
+describe("blog_post_update advertised tool schema (cinatra#246 regression)", () => {
+  it("is a flat ZodObject, not a top-level union (z.union → top-level anyOf, which OpenAI's Responses API rejects)", () => {
+    expect(updateSchemas.blogPostUpdateToolSchema).toBeInstanceOf(z.ZodObject);
+    expect(updateSchemas.blogPostUpdateToolSchema).not.toBeInstanceOf(z.ZodUnion);
+  });
+
+  it("covers both shapes' fields so neither client shape is unrepresentable", () => {
+    const shape = (updateSchemas.blogPostUpdateToolSchema as z.ZodObject<z.ZodRawShape>).shape;
+    for (const f of ["projectId", "postId", "title", "excerpt", "content", "postArtifactId", "postRepresentationRevisionId", "imageArtifactId", "imageRepresentationRevisionId"]) {
+      expect(Object.keys(shape)).toContain(f);
+    }
   });
 });
