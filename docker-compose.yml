@@ -156,6 +156,12 @@ services:
       # Reserved example.com TLD — `dev@localhost` (no dot) fails WordPress
       # is_email(), so `wp core install` errors and the site never installs.
       WP_DEV_ADMIN_EMAIL: dev@example.com
+      # Container-reachable base for the WP plugin's server-to-server calls back
+      # to the host cinatra dev server. Inside the container `localhost:3000`
+      # (the browser-facing cinatra_url) is the container's own loopback, so the
+      # /token exchange must target the host gateway instead. Mirrors the drupal
+      # + wayflow services; requires the `extra_hosts` mapping below on Linux/CI.
+      CINATRA_BASE_URL: http://host.docker.internal:3000
     volumes:
       - cinatra-wordpress:/var/www/html
       - ./dev/wordpress-plugin:/var/www/html/wp-content/plugins/cinatra
@@ -168,6 +174,12 @@ services:
     depends_on:
       wordpress-db:
         condition: service_healthy
+    # Resolve `host.docker.internal` (the CINATRA_BASE_URL host) to the host
+    # gateway. Automatic on Docker Desktop but NOT on Linux/CI, where the
+    # WP/Drupal UAT runs — without this the plugin's server-to-server /token
+    # call to the host cinatra dev server fails to connect.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # ---------------------------------------------------------------------------
   # A2A dev peer agents. OPT-IN via `--profile a2a-peers`.
@@ -467,6 +479,12 @@ services:
     depends_on:
       drupal-db:
         condition: service_healthy
+    # Resolve `host.docker.internal` (the CINATRA_BASE_URL host above) to the
+    # host gateway. Automatic on Docker Desktop but NOT on Linux/CI, where the
+    # WP/Drupal UAT runs — without this the module's server-to-server /token
+    # call to the host cinatra dev server fails to connect.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # ---- Twenty CRM stack (profile-gated; default `docker compose up` does NOT start this) ----
   # ~2 GB image pull on first start; explicit opt-in: `docker compose --profile twenty up -d twenty-server twenty-worker twenty-db twenty-redis`
