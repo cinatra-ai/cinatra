@@ -57,6 +57,13 @@ export type LocalAgentTemplateSeed = {
   status?: string;
   packageName?: string;
   packageVersion?: string;
+  /**
+   * @deprecated DECLARE/WRITE surface for the legacy `cinatra.agentDependencies`
+   * vocabulary. The canonical replacement is `cinatra.dependencies` (read via
+   * `parseManifestDependencyEdges`). Kept during the deprecation window for
+   * back-compat with the ZIP-import / registry-install seed shape. (Removal
+   * tracked as a follow-up milestone.)
+   */
   agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; undefined when manifest had no value
   type?: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "flow" | "node"; // defaults to "leaf" if omitted
   lgGraphCode?: string | null;

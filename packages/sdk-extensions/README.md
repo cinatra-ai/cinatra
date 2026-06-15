@@ -52,6 +52,55 @@ The ABI is semantic-versioned independently of the npm package version (see
 - **`2.2.0`** — added optional `nango` render-time getters: `getStatus`,
   `getFrontendConfig`, `getPrimarySavedConnection(s)`, `listConnectionRecords`.
 
+### ABI-evolution policy
+
+The port surface is **frozen**, but it evolves under a fixed policy. Each host
+port carries a lifecycle **tier** (exported as `HOST_PORT_TIER`, a
+`Record<HostPortName, HostPortTier>`; the derived reserved set is
+`RESERVED_HOST_PORTS`):
+
+| Tier | Meaning | Granting it |
+| --- | --- | --- |
+| `stable` | Wired, frozen, safe to use. | Returns the real host impl. |
+| `reserved` | Declared in the frozen surface but **not wired** yet. | Fail-loud at runtime (`"not-implemented"`) until a future MINOR wires it. |
+
+Today only **`db`** is `reserved` (the scoped, least-privilege escape hatch —
+config goes through `settings`, credentials through `secrets`). An extension may
+list a `reserved` port in `cinatra.requestedHostPorts`, but the manifest
+generator **warns** (it is not build-blocked) and any access throws at runtime.
+
+How the tier governs the version bump:
+
+- **Adding a NEW port** → ABI **MAJOR**. Older hosts don't have it; an extension
+  needing it is correctly skipped on a host below the new major.
+- **Wiring a `reserved` → `stable` port** → ABI **MINOR**. The port already
+  exists in the surface; an older host simply fail-louds it, and an extension
+  that needs the wired behaviour declares the floor (`>=` the wiring minor).
+- **Removing or reshaping a port** (changing its method signatures or privilege
+  model) → ABI **MAJOR**.
+
+`HOST_PORT_TIER` is the **canonical** tier table. The host's grant-aware factory
+derives its `"not-implemented"` branch directly from it (in-process, a real TS
+import). The build-time manifest generator (`scripts/extensions/generate-extension-manifest.mjs`)
+runs under bare Node and cannot import the TS SDK, so it keeps a **literal mirror**
+of the derived `reserved` set for its warning — that mirror is not trusted blindly:
+a vitest parity test (`scripts/extensions/__tests__/host-port-tiers-parity.test.ts`)
+asserts it exactly equals the SDK's derived `RESERVED_HOST_PORTS`, so any drift
+fails CI. Wiring a reserved port is a one-line tier flip in `HOST_PORT_TIER` (the
+host factory follows automatically); the generator's mirror is the one parity-guarded
+copy you also update, and the test will flag it if you forget.
+
+#### Future direction (not yet built)
+
+- **Minimum-minor type folding** — making the optional MINOR-added methods (e.g.
+  the 2.2.0 `nango` render getters) *non-optional* on the ctx type when an
+  extension declares a high-enough `sdkAbiRange`, so the type system enforces the
+  floor instead of feature-detection. This is a **breaking** type change (it
+  would require an ABI 3.0); the policy is documented here, the type is deferred.
+- **Grant-typed ctx** — a `ctx` parameterized by the manifest's
+  `requestedHostPorts` so an ungranted port is a *compile-time* error rather than
+  a runtime fail-loud. Deferred; runtime grant enforcement remains the boundary.
+
 ### Declaring a compatible range (`cinatra.sdkAbiRange`)
 
 A server-entry extension pins the host ABI range it needs via

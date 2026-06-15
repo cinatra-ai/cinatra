@@ -77,7 +77,19 @@ export async function resolveDependencyTree(input: {
   const maxNodes = input.maxNodes ?? 500;
   const maxDepth = input.maxDepth ?? 20;
   const conflictPolicy = input.conflictPolicy ?? "strict-reject";
-  const { scopePrefixes, packumentDepKey } = input.typeConfig;
+  const { scopePrefixes, packumentDepKey, readPackumentDeps } = input.typeConfig;
+
+  // Single read seam for a node's transitive dependency map. Default reads the
+  // legacy `cinatra[packumentDepKey]` map; a typeConfig may inject
+  // `readPackumentDeps` to resolve from a different vocabulary (e.g. the agent
+  // installer projects the canonical `cinatra.dependencies` array). Used at all
+  // three packument read sites so the two paths can never drift.
+  const readDeps = (entry: PackumentVersionEntry): Record<string, string> => {
+    if (readPackumentDeps) return readPackumentDeps(entry);
+    return (
+      (entry.cinatra?.[packumentDepKey] as Record<string, string> | undefined) ?? {}
+    );
+  };
 
   // Fail closed on a malformed allowlist: an empty list would reject
   // everything cryptically, and a prefix that does not look like "@scope/"
@@ -209,10 +221,7 @@ export async function resolveDependencyTree(input: {
         });
         pickedManifests.set(name, pickedManifest);
         // Re-enqueue children of the newer manifest.
-        const childDeps =
-          (pickedManifest.cinatra?.[packumentDepKey] as
-            | Record<string, string>
-            | undefined) ?? {};
+        const childDeps = readDeps(pickedManifest);
         const nextPath = [...path, name];
         for (const [depName, depRange] of Object.entries(childDeps)) {
           queue.push({
@@ -248,10 +257,7 @@ export async function resolveDependencyTree(input: {
     resolved.set(name, node);
     pickedManifests.set(name, pickedManifest);
 
-    const childDeps =
-      (pickedManifest.cinatra?.[packumentDepKey] as
-        | Record<string, string>
-        | undefined) ?? {};
+    const childDeps = readDeps(pickedManifest);
     const nextPath = [...path, name];
     for (const [depName, depRange] of Object.entries(childDeps)) {
       queue.push({
@@ -269,10 +275,7 @@ export async function resolveDependencyTree(input: {
   // packument manifest so the resolver output is self-describing.
   for (const [name, node] of resolved) {
     const manifest = pickedManifests.get(name);
-    const deps =
-      (manifest?.cinatra?.[packumentDepKey] as
-        | Record<string, string>
-        | undefined) ?? {};
+    const deps = manifest ? readDeps(manifest) : {};
     node.dependencies = { ...deps };
   }
 
