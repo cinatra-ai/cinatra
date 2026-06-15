@@ -474,6 +474,91 @@ export async function saveWordPressInstance(input: {
   return nextInstance;
 }
 
+/**
+ * LOCAL-DEV-ONLY recovery persist for `dev-auto-setup`.
+ *
+ * `saveWordPressInstance` re-validates over the network before it persists —
+ * it `GET`s `wp/v2/users/me` AND `wp/v2/administration`. The latter route is
+ * NOT registered by the local dev WordPress plugin surface (it 404s), so the
+ * validation throws and the FIRST wire never lands a configured instance row,
+ * which in turn blocks `dev-auto-setup` from pushing the browser widget config
+ * (`cinatra_url`/`cinatra_api_key`/`cinatra_instance_id`). The browser→cinatra
+ * widget direction does NOT depend on the cinatra→WP application-password being
+ * fully validated, so this helper lets `dev-auto-setup` persist a COMPLETE
+ * instance row from a locally minted application password WITHOUT the network
+ * validation, then best-effort syncs Nango. The reuse-boot reconcile
+ * (`ensureWordPressAppPasswordReconciled`) re-probes + re-validates on the next
+ * boot, so `lastValidatedAt` is intentionally left unset here (no false
+ * attribution).
+ *
+ * HARD-GATED to localhost: `server-only` is not a dev boundary, so this
+ * NON-VALIDATING exported persist refuses any non-local site URL. It must never
+ * become a general production affordance.
+ *
+ * SECRET BOUNDARY: never logs the username/application password.
+ */
+export async function persistLocalDevWordPressInstanceUnvalidated(input: {
+  id?: string;
+  siteUrl: string;
+  username: string;
+  applicationPassword: string;
+  name?: string;
+}): Promise<WordPressInstanceSettings> {
+  const siteUrl = normalizeSiteUrl(input.siteUrl);
+  const host = (() => {
+    try {
+      return new URL(siteUrl).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+  if (!["localhost", "127.0.0.1", "::1"].includes(host)) {
+    throw new Error("Unvalidated WordPress instance persistence is local-dev only.");
+  }
+
+  const applicationPassword = input.applicationPassword.trim();
+  if (!applicationPassword) {
+    throw new Error("Enter an application password to continue.");
+  }
+  const username = input.username.trim();
+  if (!username) {
+    throw new Error("Enter a WordPress username to continue.");
+  }
+
+  const current = getWordPressAPISettings();
+  const existing = input.id
+    ? current.instances.find((instance) => instance.id === input.id)
+    : current.instances.find((instance) => instance.siteUrl === siteUrl);
+
+  const timestamp = new Date().toISOString();
+  const instanceId = input.id?.trim() || existing?.id || crypto.randomUUID();
+  const nextInstance: WordPressInstanceSettings = {
+    id: instanceId,
+    name: input.name?.trim() || existing?.name || siteUrl,
+    siteUrl,
+    username,
+    applicationPassword,
+    providerConfigKey: existing?.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.wordpress,
+    connectionId: existing?.connectionId ?? instanceId,
+    // lastValidatedAt intentionally omitted — this row was NOT network-validated.
+    createdAt: existing?.createdAt ?? timestamp,
+    updatedAt: timestamp,
+    blogConnectorId: existing?.blogConnectorId,
+  };
+
+  writeSettings({
+    loggingEnabled: current.loggingEnabled ?? true,
+    instances: existing
+      ? current.instances.map((instance) => (instance.id === nextInstance.id ? nextInstance : instance))
+      : [nextInstance, ...current.instances.filter((instance) => instance.siteUrl !== nextInstance.siteUrl)],
+  });
+
+  // Best-effort: let content writes resolve auth through Nango. Never throws.
+  await syncWordPressInstanceToNango(nextInstance).catch(() => null);
+
+  return nextInstance;
+}
+
 export async function saveWordPressInstanceFromNangoConnection(input: {
   siteUrl: string;
   providerConfigKey: string;

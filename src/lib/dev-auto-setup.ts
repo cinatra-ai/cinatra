@@ -15,6 +15,7 @@ import {
 } from "@/lib/drupal-mcp-connection";
 import {
   saveWordPressInstance,
+  persistLocalDevWordPressInstanceUnvalidated,
   listWordPressInstances,
   readWordPressInstanceById,
 } from "@/lib/wordpress-api";
@@ -718,6 +719,128 @@ async function verifyWordPressNangoBothHalves(
   }
 }
 
+type WordPressFirstWireOutcome =
+  | { ok: true; instanceId: string; reconcile: WordPressReconcileOutcome }
+  | { ok: false; reason: string };
+
+/**
+ * First wire (no existing instance): mint an application password and land a
+ * COMPLETE local WordPress instance row, then (the caller) push the browser
+ * widget config.
+ *
+ * RESILIENCE (the #260 Step-7 fix): the happy path is the network-validated
+ * `saveWordPressInstance`. But that validation also `GET`s `wp/v2/administration`
+ * — a route the local dev WordPress plugin surface does NOT register (it 404s) —
+ * so first-wire validation throws and historically returned a hard `error` BEFORE
+ * the widget config (`cinatra_url`) was ever pushed, leaving the widget unwired.
+ * The browser→cinatra widget direction does NOT depend on the cinatra→WP
+ * application-password being fully validated, so on a `saveWordPressInstance`
+ * throw we fall back to `persistLocalDevWordPressInstanceUnvalidated`, which lands
+ * a complete instance row (all `requiredInstanceFields` non-empty, so widget
+ * stream auth accepts it) + best-effort Nango import. The next boot's reuse-path
+ * reconcile re-probes + re-validates.
+ *
+ * Returns `{ ok: false, reason }` (caller emits a hard error and does NOT push
+ * the widget config) ONLY when a COMPLETE instance row could not be persisted at
+ * all — the app-password mint failed, OR BOTH the validated save AND the
+ * unvalidated fallback threw. Pushing `cinatra_instance_id` for an unpersisted
+ * row would dangle: widget-stream auth has no configured instance to authorize.
+ *
+ * SECRET BOUNDARY: never logs the minted application password; failure reasons
+ * are fixed host-owned labels (never a lower-layer error message).
+ */
+export async function firstWireWordPressInstance(): Promise<WordPressFirstWireOutcome> {
+  const appPassword = mintWordPressAppPassword();
+  if (!appPassword) {
+    return { ok: false, reason: "wp user application-password create failed (no porcelain output)" };
+  }
+
+  const providerConfigKey = CINATRA_NANGO_PROVIDER_CONFIG_KEYS.wordpress;
+  // Generate the instance id up-front so the validated-save and the unvalidated
+  // fallback land the SAME id (no dangling/duplicated instance_id).
+  const instanceId = randomUUID();
+
+  let persistedId: string = instanceId;
+  let connectionId: string = instanceId;
+  let validated = false;
+  try {
+    const saved = await saveWordPressInstance({
+      id: instanceId,
+      siteUrl: LOCAL_WORDPRESS.siteUrl,
+      username: LOCAL_WORDPRESS.adminUser,
+      applicationPassword: appPassword,
+    });
+    persistedId = saved.id;
+    connectionId = saved.connectionId ?? saved.id;
+    validated = true;
+  } catch {
+    // SECRET BOUNDARY: saveWordPressInstance re-validates over the network and
+    // can throw with remote WordPress response-body text — never forward it.
+    // The validation also requires `wp/v2/administration` (404 on the local dev
+    // plugin surface), so fall back to a complete local-dev persist rather than
+    // abort the whole wire (which would leave the widget config unpushed).
+    try {
+      const persisted = await persistLocalDevWordPressInstanceUnvalidated({
+        id: instanceId,
+        siteUrl: LOCAL_WORDPRESS.siteUrl,
+        username: LOCAL_WORDPRESS.adminUser,
+        applicationPassword: appPassword,
+      });
+      persistedId = persisted.id;
+      connectionId = persisted.connectionId ?? persisted.id;
+    } catch {
+      // Even the unvalidated local-dev persist failed — NO complete instance row
+      // landed, so this is genuinely unrecoverable: the caller must hard-error
+      // and NOT push the widget config (a `cinatra_instance_id` with no backing
+      // configured-instance row would never authorize against widget-stream auth).
+      // SECRET BOUNDARY: surface only a fixed host-owned reason.
+      return { ok: false, reason: "saveWordPressInstance failed (first wire)" };
+    }
+    console.log(
+      "[dev-auto-setup:wordpress] first-wire connection validation did not pass; persisted a local-dev instance + pushed the widget config anyway. " +
+        "WordPress MCP writes 401 until the credential validates; the next boot re-probes and reconciles.",
+    );
+  }
+
+  // BOTH-HALVES verify (codex refinement: compare username AND password) —
+  // saveWordPressInstance / the local-dev persist sync Nango best-effort, so
+  // confirm Nango actually holds the freshly minted credential.
+  const synced = await verifyWordPressNangoBothHalves(
+    { providerConfigKey, connectionId },
+    LOCAL_WORDPRESS.adminUser,
+    appPassword,
+  );
+
+  let reconcile: WordPressReconcileOutcome;
+  if (validated && synced) {
+    reconcile = { working: true, rotated: false, note: "first-wire minted + nango-synced" };
+  } else if (validated) {
+    reconcile = {
+      working: false,
+      rotated: false,
+      note: "nango-sync-failed (connector metadata + Nango out of sync)",
+    };
+    console.log(
+      "[dev-auto-setup:wordpress] first-wire app-password minted but Nango sync could not be confirmed. " +
+        "WordPress MCP writes 401 until the credential is in Nango; re-run once Nango is reachable.",
+    );
+  } else if (synced) {
+    reconcile = {
+      working: false,
+      rotated: false,
+      note: "first-wire validation unconfirmed; instance persisted + nango-synced (re-validates on a later boot)",
+    };
+  } else {
+    reconcile = {
+      working: false,
+      rotated: false,
+      note: "first-wire validation unconfirmed; instance persisted (nango sync unconfirmed; re-validates on a later boot)",
+    };
+  }
+
+  return { ok: true, instanceId: persistedId, reconcile };
+}
+
 async function autoSetupLocalWordPress(): Promise<Status> {
   if (!probeDockerContainer(LOCAL_WORDPRESS.containerName)) {
     return { status: "skipped", reason: `${LOCAL_WORDPRESS.containerName} not running (run docker compose --profile wordpress up -d)` };
@@ -775,53 +898,19 @@ async function autoSetupLocalWordPress(): Promise<Status> {
       );
     }
   } else {
-    const appPassword = mintWordPressAppPassword();
-    if (!appPassword) {
-      return {
-        status: "error",
-        reason: "wp user application-password create failed (no porcelain output)",
-      };
+    const firstWire = await firstWireWordPressInstance();
+    if (!firstWire.ok) {
+      // No COMPLETE instance row landed (mint failed, OR both the validated save
+      // AND the unvalidated fallback threw). Hard-error and do NOT push the widget
+      // config — a `cinatra_instance_id` with no backing configured-instance row
+      // would never authorize against widget-stream auth. A mere validation
+      // failure does NOT land here: it soft-proceeds via the unvalidated local-dev
+      // persist inside the helper, which keeps the widget wiring resilient.
+      return { status: "error", reason: firstWire.reason };
     }
-    try {
-      const saved = await saveWordPressInstance({
-        siteUrl: LOCAL_WORDPRESS.siteUrl,
-        username: LOCAL_WORDPRESS.adminUser,
-        applicationPassword: appPassword,
-      });
-      instanceId = saved.id;
-      created = true;
-    } catch {
-      // SECRET BOUNDARY: saveWordPressInstance re-validates over the network and
-      // can throw with remote WordPress response-body text — surface only a fixed
-      // host-owned reason.
-      return { status: "error", reason: "saveWordPressInstance failed (first wire)" };
-    }
-    // First-wire BOTH-HALVES verify: saveWordPressInstance swallows a Nango-sync
-    // failure, so confirm Nango actually holds the freshly minted credential.
-    let synced = false;
-    try {
-      const after = await getNangoCredentials(
-        CINATRA_NANGO_PROVIDER_CONFIG_KEYS.wordpress,
-        instanceId,
-        { forceRefresh: true },
-      );
-      synced =
-        !!after &&
-        typeof after === "object" &&
-        "password" in after &&
-        (after as { password?: unknown }).password === appPassword;
-    } catch {
-      synced = false;
-    }
-    reconcile = synced
-      ? { working: true, rotated: false, note: "first-wire minted + nango-synced" }
-      : { working: false, rotated: false, note: "nango-sync-failed (connector metadata + Nango out of sync)" };
-    if (!synced) {
-      console.log(
-        "[dev-auto-setup:wordpress] first-wire app-password minted but Nango sync could not be confirmed. " +
-          "WordPress MCP writes 401 until the credential is in Nango; re-run once Nango is reachable.",
-      );
-    }
+    instanceId = firstWire.instanceId;
+    created = true;
+    reconcile = firstWire.reconcile;
   }
 
   // WP-side: push the widget plugin options on EVERY run (create OR reuse) so a
@@ -832,11 +921,12 @@ async function autoSetupLocalWordPress(): Promise<Status> {
     wpCli(`option update cinatra_url ${cinatraBrowserBaseUrl()}`);
     wpCli(`option update cinatra_api_key ${auth.apiKey}`);
     wpCli(`option update cinatra_instance_id ${instanceId}`);
-  } catch (err) {
-    return {
-      status: "error",
-      reason: `wp option update cinatra_* failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+  } catch {
+    // SECRET BOUNDARY: the wp-cli command line embeds the widget api_key
+    // (`option update cinatra_api_key <key>`), and a wp-cli failure can echo the
+    // failed command in its error message — surface only a fixed host-owned
+    // reason, never the raw error.
+    return { status: "error", reason: "wp option update cinatra_* failed" };
   }
 
   // Distinguish a POSITIVELY-confirmed credential (200 probe, no note) from a

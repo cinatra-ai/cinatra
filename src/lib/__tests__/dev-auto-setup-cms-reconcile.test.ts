@@ -33,6 +33,7 @@ vi.mock("@/lib/drupal-api", () => ({
 
 vi.mock("@/lib/wordpress-api", () => ({
   saveWordPressInstance: vi.fn(async () => ({ id: "wp-1" })),
+  persistLocalDevWordPressInstanceUnvalidated: vi.fn(async () => ({ id: "wp-1" })),
   listWordPressInstances: vi.fn(async () => []),
   readWordPressInstanceById: vi.fn(() => null),
 }));
@@ -95,7 +96,11 @@ vi.mock("@/lib/twenty-keygen.mjs", () => ({
 
 import { spawnSync, execSync } from "node:child_process";
 import { saveDrupalInstance } from "@/lib/drupal-api";
-import { saveWordPressInstance, readWordPressInstanceById } from "@/lib/wordpress-api";
+import {
+  saveWordPressInstance,
+  persistLocalDevWordPressInstanceUnvalidated,
+  readWordPressInstanceById,
+} from "@/lib/wordpress-api";
 import {
   probeDrupalMcpWithBearer,
   invalidateDrupalMcpProbeCache,
@@ -108,6 +113,7 @@ import {
   trimTrailingSlashes,
   ensureDrupalRemoteKeyReconciled,
   ensureWordPressAppPasswordReconciled,
+  firstWireWordPressInstance,
 } from "@/lib/dev-auto-setup";
 
 const WIDGET_UUID = "widget-uuid-aaaa";
@@ -486,5 +492,140 @@ describe("ensureWordPressAppPasswordReconciled", () => {
     expect(r.note).toBe("re-save-failed"); // fixed host-owned label only
     expect(r.note).not.toContain("WP-BODY-LEAK");
     expect(r.note).not.toContain(FRESH_APP_PW);
+  });
+});
+
+// ===========================================================================
+// WordPress FIRST WIRE (resilient widget config — #260 Step 7)
+// ===========================================================================
+//
+// The full UAT proved that on first wire, saveWordPressInstance() throws because
+// its network validation requires `wp/v2/administration` (a route the local dev
+// WordPress plugin surface does NOT register → 404). Historically this returned
+// a hard error BEFORE the browser widget config (cinatra_url) was ever pushed,
+// so the widget never wired and the UAT's wait timed out. The fix makes first
+// wire RESILIENT: on a saveWordPressInstance throw it falls back to a complete
+// local-dev instance persist + best-effort Nango sync, so the caller can always
+// push the widget config. The cinatra→WP credential re-validates on a later boot.
+describe("firstWireWordPressInstance — resilient first wire", () => {
+  const FIRST_WIRE_PW = "wxyz ABCD efgh IJKL";
+
+  it("HAPPY PATH: validated save + Nango both-halves in sync → working, no fallback", async () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from(`${FIRST_WIRE_PW}\n`) as never); // mint
+    vi.mocked(saveWordPressInstance).mockResolvedValueOnce({
+      id: "validated-1",
+      connectionId: "validated-1",
+    } as never);
+    // post-save both-halves readback resolves to the minted credential
+    vi.mocked(getNangoCredentials).mockResolvedValueOnce({
+      username: "admin",
+      password: FIRST_WIRE_PW,
+    } as never);
+
+    const r = await firstWireWordPressInstance();
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.instanceId).toBe("validated-1");
+    expect(r.reconcile).toMatchObject({ working: true, rotated: false });
+    expect(r.reconcile.note).toMatch(/first-wire minted \+ nango-synced/);
+    // saveWordPressInstance is called with the up-front generated id (a uuid).
+    expect(saveWordPressInstance).toHaveBeenCalledWith(
+      expect.objectContaining({ siteUrl: "http://localhost:8080", username: "admin", applicationPassword: FIRST_WIRE_PW }),
+    );
+    expect(persistLocalDevWordPressInstanceUnvalidated).not.toHaveBeenCalled();
+  });
+
+  it("RESILIENCE: saveWordPressInstance throws (administration 404) → falls back to a COMPLETE local-dev persist + Nango synced; instance still lands", async () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from(FIRST_WIRE_PW) as never); // mint
+    vi.mocked(saveWordPressInstance).mockRejectedValueOnce(
+      new Error("Unable to retrieve the WordPress site title."),
+    );
+    vi.mocked(persistLocalDevWordPressInstanceUnvalidated).mockResolvedValueOnce({
+      id: "fallback-1",
+      connectionId: "fallback-1",
+      siteUrl: "http://localhost:8080",
+      username: "admin",
+      applicationPassword: FIRST_WIRE_PW,
+    } as never);
+    // post-persist both-halves readback resolves to the minted credential
+    vi.mocked(getNangoCredentials).mockResolvedValueOnce({
+      username: "admin",
+      password: FIRST_WIRE_PW,
+    } as never);
+
+    const r = await firstWireWordPressInstance();
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok");
+    // The fallback's persisted id is the source of truth for the widget config.
+    expect(r.instanceId).toBe("fallback-1");
+    // The credential is unconfirmed (validation never passed) but the instance
+    // is persisted + Nango synced — so the widget config WILL be pushed.
+    expect(r.reconcile).toMatchObject({ working: false, rotated: false });
+    expect(r.reconcile.note).toMatch(/instance persisted/);
+    // The unvalidated fallback received the SAME minted credential.
+    expect(persistLocalDevWordPressInstanceUnvalidated).toHaveBeenCalledWith(
+      expect.objectContaining({ siteUrl: "http://localhost:8080", username: "admin", applicationPassword: FIRST_WIRE_PW }),
+    );
+    // The validated save and the fallback must use the SAME up-front id.
+    const savedId = vi.mocked(saveWordPressInstance).mock.calls[0][0].id;
+    const fallbackId = vi.mocked(persistLocalDevWordPressInstanceUnvalidated).mock.calls[0][0]!.id;
+    expect(savedId).toBeTruthy();
+    expect(fallbackId).toBe(savedId);
+  });
+
+  it("SECRET BOUNDARY: a saveWordPressInstance throw whose message embeds the app-password never leaks into the surfaced note", async () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from(FIRST_WIRE_PW) as never);
+    vi.mocked(saveWordPressInstance).mockRejectedValueOnce(
+      new Error(`remote-leak-${FIRST_WIRE_PW}`),
+    );
+    vi.mocked(persistLocalDevWordPressInstanceUnvalidated).mockResolvedValueOnce({
+      id: "fallback-2",
+      connectionId: "fallback-2",
+    } as never);
+    vi.mocked(getNangoCredentials).mockResolvedValueOnce({
+      username: "admin",
+      password: FIRST_WIRE_PW,
+    } as never);
+
+    const r = await firstWireWordPressInstance();
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.reconcile.note ?? "").not.toContain("remote-leak");
+    expect(r.reconcile.note ?? "").not.toContain(FIRST_WIRE_PW);
+  });
+
+  it("HARD ERROR: an app-password MINT failure → {ok:false} with a fixed reason — caller hard-errors, never soft-proceeds, no persist attempted", async () => {
+    // wp-cli returns an Error line → mintWordPressAppPassword() → null
+    vi.mocked(execSync).mockReturnValueOnce(
+      Buffer.from("Error: could not create application password") as never,
+    );
+
+    const r = await firstWireWordPressInstance();
+
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected not-ok");
+    expect(r.reason).toBe("wp user application-password create failed (no porcelain output)");
+    expect(saveWordPressInstance).not.toHaveBeenCalled();
+    expect(persistLocalDevWordPressInstanceUnvalidated).not.toHaveBeenCalled();
+  });
+
+  it("UNRECOVERABLE: both validated save AND the unvalidated fallback throw → {ok:false} with a FIXED reason (no widget push, no secret leak)", async () => {
+    vi.mocked(execSync).mockReturnValueOnce(Buffer.from(FIRST_WIRE_PW) as never);
+    vi.mocked(saveWordPressInstance).mockRejectedValueOnce(new Error("validate-throw"));
+    vi.mocked(persistLocalDevWordPressInstanceUnvalidated).mockRejectedValueOnce(
+      new Error(`persist-leak-${FIRST_WIRE_PW}`),
+    );
+
+    const r = await firstWireWordPressInstance();
+
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("expected not-ok");
+    // Fixed host-owned reason — caller does NOT push the widget config for an
+    // unpersisted instance.
+    expect(r.reason).toBe("saveWordPressInstance failed (first wire)");
+    expect(r.reason).not.toContain(FIRST_WIRE_PW);
   });
 });
