@@ -6,12 +6,18 @@ set -euo pipefail
 #
 # Runs BEFORE the official wordpress image's docker-entrypoint.sh. Installs
 # wp-cli + git + composer (idempotent), then backgrounds a watcher that waits
-# for core files + DB, runs `wp core install` if needed, clones the MCP adapter
-# plugin, and activates both cinatra and mcp-adapter. Finally exec's the
-# original docker-entrypoint.sh so Apache boots normally.
+# for core files + DB, runs `wp core install` if needed, clones the WordPress
+# Abilities API + MCP adapter plugins, and activates abilities-api, cinatra, and
+# mcp-adapter (abilities-api first — mcp-adapter requires wp_register_ability()).
+# Finally exec's the original docker-entrypoint.sh so Apache boots normally.
 # -----------------------------------------------------------------------------
 
 MCP_ADAPTER_REF="${MCP_ADAPTER_REF:-v0.4.1}"
+# WordPress/mcp-adapter REQUIRES the WordPress Abilities API (it provides
+# wp_register_ability(); without it mcp-adapter's DefaultServerFactory cannot
+# create the `mcp/mcp-adapter-default-server` REST route, so /wp-json/mcp 404s
+# and the external-MCP toolbox resolves 0 tools). Pin the matching release line.
+ABILITIES_API_REF="${ABILITIES_API_REF:-v0.4.0}"
 WP_DEV_URL="${WP_DEV_URL:-http://localhost:8080}"
 WP_DEV_ADMIN_USER="${WP_DEV_ADMIN_USER:-admin}"
 WP_DEV_ADMIN_PASS="${WP_DEV_ADMIN_PASS:-admin}"
@@ -20,6 +26,7 @@ WP_DEV_ADMIN_EMAIL="${WP_DEV_ADMIN_EMAIL:-dev@localhost}"
 WP_PATH=/var/www/html
 PLUGINS_DIR="$WP_PATH/wp-content/plugins"
 ADAPTER_DIR="$PLUGINS_DIR/mcp-adapter"
+ABILITIES_DIR="$PLUGINS_DIR/abilities-api"
 
 log() { printf "[cinatra-wp] %s\n" "$*"; }
 
@@ -108,6 +115,31 @@ install_wp_core_if_needed() {
     --skip-email
 }
 
+install_abilities_api() {
+  # WordPress/abilities-api is a hard prerequisite for mcp-adapter (it provides
+  # wp_register_ability()). It must be present + activated BEFORE mcp-adapter so
+  # the `mcp_adapter_init` action can register the default MCP server route.
+  if [ -d "$ABILITIES_DIR/.git" ]; then
+    local current_ref
+    current_ref=$(git -C "$ABILITIES_DIR" describe --tags --always 2>/dev/null || echo "unknown")
+    if [ "$current_ref" = "$ABILITIES_API_REF" ]; then
+      log "abilities-api already at $ABILITIES_API_REF, skipping clone."
+      return 0
+    fi
+    log "abilities-api at $current_ref, removing and re-cloning $ABILITIES_API_REF..."
+    rm -rf "$ABILITIES_DIR"
+  fi
+
+  log "Cloning WordPress/abilities-api@$ABILITIES_API_REF..."
+  git -c advice.detachedHead=false clone --depth 1 --branch "$ABILITIES_API_REF" \
+    https://github.com/WordPress/abilities-api.git "$ABILITIES_DIR"
+
+  log "Running composer install inside abilities-api..."
+  (cd "$ABILITIES_DIR" && composer install --no-dev --no-interaction --no-progress)
+
+  chown -R www-data:www-data "$ABILITIES_DIR"
+}
+
 install_mcp_adapter() {
   if [ -d "$ADAPTER_DIR/.git" ]; then
     local current_ref
@@ -131,8 +163,12 @@ install_mcp_adapter() {
 }
 
 activate_plugins() {
-  log "Activating cinatra + mcp-adapter..."
+  log "Activating abilities-api + cinatra + mcp-adapter..."
   # Activate individually so one failure doesn't block the other; log result.
+  # abilities-api MUST activate before mcp-adapter — mcp-adapter's
+  # `mcp_adapter_init` registration needs wp_register_ability() to exist.
+  wp --path="$WP_PATH" --allow-root plugin activate abilities-api 2>&1 \
+    | grep -v "already active" || true
   wp --path="$WP_PATH" --allow-root plugin activate cinatra 2>&1 \
     | grep -v "already active" || true
   wp --path="$WP_PATH" --allow-root plugin activate mcp-adapter 2>&1 \
@@ -161,6 +197,7 @@ bootstrap() {
   wait_for_config || return 0
   wait_for_db || return 0
   install_wp_core_if_needed || log "WARN: wp core install failed"
+  install_abilities_api || log "WARN: abilities-api install failed"
   install_mcp_adapter || log "WARN: mcp-adapter install failed"
   activate_plugins
   seed_content
