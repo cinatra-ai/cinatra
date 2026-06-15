@@ -48,6 +48,30 @@ export const updateDraftRefsSchema = z.object({
   imageRepresentationRevisionId: z.string().min(1).optional(),
 });
 
+// Tool-facing input schema for `blog_post_update`. A SINGLE flat object
+// (NOT a z.union) so the emitted JSON Schema has a top-level `type: "object"`.
+// OpenAI's Responses API rejects a tool whose top-level schema is `anyOf`
+// ("Invalid tool schema for: …"), which is what z.union serializes to — and
+// because the bridge injects the whole cinatra self-MCP toolset, one rejected
+// tool 400s the ENTIRE request before any tool can run. The two real shapes
+// (raw `{ title, excerpt, content }` vs refs-only) stay MUTUALLY EXCLUSIVE and
+// are still validated branch-by-branch by the `blog_post_update` handler
+// (`blog_post_update_mixed_input` guard + per-branch `.parse`), so this only
+// widens the advertised schema; it does not loosen runtime validation.
+export const blogPostUpdateToolSchema = z.object({
+  projectId: z.string().min(1),
+  postId: z.string().min(1),
+  // raw-content shape
+  title: z.string().optional(),
+  excerpt: z.string().optional(),
+  content: z.string().optional(),
+  // refs-only shape (mutually exclusive with the raw-content shape)
+  postArtifactId: z.string().min(1).optional(),
+  postRepresentationRevisionId: z.string().min(1).optional(),
+  imageArtifactId: z.string().min(1).optional(),
+  imageRepresentationRevisionId: z.string().min(1).optional(),
+});
+
 export const startImageRegenerationSchema = z.object({
   projectId: z.string().min(1),
   postId: z.string().min(1),

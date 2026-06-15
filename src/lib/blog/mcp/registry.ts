@@ -53,7 +53,7 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
   "blog_post_update": {
     description:
       "Update a blog post: EITHER raw { title, excerpt, content } (re-materialized) OR artifact refs { postArtifactId, postRepresentationRevisionId, imageArtifactId?, imageRepresentationRevisionId? } to swap (refs-only, no re-materialization). The two shapes are mutually exclusive.",
-    inputSchema: z.union([schemas.updateDraftContentSchema, schemas.updateDraftRefsSchema]),
+    inputSchema: schemas.blogPostUpdateToolSchema,
   },
   "blog_image_generate_start": {
     description: "Start generating a hero image for a blog post using AI.",
