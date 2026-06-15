@@ -499,14 +499,15 @@ describe("ensureWordPressAppPasswordReconciled", () => {
 // WordPress FIRST WIRE (resilient widget config — #260 Step 7)
 // ===========================================================================
 //
-// The full UAT proved that on first wire, saveWordPressInstance() throws because
-// its network validation requires `wp/v2/administration` (a route the local dev
-// WordPress plugin surface does NOT register → 404). Historically this returned
-// a hard error BEFORE the browser widget config (cinatra_url) was ever pushed,
-// so the widget never wired and the UAT's wait timed out. The fix makes first
-// wire RESILIENT: on a saveWordPressInstance throw it falls back to a complete
-// local-dev instance persist + best-effort Nango sync, so the caller can always
-// push the widget config. The cinatra→WP credential re-validates on a later boot.
+// The full UAT proved that on first wire, saveWordPressInstance() can throw from
+// its network validation (historically because the validation `GET`s a route
+// that 404'd; generally because the freshly minted credential is not yet usable).
+// Historically this returned a hard error BEFORE the browser widget config
+// (cinatra_url) was ever pushed, so the widget never wired and the UAT's wait
+// timed out. The fix makes first wire RESILIENT: on a saveWordPressInstance throw
+// it falls back to a complete local-dev instance persist + best-effort Nango
+// sync, so the caller can always push the widget config. The cinatra→WP
+// credential re-validates on a later boot.
 describe("firstWireWordPressInstance — resilient first wire", () => {
   const FIRST_WIRE_PW = "wxyz ABCD efgh IJKL";
 
@@ -536,7 +537,7 @@ describe("firstWireWordPressInstance — resilient first wire", () => {
     expect(persistLocalDevWordPressInstanceUnvalidated).not.toHaveBeenCalled();
   });
 
-  it("RESILIENCE: saveWordPressInstance throws (administration 404) → falls back to a COMPLETE local-dev persist + Nango synced; instance still lands", async () => {
+  it("RESILIENCE: saveWordPressInstance throws (validation failure) → falls back to a COMPLETE local-dev persist + Nango synced; instance still lands", async () => {
     vi.mocked(execSync).mockReturnValueOnce(Buffer.from(FIRST_WIRE_PW) as never); // mint
     vi.mocked(saveWordPressInstance).mockRejectedValueOnce(
       new Error("Unable to retrieve the WordPress site title."),

@@ -373,17 +373,27 @@ export async function validateWordPressInstanceConnection(input: {
     throw new Error(userPayload?.message || userPayload?.error?.message || "Unable to validate the WordPress connection.");
   }
 
+  // Second probe: the core `wp/v2/settings` route. This proves the
+  // application-password authenticates with `manage_options` (the route's
+  // permission_callback) AND yields the real site title for `detectedSiteTitle`
+  // — preserving the validation INTENT (reachable AND authenticates AND the
+  // right WP instance). The earlier `wp/v2/administration` route this replaced
+  // is registered by neither WordPress core nor the cinatra plugin, so it 404'd
+  // in every environment and broke the save. We request `_fields=title` so the
+  // response carries ONLY the title; `wp/v2/settings` otherwise returns site
+  // PII (e.g. the admin email), and this validation logs response bodies.
+  const settingsParams = new URLSearchParams({ _fields: "title" });
   await writeWordPressLogFile({
-    label: "wordpress-administration",
+    label: "wordpress-settings",
     kind: "request",
     body: {
-      endpoint: buildRESTEndpoint(siteUrl, "/administration"),
+      // PII boundary: do not record the username in the diagnostic log.
+      endpoint: buildRESTEndpoint(siteUrl, "/settings", settingsParams),
       method: "GET",
       siteUrl,
-      username: input.username,
     },
   });
-  const settingsResponse = await fetch(buildRESTEndpoint(siteUrl, "/administration"), {
+  const settingsResponse = await fetch(buildRESTEndpoint(siteUrl, "/settings", settingsParams), {
     method: "GET",
     headers: {
       Authorization: authHeader,
@@ -394,14 +404,22 @@ export async function validateWordPressInstanceConnection(input: {
 
   const settingsPayload = (await settingsResponse.json().catch(() => null)) as { title?: string; error?: { message?: string }; message?: string } | null;
   await writeWordPressLogFile({
-    label: "wordpress-administration",
+    label: "wordpress-settings",
     kind: "response",
     body: {
       status: settingsResponse.status,
-      body: settingsPayload,
+      // Log ONLY the title; `wp/v2/settings` returns site PII (admin email,
+      // etc.) even though we requested `_fields=title`, so never persist the
+      // raw body into the diagnostic log.
+      body: { title: typeof settingsPayload?.title === "string" ? settingsPayload.title : undefined },
     },
   });
   if (!settingsResponse.ok) {
+    if (settingsResponse.status === 401 || settingsResponse.status === 403) {
+      throw new Error(
+        "WordPress authenticated the user but rejected the site-settings request. The application password must belong to a user with administrator (manage_options) capability.",
+      );
+    }
     throw new Error(settingsPayload?.message || settingsPayload?.error?.message || "Unable to retrieve the WordPress site title.");
   }
 
@@ -478,9 +496,9 @@ export async function saveWordPressInstance(input: {
  * LOCAL-DEV-ONLY recovery persist for `dev-auto-setup`.
  *
  * `saveWordPressInstance` re-validates over the network before it persists —
- * it `GET`s `wp/v2/users/me` AND `wp/v2/administration`. The latter route is
- * NOT registered by the local dev WordPress plugin surface (it 404s), so the
- * validation throws and the FIRST wire never lands a configured instance row,
+ * it `GET`s `wp/v2/users/me` AND `wp/v2/settings`. The validation can still
+ * throw on a local dev first wire (e.g. the credential is not yet propagated),
+ * so the FIRST wire never lands a configured instance row,
  * which in turn blocks `dev-auto-setup` from pushing the browser widget config
  * (`cinatra_url`/`cinatra_api_key`/`cinatra_instance_id`). The browser→cinatra
  * widget direction does NOT depend on the cinatra→WP application-password being

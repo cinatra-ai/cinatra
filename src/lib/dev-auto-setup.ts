@@ -729,10 +729,11 @@ type WordPressFirstWireOutcome =
  * widget config.
  *
  * RESILIENCE (the #260 Step-7 fix): the happy path is the network-validated
- * `saveWordPressInstance`. But that validation also `GET`s `wp/v2/administration`
- * — a route the local dev WordPress plugin surface does NOT register (it 404s) —
- * so first-wire validation throws and historically returned a hard `error` BEFORE
- * the widget config (`cinatra_url`) was ever pushed, leaving the widget unwired.
+ * `saveWordPressInstance`. But that validation `GET`s `wp/v2/users/me` and
+ * `wp/v2/settings` over the network, which can still throw on a local dev first
+ * wire (e.g. the freshly minted credential is not yet usable), and historically
+ * returned a hard `error` BEFORE the widget config (`cinatra_url`) was ever
+ * pushed, leaving the widget unwired.
  * The browser→cinatra widget direction does NOT depend on the cinatra→WP
  * application-password being fully validated, so on a `saveWordPressInstance`
  * throw we fall back to `persistLocalDevWordPressInstanceUnvalidated`, which lands
@@ -776,9 +777,9 @@ export async function firstWireWordPressInstance(): Promise<WordPressFirstWireOu
   } catch {
     // SECRET BOUNDARY: saveWordPressInstance re-validates over the network and
     // can throw with remote WordPress response-body text — never forward it.
-    // The validation also requires `wp/v2/administration` (404 on the local dev
-    // plugin surface), so fall back to a complete local-dev persist rather than
-    // abort the whole wire (which would leave the widget config unpushed).
+    // A first-wire validation throw (e.g. the freshly minted credential is not
+    // yet usable) falls back to a complete local-dev persist rather than abort
+    // the whole wire (which would leave the widget config unpushed).
     try {
       const persisted = await persistLocalDevWordPressInstanceUnvalidated({
         id: instanceId,
