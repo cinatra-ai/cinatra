@@ -77,3 +77,59 @@ export async function buildWidgetChatTool(
   }
   return tool as LlmFunctionTool;
 }
+
+// ---------------------------------------------------------------------------
+// Content-editor relay targets (cinatra#246).
+//
+// The widget-stream route is a RELAY, not an LLM: it forwards the user's prompt
+// + trusted CMS context to the content-editor agent's A2A endpoint. THAT agent
+// is the single LLM with the cinatra MCP server injected, steered by its
+// SKILL.md to call the read/update primitives — the host runs no LLM and
+// exposes no function tool for this path. `agentPackageName` lets the host
+// pre-create the OBO-carrier agent_run (the agent_templates row is keyed by
+// package name) so the downstream CMS write authorizes via the real agent-run
+// OBO path; `agentUrl` is the WayFlow A2A endpoint (per-connector env override
+// with a localhost default, preserving the prior connector behavior).
+//
+// `agentPackageName` is data-driven from the connector's
+// `cinatra.widgetStream.relayAgentPackage` (carried through the generated
+// manifest), so the host names NO specific extension instance (core→extension
+// instance-coupling ban); `agentUrl` is derived from that package by convention,
+// env-overridable per agent.
+export type ContentEditorRelayTarget = {
+  agentPackageName: string;
+  agentUrl: string;
+};
+
+/**
+ * Per-agent env override key for the relay A2A URL, derived from the slug so no
+ * extension-instance literal lives in core. e.g. `wordpress-content-editor` →
+ * `CONTENT_EDITOR_A2A_URL__WORDPRESS_CONTENT_EDITOR`.
+ */
+function relayA2aUrlEnvKey(agentSlug: string): string {
+  return `CONTENT_EDITOR_A2A_URL__${agentSlug.replace(/[^a-zA-Z0-9]+/g, "_").toUpperCase()}`;
+}
+
+/**
+ * Resolve the relay target (agent package + A2A URL) for a widget slug. The
+ * agent package comes from the connector's `cinatra.widgetStream.relayAgentPackage`
+ * via the GENERATED manifest — the host never names a specific extension. The
+ * A2A URL is derived from that package by convention (the live WayFlow route),
+ * env-overridable per agent for dev. Returns null for a slug that is not a
+ * relay-bearing widget-stream agent.
+ */
+export function resolveContentEditorRelay(
+  agentSlug: string,
+): ContentEditorRelayTarget | null {
+  const agentPackageName = resolveWidgetStreamAgent(agentSlug)?.relayAgentPackage;
+  if (!agentPackageName) return null;
+  // `@scope/name` → `http://localhost:3010/agents/<scope>/<name>/`. The trailing
+  // slash is REQUIRED — the A2A SDK card resolver drops the final path segment
+  // without it.
+  const [scope, name] = agentPackageName.replace(/^@/, "").split("/");
+  const defaultUrl = `http://localhost:3010/agents/${scope}/${name}/`;
+  return {
+    agentPackageName,
+    agentUrl: process.env[relayA2aUrlEnvKey(agentSlug)] ?? defaultUrl,
+  };
+}
