@@ -487,7 +487,20 @@ export async function saveWordPressInstance(input: {
       : [nextInstance, ...current.instances],
   });
 
-  await syncWordPressInstanceToNango(nextInstance).catch(() => null);
+  await syncWordPressInstanceToNango(nextInstance).catch((err) => {
+    // Best-effort Nango sync — the local instance row + the browser→cinatra
+    // widget path do not depend on it, so a sync failure must not block the
+    // save. But do NOT swallow SILENTLY: a Nango auth/format failure (e.g. a
+    // `401 invalid_secret_key_format` from a misconfigured dev secret) would
+    // otherwise surface only as a generic "credential unavailable" at write
+    // time, masking the real cause. Log a host-owned label + the error message
+    // (Axios messages are status-only — NEVER the credential).
+    console.warn(
+      "[wordpress-api] Nango credential sync failed — WordPress MCP writes will 401 until the credential is stored:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  });
 
   return nextInstance;
 }
@@ -572,7 +585,20 @@ export async function persistLocalDevWordPressInstanceUnvalidated(input: {
   });
 
   // Best-effort: let content writes resolve auth through Nango. Never throws.
-  await syncWordPressInstanceToNango(nextInstance).catch(() => null);
+  await syncWordPressInstanceToNango(nextInstance).catch((err) => {
+    // Best-effort Nango sync — the local instance row + the browser→cinatra
+    // widget path do not depend on it, so a sync failure must not block the
+    // save. But do NOT swallow SILENTLY: a Nango auth/format failure (e.g. a
+    // `401 invalid_secret_key_format` from a misconfigured dev secret) would
+    // otherwise surface only as a generic "credential unavailable" at write
+    // time, masking the real cause. Log a host-owned label + the error message
+    // (Axios messages are status-only — NEVER the credential).
+    console.warn(
+      "[wordpress-api] Nango credential sync failed — WordPress MCP writes will 401 until the credential is stored:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  });
 
   return nextInstance;
 }
