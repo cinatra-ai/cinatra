@@ -145,7 +145,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "21bb518657de75b29b7700f39c1a0a3375a42e14"
+      "resolvedSha": "628f38a44d09cfdab25483d5613c0abfa3823587"
     },
     {
       "packageName": "@cinatra-ai/drupal-skills",
@@ -355,7 +355,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "9087744660fc7fd2d44c2ab60a3c1aac9a114fa9"
+      "resolvedSha": "eb8d62fbd35713322894fb987a3b7bea3405147c"
     },
     {
       "packageName": "@cinatra-ai/youtube-connector",

@@ -413,6 +413,13 @@ export function validateWidgetStreamDeclaration(pkgName, ws) {
   if (typeof ws.skillCapability !== "string" || !ws.skillCapability.trim()) {
     errors.push(`${at}.skillCapability: must be a non-empty string`);
   }
+  if (
+    ws.relayAgentPackage !== undefined &&
+    (typeof ws.relayAgentPackage !== "string" ||
+      !/^@[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*$/.test(ws.relayAgentPackage))
+  ) {
+    errors.push(`${at}.relayAgentPackage: must be an npm package name (e.g. @cinatra-ai/wordpress-agent) when present`);
+  }
   if (!Array.isArray(ws.contextFields) || ws.contextFields.length === 0) {
     errors.push(`${at}.contextFields: must be a non-empty array`);
   } else {
@@ -819,6 +826,7 @@ export async function buildManifest() {
         label: ws.label,
         subjectNoun: ws.subjectNoun,
         skillCapability: ws.skillCapability,
+        relayAgentPackage: ws.relayAgentPackage,
         contextFields: ws.contextFields.map((f) => ({ key: f.key, maxLength: f.maxLength })),
         auth: {
           tokenConfigKey: ws.auth.tokenConfigKey,
@@ -1088,6 +1096,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
         label: w.label,
         subjectNoun: w.subjectNoun,
         skillCapability: w.skillCapability,
+        relayAgentPackage: w.relayAgentPackage,
         contextFields: w.contextFields,
         auth: w.auth,
       };
@@ -1187,6 +1196,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  label: string;\n` +
     `  subjectNoun: string;\n` +
     `  skillCapability: string;\n` +
+    `  relayAgentPackage?: string;\n` +
     `  contextFields: GeneratedWidgetStreamContextField[];\n` +
     `  auth: GeneratedWidgetStreamAuth;\n` +
     `};\n\n` +
