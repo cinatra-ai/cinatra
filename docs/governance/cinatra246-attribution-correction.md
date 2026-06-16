@@ -63,3 +63,16 @@ naming both affected commits, restoring a green attribution tip on `main`. A
 direct-push `Correction-for` cannot green the gate (no PR context ⇒ the machine
 arm is unverifiable), so the correction is carried by this PR's properly-armed
 squash merge per the §5 mechanism. No code behavior changes.
+
+## Addendum — the first correction merge carried a malformed trailer (#281)
+
+The first attempt at this correction (PR #281, squash `fbd13e49...`) carried a
+**malformed `Correction-for` trailer** — two commit SHAs on one line. The gate's
+parser expects **one SHA per `Correction-for:` line**, so it rejected the record
+and that squash went red on the post-merge attribution gate. (Main was already
+green via the #280 relay merge; #281 was a redundant ledger entry whose malformed
+trailer re-reddened the tip.)
+
+This addendum, merged with the machine arm and a correctly-formatted
+`Correction-for` trailer, supersedes the #281 record and restores the green tip.
+No code change.
