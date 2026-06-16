@@ -173,15 +173,40 @@ export async function dispatchContentEditorViaA2A(
   // Create + track the OBO-carrier agent_run (and inject cinatra_run_id) BEFORE
   // opening the external A2A client. createExternalA2AClient eagerly fetches the
   // agent card and can throw; doing prepareDispatch first guarantees the carrier
-  // run exists and is recorded even when that card fetch fails (cinatra#246).
+  // run exists and is recorded even when that card fetch fails (cinatra#246). The
+  // try/catch below then transitions that recorded run queued→failed so the
+  // failure can never leave it orphaned in `queued`.
   const { text, runId } = await prepareDispatch(input);
 
-  const a2aBearer = await buildA2aBearerToken("openai");
-  const client = await createExternalA2AClient({
-    agentUrl: input.agentUrl,
-    credentials: a2aBearer ? { token: a2aBearer } : undefined,
-    timeoutMs: input.timeoutMs,
-  });
+  // Token-build + client-creation happen AFTER the carrier run is created (in
+  // prepareDispatch), and either can throw — buildA2aBearerToken on a mint
+  // failure, createExternalA2AClient on its eager agent-card fetch. If we let
+  // such a throw propagate here the run would be orphaned in `queued` forever
+  // (the sendTask catch below only handles the running→failed edge). Transition
+  // the still-`queued` carrier run →failed before rethrowing so it never strands
+  // on a "stuck queued run" surface (cinatra#246). Transition errors stay
+  // non-fatal: the run row is auxiliary to the actual dispatch.
+  let client: Awaited<ReturnType<typeof createExternalA2AClient>>;
+  try {
+    const a2aBearer = await buildA2aBearerToken("openai");
+    client = await createExternalA2AClient({
+      agentUrl: input.agentUrl,
+      credentials: a2aBearer ? { token: a2aBearer } : undefined,
+      timeoutMs: input.timeoutMs,
+    });
+  } catch (err) {
+    if (runId) {
+      try {
+        await transitionRunStatus(runId, "queued", "failed", {
+          error: err instanceof Error ? err.message : String(err),
+          completedAt: new Date(),
+        });
+      } catch (txErr) {
+        console.warn(`[content-editor-dispatch] run ${runId} queued→failed failed:`, txErr);
+      }
+    }
+    throw err;
+  }
 
   // Drive the OBO-carrier run's lifecycle inline. queued→running before the
   // blocking dispatch; →completed on success, →failed on dispatch error. This

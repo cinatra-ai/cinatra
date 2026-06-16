@@ -13,11 +13,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- A2A + LLM runtime edges -------------------------------------------------
 const sendTask = vi.fn();
+const createExternalA2AClient = vi.fn(async () => ({ sendTask }));
+const buildA2aBearerToken = vi.fn(async () => "bearer-token");
 vi.mock("@cinatra-ai/a2a", () => ({
-  createExternalA2AClient: vi.fn(async () => ({ sendTask })),
+  createExternalA2AClient: (...a: unknown[]) => createExternalA2AClient(...(a as [])),
 }));
 vi.mock("@cinatra-ai/llm", () => ({
-  buildA2aBearerToken: vi.fn(async () => "bearer-token"),
+  buildA2aBearerToken: (...a: unknown[]) => buildA2aBearerToken(...(a as [])),
 }));
 
 // --- agents store ------------------------------------------------------------
@@ -50,6 +52,8 @@ function lastSentText(): string {
 beforeEach(() => {
   vi.clearAllMocks();
   // Default happy-path: a resolved identity + installed template + agent reply.
+  buildA2aBearerToken.mockResolvedValue("bearer-token");
+  createExternalA2AClient.mockResolvedValue({ sendTask });
   resolveSingleTenantContentEditorIdentity.mockResolvedValue({
     orgId: "org_1",
     runBy: "u_admin",
@@ -161,5 +165,43 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     ).rejects.toThrow("a2a boom");
     const runArg = createAgentRun.mock.calls[0][0] as { id: string };
     expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "running", "failed", expect.anything());
+  });
+
+  it("marks the carrier run queued→failed (never orphaned in queued) when client creation throws", async () => {
+    // The carrier run is created BEFORE buildA2aBearerToken + createExternalA2AClient.
+    // If the eager agent-card fetch throws, the still-`queued` run must be
+    // transitioned →failed before the error propagates — never left orphaned.
+    createExternalA2AClient.mockRejectedValue(new Error("card fetch boom"));
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { postId: "7" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+      }),
+    ).rejects.toThrow("card fetch boom");
+
+    const runArg = createAgentRun.mock.calls[0][0] as { id: string };
+    // The failure happens before queued→running, so the carrier run transitions
+    // FROM queued (not running) to failed — and never reaches sendTask.
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything());
+    expect(transitionRunStatus).not.toHaveBeenCalledWith(runArg.id, "queued", "running", expect.anything());
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("marks the carrier run queued→failed when token-build throws", async () => {
+    buildA2aBearerToken.mockRejectedValue(new Error("token mint boom"));
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { postId: "7" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+      }),
+    ).rejects.toThrow("token mint boom");
+
+    const runArg = createAgentRun.mock.calls[0][0] as { id: string };
+    expect(transitionRunStatus).toHaveBeenCalledWith(runArg.id, "queued", "failed", expect.anything());
+    expect(createExternalA2AClient).not.toHaveBeenCalled();
   });
 });
