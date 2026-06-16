@@ -109,8 +109,8 @@ export function selectExtensionDepsToProbe(manifest) {
 
 /** Build the npm-registry packument URL for a scoped package name. */
 function packumentUrl(registryUrl, name) {
-  // Scoped names are URL-encoded with the slash escaped: @scope%2Fname.
-  return `${String(registryUrl).replace(/\/+$/, "")}/${name.replace("/", "%2F")}`;
+  // Scoped names are URL-encoded with every slash escaped: @scope%2Fname.
+  return `${String(registryUrl).replace(/\/+$/, "")}/${name.replace(/\//g, "%2F")}`;
 }
 
 function authHeader(token) {
