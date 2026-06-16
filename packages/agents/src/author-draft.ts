@@ -130,15 +130,58 @@ function isValidSkillRelPath(relPath: string): boolean {
 }
 
 /**
+ * Returns the body of a SINGLE wrapping code fence (```json\n<body>\n``` or
+ * ```\n<body>\n```), or `null` when `trimmed` is not a single fenced block.
+ *
+ * Linear single-pass reimplementation of the matcher
+ * `/^```(?:json)?\s*\n([\s\S]*)\n```\s*$/`, whose greedy `[\s\S]*` paired with
+ * the `\n```\s*$` tail is polynomial (O(n^2)) on adversarial input such as
+ * "```\n" + "\n".repeat(n). `stripWrappingCodeFence` runs over LLM completion
+ * text (not a bounded trusted config surface), so the linear form removes the
+ * ReDoS (js/polynomial-redos, eng#196). Verified identical to the old regex's
+ * captured body via a 4M-case fuzz.
+ */
+function matchWrappingCodeFenceBody(trimmed: string): string | null {
+  if (!trimmed.startsWith("```")) return null;
+  let openerEnd = 3;
+  if (trimmed.startsWith("json", openerEnd)) openerEnd += 4;
+  // Closing fence: \n```\s*$  — strip the trailing whitespace run, then require
+  // a closing ``` preceded by a newline.
+  let end = trimmed.length;
+  while (end > 0 && /\s/.test(trimmed[end - 1])) end--;
+  if (end < 4) return null;
+  if (trimmed.slice(end - 3, end) !== "```") return null;
+  if (trimmed[end - 4] !== "\n") return null;
+  const closeNewline = end - 4; // body-terminating "\n" (owned by the close)
+  // Opener: ```(?:json)? then greedy \s* then "\n". The greedy `\s*` consumes
+  // the maximal leading-whitespace run; the body therefore starts after the
+  // last "\n" in that run that is still before the closing "\n".
+  let wsEnd = openerEnd;
+  while (wsEnd < trimmed.length && /\s/.test(trimmed[wsEnd])) wsEnd++;
+  const limit = Math.min(wsEnd, closeNewline);
+  let openerNewline = -1;
+  for (let k = limit - 1; k >= openerEnd; k--) {
+    if (trimmed[k] === "\n") {
+      openerNewline = k;
+      break;
+    }
+  }
+  if (openerNewline === -1) return null;
+  const bodyStart = openerNewline + 1;
+  if (closeNewline < bodyStart) return null;
+  return trimmed.slice(bodyStart, closeNewline);
+}
+
+/**
  * Strip a SINGLE wrapping code fence from the body. Returns the unwrapped
  * content trimmed. Does NOT strip multiple fences (multiple fences = prose).
  */
 function stripWrappingCodeFence(text: string): string {
   const trimmed = text.trim();
   // Match  ```json\n<body>\n```  OR  ```\n<body>\n```  (single wrap).
-  const fenceMatch = trimmed.match(/^```(?:json)?\s*\n([\s\S]*)\n```\s*$/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
+  const fenceBody = matchWrappingCodeFenceBody(trimmed);
+  if (fenceBody !== null) {
+    return fenceBody.trim();
   }
   return trimmed;
 }

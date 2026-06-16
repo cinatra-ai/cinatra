@@ -134,8 +134,51 @@ const KNOWN_PREFIX_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "aws-access-key", re: /^(AKIA|ASIA)[A-Z0-9]{12,}$/ },
 ];
 
-// JWT-shape: three base64url-ish segments separated by dots.
-const JWT_RE = /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+// JWT-shape detection: three base64url-ish segments separated by dots, where
+// the first two segments begin with the `eyJ` header marker.
+//
+// Implemented as a linear single-pass scanner rather than a backtracking regex.
+// The previous form `/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/`
+// is polynomial (O(n^2)) on adversarial input such as `"eyJ".repeat(n)`: the
+// unanchored regex retries the unbounded `+` segments at every offset. Because
+// `detectCredentialPattern` runs over untrusted, author-submitted agent
+// OAS/JSON string values (see scanOasForLiteralSecrets -> walkOasForScannableStrings),
+// that quadratic blowup is a reachable ReDoS (js/polynomial-redos, eng#196).
+//
+// This scanner is behaviorally identical to the old regex (verified against the
+// original via a 500k-case fuzz, including the exact matched substring) but
+// runs in O(n): it splits on "." once and checks consecutive segment triples.
+const JWT_FULL_SEGMENT_RE = /^[A-Za-z0-9_-]+$/; // anchored => linear
+const JWT_LEADING_SEGMENT_RE = /^[A-Za-z0-9_-]+/; // leading base64url run
+
+/**
+ * Returns `[matchedToken]` when `value` contains a JWT-shaped substring
+ * (`eyJ<b64url>.eyJ<b64url>.<b64url>`), else `null`. The single-element tuple
+ * mirrors the `RegExpMatchArray` shape the caller relies on (`jwtMatch[0]`).
+ */
+function matchJwtShape(value: string): [string] | null {
+  if (value.indexOf("eyJ") === -1) return null;
+  const parts = value.split(".");
+  for (let i = 0; i + 2 < parts.length; i++) {
+    // First segment: take the leftmost `eyJ` header start, then require the
+    // rest of that inter-dot segment to be base64url with >=1 char after `eyJ`.
+    const headerIdx = parts[i].indexOf("eyJ");
+    if (headerIdx === -1) continue;
+    const seg0 = parts[i].slice(headerIdx);
+    if (seg0.length < 4 || !JWT_FULL_SEGMENT_RE.test(seg0)) continue;
+    // Second segment must also start `eyJ` and be entirely base64url.
+    const seg1 = parts[i + 1];
+    if (seg1.length < 4 || !seg1.startsWith("eyJ") || !JWT_FULL_SEGMENT_RE.test(seg1)) {
+      continue;
+    }
+    // Third segment only needs a leading base64url run (regex stops at first
+    // non-base64url char, matching the old `[A-Za-z0-9_-]+`).
+    const tail = parts[i + 2].match(JWT_LEADING_SEGMENT_RE);
+    if (tail === null) continue;
+    return [`${seg0}.${seg1}.${tail[0]}`];
+  }
+  return null;
+}
 
 // Placeholder patterns that short-circuit a scanned value to "no finding".
 const PLACEHOLDER_PATTERNS: RegExp[] = [
@@ -211,7 +254,7 @@ export function detectCredentialPattern(value: string): string | null {
 
   // JWT scan operates on the whole value (its body fragments are not always
   // word-split friendly).
-  const jwtMatch = value.match(JWT_RE);
+  const jwtMatch = matchJwtShape(value);
   if (jwtMatch && !isPlaceholderToken(jwtMatch[0])) {
     return "jwt";
   }

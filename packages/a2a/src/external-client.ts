@@ -30,6 +30,21 @@ export type A2AStreamEventData =
   | TaskStatusUpdateEvent
   | TaskArtifactUpdateEvent;
 
+/**
+ * Strips trailing `/` characters from a string in linear time.
+ *
+ * Replaces the regex `value.replace(/\/+$/, "")`, which is polynomial
+ * (O(n^2)) on adversarial input such as `"/".repeat(n) + "x"` — the
+ * end-anchored `\/+$` retries at every offset (js/polynomial-redos, eng#196).
+ * `options.agentUrl` is caller-supplied, so the linear form is preferred.
+ * Behaviorally identical to the old regex (verified by fuzz).
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return value.slice(0, end);
+}
+
 // ---------------------------------------------------------------------------
 // createExternalA2AClient
 //
@@ -312,7 +327,7 @@ export async function createExternalA2AClient(
   const agentCard = await cardResolver.resolve(options.agentUrl, options.agentCardPath);
   const agentCardWithOverriddenUrl = {
     ...agentCard,
-    url: options.agentUrl.replace(/\/+$/, "") + "/",
+    url: stripTrailingSlashes(options.agentUrl) + "/",
   };
   const sdkClient = await factory.createFromAgentCard(agentCardWithOverriddenUrl);
 

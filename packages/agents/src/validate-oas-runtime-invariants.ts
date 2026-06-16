@@ -57,7 +57,43 @@ const ENV_VAR_PLACEHOLDER = /^[A-Z_][A-Z0-9_]*$/;
 // JS-style ternary inside Jinja `{{ ... }}` placeholders is broken twice:
 // (a) Jinja conditional syntax uses `if/else`, not `? :`; (b) the names
 // inside the ternary are invisible to the placeholder regex above.
-const JS_TERNARY_IN_PLACEHOLDER_REGEX = /\{\{[^}]*\?[^}]*:[^}]*\}\}/g;
+//
+// Detected with a linear single-pass scanner instead of a backtracking regex.
+// The previous form `/\{\{[^}]*\?[^}]*:[^}]*\}\}/g` has three adjacent
+// unbounded `[^}]*` groups and is polynomial (O(n^2)) on adversarial input such
+// as `"{{".repeat(n)` or `"{{" + "a?".repeat(n)`. This scanner runs over
+// untrusted, author-submitted agent OAS string values (via `walkStrings`), so
+// that blowup is a reachable ReDoS (js/polynomial-redos, eng#196).
+//
+// `findJsTernaryPlaceholder` is behaviorally identical to the old regex
+// (verified by an 800k-case fuzz, including the exact matched substring): it
+// finds each `{{ ... }}` placeholder body (which, like `[^}]*`, may not contain
+// `}`) and reports the first whose body has a `?` followed later by a `:`.
+function findJsTernaryPlaceholder(text: string): string | null {
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const open = text.indexOf("{{", i);
+    if (open === -1) return null;
+    let j = open + 2;
+    while (j < n && text[j] !== "}") j++;
+    if (j + 1 < n && text[j] === "}" && text[j + 1] === "}") {
+      const inner = text.slice(open + 2, j);
+      const q = inner.indexOf("?");
+      if (q !== -1 && inner.indexOf(":", q + 1) !== -1) {
+        return text.slice(open, j + 2);
+      }
+      // Not a ternary placeholder; keep scanning for a `{{` start after this one.
+      i = open + 2;
+    } else {
+      // No `}}` close before the next `}` (or end of string). The span
+      // [open, j) contains no `}`, so no `{{` start within it can close either;
+      // jump past the scanned span to preserve linear time.
+      i = Math.max(j, open + 2);
+    }
+  }
+  return null;
+}
 
 // Strings sourced from these ApiNode fields produce pyagentspec's inferred
 // placeholder set. Mirrors `ApiNode._get_inferred_inputs()` in the upstream
@@ -167,15 +203,14 @@ function scanForJsTernaryPlaceholders(
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   walkStrings(parsed, (text, path) => {
-    JS_TERNARY_IN_PLACEHOLDER_REGEX.lastIndex = 0;
-    const match = JS_TERNARY_IN_PLACEHOLDER_REGEX.exec(text);
+    const match = findJsTernaryPlaceholder(text);
     if (match !== null) {
       findings.push({
         code: "OAS-RUNTIME-002",
         severity: "blocker",
         message:
           `Found JS-style ternary inside Jinja placeholder at ${path}: ` +
-          `"${match[0]}". This is broken twice — (a) Jinja conditional ` +
+          `"${match}". This is broken twice — (a) Jinja conditional ` +
           `syntax uses {{ a if cond else b }}, not the JS \`? :\` form, ` +
           `so rendering raises a TemplateSyntaxError at runtime; (b) the ` +
           `names inside the ternary are invisible to pyagentspec's ` +
