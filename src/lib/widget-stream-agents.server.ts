@@ -77,3 +77,56 @@ export async function buildWidgetChatTool(
   }
   return tool as LlmFunctionTool;
 }
+
+// ---------------------------------------------------------------------------
+// Content-editor relay targets (cinatra#246).
+//
+// The widget-stream route is a RELAY, not an LLM: it forwards the user's prompt
+// + trusted CMS context to the content-editor agent's A2A endpoint. THAT agent
+// is the single LLM with the cinatra MCP server injected, steered by its
+// SKILL.md to call the read/update primitives — the host runs no LLM and
+// exposes no function tool for this path. `agentPackageName` lets the host
+// pre-create the OBO-carrier agent_run (the agent_templates row is keyed by
+// package name) so the downstream CMS write authorizes via the real agent-run
+// OBO path; `agentUrl` is the WayFlow A2A endpoint (per-connector env override
+// with a localhost default, preserving the prior connector behavior).
+//
+// This is the one place the route is aware of a specific widget agent. It is
+// intentionally a small explicit table (not the generated manifest) to keep the
+// change surgical; a future pass can lift `agentPackageName`/`a2aUrl*` into the
+// `cinatra.widgetStream` manifest declaration so even this becomes data-driven.
+export type ContentEditorRelayTarget = {
+  agentPackageName: string;
+  agentUrl: string;
+};
+
+const CONTENT_EDITOR_RELAY: Record<
+  string,
+  { agentPackageName: string; a2aUrlEnv: string; a2aUrlDefault: string }
+> = {
+  "wordpress-content-editor": {
+    agentPackageName: "@cinatra-ai/wordpress-agent",
+    a2aUrlEnv: "WP_CONTENT_EDITOR_A2A_URL",
+    // Live WayFlow agent route (mirrors the connector's #21 default). Trailing
+    // slash is REQUIRED — the A2A SDK card resolver drops the final path
+    // segment without it. Overridable via WP_CONTENT_EDITOR_A2A_URL.
+    a2aUrlDefault: "http://localhost:3010/agents/cinatra-ai/wordpress-agent/",
+  },
+  "drupal-content-editor": {
+    agentPackageName: "@cinatra-ai/drupal-agent",
+    a2aUrlEnv: "DRUPAL_CONTENT_EDITOR_A2A_URL",
+    a2aUrlDefault: "http://localhost:3010/agents/cinatra-ai/drupal-agent/",
+  },
+};
+
+/** Resolve the relay target (agent A2A URL + package name) for a widget slug. */
+export function resolveContentEditorRelay(
+  agentSlug: string,
+): ContentEditorRelayTarget | null {
+  const cfg = CONTENT_EDITOR_RELAY[agentSlug];
+  if (!cfg) return null;
+  return {
+    agentPackageName: cfg.agentPackageName,
+    agentUrl: process.env[cfg.a2aUrlEnv] ?? cfg.a2aUrlDefault,
+  };
+}

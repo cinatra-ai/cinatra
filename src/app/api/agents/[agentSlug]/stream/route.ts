@@ -1,18 +1,10 @@
 import { NextResponse } from "next/server";
 
 import {
-  stream as orchestrateStream,
-  buildSkillTools,
-} from "@cinatra-ai/llm";
-import type { LlmTool } from "@cinatra-ai/llm";
-import { ensureSkillForCapability } from "@cinatra-ai/skills";
-import { buildActorContextFromPrimitive } from "@cinatra-ai/agents/auth-policy";
-
-import {
   resolveWidgetStreamAgent,
-  buildWidgetChatTool,
+  resolveContentEditorRelay,
 } from "@/lib/widget-stream-agents.server";
-import { ExtensionModuleAbsentError } from "@/lib/extension-load-guard";
+import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
 import {
   resolveWidgetStreamOrigin,
   validateWidgetStreamToken,
@@ -38,11 +30,11 @@ export const dynamic = "force-dynamic";
 // ---------------------------------------------------------------------------
 // Generic per-agent widget SSE stream. Registration is MANIFEST-DRIVEN: a
 // widget-bearing extension declares `cinatra.widgetStream` (agentSlug, label,
-// subjectNoun, skillCapability, contextFields, auth policy) and ships a
-// `widget-chat-tool` factory; the generated manifest carries the slug-keyed
-// entry and this route resolves it generically. Adding a widget-stream
-// extension requires NO edit to this file (or to the auth-route-guard — its
-// public-path list is generated from the same declarations).
+// subjectNoun, contextFields, auth policy) and this route resolves it
+// generically. Adding a widget-stream extension requires NO edit to this file
+// (or to the auth-route-guard — its public-path list is generated from the same
+// declarations); a content-editor relay target is the one per-agent fact, kept
+// in resolveContentEditorRelay (widget-stream-agents.server.ts).
 //
 // Auth: route-level CORS Origin allowlist + Bearer token, both driven by the
 // entry's declared auth policy (instances config key + validity fields, token
@@ -50,12 +42,17 @@ export const dynamic = "force-dynamic";
 // PUBLIC_AGENT_STREAM_PATHS in src/lib/auth-route-guard.ts so unauthenticated
 // browser widgets reach this handler instead of being redirected to /sign-in.
 //
-// The route calls stream with the extension's widget-chat function tool and
-// skill tool (resolved + self-healed through the generic
-// extension-skill-resolver via the declared skillCapability). The LLM decides
-// whether to chat conversationally or call the content-editor tool.
-// SSE wire format on the widget side is FROZEN: text/changes/error/done frames
-// only, and the `changes` frame keeps its `fields`/`nodeId`/`postId` shape.
+// ARCHITECTURE (cinatra#246): this route is a RELAY, not an LLM. It forwards the
+// user's prompt + trusted CMS context to the respective content-editor agent
+// (wordpress-content-editor / drupal-content-editor) over A2A and streams the
+// agent's reply back. THE AGENT is the single LLM: it has the cinatra MCP
+// server injected and is steered by its SKILL.md to call the read/update
+// primitives. The host runs NO LLM here and exposes NO function tool — the
+// prior host-LLM + `*_content_editor_run` function tool both violated the
+// "no function call for an MCP tool" rule and let the agent recurse into its own
+// dispatcher. SSE wire format on the widget side is FROZEN: text/changes/error/
+// done frames only, and the `changes` frame keeps its `fields`/`nodeId`/`postId`
+// shape.
 // ---------------------------------------------------------------------------
 
 type StreamRequestBody = {
@@ -63,6 +60,14 @@ type StreamRequestBody = {
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   context?: Record<string, unknown>;
 };
+
+// Strip Markdown code fences from agent-emitted JSON before parse. The
+// content-editor agent's LLM occasionally wraps its JSON output in ```json ...
+// ``` fences; the regex only matches at string boundaries so internal triplets
+// survive. (Mirrors the connector's prior stripCodeFences.)
+function stripCodeFences(text: string): string {
+  return text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim();
+}
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -177,125 +182,40 @@ export async function POST(
 
   const context = body.context ?? {};
 
-  // Resolve the skill THROUGH the declared capability key (generic
-  // extension-skill-resolver: maps the capability to the active skill-bearing
-  // extension and lazily registers its SKILL.md — the prod self-heal). The
-  // skill may be co-located in the connector itself or in a sibling skill
-  // package, hence both kinds are allowed. FAIL LOUD pre-SSE: no active
-  // extension providing the capability is a configuration/install error the
-  // admin must see as a clean JSON 500, not an aborted half-opened stream.
-  let skillId: string;
-  try {
-    skillId = await ensureSkillForCapability(entry.skillCapability, {
-      allowKinds: ["skill", "connector"],
-    });
-  } catch (err) {
-    console.error(`[agent-stream:${agentSlug}] skill capability resolution failed:`, err);
+  // Resolve the relay target (content-editor agent A2A URL + package name) for
+  // this slug. A widget-stream agent with no relay configured is a wiring error
+  // the admin must see as a clean JSON 500, not a half-opened stream.
+  const relay = resolveContentEditorRelay(agentSlug);
+  if (!relay) {
+    console.error(`[agent-stream:${agentSlug}] no content-editor relay configured for slug`);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to resolve widget skill" },
+      { error: "This widget agent has no content-editor relay configured" },
       { status: 500, headers: corsHeaders },
     );
   }
 
-  // Build the extension's widget-chat function tool from the manifest loader
-  // entry. FAIL LOUD pre-SSE (import/factory/shape errors are host wiring
-  // bugs, not user errors — surface them as a clean 500). ONE deliberate
-  // exception (cinatra#7): an ABSENT optional widget module (typed
-  // ExtensionModuleAbsentError from the guarded loader) is a legitimate
-  // post-build state, not a wiring bug — degrade to a defined 503 so the
-  // embedding CMS widget sees "temporarily unavailable", never a generic 500.
-  let tool;
-  try {
-    tool = await buildWidgetChatTool(agentSlug, entry, context);
-  } catch (err) {
-    if (err instanceof ExtensionModuleAbsentError) {
-      console.warn(
-        `[agent-stream:${agentSlug}] widget-chat tool module is absent post-build — degrading to 503:`,
-        err.message,
-      );
-      return NextResponse.json(
-        { error: "This widget's extension is not available on this deployment" },
-        { status: 503, headers: corsHeaders },
-      );
-    }
-    console.error(`[agent-stream:${agentSlug}] widget-chat tool build failed:`, err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to build widget tool" },
-      { status: 500, headers: corsHeaders },
-    );
-  }
+  // The editing instruction is the latest user message. Trusted CMS context
+  // (instanceId, postId, …) comes from the AUTHENTICATED request body — there is
+  // no model in this path, so there are no model-supplied identity fields to
+  // override. Sanitize string context (strip CR/LF/tabs, bound length) the same
+  // way the prior system-prompt path did, then forward the declared
+  // contextFields plus the instruction as the A2A payload the agent's SKILL.md
+  // reads. Undeclared keys are filtered by the agent loader.
+  const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
+  const instructions = typeof lastUser?.content === "string" ? lastUser.content : "";
 
-  // Sanitize client-supplied context strings before embedding in the system
-  // prompt. Strips CR/LF/tabs (so attacker-controlled strings can't add
-  // fake instructions on a new line) and bounds length (so a 1MB href can't
-  // dominate the system-prompt window). The factory tool path uses identity
-  // override on its own and is unaffected — this sanitiser is for
-  // system-prompt embedding only.
-  const safe = (s: unknown, max = 200): string =>
+  const safe = (s: unknown, max = 500): string =>
     String(s ?? "")
       .replace(/[\r\n\t]+/g, " ")
       .slice(0, max);
 
-  // Build the system prompt with explicit CMS context from the declared
-  // contextFields. Full routing rules live in the SKILL.md the LLM reads via
-  // the skill tool.
-  const cmsContextBlock =
-    `\n\nCurrent ${entry.label} context:\n` +
-    entry.contextFields
-      .map((field) => `- ${field.key}: ${safe(context[field.key], field.maxLength)}\n`)
-      .join("");
-
-  const systemPrompt =
-    `You are the Cinatra in-CMS assistant embedded in a ${entry.label} content editor. ` +
-    `Read the widget-chat skill using the provided skill tool for routing rules. ` +
-    `When the user asks for any change to the current ${entry.subjectNoun}, ` +
-    `call the content-editor tool with their instructions. ` +
-    `When the user is conversational (greeting, question, discussion), answer directly without calling tools. ` +
-    `Never paste tool-result JSON into your reply — write a natural-language summary instead.` +
-    cmsContextBlock;
-
-  // Build the tools array. Use ONLY the single function tool plus skill tools.
-  // Pitfall 7 — widget chat is scoped narrowly to the current node/post; do NOT
-  // expose the full primitive-handlers surface to the LLM here.
-  // buildSkillTools returns [] (with a warning) when no skill resolved with an
-  // on-disk sourcePath — the self-heal above should make that impossible, but
-  // on failure return a JSON error BEFORE the SSE stream is constructed so the
-  // client sees a clean 500 rather than a silently skill-less assistant.
-  let skillTools;
-  try {
-    skillTools = await buildSkillTools({ skillIds: [skillId] });
-  } catch (err) {
-    console.error(`[agent-stream:${agentSlug}] buildSkillTools threw:`, err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to build skill tools" },
-      { status: 500, headers: corsHeaders },
-    );
+  const payload: Record<string, unknown> = { instructions };
+  for (const field of entry.contextFields) {
+    const value = context[field.key];
+    if (value === undefined || value === null) continue;
+    payload[field.key] =
+      typeof value === "string" ? safe(value, field.maxLength) : value;
   }
-  if (skillTools.length === 0) {
-    console.error(
-      `[agent-stream:${agentSlug}] no mountable skill tools for "${skillId}" — ` +
-        "widget skill delivery failed (registration self-heal did not produce a deliverable skill)",
-    );
-    return NextResponse.json(
-      { error: "Widget skill is unavailable. Please try again." },
-      { status: 500, headers: corsHeaders },
-    );
-  }
-  const tools: LlmTool[] = [tool, ...skillTools];
-
-  // Establish the LLM actor frame. The widget SSE stream is an UNAUTHENTICATED
-  // in-CMS embed — there is no Better Auth session, so no human/org ALS frame
-  // exists. `stream()` is wrapped by `requireActorFrame`, which throws
-  // ACTOR_CONTEXT_MISSING in production when neither an ALS frame nor an
-  // explicit `actorContext` is present. Supply the SAME roleless internal-model
-  // service-account actor that `buildSkillTools` already used to resolve the
-  // widget skill above (no org/user identity → it passes only the narrow
-  // internal-model carve-outs, never org/workspace-scoped reads). The widget's
-  // skill content was already resolved + auth-checked before this stream opens.
-  const widgetActorContext = buildActorContextFromPrimitive({
-    actorType: "model",
-    source: "agent",
-  });
 
   const encoder = new TextEncoder();
 
@@ -305,88 +225,62 @@ export async function POST(
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       }
 
-      let emittedAnyText = false;
-      let emittedAnyChanges = false;
-
       try {
-        await orchestrateStream({
-          actorContext: widgetActorContext,
-          system: systemPrompt,
-          // Sanitize: drop system-role injection attacks, bound history to last
-          // 20 messages, drop messages with non-string content.
-          messages: (body.messages as Array<{ role: string; content: string }>)
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .filter((m) => typeof m.content === "string")
-            .slice(-20)
-            .map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-          tools,
-          maxSteps: 6,
-          signal: AbortSignal.timeout(360_000), // 6 min covers 300s tool budget + slack
-          logLabel: `widget:${agentSlug}`,
-          preserveFunctionTools: true,            // Pitfall 4 — keep our function tool when MCP is injected
-          skipMcpInjection: true,                 // Block full Cinatra MCP surface; only the hardened function tool path is exposed to the LLM.
-          onTextDelta: (delta) => {
-            if (delta) {
-              emittedAnyText = true;
-              send("text", { content: delta });
-            }
-          },
-          onToolCall: () => {
-            // Widget bundle has no tool-call UI — no SSE frame emitted here.
-          },
-          onToolResult: (result) => {
-            // Only the widget's own content-editor tool can emit a `changes`
-            // frame — gate on the BUILT tool's name (no per-CMS literals).
-            if (result.name !== tool.name) {
-              return;
-            }
-            let parsed:
-              | {
-                  nodeId?: string | number;
-                  postId?: string | number;
-                  changes?: Array<{ field: string; before: string; after: string }>;
-                }
-              | undefined;
-            try {
-              parsed = JSON.parse(result.result);
-            } catch {
-              return; // tool result wasn't JSON — text path handles it
-            }
-            // The text-fallback result `{ result: <text> }` is also valid JSON,
-            // so gate on a real `changes` array: only a structured edit emits a
-            // `changes` SSE frame. A text-only reply must NOT trigger the
-            // widget's reload-to-apply path.
-            if (parsed && Array.isArray(parsed.changes) && !emittedAnyChanges) {
-              emittedAnyChanges = true;
-              send("changes", {
-                fields: parsed.changes,
-                nodeId: String(parsed.nodeId ?? ""),
-                postId: String(parsed.postId ?? ""), // Pitfall 6 — always String()
-              });
-            }
-          },
-          onStepStart: () => {
-            // No widget UI for thinking-step boundaries — frames omitted to keep wire format frozen.
-          },
-          onStepEnd: () => {},
-          onError: (error) => {
-            console.error(`[agent-stream:${agentSlug}] stream error:`, error);
-            send("error", {
-              message: "An error occurred processing your request. Please try again.",
-            });
-          },
+        // RELAY: blocking A2A dispatch to the content-editor agent. The host
+        // helper pre-creates the OBO-carrier agent_run (cinatra#246) so the
+        // agent's downstream `/api/mcp` CMS write authorizes via the real
+        // agent-run OBO path, then walks the agent's reply for its final text.
+        const text = await dispatchContentEditorViaA2A({
+          agentUrl: relay.agentUrl,
+          payload,
+          timeoutMs: 300_000, // aligned with the /chat blocking budget
+          packageName: relay.agentPackageName,
         });
-        // Successful path — emit done. If the LLM produced no text and no changes
-        // (rare — abort or tool-only error), include fallback so widget drops the
-        // empty assistant turn from history (Pitfall 5).
-        if (!emittedAnyText && !emittedAnyChanges) {
-          send("done", { fallback: true });
-        } else {
+
+        // Parse the agent's reply. A structured `{ postId|nodeId, changes[] }`
+        // edit emits a `changes` frame (the widget's reload-to-apply path); a
+        // text-only reply (or non-JSON) is surfaced as a `text` frame. The
+        // text-fallback shape `{ result: <text> }` is JSON too, so gate the
+        // `changes` frame on a real `changes` array.
+        let parsed:
+          | {
+              nodeId?: string | number;
+              postId?: string | number;
+              changes?: Array<{ field: string; before: string; after: string }>;
+              result?: string;
+            }
+          | undefined;
+        try {
+          parsed = JSON.parse(stripCodeFences(text));
+        } catch {
+          parsed = undefined; // reply wasn't JSON — treat as plain text below
+        }
+
+        if (parsed && Array.isArray(parsed.changes)) {
+          send("changes", {
+            fields: parsed.changes,
+            nodeId: String(parsed.nodeId ?? ""),
+            postId: String(parsed.postId ?? ""), // Pitfall 6 — always String()
+          });
           send("done", {});
+        } else if (parsed && typeof parsed.result === "string" && parsed.result.trim()) {
+          // Agent emitted the text-fallback shape `{ result: <text> }` — surface
+          // the inner text, NOT the raw JSON wrapper.
+          send("text", { content: parsed.result.trim() });
+          send("done", {});
+        } else if (!parsed && text.trim()) {
+          // Non-JSON conversational reply — surface as a single text frame.
+          send("text", { content: text.trim() });
+          send("done", {});
+        } else {
+          // No usable reply (empty, or unexpected structured JSON with neither
+          // changes[] nor result) — drop the empty assistant turn from widget
+          // history rather than dumping raw JSON (Pitfall 5).
+          send("done", { fallback: true });
         }
       } catch (err) {
         const internalMessage = err instanceof Error ? err.message : String(err);
-        console.error(`[agent-stream:${agentSlug}] dispatch failed:`, internalMessage);
+        console.error(`[agent-stream:${agentSlug}] relay failed:`, internalMessage);
         // Sanitize the user-facing error.
         send("error", {
           message: "An error occurred processing your request. Please try again.",
