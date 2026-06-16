@@ -170,14 +170,18 @@ async function prepareDispatch(
 export async function dispatchContentEditorViaA2A(
   input: ContentEditorDispatchInput,
 ): Promise<string> {
+  // Create + track the OBO-carrier agent_run (and inject cinatra_run_id) BEFORE
+  // opening the external A2A client. createExternalA2AClient eagerly fetches the
+  // agent card and can throw; doing prepareDispatch first guarantees the carrier
+  // run exists and is recorded even when that card fetch fails (cinatra#246).
+  const { text, runId } = await prepareDispatch(input);
+
   const a2aBearer = await buildA2aBearerToken("openai");
   const client = await createExternalA2AClient({
     agentUrl: input.agentUrl,
     credentials: a2aBearer ? { token: a2aBearer } : undefined,
     timeoutMs: input.timeoutMs,
   });
-
-  const { text, runId } = await prepareDispatch(input);
 
   // Drive the OBO-carrier run's lifecycle inline. queued→running before the
   // blocking dispatch; →completed on success, →failed on dispatch error. This
