@@ -38,6 +38,25 @@ function normalizeRepositoryName(value: string) {
   return value.replace(/\.git$/i, "").trim();
 }
 
+// GitHub owner (user/org) login charset: alphanumerics and single hyphens.
+// GitHub repository-name charset: alphanumerics plus `.`, `_`, `-`.
+// Neither may be `.`/`..` nor contain a path separator. These guards are the
+// authoritative defense against path traversal: `owner`/`repo` flow verbatim
+// into `path.join(getSkillsDataRootPath(), "workspace", owner, repo)`, so a
+// reference like `../..` (which the legacy `owner/repo` regex accepted as
+// owner=".." repo="..") MUST be rejected here before it can escape the skills
+// store sandbox (js/path-injection, code-scanning).
+const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
+const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+function isSafeOwnerAndRepo(owner: string, repo: string): boolean {
+  if (!GITHUB_OWNER_PATTERN.test(owner)) return false;
+  // Reject `.`/`..` and any traversal/separator chars in the repo segment.
+  if (repo === "." || repo === ".." || !GITHUB_REPO_PATTERN.test(repo)) return false;
+  if (repo.includes("/") || repo.includes("\\")) return false;
+  return true;
+}
+
 function slugify(value: string) {
   return value
     .trim()
@@ -54,20 +73,17 @@ export function parseGitHubRepositoryReference(value: string): GitHubRepositoryR
 
   const scpLikeMatch = trimmed.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
   if (scpLikeMatch) {
-    return {
-      owner: scpLikeMatch[1]!.trim(),
-      repo: normalizeRepositoryName(scpLikeMatch[2]!),
-    };
+    const owner = scpLikeMatch[1]!.trim();
+    const repo = normalizeRepositoryName(scpLikeMatch[2]!);
+    return isSafeOwnerAndRepo(owner, repo) ? { owner, repo } : null;
   }
 
   if (/^[^/\s]+\/[^/\s]+$/.test(trimmed)) {
-    const [owner, repo] = trimmed.split("/");
-    return owner && repo
-      ? {
-          owner: owner.trim(),
-          repo: normalizeRepositoryName(repo),
-        }
-      : null;
+    const [ownerRaw, repoRaw] = trimmed.split("/");
+    if (!ownerRaw || !repoRaw) return null;
+    const owner = ownerRaw.trim();
+    const repo = normalizeRepositoryName(repoRaw);
+    return isSafeOwnerAndRepo(owner, repo) ? { owner, repo } : null;
   }
 
   try {
@@ -76,13 +92,11 @@ export function parseGitHubRepositoryReference(value: string): GitHubRepositoryR
       return null;
     }
 
-    const [owner, repo] = url.pathname.split("/").filter(Boolean);
-    return owner && repo
-      ? {
-          owner: owner.trim(),
-          repo: normalizeRepositoryName(repo),
-        }
-      : null;
+    const [ownerRaw, repoRaw] = url.pathname.split("/").filter(Boolean);
+    if (!ownerRaw || !repoRaw) return null;
+    const owner = ownerRaw.trim();
+    const repo = normalizeRepositoryName(repoRaw);
+    return isSafeOwnerAndRepo(owner, repo) ? { owner, repo } : null;
   } catch {
     return null;
   }
@@ -215,10 +229,24 @@ async function cloneGitHubRepoToDirectory(input: {
   await rm(targetDirectory, { recursive: true, force: true });
   await mkdir(targetDirectory, { recursive: true });
 
+  // Containment root for every materialized tree entry. Defense-in-depth: Git
+  // tree paths cannot themselves contain `..` components (Git rejects them in
+  // tree objects), but we never write a path that resolves outside the clone
+  // target regardless of what the API returns (js/path-injection).
+  const resolvedTarget = path.resolve(targetDirectory);
+
   for (const entry of treeResponse.data.tree) {
     if (!entry.path) continue;
 
     const destinationPath = path.join(targetDirectory, entry.path);
+    const resolvedDestination = path.resolve(destinationPath);
+    if (
+      resolvedDestination !== resolvedTarget &&
+      !resolvedDestination.startsWith(resolvedTarget + path.sep)
+    ) {
+      // Skip any entry that would escape the clone target.
+      continue;
+    }
 
     if (entry.type === "tree") {
       await mkdir(destinationPath, { recursive: true });
