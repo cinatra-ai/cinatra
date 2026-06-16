@@ -218,7 +218,11 @@ export async function searchWorkspaceUsersForProject(
   );
 
   const trimmed = query.trim();
-  const like = trimmed.length > 0 ? `%${trimmed.replace(/[%_]/g, "\\$&")}%` : null;
+  // Escape the LIKE/ILIKE escape character (backslash) FIRST, then the `%`/`_`
+  // wildcards, all via the single character class `[\\%_]`. Postgres ILIKE uses
+  // backslash as the default ESCAPE char; without escaping a user-supplied `\`
+  // the pattern semantics drift (e.g. `\%` would stop being a literal match).
+  const like = trimmed.length > 0 ? `%${trimmed.replace(/[\\%_]/g, "\\$&")}%` : null;
 
   // limit the typeahead to users who are members of the caller's
   // active organization. Without this filter, any caller could
