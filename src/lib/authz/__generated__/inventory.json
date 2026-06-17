@@ -10,32 +10,32 @@
     {
       "primitiveName": "agent_creation_request_decide",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 658
+      "line": 786
     },
     {
       "primitiveName": "agent_creation_request_edit",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 628
+      "line": 756
     },
     {
       "primitiveName": "agent_creation_request_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 654
+      "line": 782
     },
     {
       "primitiveName": "agent_creation_request_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 642
+      "line": 770
     },
     {
       "primitiveName": "agent_creation_request_propose",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 609
+      "line": 737
     },
     {
       "primitiveName": "agent_creation_request_retry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 674
+      "line": 802
     },
     {
       "primitiveName": "agent_delete",
@@ -110,17 +110,17 @@
     {
       "primitiveName": "agent_run_trigger_delete",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 602
+      "line": 730
     },
     {
       "primitiveName": "agent_run_trigger_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 596
+      "line": 724
     },
     {
       "primitiveName": "agent_run_trigger_set",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 564
+      "line": 692
     },
     {
       "primitiveName": "agent_run_update",
@@ -160,7 +160,7 @@
     {
       "primitiveName": "agent_source_review",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 529
+      "line": 657
     },
     {
       "primitiveName": "agent_source_validate",
@@ -210,7 +210,7 @@
     {
       "primitiveName": "agents_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 687
+      "line": 815
     },
     {
       "primitiveName": "apollo_administration_get",
@@ -291,6 +291,26 @@
       "primitiveName": "artifact_representation_list",
       "file": "src/lib/artifacts/mcp.ts",
       "line": 327
+    },
+    {
+      "primitiveName": "artifact_source_compile",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 508
+    },
+    {
+      "primitiveName": "artifact_source_publish",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 515
+    },
+    {
+      "primitiveName": "artifact_source_validate",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 500
+    },
+    {
+      "primitiveName": "artifact_source_write",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 480
     },
     {
       "primitiveName": "artifacts_get",
@@ -986,6 +1006,26 @@
       "primitiveName": "role_grant_revoke",
       "file": "packages/permissions/src/mcp/registry.ts",
       "line": 42
+    },
+    {
+      "primitiveName": "skill_source_compile",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 573
+    },
+    {
+      "primitiveName": "skill_source_publish",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 580
+    },
+    {
+      "primitiveName": "skill_source_validate",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 566
+    },
+    {
+      "primitiveName": "skill_source_write",
+      "file": "packages/agents/src/mcp/schemas.ts",
+      "line": 543
     },
     {
       "primitiveName": "skills_catalog_list",

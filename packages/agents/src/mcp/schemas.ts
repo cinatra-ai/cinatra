@@ -466,6 +466,134 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
         .describe("Set to true after the user acknowledges a copyleft license. Required when the package has a copyleft license (GPL/AGPL/LGPL/MPL-2.0)."),
     }),
   },
+  // ----------------------------------------------------------------------
+  // ARTIFACT declarative package-authoring (SDK-P5, eng#167).
+  //
+  // These author an artifact EXTENSION PACKAGE (a `cinatra.kind: "artifact"`
+  // package whose `cinatra.artifact` block is a SEMANTIC artifact manifest —
+  // accepts/satisfies/templates/skills/agentDependencies), published to the
+  // registry. They are FUNDAMENTALLY DISTINCT from `artifact_authoring_emit`,
+  // which emits an artifact INSTANCE (one authored object + assertion). A
+  // package is a reusable, versioned, shippable artifact TYPE; emit produces
+  // one instance of an existing type. ADMIN-ONLY.
+  // ----------------------------------------------------------------------
+  "artifact_source_write": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write an ARTIFACT EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"artifact\"; the cinatra.artifact semantic manifest declares accepts/satisfies/templates/skills/agentDependencies) and an optional skills/<packageSlug>/SKILL.md. DISTINCT from artifact_authoring_emit, which emits an artifact INSTANCE (a concrete object), NOT a reusable artifact TYPE package. Validates the cinatra.artifact manifest before writing (fails closed on an invalid manifest) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: artifact_source_write → artifact_source_validate → artifact_source_compile → artifact_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z
+        .string()
+        .describe("Directory name under extensions/cinatra-ai/ (e.g. 'sales-playbook-artifact'). Must not contain path separators. Convention: kind at the END (-artifact)."),
+      packageJson: z
+        .string()
+        .describe("JSON string for package.json (npm manifest; cinatra.kind is normalized to \"artifact\"; cinatra.artifact is the semantic manifest)."),
+      skillMd: z
+        .string()
+        .optional()
+        .describe("Optional Markdown string for skills/<packageSlug>/SKILL.md (an authoring/matcher/validator skill co-located with the artifact package)."),
+      progressContext: z
+        .object({ runId: z.string() })
+        .optional()
+        .describe("Append-only creation-progress emit context; recipient is server-derived from the actor (HumanUser only)."),
+    }),
+  },
+  "artifact_source_validate": {
+    description:
+      "Validate an artifact PACKAGE's `cinatra.artifact` semantic manifest (accepts/satisfies/templates/skills/agentDependencies) using the canonical install-time parser. Returns { valid, errors }. Does NOT write or persist anything, and does NOT touch any artifact INSTANCE/assertion (that is the artifact_* runtime surface). Pass EITHER `content` (the cinatra.artifact manifest as a JSON string, or a package.json with a cinatra.artifact block) OR `packageSlug` (loads package.json from the package on disk). Source-authoring pipeline step 2 of 4.",
+    inputSchema: z.object({
+      content: z.string().optional().describe("JSON string of the cinatra.artifact manifest (or a package.json containing it)."),
+      packageSlug: z.string().optional().describe("Package slug to load package.json from disk. Must not contain path separators."),
+    }),
+  },
+  "artifact_source_compile": {
+    description:
+      "ADMIN-ONLY (platform_admin). Build/verify gate for an artifact PACKAGE: re-validates that the on-disk package.json#cinatra.artifact manifest parses + validates, and runs the sibling-file credential scan. An artifact package is purely declarative — there is NO agent_templates DB sync. Returns { compiled, valid }. Source-authoring pipeline step 3 of 4. Non-admin invocations are rejected at the delegated-chat policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Artifact package slug. Must not contain path separators."),
+    }),
+  },
+  "artifact_source_publish": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: publish an ARTIFACT PACKAGE from its on-disk directory (extensions/cinatra-ai/<packageSlug>/) to the configured registry. Reads name + version from package.json, carries the declarative cinatra block (kind=artifact) through to the published manifest, and re-runs the manifest validation gate before publishing. Refuses to overwrite an already-published version (returns alreadyPublished: true). Does NOT publish an artifact INSTANCE. Source-authoring pipeline step 4 of 4. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Artifact package slug. Must not contain path separators."),
+      changelog: z.string().nullable().optional().describe("Optional changelog note for this release."),
+      destination: z
+        .enum(["private", "public"])
+        .default("private")
+        .optional()
+        .describe("Publish destination: 'private' (instance-only, default) or 'public' (Cinatra marketplace)."),
+      licenseAcknowledged: z
+        .boolean()
+        .optional()
+        .describe("Set to true after the user acknowledges a copyleft license. Required when the package has a copyleft license (GPL/AGPL/LGPL/MPL-2.0)."),
+    }),
+  },
+  // ----------------------------------------------------------------------
+  // SKILL declarative package-authoring (SDK-P5, eng#167).
+  //
+  // These author a skill EXTENSION PACKAGE (a `cinatra.kind: "skill"` package
+  // whose `cinatra.capabilities` map binds stable capability keys to co-located
+  // skills/<slug>/SKILL.md files), published to the registry. They are
+  // FUNDAMENTALLY DISTINCT from skills_personal_upsert / skills_installed_upsert
+  // (personal/installed skill ROW mutations) and skills_packages_install (which
+  // INSTALLS an already-published skill package). A package authored here is the
+  // reusable, versioned, shippable skill TYPE. ADMIN-ONLY.
+  // ----------------------------------------------------------------------
+  "skill_source_write": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a SKILL EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"skill\"; cinatra.capabilities maps capability keys to co-located skill slugs; defaults to a single capability binding the slug when absent) and skills/<skillSlug>/SKILL.md (the skill content, frontmatter `name` required). DISTINCT from skills_personal_upsert / skills_installed_upsert (skill ROW mutations) and skills_packages_install (install of a published package) — this authors a reusable skill TYPE PACKAGE. Validates the SKILL.md frontmatter before writing (fails closed) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z
+        .string()
+        .describe("Directory name under extensions/cinatra-ai/ (e.g. 'blog-skills'). Must not contain path separators. Convention: kind at the END (-skills)."),
+      packageJson: z
+        .string()
+        .describe("JSON string for package.json (npm manifest; cinatra.kind is normalized to \"skill\"; cinatra.capabilities maps capability keys to skill slugs)."),
+      skillMd: z
+        .string()
+        .describe("Markdown string for skills/<skillSlug>/SKILL.md — the skill content (frontmatter `name` is required)."),
+      skillSlug: z
+        .string()
+        .optional()
+        .describe("Skill directory slug under skills/ (defaults to packageSlug). Must not contain path separators."),
+      progressContext: z
+        .object({ runId: z.string() })
+        .optional()
+        .describe("Append-only creation-progress emit context; recipient is server-derived from the actor (HumanUser only)."),
+    }),
+  },
+  "skill_source_validate": {
+    description:
+      "Validate a skill PACKAGE's capabilities↔SKILL.md contract: package.json#cinatra.kind must be \"skill\", cinatra.capabilities must be non-empty, and every referenced skill slug must resolve to a skills/<slug>/SKILL.md with a parseable frontmatter `name`. Returns { valid, errors }. Does NOT write or persist anything, and does NOT touch any personal/installed skill ROW (that is the skills_* runtime surface). Reads the package on disk via `packageSlug`. Source-authoring pipeline step 2 of 4.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Skill package slug to load from disk. Must not contain path separators."),
+    }),
+  },
+  "skill_source_compile": {
+    description:
+      "ADMIN-ONLY (platform_admin). Build/verify gate for a skill PACKAGE: re-validates the on-disk capabilities↔SKILL.md contract and runs the sibling-file credential scan. A skill package is purely declarative — there is NO agent_templates DB sync. Returns { compiled, valid }. Source-authoring pipeline step 3 of 4. Non-admin invocations are rejected at the delegated-chat policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Skill package slug. Must not contain path separators."),
+    }),
+  },
+  "skill_source_publish": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: publish a SKILL PACKAGE from its on-disk directory (extensions/cinatra-ai/<packageSlug>/) to the configured registry. Reads name + version from package.json, carries the declarative cinatra block (kind=skill) through to the published manifest, and re-runs the capabilities↔SKILL.md validation gate before publishing. Refuses to overwrite an already-published version (returns alreadyPublished: true). Does NOT mutate a personal/installed skill ROW, and does NOT install a package. Source-authoring pipeline step 4 of 4. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Skill package slug. Must not contain path separators."),
+      changelog: z.string().nullable().optional().describe("Optional changelog note for this release."),
+      destination: z
+        .enum(["private", "public"])
+        .default("private")
+        .optional()
+        .describe("Publish destination: 'private' (instance-only, default) or 'public' (Cinatra marketplace)."),
+      licenseAcknowledged: z
+        .boolean()
+        .optional()
+        .describe("Set to true after the user acknowledges a copyleft license. Required when the package has a copyleft license (GPL/AGPL/LGPL/MPL-2.0)."),
+    }),
+  },
   // Single review surface for chat-driven agent authoring.
   // Deterministic lint runs server-side; advisory mode is DEFERRED because
   // agent_run queues asynchronously and cannot return helper findings inline.

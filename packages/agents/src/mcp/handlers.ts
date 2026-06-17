@@ -233,7 +233,7 @@ import {
   enqueueInlineForAgent,
   cleanupForAgent,
 } from "@cinatra-ai/skills";
-import { createDeterministicObjectsClient } from "@cinatra-ai/objects";
+import { createDeterministicObjectsClient, parseSemanticArtifactManifest } from "@cinatra-ai/objects";
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { enforceRunAccess, actorContextFromMcpRequest } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
@@ -4993,6 +4993,788 @@ async function handleWorkflowSourcePublish(
   }
 }
 
+// ===========================================================================
+// ARTIFACT source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+//
+// These tools author an ARTIFACT EXTENSION PACKAGE on disk (a `cinatra.kind:
+// "artifact"` package whose `cinatra.artifact` block is a SEMANTIC artifact
+// manifest — accepts/satisfies/templates/skills/agentDependencies — plus
+// optional co-located skills/<slug>/SKILL.md files), published to the registry.
+//
+// This is FUNDAMENTALLY DISTINCT from `artifact_authoring_emit`, which emits an
+// artifact INSTANCE (a concrete authored object + assertion via the recursion-
+// ledger-gated chat surface). A package is a reusable, versioned, shippable
+// artifact TYPE definition; emit produces one instance of an existing type.
+//
+// Pipeline shape mirrors the workflow path (scaffold→write→validate→build→submit):
+//   artifact_source_write    — scaffold + write package.json (kind:artifact) + optional SKILL.md
+//   artifact_source_validate — parse cinatra.artifact via parseSemanticArtifactManifest (read-only)
+//   artifact_source_compile  — re-validate the on-disk manifest + sibling-file scan (build/verify gate)
+//   artifact_source_publish  — publish the artifact package to the registry (kind-aware, no OAS)
+//
+// The three MUTATORS (write/compile/publish) are ADMIN-ONLY at the handler
+// boundary (same gate as agent_source_*/workflow_source_*) and are denied for
+// non-admins by the delegated-chat tool policy (their verb tokens are denylisted
+// + not allowlisted). artifact_source_VALIDATE is read-only and intentionally
+// NOT admin-gated (parity with workflow_source_validate).
+// ===========================================================================
+
+function resolveArtifactPackagePathForRead(packageSlug: string): { path: string; rootDir: string } | null {
+  const root = resolveAgentInstallDir();
+  const pkgRoot = join(root, "cinatra-ai", packageSlug);
+  const pkgJson = join(pkgRoot, "package.json");
+  if (existsSync(pkgJson)) return { path: pkgJson, rootDir: pkgRoot };
+  return null;
+}
+
+// Validate a `cinatra.artifact` semantic manifest BLOCK (the artifact PACKAGE's
+// declarative definition). Mirrors validateWorkflowBpmnContent in shape: pure,
+// no persistence, fail-closed. The canonical schema lives in @cinatra-ai/objects
+// (parseSemanticArtifactManifest) — the SAME parser the install-time artifact
+// handler uses — so chat-authored packages are held to the install contract.
+function validateArtifactManifestContent(
+  cinatraArtifact: unknown,
+): { valid: boolean; errors: string[] } {
+  if (cinatraArtifact === undefined || cinatraArtifact === null) {
+    return { valid: false, errors: ["package.json#cinatra.artifact is required for an artifact package (the semantic manifest: accepts/satisfies/templates/skills/agentDependencies)."] };
+  }
+  const result = parseSemanticArtifactManifest(cinatraArtifact);
+  if (result.ok) return { valid: true, errors: [] };
+  return { valid: false, errors: result.errors };
+}
+
+// Full ON-DISK artifact-package validation — reads package.json#cinatra and runs
+// validateArtifactManifestContent over the `artifact` block. Used by compile/
+// publish where the package is materialized on disk (the pre-write content
+// validator only sees the incoming JSON string).
+// Mirrors the install-time artifact handler's cinatra-block allowlist
+// (packages/extensions/src/artifact-handler.ts) so a chat-authored package that
+// compiles/publishes here can never be REJECTED or silently skipped at install.
+const ARTIFACT_ALLOWED_CINATRA_KEYS = new Set(["kind", "apiVersion", "artifact", "dependencies", "roles"]);
+
+async function validateArtifactPackageOnDisk(
+  packageRoot: string,
+): Promise<{ valid: boolean; errors: string[] }> {
+  let pkgCinatra: Record<string, unknown> = {};
+  try {
+    const pkgRaw = await readFile(join(packageRoot, "package.json"), "utf8");
+    const pkg = JSON.parse(pkgRaw) as Record<string, unknown>;
+    if (pkg.cinatra && typeof pkg.cinatra === "object" && !Array.isArray(pkg.cinatra)) {
+      pkgCinatra = pkg.cinatra as Record<string, unknown>;
+    }
+  } catch (err) {
+    return { valid: false, errors: [`Failed to read package.json: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  const errors: string[] = [];
+  if (pkgCinatra.kind !== "artifact") {
+    errors.push(`package.json#cinatra.kind must be "artifact" (got "${String(pkgCinatra.kind ?? "<missing>")}").`);
+  }
+  // Parity with the install contract: an artifact extension is metadata-only —
+  // it must NOT carry a cinatra.oas payload (never agent-loader-mountable).
+  if ("oas" in pkgCinatra && pkgCinatra.oas != null) {
+    errors.push("artifact extensions are metadata-only and must NOT carry a `cinatra.oas` payload.");
+  }
+  // Allowlist the cinatra block — reject ANY non-artifact manifest key (catches
+  // stale agent/workflow keys left from a reused slug — the kind-disjointness guard).
+  const extraneous = Object.keys(pkgCinatra).filter((k) => !ARTIFACT_ALLOWED_CINATRA_KEYS.has(k));
+  if (extraneous.length > 0) {
+    errors.push(`artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles}; unexpected key(s): ${extraneous.join(", ")}.`);
+  }
+  // Forbidden kind-foreign sidecars on disk (stale from a reused slug): a
+  // workflow.bpmn or an agent oas.json must not coexist in an artifact package.
+  if (existsSync(join(packageRoot, "cinatra", "workflow.bpmn"))) {
+    errors.push("an artifact package must not contain cinatra/workflow.bpmn (stale workflow sidecar from a reused slug).");
+  }
+  if (existsSync(join(packageRoot, "cinatra", "oas.json"))) {
+    errors.push("an artifact package must not contain cinatra/oas.json (stale agent sidecar from a reused slug).");
+  }
+  if (existsSync(join(packageRoot, "cinatra", "agent.json"))) {
+    errors.push("an artifact package must not contain cinatra/agent.json (stale agent sidecar from a reused slug).");
+  }
+  const manifestCheck = validateArtifactManifestContent(pkgCinatra.artifact);
+  if (!manifestCheck.valid) errors.push(...manifestCheck.errors);
+  return { valid: errors.length === 0, errors };
+}
+
+// artifact_source_write — scaffold + write an artifact extension package.
+async function handleArtifactSourceWrite(
+  request: PrimitiveRequest<{
+    packageSlug?: string;
+    packageJson?: string;
+    skillMd?: string;
+    progressContext?: { runId: string };
+  }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to write artifact package files." };
+
+  const writePreflight = await runAgentSourceWritePreflightIfPinned();
+  if (writePreflight && !writePreflight.ok) {
+    return {
+      error: `artifact_source_write blocked by preflight (${writePreflight.errors.map((e) => e.code).join(", ")}): ${writePreflight.errors.map((e) => e.message).join(" / ")}`,
+    };
+  }
+
+  const { packageSlug, packageJson, skillMd } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (!packageJson || typeof packageJson !== "string") return { error: "packageJson is required (JSON string)." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+
+  let parsedPackageJson: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(packageJson);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "packageJson must be a JSON object." };
+    parsedPackageJson = raw as Record<string, unknown>;
+  } catch {
+    return { error: "packageJson is not valid JSON." };
+  }
+
+  // sibling-file credential scan over the in-memory strings (BEFORE disk write).
+  {
+    const inMemBlockers: ReviewFinding[] = [];
+    const scanTargets: Array<[string, string]> = [["package.json", packageJson]];
+    if (typeof skillMd === "string") scanTargets.push([`skills/${packageSlug}/SKILL.md`, skillMd]);
+    for (const [relPath, content] of scanTargets) {
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        const pattern = detectCredentialPattern(line);
+        if (pattern) {
+          inMemBlockers.push({
+            code: "literal_credential_in_sibling_file",
+            severity: "blocker",
+            message: `literal credential detected in ${relPath}:${i + 1}: pattern=${pattern}`,
+            location: `${relPath}:${i + 1}`,
+            source: "deterministic",
+          });
+        }
+      }
+    }
+    if (inMemBlockers.length > 0) {
+      return {
+        error: `Refusing to write package files — ${inMemBlockers.length} literal credential${inMemBlockers.length === 1 ? "" : "s"} detected. Move credentials to /settings/connections (Nango).`,
+        code: "review_blocked",
+        blockers: inMemBlockers,
+      };
+    }
+  }
+
+  // Validate the semantic artifact manifest BEFORE writing — fail closed so an
+  // artifact package with an invalid `cinatra.artifact` block never lands on disk.
+  const incomingCinatraRaw =
+    parsedPackageJson.cinatra && typeof parsedPackageJson.cinatra === "object" && !Array.isArray(parsedPackageJson.cinatra)
+      ? (parsedPackageJson.cinatra as Record<string, unknown>)
+      : {};
+  const manifestCheck = validateArtifactManifestContent(incomingCinatraRaw.artifact);
+  if (!manifestCheck.valid) {
+    return { error: `cinatra.artifact failed validation: ${manifestCheck.errors.join("; ")}`, valid: false, errors: manifestCheck.errors };
+  }
+
+  // Rescope package.json#name to the operator's vendor namespace (same logic as
+  // the agent/workflow path) so disk slug, package name, and published scope cannot drift.
+  const identity = readInstanceIdentity();
+  const vendorName = identity
+    ? ((identity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
+       (identity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace ??
+       "cinatra-ai")
+    : "cinatra-ai";
+  const normalizedPackageName = `@${vendorName}/${packageSlug}`;
+  assertNotReservedAgentPackageName(normalizedPackageName);
+  const incomingName = typeof parsedPackageJson.name === "string" ? parsedPackageJson.name : null;
+  let nameNormalized: { from: string | null; to: string } | null = null;
+  if (incomingName !== normalizedPackageName) {
+    nameNormalized = { from: incomingName, to: normalizedPackageName };
+  }
+  parsedPackageJson.name = normalizedPackageName;
+
+  // Normalize the cinatra block to the ARTIFACT kind (the de-coerced normalizer
+  // — this path passes "artifact", not "agent"). The `artifact` manifest block
+  // is preserved by the normalizer (it only touches kind + apiVersion).
+  const { block: cinatraBlock, normalized: cinatraNormalized } = normalizeCinatraBlockForKind(
+    parsedPackageJson.cinatra,
+    "artifact",
+  );
+  parsedPackageJson.cinatra = cinatraBlock;
+
+  await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
+
+  const installRoot = resolveAgentInstallDir();
+  const pkgRoot = join(installRoot, "cinatra-ai", packageSlug);
+  const packageJsonPath = join(pkgRoot, "package.json");
+  const skillMdPath = join(pkgRoot, "skills", packageSlug, "SKILL.md");
+
+  try {
+    await mkdir(pkgRoot, { recursive: true });
+    await writeFile(packageJsonPath, JSON.stringify(parsedPackageJson, null, 2) + "\n", "utf8");
+    if (typeof skillMd === "string" && skillMd.length > 0) {
+      await mkdir(join(pkgRoot, "skills", packageSlug), { recursive: true });
+      await writeFile(skillMdPath, skillMd, "utf8");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await rm(pkgRoot, { recursive: true, force: true }).catch(() => {});
+    return { error: `Failed to write files: ${message}` };
+  }
+
+  return {
+    written: true,
+    kind: "artifact",
+    paths: {
+      packageJson: relative(process.cwd(), packageJsonPath),
+      ...(typeof skillMd === "string" && skillMd.length > 0 ? { skillMd: relative(process.cwd(), skillMdPath) } : {}),
+    },
+    ...(nameNormalized ? { nameNormalized } : {}),
+    ...(cinatraNormalized ? { cinatraNormalized } : {}),
+  };
+}
+
+// artifact_source_validate — validate a cinatra.artifact manifest (content or on-disk slug).
+async function handleArtifactSourceValidate(
+  request: PrimitiveRequest<{ content?: string; packageSlug?: string }>,
+): Promise<unknown> {
+  const { content, packageSlug } = request.input;
+  // `content` is the cinatra.artifact manifest as a JSON string (or the whole
+  // package.json — we extract cinatra.artifact when present).
+  if (content && typeof content === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      return { valid: false, errors: ["content is not valid JSON (expected the cinatra.artifact manifest or a package.json with a cinatra.artifact block)."] };
+    }
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as Record<string, unknown>;
+      const cinatra = obj.cinatra && typeof obj.cinatra === "object" && !Array.isArray(obj.cinatra) ? (obj.cinatra as Record<string, unknown>) : null;
+      if (cinatra && "artifact" in cinatra) return validateArtifactManifestContent(cinatra.artifact);
+      if ("artifact" in obj && !("accepts" in obj)) return validateArtifactManifestContent(obj.artifact);
+    }
+    return validateArtifactManifestContent(parsed);
+  }
+  if (typeof packageSlug === "string" && packageSlug.length > 0) {
+    if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+      return { valid: false, errors: ["packageSlug must not contain path separators or '..'."] };
+    }
+    const resolved = resolveArtifactPackagePathForRead(packageSlug);
+    if (!resolved) {
+      return { valid: false, errors: [`Artifact package not found for slug "${packageSlug}". Use artifact_source_write first, or pass content directly.`] };
+    }
+    return validateArtifactPackageOnDisk(resolved.rootDir);
+  }
+  return { valid: false, errors: ["content (cinatra.artifact manifest JSON string) or packageSlug is required."] };
+}
+
+// artifact_source_compile — re-validate the on-disk package compiles cleanly.
+// Like workflow_source_compile (and UNLIKE agent_source_compile), there is NO
+// agent_templates DB sync — an artifact PACKAGE is purely declarative.
+async function handleArtifactSourceCompile(
+  request: PrimitiveRequest<{ packageSlug?: string }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to compile." };
+
+  const { packageSlug } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  const resolved = resolveArtifactPackagePathForRead(packageSlug);
+  if (!resolved) {
+    return { error: `Artifact package not found: cinatra-ai/${packageSlug}/package.json. Use artifact_source_write to create it first.` };
+  }
+
+  // sibling-file credential scan over the on-disk package (parity with workflow compile).
+  const siblingFindings = await scanPackageSiblingFilesForLiteralSecrets(resolved.rootDir);
+  const siblingBlockers = siblingFindings.filter((f) => f.severity === "blocker");
+  if (siblingBlockers.length > 0) {
+    return {
+      error: `Package sibling-file review failed (${siblingBlockers.length} blocker${siblingBlockers.length === 1 ? "" : "s"}): ${siblingBlockers.map((b) => b.message).join("; ")}`,
+      code: "review_blocked",
+      blockers: siblingBlockers,
+    };
+  }
+
+  const check = await validateArtifactPackageOnDisk(resolved.rootDir);
+  if (!check.valid) {
+    return { error: `artifact package failed validation: ${check.errors.join("; ")}`, valid: false, errors: check.errors };
+  }
+  return { compiled: true, kind: "artifact", packageSlug, valid: true };
+}
+
+// artifact_source_publish — publish the artifact package to the registry.
+async function handleArtifactSourcePublish(
+  request: PrimitiveRequest<{ packageSlug?: string; destination?: "private" | "public"; changelog?: string | null; licenseAcknowledged?: boolean }>,
+): Promise<unknown> {
+  return publishDeclarativePackage(request, "artifact", validateArtifactPackageOnDisk, resolveArtifactPackagePathForRead);
+}
+
+// ===========================================================================
+// SKILL source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+//
+// These tools author a SKILL EXTENSION PACKAGE on disk (a `cinatra.kind:
+// "skill"` package whose `cinatra.capabilities` map binds stable capability
+// keys to co-located skills/<slug>/SKILL.md files), published to the registry.
+//
+// This is FUNDAMENTALLY DISTINCT from skills_personal_upsert / skills_installed_
+// upsert (which mutate an operator's PERSONAL/INSTALLED skill rows) and from
+// skills_packages_install (which INSTALLS an already-published skill package).
+// A package authored here is the reusable, versioned, shippable skill TYPE; the
+// skills_* mutations operate on a runtime skill row or install state, not on a
+// publishable package on disk.
+//
+// Pipeline shape mirrors the workflow/artifact path:
+//   skill_source_write    — scaffold + write package.json (kind:skill, capabilities) + skills/<slug>/SKILL.md
+//   skill_source_validate — verify capabilities map binds to present SKILL.md files w/ valid frontmatter (read-only)
+//   skill_source_compile  — re-validate the on-disk package + sibling-file scan (build/verify gate)
+//   skill_source_publish  — publish the skill package to the registry (kind-aware, no OAS)
+//
+// The three MUTATORS (write/compile/publish) are ADMIN-ONLY at the handler
+// boundary; the delegated-chat tool policy denylists their verbs identically.
+// skill_source_VALIDATE is read-only and intentionally NOT admin-gated.
+// ===========================================================================
+
+function resolveSkillPackagePathForRead(packageSlug: string): { path: string; rootDir: string } | null {
+  const root = resolveAgentInstallDir();
+  const pkgRoot = join(root, "cinatra-ai", packageSlug);
+  const pkgJson = join(pkgRoot, "package.json");
+  if (existsSync(pkgJson)) return { path: pkgJson, rootDir: pkgRoot };
+  return null;
+}
+
+// Full ON-DISK skill-package validation: package.json#cinatra.kind must be
+// "skill"; the `cinatra.capabilities` map (stable key → co-located skill slug)
+// must be present and every referenced slug must resolve to a
+// skills/<slug>/SKILL.md with a parseable frontmatter `name`. Mirrors the
+// extension-skill-resolver's on-disk contract (capabilities → skills/<slug>/SKILL.md).
+async function validateSkillPackageOnDisk(
+  packageRoot: string,
+): Promise<{ valid: boolean; errors: string[] }> {
+  let pkgCinatra: { kind?: unknown; capabilities?: unknown } = {};
+  try {
+    const pkgRaw = await readFile(join(packageRoot, "package.json"), "utf8");
+    const pkg = JSON.parse(pkgRaw) as Record<string, unknown>;
+    if (pkg.cinatra && typeof pkg.cinatra === "object" && !Array.isArray(pkg.cinatra)) {
+      pkgCinatra = pkg.cinatra as typeof pkgCinatra;
+    }
+  } catch (err) {
+    return { valid: false, errors: [`Failed to read package.json: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  if (pkgCinatra.kind !== "skill") {
+    return { valid: false, errors: [`package.json#cinatra.kind must be "skill" (got "${String(pkgCinatra.kind ?? "<missing>")}").`] };
+  }
+  // Parity with the metadata-only kinds: a skill package must NOT carry a
+  // cinatra.oas payload, and must not coexist with kind-foreign sidecars left
+  // from a reused slug (the kind-disjointness guard codex flagged).
+  const preErrors: string[] = [];
+  if ("oas" in pkgCinatra && pkgCinatra.oas != null) {
+    preErrors.push("skill extensions are declarative and must NOT carry a `cinatra.oas` payload.");
+  }
+  if (existsSync(join(packageRoot, "cinatra", "workflow.bpmn"))) {
+    preErrors.push("a skill package must not contain cinatra/workflow.bpmn (stale workflow sidecar from a reused slug).");
+  }
+  if (existsSync(join(packageRoot, "cinatra", "oas.json"))) {
+    preErrors.push("a skill package must not contain cinatra/oas.json (stale agent sidecar from a reused slug).");
+  }
+  if (existsSync(join(packageRoot, "cinatra", "agent.json"))) {
+    preErrors.push("a skill package must not contain cinatra/agent.json (stale agent sidecar from a reused slug).");
+  }
+  const rawCaps = pkgCinatra.capabilities;
+  if (!rawCaps || typeof rawCaps !== "object" || Array.isArray(rawCaps)) {
+    return { valid: false, errors: [...preErrors, "package.json#cinatra.capabilities must be a non-empty object mapping capability keys to co-located skill slugs."] };
+  }
+  const caps = rawCaps as Record<string, unknown>;
+  const capEntries = Object.entries(caps);
+  if (capEntries.length === 0) {
+    return { valid: false, errors: [...preErrors, "package.json#cinatra.capabilities is empty — a skill package must declare at least one capability → skill-slug binding."] };
+  }
+  const errors: string[] = [...preErrors];
+  for (const [capKey, slugValue] of capEntries) {
+    if (typeof slugValue !== "string" || slugValue.length === 0) {
+      errors.push(`capabilities["${capKey}"] must be a non-empty skill-slug string.`);
+      continue;
+    }
+    if (slugValue.includes("..") || slugValue.includes("/") || slugValue.includes("\\")) {
+      errors.push(`capabilities["${capKey}"] skill-slug "${slugValue}" must not contain path separators or '..'.`);
+      continue;
+    }
+    const skillMdPath = join(packageRoot, "skills", slugValue, "SKILL.md");
+    if (!existsSync(skillMdPath)) {
+      errors.push(`capability "${capKey}" → slug "${slugValue}": skills/${slugValue}/SKILL.md not found.`);
+      continue;
+    }
+    try {
+      const content = await readFile(skillMdPath, "utf8");
+      const { attributes } = parseFrontmatter(content);
+      if (!attributes || typeof attributes.name !== "string" || attributes.name.length === 0) {
+        errors.push(`skills/${slugValue}/SKILL.md is missing a frontmatter \`name\`.`);
+      }
+    } catch (err) {
+      errors.push(`Failed to read skills/${slugValue}/SKILL.md: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+// skill_source_write — scaffold + write a skill extension package.
+async function handleSkillSourceWrite(
+  request: PrimitiveRequest<{
+    packageSlug?: string;
+    packageJson?: string;
+    skillMd?: string;
+    skillSlug?: string;
+    progressContext?: { runId: string };
+  }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to write skill package files." };
+
+  const writePreflight = await runAgentSourceWritePreflightIfPinned();
+  if (writePreflight && !writePreflight.ok) {
+    return {
+      error: `skill_source_write blocked by preflight (${writePreflight.errors.map((e) => e.code).join(", ")}): ${writePreflight.errors.map((e) => e.message).join(" / ")}`,
+    };
+  }
+
+  const { packageSlug, packageJson, skillMd } = request.input;
+  // The skill content slug defaults to the package slug (the common single-skill
+  // package shape). Callers may override to author a differently-named skill dir.
+  const skillSlug = typeof request.input.skillSlug === "string" && request.input.skillSlug.length > 0 ? request.input.skillSlug : packageSlug;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (!packageJson || typeof packageJson !== "string") return { error: "packageJson is required (JSON string)." };
+  if (!skillMd || typeof skillMd !== "string") return { error: "skillMd is required (Markdown string with frontmatter)." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  if (typeof skillSlug !== "string" || skillSlug.includes("..") || skillSlug.includes("/") || skillSlug.includes("\\")) {
+    return { error: "skillSlug must not contain path separators or '..'." };
+  }
+
+  let parsedPackageJson: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(packageJson);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "packageJson must be a JSON object." };
+    parsedPackageJson = raw as Record<string, unknown>;
+  } catch {
+    return { error: "packageJson is not valid JSON." };
+  }
+
+  // sibling-file credential scan over the in-memory strings (BEFORE disk write).
+  {
+    const inMemBlockers: ReviewFinding[] = [];
+    const scanTargets: Array<[string, string]> = [
+      ["package.json", packageJson],
+      [`skills/${skillSlug}/SKILL.md`, skillMd],
+    ];
+    for (const [relPath, content] of scanTargets) {
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        const pattern = detectCredentialPattern(line);
+        if (pattern) {
+          inMemBlockers.push({
+            code: "literal_credential_in_sibling_file",
+            severity: "blocker",
+            message: `literal credential detected in ${relPath}:${i + 1}: pattern=${pattern}`,
+            location: `${relPath}:${i + 1}`,
+            source: "deterministic",
+          });
+        }
+      }
+    }
+    if (inMemBlockers.length > 0) {
+      return {
+        error: `Refusing to write package files — ${inMemBlockers.length} literal credential${inMemBlockers.length === 1 ? "" : "s"} detected. Move credentials to /settings/connections (Nango).`,
+        code: "review_blocked",
+        blockers: inMemBlockers,
+      };
+    }
+  }
+
+  // Validate the SKILL.md frontmatter BEFORE writing — fail closed so a skill
+  // package with an unparseable/nameless SKILL.md never lands on disk.
+  {
+    const { attributes } = parseFrontmatter(skillMd);
+    if (!attributes || typeof attributes.name !== "string" || attributes.name.length === 0) {
+      return { error: "skillMd is missing a frontmatter `name` (required for a skill package).", valid: false, errors: ["SKILL.md frontmatter `name` is required."] };
+    }
+  }
+
+  // Rescope package.json#name to the operator's vendor namespace.
+  const identity = readInstanceIdentity();
+  const vendorName = identity
+    ? ((identity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
+       (identity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace ??
+       "cinatra-ai")
+    : "cinatra-ai";
+  const normalizedPackageName = `@${vendorName}/${packageSlug}`;
+  assertNotReservedAgentPackageName(normalizedPackageName);
+  const incomingName = typeof parsedPackageJson.name === "string" ? parsedPackageJson.name : null;
+  let nameNormalized: { from: string | null; to: string } | null = null;
+  if (incomingName !== normalizedPackageName) {
+    nameNormalized = { from: incomingName, to: normalizedPackageName };
+  }
+  parsedPackageJson.name = normalizedPackageName;
+
+  // Normalize the cinatra block to the SKILL kind. If no capabilities map was
+  // emitted, default to a single capability binding the package slug to the
+  // authored skill slug so the package is immediately resolvable + publishable.
+  const { block: cinatraBlock, normalized: cinatraNormalized } = normalizeCinatraBlockForKind(
+    parsedPackageJson.cinatra,
+    "skill",
+  );
+  const existingCaps =
+    cinatraBlock.capabilities && typeof cinatraBlock.capabilities === "object" && !Array.isArray(cinatraBlock.capabilities)
+      ? (cinatraBlock.capabilities as Record<string, unknown>)
+      : null;
+  if (!existingCaps || Object.keys(existingCaps).length === 0) {
+    cinatraBlock.capabilities = { [`skill.${skillSlug}`]: skillSlug };
+  } else {
+    // Fail closed on an explicit capabilities map BEFORE writing. This single
+    // write authors exactly ONE skills/<skillSlug>/SKILL.md, so every capability
+    // value MUST bind to `skillSlug` — a reference to any other slug would point
+    // at a file this write does not create (the on-disk validator would later
+    // reject it, but only after the package already landed). Author a multi-skill
+    // package by calling skill_source_write once per skillSlug.
+    const danglingValues = Object.entries(existingCaps).filter(([, v]) => v !== skillSlug);
+    if (danglingValues.length > 0) {
+      return {
+        error: `cinatra.capabilities references skill slug(s) not authored by this write: ${danglingValues.map(([k, v]) => `${k}→${String(v)}`).join(", ")}. This write authors only skills/${skillSlug}/SKILL.md — every capability must bind to "${skillSlug}". Author other skills with a separate skill_source_write call.`,
+        valid: false,
+        errors: [`capabilities must bind to the authored skill slug "${skillSlug}".`],
+      };
+    }
+  }
+  parsedPackageJson.cinatra = cinatraBlock;
+
+  await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
+
+  const installRoot = resolveAgentInstallDir();
+  const pkgRoot = join(installRoot, "cinatra-ai", packageSlug);
+  const packageJsonPath = join(pkgRoot, "package.json");
+  const skillMdPath = join(pkgRoot, "skills", skillSlug, "SKILL.md");
+
+  try {
+    await mkdir(pkgRoot, { recursive: true });
+    await mkdir(join(pkgRoot, "skills", skillSlug), { recursive: true });
+    await writeFile(packageJsonPath, JSON.stringify(parsedPackageJson, null, 2) + "\n", "utf8");
+    await writeFile(skillMdPath, skillMd, "utf8");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await rm(pkgRoot, { recursive: true, force: true }).catch(() => {});
+    return { error: `Failed to write files: ${message}` };
+  }
+
+  return {
+    written: true,
+    kind: "skill",
+    paths: {
+      packageJson: relative(process.cwd(), packageJsonPath),
+      skillMd: relative(process.cwd(), skillMdPath),
+    },
+    ...(nameNormalized ? { nameNormalized } : {}),
+    ...(cinatraNormalized ? { cinatraNormalized } : {}),
+  };
+}
+
+// skill_source_validate — validate a skill package's capabilities↔SKILL.md
+// contract (on-disk slug). Read-only; no persistence.
+async function handleSkillSourceValidate(
+  request: PrimitiveRequest<{ packageSlug?: string }>,
+): Promise<unknown> {
+  const { packageSlug } = request.input;
+  if (typeof packageSlug !== "string" || packageSlug.length === 0) {
+    return { valid: false, errors: ["packageSlug is required (skill package validation reads the on-disk capabilities↔SKILL.md contract)."] };
+  }
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { valid: false, errors: ["packageSlug must not contain path separators or '..'."] };
+  }
+  const resolved = resolveSkillPackagePathForRead(packageSlug);
+  if (!resolved) {
+    return { valid: false, errors: [`Skill package not found for slug "${packageSlug}". Use skill_source_write first.`] };
+  }
+  return validateSkillPackageOnDisk(resolved.rootDir);
+}
+
+// skill_source_compile — re-validate the on-disk package compiles cleanly.
+async function handleSkillSourceCompile(
+  request: PrimitiveRequest<{ packageSlug?: string }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to compile." };
+
+  const { packageSlug } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  const resolved = resolveSkillPackagePathForRead(packageSlug);
+  if (!resolved) {
+    return { error: `Skill package not found: cinatra-ai/${packageSlug}/package.json. Use skill_source_write to create it first.` };
+  }
+
+  const siblingFindings = await scanPackageSiblingFilesForLiteralSecrets(resolved.rootDir);
+  const siblingBlockers = siblingFindings.filter((f) => f.severity === "blocker");
+  if (siblingBlockers.length > 0) {
+    return {
+      error: `Package sibling-file review failed (${siblingBlockers.length} blocker${siblingBlockers.length === 1 ? "" : "s"}): ${siblingBlockers.map((b) => b.message).join("; ")}`,
+      code: "review_blocked",
+      blockers: siblingBlockers,
+    };
+  }
+
+  const check = await validateSkillPackageOnDisk(resolved.rootDir);
+  if (!check.valid) {
+    return { error: `skill package failed validation: ${check.errors.join("; ")}`, valid: false, errors: check.errors };
+  }
+  return { compiled: true, kind: "skill", packageSlug, valid: true };
+}
+
+// skill_source_publish — publish the skill package to the registry.
+async function handleSkillSourcePublish(
+  request: PrimitiveRequest<{ packageSlug?: string; destination?: "private" | "public"; changelog?: string | null; licenseAcknowledged?: boolean }>,
+): Promise<unknown> {
+  return publishDeclarativePackage(request, "skill", validateSkillPackageOnDisk, resolveSkillPackagePathForRead);
+}
+
+// ---------------------------------------------------------------------------
+// Shared declarative-publish path for the artifact + skill kinds (SDK-P5,
+// eng#167). Mirrors handleWorkflowSourcePublish exactly (admin gate → on-disk
+// validation gate → SPDX license gate → public strict-semver guard → publish-
+// destination resolution → publishExtensionPackageFromDir({kind})), parametric
+// over the kind + its on-disk validator + its path resolver. The workflow path
+// stays separate because its validator (BPMN sidecar) has a distinct signature.
+// ---------------------------------------------------------------------------
+async function publishDeclarativePackage(
+  request: PrimitiveRequest<{ packageSlug?: string; destination?: "private" | "public"; changelog?: string | null; licenseAcknowledged?: boolean }>,
+  kind: "artifact" | "skill",
+  validateOnDisk: (packageRoot: string) => Promise<{ valid: boolean; errors: string[] }>,
+  resolvePath: (packageSlug: string) => { path: string; rootDir: string } | null,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: `Unauthorized — admin session required to publish.` };
+
+  const { packageSlug, destination = "private", licenseAcknowledged = false } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  const resolved = resolvePath(packageSlug);
+  if (!resolved) {
+    return { error: `${kind} package not found: cinatra-ai/${packageSlug}. Use ${kind}_source_write to create it first.` };
+  }
+
+  // Re-run the FULL on-disk validation gate so a structurally-invalid package
+  // never publishes (parity with the workflow path).
+  const onDiskCheck = await validateOnDisk(resolved.rootDir);
+  if (!onDiskCheck.valid) {
+    return { error: `Refusing to publish — ${kind} package failed validation: ${onDiskCheck.errors.join("; ")}`, valid: false, errors: onDiskCheck.errors };
+  }
+
+  // SPDX license detection gate — parity with agent/workflow publish.
+  try {
+    const licenseResult = await detectSpdxLicense(resolved.rootDir);
+    if (licenseResult.tier === "reject") {
+      throw new LicenseDetectionRejectedError(licenseResult.reason);
+    }
+    if (licenseResult.tier === "copyleft" && !licenseAcknowledged) {
+      throw new LicenseAcknowledgementRequiredError(licenseResult.spdxId);
+    }
+  } catch (licenseError) {
+    if (
+      licenseError instanceof LicenseDetectionRejectedError ||
+      licenseError instanceof LicenseAcknowledgementRequiredError
+    ) {
+      return { error: licenseError.message, code: licenseError.code };
+    }
+    const msg = licenseError instanceof Error ? licenseError.message : "License detection failed.";
+    return { error: `License detection error: ${msg}` };
+  }
+
+  // Public-publish strict-semver guard — parity with agent/workflow publish.
+  if (destination === "public") {
+    let pkgVersion = "";
+    try {
+      const pkgRaw = await readFile(join(resolved.rootDir, "package.json"), "utf8");
+      pkgVersion = (JSON.parse(pkgRaw) as { version?: string }).version ?? "";
+    } catch {
+      return { error: "publish refused: could not read package.json version.", code: "publish_authority_denied" };
+    }
+    const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?$/;
+    if (!pkgVersion || pkgVersion.startsWith("0.0.0-dev.") || !SEMVER.test(pkgVersion)) {
+      return {
+        error: `publish refused by publish authority: a public ${kind} package must carry a real semver version (got "${pkgVersion || "<none>"}").`,
+        code: "publish_authority_denied",
+      };
+    }
+  }
+
+  // Publish-side destination resolution (parity with workflow path).
+  let publishConfig: VerdaccioConfig;
+  const publishScopeOverride = readEffectivePublishScopeOverride();
+  try {
+    publishConfig = await resolvePublishDestination(destination, {
+      vendorScopeOverride: publishScopeOverride,
+    });
+  } catch (e) {
+    if (e instanceof InstanceNamespaceNotConfiguredError) {
+      return { error: "Instance vendor name is not configured. Visit /setup/name to provision a registry identity before publishing." };
+    }
+    if (e instanceof PublishDestinationNotConfiguredError && destination === "private") {
+      try {
+        const fallback = await loadVerdaccioConfigForServer();
+        publishConfig = publishScopeOverride
+          ? { ...fallback, packageScope: `@${publishScopeOverride}` }
+          : fallback;
+      } catch (fallbackErr) {
+        const msg = fallbackErr instanceof Error ? fallbackErr.message : "Failed to resolve publish destination.";
+        return { error: `No private publish destination is configured (${e.message}); local Verdaccio fallback also failed: ${msg}.` };
+      }
+    } else {
+      return { error: e instanceof Error ? e.message : "Failed to resolve publish destination." };
+    }
+  }
+
+  try {
+    const { publishExtensionPackageFromDir } = await import("../verdaccio/client");
+    const result = await publishExtensionPackageFromDir(
+      { packageDir: resolved.rootDir, kind },
+      publishConfig,
+    );
+    if (result.alreadyPublished) {
+      return {
+        packageName: result.packageName,
+        packageVersion: result.packageVersion,
+        registryUrl: result.registryUrl,
+        published: false,
+        alreadyPublished: true,
+      };
+    }
+    return {
+      packageName: result.packageName,
+      packageVersion: result.packageVersion,
+      registryUrl: result.registryUrl,
+      published: true,
+      alreadyPublished: false,
+      kind,
+    };
+  } catch (err) {
+    return { error: `Publish failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -5133,6 +5915,48 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     },
     workflow_source_publish: (req) =>
       handleWorkflowSourcePublish(req as Parameters<typeof handleWorkflowSourcePublish>[0]),
+    // ARTIFACT declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // artifact_authoring_emit (an artifact INSTANCE emit) — these author/publish
+    // a reusable artifact TYPE PACKAGE (cinatra.kind:"artifact" + a semantic
+    // cinatra.artifact manifest). Same lifecycle-lock discipline as the agent/
+    // workflow source mutators.
+    artifact_source_write: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleArtifactSourceWrite(req as Parameters<typeof handleArtifactSourceWrite>[0]),
+      );
+    },
+    artifact_source_validate: (req) =>
+      handleArtifactSourceValidate(req as Parameters<typeof handleArtifactSourceValidate>[0]),
+    artifact_source_compile: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleArtifactSourceCompile(req as Parameters<typeof handleArtifactSourceCompile>[0]),
+      );
+    },
+    artifact_source_publish: (req) =>
+      handleArtifactSourcePublish(req as Parameters<typeof handleArtifactSourcePublish>[0]),
+    // SKILL declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // skills_personal_upsert / skills_installed_upsert (personal/installed skill
+    // ROW mutations) and skills_packages_install (INSTALL of a published package)
+    // — these author/publish a reusable skill TYPE PACKAGE (cinatra.kind:"skill"
+    // + a cinatra.capabilities map binding to co-located skills/<slug>/SKILL.md).
+    skill_source_write: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleSkillSourceWrite(req as Parameters<typeof handleSkillSourceWrite>[0]),
+      );
+    },
+    skill_source_validate: (req) =>
+      handleSkillSourceValidate(req as Parameters<typeof handleSkillSourceValidate>[0]),
+    skill_source_compile: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleSkillSourceCompile(req as Parameters<typeof handleSkillSourceCompile>[0]),
+      );
+    },
+    skill_source_publish: (req) =>
+      handleSkillSourcePublish(req as Parameters<typeof handleSkillSourcePublish>[0]),
     // chat-authoring review primitive that replaces the
     // agent-creation-finalizer Flow. Runs lint + 3 LLM advisors in-process.
     agent_creation_review: (req) =>

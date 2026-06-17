@@ -38,6 +38,31 @@ describe("chat extension implementation confirmation", () => {
     expect(requiresExtensionImplementationConfirmation("workflow_validate")).toBe(false);
   });
 
+  it("requires confirmation for artifact PACKAGE authoring (artifact_source_*), NOT the artifact INSTANCE emit", () => {
+    // SDK-P5 (eng#167) vertical 2: artifact_source_* package mutators gate
+    // exactly like agent_source_*/workflow_source_*.
+    expect(requiresExtensionImplementationConfirmation("artifact_source_write")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("artifact_source_compile")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("artifact_source_publish")).toBe(true);
+    // Read-only validate does NOT gate.
+    expect(requiresExtensionImplementationConfirmation("artifact_source_validate")).toBe(false);
+    // artifact_authoring_emit is an artifact INSTANCE emit (a DIFFERENT surface,
+    // recursion-ledger-gated + matcher-suppressed) — it must NOT gate here.
+    expect(requiresExtensionImplementationConfirmation("artifact_authoring_emit")).toBe(false);
+    expect(requiresExtensionImplementationConfirmation("artifact_extension_search")).toBe(false);
+  });
+
+  it("requires confirmation for skill PACKAGE authoring (skill_source_*), distinct from skills_* row/install gating", () => {
+    // SDK-P5 (eng#167) vertical 2: the SINGULAR skill_source_* package mutators
+    // gate like agent_source_*. (The PLURAL skills_* row/install mutations have
+    // their own gating, asserted in the skills_* test below.)
+    expect(requiresExtensionImplementationConfirmation("skill_source_write")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("skill_source_compile")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("skill_source_publish")).toBe(true);
+    // Read-only validate does NOT gate.
+    expect(requiresExtensionImplementationConfirmation("skill_source_validate")).toBe(false);
+  });
+
   it("requires confirmation for skills_* authoring/install mutations exposed to chat", () => {
     // Cinatra MCP exposes skills primitives under `skills_` (plural). The matcher must catch
     // them just like it catches agent_* authoring tools — otherwise the assistant can silently

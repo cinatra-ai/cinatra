@@ -25,15 +25,18 @@ const EXTENSION_IMPLEMENTATION_TOOLS = new Set([
 ]);
 
 const FUTURE_EXTENSION_AUTHORING_PATTERNS = [
-  // `workflow` is now LIVE (SDK-P5, eng#167): the workflow_source_* package-
-  // authoring tools require the same implementation-confirmation gate as the
-  // agent_source_* tools. The other kinds (connector/asset/entity/skill/
-  // extension) remain anticipated-but-unbuilt and are matched defensively.
-  // NOTE: this matches workflow_source_* but NOT the workflow_draft_* /
-  // workflow_template_* runtime tools — those author DRAFTS/INSTANCES (a
-  // proposal-only chat surface), not extension PACKAGES, and have their own
-  // (lighter) proposal flow; only the `_source_` package mutators gate here.
-  /^(agent|workflow|extension|connector|asset|entity|skill)_source_(write|write_files|compile|publish|save|create)$/,
+  // `workflow`, `artifact`, and `skill` are now LIVE (SDK-P5, eng#167): the
+  // {workflow,artifact,skill}_source_* package-authoring tools require the same
+  // implementation-confirmation gate as the agent_source_* tools. The remaining
+  // kinds (connector/asset/entity/extension) stay anticipated-but-unbuilt and
+  // are matched defensively. NOTE: this matches {workflow,artifact,skill}_source_*
+  // but NOT the workflow_draft_*/workflow_template_* runtime tools (which author
+  // DRAFTS/INSTANCES), NOT artifact_authoring_emit (an artifact INSTANCE emit),
+  // and NOT skills_personal_*/skills_installed_*/skills_packages_install (skill
+  // ROW/install mutations — those have their own gating below); only the
+  // `_source_` package mutators gate here. `*_source_validate` is read-only and
+  // is intentionally NOT matched (no write/compile/publish/save/create verb).
+  /^(agent|workflow|artifact|extension|connector|asset|entity|skill)_source_(write|write_files|compile|publish|save|create)$/,
   /^(connector|asset|entity|skill|extension)_(compile|save|publish)$/,
   /^(connector|asset|entity|skill|extension)_registry_publish$/,
   // Mirror the explicit `skills_` (plural) mutations above so future siblings are caught.

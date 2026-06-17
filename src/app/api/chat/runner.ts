@@ -91,6 +91,15 @@ const CHAT_SKILL_SLUGS = [
   // a cinatra/workflow.bpmn) via the workflow_source_* tools. DISTINCT from
   // chat-workflow-authoring below, which creates a one-off DRAFT/INSTANCE.
   "chat-workflow-extension-authoring",
+  // Authoring a reusable ARTIFACT EXTENSION PACKAGE (cinatra.kind:"artifact",
+  // a semantic cinatra.artifact manifest) via the artifact_source_* tools.
+  // DISTINCT from chat-create-artifact below, which emits an artifact INSTANCE.
+  "chat-artifact-extension-authoring",
+  // Authoring a reusable SKILL EXTENSION PACKAGE (cinatra.kind:"skill", a
+  // cinatra.capabilities map → co-located skills/<slug>/SKILL.md) via the
+  // skill_source_* tools. DISTINCT from the skills_* personal/installed/install
+  // mutations, which operate on skill ROWS / install state, not a package.
+  "chat-skill-extension-authoring",
   "chat-agent-dispatch",
   "chat-campaign-creation",
   "chat-appointment-schedules",
