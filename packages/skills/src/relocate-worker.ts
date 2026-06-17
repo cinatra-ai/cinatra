@@ -10,7 +10,7 @@
 import "server-only";
 import { Client, Pool, type PoolClient } from "pg";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 
 import { getSkillsDataRootPath, isRealpathContained } from "./skills-store";
@@ -93,11 +93,34 @@ function resolveRelocationAbsPath(stored: string): string {
  * no-op on the missing leaf and the confined `oldAbs` dir anchors it — so
  * behavior is identical for legitimate moves. Exported for unit testing without
  * a database (the write path itself is DB-driven).
+ *
+ * Dangling-write-leaf confinement (#300): the `existsSync` realpath check
+ * FOLLOWS symlinks, so a pre-existing DANGLING symlink leaf (file present,
+ * target absent) makes `existsSync` return false and slips through — then the
+ * marker `writeFile` follows the dangling symlink and creates the marker at the
+ * OUTSIDE target. `lstatSync` does NOT follow the symlink, catching the dangling
+ * case; throw on any symlink leaf (consistent with this guard's throw contract)
+ * rather than writing through it. ENOENT (no leaf at all) → genuinely new file,
+ * proceed. A regular file → proceed (the `oldAbs` dir is already confined).
  */
 export function assertRelocationMarkerLeafContained(markerPath: string): void {
   if (existsSync(markerPath) && !isRealpathContained(markerPath, rootSkillsAbs())) {
     throw new Error(
       `[path-escape guard] relocation marker leaf escapes skills root via symlink: markerPath="${markerPath}"`,
+    );
+  }
+  let stats;
+  try {
+    stats = lstatSync(markerPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return; // genuinely new marker — safe to create
+    }
+    throw err;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(
+      `[path-escape guard] relocation marker leaf is a symlink; refusing to write through it: markerPath="${markerPath}"`,
     );
   }
 }

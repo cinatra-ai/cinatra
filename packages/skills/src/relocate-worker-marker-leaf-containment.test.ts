@@ -93,4 +93,36 @@ describe("relocation marker write-leaf containment (#300)", () => {
       "ORIGINAL OUTSIDE CONTENT — MUST NOT BE OVERWRITTEN",
     );
   });
+
+  it("REJECTS a DANGLING symlink marker leaf and does NOT create the outside target (#300)", () => {
+    // A pre-existing DANGLING symlink: the symlink file exists, but its target
+    // (outside the skills root) does NOT yet exist. `existsSync` FOLLOWS the
+    // symlink and returns false, so the realpath check is skipped — the
+    // pre-lstat guard treated this as a new leaf and `writeFile` would FOLLOW
+    // the dangling symlink and CREATE the file at the outside target. lstat
+    // catches it. Revert-sensitive: without the lstat arm this test fails by
+    // materializing `outsideTarget`.
+    const outsideTarget = path.join(outsideDir, "dangling-relocate-target.json");
+    // Ensure the target does NOT exist — that is what makes the symlink dangle.
+    try { rmSync(outsideTarget, { force: true }); } catch { /* noop */ }
+    expect(existsSync(outsideTarget)).toBe(false);
+
+    const oldDir = path.join(skillsRoot, "personal", "alice", "dangling");
+    mkdirSync(oldDir, { recursive: true });
+    const markerPath = path.join(oldDir, MARKER_FILE_NAME);
+    try { rmSync(markerPath, { force: true }); } catch { /* noop */ }
+    symlinkSync(outsideTarget, markerPath, "file");
+
+    // existsSync follows the dangling symlink -> false (proving the pre-lstat
+    // realpath guard would NOT have fired on this leaf).
+    expect(existsSync(markerPath)).toBe(false);
+
+    expect(() => assertRelocationMarkerLeafContained(markerPath)).toThrow(
+      /relocation marker leaf is a symlink; refusing to write through it/i,
+    );
+
+    // Crucially: no write occurred through the dangling symlink, so the outside
+    // target was never created.
+    expect(existsSync(outsideTarget)).toBe(false);
+  });
 });

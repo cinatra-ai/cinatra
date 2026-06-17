@@ -342,6 +342,57 @@ describe("realpath/symlink containment (#300)", () => {
       rmSync(workspaceLink, { recursive: true, force: true });
       mkdirSync(workspaceLink, { recursive: true });
     });
+
+    it("REJECTS a write when the SKILL.md LEAF is a pre-existing DANGLING symlink to outside, and does NOT create the outside target (#300)", async () => {
+      replaceSkillCatalogMock.mockClear();
+
+      // A DANGLING symlink leaf: the SKILL.md symlink exists, but its target
+      // (outside the store) does NOT yet exist. `existsSync` FOLLOWS the symlink
+      // and returns false, so BOTH the lexical and the nearest-ancestor realpath
+      // leaf checks treat this as an absent / not-yet-created leaf and PASS —
+      // then `writeFile(skillFilePath, ...)` follows the dangling symlink and
+      // CREATES the file at the outside target. lstat (which does NOT follow the
+      // symlink) catches it. Revert-sensitive: without the lstat guard this test
+      // fails by materializing `outsideTarget`.
+      const workspaceLink = path.join(storeRoot, "workspace");
+      try { rmSync(workspaceLink, { recursive: true, force: true }); } catch { /* noop */ }
+      mkdirSync(workspaceLink, { recursive: true });
+
+      const outsideTarget = path.join(outsideDir, "dangling-leaf-SKILL.md");
+      // Ensure the target does NOT exist — that is what makes the symlink dangle.
+      try { rmSync(outsideTarget, { force: true }); } catch { /* noop */ }
+      expect(existsSync(outsideTarget)).toBe(false);
+
+      // upsertSkill composes the dir from the package/skill slug; mirror it so
+      // the leaf we plant is exactly the path the write targets.
+      const skillDir = path.join(workspaceLink, "dangling-pkg", "dangling-skill");
+      mkdirSync(skillDir, { recursive: true });
+      const leaf = path.join(skillDir, "SKILL.md");
+      try { rmSync(leaf, { force: true }); } catch { /* noop */ }
+      symlinkSync(outsideTarget, leaf, "file");
+
+      // existsSync follows the dangling symlink -> false (the pre-lstat realpath
+      // leaf check would NOT have fired on this leaf).
+      expect(existsSync(leaf)).toBe(false);
+
+      await expect(
+        upsertSkill({
+          type: "workspace",
+          packageName: "Dangling Pkg",
+          name: "Dangling Skill",
+          content: "SHOULD NOT BE WRITTEN THROUGH THE DANGLING SYMLINK",
+        }),
+      ).rejects.toThrow(/leaf is a symlink; refusing to write through it/i);
+
+      // The catalog DB write happens before the disk write in upsertSkill, so it
+      // may have been called — but crucially nothing was written through the
+      // dangling symlink: the outside target was never created.
+      expect(existsSync(outsideTarget)).toBe(false);
+
+      // Cleanup so subsequent tests start from a real dir.
+      rmSync(workspaceLink, { recursive: true, force: true });
+      mkdirSync(workspaceLink, { recursive: true });
+    });
   });
 
   // -------------------------------------------------------------------------

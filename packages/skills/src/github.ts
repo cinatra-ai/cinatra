@@ -1,5 +1,5 @@
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { Octokit } from "octokit";
 import { unzipSync } from "fflate";
@@ -40,6 +40,15 @@ async function writeGitHubSyncMarker(repositoryFullName: string): Promise<void> 
     return;
   }
   await mkdir(path.dirname(markerPath), { recursive: true });
+  // Dangling-write-leaf confinement (#300): the containment check above uses
+  // existsSync (follows symlinks) so a pre-existing DANGLING symlink leaf would
+  // slip through and `writeFile` would create the marker at the outside target.
+  // lstat catches the dangling symlink. The marker is non-critical, so skip the
+  // write (with a log) rather than writing through the symlink.
+  if (!isLeafSafeToWrite(markerPath)) {
+    console.warn(`[skills/github] refusing to write sync marker through symlink leaf: ${markerPath}`);
+    return;
+  }
   await writeFile(markerPath, JSON.stringify({ repository: repositoryFullName, syncedAt: new Date().toISOString() }, null, 2));
 }
 
@@ -141,6 +150,30 @@ function isEntryContainedInBase(baseDirResolved: string, entryResolved: string):
   const realBase = realpathNearestExisting(baseDirResolved);
   const realEntry = realpathNearestExisting(entryResolved);
   return realEntry === realBase || realEntry.startsWith(realBase + path.sep);
+}
+
+/**
+ * Dangling-write-leaf confinement (#300). `isEntryContainedInBase` and the
+ * realpath helpers use `existsSync`, which FOLLOWS symlinks: a leaf that is a
+ * DANGLING symlink (file pre-exists, target does NOT) makes `existsSync` return
+ * false so the realpath checks treat it as a not-yet-created leaf and pass —
+ * then `writeFile` follows the dangling symlink and creates the file at the
+ * OUTSIDE target. `lstatSync` does NOT follow the symlink, catching the dangling
+ * case. Returns `false` (refuse-the-write) when the leaf is a symlink so the
+ * caller skips the non-critical write rather than writing through it; `true`
+ * (proceed) for ENOENT (genuinely new file) or a regular file (the dir is
+ * already realpath-confined). Behavior is identical for legitimate new-file and
+ * regular-file writes.
+ */
+function isLeafSafeToWrite(leafPath: string): boolean {
+  try {
+    return !lstatSync(leafPath).isSymbolicLink();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return true; // genuinely new file — safe to create
+    }
+    throw err;
+  }
 }
 
 // GitHub owner (user/org) login charset: alphanumerics and single hyphens.

@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { existsSync, readdirSync, readFileSync, realpathSync } from "fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
@@ -1324,6 +1324,11 @@ export async function upsertSkill(input: {
 
   // Write SKILL.md to disk so the local path is available to the LLM shell tool.
   await mkdir(skillDiskDir, { recursive: true });
+  // Dangling-write-leaf confinement (#300): the realpath checks above use
+  // existsSync (follows symlinks) so a pre-existing DANGLING symlink leaf would
+  // slip through and `writeFile` would create the SKILL.md at the outside
+  // target. lstat catches the dangling symlink; throw rather than write through.
+  assertLeafNotSymlink(skillFilePath);
   await writeFile(skillFilePath, skillRecord.content, "utf8");
   commitSkillChange(`skill: save ${input.type} skill '${skillRecord.name}'`).catch(() => undefined);
 
@@ -1526,6 +1531,38 @@ export function isRealpathContained(resolved: string, root: string): boolean {
  */
 function isFileLeafContainedInDir(baseDir: string, filePath: string): boolean {
   return isRealpathContained(path.resolve(filePath), path.resolve(baseDir));
+}
+
+/**
+ * Dangling-write-leaf confinement (#300). The directory + leaf realpath checks
+ * above use `existsSync`, which FOLLOWS symlinks: a leaf that is a DANGLING
+ * symlink (the symlink file pre-exists but its target does NOT) makes
+ * `existsSync` return false, so the realpath checks treat it as an absent /
+ * not-yet-created leaf and pass — then `writeFile` follows the dangling symlink
+ * and CREATES the file at the OUTSIDE target. `lstatSync` does NOT follow the
+ * symlink, so it catches the dangling case. Call this immediately before any
+ * write whose leaf was only confined via `existsSync`/nearest-ancestor realpath.
+ * ENOENT (no leaf at all) → genuinely new file, proceed. A regular file →
+ * proceed (the dir is already realpath-confined and overwriting a regular file
+ * stays inside). A symlink (dangling or live) → throw, refusing to write
+ * through it. Behavior is identical for legitimate new-file and regular-file
+ * writes (lstat is a no-op decision on those).
+ */
+function assertLeafNotSymlink(leafPath: string): void {
+  let stats;
+  try {
+    stats = lstatSync(leafPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return; // genuinely new file — safe to create
+    }
+    throw err;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(
+      `Skill write path leaf is a symlink; refusing to write through it: ${leafPath}`,
+    );
+  }
 }
 
 /**
