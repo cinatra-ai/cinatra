@@ -266,6 +266,55 @@ describe("compileAndRegisterAgentSkillsForRepo", () => {
 
       await rm(tmpRoot, { recursive: true, force: true });
     });
+
+    it("does not read skills when agents/<slug>/skills is a symlink to outside the repo", async () => {
+      // The escape: `agents/<slug>/skills` is itself a SYMLINK to a directory
+      // OUTSIDE the repo root containing a SKILL.md. Lexically `skills` is inside
+      // `agentDir`, so the literal path.join would readdir the link's outside
+      // target, and the per-skill resolveWithin(skillsDir, …) would canonicalize
+      // that outside target as its realParent — making every child look
+      // contained and reading SKILL.md OUT of the repo. Confining `skills`
+      // through resolveWithin(agentDir, "skills") catches the symlink and skips
+      // the agent (no-throw contract). A legitimate non-symlink sibling agent
+      // still compiles, proving behavior is unchanged for normal layouts.
+      const outsideSkills = path.join(tmpRoot, "outside-skills");
+      await mkdir(path.join(outsideSkills, "leaked"), { recursive: true });
+      await writeFile(
+        path.join(outsideSkills, "leaked", "SKILL.md"),
+        "---\nname: Leaked\n---\nTOP SECRET",
+      );
+
+      // Malicious agent: skills/ is a symlink to the outside dir.
+      const evilAgentDir = path.join(tmpRoot, "agents", "evil");
+      await mkdir(evilAgentDir, { recursive: true });
+      await writeFile(path.join(evilAgentDir, "package.json"), JSON.stringify({ name: "@x/evil" }));
+      await symlink(outsideSkills, path.join(evilAgentDir, "skills"), "dir");
+
+      // Legitimate agent: a real, non-symlink skills tree that must still compile.
+      const goodAgentDir = path.join(tmpRoot, "agents", "good");
+      const goodSkillDir = path.join(goodAgentDir, "skills", "bar");
+      await mkdir(goodSkillDir, { recursive: true });
+      await writeFile(path.join(goodAgentDir, "package.json"), JSON.stringify({ name: "@x/good" }));
+      await writeFile(
+        path.join(goodSkillDir, "SKILL.md"),
+        ["---", "name: Bar Skill", "description: a description", "---", "body"].join("\n"),
+      );
+
+      const result = await compileAndRegisterAgentSkillsForRepo({ repoRoot: tmpRoot });
+
+      // The leaked skill is never read/compiled; the evil agent is skipped.
+      expect(result.registered).toEqual(["custom:good:bar-skill"]);
+      expect(
+        result.skipped.some((s) => s.slug === "evil" && /skills dir escapes/i.test(s.reason)),
+      ).toBe(true);
+      // upsertSkill is called exactly once — for the legitimate skill only.
+      expect(upsertSkillMock).toHaveBeenCalledTimes(1);
+      expect(
+        upsertSkillMock.mock.calls.every(([arg]) => !arg.content?.includes("TOP SECRET")),
+      ).toBe(true);
+
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
   });
 
   // -------------------------------------------------------------------------

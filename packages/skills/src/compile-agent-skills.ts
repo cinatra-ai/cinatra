@@ -174,7 +174,19 @@ export async function compileAndRegisterAgentSkillsForRepo(input: {
       continue;
     }
     const pkgJsonPath = path.join(agentDir, "package.json");
-    const skillsDir = path.join(agentDir, "skills");
+
+    // Confine the `skills` subdir within `agentDir` before the readdir below
+    // (js/path-injection). 'skills' is a literal so this never trips for a
+    // legitimate non-symlink tree, but if `agents/<slug>/skills` is itself a
+    // SYMLINK to an outside directory, the per-skill resolveWithin(skillsDir, …)
+    // would canonicalize the link's OUTSIDE target as its realParent and treat
+    // every child as contained — reading SKILL.md outside the repo root. Rooting
+    // `skillsDir` on a base proven inside the repo root closes that escape.
+    const skillsDir = resolveWithin(agentDir, "skills");
+    if (!skillsDir) {
+      result.skipped.push({ slug: dirSlug, reason: `skills dir escapes the agent root "${dirSlug}"` });
+      continue;
+    }
 
     let pkgRaw: string;
     try {
