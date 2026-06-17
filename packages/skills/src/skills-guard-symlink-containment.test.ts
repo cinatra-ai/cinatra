@@ -41,6 +41,13 @@ const realStoreRoot = realpathSync.native(storeRoot);
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
+// Capture the catalog written by upsertRepositoryBackedSkillPackage so the
+// leaf-confinement assertions below can inspect what content actually got
+// ingested (a symlinked-out SKILL.md/README must never reach the catalog).
+const { replaceSkillCatalogMock } = vi.hoisted(() => ({
+  replaceSkillCatalogMock: vi.fn(),
+}));
+
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: vi.fn(() => ({
     dataPath: legacyRoot,
@@ -48,7 +55,7 @@ vi.mock("@/lib/database", () => ({
   })),
   writeConnectorConfigToDatabase: vi.fn(),
   readSkillCatalogFromDatabase: vi.fn(() => ({ skillPackages: [], skills: [] })),
-  replaceSkillCatalogInDatabase: vi.fn(),
+  replaceSkillCatalogInDatabase: replaceSkillCatalogMock,
   getPostgresConnectionString: vi.fn(() => ""),
   postgresSchema: "public",
 }));
@@ -70,6 +77,7 @@ import {
   assertSkillFilePathInsideRoot,
   getSkillsDataRootPath,
   getSkillStoreRootPath,
+  upsertRepositoryBackedSkillPackage,
 } from "./skills-store";
 
 afterAll(() => {
@@ -157,6 +165,82 @@ describe("realpath/symlink containment (#300)", () => {
       expect(() => assertSkillFilePathInsideRoot(exfilPath)).toThrow(
         /outside the allowed skill roots/i,
       );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // File-LEAF confinement (the next layer beyond #300's directory containment).
+  //
+  // assertSkillDirectoryInsideRoot confines a repository/scan BASE directory,
+  // but a confined directory can still hold a FILE that is a SYMLINK to outside
+  // (e.g. `<repo>/README.md -> /outside/secret`, or `<skillDir>/SKILL.md`
+  // symlinked out). The dir guards all pass for such a layout — the directory
+  // itself is legitimately inside the root — yet `readFileSync` would follow the
+  // file-symlink and ingest content from outside the skill roots.
+  // upsertRepositoryBackedSkillPackage drives BOTH the README/LICENSE leaf reads
+  // and (via collectSkillDirectories) the per-skill SKILL.md reads, so it is the
+  // end-to-end harness for the leaf confinement.
+  // -------------------------------------------------------------------------
+  describe("file-leaf confinement (upsertRepositoryBackedSkillPackage)", () => {
+    it("does NOT ingest a SKILL.md / README that is a file symlink to outside, while a real skill still ingests", async () => {
+      replaceSkillCatalogMock.mockClear();
+
+      // The outside secrets the symlinks point at.
+      const outsideSkillMd = path.join(outsideDir, "leaked-SKILL.md");
+      writeFileSync(outsideSkillMd, ["---", "name: leaked", "---", "TOP SECRET BODY"].join("\n"));
+      const outsideReadme = path.join(outsideDir, "leaked-README.md");
+      writeFileSync(outsideReadme, "TOP SECRET README");
+
+      // A confined repository inside the store root.
+      const repoDir = path.join(storeRoot, "workspace", "octo", "leaf-repo");
+      mkdirSync(repoDir, { recursive: true });
+
+      // README.md at the repo root is a file-symlink to the outside secret.
+      const readmeLink = path.join(repoDir, "README.md");
+      try { rmSync(readmeLink, { force: true }); } catch { /* noop */ }
+      symlinkSync(outsideReadme, readmeLink, "file");
+
+      // Malicious skill dir: legitimately inside the repo, but its SKILL.md is a
+      // file-symlink to the outside secret.
+      const evilSkillDir = path.join(repoDir, "evil-skill");
+      mkdirSync(evilSkillDir, { recursive: true });
+      const evilSkillMd = path.join(evilSkillDir, "SKILL.md");
+      try { rmSync(evilSkillMd, { force: true }); } catch { /* noop */ }
+      symlinkSync(outsideSkillMd, evilSkillMd, "file");
+
+      // Legitimate skill dir: a real, non-symlink SKILL.md that must still ingest.
+      const goodSkillDir = path.join(repoDir, "good-skill");
+      mkdirSync(goodSkillDir, { recursive: true });
+      writeFileSync(
+        path.join(goodSkillDir, "SKILL.md"),
+        ["---", "name: good-skill", "description: a real skill", "---", "REAL BODY"].join("\n"),
+      );
+
+      await upsertRepositoryBackedSkillPackage({
+        packageId: "github:octo/leaf-repo",
+        name: "Leaf Repo",
+        slug: "leaf-repo",
+        description: "leaf-confinement fixture",
+        repositoryUrl: "https://github.com/octo/leaf-repo",
+        repositoryPath: repoDir,
+      });
+
+      expect(replaceSkillCatalogMock).toHaveBeenCalledTimes(1);
+      const written = replaceSkillCatalogMock.mock.calls[0][0] as {
+        skillPackages: Array<{ readmeContent?: string }>;
+        skills: Array<{ slug: string; content: string }>;
+      };
+
+      // The legitimate skill is ingested; the symlinked-out one is dropped.
+      const ingestedSlugs = written.skills.map((s) => s.slug);
+      expect(ingestedSlugs).toContain("good-skill");
+      expect(ingestedSlugs).not.toContain("evil-skill");
+
+      // No ingested content carries the outside secrets.
+      expect(written.skills.every((s) => !s.content.includes("TOP SECRET"))).toBe(true);
+      expect(
+        written.skillPackages.every((p) => !(p.readmeContent ?? "").includes("TOP SECRET")),
+      ).toBe(true);
     });
   });
 });

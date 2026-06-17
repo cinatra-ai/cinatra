@@ -506,6 +506,14 @@ function collectSkillDirectories(searchRootPath: string, relativeDirectoryPath =
 
   const skillFilePath = path.join(searchRootPath, "SKILL.md");
   if (existsSync(skillFilePath)) {
+    // Leaf confinement (file-symlink escape): `searchRootPath` is confined to
+    // the skill roots, but if `SKILL.md` inside it is a SYMLINK to an outside
+    // file the downstream `readFileSync(skillFilePath)` would follow it. When
+    // the real file escapes the real directory, treat this dir as having no
+    // skill (drop the discovery) so the escaping file is never read/ingested.
+    if (!isFileLeafContainedInDir(searchRootPath, skillFilePath)) {
+      return [];
+    }
     return [
       {
         slug: path.basename(searchRootPath),
@@ -557,8 +565,17 @@ function scanInstalledPackageCatalog() {
       license: installedPackage.license,
       authors: installedPackage.authors,
       repositoryPath: installedPackage.repositoryPath,
-      readmeContent: existsSync(readmePath) ? readFileSync(readmePath, "utf8") : undefined,
-      licenseText: existsSync(licensePath) ? readFileSync(licensePath, "utf8") : undefined,
+      // Leaf confinement (file-symlink escape): README/LICENSE lexically live in
+      // `catalogDocumentPath`, but a file-symlink to outside would be followed by
+      // `readFileSync`. Skip the read when the real file escapes the real dir.
+      readmeContent:
+        existsSync(readmePath) && isFileLeafContainedInDir(catalogDocumentPath, readmePath)
+          ? readFileSync(readmePath, "utf8")
+          : undefined,
+      licenseText:
+        existsSync(licensePath) && isFileLeafContainedInDir(catalogDocumentPath, licensePath)
+          ? readFileSync(licensePath, "utf8")
+          : undefined,
       isCustom: false,
       level: packageLevel,
     };
@@ -1453,6 +1470,24 @@ function isRealpathContained(resolved: string, root: string): boolean {
 }
 
 /**
+ * File-LEAF realpath confinement (the next layer beyond #300's directory
+ * containment). `assertSkillDirectoryInsideRoot` confines a scan/repository
+ * BASE directory, but a confined directory can still hold a FILE that is a
+ * symlink to outside — e.g. `<repositoryPath>/README.md -> /outside/secret`, or
+ * a discovered `<skillDir>/SKILL.md` symlinked out — and a `readFileSync` would
+ * follow it. Before reading any content file rooted on an already-confined base
+ * dir, assert the file's REAL path stays inside the REAL base dir. A
+ * non-existent file is already skipped by its own `existsSync` gate, so this
+ * only confines existing leaves (and realpath is a no-op on non-symlink files,
+ * keeping behavior identical for legitimate layouts). Returns `false` on a
+ * symlink escape so the caller skips the read instead of exfiltrating an
+ * arbitrary local file.
+ */
+function isFileLeafContainedInDir(baseDir: string, filePath: string): boolean {
+  return isRealpathContained(path.resolve(filePath), path.resolve(baseDir));
+}
+
+/**
  * Strict-containment guard for any direct read of a stored skill `sourcePath`.
  * Callers that read raw bytes (e.g. the Anthropic sync uploader needs a Buffer
  * via `fs.readFile(p)` — not a UTF-8 string) MUST run this first so a
@@ -1787,9 +1822,19 @@ export async function upsertRepositoryBackedSkillPackage(input: {
     sourceUrl: input.sourceUrl ?? input.repositoryUrl,
     repositoryUrl: input.repositoryUrl,
     repositoryPath: input.repositoryPath,
-    readmeContent: existsSync(readmePath) ? readFileSync(readmePath, "utf8") : undefined,
+    // Leaf confinement (file-symlink escape): `repositoryPath` is confined to
+    // the skill roots above, but README/LICENSE inside it could be a SYMLINK to
+    // an outside file that `readFileSync` would follow. Skip the read when the
+    // real file escapes the real repository directory.
+    readmeContent:
+      existsSync(readmePath) && isFileLeafContainedInDir(repositoryPath, readmePath)
+        ? readFileSync(readmePath, "utf8")
+        : undefined,
     license: input.license,
-    licenseText: existsSync(licensePath) ? readFileSync(licensePath, "utf8") : undefined,
+    licenseText:
+      existsSync(licensePath) && isFileLeafContainedInDir(repositoryPath, licensePath)
+        ? readFileSync(licensePath, "utf8")
+        : undefined,
     authors: input.authors,
     isCustom: true,
   };

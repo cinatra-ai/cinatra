@@ -315,6 +315,91 @@ describe("compileAndRegisterAgentSkillsForRepo", () => {
 
       await rm(tmpRoot, { recursive: true, force: true });
     });
+
+    it("does not read a SKILL.md that is a FILE symlink to outside the repo (leaf confinement)", async () => {
+      // The escape (next layer beyond #300's directory containment): the skill
+      // DIRECTORY is legitimately confined inside the repo, but the SKILL.md
+      // FILE inside it is a SYMLINK to a secret OUTSIDE the repo. The directory
+      // guards all pass — `agents/evil/skills/leaf` resolves inside the repo —
+      // but `readFile(SKILL.md)` would follow the file-symlink and ingest the
+      // outside secret. fileLeafContainedIn must reject the leaf so it is
+      // skipped (no-throw), while a legitimate non-symlink SKILL.md still
+      // compiles, proving behavior is unchanged for normal files.
+      const secret = path.join(tmpRoot, "secret-skill.md");
+      await writeFile(secret, ["---", "name: Leaked", "---", "TOP SECRET"].join("\n"));
+
+      // Malicious agent: a real, confined skill dir whose SKILL.md is a symlink
+      // to the outside secret.
+      const evilAgentDir = path.join(tmpRoot, "agents", "evil");
+      const evilSkillDir = path.join(evilAgentDir, "skills", "leaf");
+      await mkdir(evilSkillDir, { recursive: true });
+      await writeFile(path.join(evilAgentDir, "package.json"), JSON.stringify({ name: "@x/evil" }));
+      await symlink(secret, path.join(evilSkillDir, "SKILL.md"), "file");
+
+      // Legitimate agent: a real, non-symlink SKILL.md that must still compile.
+      const goodAgentDir = path.join(tmpRoot, "agents", "good");
+      const goodSkillDir = path.join(goodAgentDir, "skills", "bar");
+      await mkdir(goodSkillDir, { recursive: true });
+      await writeFile(path.join(goodAgentDir, "package.json"), JSON.stringify({ name: "@x/good" }));
+      await writeFile(
+        path.join(goodSkillDir, "SKILL.md"),
+        ["---", "name: Bar Skill", "description: a description", "---", "body"].join("\n"),
+      );
+
+      const result = await compileAndRegisterAgentSkillsForRepo({ repoRoot: tmpRoot });
+
+      // The leaked skill is never read/compiled; the evil leaf is skipped.
+      expect(result.registered).toEqual(["custom:good:bar-skill"]);
+      expect(
+        result.skipped.some(
+          (s) => s.slug === "evil/leaf" && /SKILL\.md escapes the skill dir \(symlink\)/i.test(s.reason),
+        ),
+      ).toBe(true);
+      // upsertSkill is called exactly once — for the legitimate skill only.
+      expect(upsertSkillMock).toHaveBeenCalledTimes(1);
+      expect(
+        upsertSkillMock.mock.calls.every(([arg]) => !arg.content?.includes("TOP SECRET")),
+      ).toBe(true);
+
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("does not read a package.json that is a FILE symlink to outside the repo (leaf confinement)", async () => {
+      // Same leaf escape applied to the package.json read: the agent DIRECTORY
+      // is confined inside the repo, but its package.json is a SYMLINK to a file
+      // outside. The directory guards pass; fileLeafContainedIn must reject the
+      // leaf so `readFile(package.json)` never follows the symlink, skipping the
+      // agent. A legitimate non-symlink agent still compiles.
+      const outsidePkg = path.join(tmpRoot, "outside-package.json");
+      await writeFile(outsidePkg, JSON.stringify({ name: "@x/leaked" }));
+
+      const evilAgentDir = path.join(tmpRoot, "agents", "evilpkg");
+      const evilSkillDir = path.join(evilAgentDir, "skills", "s");
+      await mkdir(evilSkillDir, { recursive: true });
+      await symlink(outsidePkg, path.join(evilAgentDir, "package.json"), "file");
+      await writeFile(path.join(evilSkillDir, "SKILL.md"), "---\nname: S\n---\nbody");
+
+      const goodAgentDir = path.join(tmpRoot, "agents", "goodpkg");
+      const goodSkillDir = path.join(goodAgentDir, "skills", "bar");
+      await mkdir(goodSkillDir, { recursive: true });
+      await writeFile(path.join(goodAgentDir, "package.json"), JSON.stringify({ name: "@x/goodpkg" }));
+      await writeFile(
+        path.join(goodSkillDir, "SKILL.md"),
+        ["---", "name: Bar Skill", "description: a description", "---", "body"].join("\n"),
+      );
+
+      const result = await compileAndRegisterAgentSkillsForRepo({ repoRoot: tmpRoot });
+
+      expect(result.registered).toEqual(["custom:goodpkg:bar-skill"]);
+      expect(
+        result.skipped.some(
+          (s) => s.slug === "evilpkg" && /package\.json escapes the agent dir \(symlink\)/i.test(s.reason),
+        ),
+      ).toBe(true);
+      expect(upsertSkillMock).toHaveBeenCalledTimes(1);
+
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
   });
 
   // -------------------------------------------------------------------------
