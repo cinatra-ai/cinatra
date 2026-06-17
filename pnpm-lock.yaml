@@ -1407,6 +1407,9 @@ importers:
       '@cinatra-ai/skills':
         specifier: workspace:*
         version: link:../skills
+      '@cinatra-ai/workflows':
+        specifier: workspace:*
+        version: link:../workflows
       cron-parser:
         specifier: ^4.9.0
         version: 4.9.0

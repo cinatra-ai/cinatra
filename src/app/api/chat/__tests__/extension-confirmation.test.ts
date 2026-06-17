@@ -21,6 +21,23 @@ describe("chat extension implementation confirmation", () => {
     expect(requiresExtensionImplementationConfirmation("agent_run")).toBe(false);
   });
 
+  it("requires confirmation for workflow PACKAGE authoring (workflow_source_*), NOT workflow draft/instance tools", () => {
+    // SDK-P5 (eng#167): the workflow_source_* package mutators gate exactly
+    // like the agent_source_* tools.
+    expect(requiresExtensionImplementationConfirmation("workflow_source_write")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("workflow_source_compile")).toBe(true);
+    expect(requiresExtensionImplementationConfirmation("workflow_source_publish")).toBe(true);
+    // workflow_source_validate is read-only — it does NOT carry a write/compile/
+    // publish/save/create verb, so it must NOT gate.
+    expect(requiresExtensionImplementationConfirmation("workflow_source_validate")).toBe(false);
+    // The workflow DRAFT/INSTANCE runtime tools are a DIFFERENT surface (a
+    // proposal-only chat flow), NOT package authoring — they must NOT gate here.
+    expect(requiresExtensionImplementationConfirmation("workflow_draft_create")).toBe(false);
+    expect(requiresExtensionImplementationConfirmation("workflow_draft_update")).toBe(false);
+    expect(requiresExtensionImplementationConfirmation("workflow_template_instantiate")).toBe(false);
+    expect(requiresExtensionImplementationConfirmation("workflow_validate")).toBe(false);
+  });
+
   it("requires confirmation for skills_* authoring/install mutations exposed to chat", () => {
     // Cinatra MCP exposes skills primitives under `skills_` (plural). The matcher must catch
     // them just like it catches agent_* authoring tools — otherwise the assistant can silently

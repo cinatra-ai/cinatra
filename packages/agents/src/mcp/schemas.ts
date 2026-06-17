@@ -400,6 +400,72 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
         ),
     }),
   },
+  // ----------------------------------------------------------------------
+  // WORKFLOW declarative package-authoring (SDK-P5, eng#167).
+  //
+  // These author a workflow EXTENSION PACKAGE (a `cinatra.kind: "workflow"`
+  // package with a `cinatra/workflow.bpmn` definition), published to the
+  // registry. They are FUNDAMENTALLY DISTINCT from the `workflow_draft_*` /
+  // `workflow_template_*` runtime tools (the @cinatra-ai/workflows MCP surface)
+  // which create/edit a workflow DRAFT or INSTANCE (rows in the `workflow`
+  // table). Package vs draft: a package is reusable, versioned, and shippable;
+  // a draft is one operator's concrete planned-run on the Gantt. ADMIN-ONLY.
+  // ----------------------------------------------------------------------
+  "workflow_source_write": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a WORKFLOW EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"workflow\"), cinatra/workflow.bpmn (the declarative BPMN definition), and an optional skills/<packageSlug>/SKILL.md. DISTINCT from workflow_draft_create / workflow_template_instantiate, which author a workflow DRAFT/INSTANCE row (a planned run on the Gantt) — NOT a reusable package. Validates the BPMN before writing (fails closed on a structurally-invalid workflow) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: workflow_source_write → workflow_source_validate → workflow_source_compile → workflow_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z
+        .string()
+        .describe("Directory name under extensions/cinatra-ai/ (e.g. 'product-launch-workflow'). Must not contain path separators. Convention: kind at the END (-workflow)."),
+      packageJson: z
+        .string()
+        .describe("JSON string for package.json (npm manifest; cinatra.kind is normalized to \"workflow\", workflowVersion defaults to 1 when absent)."),
+      workflowBpmn: z
+        .string()
+        .describe("BPMN XML string for cinatra/workflow.bpmn — the declarative workflow definition (cinatra: namespace extension elements for taskKind/schedule/agentRef/approvalConfig)."),
+      skillMd: z
+        .string()
+        .optional()
+        .describe("Optional Markdown string for skills/<packageSlug>/SKILL.md (authoring/usage notes for the workflow package)."),
+      progressContext: z
+        .object({ runId: z.string() })
+        .optional()
+        .describe("Append-only creation-progress emit context; recipient is server-derived from the actor (HumanUser only)."),
+    }),
+  },
+  "workflow_source_validate": {
+    description:
+      "Validate a workflow.bpmn (a workflow PACKAGE's declarative definition) — parses the BPMN sidecar to a WorkflowSpec and validates it at the template tier. Returns { valid, errors } where errors are human-readable. Does NOT write or persist anything, and does NOT touch any workflow DRAFT/INSTANCE row (that is workflow_validate on the runtime surface). Pass EITHER `content` (BPMN XML string) OR `packageSlug` (loads cinatra/workflow.bpmn from the package on disk). Source-authoring pipeline step 2 of 4.",
+    inputSchema: z.object({
+      content: z.string().optional().describe("BPMN XML string of the workflow definition."),
+      packageSlug: z.string().optional().describe("Package slug to load cinatra/workflow.bpmn from disk. Must not contain path separators."),
+    }),
+  },
+  "workflow_source_compile": {
+    description:
+      "ADMIN-ONLY (platform_admin). Build/verify gate for a workflow PACKAGE: re-validates that the on-disk cinatra/workflow.bpmn parses + validates as a template and runs the sibling-file credential scan. A workflow package is purely declarative — unlike agent_source_compile there is NO agent_templates DB sync. Returns { compiled, valid }. Source-authoring pipeline step 3 of 4. Non-admin invocations are rejected at the delegated-chat policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Workflow package slug. Must not contain path separators."),
+    }),
+  },
+  "workflow_source_publish": {
+    description:
+      "ADMIN-ONLY (platform_admin). Live source mutation: publish a WORKFLOW PACKAGE from its on-disk directory (extensions/cinatra-ai/<packageSlug>/) to the configured registry. Reads name + version from package.json, carries the declarative cinatra block (kind=workflow) through to the published manifest, and re-runs the BPMN validation gate before publishing. Refuses to overwrite an already-published version (returns alreadyPublished: true). Does NOT publish a workflow DRAFT/INSTANCE (those never leave the instance). Source-authoring pipeline step 4 of 4. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+    inputSchema: z.object({
+      packageSlug: z.string().describe("Workflow package slug. Must not contain path separators."),
+      changelog: z.string().nullable().optional().describe("Optional changelog note for this release."),
+      destination: z
+        .enum(["private", "public"])
+        .default("private")
+        .optional()
+        .describe("Publish destination: 'private' (instance-only, default) or 'public' (Cinatra marketplace)."),
+      licenseAcknowledged: z
+        .boolean()
+        .optional()
+        .describe("Set to true after the user acknowledges a copyleft license. Required when the package has a copyleft license (GPL/AGPL/LGPL/MPL-2.0)."),
+    }),
+  },
   // Single review surface for chat-driven agent authoring.
   // Deterministic lint runs server-side; advisory mode is DEFERRED because
   // agent_run queues asynchronously and cannot return helper findings inline.

@@ -518,6 +518,171 @@ export async function publishAgentPackageFromGitDir(
   }
 }
 
+/**
+ * Publish a DECLARATIVE extension package directory (SDK-P5, eng#167).
+ *
+ * Distinct from `publishAgentPackageFromGitDir`: it does NOT require/compile a
+ * `cinatra/oas.json` and does NOT build the agent-shaped distManifest/distPayload
+ * (no agent_templates coupling). It publishes the source package dir as-is for
+ * a declarative kind (workflow / artifact / skill) — reading name/version/cinatra
+ * from the dir's package.json, carrying the `cinatra` block through to the
+ * distribution manifest, and reusing the same tarball-from-dir + npm-registry
+ * PUT path. Connector (code-bearing) kinds are NOT accepted — they are gated on
+ * SDK-P0 (#162). The same last-resort credential sibling-scan as the agent path
+ * runs before any tarball is built.
+ */
+const DECLARATIVE_PUBLISHABLE_KINDS = new Set(["workflow", "artifact", "skill"]);
+
+export async function publishExtensionPackageFromDir(
+  input: {
+    packageDir: string;
+    /** The declarative kind being published. Must match the dir's package.json#cinatra.kind. */
+    kind: "workflow" | "artifact" | "skill";
+  },
+  config?: VerdaccioConfig,
+): Promise<PublishAgentPackageResult> {
+  const resolvedConfig = ensureConfig(config, "publishExtensionPackageFromDir");
+  if (!DECLARATIVE_PUBLISHABLE_KINDS.has(input.kind)) {
+    throw new Error(
+      `publishExtensionPackageFromDir only publishes declarative kinds (workflow|artifact|skill); got "${input.kind}".`,
+    );
+  }
+
+  // Last-resort credential guard — identical posture to publishAgentPackageFromGitDir.
+  const { scanPackageSiblingFilesForLiteralSecrets } = await import("../scan-package-siblings");
+  const lastResortFindings = await scanPackageSiblingFilesForLiteralSecrets(input.packageDir);
+  const lastResortBlockers = lastResortFindings.filter((f) => f.severity === "blocker");
+  if (lastResortBlockers.length > 0) {
+    const summary = lastResortBlockers.slice(0, 3).map((b) => b.location ?? b.code).join(", ");
+    throw new Error(
+      `publishExtensionPackageFromDir refusing to publish package with ${lastResortBlockers.length} credential/forbidden-file blocker${lastResortBlockers.length === 1 ? "" : "s"} (${summary}${lastResortBlockers.length > 3 ? ", …" : ""}).`,
+    );
+  }
+
+  const pkgJsonPath = path.join(input.packageDir, "package.json");
+  let pkgJson: Record<string, unknown>;
+  try {
+    pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Cannot read package.json from ${input.packageDir}`);
+  }
+
+  const packageName = typeof pkgJson.name === "string" ? pkgJson.name : null;
+  const packageVersion = typeof pkgJson.version === "string" ? pkgJson.version : null;
+  if (!packageName || !packageVersion) {
+    throw new Error("package.json must have name and version fields.");
+  }
+
+  const incomingCinatra =
+    pkgJson.cinatra && typeof pkgJson.cinatra === "object" && !Array.isArray(pkgJson.cinatra)
+      ? (pkgJson.cinatra as Record<string, unknown>)
+      : {};
+  if (incomingCinatra.kind !== input.kind) {
+    throw new Error(
+      `package.json#cinatra.kind ("${String(incomingCinatra.kind ?? "<missing>")}") does not match the requested publish kind "${input.kind}".`,
+    );
+  }
+
+  // Overwrite guard — refuse to publish a version that already exists.
+  if (await isVersionPublished(resolvedConfig, packageName, packageVersion)) {
+    return { packageName, packageVersion, registryUrl: resolvedConfig.registryUrl, published: false, alreadyPublished: true };
+  }
+
+  const license =
+    typeof pkgJson.license === "string" && pkgJson.license.trim().length > 0 ? pkgJson.license : undefined;
+
+  // Distribution manifest carries the declarative `cinatra` block through
+  // verbatim (kind + apiVersion are authoritative; workflowVersion/dependencies
+  // pass through) so the registry manifest reader reports the correct kind and
+  // the marketplace `?tab=<kind>` filter includes the package.
+  const distManifest: Record<string, unknown> = {
+    name: packageName,
+    version: packageVersion,
+    ...(typeof pkgJson.description === "string" ? { description: pkgJson.description } : {}),
+    ...(license ? { license } : {}),
+    keywords: ["cinatra", `cinatra-${input.kind}`],
+    publishConfig: { registry: resolvedConfig.registryUrl },
+    cinatra: {
+      ...incomingCinatra,
+      kind: input.kind,
+      apiVersion: "cinatra.ai/v1",
+    },
+  };
+
+  // Build the tarball from the SAME publishable-file set the sibling scan used
+  // (walkPackageFiles is the single source of truth: it skips generated dirs,
+  // node_modules, symlinks (anti-escape), and blocked .env* files, and tags
+  // binaries for verbatim copy). This is the exact discipline
+  // publishAgentPackageFromGitDir uses — a plain `cp -R` would reintroduce the
+  // skipped-but-copied class. package.json is synthesized (distManifest), so
+  // the on-disk original is skipped.
+  const { walkPackageFiles } = await import("../scan-package-siblings");
+  const tempDir = await mkdtemp(path.join(tmpdir(), "cinatra-ext-publish-"));
+  try {
+    const publishableFiles = await walkPackageFiles(input.packageDir);
+    for (const file of publishableFiles) {
+      if (file.relPath === "package.json") continue; // synthesized below
+      if (file.isEnvBlocked) continue;
+      const dstPath = path.join(tempDir, file.relPath);
+      await mkdir(path.dirname(dstPath), { recursive: true });
+      if (file.isBinary) {
+        await writeFile(dstPath, await readFile(file.absPath));
+      } else {
+        await writeFile(dstPath, await readFile(file.absPath, "utf8"), "utf8");
+      }
+    }
+    await writeFile(path.join(tempDir, "package.json"), JSON.stringify(distManifest, null, 2) + "\n", "utf8");
+
+    const entries = await readdir(tempDir);
+    const tarballData: Buffer = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      tarCreate({ gzip: true, cwd: tempDir, prefix: "package" }, entries)
+        .on("data", (chunk: Buffer) => chunks.push(chunk))
+        .on("end", () => resolve(Buffer.concat(chunks)))
+        .on("error", (err: unknown) => reject(err));
+    });
+
+    const tarballBase64 = tarballData.toString("base64");
+    const tarballName = `${packageName}-${packageVersion}.tgz`;
+    const { createHash } = await import("node:crypto");
+    const tarballShasum = createHash("sha1").update(tarballData).digest("hex");
+    const tarballIntegrity = `sha512-${createHash("sha512").update(tarballData).digest("base64")}`;
+    const publishBody = {
+      _id: packageName,
+      name: packageName,
+      "dist-tags": { latest: packageVersion },
+      versions: {
+        [packageVersion]: {
+          ...distManifest,
+          dist: {
+            tarball: `${ensureTrailingSlash(resolvedConfig.registryUrl)}-/${encodeURIComponent(packageName)}/-/${tarballName}`,
+            shasum: tarballShasum,
+            integrity: tarballIntegrity,
+          },
+        },
+      },
+      _attachments: {
+        [tarballName]: {
+          content_type: "application/octet-stream",
+          data: tarballBase64,
+          length: tarballData.byteLength,
+        },
+      },
+    };
+    await registryJson<void>(resolvedConfig, `/${encodeURIComponent(packageName)}`, {
+      method: "PUT",
+      body: JSON.stringify(publishBody),
+    });
+
+    return { packageName, packageVersion, registryUrl: resolvedConfig.registryUrl, published: true, alreadyPublished: false };
+  } catch (error) {
+    const message = error instanceof Error ? redactToken(error.message, resolvedConfig.token) : "Verdaccio publish failed.";
+    throw new Error(message);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 export async function deprecateAgentPackageVersion(
   input: {
     packageName: string;

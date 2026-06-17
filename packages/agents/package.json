@@ -42,6 +42,7 @@
     "@cinatra-ai/registries": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
+    "@cinatra-ai/workflows": "workspace:*",
     "cron-parser": "^4.9.0",
     "cronstrue": "^3.14.0",
     "diff": "9.0.0",

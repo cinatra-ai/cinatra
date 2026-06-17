@@ -166,6 +166,65 @@ async function resolveVerdaccioConfigForHandler(): Promise<
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Declarative package `cinatra.kind` normalization (SDK-P5, eng#167).
+//
+// The five canonical declarative kinds. Source-authoring is declarative-first:
+// /chat authors WORKFLOW/ARTIFACT/SKILL packages in v1; code-bearing CONNECTOR
+// authoring is hard-gated on SDK-P0 (#162) and NOT done here. `agent` remains
+// the current chat-authored kind and the historical default for this pipeline.
+// ---------------------------------------------------------------------------
+const CANONICAL_EXTENSION_KINDS = ["agent", "connector", "artifact", "skill", "workflow"] as const;
+type CanonicalExtensionKind = (typeof CANONICAL_EXTENSION_KINDS)[number];
+
+function isCanonicalExtensionKind(value: unknown): value is CanonicalExtensionKind {
+  return typeof value === "string" && (CANONICAL_EXTENSION_KINDS as readonly string[]).includes(value);
+}
+
+/**
+ * Normalize a package.json `cinatra` block's `kind` + `apiVersion` for a write.
+ *
+ * `expectedKind` is the kind THIS authoring path is materializing (the agent
+ * pipeline passes the historical "agent"; the workflow/artifact/skill source
+ * tools pass their own kind). Behavior:
+ *   - When the incoming `cinatra.kind` already equals `expectedKind`, it is
+ *     left untouched (the common case for a correctly-emitted package).
+ *   - Otherwise it is COERCED to `expectedKind` — covering the missing-kind
+ *     case AND a stale/wrong kind the LLM emitted — so the marketplace
+ *     `?tab=<kind>` filter and the runtime kind-dispatch can never drift from
+ *     the directory the files actually landed in. This is the SAME
+ *     defend-the-kind behavior the agent path always had, now PARAMETRIC over
+ *     the kind instead of hard-wired to "agent".
+ *   - `apiVersion` is always forced to "cinatra.ai/v1".
+ * Returns the normalized block plus a `from→to` diff (or null when nothing
+ * changed) so the caller can surface the rescope to the chat assistant.
+ */
+function normalizeCinatraBlockForKind(
+  incomingCinatra: unknown,
+  expectedKind: CanonicalExtensionKind,
+): {
+  block: Record<string, unknown>;
+  normalized: { kind?: { from: unknown; to: string }; apiVersion?: { from: unknown; to: string } } | null;
+} {
+  const block: Record<string, unknown> =
+    incomingCinatra && typeof incomingCinatra === "object" && !Array.isArray(incomingCinatra)
+      ? { ...(incomingCinatra as Record<string, unknown>) }
+      : {};
+  let normalized: { kind?: { from: unknown; to: string }; apiVersion?: { from: unknown; to: string } } | null = null;
+  if (block.kind !== expectedKind) {
+    normalized = normalized ?? {};
+    normalized.kind = { from: block.kind ?? null, to: expectedKind };
+    block.kind = expectedKind;
+  }
+  if (block.apiVersion !== "cinatra.ai/v1") {
+    normalized = normalized ?? {};
+    normalized.apiVersion = { from: block.apiVersion ?? null, to: "cinatra.ai/v1" };
+    block.apiVersion = "cinatra.ai/v1";
+  }
+  return { block, normalized };
+}
+
 import { derivePublishMetadataFromSnapshot } from "../verdaccio/publish-metadata";
 import {
   upsertSkill,
@@ -2984,6 +3043,11 @@ async function handleAgentBuilderGitWriteFiles(
     packageJson?: string;
     skillMd?: string;
     progressContext?: { runId: string };
+    // SDK-P5 (eng#167): the declarative kind this write materializes. The agent
+    // chat-authoring path omits it (defaults to "agent" — unchanged behavior);
+    // the workflow/artifact/skill source tools pass their own canonical kind so
+    // the package.json `cinatra.kind` is no longer force-coerced to "agent".
+    kind?: string;
   }>,
 ): Promise<unknown> {
   // Admin gate (mirrors handleAgentBuilderGitWrite — same rationale: the
@@ -3010,6 +3074,28 @@ async function handleAgentBuilderGitWriteFiles(
   if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
   if (!packageJson || typeof packageJson !== "string") return { error: "packageJson is required (JSON string)." };
   if (!skillMd || typeof skillMd !== "string") return { error: "skillMd is required (Markdown string)." };
+
+  // SDK-P5: resolve the declarative kind this write materializes. Defaults to
+  // "agent" (the historical, unchanged chat-authoring path). A caller-supplied
+  // kind must be one of the canonical declarative kinds AND must NOT be
+  // "connector" — code-bearing connector authoring is hard-gated on SDK-P0
+  // (#162) and is not authored through this pipeline.
+  const requestedKind = request.input.kind;
+  let expectedKind: CanonicalExtensionKind = "agent";
+  if (requestedKind !== undefined) {
+    if (!isCanonicalExtensionKind(requestedKind)) {
+      return {
+        error: `Unsupported kind "${String(requestedKind).slice(0, 40)}". Declarative authoring supports: agent, workflow, artifact, skill.`,
+      };
+    }
+    if (requestedKind === "connector") {
+      return {
+        error:
+          "Connector authoring is not available — code-bearing connector packages are gated on SDK-P0 (#162). Declarative kinds only: agent, workflow, artifact, skill.",
+      };
+    }
+    expectedKind = requestedKind;
+  }
 
   if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
     return { error: "packageSlug must not contain path separators or '..'." };
@@ -3100,32 +3186,22 @@ async function handleAgentBuilderGitWriteFiles(
 
   // server-side normalize the `cinatra` block.
   // The LLM frequently emits package.json without a `cinatra` block at all,
-  // which makes the marketplace `?tab=agent` filter exclude the package
-  // (marketplace card meta.kind is null without cinatra.kind, so
-  // m.kind !== "agent" hides the card). Force kind + apiVersion regardless
-  // of what the LLM emitted — this pipeline is agent-only; coercing a stale
-  // "skill" or missing kind to "agent" is the safer default for chat-created
-  // packages. Same shape applied at publish time for defense-in-depth.
-  // Composed with the name-rescoping above: name-rescoping runs first, then cinatra-block
+  // which makes the marketplace `?tab=<kind>` filter exclude the package
+  // (marketplace card meta.kind is null without cinatra.kind, so the kind
+  // filter hides the card). Normalize kind + apiVersion regardless of what the
+  // LLM emitted, but PARAMETRIC over `expectedKind` (SDK-P5, eng#167): the
+  // agent chat-authoring path passes "agent" (so this is byte-for-byte the
+  // historical behavior — a stale/missing kind still coerces to "agent"),
+  // while the workflow/artifact/skill source tools pass their own kind. Same
+  // shape applied at publish time for defense-in-depth. Composed with the
+  // name-rescoping above: name-rescoping runs first, then cinatra-block
   // normalization — they touch independent keys of parsedPackageJson and the
   // order doesn't matter, but keeping name-first matches the publish-time
   // ordering at actions.ts:393-398.
-  const incomingCinatra = parsedPackageJson.cinatra;
-  const cinatraBlock: Record<string, unknown> =
-    incomingCinatra && typeof incomingCinatra === "object" && !Array.isArray(incomingCinatra)
-      ? { ...(incomingCinatra as Record<string, unknown>) }
-      : {};
-  let cinatraNormalized: { kind?: { from: unknown; to: string }; apiVersion?: { from: unknown; to: string } } | null = null;
-  if (cinatraBlock.kind !== "agent") {
-    cinatraNormalized = cinatraNormalized ?? {};
-    cinatraNormalized.kind = { from: cinatraBlock.kind ?? null, to: "agent" };
-    cinatraBlock.kind = "agent";
-  }
-  if (cinatraBlock.apiVersion !== "cinatra.ai/v1") {
-    cinatraNormalized = cinatraNormalized ?? {};
-    cinatraNormalized.apiVersion = { from: cinatraBlock.apiVersion ?? null, to: "cinatra.ai/v1" };
-    cinatraBlock.apiVersion = "cinatra.ai/v1";
-  }
+  const { block: cinatraBlock, normalized: cinatraNormalized } = normalizeCinatraBlockForKind(
+    parsedPackageJson.cinatra,
+    expectedKind,
+  );
   parsedPackageJson.cinatra = cinatraBlock;
   if (cinatraNormalized) {
     // Sanitize log: never echo a verbatim object/string value the LLM emitted.
@@ -4468,6 +4544,455 @@ export async function handleAgentRunTriggerDelete(
   return { ok: true };
 }
 
+// ===========================================================================
+// WORKFLOW source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+//
+// These tools author a WORKFLOW EXTENSION PACKAGE on disk (a `cinatra.kind:
+// "workflow"` package with a `cinatra/workflow.bpmn` declarative definition),
+// published to the registry. This is DISTINCT from the `workflow_draft_*` /
+// `workflow_template_*` runtime tools (packages/workflows) which author/edit
+// workflow DRAFTS and INSTANCES (rows in the `workflow` table) — NOT packages.
+//
+// Pipeline shape mirrors the agent path (scaffold→write→validate→build→submit):
+//   workflow_source_write    — scaffold + write package.json (kind:workflow) + workflow.bpmn + SKILL.md
+//   workflow_source_validate — parse the BPMN sidecar → WorkflowSpec, validate (read-only, no persistence)
+//   workflow_source_compile  — re-validate the on-disk package compiles cleanly (no agent_templates DB sync)
+//   workflow_source_publish  — publish the workflow package to the registry (kind-aware, no OAS)
+//
+// All four are ADMIN-ONLY at the handler boundary (same gate as agent_source_*)
+// and are denied for non-admins by the delegated-chat tool policy (the write/
+// compile/publish verb tokens are on its denylist, and they are NOT on the
+// allowlist) — identical posture to the agent source tools.
+// ===========================================================================
+
+function resolveWorkflowBpmnPathForRead(packageSlug: string): { path: string; rootDir: string } | null {
+  const root = resolveAgentInstallDir();
+  const pkgRoot = join(root, "cinatra-ai", packageSlug);
+  const bpmn = join(pkgRoot, "cinatra", "workflow.bpmn");
+  if (existsSync(bpmn)) return { path: bpmn, rootDir: pkgRoot };
+  return null;
+}
+
+// Lazy structural validation of a workflow.bpmn STRING via @cinatra-ai/workflows.
+// The import is dynamic so packages/agents does not take a static dep edge on
+// packages/workflows (mirrors the dynamic-import discipline used elsewhere in
+// this file). Mirrors the install-time sidecar validation chain
+// (parse → Profile 1.0 → compile → template-validate) but over an in-memory
+// XML string so it works pre-write. Returns { valid, errors[] } — fail-closed.
+async function validateWorkflowBpmnContent(
+  bpmnXml: string,
+): Promise<{ valid: boolean; errors: string[] }> {
+  let bpmn: typeof import("@cinatra-ai/workflows/bpmn");
+  let validateTemplate: typeof import("@cinatra-ai/workflows/spec").validateTemplate;
+  try {
+    bpmn = await import("@cinatra-ai/workflows/bpmn");
+    ({ validateTemplate } = await import("@cinatra-ai/workflows/spec"));
+  } catch (err) {
+    return { valid: false, errors: [`Workflow validator unavailable: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+
+  // 1. Parse the BPMN XML.
+  const parsed = await bpmn.parseBpmnXml(bpmnXml);
+  if (!parsed.ok) {
+    return { valid: false, errors: [`${parsed.code}: ${parsed.detail}`] };
+  }
+  // 2. Profile 1.0 validation (collects unsupported-construct + structure errors).
+  const profile = bpmn.validateBpmnAgainstProfile(parsed.definitions);
+  if (!profile.ok) {
+    const constructErrors = profile.errors.map(
+      (e) => `${e.elementType}${e.elementId ? ` (${e.elementId})` : ""}: ${e.reason}`,
+    );
+    return { valid: false, errors: [...constructErrors, ...profile.structureErrors] };
+  }
+  // 3. Compile to a WorkflowSpec.
+  let spec: unknown;
+  try {
+    spec = bpmn.compileBpmnToWorkflowSpec(parsed.definitions);
+  } catch (err) {
+    if (err instanceof bpmn.BpmnCompileException) {
+      return { valid: false, errors: [`${err.error.code}: ${err.error.reason}`] };
+    }
+    return { valid: false, errors: [`BPMN compile failed: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  // 4. Validate the compiled spec at the TEMPLATE tier (packages are reusable
+  //    templates in the registry).
+  const result = validateTemplate(spec);
+  return {
+    valid: result.ok,
+    errors: (result.errors ?? []).map((e) => `${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}`),
+  };
+}
+
+// Full ON-DISK workflow-package validation — parity with the install-time
+// sidecar contract: reads package.json#cinatra and runs the canonical
+// parseWorkflowBpmnSidecar (which enforces the integer workflowVersion, the
+// forbidden-inline-definition rule, the single-canonical-sidecar rule, Profile
+// 1.0, compile, and template validity). Used by compile/publish where the
+// package is materialized on disk (the pre-write `validateWorkflowBpmnContent`
+// only sees the BPMN string and cannot check the package-manifest contract).
+async function validateWorkflowPackageOnDisk(
+  packageRoot: string,
+): Promise<{ valid: boolean; errors: string[] }> {
+  let bpmn: typeof import("@cinatra-ai/workflows/bpmn");
+  try {
+    bpmn = await import("@cinatra-ai/workflows/bpmn");
+  } catch (err) {
+    return { valid: false, errors: [`Workflow validator unavailable: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  let pkgCinatra: { workflow?: unknown; workflowVersion?: unknown; kind?: unknown; apiVersion?: unknown } = {};
+  try {
+    const pkgRaw = await readFile(join(packageRoot, "package.json"), "utf8");
+    const pkg = JSON.parse(pkgRaw) as Record<string, unknown>;
+    if (pkg.cinatra && typeof pkg.cinatra === "object" && !Array.isArray(pkg.cinatra)) {
+      pkgCinatra = pkg.cinatra as typeof pkgCinatra;
+    }
+  } catch (err) {
+    return { valid: false, errors: [`Failed to read package.json: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  const result = await bpmn.parseWorkflowBpmnSidecar({ packageRoot, pkgCinatra });
+  if (!result.ok) {
+    return { valid: false, errors: result.errors.map((e) => `${e.code}: ${e.detail}`) };
+  }
+  return { valid: true, errors: [] };
+}
+
+// workflow_source_write — scaffold + write a workflow extension package.
+async function handleWorkflowSourceWrite(
+  request: PrimitiveRequest<{
+    packageSlug?: string;
+    packageJson?: string;
+    workflowBpmn?: string;
+    skillMd?: string;
+    progressContext?: { runId: string };
+  }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to write workflow package files." };
+
+  const writePreflight = await runAgentSourceWritePreflightIfPinned();
+  if (writePreflight && !writePreflight.ok) {
+    return {
+      error: `workflow_source_write blocked by preflight (${writePreflight.errors.map((e) => e.code).join(", ")}): ${writePreflight.errors.map((e) => e.message).join(" / ")}`,
+    };
+  }
+
+  const { packageSlug, packageJson, workflowBpmn, skillMd } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (!packageJson || typeof packageJson !== "string") return { error: "packageJson is required (JSON string)." };
+  if (!workflowBpmn || typeof workflowBpmn !== "string") return { error: "workflowBpmn is required (BPMN XML string)." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+
+  let parsedPackageJson: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(packageJson);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "packageJson must be a JSON object." };
+    parsedPackageJson = raw as Record<string, unknown>;
+  } catch {
+    return { error: "packageJson is not valid JSON." };
+  }
+
+  // sibling-file credential scan over the in-memory strings (BEFORE disk write).
+  {
+    const inMemBlockers: ReviewFinding[] = [];
+    const scanTargets: Array<[string, string]> = [
+      ["package.json", packageJson],
+      ["cinatra/workflow.bpmn", workflowBpmn],
+    ];
+    if (typeof skillMd === "string") scanTargets.push([`skills/${packageSlug}/SKILL.md`, skillMd]);
+    for (const [relPath, content] of scanTargets) {
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        const pattern = detectCredentialPattern(line);
+        if (pattern) {
+          inMemBlockers.push({
+            code: "literal_credential_in_sibling_file",
+            severity: "blocker",
+            message: `literal credential detected in ${relPath}:${i + 1}: pattern=${pattern}`,
+            location: `${relPath}:${i + 1}`,
+            source: "deterministic",
+          });
+        }
+      }
+    }
+    if (inMemBlockers.length > 0) {
+      return {
+        error: `Refusing to write package files — ${inMemBlockers.length} literal credential${inMemBlockers.length === 1 ? "" : "s"} detected. Move credentials to /settings/connections (Nango).`,
+        code: "review_blocked",
+        blockers: inMemBlockers,
+      };
+    }
+  }
+
+  // Validate the BPMN BEFORE writing — fail closed on a structurally-invalid
+  // workflow so a bad package never lands on disk.
+  const bpmnCheck = await validateWorkflowBpmnContent(workflowBpmn);
+  if (!bpmnCheck.valid) {
+    return { error: `workflow.bpmn failed validation: ${bpmnCheck.errors.join("; ")}`, valid: false, errors: bpmnCheck.errors };
+  }
+
+  // Rescope package.json#name to the operator's vendor namespace (same logic as
+  // the agent path) so disk slug, package name, and published scope cannot drift.
+  const identity = readInstanceIdentity();
+  const vendorName = identity
+    ? ((identity as { vendorName?: string; instanceNamespace?: string }).vendorName ??
+       (identity as { vendorName?: string; instanceNamespace?: string }).instanceNamespace ??
+       "cinatra-ai")
+    : "cinatra-ai";
+  const normalizedPackageName = `@${vendorName}/${packageSlug}`;
+  assertNotReservedAgentPackageName(normalizedPackageName);
+  const incomingName = typeof parsedPackageJson.name === "string" ? parsedPackageJson.name : null;
+  let nameNormalized: { from: string | null; to: string } | null = null;
+  if (incomingName !== normalizedPackageName) {
+    nameNormalized = { from: incomingName, to: normalizedPackageName };
+  }
+  parsedPackageJson.name = normalizedPackageName;
+
+  // Normalize the cinatra block to the WORKFLOW kind (the whole point of the
+  // de-coerced normalizer — this path passes "workflow", not "agent").
+  const { block: cinatraBlock, normalized: cinatraNormalized } = normalizeCinatraBlockForKind(
+    parsedPackageJson.cinatra,
+    "workflow",
+  );
+  // Default workflowVersion when absent so the registry manifest is complete.
+  if (cinatraBlock.workflowVersion === undefined) cinatraBlock.workflowVersion = 1;
+  parsedPackageJson.cinatra = cinatraBlock;
+
+  await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
+
+  const installRoot = resolveAgentInstallDir();
+  const pkgRoot = join(installRoot, "cinatra-ai", packageSlug);
+  const packageJsonPath = join(pkgRoot, "package.json");
+  const bpmnPath = join(pkgRoot, "cinatra", "workflow.bpmn");
+  const skillMdPath = join(pkgRoot, "skills", packageSlug, "SKILL.md");
+
+  try {
+    await mkdir(pkgRoot, { recursive: true });
+    await mkdir(join(pkgRoot, "cinatra"), { recursive: true });
+    await writeFile(packageJsonPath, JSON.stringify(parsedPackageJson, null, 2) + "\n", "utf8");
+    await writeFile(bpmnPath, workflowBpmn, "utf8");
+    if (typeof skillMd === "string" && skillMd.length > 0) {
+      await mkdir(join(pkgRoot, "skills", packageSlug), { recursive: true });
+      await writeFile(skillMdPath, skillMd, "utf8");
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await rm(pkgRoot, { recursive: true, force: true }).catch(() => {});
+    return { error: `Failed to write files: ${message}` };
+  }
+
+  return {
+    written: true,
+    kind: "workflow",
+    paths: {
+      packageJson: relative(process.cwd(), packageJsonPath),
+      workflowBpmn: relative(process.cwd(), bpmnPath),
+      ...(typeof skillMd === "string" && skillMd.length > 0 ? { skillMd: relative(process.cwd(), skillMdPath) } : {}),
+    },
+    ...(nameNormalized ? { nameNormalized } : {}),
+    ...(cinatraNormalized ? { cinatraNormalized } : {}),
+  };
+}
+
+// workflow_source_validate — validate a workflow.bpmn (content or on-disk slug).
+async function handleWorkflowSourceValidate(
+  request: PrimitiveRequest<{ content?: string; packageSlug?: string }>,
+): Promise<unknown> {
+  let { content } = request.input;
+  const { packageSlug } = request.input;
+  if (!content && typeof packageSlug === "string" && packageSlug.length > 0) {
+    if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+      return { valid: false, errors: ["packageSlug must not contain path separators or '..'."] };
+    }
+    const resolved = resolveWorkflowBpmnPathForRead(packageSlug);
+    if (!resolved) {
+      return { valid: false, errors: [`Workflow BPMN not found for slug "${packageSlug}". Use workflow_source_write first, or pass content directly.`] };
+    }
+    try {
+      content = await readFile(resolved.path, "utf8");
+    } catch (err) {
+      return { valid: false, errors: [`Failed to read workflow.bpmn: ${(err as Error).message}`] };
+    }
+  }
+  if (!content || typeof content !== "string") {
+    return { valid: false, errors: ["content (BPMN XML string) or packageSlug is required."] };
+  }
+  return validateWorkflowBpmnContent(content);
+}
+
+// workflow_source_compile — re-validate the on-disk package compiles cleanly.
+// Unlike agent_source_compile, there is NO agent_templates DB sync: a workflow
+// PACKAGE is purely declarative. Compile = "does this package's BPMN parse +
+// validate as a template?" (the build/verify gate before publish).
+async function handleWorkflowSourceCompile(
+  request: PrimitiveRequest<{ packageSlug?: string }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to compile." };
+
+  const { packageSlug } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  const resolved = resolveWorkflowBpmnPathForRead(packageSlug);
+  if (!resolved) {
+    return { error: `Workflow BPMN not found: cinatra-ai/${packageSlug}/cinatra/workflow.bpmn. Use workflow_source_write to create it first.` };
+  }
+
+  // sibling-file credential scan over the on-disk package (parity with agent compile).
+  const siblingFindings = await scanPackageSiblingFilesForLiteralSecrets(resolved.rootDir);
+  const siblingBlockers = siblingFindings.filter((f) => f.severity === "blocker");
+  if (siblingBlockers.length > 0) {
+    return {
+      error: `Package sibling-file review failed (${siblingBlockers.length} blocker${siblingBlockers.length === 1 ? "" : "s"}): ${siblingBlockers.map((b) => b.message).join("; ")}`,
+      code: "review_blocked",
+      blockers: siblingBlockers,
+    };
+  }
+
+  // Full on-disk sidecar/package validation (the build/verify gate).
+  const check = await validateWorkflowPackageOnDisk(resolved.rootDir);
+  if (!check.valid) {
+    return { error: `workflow package failed validation: ${check.errors.join("; ")}`, valid: false, errors: check.errors };
+  }
+  return { compiled: true, kind: "workflow", packageSlug, valid: true };
+}
+
+// workflow_source_publish — publish the workflow package to the registry.
+async function handleWorkflowSourcePublish(
+  request: PrimitiveRequest<{ packageSlug?: string; destination?: "private" | "public"; changelog?: string | null; licenseAcknowledged?: boolean }>,
+): Promise<unknown> {
+  const isAdmin = await resolveIsPlatformAdminFromSession(
+    request.actor as { platformRole?: string } | undefined,
+  );
+  if (!isAdmin) return { error: "Unauthorized — admin session required to publish." };
+
+  const { packageSlug, destination = "private", licenseAcknowledged = false } = request.input;
+  if (!packageSlug || typeof packageSlug !== "string") return { error: "packageSlug is required." };
+  if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
+    return { error: "packageSlug must not contain path separators or '..'." };
+  }
+  const resolved = resolveWorkflowBpmnPathForRead(packageSlug);
+  if (!resolved) {
+    return { error: `Workflow package not found: cinatra-ai/${packageSlug}. Use workflow_source_write to create it first.` };
+  }
+
+  // Re-run the FULL on-disk sidecar/package validation gate so a structurally-
+  // invalid package never publishes (parity with the install-time contract:
+  // package.json#cinatra.workflowVersion, forbidden inline definition,
+  // duplicate sidecar, profile + template validity).
+  const sidecarCheck = await validateWorkflowPackageOnDisk(resolved.rootDir);
+  if (!sidecarCheck.valid) {
+    return { error: `Refusing to publish — workflow package failed validation: ${sidecarCheck.errors.join("; ")}`, valid: false, errors: sidecarCheck.errors };
+  }
+
+  // SPDX license detection gate — parity with agent_source_publish. `reject`
+  // tier (missing/unknown license) blocks; `copyleft` tier requires explicit
+  // licenseAcknowledged (re-validated server-side so the client can't bypass).
+  try {
+    const licenseResult = await detectSpdxLicense(resolved.rootDir);
+    if (licenseResult.tier === "reject") {
+      throw new LicenseDetectionRejectedError(licenseResult.reason);
+    }
+    if (licenseResult.tier === "copyleft" && !licenseAcknowledged) {
+      throw new LicenseAcknowledgementRequiredError(licenseResult.spdxId);
+    }
+  } catch (licenseError) {
+    if (
+      licenseError instanceof LicenseDetectionRejectedError ||
+      licenseError instanceof LicenseAcknowledgementRequiredError
+    ) {
+      return { error: licenseError.message, code: licenseError.code };
+    }
+    const msg = licenseError instanceof Error ? licenseError.message : "License detection failed.";
+    return { error: `License detection error: ${msg}` };
+  }
+
+  // Public-publish strict-semver guard — parity with agent_source_publish: a
+  // public marketplace publish must carry a real semver (never a 0.0.0-dev.*
+  // or malformed version). Runs pre-publish.
+  if (destination === "public") {
+    let pkgVersion = "";
+    try {
+      const pkgRaw = await readFile(join(resolved.rootDir, "package.json"), "utf8");
+      pkgVersion = (JSON.parse(pkgRaw) as { version?: string }).version ?? "";
+    } catch {
+      return { error: "publish refused: could not read package.json version.", code: "publish_authority_denied" };
+    }
+    const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?$/;
+    if (!pkgVersion || pkgVersion.startsWith("0.0.0-dev.") || !SEMVER.test(pkgVersion)) {
+      return {
+        error: `publish refused by publish authority: a public workflow package must carry a real semver version (got "${pkgVersion || "<none>"}").`,
+        code: "publish_authority_denied",
+      };
+    }
+  }
+
+  // Publish-side config resolution (NOT the read-side helper): resolve the
+  // destination via resolvePublishDestination, falling back to the local
+  // Verdaccio for a private publish when the destination resolver is not wired
+  // — mirrors handleAgentBuilderGitPublish.
+  let publishConfig: VerdaccioConfig;
+  const publishScopeOverride = readEffectivePublishScopeOverride();
+  try {
+    publishConfig = await resolvePublishDestination(destination, {
+      vendorScopeOverride: publishScopeOverride,
+    });
+  } catch (e) {
+    if (e instanceof InstanceNamespaceNotConfiguredError) {
+      return { error: "Instance vendor name is not configured. Visit /setup/name to provision a registry identity before publishing." };
+    }
+    if (e instanceof PublishDestinationNotConfiguredError && destination === "private") {
+      try {
+        const fallback = await loadVerdaccioConfigForServer();
+        publishConfig = publishScopeOverride
+          ? { ...fallback, packageScope: `@${publishScopeOverride}` }
+          : fallback;
+      } catch (fallbackErr) {
+        const msg = fallbackErr instanceof Error ? fallbackErr.message : "Failed to resolve publish destination.";
+        return { error: `No private publish destination is configured (${e.message}); local Verdaccio fallback also failed: ${msg}.` };
+      }
+    } else {
+      return { error: e instanceof Error ? e.message : "Failed to resolve publish destination." };
+    }
+  }
+
+  try {
+    const { publishExtensionPackageFromDir } = await import("../verdaccio/client");
+    const result = await publishExtensionPackageFromDir(
+      { packageDir: resolved.rootDir, kind: "workflow" },
+      publishConfig,
+    );
+    if (result.alreadyPublished) {
+      return {
+        packageName: result.packageName,
+        packageVersion: result.packageVersion,
+        registryUrl: result.registryUrl,
+        published: false,
+        alreadyPublished: true,
+      };
+    }
+    return {
+      packageName: result.packageName,
+      packageVersion: result.packageVersion,
+      registryUrl: result.registryUrl,
+      published: true,
+      alreadyPublished: false,
+      kind: "workflow",
+    };
+  } catch (err) {
+    return { error: `Publish failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -4586,6 +5111,28 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     // helper dispatch in one MCP primitive. Blockers gate compile/publish.
     agent_source_review: (req) =>
       handleAgentSourceReview(req as Parameters<typeof handleAgentSourceReview>[0]),
+    // WORKFLOW declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // the workflow_draft_*/workflow_template_* runtime tools (packages/workflows)
+    // which author DRAFTS/INSTANCES — these author/publish a workflow PACKAGE.
+    // Hold the global extension-lifecycle lock across write/compile/publish so
+    // they are strictly ordered against the install/purge sagas, exactly like
+    // the agent_source_* mutators.
+    workflow_source_write: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleWorkflowSourceWrite(req as Parameters<typeof handleWorkflowSourceWrite>[0]),
+      );
+    },
+    workflow_source_validate: (req) =>
+      handleWorkflowSourceValidate(req as Parameters<typeof handleWorkflowSourceValidate>[0]),
+    workflow_source_compile: async (req) => {
+      const { withGlobalExtensionLifecycleLock } = await import("../materialize-agent-package");
+      return withGlobalExtensionLifecycleLock(() =>
+        handleWorkflowSourceCompile(req as Parameters<typeof handleWorkflowSourceCompile>[0]),
+      );
+    },
+    workflow_source_publish: (req) =>
+      handleWorkflowSourcePublish(req as Parameters<typeof handleWorkflowSourcePublish>[0]),
     // chat-authoring review primitive that replaces the
     // agent-creation-finalizer Flow. Runs lint + 3 LLM advisors in-process.
     agent_creation_review: (req) =>

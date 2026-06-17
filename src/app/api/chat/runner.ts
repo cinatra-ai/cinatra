@@ -81,7 +81,16 @@ export { hasConfiguredLlmRuntime };
 // tool so the LLM reads concern-specific guidance on demand.
 const CHAT_SKILL_SLUGS = [
   "chat-assistant-core",
+  // Shared SPINE for authoring a new extension PACKAGE (kind selection, the
+  // trust/confirmation flow, the validator contract, the scaffold→write→
+  // validate→build→submit→review lifecycle). The per-kind authoring skills
+  // (chat-agent-authoring, chat-workflow-extension-authoring) reference it.
+  "chat-extension-authoring-core",
   "chat-agent-authoring",
+  // Authoring a reusable WORKFLOW EXTENSION PACKAGE (cinatra.kind:"workflow",
+  // a cinatra/workflow.bpmn) via the workflow_source_* tools. DISTINCT from
+  // chat-workflow-authoring below, which creates a one-off DRAFT/INSTANCE.
+  "chat-workflow-extension-authoring",
   "chat-agent-dispatch",
   "chat-campaign-creation",
   "chat-appointment-schedules",
@@ -91,7 +100,9 @@ const CHAT_SKILL_SLUGS = [
   // via artifact_extension_search, and emit through artifact_authoring_emit
   // (which is recursion-ledger-gated + matcher-suppressed).
   "chat-create-artifact",
-  // Workflow authoring + read-only status Q&A.
+  // Workflow DRAFT/INSTANCE authoring + read-only status Q&A. Creates one-off
+  // planned runs on the Gantt — NOT reusable workflow PACKAGES (that is
+  // chat-workflow-extension-authoring above, via the workflow_source_* tools).
   // Proposal-only: create/revise/preview drafts, never start/approve/reject.
   "chat-workflow-authoring",
   // Blog dashboard surface (the blog-content-workflow extension composes the
