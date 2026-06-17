@@ -230,7 +230,8 @@ async function cloneGitHubRepoToDirectory(input: {
   /** Optional tag / branch / sha. When undefined the repository's default branch is used. */
   ref?: string;
 }) {
-  const { octokit, owner, repo, targetDirectory, ref } = input;
+  const { octokit, owner, repo, ref } = input;
+  let targetDirectory = input.targetDirectory;
 
   const repoResponse = await octokit.rest.repos.get({ owner, repo });
   let treeSha: string;
@@ -256,34 +257,36 @@ async function cloneGitHubRepoToDirectory(input: {
   // `rm` below runs on the `targetDirectory` PARAMETER before the per-entry
   // containment loop, so confine it to the skills data root here regardless of
   // what the caller passed. Callers already validate `owner`/`repo` (#291); a
-  // legitimate target never trips this. Use the resolved/confined path for the
-  // `rm`/`mkdir` so CodeQL tracks the sanitizer output into the sink.
-  const resolvedTarget = assertWithinSkillsRoot(
+  // legitimate target never trips this. Reassign `targetDirectory` to the
+  // resolved/confined path so CodeQL tracks the sanitizer output into the
+  // `rm`/`mkdir` sinks below (the sink reads the barrier's return value; the
+  // variable name is immaterial to the dataflow).
+  targetDirectory = assertWithinSkillsRoot(
     targetDirectory,
     "Refusing to sync: clone target escapes the skills data root.",
   );
 
-  await rm(resolvedTarget, { recursive: true, force: true });
-  await mkdir(resolvedTarget, { recursive: true });
+  await rm(targetDirectory, { recursive: true, force: true });
+  await mkdir(targetDirectory, { recursive: true });
 
   // Containment root for every materialized tree entry. Defense-in-depth: Git
   // tree paths cannot themselves contain `..` components (Git rejects them in
   // tree objects), but we never write a path that resolves outside the clone
-  // target regardless of what the API returns (js/path-injection). `resolvedTarget`
-  // is the confined base asserted above.
+  // target regardless of what the API returns (js/path-injection).
+  // `targetDirectory` is the confined base asserted above.
   for (const entry of treeResponse.data.tree) {
     if (!entry.path) continue;
 
-    // Build the destination from the confined `resolvedTarget` base (the
+    // Build the destination from the confined `targetDirectory` base (the
     // barrier output asserted above), then re-confirm the resolved entry stays
     // inside it. This is the #291 per-entry pattern; rooting it on the
     // sanitizer output makes the mkdir/writeFile/chmod sinks below tracked as
     // confined (js/path-injection).
-    const destinationPath = path.join(resolvedTarget, entry.path);
+    const destinationPath = path.join(targetDirectory, entry.path);
     const resolvedDestination = path.resolve(destinationPath);
     if (
-      resolvedDestination !== resolvedTarget &&
-      !resolvedDestination.startsWith(resolvedTarget + path.sep)
+      resolvedDestination !== targetDirectory &&
+      !resolvedDestination.startsWith(targetDirectory + path.sep)
     ) {
       // Skip any entry that would escape the clone target.
       continue;
