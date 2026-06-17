@@ -110,6 +110,32 @@ describe("parseGitHubRepositoryReference (host validation)", () => {
     expect(parseGitHubRepositoryReference("")).toBeNull();
     expect(parseGitHubRepositoryReference("owner")).toBeNull();
   });
+
+  // Path-injection guard (js/path-injection, code-scanning): owner/repo flow
+  // verbatim into path.join(storeRoot, "workspace", owner, repo). The legacy
+  // owner/repo regex accepted ".." as a path component, letting a reference
+  // like "../.." escape the skills-store sandbox up to the data-root parent
+  // and reach the clobber-guard fs reads (existsSync/readdirSync/readFileSync)
+  // and the destructive rm/writeFile. The parser MUST reject any traversal.
+  it("rejects path-traversal owner/repo segments", () => {
+    expect(parseGitHubRepositoryReference("../..")).toBeNull();
+    expect(parseGitHubRepositoryReference("..")).toBeNull();
+    expect(parseGitHubRepositoryReference("owner/..")).toBeNull();
+    expect(parseGitHubRepositoryReference("../repo")).toBeNull();
+    expect(parseGitHubRepositoryReference(".../...")).toBeNull();
+    expect(parseGitHubRepositoryReference("owner/.")).toBeNull();
+    expect(parseGitHubRepositoryReference("https://github.com/owner/..%2F..%2Fevil")).toBeNull();
+    expect(parseGitHubRepositoryReference("git@github.com:owner/../../x.git")).toBeNull();
+    // Backslash separators (Windows-style traversal) must also be rejected.
+    expect(parseGitHubRepositoryReference("owner/..\\..\\evil")).toBeNull();
+  });
+
+  it("still accepts legitimate owner/repo names with dots, dashes, underscores", () => {
+    expect(parseGitHubRepositoryReference("octo-org/my.repo_name-2")).toEqual({
+      owner: "octo-org",
+      repo: "my.repo_name-2",
+    });
+  });
 });
 
 describe("installSkillPackageFromGitHub (ref resolution)", () => {

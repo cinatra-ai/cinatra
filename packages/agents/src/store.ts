@@ -1084,16 +1084,32 @@ export async function readInstalledAgentTemplates(
  * their comparisons are slash-/case-insensitive.
  */
 function normalizeAgentUrl(raw: string): string {
-  const trimmed = raw.trim().replace(/\/+$/, "");
+  const trimmed = stripTrailingSlashes(raw.trim());
   try {
     const u = new URL(trimmed);
     const host = u.host.toLowerCase();
     const scheme = u.protocol.toLowerCase();
-    const rest = `${u.pathname}${u.search}`.replace(/\/+$/, "");
+    const rest = stripTrailingSlashes(`${u.pathname}${u.search}`);
     return `${scheme}//${host}${rest}`;
   } catch {
     return trimmed;
   }
+}
+
+/**
+ * Strips trailing `/` characters from a string in linear time.
+ *
+ * Replaces the regex `value.replace(/\/+$/, "")`, which is polynomial
+ * (O(n^2)) on adversarial input such as `"/".repeat(n) + "x"` — the
+ * end-anchored `\/+$` retries at every offset (js/polynomial-redos, eng#196).
+ * `normalizeAgentUrl` runs on caller-supplied agent-registration URLs, so the
+ * linear form is preferred. Behaviorally identical to the old regex
+ * (verified by fuzz, including query strings).
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return value.slice(0, end);
 }
 
 /**

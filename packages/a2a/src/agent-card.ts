@@ -124,6 +124,20 @@ const TOP_LEVEL_DESCRIPTION =
   "Cinatra agent platform — a multi-agent host. Each published virtual agent is exposed as a named skill.";
 
 /**
+ * Strips trailing `/` characters from a string in linear time.
+ *
+ * Replaces the regex `value.replace(/\/+$/, "")`, which is polynomial
+ * (O(n^2)) on adversarial input such as `"/".repeat(n) + "x"` — the
+ * end-anchored `\/+$` retries at every offset (js/polynomial-redos, eng#196).
+ * Behaviorally identical to the old regex (verified by fuzz).
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) end--;
+  return value.slice(0, end);
+}
+
+/**
  * Builds a valid A2A AgentCard from a list of published virtual agent
  * templates. Pure deterministic transform — same input always produces a
  * byte-identical JSON.stringify output.
@@ -136,7 +150,7 @@ const TOP_LEVEL_DESCRIPTION =
  *    versions are unavailable (operativeVersion still flows from packageVersion).
  */
 export function buildAgentCard(input: BuildAgentCardInput): AgentCard {
-  const baseUrl = input.baseUrl.replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes(input.baseUrl);
   const hostVersion = input.hostVersion ?? "1.0.0";
 
   const skills: AgentCardSkill[] = [];

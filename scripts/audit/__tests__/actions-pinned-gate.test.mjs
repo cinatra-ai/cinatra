@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 
 import {
@@ -371,7 +371,11 @@ test("scanWorkflowText: a with-input key like `uses_legacy:` is NOT flagged", ()
 test("live: the actual gate run over .github/workflows exits 0", () => {
   const root = execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
   const gate = resolve(root, "scripts/audit/actions-pinned-gate.mjs");
-  // throws (non-zero exit) if the gate finds any offender
-  const out = execSync(`node ${gate}`, { cwd: root, encoding: "utf8" });
+  // throws (non-zero exit) if the gate finds any offender.
+  // Use execFileSync with an argv array (no shell): `gate` is an absolute path
+  // derived from the on-disk checkout location, so passing it as a discrete
+  // argument avoids any shell metacharacter interpretation if the clone path
+  // ever contains a space or special character (CodeQL js/shell-command-injection).
+  const out = execFileSync("node", [gate], { cwd: root, encoding: "utf8" });
   assert.match(out, /all remote `uses:` refs/);
 });

@@ -1150,6 +1150,35 @@ export async function upsertSkill(input: {
   );
   const skillFilePath = path.join(skillDiskDir, "SKILL.md");
 
+  // Strict write-side containment (js/path-injection). The disk segments are
+  // slug-derived/actor-bound today, but assert BEFORE we mutate the catalog or
+  // touch the filesystem so a future regression in slug derivation (or a stray
+  // `..` reaching `skillSlug`/`storagePackagePath`) can never escape the store.
+  //
+  // Two layers:
+  //   1. Reject any `.`/`..` traversal segment in the derived path components.
+  //      The `storagePackagePath` agent branch legitimately uses `/` separators
+  //      (vendor/pkg), so we forbid only the dot-segments, not separators.
+  //   2. Resolve the final path and require it inside the *canonical* skill
+  //      store root. Unlike the read-side `assertSkillFilePathInsideRoot`
+  //      (which also tolerates the legacy `data/skills` root for compat), new
+  //      writes must land in the canonical store — this prevents a crafted
+  //      segment from resolving into the sibling legacy root for a cross-root
+  //      clobber.
+  for (const segment of [input.storagePackagePath ?? packageSlug, skillSlug, input.ownerUserId ?? ""]) {
+    if (segment.split(/[/\\]/).some((part) => part === ".." || part === ".")) {
+      throw new Error("Refusing to write a skill to a path containing a traversal segment.");
+    }
+  }
+  const canonicalStoreRoot = path.resolve(getSkillStoreRootPath());
+  const resolvedSkillDir = path.resolve(skillDiskDir);
+  if (
+    resolvedSkillDir !== canonicalStoreRoot &&
+    !resolvedSkillDir.startsWith(canonicalStoreRoot + path.sep)
+  ) {
+    throw new Error("Skill write path is outside the canonical skill store root.");
+  }
+
   const defaultDescription = isPersonal
     ? `Custom skill for ${input.agentId ?? "this agent"}.`
     : "User-created skill.";
