@@ -101,6 +101,34 @@ export function assertWithinSkillsRoot(targetDirectory: string, errorMessage: st
   return resolvedTarget;
 }
 
+/**
+ * Per-entry realpath containment for a materialized path rooted on an
+ * already-confined base directory (#300, ZIP-slip + symlink-escape). Mirrors
+ * `assertWithinSkillsRoot`'s two layers but as a no-throw predicate the
+ * extraction loop uses to SKIP an escaping entry:
+ *   1. Lexical containment — rejects pure `../` traversal baked into a ZIP
+ *      entry name before any fs op (zip-slip).
+ *   2. Realpath containment — a confined base may contain a SYMLINKED ancestor
+ *      (or the entry's own leaf may be a symlink) that resolves OUT of the
+ *      base; canonicalize the base and the entry (nearest-existing-ancestor
+ *      realpath for a not-yet-created leaf) and re-assert on the real paths.
+ * Behavior is identical for legitimate non-symlink, non-traversal entries
+ * (realpath is a no-op on those).
+ */
+function isEntryContainedInBase(baseDirResolved: string, entryResolved: string): boolean {
+  // Layer 1 — lexical.
+  if (
+    entryResolved !== baseDirResolved &&
+    !entryResolved.startsWith(baseDirResolved + path.sep)
+  ) {
+    return false;
+  }
+  // Layer 2 — realpath.
+  const realBase = realpathNearestExisting(baseDirResolved);
+  const realEntry = realpathNearestExisting(entryResolved);
+  return realEntry === realBase || realEntry.startsWith(realBase + path.sep);
+}
+
 // GitHub owner (user/org) login charset: alphanumerics and single hyphens.
 // GitHub repository-name charset: alphanumerics plus `.`, `_`, `-`.
 // Neither may be `.`/`..` nor contain a path separator. These guards are the
@@ -626,11 +654,19 @@ export async function installSkillPackageFromZip(zipBuffer: Buffer, slug: string
   const packageId = `zip:${packageSlug}`;
   // Target the ownership-first layout. ZIP-uploaded packages are workspace-tier
   // user-authored installs; they land at workspace/uploaded/<slug>/.
-  const targetDirectory = path.join(
-    getSkillsDataRootPath(),
-    "workspace",
-    "uploaded",
-    packageSlug,
+  // Fail-closed base confinement (#300). Confine the install base to the
+  // skills data root BEFORE the destructive `rm`/`mkdir` and per-entry writes.
+  // The slug is slugified, so a legitimate upload never trips this; a symlinked
+  // ancestor under workspace/uploaded that resolves the base outside the root
+  // is rejected here. Reassign so the sanitizer output feeds the sinks below.
+  const targetDirectory = assertWithinSkillsRoot(
+    path.join(
+      getSkillsDataRootPath(),
+      "workspace",
+      "uploaded",
+      packageSlug,
+    ),
+    `Refusing to install ${packageId}: resolved target escapes the skills data root.`,
   );
 
   await rm(targetDirectory, { recursive: true, force: true });
@@ -646,11 +682,20 @@ export async function installSkillPackageFromZip(zipBuffer: Buffer, slug: string
     ? allPaths[0]!.slice(0, firstSlash + 1)
     : "";
 
+  // The extraction base for the per-entry zip-slip check is the confined target.
+  const resolvedTarget = path.resolve(targetDirectory);
   for (const [zipPath, content] of Object.entries(unzipped)) {
     const relativePath = rootPrefix ? zipPath.slice(rootPrefix.length) : zipPath;
     if (!relativePath) continue; // root directory entry
 
+    // ZIP-SLIP / symlink-escape (#300). Resolve each entry against the confined
+    // base and SKIP any entry whose resolved real path escapes it — covers a
+    // `../` lexical traversal baked into the entry name AND a symlinked
+    // ancestor/leaf already materialized inside the base by an earlier entry.
     const destinationPath = path.join(targetDirectory, relativePath);
+    if (!isEntryContainedInBase(resolvedTarget, path.resolve(destinationPath))) {
+      continue;
+    }
     if (zipPath.endsWith("/")) {
       await mkdir(destinationPath, { recursive: true });
     } else {
@@ -718,7 +763,16 @@ export async function pushSkillStoreToGitHub(options?: { force?: boolean }): Pro
   // Create blobs for all files
   const treeItems: Array<{ path: string; mode: "100644"; type: "blob"; sha: string }> = [];
 
+  const resolvedStoreRoot = path.resolve(storeRoot);
   for (const file of files) {
+    // Leaf confinement (file-symlink escape, #300). `collectFilesRecursive`
+    // walks `storeRoot`, but a file leaf under it that is a SYMLINK to an
+    // outside secret would be followed by the `readFile` below and pushed to
+    // the remote repo. Skip any file whose real path escapes the real store
+    // root (`continue` matches the loop's per-file, non-fatal handling).
+    if (!isEntryContainedInBase(resolvedStoreRoot, path.resolve(file.absolutePath))) {
+      continue;
+    }
     const content = await readFile(file.absolutePath);
     const blobResponse = await octokit.rest.git.createBlob({
       owner,

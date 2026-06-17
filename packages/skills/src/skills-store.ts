@@ -458,7 +458,12 @@ function parseFrontmatter(content: string) {
 
 function readPluginManifestLevel(packageRootPath: string): SkillLevel | undefined {
   const pluginJsonPath = path.join(packageRootPath, "cinatra", "plugin.json");
-  if (!existsSync(pluginJsonPath)) return undefined;
+  // Leaf confinement (file-symlink escape, #300): `packageRootPath` is a
+  // confined package dir, but a `cinatra/plugin.json` that is a SYMLINK to an
+  // outside file would be followed by the `readFileSync` below. Skip (treat as
+  // no manifest) when the real file escapes the real package dir.
+  if (!existsSync(pluginJsonPath) || !isFileLeafContainedInDir(packageRootPath, pluginJsonPath))
+    return undefined;
   try {
     const manifest = JSON.parse(readFileSync(pluginJsonPath, "utf8")) as { skills?: { type?: string } };
     const type = manifest.skills?.type;
@@ -679,7 +684,11 @@ function scanInstalledPackageCatalog() {
       // page render with empty repository/license/authors fields.
       const markerPath = path.join(repoDir, ".cinatra-skill-source.json");
       let markerPackageId: string | null = null;
-      if (existsSync(markerPath)) {
+      // Leaf confinement (file-symlink escape, #300): `repoDir` is confined,
+      // but a `.cinatra-skill-source.json` symlinked to an outside file would
+      // be followed by `readFileSync`. Skip the read when the real file escapes
+      // the real package dir (treated as no marker, the malformed-marker path).
+      if (existsSync(markerPath) && isFileLeafContainedInDir(repoDir, markerPath)) {
         try {
           const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { packageId?: unknown };
           if (typeof marker.packageId === "string" && marker.packageId.length > 0) {
@@ -699,7 +708,13 @@ function scanInstalledPackageCatalog() {
         packageId = markerPackageId;
       } else {
         try {
-          packageId = (JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { name?: string }).name?.trim() || `installed:${packageSlug}`;
+          // Leaf confinement (file-symlink escape, #300): a `package.json`
+          // symlinked to an outside file would be followed by `readFileSync`.
+          // On escape, fall through to the `installed:<slug>` derivation rather
+          // than ingesting the outside file's `name`.
+          packageId = isFileLeafContainedInDir(repoDir, pkgJsonPath)
+            ? (JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { name?: string }).name?.trim() || `installed:${packageSlug}`
+            : `installed:${packageSlug}`;
         } catch {
           packageId = `installed:${packageSlug}`;
         }
@@ -727,8 +742,18 @@ function scanInstalledPackageCatalog() {
         slug: packageSlug,
         description: `Skills package from ${packageSlug}.`,
         repositoryPath: repoDir,
-        readmeContent: existsSync(readmePath) ? readFileSync(readmePath, "utf8") : undefined,
-        licenseText: existsSync(licensePath) ? readFileSync(licensePath, "utf8") : undefined,
+        // Leaf confinement (file-symlink escape, #300): README/LICENSE lexically
+        // live in the confined `repoDir`, but a file-symlink to outside would be
+        // followed by `readFileSync`. Skip the read when the real file escapes
+        // the real dir (mirrors the scanInstalledPackageCatalog probe above).
+        readmeContent:
+          existsSync(readmePath) && isFileLeafContainedInDir(repoDir, readmePath)
+            ? readFileSync(readmePath, "utf8")
+            : undefined,
+        licenseText:
+          existsSync(licensePath) && isFileLeafContainedInDir(repoDir, licensePath)
+            ? readFileSync(licensePath, "utf8")
+            : undefined,
         isCustom: !pluginLevel,
         level: resolvedLevel,
       };
@@ -1208,6 +1233,22 @@ export async function upsertSkill(input: {
   if (
     resolvedSkillDir !== canonicalStoreRoot &&
     !resolvedSkillDir.startsWith(canonicalStoreRoot + path.sep)
+  ) {
+    throw new Error("Skill write path is outside the canonical skill store root.");
+  }
+  // Layer 3 — realpath containment (#300). The lexical prefix check above is
+  // satisfied by a path whose ANCESTOR (e.g. `workspace/<pkg>`) is a SYMLINK
+  // pointing outside the store; the downstream `mkdir`/`writeFile` would then
+  // materialize the SKILL.md OUTSIDE the canonical store. Canonicalize the
+  // store root and the resolved skill DIR (nearest-existing-ancestor realpath
+  // handles the not-yet-created leaf) and re-assert containment on the real
+  // paths. Also confine the SKILL.md leaf itself: a pre-existing symlinked
+  // leaf would have `writeFile` follow it out of the store. Behavior is
+  // identical for legitimate non-symlink and not-yet-created paths (realpath
+  // is a no-op on those).
+  if (
+    !isRealpathContained(resolvedSkillDir, canonicalStoreRoot) ||
+    !isFileLeafContainedInDir(canonicalStoreRoot, skillFilePath)
   ) {
     throw new Error("Skill write path is outside the canonical skill store root.");
   }

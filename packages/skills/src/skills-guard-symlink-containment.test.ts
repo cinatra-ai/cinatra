@@ -18,7 +18,7 @@
  * chain, so that suite mocks ./skills-store instead of loading it).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, rmSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -78,6 +78,7 @@ import {
   getSkillsDataRootPath,
   getSkillStoreRootPath,
   upsertRepositoryBackedSkillPackage,
+  upsertSkill,
 } from "./skills-store";
 
 afterAll(() => {
@@ -241,6 +242,148 @@ describe("realpath/symlink containment (#300)", () => {
       expect(
         written.skillPackages.every((p) => !(p.readmeContent ?? "").includes("TOP SECRET")),
       ).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // upsertSkill write-path realpath containment (#300).
+  //
+  // upsertSkill composes `<storeRoot>/workspace/<pkg>/<skill>/SKILL.md` and
+  // previously asserted only LEXICAL containment before `mkdir`/`writeFile`. A
+  // symlinked ANCESTOR (e.g. `<storeRoot>/workspace -> /outside`) passes the
+  // lexical prefix check but the write materializes OUTSIDE the canonical
+  // store. The new realpath layer (+ SKILL.md leaf check) rejects this.
+  // -------------------------------------------------------------------------
+  describe("upsertSkill write-path containment", () => {
+    it("writes a legitimate workspace skill inside the canonical store root", async () => {
+      replaceSkillCatalogMock.mockClear();
+      const skill = await upsertSkill({
+        type: "workspace",
+        packageName: "Legit Pkg",
+        name: "Legit Skill",
+        content: "REAL SKILL BODY",
+      });
+      // SKILL.md path is inside the (lexical) store root and the file was
+      // written. `sourcePath` is the lexical store path; on macOS the realpath
+      // differs (/tmp -> /private/tmp), so assert against the lexical root and
+      // confirm the real file resolves under the realpath'd root.
+      const resolvedStoreRoot = path.resolve(storeRoot);
+      expect(path.resolve(skill.sourcePath!).startsWith(resolvedStoreRoot + path.sep)).toBe(true);
+      expect(existsSync(skill.sourcePath!)).toBe(true);
+      expect(realpathSync.native(skill.sourcePath!).startsWith(realStoreRoot + path.sep)).toBe(true);
+      expect(readFileSync(skill.sourcePath!, "utf8")).toBe("REAL SKILL BODY");
+      expect(replaceSkillCatalogMock).toHaveBeenCalled();
+    });
+
+    it("REJECTS a write whose resolved path escapes the store via a symlinked ancestor", async () => {
+      replaceSkillCatalogMock.mockClear();
+      // Plant <storeRoot>/workspace -> <outsideDir>. The computed skill dir
+      // <storeRoot>/workspace/<pkg>/<skill> is lexically inside the store but
+      // its REAL path is <outsideDir>/<pkg>/<skill>, outside the store.
+      const workspaceLink = path.join(storeRoot, "workspace");
+      try { rmSync(workspaceLink, { recursive: true, force: true }); } catch { /* noop */ }
+      symlinkSync(outsideDir, workspaceLink, "dir");
+
+      await expect(
+        upsertSkill({
+          type: "workspace",
+          packageName: "Escape Pkg",
+          name: "Escape Skill",
+          content: "SHOULD NOT BE WRITTEN",
+        }),
+      ).rejects.toThrow(/outside the canonical skill store root/i);
+
+      // No catalog mutation and nothing written to the escaping (outside) path.
+      expect(replaceSkillCatalogMock).not.toHaveBeenCalled();
+      expect(existsSync(path.join(outsideDir, "escape-pkg", "escape-skill", "SKILL.md"))).toBe(false);
+
+      // Restore a real directory so other tests are unaffected.
+      rmSync(workspaceLink, { recursive: true, force: true });
+      mkdirSync(workspaceLink, { recursive: true });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Legacy scanner leaf reads (scanInstalledPackageCatalog's
+  // installedDir-walk + readPluginManifestLevel). README/LICENSE/marker/
+  // package.json/plugin.json are read from a confined package dir but were not
+  // leaf-confined; a file-symlink to outside would be followed by readFileSync.
+  // upsertRepositoryBackedSkillPackage triggers readSkillsCatalog ->
+  // syncInstalledSkillsToDatabase, which runs this legacy scanner over the
+  // store root, so it is the end-to-end harness for these leaf reads.
+  // -------------------------------------------------------------------------
+  describe("legacy scanner leaf-read confinement", () => {
+    it("does NOT ingest a README/LICENSE/package.json/plugin.json symlinked to outside while scanning installed packages", async () => {
+      replaceSkillCatalogMock.mockClear();
+
+      // Outside secrets the file-symlinks point at.
+      const secretReadme = path.join(outsideDir, "scanner-leaked-README.md");
+      writeFileSync(secretReadme, "TOP SECRET SCANNER README");
+      const secretLicense = path.join(outsideDir, "scanner-leaked-LICENSE");
+      writeFileSync(secretLicense, "TOP SECRET SCANNER LICENSE");
+      const secretPkgJson = path.join(outsideDir, "scanner-leaked-package.json");
+      writeFileSync(secretPkgJson, JSON.stringify({ name: "TOP-SECRET-PKG-NAME" }));
+
+      // A package dir the legacy scanner will walk: <legacyRoot>/scanner-pkg.
+      // (getInstalledPackagesDir() === getSkillsDataRootPath() === legacyRoot.)
+      const scannerPkg = path.join(legacyRoot, "scanner-pkg");
+      mkdirSync(scannerPkg, { recursive: true });
+      // A real SKILL.md so the dir registers as a package with one skill.
+      const skillDir = path.join(scannerPkg, "real-skill");
+      mkdirSync(skillDir, { recursive: true });
+      writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        ["---", "name: real-scanner-skill", "---", "REAL SCANNER BODY"].join("\n"),
+      );
+      // File-symlinks at the package root → outside secrets.
+      for (const [name, target] of [
+        ["README.md", secretReadme],
+        ["LICENSE", secretLicense],
+        ["package.json", secretPkgJson],
+      ] as const) {
+        const link = path.join(scannerPkg, name);
+        try { rmSync(link, { force: true }); } catch { /* noop */ }
+        symlinkSync(target, link, "file");
+      }
+      // A plugin.json file-symlink to outside (readPluginManifestLevel).
+      const cinatraDir = path.join(scannerPkg, "cinatra");
+      mkdirSync(cinatraDir, { recursive: true });
+      const secretPlugin = path.join(outsideDir, "scanner-leaked-plugin.json");
+      writeFileSync(secretPlugin, JSON.stringify({ skills: { type: "system" } }));
+      const pluginLink = path.join(cinatraDir, "plugin.json");
+      try { rmSync(pluginLink, { force: true }); } catch { /* noop */ }
+      symlinkSync(secretPlugin, pluginLink, "file");
+
+      // Drive a sync (readSkillsCatalog) via an unrelated upsert; the scanner
+      // runs over legacyRoot as a side effect of catalog read.
+      await upsertRepositoryBackedSkillPackage({
+        packageId: "github:octo/scanner-trigger",
+        name: "Scanner Trigger",
+        slug: "scanner-trigger",
+        description: "trigger",
+        repositoryUrl: "https://github.com/octo/scanner-trigger",
+        repositoryPath: path.join(storeRoot, "workspace", "octo", "scanner-trigger-repo"),
+      });
+
+      expect(replaceSkillCatalogMock).toHaveBeenCalled();
+      const calls = replaceSkillCatalogMock.mock.calls;
+      const written = calls[calls.length - 1][0] as {
+        skillPackages: Array<{ id: string; readmeContent?: string; licenseText?: string }>;
+        skills: Array<{ content: string }>;
+      };
+
+      // The scanner package was discovered (its real skill ingested) but NONE
+      // of the symlinked-out leaves leaked their content/name.
+      expect(
+        written.skillPackages.every(
+          (p) =>
+            !(p.readmeContent ?? "").includes("TOP SECRET") &&
+            !(p.licenseText ?? "").includes("TOP SECRET"),
+        ),
+      ).toBe(true);
+      // The escaping package.json `name` must not become a package id.
+      expect(written.skillPackages.every((p) => p.id !== "TOP-SECRET-PKG-NAME")).toBe(true);
+      expect(written.skills.every((s) => !s.content.includes("TOP SECRET"))).toBe(true);
     });
   });
 });
