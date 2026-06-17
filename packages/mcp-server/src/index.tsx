@@ -199,13 +199,25 @@ type OAuthClientMutationResponse = OAuthClientRecord & {
   client_secret?: string;
 };
 
+// Strip trailing "/" via a LINEAR char-index scan. The anchored greedy
+// `/\/+$/` is flagged polynomial-ReDoS on slash-heavy input
+// (CodeQL js/polynomial-redos); this mirrors the trim already used in
+// mcp-public-base-url-shape.mjs and is O(n) with no backtracking.
+function trimTrailingSlash(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return value.slice(0, end);
+}
+
 function normalizePath(path: string | undefined, fallback: string) {
   const value = (path ?? fallback).trim();
   if (!value) {
     return fallback;
   }
 
-  return value.startsWith("/") ? value.replace(/\/+$/, "") || "/" : `/${value.replace(/\/+$/, "")}`;
+  return value.startsWith("/")
+    ? trimTrailingSlash(value) || "/"
+    : `/${trimTrailingSlash(value)}`;
 }
 
 function normalizeOptionalUrl(value: string | null | undefined) {
