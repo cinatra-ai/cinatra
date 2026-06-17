@@ -40,7 +40,38 @@ packages:
 # `pnpm install` runs.
 verifyDepsBeforeRun: false
 overrides:
+  react: 19.2.6 # exact-pinned 19.2.6 in root/chat/mcp-server/skills; pin caret consumers too for react/react-dom lockstep
   react-dom: 19.2.6 # kept in lockstep with `react`
+  # --- Bounded security currency (closeout W1, #71) ---
+  # In-range transitive-dep pins for vulnerable copies left after `pnpm update
+  # -r`. Each target stays WITHIN the resolved package's existing major; the
+  # vulnerable copy is hard-pinned by an upstream (monaco-editor, chevrotain,
+  # next, vitest) so a global override is the only in-range fix. Majors-only
+  # advisories (e.g. @opentelemetry/core 1.x -> 2.8.0) are NOT overridden here;
+  # they are deferred to the discretionary-majors milestone.
+  dompurify@<3.4.9: ">=3.4.9 <4" # monaco-editor 0.55.1 pins 3.2.7 (GHSA-gvmj/-vxr8/-76mc + mermaid path)
+  # vite (GHSA-fx2h-pf6j-xcff high + GHSA-v2wj-q39q-566r / -p9ff-h696-f583) NOT
+  # overridden: vite is dev/test-only here (sole consumer is vitest/@vitest/
+  # mocker; this repo dev/builds on Next + Turbopack, ships no Vite dev server),
+  # so the dev-server fs.deny-bypass / file-read advisories have NO production
+  # exposure. The in-range patched vite (8.0.16) ALSO breaks vitest module
+  # mocking (vi.resetModules + dynamic import of a vi.mock'd module stops
+  # intercepting -> sentry.test.ts / background-jobs-sentry.test.ts go red).
+  # Bounded-currency rule: keep CI green, defer the no-prod-exposure bump.
+  lodash@<4.17.24: ">=4.17.24 <5" # chevrotain (mermaid) pins 4.17.21 (GHSA-r5fr/-f23m)
+  lodash-es@<4.17.24: ">=4.17.24 <5"
+  postcss@<8.5.10: ">=8.5.10 <9" # next bundles 8.4.31 (GHSA-qx2v)
+  # @better-auth/cli@1.4.21 (a dev-only, now-vestigial devDep — the auth:migrate
+  # script imports the main `better-auth` programmatically, NOT the cli) drags in
+  # vulnerable better-auth@1.4.21 (GHSA-wxw3) + drizzle-orm@0.41.0 (GHSA-gpj5).
+  # Dedupe both to the already-resolved patched prod versions; in-range (v1 / v0.x).
+  better-auth@<1.6.2: "1.6.19" # match the prod better-auth already in the tree
+  drizzle-orm@<0.45.2: "0.45.2" # match the prod drizzle-orm already in the tree
+  # The in-range app bump ioredis ^5.10.1 -> ^5.11.1 left bullmq@5.78.1 pinning
+  # ioredis@5.10.1, so two ioredis copies coexisted -> nominal `Redis` type clash
+  # (bullmq's ConnectionOptions wanted the 5.10.1 Redis; the app builds a 5.11.1
+  # Redis). Dedupe to one copy (patch bump within v5; bullmq is compatible).
+  ioredis: "5.11.1"
 
 patchedDependencies:
   "@a2a-js/sdk@0.3.13": patches/@a2a-js__sdk@0.3.13.patch

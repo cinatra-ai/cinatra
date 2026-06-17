@@ -24,17 +24,17 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "zod": "^4.4.3",
-    "drizzle-orm": "^0.45.2",
-    "pg": "^8.20.0",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-client": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.21.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/react": "^19",
-    "@types/pg": "^8.15.0",
-    "vitest": "^4.1.6"
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.2.17",
+    "vitest": "^4.1.9"
   }
 }

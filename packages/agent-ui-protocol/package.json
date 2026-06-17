@@ -11,11 +11,11 @@
   "dependencies": {
     "@cinatra-ai/a2a": "workspace:*",
     "@cinatra-ai/sdk-extensions": "workspace:*",
-    "ioredis": "^5.10.1"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
     "@a2ui/web_core": "0.10.0",
     "@ag-ui/core": "0.0.53",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   }
 }

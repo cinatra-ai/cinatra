@@ -14,9 +14,9 @@
     "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-client": "workspace:*",
-    "ioredis": "^5.10.1"
+    "ioredis": "^5.11.1"
   },
   "devDependencies": {
-    "bullmq": "^5.76.9"
+    "bullmq": "^5.78.1"
   }
 }

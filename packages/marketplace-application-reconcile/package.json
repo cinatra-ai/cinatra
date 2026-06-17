@@ -17,6 +17,6 @@
     "@cinatra-ai/marketplace-mcp-client": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "^4.0.0"
+    "vitest": "^4.1.9"
   }
 }

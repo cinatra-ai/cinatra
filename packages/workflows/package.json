@@ -33,15 +33,15 @@
     "@cinatra-ai/extension-types": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/objects": "workspace:*",
-    "@date-fns/tz": "^1.4.1",
+    "@date-fns/tz": "^1.5.0",
     "bpmn-moddle": "10.0.0",
-    "moddle-xml": "12.0.0",
-    "bullmq": "^5.76.9",
-    "date-fns": "^4.1.0",
+    "bullmq": "^5.78.1",
+    "date-fns": "^4.4.0",
     "drizzle-orm": "^0.45.2",
-    "ioredis": "^5.10.1",
-    "pg": "^8.20.0",
-    "server-only": "*",
-    "zod": "^4.3.6"
+    "ioredis": "^5.11.1",
+    "moddle-xml": "12.0.0",
+    "pg": "^8.21.0",
+    "server-only": "^0.0.1",
+    "zod": "^4.4.3"
   }
 }

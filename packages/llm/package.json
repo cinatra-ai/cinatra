@@ -16,14 +16,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
     "@cinatra-ai/mcp-server": "workspace:*",
     "@cinatra-ai/metric-usage-api": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
-    "@google/genai": "^2.3.0",
-    "@anthropic-ai/sdk": "^0.96.0",
-    "openai": "^6.38.0"
+    "@google/genai": "^2.8.0",
+    "openai": "^6.43.0"
   },
   "devDependencies": {
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   }
 }

@@ -7,16 +7,16 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "peerDependencies": {
+    "@tanstack/react-query": "^5.100.10",
     "drizzle-orm": "^0.45.0",
     "react": "^19.2.6",
-    "zod": "^4.4.3",
-    "@tanstack/react-query": "^5.100.10"
+    "zod": "^4.4.3"
   },
   "scripts": {
     "test": "vitest run"
   },
   "devDependencies": {
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   },
   "dependencies": {
     "drizzle-cube": "0.5.7"
