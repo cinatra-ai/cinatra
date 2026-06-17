@@ -22,7 +22,7 @@
  * Returns `{ registered, skipped }`. Never throws — per-agent and
  * per-skill failures are collected in `skipped` with a reason.
  */
-import { type Dirent, type Stats } from "fs";
+import { type Dirent, type Stats, existsSync, realpathSync } from "fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "path";
 import { upsertSkill } from "./skills-store";
@@ -63,9 +63,40 @@ function isValidDirectorySlug(slug: string): boolean {
  * child, or `null` when it escapes (the function contract never throws — the
  * caller pushes a `skipped` reason instead).
  */
-function resolveWithin(parentResolved: string, segment: string): string | null {
+/**
+ * Realpath the nearest EXISTING ancestor of `target` (#300 symlink-containment
+ * support). Realpath of a not-yet-created leaf throws (`ENOENT`), so walk up
+ * until an existing path is found and canonicalize THAT. Falls back to the
+ * lexical resolve at the filesystem root (defensive).
+ */
+function realpathNearestExisting(target: string): string {
+  let current = path.resolve(target);
+  for (;;) {
+    if (existsSync(current)) {
+      return realpathSync.native(current);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
+export function resolveWithin(parentResolved: string, segment: string): string | null {
   const childResolved = path.resolve(parentResolved, segment);
+  // Layer 1 — lexical containment (KEEP; defense in depth).
   if (childResolved !== parentResolved && !childResolved.startsWith(parentResolved + path.sep)) {
+    return null;
+  }
+  // Layer 2 — realpath containment (#300). A symlinked ANCESTOR under
+  // `parentResolved` passes the lexical prefix check but resolves OUT of the
+  // parent via the link target. Canonicalize the parent and child (nearest
+  // existing ancestor for not-yet-created leaves) and re-check; return null on
+  // escape, matching the function's no-throw contract.
+  const realParent = realpathNearestExisting(parentResolved);
+  const realChild = realpathNearestExisting(childResolved);
+  if (realChild !== realParent && !realChild.startsWith(realParent + path.sep)) {
     return null;
   }
   return childResolved;

@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
@@ -1416,6 +1416,43 @@ export const upsertPersonalSkill = upsertCustomSkill;
  * satisfy the containment.
  */
 /**
+ * Realpath the nearest EXISTING ancestor of `target` (#300 symlink-containment
+ * support). Realpath of a not-yet-created leaf throws (`ENOENT`), so we walk up
+ * until a path that exists is found and canonicalize THAT — the missing
+ * trailing segments cannot themselves be a symlink (they don't exist), so the
+ * realpath'd ancestor is the correct containment anchor. Falls back to the
+ * lexical resolve at the filesystem root (defensive; the root always exists).
+ */
+function realpathNearestExisting(target: string): string {
+  let current = path.resolve(target);
+  for (;;) {
+    if (existsSync(current)) {
+      return realpathSync.native(current);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Realpath-containment re-assertion (#300). After the lexical resolve+prefix
+ * check confirms `resolved` is lexically inside one of the allowed roots, this
+ * canonicalizes the root and the target (via the nearest existing ancestor for
+ * not-yet-created leaves) and re-checks containment on the REAL paths. A
+ * symlinked ancestor under a root passes the lexical check but resolves OUT of
+ * it — this layer rejects that. Behavior is identical for legitimate
+ * non-symlink and not-yet-created paths (realpath is a no-op on those).
+ */
+function isRealpathContained(resolved: string, root: string): boolean {
+  const realRoot = realpathNearestExisting(root);
+  const realTarget = realpathNearestExisting(resolved);
+  return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
+}
+
+/**
  * Strict-containment guard for any direct read of a stored skill `sourcePath`.
  * Callers that read raw bytes (e.g. the Anthropic sync uploader needs a Buffer
  * via `fs.readFile(p)` — not a UTF-8 string) MUST run this first so a
@@ -1432,11 +1469,20 @@ export function assertSkillFilePathInsideRoot(filePath: string): void {
   const storeRoot = path.resolve(getSkillStoreRootPath());
   const legacyRoot = path.resolve(getSkillsDataRootPath());
   const resolved = path.resolve(filePath);
+  // Layer 1 — lexical containment (KEEP; defense in depth).
   const insideStore =
     resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
   const insideLegacy =
     resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
   if (!insideStore && !insideLegacy) {
+    throw new Error("Skill file path is outside the allowed skill roots.");
+  }
+  // Layer 2 — realpath containment (#300). A symlinked ANCESTOR under either
+  // root passes the lexical prefix check but the real path escapes the root.
+  // Re-assert against the canonicalized root(s) the target lexically matched.
+  const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
+  const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
+  if (!realpathInsideStore && !realpathInsideLegacy) {
     throw new Error("Skill file path is outside the allowed skill roots.");
   }
 }
@@ -1464,11 +1510,22 @@ export function assertSkillDirectoryInsideRoot(directoryPath: string): string {
   const storeRoot = path.resolve(getSkillStoreRootPath());
   const legacyRoot = path.resolve(getSkillsDataRootPath());
   const resolved = path.resolve(directoryPath);
+  // Layer 2 — lexical containment (KEEP; defense in depth).
   const insideStore =
     resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
   const insideLegacy =
     resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
   if (!insideStore && !insideLegacy) {
+    throw new Error("Skill directory path is outside the allowed skill roots.");
+  }
+  // Layer 3 — realpath containment (#300). A symlinked ANCESTOR under either
+  // root passes the lexical prefix check but resolves OUT of the root via the
+  // link target. Re-assert against the canonicalized root(s) the target
+  // lexically matched (nearest-existing-ancestor realpath handles a not-yet-
+  // created leaf without throwing).
+  const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
+  const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
+  if (!realpathInsideStore && !realpathInsideLegacy) {
     throw new Error("Skill directory path is outside the allowed skill roots.");
   }
   return resolved;

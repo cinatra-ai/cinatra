@@ -1,5 +1,5 @@
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { Octokit } from "octokit";
 import { unzipSync } from "fflate";
@@ -55,10 +55,47 @@ function normalizeRepositoryName(value: string) {
  * sanitizer-normalized value into the sink (which CodeQL tracks as the barrier
  * output, breaking the tainted flow).
  */
-function assertWithinSkillsRoot(targetDirectory: string, errorMessage: string): string {
+/**
+ * Realpath the nearest EXISTING ancestor of `target` (walking up until a path
+ * that exists is found). Used to canonicalize a not-yet-created leaf: realpath
+ * of a missing path throws, so we resolve the deepest ancestor that exists and
+ * treat the remaining (not-yet-created) segments as confined relative to it.
+ * Returns the lexical resolve when no ancestor exists (defensive — the
+ * filesystem root always exists in practice).
+ */
+function realpathNearestExisting(target: string): string {
+  let current = path.resolve(target);
+  // Walk up to the filesystem root; `path.dirname(root) === root`.
+  for (;;) {
+    if (existsSync(current)) {
+      return realpathSync.native(current);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
+export function assertWithinSkillsRoot(targetDirectory: string, errorMessage: string): string {
   const skillsRoot = path.resolve(getSkillsDataRootPath());
   const resolvedTarget = path.resolve(targetDirectory);
+  // Layer 1 — lexical containment (defense in depth; KEEP). Breaks the CodeQL
+  // tainted flow and rejects pure `..` escapes before any fs access.
   if (resolvedTarget !== skillsRoot && !resolvedTarget.startsWith(skillsRoot + path.sep)) {
+    throw new Error(errorMessage);
+  }
+  // Layer 2 — realpath containment (#300). A symlinked ANCESTOR under the
+  // skills root passes the lexical prefix check but a downstream fs op would
+  // follow it OUT of the intended root. Canonicalize the root and the target
+  // (or, when the leaf does not exist yet, the nearest existing ancestor —
+  // realpath of a missing leaf throws) and re-assert containment on the real
+  // paths. Behavior is identical for legitimate non-symlink and not-yet-created
+  // paths (realpath is a no-op on those).
+  const realRoot = realpathNearestExisting(skillsRoot);
+  const realTarget = realpathNearestExisting(resolvedTarget);
+  if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
     throw new Error(errorMessage);
   }
   return resolvedTarget;

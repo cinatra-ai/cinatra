@@ -6,7 +6,7 @@
  * defensive skip behavior without loading the real database chain.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
@@ -47,7 +47,7 @@ vi.mock("./skills-registry", () => ({
   },
 }));
 
-import { compileAndRegisterAgentSkillsForRepo } from "./compile-agent-skills";
+import { compileAndRegisterAgentSkillsForRepo, resolveWithin } from "./compile-agent-skills";
 
 // ---------------------------------------------------------------------------
 // compileAndRegisterAgentSkillsForRepo
@@ -264,6 +264,50 @@ describe("compileAndRegisterAgentSkillsForRepo", () => {
       expect(result.skipped.some((s) => /slug/i.test(s.reason))).toBe(true);
       expect(upsertSkillMock).not.toHaveBeenCalled();
 
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // resolveWithin realpath/symlink containment (#300).
+  //
+  // resolveWithin is the per-segment guard. Pre-#300 it was lexical-only, so a
+  // child built on a symlinked parent passed the prefix check and a downstream
+  // fs op followed the link outside the parent. It now realpath-confines and
+  // returns null on a symlink escape (preserving the no-throw contract), while
+  // legitimate non-symlink and not-yet-created children still resolve.
+  // -------------------------------------------------------------------------
+  describe("resolveWithin realpath/symlink containment", () => {
+    it("resolves a legitimate non-symlink child inside the parent", async () => {
+      await mkdir(path.join(tmpRoot, "agents"), { recursive: true });
+      const child = resolveWithin(path.resolve(tmpRoot), "agents");
+      expect(child).toBe(path.join(path.resolve(tmpRoot), "agents"));
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("resolves a not-yet-existing child (nearest-ancestor realpath)", async () => {
+      // The parent exists; the child segment does not. realpath of the missing
+      // child throws — the guard must resolve the existing parent and accept.
+      const child = resolveWithin(path.resolve(tmpRoot), "does-not-exist-yet");
+      expect(child).toBe(path.join(path.resolve(tmpRoot), "does-not-exist-yet"));
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("returns null when the resolved child is a symlink pointing outside the parent", async () => {
+      // The escape: a child SEGMENT that exists as a symlink to a target
+      // outside the parent. `realparent/agents` is a symlink to `outside/agents`
+      // (a real dir outside the parent). Lexically `agents` is inside
+      // `realparent`, but it realpath's to `outside/agents` which is NOT inside
+      // realpath(realparent) -> resolveWithin must return null. A downstream
+      // readdir would otherwise walk the linked-out tree.
+      const realParentDir = path.join(tmpRoot, "realparent");
+      const outside = path.join(tmpRoot, "outside2");
+      await mkdir(realParentDir, { recursive: true });
+      await mkdir(path.join(outside, "agents"), { recursive: true });
+      const linkChild = path.join(realParentDir, "agents");
+      await symlink(path.join(outside, "agents"), linkChild, "dir");
+      const resolved = resolveWithin(path.resolve(realParentDir), "agents");
+      expect(resolved).toBeNull();
       await rm(tmpRoot, { recursive: true, force: true });
     });
   });
