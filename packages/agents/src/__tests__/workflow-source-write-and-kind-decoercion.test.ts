@@ -309,6 +309,6 @@ describe("workflow_source_write — declarative workflow PACKAGE authoring", () 
       actor: { actorType: "user", source: "ui", userId: "u-member", platformRole: "member" },
       mode: "deterministic",
     })) as { error?: string };
-    expect(result.error).toMatch(/admin session required/);
+    expect(result.error).toMatch(/session required to write/);
   });
 });

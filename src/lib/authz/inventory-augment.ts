@@ -311,6 +311,18 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   workflow_draft_update:       { resourceType: "workflow_draft",    action: "update",  status: "enforced" },
   workflow_preview:            { resourceType: "workflow_draft",    action: "read",    status: "enforced" },
   workflow_save_as_template:   { resourceType: "workflow_template", action: "create",  status: "enforced" },
+  // workflow_source_* — admin-only WORKFLOW EXTENSION PACKAGE authoring (SDK-P5,
+  // eng#167). Mirror of agent_source_* but classified against the dedicated
+  // workflow_extension resourceType where one exists: validate = a read of the
+  // package's BPMN sidecar; publish = the registered workflow_extension.publish
+  // capability (admin / release_manager). write + compile are privileged on-disk
+  // package mutation/build — workflow_extension has no write/update action, so
+  // they map to the closest registered pair, workflow.update (NOT a runtime
+  // workflow-row edit; least-privilege within the registry's existing pairs).
+  workflow_source_compile:     { resourceType: "workflow",           action: "update",  status: "enforced" },
+  workflow_source_publish:     { resourceType: "workflow_extension", action: "publish", status: "enforced" },
+  workflow_source_validate:    { resourceType: "workflow_extension", action: "read",    status: "enforced" },
+  workflow_source_write:       { resourceType: "workflow",           action: "update",  status: "enforced" },
   workflow_status_get:         { resourceType: "workflow",          action: "read",    status: "enforced" },
   workflow_status_list:        { resourceType: "workflow",          action: "list",    status: "enforced" },
   workflow_artifacts_list:     { resourceType: "workflow",          action: "read",    status: "enforced" },
