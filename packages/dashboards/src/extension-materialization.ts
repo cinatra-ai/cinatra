@@ -25,6 +25,22 @@ export {
   type PortletKindDescriptor,
 } from "./extension/dashboard-config-v12";
 
+// Renderer version-dispatch (cinatra#272). Pure read-only helpers so the
+// `/dashboards/[id]` route can pick a render path from the row's config_version
+// instead of running the apiVersion 1.2-only validator unconditionally. No writes — these
+// are structural validators only, so the single-writer invariant is untouched.
+export {
+  resolveDashboardRenderKind,
+  type DashboardRenderKind,
+} from "./render-kind";
+export {
+  parseDashboardConfig,
+  isValidDashboardConfig,
+  CURRENT_CONFIG_VERSION,
+  type DashboardConfig,
+  type DashboardConfigV1_1,
+} from "./store/dashboard-config";
+
 // The runtime-installer cube guard. The saga's preflight calls it against the
 // materialized storeDir's dashboard config to reject an extension that references
 // an unregistered cube (`reject`) or declares new cube contributions
