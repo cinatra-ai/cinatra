@@ -55,8 +55,9 @@ export async function fireExtensionDataTeardown(packageName: string): Promise<vo
     await hook(packageName);
   } catch (err) {
     console.warn(
-      `[cinatra:extensions] data teardown hook threw for "${packageName}" ` +
+      '[cinatra:extensions] data teardown hook threw for "%s" ' +
         "(durable cleanup is idempotent + re-runnable; committed removal is unaffected):",
+      packageName,
       err instanceof Error ? err.message : err,
     );
   }

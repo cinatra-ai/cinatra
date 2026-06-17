@@ -110,8 +110,9 @@ export async function fireExtensionActivate(
       : await hook(packageName, orgId ?? null, version);
   } catch (err) {
     console.warn(
-      `[cinatra:extensions] activate hook threw for "${packageName}" ` +
+      '[cinatra:extensions] activate hook threw for "%s" ' +
         "(in-process activation only; committed install is unaffected):",
+      packageName,
       err instanceof Error ? err.message : err,
     );
     return { activated: false, reason: "activate-threw" };
