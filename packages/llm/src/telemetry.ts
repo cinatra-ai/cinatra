@@ -38,13 +38,16 @@ export function getAnthropicLoggingSettings() {
 }
 
 function sanitizeLogLabel(value: string) {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "anthropic-call"
-  );
+  // Collapse non-alphanumeric runs to a single dash (linear global replace), then
+  // trim leading/trailing dashes with a bounded scan instead of the anchored
+  // `/^-+|-+$/g` regex, which CodeQL flags as polynomial-ReDoS on dash-heavy input
+  // (js/polynomial-redos). The char-scan trim is O(n) with no backtracking.
+  const collapsed = value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  let start = 0;
+  let end = collapsed.length;
+  while (start < end && collapsed.charCodeAt(start) === 45 /* '-' */) start++;
+  while (end > start && collapsed.charCodeAt(end - 1) === 45 /* '-' */) end--;
+  return collapsed.slice(start, end).slice(0, 80) || "anthropic-call";
 }
 
 function buildLogTimestamp() {

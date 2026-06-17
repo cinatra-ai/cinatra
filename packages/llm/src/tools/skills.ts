@@ -178,23 +178,186 @@ export function createLocalSkillShellTool(options: {
  * skill directory before issuing a cat command. The `cd` is stripped and
  * the remainder is executed with the path resolved against the virtual map.
  */
+const WHITESPACE_RE = /\s/;
+
+/**
+ * Strip a leading `cd <dir> &&` (or `cd "<dir>" &&`) prefix, returning the
+ * remainder of the command, or `null` if no such prefix is present.
+ *
+ * Linear (O(n), no backtracking) replacement for the retired regex
+ *   ^cd \s+ "? ([^"&]+) "? \s* &&\s*
+ * (CodeQL js/polynomial-redos). Behaviour is byte-for-byte equivalent to
+ * `command.slice(match[0].length)` for the old regex — proven by the parity
+ * test in `__tests__/skills-redos-parity.test.ts`. Notably the directory token
+ * never crosses a lone `&` or `"`, matching the old `[^"&]+` class.
+ */
+export function stripCdPrefix(command: string): string | null {
+  if (command.slice(0, 2) !== "cd") return null;
+  let i = 2;
+  const n = command.length;
+  // \s+ (one or more)
+  let ws = 0;
+  while (i < n && WHITESPACE_RE.test(command[i]!)) {
+    i++;
+    ws++;
+  }
+  if (ws === 0) return null;
+  // "?  (optional opening quote)
+  if (command[i] === '"') i++;
+  // [^"&]+  (one or more chars that are neither '"' nor '&')
+  const runStart = i;
+  while (i < n) {
+    const c = command[i]!;
+    if (c === '"' || c === "&") break;
+    i++;
+  }
+  if (i === runStart) return null; // the `+` requires at least one char
+  // The old regex's `[^"&]+` is greedy and also consumes trailing whitespace,
+  // then backtracks so the `"?\s*&&` tail can match. Replicate by giving back
+  // trailing chars of the run until `"?\s*&&` matches at the boundary.
+  for (let runEnd = i; runEnd >= runStart; runEnd--) {
+    let j = runEnd;
+    // "?  (the run never contains '"', so this only applies at the boundary i)
+    if (command[j] === '"') j++;
+    // \s*
+    while (j < n && WHITESPACE_RE.test(command[j]!)) j++;
+    // &&
+    if (command[j] === "&" && command[j + 1] === "&") {
+      let k = j + 2;
+      // trailing \s*
+      while (k < n && WHITESPACE_RE.test(command[k]!)) k++;
+      return command.slice(k);
+    }
+  }
+  return null;
+}
+
+/**
+ * Split on `&&` with surrounding whitespace stripped, equivalent to
+ * splitting on the regex `\s* && \s*` but linear (no quadratic backtracking on
+ * whitespace runs — CodeQL js/polynomial-redos). Whitespace is only trimmed
+ * immediately adjacent to a `&&` delimiter, exactly like the regex split.
+ */
+export function splitOnAmpAmp(value: string): string[] {
+  const out: string[] = [];
+  const n = value.length;
+  let i = 0;
+  let segStart = 0;
+  while (i < n) {
+    if (value[i] === "&" && value[i + 1] === "&") {
+      // The delimiter's leading `\s*` eats whitespace right before `&&`.
+      let segEnd = i;
+      while (segEnd > segStart && WHITESPACE_RE.test(value[segEnd - 1]!)) segEnd--;
+      out.push(value.slice(segStart, segEnd));
+      i += 2;
+      // The delimiter's trailing `\s*` eats whitespace right after `&&`.
+      while (i < n && WHITESPACE_RE.test(value[i]!)) i++;
+      segStart = i;
+      continue;
+    }
+    i++;
+  }
+  out.push(value.slice(segStart));
+  return out;
+}
+
+/**
+ * Parse `sed -n 'X,Yp' path` / `sed -n Yp path` into the trailing line count
+ * `Y` and the file path. Returns `null` if the segment is not such a command.
+ *
+ * Linear tokenizer equivalent to the retired regex
+ * `/^sed\s+-n\s+['"]?(?:\d+,)?(\d+)p['"]?\s+(.+)$/` (CodeQL js/polynomial-redos:
+ * the chained `\s+` runs are quadratic on tab-heavy input). The `(.+)$` is
+ * replicated as a maximal run of non-newline chars terminated by end-of-string
+ * or a single trailing newline (NOT dot-all) — matching the original, which
+ * had no `s`/`m` flags. Proven by `__tests__/skills-redos-parity.test.ts`.
+ */
+export function parseSedReadCommand(
+  seg: string,
+): { lineCount: string; path: string } | null {
+  let i = 0;
+  const n = seg.length;
+  const isDigit = (c: string) => c >= "0" && c <= "9";
+  // "sed"
+  if (seg.slice(0, 3) !== "sed") return null;
+  i = 3;
+  // \s+
+  let ws = 0;
+  while (i < n && WHITESPACE_RE.test(seg[i]!)) {
+    i++;
+    ws++;
+  }
+  if (ws === 0) return null;
+  // "-n"
+  if (seg.slice(i, i + 2) !== "-n") return null;
+  i += 2;
+  // \s+
+  ws = 0;
+  while (i < n && WHITESPACE_RE.test(seg[i]!)) {
+    i++;
+    ws++;
+  }
+  if (ws === 0) return null;
+  // ['"]?  (optional opening quote)
+  if (seg[i] === "'" || seg[i] === '"') i++;
+  // (?:\d+,)?  (optional "<digits>,")
+  const beforeOptional = i;
+  let optDigits = 0;
+  while (i < n && isDigit(seg[i]!)) {
+    i++;
+    optDigits++;
+  }
+  if (optDigits > 0 && seg[i] === ",") {
+    i++; // consumed the optional "<digits>," group
+  } else {
+    i = beforeOptional; // the optional group did not match; rewind
+  }
+  // (\d+)
+  const numStart = i;
+  while (i < n && isDigit(seg[i]!)) i++;
+  if (i === numStart) return null;
+  const lineCount = seg.slice(numStart, i);
+  // "p"
+  if (seg[i] !== "p") return null;
+  i++;
+  // ['"]?  (optional closing quote)
+  if (seg[i] === "'" || seg[i] === '"') i++;
+  // \s+
+  ws = 0;
+  while (i < n && WHITESPACE_RE.test(seg[i]!)) {
+    i++;
+    ws++;
+  }
+  if (ws === 0) return null;
+  // (.+)$  — maximal non-newline run; end-anchored allowing one final newline.
+  const pathStart = i;
+  let p = i;
+  while (p < n && seg[p] !== "\n") p++;
+  if (p === pathStart) return null; // `+` requires >=1 char
+  if (!(p === n || (p === n - 1 && seg[p] === "\n"))) return null;
+  return { lineCount, path: seg.slice(pathStart, p) };
+}
+
 async function executeLocalSkillCommand(
   command: string,
   mountedSkills: SkillSummary[],
   virtualToReal?: Map<string, string>,
 ): Promise<string> {
   // Strip `cd "<dir>" &&` or `cd <dir> &&` prefix the LLM commonly emits.
+  // Linear scanner equivalent to the retired `/^cd\s+"?([^"&]+)"?\s*&&\s*/`,
+  // which CodeQL flags as polynomial-ReDoS (the `[^"&]+` run overlaps the
+  // trailing `\s*&&`, causing O(n²) backtracking on tab-heavy input).
   let effectiveCommand = command.trim();
-  const cdMatch = effectiveCommand.match(/^cd\s+"?([^"&]+)"?\s*&&\s*/);
-  if (cdMatch) {
-    effectiveCommand = effectiveCommand.slice(cdMatch[0].length).trim();
+  const cdStrip = stripCdPrefix(effectiveCommand);
+  if (cdStrip !== null) {
+    effectiveCommand = cdStrip.trim();
   }
 
   // Scan all &&-chained segments for the first supported read command.
   // The LLM sometimes generates multi-step probes (e.g. `printf '%s\n' path && sed -n '1,220p' path`)
   // or chains commands after a cd. Find the first segment with a supported verb, or translate
   // `sed -n 'X,Yp' path` → `head -n Y path`. Falls back to the first segment on no match.
-  const chainedSegments = effectiveCommand.split(/\s*&&\s*/);
+  const chainedSegments = splitOnAmpAmp(effectiveCommand);
   if (chainedSegments.length > 1) {
     let resolved: string | undefined;
     for (const seg of chainedSegments) {
@@ -204,9 +367,9 @@ async function executeLocalSkillCommand(
         break;
       }
       // Translate `sed -n 'X,Yp' path` or `sed -n X,Yp path` → `head -n Y path`
-      const sedMatch = seg.trim().match(/^sed\s+-n\s+['"]?(?:\d+,)?(\d+)p['"]?\s+(.+)$/);
-      if (sedMatch) {
-        resolved = `head -n ${sedMatch[1]} ${sedMatch[2].trim()}`;
+      const sed = parseSedReadCommand(seg.trim());
+      if (sed) {
+        resolved = `head -n ${sed.lineCount} ${sed.path.trim()}`;
         break;
       }
     }
