@@ -1398,6 +1398,9 @@ importers:
       '@cinatra-ai/metric-usage-api':
         specifier: workspace:*
         version: link:../metric-usage-api
+      '@cinatra-ai/objects':
+        specifier: workspace:*
+        version: link:../objects
       '@cinatra-ai/registries':
         specifier: workspace:*
         version: link:../registries
