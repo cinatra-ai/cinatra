@@ -126,6 +126,174 @@ export type HostNangoPort = {
   ): Promise<{ connectionId: string; metadata?: Record<string, unknown> }[]>;
 };
 
+// ---------------------------------------------------------------------------
+// ABI-evolution policy: MINIMUM-MINOR semantics keyed off `sdkAbiRange`.
+//
+// `HostNangoPort` keeps the five 2.2.0-additive render getters OPTIONAL so a host
+// pinned to an OLDER minor still type-checks (a connector reads them null-safe,
+// `ctx.nango.getStatus?.()`). That optionality is correct WHEN an extension does
+// not declare a 2.2 floor — but it produces "optional-method sprawl" for an
+// extension that DOES require 2.2: such a connector wrote `getStatus!()` /
+// non-null assertions everywhere, with no type-level proof the host actually
+// provides the method.
+//
+// MINIMUM-MINOR fixes this at the TYPE level: a manifest declaring
+// `sdkAbiRange` whose lower bound is `>= 2.2` gets a HostNangoPort whose five
+// 2.2-added members are NON-OPTIONAL (required), so the host must supply them
+// and the connector drops the null-safe ceremony; below a 2.2 floor (e.g. `^2`,
+// `~2.1`, `1.x`, unpinned) they stay OPTIONAL exactly as today.
+//
+// PURELY TYPE-LEVEL + ADDITIVE: no value changes, no ABI bump. `HostNangoPort`
+// is untouched (its members stay optional — the legacy/below-2.2 contract). The
+// runtime host factory still builds ONE nango impl that provides all getters; the
+// minimum-minor type only sharpens what an extension can RELY on given its
+// declared floor. `AbiScopedNangoPort<Range>` is the parameterized refinement; an
+// author writes `register(ctx: GrantedHostContext<Ports, Range>)` (below) or
+// `ctx.nango satisfies AbiScopedNangoPort<"^2.2">` to opt in.
+// ---------------------------------------------------------------------------
+
+/** The five render-time getters HostNangoPort ADDED in ABI 2.2.0 (optional on the
+ * base port). At a declared `>= 2.2` floor these become required (minimum-minor). */
+export const NANGO_ABI_2_2_ADDED_METHODS = [
+  "getStatus",
+  "getFrontendConfig",
+  "getPrimarySavedConnection",
+  "getPrimarySavedConnections",
+  "listConnectionRecords",
+] as const;
+export type NangoAbi220AddedMethod = (typeof NANGO_ABI_2_2_ADDED_METHODS)[number];
+
+// The parser below is intentionally STRICT and FAIL-CLOSED-to-FALSE: on any form
+// that is NOT an unambiguous CANONICAL `2.<minor>[.<patch>]` floor — a non-numeric
+// or empty component, a malformed patch tail, stray characters, OR a non-canonical
+// leading-zero numeric (`2.02`) — it resolves to `false` (the getters stay
+// OPTIONAL). Failing closed to OPTIONAL is the SAFE direction: it NEVER wrongly
+// forces the 2.2 getters required.
+//
+// This is deliberately a touch STRICTER than the runtime `rangeBounds`
+// (register.ts), which tolerates leading-zero numerics via `Number(\d+)`
+// (`2.02` → floor 2.2). The divergence is one-sided and safe: where they differ,
+// the TYPE under-promotes (stays optional) — it never over-promotes a malformed
+// range to required. Real `sdkAbiRange` values are canonical semver, so the two
+// agree on every realistic input; the strictness only covers pathological literals.
+
+/** True iff the single ASCII digit is `>= 2`. */
+type DigitGte2 = {
+  "0": false; "1": false; "2": true; "3": true; "4": true;
+  "5": true; "6": true; "7": true; "8": true; "9": true;
+};
+type SingleDigit = keyof DigitGte2;
+
+/**
+ * A CANONICAL numeric semver component (no leading zero unless the whole value is
+ * the single digit `"0"`), compared against `>= 2`. Mirrors runtime `Number(...)`
+ * on a `\d+`-matched component WITHOUT the leading-zero ambiguity codex flagged:
+ *  - single digit            → the lookup table (`"2".."9"` ⇒ true).
+ *  - 2+ canonical digits     → `>= 10` ⇒ true.
+ *  - leading-zero multi-digit (`"01"`, `"00"`) / non-numeric → `false`
+ *    (NON-CANONICAL ⇒ unsupported ⇒ fail closed to optional).
+ * Returns `false` (NOT `never`) for a non-canonical component: `never` is
+ * assignable to `true`, so a `never` sentinel would WRONGLY satisfy a downstream
+ * `extends true` test — the bug a `2.01` literal exposed.
+ */
+type CanonicalNumGte2<Comp extends string> = Comp extends ""
+  ? false // empty component (e.g. the "2." trailing-dot / "2..0" forms) → unsupported
+  : Comp extends SingleDigit
+    ? DigitGte2[Comp]
+    : Comp extends `0${string}`
+      ? false // leading-zero multi-digit: non-canonical, fail closed
+      : IsAllDigits<Comp> extends true
+        ? true // 2+ canonical digits (no leading zero) ⇒ >= 10 ⇒ >= 2
+        : false;
+
+/** True iff every char of `S` is an ASCII digit (no `x`/`*`/`-`/`.`/letters). */
+type IsAllDigits<S extends string> = S extends ""
+  ? true
+  : S extends `${infer D}${infer Rest}`
+    ? D extends SingleDigit
+      ? IsAllDigits<Rest>
+      : false
+    : false;
+
+/** Strip a single leading comparator/operator (`>=`, `^`, `~`, `=`) then trim spaces. */
+type StripOp<S extends string> = S extends `>=${infer R}`
+  ? TrimStart<R>
+  : S extends `^${infer R}`
+    ? TrimStart<R>
+    : S extends `~${infer R}`
+      ? TrimStart<R>
+      : S extends `=${infer R}`
+        ? TrimStart<R>
+        : S;
+type TrimStart<S extends string> = S extends ` ${infer R}` ? TrimStart<R> : S;
+type TrimEnd<S extends string> = S extends `${infer R} ` ? TrimEnd<R> : S;
+type Trim<S extends string> = TrimEnd<TrimStart<S>>;
+
+/** Is the PATCH tail a runtime-accepted form? `\d+` (canonical) or an x-range
+ * wildcard (`x`/`X`/`*`). A patch never affects the major.minor floor, but a
+ * MALFORMED patch (`-beta`, `foo`) makes the whole range unsupported → false. */
+type ValidPatch<P extends string> = P extends "x" | "X" | "*"
+  ? true
+  : IsAllDigits<P> extends true
+    ? P extends "" // an empty patch (trailing dot) is malformed
+      ? false
+      : P extends `0${string}`
+        ? P extends "0"
+          ? true
+          : false // leading-zero multi-digit patch: non-canonical
+        : true
+    : false;
+
+/**
+ * Compile-time predicate: does the declared `sdkAbiRange` literal have a LOWER
+ * BOUND of `>= 2.2`? Mirrors the runtime `rangeBounds` lower-bound semantics
+ * (register.ts): the floor's major must be exactly `2` AND its minor `>= 2`.
+ * Forms that meet it: `>=2.2[.z]`, `^2.2[.z]`, `~2.2[.z]`, exact `2.2.z`, `2.2`,
+ * `2.2.x`, `2.10` (minor 10 ≥ 2). Forms that do NOT: `^2` / `2` / `2.0` / `2.1` /
+ * `~2.1` (floor minor < 2), any major != 2 (`^1`, `^3`, `1.x`), a malformed/
+ * non-canonical form (`2.01`, `2.2.0-beta`, `2.2.`), and unpinned (`""`, `"*"`,
+ * `undefined`, `null`) — all fail closed to `false` (getters stay optional).
+ *
+ * Scoped to the 2.x line (the line that ADDED the 2.2 getters). A future
+ * `^3`-floor extension is handled when a 3.x additive method is introduced;
+ * today only the 2.2 boundary matters.
+ */
+export type SdkAbiRangeMeets22<Range extends string | null | undefined> =
+  // `[never]` guard: `never` distributes/short-circuits and `never` is assignable
+  // to `true`, so a `never` Range (or any internal `never`) must NOT reach the
+  // required branch. Fail closed to `false`.
+  [Range] extends [never]
+    ? false
+    : Range extends string
+    ? StripOp<Trim<Range>> extends `2.${infer MinorAndRest}`
+      ? MinorAndRest extends `${infer Minor}.${infer Patch}`
+        ? ValidPatch<Patch> extends true
+          ? CanonicalNumGte2<Minor> extends true
+            ? true // "2.<minor>.<patch>" with a valid patch + minor >= 2
+            : false
+          : false // malformed patch tail (e.g. "2.2.0-beta") → unsupported
+        : CanonicalNumGte2<MinorAndRest> extends true
+          ? true // "2.<minor>" (no patch) with minor >= 2
+          : false
+      : false // major != 2 (or bare "2" → floor 2.0 < 2.2)
+    : false;
+
+/** Make the named keys of `T` REQUIRED (drop `?`), keep the rest as-is. */
+type RequireKeys<T, K extends keyof T> = Omit<T, K> & {
+  [P in K]-?: NonNullable<T[P]>;
+};
+
+/**
+ * `HostNangoPort` REFINED for a declared `sdkAbiRange`: when the range's lower
+ * bound is `>= 2.2` the five 2.2-added getters are REQUIRED (minimum-minor);
+ * otherwise the port is exactly the base (getters optional). Type-only — the
+ * runtime impl is unchanged.
+ */
+export type AbiScopedNangoPort<Range extends string | null | undefined> =
+  SdkAbiRangeMeets22<Range> extends true
+    ? RequireKeys<HostNangoPort, NangoAbi220AddedMethod>
+    : HostNangoPort;
+
 /** Current actor / session (the `@/lib/auth-session` surface, inverted). */
 export type HostAuthSessionPort = {
   getActor(): Promise<{
@@ -340,6 +508,71 @@ export const HOST_PORT_NAMES = [
 ] as const;
 
 export type HostPortName = (typeof HOST_PORT_NAMES)[number];
+
+// ---------------------------------------------------------------------------
+// ABI-evolution policy: LEAST-PRIVILEGE in the TYPE SYSTEM — a grant-typed ctx.
+//
+// `ExtensionHostContext` (above) exposes ALL ports as required props, and
+// least-privilege is enforced at RUNTIME (the host grant-aware factory fail-louds
+// on an ungranted port; see src/lib/extension-host-context.ts). That stays — it
+// is the defense-in-depth backstop and the contract the `register(ctx)` ABI
+// freezes against.
+//
+// `GrantedHostContext<Ports, Range>` is an ADDITIVE compile-time refinement: a
+// context type that exposes ONLY the ports an extension's manifest
+// `requestedHostPorts` declares (plus the always-available AMBIENT ports
+// `logger`/`runtime`, and the immutable `abiVersion`/`packageName` identity).
+// An author who types `register(ctx: GrantedHostContext<["settings","nango"]>)`
+// gets a compile error on `ctx.secrets` (never granted) — least-privilege caught
+// at build time, BEFORE the runtime fail-loud ever fires.
+//
+// It is parameterized by the declared `sdkAbiRange` too, so a `>= 2.2` extension's
+// `ctx.nango` is the minimum-minor `AbiScopedNangoPort` (the 2.2 getters
+// required); below 2.2 it is the base optional-getter port. This unifies both
+// ABI-evolution-policy mechanisms behind one author-facing ctx type.
+//
+// PURELY ADDITIVE — `ExtensionHostContext` is unchanged; existing consumers keep
+// the full required-prop surface. `GrantedHostContext<Ports>` is STRUCTURALLY a
+// subtype of (assignable to a Pick of) `ExtensionHostContext`, so the host's
+// grant-aware factory result still satisfies an author's narrower grant typing.
+// ---------------------------------------------------------------------------
+
+/** Ambient ports always present regardless of grants (no manifest declaration
+ * required). MUST mirror the host factory's `AMBIENT_PORTS`
+ * (src/lib/extension-host-context.ts) and the test harness's
+ * `TEST_AMBIENT_PORTS` (test-host-context); the abi-2.2.0-contracts test pins it
+ * to `["logger","runtime"]` and asserts equality with `TEST_AMBIENT_PORTS`. */
+export const AMBIENT_HOST_PORTS = ["logger", "runtime"] as const;
+export type AmbientHostPort = (typeof AMBIENT_HOST_PORTS)[number];
+
+/** The two identity fields every ctx carries irrespective of grants. */
+type HostContextIdentity = Pick<ExtensionHostContext, "abiVersion" | "packageName">;
+
+/**
+ * The compile-time type of a port `P` on a grant-typed ctx, applying the
+ * minimum-minor refinement: `nango` becomes `AbiScopedNangoPort<Range>` (its 2.2
+ * getters required at a `>= 2.2` floor), every other port is its base type.
+ */
+type ScopedPort<P extends HostPortName, Range extends string | null | undefined> =
+  P extends "nango" ? AbiScopedNangoPort<Range> : ExtensionHostContext[P];
+
+/**
+ * Least-privilege, ABI-scoped host context: exposes ONLY the granted `Ports`
+ * (plus ambient ports + identity), each at its `Range`-refined type. Accessing a
+ * port outside `Ports ∪ ambient` is a COMPILE error; the runtime fail-loud check
+ * remains as defense-in-depth.
+ *
+ * @typeParam Ports - the manifest's `requestedHostPorts` (a tuple/union of
+ *   `HostPortName`). Defaults to the full set so an un-parameterized use is the
+ *   familiar full surface (just with nango ABI-scoped).
+ * @typeParam Range - the declared `cinatra.sdkAbiRange` (drives minimum-minor).
+ */
+export type GrantedHostContext<
+  Ports extends HostPortName = HostPortName,
+  Range extends string | null | undefined = undefined,
+> = HostContextIdentity & {
+  readonly [P in Ports | AmbientHostPort]: ScopedPort<P, Range>;
+};
 
 // ---------------------------------------------------------------------------
 // ABI-evolution policy: per-port lifecycle TIER. Codifies "reserved-port
