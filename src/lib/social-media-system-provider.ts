@@ -24,7 +24,7 @@ export function resolveSocialMediaSystem(): SocialMediaSystemProvider | null {
   const match = resolveCapabilityProviders(SOCIAL_MEDIA_SYSTEM_CAPABILITY).find((p) =>
     isSocialMediaSystemProvider(p.impl),
   );
-  return (match?.impl as SocialMediaSystemProvider | undefined) ?? null;
+  return match?.impl ?? null;
 }
 
 /** Fail-loud resolution for features that cannot proceed without the facade. */

@@ -17,7 +17,6 @@ import "server-only";
 //     unwired in some boot configurations).
 
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-import type { ChatUserContextContributor } from "@cinatra-ai/sdk-extensions";
 import { CHAT_USER_CONTEXT_CAPABILITY_ID } from "@cinatra-ai/sdk-extensions/internal";
 
 /**
@@ -31,7 +30,7 @@ export async function buildChatUserContextSections(userId?: string): Promise<str
   );
   const sections: string[] = [];
   for (const provider of providers) {
-    const impl = provider.impl as Partial<ChatUserContextContributor> | null | undefined;
+    const impl = provider.impl;
     if (typeof impl?.buildSections !== "function") {
       console.warn(
         `[chat] chat-user-context provider ${provider.packageName} has no buildSections() — skipped`,

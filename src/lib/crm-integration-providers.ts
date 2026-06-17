@@ -65,7 +65,7 @@ export function resolveCrmPointerWriter(): CrmPointerWriterProvider | null {
   const match = resolveCapabilityProviders(CRM_POINTER_WRITER_CAPABILITY).find((p) =>
     isCrmPointerWriter(p.impl),
   );
-  return (match?.impl as CrmPointerWriterProvider | undefined) ?? null;
+  return match?.impl ?? null;
 }
 
 function isCrmListReader(impl: unknown): impl is CrmListReader {
@@ -85,5 +85,5 @@ export function resolveCrmListReader(): CrmListReader | null {
   const match = resolveCapabilityProviders(CRM_LIST_READER_CAPABILITY_ID).find((p) =>
     isCrmListReader(p.impl),
   );
-  return (match?.impl as CrmListReader | undefined) ?? null;
+  return match?.impl ?? null;
 }

@@ -37,7 +37,7 @@ export function resolveBlogSystem(): BlogSystemProvider | null {
   const match = resolveCapabilityProviders(BLOG_SYSTEM_CAPABILITY).find((p) =>
     isBlogSystemProvider(p.impl),
   );
-  return (match?.impl as BlogSystemProvider | undefined) ?? null;
+  return match?.impl ?? null;
 }
 
 /** Fail-loud resolution for features that cannot proceed without the facade. */

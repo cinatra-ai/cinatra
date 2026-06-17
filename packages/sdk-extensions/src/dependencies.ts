@@ -132,7 +132,7 @@ export function isExtensionKind(value: unknown): value is ExtensionKind {
 }
 
 // ---------------------------------------------------------------------------
-// createHostDepsSlot — the ONE host-dependency-slot primitive (eng#159 #11).
+// createHostDepsSlot — the ONE host-dependency-slot primitive (#159 #11).
 //
 // MANY SDK contracts wire a SINGLE host-injected value (a store / provider /
 // resolver / guard) by anchoring it on `globalThis` under a namespaced+versioned
@@ -155,10 +155,17 @@ export function isExtensionKind(value: unknown): value is ExtensionKind {
 // EXACT existing key string (so the cross-instance + any persisted slot is
 // byte-identical to before).
 //
-// SCOPE NOTE: this is the mechanical extraction only. Whether typed ctx ports or
-// the capability registry is the permanent host->extension spine — and how these
-// slots fold into it — is the architecture decision deferred to an owner ruling
-// (eng#159 #11/#12/#13), NOT settled here.
+// SCOPE NOTE: these slots are a LOAD-BEARING, ctx-less DI primitive that does NOT
+// and CANNOT collapse onto `ctx` ports — this is the intended end-state, not a
+// deferred decision (#159 #11, bullet-2 "fold" ruled won't-fix-by-design). Two
+// reasons it is irreducible: (1) connectors VALUE-IMPORT `require*()` from
+// `"use server"` / setup bundles that run OUTSIDE `register(ctx)` (e.g.
+// `google-oauth-connector/src/actions.ts`), where no `ctx` exists to read a port
+// from; (2) the SDK is compiled into MULTIPLE Next.js module instances (server /
+// RSC / route segments / the BullMQ worker bundle), and only the `Symbol.for(key)`
+// process-global anchor meets across all of them — a per-instance `ctx` port could
+// not. The typed-ctx-port channel and the capability registry coexist with these
+// slots BY DESIGN; the three channels are the spine, not transitional overlap.
 
 /**
  * A single host-injected dependency value anchored on `globalThis` under a

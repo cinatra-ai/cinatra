@@ -35,7 +35,7 @@ export function getDevTunnelStatus(): DevTunnelStatus {
     isDevTunnelStatusProvider(p.impl),
   );
   if (!match) return { connected: false, funnelUrlPreview: null };
-  const impl = match.impl as DevTunnelStatusProvider;
+  const impl = match.impl;
   try {
     return {
       connected: impl.getConnectionStatus().connected === true,

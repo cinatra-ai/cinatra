@@ -29,7 +29,7 @@ export function resolveEmailSystemFacade(): EmailSystemProvider | null {
   const match = resolveCapabilityProviders(EMAIL_SYSTEM_CAPABILITY).find((p) =>
     isEmailSystemProvider(p.impl),
   );
-  return (match?.impl as EmailSystemProvider | undefined) ?? null;
+  return match?.impl ?? null;
 }
 
 /** Fail-loud resolution for sends that cannot proceed without the facade. */
