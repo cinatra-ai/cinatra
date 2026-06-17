@@ -39,6 +39,16 @@ export default defineConfig({
         find: "@cinatra/agent-builder/store",
         replacement: path.join(__dirname, "tests/__stubs__/agent-builder-store.ts"),
       },
+      // Subpath BEFORE the bare prefix (vitest aliases match in order; the
+      // bare `@cinatra-ai/extensions` find is a prefix-match that would
+      // otherwise rewrite `/permissions-store` onto `index.ts/permissions-store`
+      // — ENOTDIR). tsconfig already maps this subpath for the app/tsgo build;
+      // mirror it here so skills tests that drive `uninstallSkillPackage`'s
+      // dynamic `import("@cinatra-ai/extensions/permissions-store")` resolve.
+      {
+        find: "@cinatra-ai/extensions/permissions-store",
+        replacement: path.join(__dirname, "../extensions/src/permissions-store.ts"),
+      },
       { find: "@cinatra-ai/extensions", replacement: path.join(__dirname, "../extensions/src/index.ts") },
       { find: /^@\/(.+)$/, replacement: path.join(root, "src") + "/$1" },
     ],

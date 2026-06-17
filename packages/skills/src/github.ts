@@ -15,7 +15,13 @@ function getGitHubSyncMarkerPath(): string {
 
 function readGitHubSyncMarker(): { repository: string; syncedAt: string } | null {
   const markerPath = getGitHubSyncMarkerPath();
-  if (!existsSync(markerPath)) return null;
+  // Leaf confinement (file-symlink escape, #300). The marker sits at a fixed
+  // leaf under the skills data root, but if that leaf is a SYMLINK to an
+  // outside file the `readFileSync` would follow it and leak arbitrary local
+  // content. Skip (treat as no marker) when the real leaf escapes the real root.
+  const skillsRoot = path.resolve(getSkillsDataRootPath());
+  if (!existsSync(markerPath) || !isEntryContainedInBase(skillsRoot, path.resolve(markerPath)))
+    return null;
   try {
     return JSON.parse(readFileSync(markerPath, "utf8"));
   } catch {
@@ -25,6 +31,14 @@ function readGitHubSyncMarker(): { repository: string; syncedAt: string } | null
 
 async function writeGitHubSyncMarker(repositoryFullName: string): Promise<void> {
   const markerPath = getGitHubSyncMarkerPath();
+  // Leaf confinement (#300). Refuse to write through a symlinked marker leaf
+  // that resolves OUT of the skills data root (a `writeFile` would otherwise
+  // clobber an arbitrary outside file). A legitimate (non-symlink, or
+  // not-yet-created) marker is a no-op for the realpath check.
+  const skillsRoot = path.resolve(getSkillsDataRootPath());
+  if (!isEntryContainedInBase(skillsRoot, path.resolve(markerPath))) {
+    return;
+  }
   await mkdir(path.dirname(markerPath), { recursive: true });
   await writeFile(markerPath, JSON.stringify({ repository: repositoryFullName, syncedAt: new Date().toISOString() }, null, 2));
 }
@@ -348,11 +362,14 @@ async function cloneGitHubRepoToDirectory(input: {
     // sanitizer output makes the mkdir/writeFile/chmod sinks below tracked as
     // confined (js/path-injection).
     const destinationPath = path.join(targetDirectory, entry.path);
-    const resolvedDestination = path.resolve(destinationPath);
-    if (
-      resolvedDestination !== targetDirectory &&
-      !resolvedDestination.startsWith(targetDirectory + path.sep)
-    ) {
+    // Per-entry realpath containment (#300), mirroring the ZIP-install loop's
+    // `isEntryContainedInBase`. Git tree paths cannot contain `..`, but a tree
+    // CAN carry a symlink blob (mode 120000) pointing outside; an earlier
+    // symlink entry would then let a later `mkdir`/`writeFile` traverse OUT of
+    // the confined clone target. Resolve each entry against the confined base
+    // and SKIP on escape (lexical `..` + realpath symlink). Behavior is
+    // identical for legitimate non-symlink, non-traversal trees.
+    if (!isEntryContainedInBase(targetDirectory, path.resolve(destinationPath))) {
       // Skip any entry that would escape the clone target.
       continue;
     }
@@ -507,7 +524,17 @@ export async function installSkillPackageFromGitHub(
   if (targetDirIsNonEmpty) {
     let recordedPackageId: string | null = null;
     let markerIsValid = false;
-    if (existsSync(installMarkerPath)) {
+    // Leaf confinement (file-symlink escape, #300). `targetDirectory` is the
+    // realpath-confined install base, but `.cinatra-skill-source.json` inside
+    // it could be a SYMLINK to an outside file the `readFileSync` below would
+    // follow (leaking arbitrary local content into the provenance check, and
+    // letting an attacker forge a "matching" marker from outside). Skip the
+    // read when the real marker escapes the real base — treated as a missing
+    // marker, which fails closed into the "no provenance marker" refusal.
+    if (
+      existsSync(installMarkerPath) &&
+      isEntryContainedInBase(path.resolve(targetDirectory), path.resolve(installMarkerPath))
+    ) {
       try {
         const marker = JSON.parse(readFileSync(installMarkerPath, "utf8")) as { packageId?: unknown };
         if (typeof marker.packageId === "string" && marker.packageId.length > 0) {

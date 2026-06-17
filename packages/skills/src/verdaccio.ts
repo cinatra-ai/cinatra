@@ -23,6 +23,8 @@ import {
 import {
   upsertRepositoryBackedSkillPackage,
   getSkillsDataRootPath,
+  assertSkillDirectoryInsideRoot,
+  isRealpathContained,
   type PersistedSkill,
   type PersistedSkillPackage,
 } from "./skills-store";
@@ -45,10 +47,44 @@ export const verdaccioSkillPackageId = buildVerdaccioId;
 // trees and retargets the install paths together.
 const VERDACCIO_INSTALL_SUBDIR = "_verdaccio-installs";
 
-function persistInstallDir(packageName: string, version: string): string {
+// Exported for unit testing of the #300 version-segment traversal containment
+// (pure path fn — no fs/network/DB). Not part of the install lifecycle surface.
+export function persistInstallDir(packageName: string, version: string): string {
   // Slugify @scope/pkg -> scope__pkg so it nests in a single dir level safely.
   const safe = packageName.replace(/^@/, "").replace(/[^a-zA-Z0-9._-]+/g, "_");
-  return path.join(getSkillsDataRootPath(), VERDACCIO_INSTALL_SUBDIR, safe, version);
+  // The version segment flows in from the resolved package and was NOT
+  // slugified (#300). `path.join` collapses a `../../escape` version into a
+  // path that still resolves UNDER the skills root but OUTSIDE the verdaccio
+  // install subroot — letting the destructive `rmSync`/`renameSync` clobber
+  // arbitrary `data/skills` descendants (e.g. another package's install).
+  // Sanitize the version with the SAME charset as the name and collapse any
+  // residual `.`/`..`-only segment, so the leaf can never traverse.
+  const safeVersion =
+    version.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^\.+$/, "_") || "unversioned";
+  const installSubroot = path.join(getSkillsDataRootPath(), VERDACCIO_INSTALL_SUBDIR);
+  const installDir = path.join(installSubroot, safe, safeVersion);
+  // Strict-subroot assertion (two layers). The resolved install dir must be
+  // STRICTLY inside the verdaccio install subroot (not merely inside the skills
+  // data root — `assertSkillDirectoryInsideRoot` at the call site only confines
+  // to `data/skills`).
+  //   1. Lexical: rejects residual intra-root traversal in the slugified segments.
+  //   2. Realpath (#300): a SYMLINKED ancestor under `_verdaccio-installs`
+  //      (e.g. `_verdaccio-installs/<name> -> ../other-package`) passes the
+  //      lexical prefix check but resolves into another `data/skills` subtree —
+  //      the destructive `rmSync`/`renameSync` would then clobber it. Re-assert
+  //      on the real paths (nearest-existing-ancestor realpath for the
+  //      not-yet-created version leaf).
+  const resolvedSubroot = path.resolve(installSubroot);
+  const resolvedInstallDir = path.resolve(installDir);
+  if (
+    !resolvedInstallDir.startsWith(resolvedSubroot + path.sep) ||
+    !isRealpathContained(resolvedInstallDir, resolvedSubroot)
+  ) {
+    throw new Error(
+      `installSkillPackageFromVerdaccio: resolved install dir escapes the verdaccio install subroot (name="${packageName}", version="${version}").`,
+    );
+  }
+  return installDir;
 }
 
 export interface VerdaccioSkillInstallInput {
@@ -108,7 +144,18 @@ export async function installSkillPackageFromVerdaccio(
 
   // Move extracted tree to the persistent install dir. Overwrite an existing
   // dir at the same path (re-install with the same version).
-  const installDir = persistInstallDir(extracted.packageName, extracted.packageVersion);
+  //
+  // Fail-closed containment barrier (#300). `persistInstallDir` slugifies the
+  // package name but the `version` segment flows in VERBATIM — a crafted
+  // version like `../../escape` (or a symlinked ancestor under the install
+  // subdir) would otherwise let the destructive `rmSync`/`mkdirSync`/
+  // `renameSync` below escape the skills data root. `assertSkillDirectoryInsideRoot`
+  // rejects any `.`/`..` traversal segment AND realpath-confines the resolved
+  // dir to the allowed skill roots; reassign so the confined value feeds the
+  // sinks. A legitimate `@scope/pkg@1.0.0` never trips this.
+  const installDir = assertSkillDirectoryInsideRoot(
+    persistInstallDir(extracted.packageName, extracted.packageVersion),
+  );
   if (fs.existsSync(installDir)) {
     fs.rmSync(installDir, { recursive: true, force: true });
   }

@@ -1504,7 +1504,7 @@ function realpathNearestExisting(target: string): string {
  * it — this layer rejects that. Behavior is identical for legitimate
  * non-symlink and not-yet-created paths (realpath is a no-op on those).
  */
-function isRealpathContained(resolved: string, root: string): boolean {
+export function isRealpathContained(resolved: string, root: string): boolean {
   const realRoot = realpathNearestExisting(root);
   const realTarget = realpathNearestExisting(resolved);
   return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
@@ -1781,8 +1781,27 @@ export async function deleteCustomSkill(input: {
     : existingSkill.ownerUserId
       ? path.join(getSkillsDataRootPath(), "personal", existingSkill.ownerUserId, existingSkill.slug)
       : null;
+  // Confine the derived directory (lexical + realpath, #300) before `rm`. The
+  // `sourcePath` branch derives `dirname(<stored sourcePath>)`, so a
+  // payload-injected/stale stored path — or one whose real path escapes via a
+  // symlinked ancestor — must not have `rm` delete an arbitrary directory.
+  // Custom skills write under the store root (`upsertSkill`); the legacy
+  // fallback lands under the skills data root. Require the dir STRICTLY inside
+  // EITHER root (root-equality excluded by `startsWith(root + sep)`, so the
+  // root itself or its parent is never deleted) AND realpath-confined.
   if (skillDiskDir) {
-    await rm(skillDiskDir, { recursive: true, force: true });
+    const resolvedSkillDiskDir = path.resolve(skillDiskDir);
+    const storeRoot = path.resolve(getSkillStoreRootPath());
+    const legacyRoot = path.resolve(getSkillsDataRootPath());
+    const insideStore =
+      resolvedSkillDiskDir.startsWith(storeRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, storeRoot);
+    const insideLegacy =
+      resolvedSkillDiskDir.startsWith(legacyRoot + path.sep) &&
+      isRealpathContained(resolvedSkillDiskDir, legacyRoot);
+    if (insideStore || insideLegacy) {
+      await rm(resolvedSkillDiskDir, { recursive: true, force: true });
+    }
   }
   commitSkillChange(`skill: delete '${input.skillId}'`).catch(() => undefined);
 
@@ -2042,12 +2061,36 @@ export async function deleteAgentSkillsForSlugs(
     // ~agent/<slugifiedNpmName>/ is cleaned up below if it ends up empty.
     if (skill.sourcePath) {
       const resolvedSourcePath = path.resolve(skill.sourcePath);
-      if (resolvedSourcePath.startsWith(skillsRoot + path.sep) || resolvedSourcePath === skillsRoot) {
+      // Confine a STORED `sourcePath` before `rm` (#300). Two bugs the prior
+      // lexical-only guard had:
+      //   1. Root-equality: `resolvedSourcePath === skillsRoot` passed the
+      //      guard, then `dirname(resolvedSourcePath)` is the root's PARENT —
+      //      the `rm` would delete the directory ABOVE the skills root. Only a
+      //      path STRICTLY inside the root may be deleted; the root itself (and
+      //      thus its parent) is never a valid delete target.
+      //   2. Symlinked ancestor: a `sourcePath` whose real path escapes the
+      //      root via a symlinked ancestor passed `startsWith` but resolves
+      //      OUT of the root. Re-assert realpath containment on the resolved
+      //      sourcePath AND on the `skillDir` actually handed to `rm`.
+      const strictlyInside =
+        resolvedSourcePath !== skillsRoot &&
+        resolvedSourcePath.startsWith(skillsRoot + path.sep) &&
+        isRealpathContained(resolvedSourcePath, skillsRoot);
+      if (strictlyInside) {
         const skillDir = path.dirname(resolvedSourcePath);
-        try {
-          await rm(skillDir, { recursive: true, force: true });
-        } catch {
-          // best-effort
+        // `dirname` of a strictly-inside path is at most the root itself; never
+        // rm the root (would clobber the whole store). Require the dir to be
+        // strictly inside and realpath-confined too.
+        const skillDirStrictlyInside =
+          skillDir !== skillsRoot &&
+          skillDir.startsWith(skillsRoot + path.sep) &&
+          isRealpathContained(skillDir, skillsRoot);
+        if (skillDirStrictlyInside) {
+          try {
+            await rm(skillDir, { recursive: true, force: true });
+          } catch {
+            // best-effort
+          }
         }
       }
     }
@@ -2066,11 +2109,27 @@ export async function deleteAgentSkillsForSlugs(
     if (!matchesPrefix && !matchesPackageSlug) continue;
 
     const resolvedSourcePath = path.resolve(skill.sourcePath);
-    if (!resolvedSourcePath.startsWith(skillsRoot + path.sep)) continue;
+    // Confine the STORED `sourcePath` (lexical + realpath, #300) before
+    // deriving the parent dir to clean up. `startsWith(skillsRoot + sep)` also
+    // excludes the root-equality case (the root itself never `startsWith`
+    // root+sep), so the parent computed below can never be the root's parent.
+    if (
+      !resolvedSourcePath.startsWith(skillsRoot + path.sep) ||
+      !isRealpathContained(resolvedSourcePath, skillsRoot)
+    )
+      continue;
     const parentDir = path.dirname(path.dirname(resolvedSourcePath));
     if (seenParentDirs.has(parentDir)) continue;
     seenParentDirs.add(parentDir);
-    if (!parentDir.startsWith(skillsRoot + path.sep)) continue;
+    // `parentDir` (two levels up) must itself be STRICTLY inside the root and
+    // realpath-confined before `readdirSync`/`rm` — a symlinked ancestor could
+    // make the lexically-inside parent resolve OUT of the root. `startsWith`
+    // (not `===`) keeps the root itself off the delete path.
+    if (
+      !parentDir.startsWith(skillsRoot + path.sep) ||
+      !isRealpathContained(parentDir, skillsRoot)
+    )
+      continue;
     try {
       // Only remove if empty, to avoid clobbering siblings.
       const remaining = readdirSync(parentDir);
@@ -2100,9 +2159,26 @@ export async function uninstallSkillPackage(packageId: string) {
   // Order matters: read slugs → rm dir → delete catalog rows → delete
   // agent-skill catalog rows by slug.
   let agentSlugsForCleanup: string[] = [];
-  if (existingPackage.repositoryPath) {
-    const agentsDirPath = path.join(existingPackage.repositoryPath, "agents");
-    if (existsSync(agentsDirPath)) {
+  // Confine the STORED `repositoryPath` (lexical + realpath, #300) BEFORE the
+  // readdir walks it. A payload-injected/stale stored path — or one whose real
+  // path escapes the installed-packages root via a symlinked ancestor — must
+  // not have `readdirSync` enumerate an arbitrary outside directory. The
+  // installed-packages root is the same root the disk-removal `rm` confines to
+  // below, so the read and the delete share one containment contract.
+  const installedPackagesRoot = path.resolve(getInstalledPackagesDir());
+  const resolvedRepositoryPath = existingPackage.repositoryPath
+    ? path.resolve(existingPackage.repositoryPath)
+    : null;
+  const repositoryPathConfined =
+    resolvedRepositoryPath !== null &&
+    resolvedRepositoryPath.startsWith(installedPackagesRoot + path.sep) &&
+    isRealpathContained(resolvedRepositoryPath, installedPackagesRoot);
+  if (repositoryPathConfined && resolvedRepositoryPath) {
+    const agentsDirPath = path.join(resolvedRepositoryPath, "agents");
+    // Leaf confinement: `agents/` lexically lives in the confined repo dir, but
+    // could itself be a symlink to an outside directory that `readdirSync`
+    // would enumerate. Skip when the real `agents/` escapes the real repo dir.
+    if (existsSync(agentsDirPath) && isFileLeafContainedInDir(resolvedRepositoryPath, agentsDirPath)) {
       try {
         agentSlugsForCleanup = readdirSync(agentsDirPath, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
@@ -2153,13 +2229,14 @@ export async function uninstallSkillPackage(packageId: string) {
     skills: existingCatalog.skills.filter((s) => s.packageId !== packageId),
   });
 
-  // Remove from disk if it lives in the skills data directory.
-  if (existingPackage.repositoryPath) {
-    const resolvedRepoPath = path.resolve(existingPackage.repositoryPath);
-    const resolvedSkillsRoot = path.resolve(getInstalledPackagesDir());
-    if (resolvedRepoPath.startsWith(resolvedSkillsRoot + path.sep)) {
-      await rm(resolvedRepoPath, { recursive: true, force: true });
-    }
+  // Remove from disk if it lives in the skills data directory. Reuse the
+  // single lexical+realpath containment computed for the agents read above
+  // (#300): `repositoryPathConfined` already requires the stored path to be
+  // STRICTLY inside the installed-packages root (root-equality excluded by
+  // `startsWith(root + sep)`) AND realpath-confined, so a symlinked-ancestor
+  // escape can never reach this `rm`.
+  if (repositoryPathConfined && resolvedRepositoryPath) {
+    await rm(resolvedRepositoryPath, { recursive: true, force: true });
   }
 
   // Now remove any level:"agent" rows that were registered for the agent

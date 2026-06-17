@@ -13,7 +13,7 @@ import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { getSkillsDataRootPath } from "./skills-store";
+import { getSkillsDataRootPath, isRealpathContained } from "./skills-store";
 
 const POLL_BACKSTOP_MS = 5 * 60 * 1000; // 5 minutes — backstop in case NOTIFY is missed
 const NOTIFY_CHANNEL = "cinatra_path_relocations_pending";
@@ -60,9 +60,22 @@ function resolveRelocationAbsPath(stored: string): string {
   // The path-escape guard asserts the resolved abs stays under the root.
   const root = rootSkillsAbs();
   const abs = path.resolve(root, stored);
+  // Layer 1 — lexical containment (KEEP; rejects `..` traversal in the stored
+  // relative path before any fs op).
   if (abs !== root && !abs.startsWith(root + path.sep)) {
     throw new Error(
       `[path-escape guard] resolved abs="${abs}" is not under skills root="${root}" (input="${stored}")`,
+    );
+  }
+  // Layer 2 — realpath containment (#300). The stored path is the single
+  // chokepoint feeding the rename/cp/readdir/rm/writeFile sinks; a symlinked
+  // ANCESTOR under the skills root passes the lexical prefix check but resolves
+  // OUT of the root, so a move/marker-write would escape. Re-assert on the real
+  // paths (nearest-existing-ancestor realpath handles the not-yet-created move
+  // target). Behavior is identical for legitimate non-symlink paths.
+  if (!isRealpathContained(abs, root)) {
+    throw new Error(
+      `[path-escape guard] real path of abs="${abs}" escapes skills root="${root}" (input="${stored}")`,
     );
   }
   return abs;
