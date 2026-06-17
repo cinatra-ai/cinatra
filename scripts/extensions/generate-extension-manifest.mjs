@@ -121,6 +121,20 @@ export function resolveDisplayName(cin) {
     : null;
 }
 
+// Resolve self-declared connector vendor identity (`cinatra.vendor`, #12) or
+// null. Carried THROUGH unvalidated — the SDK/host own no vendor roster, so the
+// only structural shaping here is "object with non-empty string key + name".
+// Authoritative validation (shape conformance, name/key ownership + uniqueness,
+// provider mapping) is the marketplace publish gate's job (separate repo).
+export function resolveVendor(cin) {
+  const v = cin.vendor;
+  if (!v || typeof v !== "object") return null;
+  const key = typeof v.key === "string" ? v.key.trim() : "";
+  const name = typeof v.name === "string" ? v.name.trim() : "";
+  if (key.length === 0 || name.length === 0) return null;
+  return { key, name };
+}
+
 // PURE SVG sanitizer — given raw SVG text, return a bounded inline data URI
 // or null. Defends the host card surface from a hostile/marketplace logo asset.
 // A logo icon needs only a tiny shape/group/gradient vocabulary, so this FAILS
@@ -659,6 +673,10 @@ export async function buildManifest() {
       // Self-describing card identity (null → host catalog/icon fallback).
       displayName: resolveDisplayName(cin),
       logo: sanitizeLogoDataUri(x.dir, cin.logo),
+      // Self-declared connector vendor identity (`cinatra.vendor`, #12); null
+      // when undeclared. Carried through unvalidated — the marketplace publish
+      // gate (separate repo) owns shape/ownership/uniqueness/provider-mapping.
+      vendor: resolveVendor(cin),
       // Generator-owned presence classification (see resolutionOf above).
       resolution: resolutionOf(x.name),
     };
@@ -1027,6 +1045,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             dependencies: r.dependencies,
             displayName: r.displayName,
             logo: r.logo,
+            vendor: r.vendor,
             resolution: r.resolution,
           },
         )},`,

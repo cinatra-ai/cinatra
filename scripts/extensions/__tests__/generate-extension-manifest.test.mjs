@@ -5,6 +5,7 @@ import {
   readPresentExtensionNames,
   checkExitCode,
   resolveDisplayName,
+  resolveVendor,
   sanitizeSvgToDataUri,
   sanitizeLogoDataUri,
   extractFactoryExport,
@@ -122,6 +123,39 @@ describe("D10 self-describing card identity", () => {
     expect(resolveDisplayName({ displayName: "   " })).toBeNull();
     expect(resolveDisplayName({})).toBeNull();
     expect(resolveDisplayName({ displayName: 42 })).toBeNull();
+  });
+
+  // #12 connector vendor-identity end-state: a connector declares its OWN
+  // vendor key + name in its manifest (`cinatra.vendor`). The generator accepts
+  // ANY non-empty string key (the SDK owns no roster — open marketplace) and
+  // carries the value THROUGH unvalidated; authoritative shape/ownership/
+  // uniqueness/provider-mapping verification is the marketplace publish gate's
+  // job (separate repo), not the generator's.
+  it("resolveVendor accepts a manifest-declared vendor identity (any key, trimmed; else null)", () => {
+    // A well-known first-party vendor key is accepted verbatim.
+    expect(resolveVendor({ vendor: { key: "openai", name: "OpenAI" } })).toEqual({
+      key: "openai",
+      name: "OpenAI",
+    });
+    // A NOVEL key no first-party connector ships is accepted unchanged — the
+    // open marketplace: the SDK enumerates NO authoritative vendor roster.
+    expect(resolveVendor({ vendor: { key: "acme-crm", name: "Acme CRM" } })).toEqual({
+      key: "acme-crm",
+      name: "Acme CRM",
+    });
+    // Trimmed.
+    expect(resolveVendor({ vendor: { key: "  zap  ", name: "  Zapier  " } })).toEqual({
+      key: "zap",
+      name: "Zapier",
+    });
+    // Absent / malformed → null (carried through as null on the record).
+    expect(resolveVendor({})).toBeNull();
+    expect(resolveVendor({ vendor: null })).toBeNull();
+    expect(resolveVendor({ vendor: { key: "openai" } })).toBeNull();
+    expect(resolveVendor({ vendor: { name: "OpenAI" } })).toBeNull();
+    expect(resolveVendor({ vendor: { key: "", name: "x" } })).toBeNull();
+    expect(resolveVendor({ vendor: { key: "x", name: "   " } })).toBeNull();
+    expect(resolveVendor({ vendor: { key: 42, name: "x" } })).toBeNull();
   });
 
   it("sanitizeSvgToDataUri inlines a clean SVG as a base64 data URI", () => {

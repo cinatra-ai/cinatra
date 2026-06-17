@@ -11,6 +11,11 @@ import {
   type ConnectorSetupPageLoader,
 } from "@/lib/connector-setup-pages";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import {
+  asConnectorVendorKey,
+  type ConnectorVendorKey,
+  type ConnectorVendorIdentity,
+} from "@cinatra-ai/sdk-extensions";
 
 export type ConnectorDescriptor = (typeof CONNECTOR_DESCRIPTORS)[number];
 
@@ -42,6 +47,16 @@ export type ConnectorRegistryEntry = ConnectorDescriptor & {
    * segment for a connector the static manifest does not cover).
    */
   vendor: string;
+  /**
+   * The connector's SELF-DECLARED vendor identity (`cinatra.vendor`, #12), or
+   * `null` when the connector declares none. `key` is BRANDED as a
+   * `ConnectorVendorKey` here — this registry is the host trust boundary that
+   * accepts the connector's manifest-declared vendor identity (the SDK owns no
+   * roster; authoritative shape/ownership/uniqueness/provider-mapping checks
+   * run at the marketplace publish gate). Read-compat: the brand is a plain
+   * string at runtime, so the value round-trips unchanged.
+   */
+  vendorIdentity: { key: ConnectorVendorKey; name: string } | null;
   /** Manifest-resolved dispatch-route href for the connector's setup surface. */
   setupHref: string;
 };
@@ -116,6 +131,24 @@ export function connectorVendor(packageId: string): string {
   return match ? match[1] : "";
 }
 
+/**
+ * The connector's SELF-DECLARED vendor identity (`cinatra.vendor`, #12) from
+ * the generated manifest, or `null` when the connector declares none. This is
+ * the host trust boundary: the connector AUTHORED its vendor key and the
+ * marketplace publish gate verified it, so the accepted `string` key is BRANDED
+ * to `ConnectorVendorKey` here via `asConnectorVendorKey`. The SDK performs no
+ * roster/membership check (open marketplace); this function neither validates
+ * nor enumerates a vendor list — it carries the manifest value through, branded.
+ */
+export function connectorVendorIdentity(
+  packageId: string,
+): { key: ConnectorVendorKey; name: string } | null {
+  const declared: ConnectorVendorIdentity | null | undefined =
+    STATIC_EXTENSION_MANIFEST[packageId]?.vendor;
+  if (!declared) return null;
+  return { key: asConnectorVendorKey(declared.key), name: declared.name };
+}
+
 function setupHrefFor(descriptor: ConnectorDescriptor): string {
   return `/connectors/${connectorVendor(descriptor.packageId)}/${descriptor.slug}/${descriptor.setupSubroute}`;
 }
@@ -138,6 +171,7 @@ function toRegistryEntry(descriptor: ConnectorDescriptor): ConnectorRegistryEntr
     // late side-effect import of the built-in probe module) still apply.
     readinessProbe: (ctx) => getConnectorReadinessProbe(descriptor.packageId)(ctx),
     vendor: connectorVendor(descriptor.packageId),
+    vendorIdentity: connectorVendorIdentity(descriptor.packageId),
     setupHref: setupHrefFor(descriptor),
   };
 }

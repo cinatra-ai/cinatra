@@ -173,7 +173,13 @@ export type {
 } from "./mcp-oauth-clients";
 
 export { UI_SURFACE_KINDS, isUiSurfaceKind, EXTENSION_RESOLUTIONS } from "./manifest";
-export type { UiSurfaceKind, ExtensionResolution, CinatraManifest, NormalizedExtensionRecord } from "./manifest";
+export type {
+  UiSurfaceKind,
+  ExtensionResolution,
+  ConnectorVendorIdentity,
+  CinatraManifest,
+  NormalizedExtensionRecord,
+} from "./manifest";
 export type {
   ExtensionExternalMcpTool,
   ExtensionExternalMcpToolbox,

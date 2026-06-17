@@ -23,38 +23,41 @@
 
 export const NANGO_SYSTEM_CAPABILITY = "nango-system";
 
-export type NangoConnectorKey =
-  | "a2aServer"
-  | "apify"
-  | "apollo"
-  | "claude"
-  | "drupal"
-  | "github"
-  | "gmail"
-  | "gemini"
-  | "googleCalendar"
-  | "googleOAuth"
-  | "linkedin"
-  | "openai"
-  | "tailscale"
-  | "wordpress"
-  | "youtube";
+// ---------------------------------------------------------------------------
+// Vendor identity is OPEN (#12 connector vendor-identity end-state, eng#159 /
+// owner ruling eng#183 decision 2). The SDK no longer enumerates an
+// authoritative vendor ROSTER — Cinatra is an open connector marketplace, so a
+// connector declares its OWN vendor key in its manifest (`cinatra.vendor`,
+// see `./manifest`) and that identity is verified at the marketplace publish
+// gate, NOT frozen into an SDK union.
+//
+// `NangoConnectorKey` is therefore the OPEN vendor-key shape: a plain `string`.
+// It keeps its name only as a read-compat alias so the many wrapper signatures,
+// persisted `SavedNangoConnection.connectorKey` values, and the const key maps
+// (`Record<NangoConnectorKey, …>`) re-point mechanically. Every existing call
+// site that passed a bare literal (`"github"`, `"a2aServer"`, …) still
+// type-checks (a literal IS a `string`), and a persisted connector key on disk
+// still reads back unchanged — read-compat is total.
+// ---------------------------------------------------------------------------
+
+/**
+ * Open connector vendor-key shape — a plain `string`. The SDK owns NO
+ * authoritative vendor roster: a connector declares its own vendor key in its
+ * manifest (`cinatra.vendor.key`) and the marketplace publish gate verifies it.
+ * Retained as a named alias for read-compat across the nango-system wrappers,
+ * persisted connection records, and the const key maps.
+ */
+export type NangoConnectorKey = string;
 
 // ---------------------------------------------------------------------------
-// ConnectorVendorKey — a TYPE-ONLY branded vendor-key SHAPE (#12 12a).
+// ConnectorVendorKey — a TYPE-ONLY branded vendor-key SHAPE (#12).
 //
-// ADDITIVE + NON-BREAKING. `NangoConnectorKey` is unchanged: every call site
-// keeps passing bare string literals (`"github"`, `"a2aServer"`, …) into a
-// `connectorKey: NangoConnectorKey` param, and a persisted
-// `SavedNangoConnection.connectorKey` (a plain string on disk) still reads back
-// as a `NangoConnectorKey`.
-//
-// RULING (vendor-list freeze): the SDK exposes only a branded vendor-key SHAPE —
-// it must NOT carry an authoritative vendor ROSTER or any runtime membership /
-// vendor-enumeration gate. Vendor-identity validation belongs at the host
-// manifest/gate boundary, never in the SDK. So this brand is the SHAPE a value
-// can carry once a boundary that DOES own the authoritative list has accepted it;
-// the SDK provides only the type and a pure (non-validating) cast.
+// The brand is the SHAPE a vendor key carries ONCE the boundary that owns the
+// authoritative vendor identity (the host manifest / marketplace publish gate)
+// has accepted it. The SDK provides only the type and a PURE (non-validating)
+// cast: it carries NO roster and performs NO runtime membership/enumeration
+// check. Vendor-identity validation belongs at the host manifest/gate boundary,
+// never in the SDK.
 //
 // The brand is a phantom property keyed by a `unique symbol` — it is erased at
 // build, has zero runtime footprint, and a branded value is the identical string
@@ -65,22 +68,23 @@ declare const ConnectorVendorKeyBrand: unique symbol;
 
 /**
  * A connector vendor key that a trust boundary has accepted as a vendor identity.
- * Structurally a `NangoConnectorKey` carrying a compile-time-only phantom brand;
- * read-compat — assignable TO `NangoConnectorKey` and to `string` without a cast.
- * The brand only narrows the OTHER direction: a bare string is NOT a
- * `ConnectorVendorKey` until cast. The SDK holds no authoritative vendor list —
- * membership validation lives at the host manifest/gate boundary.
+ * Structurally a `string` (the open `NangoConnectorKey` shape) carrying a
+ * compile-time-only phantom brand; read-compat — assignable TO `NangoConnectorKey`
+ * and to `string` without a cast. The brand only narrows the OTHER direction: a
+ * bare string is NOT a `ConnectorVendorKey` until cast. The SDK holds no
+ * authoritative vendor list — membership validation lives at the host
+ * manifest/gate boundary.
  */
-export type ConnectorVendorKey = NangoConnectorKey & {
+export type ConnectorVendorKey = string & {
   readonly [ConnectorVendorKeyBrand]: true;
 };
 
 /**
- * PURE cast: brand a `NangoConnectorKey` as a `ConnectorVendorKey`. Performs NO
+ * PURE cast: brand a vendor-key `string` as a `ConnectorVendorKey`. Performs NO
  * membership check and consults NO roster (the SDK owns no authoritative vendor
  * list). The caller asserts the value was already accepted by the boundary that
- * owns vendor identity (the host manifest/gate). Identity at runtime — returns
- * the same value.
+ * owns vendor identity (the host manifest / marketplace publish gate). Identity
+ * at runtime — returns the same value.
  */
 export const asConnectorVendorKey = (key: NangoConnectorKey): ConnectorVendorKey =>
   key as ConnectorVendorKey;
@@ -127,10 +131,11 @@ export type NangoConfigStore = {
   delete(connectorId: string): void;
 };
 
-/** The connector keys that carry a well-known app-level connection id (the
- * connector's CINATRA_NANGO_CONNECTION_IDS map omits the per-instance /
- * Connect-UI-only keys). */
-export type NangoConnectionIdKey = Exclude<NangoConnectorKey, "a2aServer" | "drupal" | "linkedin">;
+/** The connector keys that carry a well-known app-level connection id. Open
+ * (a plain `string`, the `NangoConnectorKey` shape): which keys carry a
+ * well-known connection id is the connector's own decision (its
+ * `connectionIds` map declares the subset), not an SDK-frozen exclusion list. */
+export type NangoConnectionIdKey = NangoConnectorKey;
 
 export type NangoConnectionScopeOptions = {
   scope?: "app" | "user";

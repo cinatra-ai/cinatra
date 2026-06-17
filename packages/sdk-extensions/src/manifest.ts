@@ -44,6 +44,30 @@ export type UiSurfaceKind = (typeof UI_SURFACE_KINDS)[number];
 export const EXTENSION_RESOLUTIONS = ["required", "guardedOptional"] as const;
 export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
 
+/**
+ * Self-declared connector vendor identity (#12 connector vendor-identity
+ * end-state, eng#159 / owner ruling eng#183 decision 2).
+ *
+ * Vendor identity lives WITH the connector — a `kind:"connector"` extension
+ * declares its own vendor key + display name here, in its own manifest. The SDK
+ * owns NO authoritative vendor roster (Cinatra is an open connector
+ * marketplace); the `key` is the OPEN `ConnectorVendorKey` SHAPE (any string,
+ * not a frozen union). Authoritative validation — key SHAPE conformance,
+ * name/key ownership + uniqueness across the catalog, and provider mapping —
+ * is performed at the MARKETPLACE PUBLISH GATE (the `cinatra-ai/marketplace`
+ * repo), never in the SDK and never at the host loader (which has no
+ * cross-connector roster to check against).
+ */
+export type ConnectorVendorIdentity = {
+  /**
+   * The connector's vendor key — the OPEN `ConnectorVendorKey` shape (any
+   * non-empty string, e.g. `"github"`, `"acme-crm"`). NOT validated against an
+   * SDK roster; the publish gate owns uniqueness + ownership.
+   */
+  key: string;
+  /** User-facing vendor display name (e.g. `"GitHub"`, `"Acme CRM"`). */
+  name: string;
+};
 
 /** The `cinatra` manifest block (additive fields marked). */
 export type CinatraManifest = {
@@ -89,6 +113,15 @@ export type CinatraManifest = {
    * (no SQL/JS/seed function); see `parseDevFixtures` in `./dev-fixtures`.
    */
   devFixtures?: string;
+  /**
+   * Self-declared connector vendor identity (#12). A `kind:"connector"`
+   * extension declares its OWN vendor key + name here — the SDK owns no vendor
+   * roster (open marketplace). The marketplace publish gate (separate repo)
+   * verifies shape, name/key ownership + uniqueness, and provider mapping;
+   * the host loader carries it through unvalidated. Absent for non-connector
+   * kinds and for connectors that have not yet adopted self-declared identity.
+   */
+  vendor?: ConnectorVendorIdentity;
   /** UI hot-pluggability classification. */
   uiSurface?: UiSurfaceKind;
   /**
@@ -176,6 +209,17 @@ export type NormalizedExtensionRecord = {
    */
   displayName: string | null;
   logo: string | null;
+  /**
+   * Self-declared connector vendor identity (`cinatra.vendor`, #12), or null
+   * when the package declares none (non-connector kinds, or connectors that
+   * have not adopted self-declared identity). OPTIONAL on the type (the record
+   * shape is ABI-frozen, so the field is strictly additive); the manifest
+   * generator emits it on every record (`null` when absent). The SDK/host carry
+   * it through UNVALIDATED — vendor-identity validation (shape, name/key
+   * ownership + uniqueness, provider mapping) is the marketplace publish gate's
+   * job (separate repo), not the loader's.
+   */
+  vendor?: ConnectorVendorIdentity | null;
   /**
    * Generator-owned presence classification (see `ExtensionResolution`).
    * OPTIONAL on the type (the record shape is ABI-frozen, so the field is
