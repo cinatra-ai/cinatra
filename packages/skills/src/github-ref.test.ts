@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -490,5 +491,91 @@ describe("installSkillPackageFromGitHub (clobber guard)", () => {
 
     await expect(installSkillPackageFromGitHub("owner/repo")).resolves.toBeDefined();
     expect(octokitInstance.rest.git.getTree).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path-injection containment for the clone/install fs writes
+// (js/path-injection, code-scanning).
+//
+// The fail-closed `assertWithinSkillsRoot` barrier confines the install
+// targetDirectory and the cloneGitHubRepoToDirectory rm/mkdir to the skills
+// data root; the per-entry guard confines each materialized tree entry. These
+// tests assert legitimate installs are byte-identical AND a GitHub-tree entry
+// that tries to escape the clone target is never written outside it.
+// ---------------------------------------------------------------------------
+describe("installSkillPackageFromGitHub (path-injection containment)", () => {
+  let tmpRoot: string;
+  let cwdSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    tmpRoot = await mkdtemp(path.join(os.tmpdir(), "cinatra-pathinj-"));
+    cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmpRoot);
+
+    getGitHubAccessTokenMock.mockResolvedValue({ accessToken: "ghp_test", connection: {} });
+    getGitHubOAuthSettingsMock.mockResolvedValue({ selectedRepositoryFullName: null });
+    octokitInstance.rest.repos.get.mockResolvedValue({
+      data: {
+        default_branch: "main",
+        description: "Test repo",
+        html_url: "https://github.com/owner/repo",
+        license: { spdx_id: "MIT" },
+        owner: { login: "owner" },
+      },
+    });
+    octokitInstance.rest.repos.getBranch.mockResolvedValue({
+      data: { commit: { commit: { tree: { sha: "default-tree-sha" } } } },
+    });
+    upsertMock.mockResolvedValue({ skillPackage: { id: "github:owner/repo" }, skills: [] });
+    compileMock.mockResolvedValue({ registered: [], skipped: [] });
+  });
+
+  afterEach(async () => {
+    cwdSpy.mockRestore();
+    await rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("confines a legitimate install to <root>/workspace/<owner>/<repo> and writes the blob there", async () => {
+    octokitInstance.rest.git.getTree.mockResolvedValue({
+      data: {
+        truncated: false,
+        tree: [{ path: "SKILL.md", type: "blob", sha: "blob-sha", mode: "100644" }],
+      },
+    });
+    octokitInstance.rest.git.getBlob.mockResolvedValue({
+      data: { encoding: "utf8", content: "hello-skill" },
+    });
+
+    const result = await installSkillPackageFromGitHub("owner/repo");
+
+    const expectedTarget = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
+    expect(result.repositoryPath).toBe(expectedTarget);
+    const written = await readFile(path.join(expectedTarget, "SKILL.md"), "utf8");
+    expect(written).toBe("hello-skill");
+  });
+
+  it("skips a GitHub-tree entry whose path tries to escape the clone target", async () => {
+    octokitInstance.rest.git.getTree.mockResolvedValue({
+      data: {
+        truncated: false,
+        tree: [
+          { path: "../../escape.md", type: "blob", sha: "evil-sha", mode: "100644" },
+          { path: "ok.md", type: "blob", sha: "ok-sha", mode: "100644" },
+        ],
+      },
+    });
+    octokitInstance.rest.git.getBlob.mockImplementation(async ({ file_sha }: { file_sha: string }) => ({
+      data: { encoding: "utf8", content: file_sha === "evil-sha" ? "ESCAPED" : "safe" },
+    }));
+
+    await installSkillPackageFromGitHub("owner/repo");
+
+    const target = path.join(tmpRoot, "data", "skills", "workspace", "owner", "repo");
+    // The escaping entry must NOT have been written above the workspace dir.
+    expect(existsSync(path.join(tmpRoot, "data", "skills", "workspace", "escape.md"))).toBe(false);
+    expect(existsSync(path.join(tmpRoot, "data", "skills", "escape.md"))).toBe(false);
+    // The legitimate sibling entry IS materialized inside the confined target.
+    expect(await readFile(path.join(target, "ok.md"), "utf8")).toBe("safe");
   });
 });

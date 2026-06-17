@@ -200,4 +200,71 @@ describe("compileAndRegisterAgentSkillsForRepo", () => {
 
     await rm(tmpRoot, { recursive: true, force: true });
   });
+
+  // -------------------------------------------------------------------------
+  // Path-injection containment (js/path-injection, code-scanning).
+  //
+  // Every fs read descends from the exported `repoRoot` parameter. The fail-
+  // closed barrier resolves each child against its resolved parent and confines
+  // it. Legitimate trees (validated dir slugs, hardcoded `agents`/`skills`/
+  // `SKILL.md` leaves) are byte-identical; a `..` baked into `repoRoot` is
+  // normalized by resolve and never escapes the resolved base.
+  // -------------------------------------------------------------------------
+  describe("path-injection containment", () => {
+    it("normalizes a repoRoot containing '..' and still registers the legitimate tree", async () => {
+      // tmpRoot/nested/.. resolves back to tmpRoot — the agents tree lives at
+      // tmpRoot/agents/foo/skills/bar. The resolve must collapse the `..`
+      // without escaping, and registration must be byte-identical to the
+      // canonical-root case.
+      const agentDir = path.join(tmpRoot, "agents", "foo");
+      const skillDir = path.join(agentDir, "skills", "bar");
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(
+        path.join(agentDir, "package.json"),
+        JSON.stringify({ name: "@x/foo", version: "1.0.0" }),
+      );
+      await writeFile(
+        path.join(skillDir, "SKILL.md"),
+        ["---", "name: Bar Skill", "description: a description", "---", "body"].join("\n"),
+      );
+
+      const repoRootWithDotDot = path.join(tmpRoot, "nested", "..");
+      const result = await compileAndRegisterAgentSkillsForRepo({ repoRoot: repoRootWithDotDot });
+
+      expect(result.registered).toEqual(["custom:foo:bar-skill"]);
+      expect(result.skipped).toEqual([]);
+      expect(upsertSkillMock).toHaveBeenCalledTimes(1);
+
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("does not read SKILL.md outside the agents tree for a traversal-named skill dir", async () => {
+      // Plant a secret OUTSIDE the agents tree and an agent referencing a
+      // traversal-named skill dir. isValidDirectorySlug rejects the `..`
+      // segment, and even if it slipped through, the resolveWithin guard would
+      // skip it — so the secret is never read and upsert is never called with
+      // its content.
+      const secretPath = path.join(tmpRoot, "secret.md");
+      await writeFile(secretPath, "---\nname: Secret\n---\nTOP SECRET");
+
+      const agentDir = path.join(tmpRoot, "agents", "ok");
+      await mkdir(path.join(agentDir, "skills"), { recursive: true });
+      await writeFile(path.join(agentDir, "package.json"), JSON.stringify({ name: "@x/ok" }));
+      // A literal "..-escape" entry: isValidDirectorySlug rejects any name
+      // containing "..".
+      await mkdir(path.join(agentDir, "skills", "..-escape"), { recursive: true });
+      await writeFile(
+        path.join(agentDir, "skills", "..-escape", "SKILL.md"),
+        "---\nname: Escape\n---\nbody",
+      );
+
+      const result = await compileAndRegisterAgentSkillsForRepo({ repoRoot: tmpRoot });
+
+      expect(result.registered).toEqual([]);
+      expect(result.skipped.some((s) => /slug/i.test(s.reason))).toBe(true);
+      expect(upsertSkillMock).not.toHaveBeenCalled();
+
+      await rm(tmpRoot, { recursive: true, force: true });
+    });
+  });
 });

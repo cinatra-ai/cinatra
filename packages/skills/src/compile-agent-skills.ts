@@ -50,6 +50,27 @@ function isValidDirectorySlug(slug: string): boolean {
   return true;
 }
 
+/**
+ * Fail-closed containment barrier (js/path-injection, code-scanning).
+ *
+ * `compileAndRegisterAgentSkillsForRepo` is an EXPORTED boundary: every flagged
+ * read descends from the `input.repoRoot` parameter, which has no in-file
+ * confinement (safety today rests on the single github.ts caller). Resolve a
+ * child path against its resolved parent and assert it stays inside that parent
+ * (the #291 idiom). Inner segments (dirSlug/skillEntryName) are already guarded
+ * by isValidDirectorySlug, so this never trips for a legitimate tree; the
+ * resolve also normalizes any `..` baked into `repoRoot`. Returns the resolved
+ * child, or `null` when it escapes (the function contract never throws — the
+ * caller pushes a `skipped` reason instead).
+ */
+function resolveWithin(parentResolved: string, segment: string): string | null {
+  const childResolved = path.resolve(parentResolved, segment);
+  if (childResolved !== parentResolved && !childResolved.startsWith(parentResolved + path.sep)) {
+    return null;
+  }
+  return childResolved;
+}
+
 function slugifyForId(value: string): string {
   return value
     .trim()
@@ -66,7 +87,17 @@ export async function compileAndRegisterAgentSkillsForRepo(input: {
   repoRoot: string;
 }): Promise<CompileAgentSkillsResult> {
   const result: CompileAgentSkillsResult = { registered: [], skipped: [] };
-  const agentsDir = path.join(input.repoRoot, "agents");
+
+  // Fail-closed: resolve the repo root and confine the hardcoded `agents/`
+  // child within it (js/path-injection). 'agents' is a literal so this always
+  // holds, but the resolve normalizes any `..` baked into the exported
+  // `repoRoot` parameter, and feeding the confined `agentsDir` into the stat/
+  // readdir sinks makes them tracked as contained.
+  const resolvedRepoRoot = path.resolve(input.repoRoot);
+  const agentsDir = resolveWithin(resolvedRepoRoot, "agents");
+  if (!agentsDir) {
+    return result;
+  }
 
   // No-op when <repoRoot>/agents does not exist.
   let agentsDirStat: Stats;
@@ -102,7 +133,15 @@ export async function compileAndRegisterAgentSkillsForRepo(input: {
       continue;
     }
 
-    const agentDir = path.join(agentsDir, dirSlug);
+    // Confine the agent dir within `agentsDir` before building any read path
+    // (js/path-injection). `dirSlug` is already validated above; this asserts
+    // the resolved child cannot escape and feeds the confined base into the
+    // package.json / skills/ reads below.
+    const agentDir = resolveWithin(agentsDir, dirSlug);
+    if (!agentDir) {
+      result.skipped.push({ slug: dirSlug, reason: `agent dir escapes the agents root "${dirSlug}"` });
+      continue;
+    }
     const pkgJsonPath = path.join(agentDir, "package.json");
     const skillsDir = path.join(agentDir, "skills");
 
@@ -165,7 +204,19 @@ export async function compileAndRegisterAgentSkillsForRepo(input: {
         continue;
       }
 
-      const skillMdPath = path.join(skillsDir, skillEntryName, "SKILL.md");
+      // Confine the per-skill dir within `skillsDir` before reading SKILL.md
+      // (js/path-injection). `skillEntryName` is already validated above;
+      // 'SKILL.md' is a literal leaf, so this never trips for a legitimate
+      // tree and roots the read on the confined base.
+      const skillDir = resolveWithin(skillsDir, skillEntryName);
+      if (!skillDir) {
+        result.skipped.push({
+          slug: `${dirSlug}/${skillEntryName}`,
+          reason: `skill dir escapes the skills root "${skillEntryName}"`,
+        });
+        continue;
+      }
+      const skillMdPath = path.join(skillDir, "SKILL.md");
       let skillContent: string;
       try {
         skillContent = (await readFile(skillMdPath, "utf8")) as string;

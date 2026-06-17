@@ -484,7 +484,23 @@ type DiscoveredSkillDirectory = {
 };
 
 function collectSkillDirectories(searchRootPath: string, relativeDirectoryPath = ""): DiscoveredSkillDirectory[] {
-  if (!searchRootPath || !existsSync(searchRootPath)) {
+  if (!searchRootPath) {
+    return [];
+  }
+
+  // Fail-closed containment barrier (js/path-injection). Confine the
+  // externally-supplied BASE directory to the allowed skill roots exactly once,
+  // at the top-level call (`relativeDirectoryPath === ""`). Every current caller
+  // already passes a base-confined root; this rejects a traversing base before
+  // any fs read. Recursive descents (non-empty relative path) skip the guard:
+  // their base is a previously-confined parent joined with a readdir'd child
+  // name, which can never be `..`. Rebinding to the resolved value feeds the
+  // barrier output into the existsSync/readdirSync sinks below.
+  if (relativeDirectoryPath === "") {
+    searchRootPath = assertSkillDirectoryInsideRoot(searchRootPath);
+  }
+
+  if (!existsSync(searchRootPath)) {
     return [];
   }
 
@@ -1425,6 +1441,39 @@ export function assertSkillFilePathInsideRoot(filePath: string): void {
   }
 }
 
+/**
+ * Directory-path containment barrier (js/path-injection, code-scanning).
+ *
+ * Fail-closed confinement for a repository/scan BASE directory before any
+ * filesystem read (`existsSync`/`readdirSync`/`readFileSync`) walks it. Two
+ * layers, mirroring the #291 write-side guard in `upsertSkill`:
+ *   1. Reject any `.`/`..` traversal segment in the supplied directory so a
+ *      `..` baked into a leaf (e.g. the verdaccio installDir version segment,
+ *      which is not slugified, or a slugify that preserves `.`) cannot escape.
+ *   2. Resolve and require the directory inside EITHER the canonical skill
+ *      store root OR the legacy `data/skills` root (the two roots every current
+ *      caller already lands in), throwing otherwise.
+ *
+ * Returns the resolved, confined path so callers feed the sanitizer-normalized
+ * value into the sink (CodeQL tracks the barrier output, breaking the flow).
+ */
+export function assertSkillDirectoryInsideRoot(directoryPath: string): string {
+  if (directoryPath.split(/[/\\]/).some((part) => part === ".." || part === ".")) {
+    throw new Error("Skill directory path contains a traversal segment.");
+  }
+  const storeRoot = path.resolve(getSkillStoreRootPath());
+  const legacyRoot = path.resolve(getSkillsDataRootPath());
+  const resolved = path.resolve(directoryPath);
+  const insideStore =
+    resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
+  const insideLegacy =
+    resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
+  if (!insideStore && !insideLegacy) {
+    throw new Error("Skill directory path is outside the allowed skill roots.");
+  }
+  return resolved;
+}
+
 export async function readSkillFileContent(filePath: string): Promise<string> {
   const { readFile } = await import("fs/promises");
   assertSkillFilePathInsideRoot(filePath);
@@ -1658,8 +1707,19 @@ export async function upsertRepositoryBackedSkillPackage(input: {
   authors?: string[];
 }) {
   const existingCatalog = await readSkillsCatalog();
-  const readmePath = path.join(input.repositoryPath, "README.md");
-  const licensePath = path.join(input.repositoryPath, "LICENSE");
+
+  // Fail-closed containment barrier (js/path-injection). Confine the
+  // user/LLM-triggered `input.repositoryPath` (github targetDirectory or
+  // verdaccio installDir) to the allowed skill roots BEFORE any fs read. The
+  // github caller is already guarded by isSafeOwnerAndRepo (#291); the
+  // verdaccio installDir leaf segments are weakly sanitized, and this function
+  // had no self-contained guard — so assert here. Using the resolved value for
+  // the README/LICENSE joins and the directory scan feeds the barrier output
+  // into every existsSync/readFileSync sink (covers the README/LICENSE probes
+  // and, via collectSkillDirectories, the per-skill SKILL.md reads).
+  const repositoryPath = assertSkillDirectoryInsideRoot(input.repositoryPath);
+  const readmePath = path.join(repositoryPath, "README.md");
+  const licensePath = path.join(repositoryPath, "LICENSE");
 
   const packageRecord: PersistedSkillPackage = {
     id: input.packageId,
@@ -1701,7 +1761,7 @@ export async function upsertRepositoryBackedSkillPackage(input: {
   // so the catalog ID matches the consumer ref shape (e.g.
   // `@anthropics/skills:skill-creator`) instead of `verdaccio:@anthropics/skills:skill-creator`.
   const catalogIdPrefix = input.catalogSkillIdPrefix ?? input.packageId;
-  const discoveredSkills = collectSkillDirectories(input.repositoryPath);
+  const discoveredSkills = collectSkillDirectories(repositoryPath);
   const scannedSkills: PersistedSkill[] = discoveredSkills.map((discoveredSkill) => {
     const content = readFileSync(discoveredSkill.skillFilePath, "utf8");
     const { attributes } = parseFrontmatter(content);
