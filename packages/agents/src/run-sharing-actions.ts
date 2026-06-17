@@ -108,8 +108,12 @@ export async function searchOrgMembersForSharing(
   );
 
   const trimmed = query.trim();
+  // Escape the LIKE/ILIKE escape character (backslash) FIRST, then the `%`/`_`
+  // wildcards, all via the single character class `[\\%_]`. Postgres ILIKE uses
+  // backslash as the default ESCAPE char; without escaping a user-supplied `\`
+  // the pattern semantics drift (e.g. `\%` would stop being a literal match).
   const like = trimmed.length > 0
-    ? `%${trimmed.replace(/[%_]/g, "\\$&")}%`
+    ? `%${trimmed.replace(/[\\%_]/g, "\\$&")}%`
     : null;
 
   const rows = await betterAuthDb

@@ -283,7 +283,9 @@ export async function saveExtensionAccessPolicy(
     await hooks.afterPolicyWrite?.(resourceId, validatedPolicy);
   } catch (err) {
     console.warn(
-      `[extensions/permissions-actions] afterPolicyWrite hook failed for kind=${kind} id=${resourceId}:`,
+      "[extensions/permissions-actions] afterPolicyWrite hook failed for kind=%s id=%s:",
+      kind,
+      resourceId,
       err instanceof Error ? err.message : err,
     );
   }
@@ -358,7 +360,9 @@ export async function setExtensionInstaller(
     await hooks.afterInstallerSet?.(resourceId, installedByUserId);
   } catch (err) {
     console.warn(
-      `[extensions/permissions-actions] afterInstallerSet hook failed for kind=${kind} id=${resourceId}:`,
+      "[extensions/permissions-actions] afterInstallerSet hook failed for kind=%s id=%s:",
+      kind,
+      resourceId,
       err instanceof Error ? err.message : err,
     );
   }
@@ -423,8 +427,12 @@ export async function searchExtensionCoOwnerCandidates(
   }
 
   const trimmed = query.trim();
+  // Escape the LIKE/ILIKE escape character (backslash) FIRST, then the `%`/`_`
+  // wildcards, all via the single character class `[\\%_]`. Postgres ILIKE uses
+  // backslash as the default ESCAPE char; without escaping a user-supplied `\`
+  // the pattern semantics drift (e.g. `\%` would stop being a literal match).
   const like = trimmed.length > 0
-    ? `%${trimmed.replace(/[%_]/g, "\\$&")}%`
+    ? `%${trimmed.replace(/[\\%_]/g, "\\$&")}%`
     : null;
 
   const rows = await betterAuthDb
@@ -539,7 +547,9 @@ export async function addExtensionCoOwner(
     await hooks.afterCoOwnerAdd?.(resourceId, targetUserId, userId);
   } catch (err) {
     console.warn(
-      `[extensions/permissions-actions] afterCoOwnerAdd hook failed for kind=${kind} id=${resourceId}:`,
+      "[extensions/permissions-actions] afterCoOwnerAdd hook failed for kind=%s id=%s:",
+      kind,
+      resourceId,
       err instanceof Error ? err.message : err,
     );
   }
@@ -575,7 +585,9 @@ export async function removeExtensionCoOwner(
     await hooks.afterCoOwnerRemove?.(resourceId, targetUserId);
   } catch (err) {
     console.warn(
-      `[extensions/permissions-actions] afterCoOwnerRemove hook failed for kind=${kind} id=${resourceId}:`,
+      "[extensions/permissions-actions] afterCoOwnerRemove hook failed for kind=%s id=%s:",
+      kind,
+      resourceId,
       err instanceof Error ? err.message : err,
     );
   }

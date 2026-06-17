@@ -110,11 +110,34 @@ export type PackageStoreFs = {
   readFile: (path: string) => Promise<string>;
 };
 
+// LINEAR slash trims. The anchored greedy `/\/+$/` and `/^\/+|\/+$/g` are
+// flagged polynomial-ReDoS on slash-heavy segment input (CodeQL
+// js/polynomial-redos). These char-index scans are O(n) with no backtracking
+// and are byte-for-byte equivalent to the old regexes (proven by the
+// joinPath parity test in __tests__/runtime-loader-redos-parity.test.ts).
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--; // 47 = "/"
+  return value.slice(0, end);
+}
+
+function trimSurroundingSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 47) start++; // 47 = "/"
+  while (end > start && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(start, end);
+}
+
 // POSIX-join (the store path is always a container/posix path). Avoids a
 // node:path import so the pure module has zero runtime deps.
-function joinPath(...parts: string[]): string {
+//
+// Exported (host-internal; NOT re-exported through the public `index.ts`
+// surface) so the loader-parity test can prove the linear rewrite matches the
+// retired regexes.
+export function joinPath(...parts: string[]): string {
   return parts
-    .map((p, i) => (i === 0 ? p.replace(/\/+$/, "") : p.replace(/^\/+|\/+$/g, "")))
+    .map((p, i) => (i === 0 ? trimTrailingSlashes(p) : trimSurroundingSlashes(p)))
     .filter((p) => p.length > 0)
     .join("/");
 }

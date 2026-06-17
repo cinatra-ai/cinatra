@@ -66,8 +66,9 @@ export async function fireExtensionCapabilityTeardown(packageName: string): Prom
     await hook(packageName);
   } catch (err) {
     console.warn(
-      `[cinatra:extensions] capability teardown hook threw for "${packageName}" ` +
+      '[cinatra:extensions] capability teardown hook threw for "%s" ' +
         "(in-memory cleanup only; committed purge is unaffected):",
+      packageName,
       err instanceof Error ? err.message : err,
     );
   }
