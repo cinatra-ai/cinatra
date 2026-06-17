@@ -10,17 +10,17 @@
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "40f50cf27039f9dec416f4e28d25346f824f245e"
+      "resolvedSha": "a0b293658d26cbdfd1ff679a8e92a259a81a409c"
     },
     {
       "packageName": "@cinatra-ai/apify-connector",
       "repo": "cinatra-ai/apify-connector",
-      "resolvedSha": "526edbef5be051967292359e2ca60ba8a4c88e5a"
+      "resolvedSha": "6554294720b5a00f5ddd33ae950190236f0fb6bb"
     },
     {
       "packageName": "@cinatra-ai/apollo-connector",
       "repo": "cinatra-ai/apollo-connector",
-      "resolvedSha": "38b0792cf594ceba2c097b382f87e98bf12db584"
+      "resolvedSha": "5075dc133d0bb2417bbcafec79a194a029493e96"
     },
     {
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
@@ -195,7 +195,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "d9801c85a05ac5e5d2221b70616d3056977331de"
+      "resolvedSha": "feb37634b5e53385673881b7122ce5d9e5467126"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
@@ -270,7 +270,7 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "b832966132dea544cd78aac5b9c93b841c5679c3"
+      "resolvedSha": "42416cef2175dbfaa234e5308a3716ea8239c6a5"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -320,7 +320,7 @@
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "c63a05103227fc0219566ed4feda363b8dba046a"
+      "resolvedSha": "88ded33c430c3d815c2c54992164fbf991d16ec4"
     },
     {
       "packageName": "@cinatra-ai/trigger-agent",
