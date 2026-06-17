@@ -568,6 +568,22 @@ export async function installSkillPackageFromGitHub(
   });
 
   // Drop a fresh marker that future installs use for the collision check.
+  // Write-LEAF confinement (#300), mirroring the read-side check above. The
+  // clone wiped+rebuilt `targetDirectory`, but a tree entry named
+  // `.cinatra-skill-source.json` could have materialized the marker leaf as a
+  // SYMLINK (the per-entry guard only confines its REAL target inside the base,
+  // it does not forbid an in-base symlink), and `writeFile` would then follow
+  // that link. Refuse to write through a marker leaf whose real path escapes the
+  // install base. A non-symlink / not-yet-created marker is a no-op for the
+  // realpath check, so behavior is identical for legitimate installs.
+  if (
+    existsSync(installMarkerPath) &&
+    !isEntryContainedInBase(path.resolve(targetDirectory), path.resolve(installMarkerPath))
+  ) {
+    throw new Error(
+      `Refusing to write the install marker for ${packageId}: marker leaf escapes the install target via symlink.`,
+    );
+  }
   await writeFile(
     installMarkerPath,
     JSON.stringify({ packageId, repository: packageName, ref: ref ?? null, installedAt: new Date().toISOString() }, null, 2),

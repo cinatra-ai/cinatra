@@ -81,6 +81,27 @@ function resolveRelocationAbsPath(stored: string): string {
   return abs;
 }
 
+/**
+ * Write-LEAF confinement for the relocation marker (#300). `resolveRelocationAbsPath`
+ * realpath-confines the move's `oldAbs`/`newAbs` DIRECTORIES, but the marker
+ * LEAF (`<oldAbs>/.cinatra-moving.json`) is composed AFTER that and is itself
+ * unconfined: an attacker who plants a pre-existing symlink at that leaf (the
+ * old skill dir already exists on disk) pointing OUT of the skills root would
+ * have the marker `writeFile` follow it and clobber an arbitrary outside file.
+ * When the leaf already exists, re-assert its REAL path stays inside the skills
+ * root and throw on escape. A not-yet-created leaf is safe — realpath is a
+ * no-op on the missing leaf and the confined `oldAbs` dir anchors it — so
+ * behavior is identical for legitimate moves. Exported for unit testing without
+ * a database (the write path itself is DB-driven).
+ */
+export function assertRelocationMarkerLeafContained(markerPath: string): void {
+  if (existsSync(markerPath) && !isRealpathContained(markerPath, rootSkillsAbs())) {
+    throw new Error(
+      `[path-escape guard] relocation marker leaf escapes skills root via symlink: markerPath="${markerPath}"`,
+    );
+  }
+}
+
 // ===========================================================================
 // Worker bootstrap
 // ===========================================================================
@@ -245,6 +266,9 @@ async function processOneRelocation(): Promise<boolean> {
     await mkdir(path.dirname(newAbs), { recursive: true });
 
     const markerPath = path.join(oldAbs, MARKER_FILE_NAME);
+    // Write-LEAF confinement (#300): refuse to write through a pre-existing
+    // marker leaf that is a symlink resolving OUT of the skills root.
+    assertRelocationMarkerLeafContained(markerPath);
     await writeFile(
       markerPath,
       JSON.stringify({

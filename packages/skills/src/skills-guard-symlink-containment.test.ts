@@ -301,6 +301,47 @@ describe("realpath/symlink containment (#300)", () => {
       rmSync(workspaceLink, { recursive: true, force: true });
       mkdirSync(workspaceLink, { recursive: true });
     });
+
+    it("REJECTS a write when the SKILL.md LEAF is a pre-existing symlink to outside (no write-through)", async () => {
+      replaceSkillCatalogMock.mockClear();
+
+      // The skill DIR is legitimately inside the store; only the SKILL.md LEAF
+      // is a planted symlink to an outside secret. The lexical + dir realpath
+      // checks pass — the file-leaf check is what must reject this, otherwise
+      // `writeFile(skillFilePath, ...)` follows the link and clobbers outside.
+      const workspaceLink = path.join(storeRoot, "workspace");
+      try { rmSync(workspaceLink, { recursive: true, force: true }); } catch { /* noop */ }
+      mkdirSync(workspaceLink, { recursive: true });
+
+      const outsideSecret = path.join(outsideDir, "leaf-secret-SKILL.md");
+      writeFileSync(outsideSecret, "ORIGINAL OUTSIDE SKILL — MUST NOT BE OVERWRITTEN");
+
+      // <storeRoot>/workspace/leaf-pkg/leaf-skill/SKILL.md -> outsideSecret
+      const skillDir = path.join(workspaceLink, "leaf-pkg", "leaf-skill");
+      mkdirSync(skillDir, { recursive: true });
+      const leaf = path.join(skillDir, "SKILL.md");
+      try { rmSync(leaf, { force: true }); } catch { /* noop */ }
+      symlinkSync(outsideSecret, leaf, "file");
+
+      await expect(
+        upsertSkill({
+          type: "workspace",
+          packageName: "Leaf Pkg",
+          name: "Leaf Skill",
+          content: "SHOULD NOT BE WRITTEN THROUGH THE SYMLINK",
+        }),
+      ).rejects.toThrow(/outside the canonical skill store root/i);
+
+      // No catalog mutation, and the outside secret was NOT written through.
+      expect(replaceSkillCatalogMock).not.toHaveBeenCalled();
+      expect(readFileSync(outsideSecret, "utf8")).toBe(
+        "ORIGINAL OUTSIDE SKILL — MUST NOT BE OVERWRITTEN",
+      );
+
+      // Cleanup so subsequent tests start from a real dir.
+      rmSync(workspaceLink, { recursive: true, force: true });
+      mkdirSync(workspaceLink, { recursive: true });
+    });
   });
 
   // -------------------------------------------------------------------------
