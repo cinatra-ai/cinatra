@@ -13,11 +13,88 @@
 // schema is `.strict()` and has no first-class cube field, so the reference
 // lives inside `config`). When both are present, both are checked; a non-string
 // value for either is ignored (the per-kind config validator owns shape checks).
+//
+// The `analytics` keystone kind (cinatra#325) is the EXCEPTION: it embeds a
+// whole drizzle-cube dashboard at `config.dashboard`, so its cube references
+// live inside `config.dashboard.portlets[].analysisConfig.query.*` (or a
+// top-level `query`) as `"<cube>.<member>"` strings — NOT in a flat
+// `cube`/`cubeRef` field. Without a kind-aware extractor an analytics portlet
+// would silently pass the guard (no `cube`/`cubeRef` field → no refs → `"ok"`),
+// an UNSAFE fail-open for extension-shipped analytics dashboards. The extractor
+// below covers EVERY cube-bearing query surface drizzle-cube resolves a cube id
+// from (`cubejs-wire.ts resolveCubeIdFromQuery`/`resolveAndValidateCubeId`):
+// measures, dimensions, order keys, filters[].member, timeDimensions[].dimension
+// AND segments — so a cube referenced solely through a filter or a segment is
+// still caught.
 
 import type { DashboardConfigV12, PortletConfigV12 } from "./dashboard-config-v12";
+import { isAnalyticsPortletKind } from "../portlets/kinds";
 
 /** Config field names a chart-portlet uses to reference a registered cube. */
 export const PORTLET_CUBE_CONFIG_FIELDS = ["cube", "cubeRef"] as const;
+
+/** Pull the `<cube>` prefix out of a fully-qualified `"<cube>.<member>"` ref. */
+function cubePrefixOf(member: unknown): string | undefined {
+  if (typeof member !== "string") return undefined;
+  const dot = member.indexOf(".");
+  return dot > 0 ? member.slice(0, dot) : undefined;
+}
+
+/** Collect cube prefixes from one drizzle-cube query object's member surfaces.
+ *  Mirrors `cubejs-wire.ts` cube-id resolution: measures, dimensions, order
+ *  keys, filters[].member, timeDimensions[].dimension, segments. */
+function cubesFromQuery(query: unknown, into: Set<string>): void {
+  if (typeof query !== "object" || query === null) return;
+  const q = query as Record<string, unknown>;
+  const pushAll = (arr: unknown) => {
+    if (!Array.isArray(arr)) return;
+    for (const m of arr) {
+      const c = cubePrefixOf(m);
+      if (c) into.add(c);
+    }
+  };
+  pushAll(q.measures);
+  pushAll(q.dimensions);
+  pushAll(q.segments);
+  if (q.order && typeof q.order === "object") {
+    for (const key of Object.keys(q.order as Record<string, unknown>)) {
+      const c = cubePrefixOf(key);
+      if (c) into.add(c);
+    }
+  }
+  if (Array.isArray(q.filters)) {
+    for (const f of q.filters) {
+      const c = cubePrefixOf((f as Record<string, unknown> | null)?.member);
+      if (c) into.add(c);
+    }
+  }
+  if (Array.isArray(q.timeDimensions)) {
+    for (const td of q.timeDimensions) {
+      const c = cubePrefixOf((td as Record<string, unknown> | null)?.dimension);
+      if (c) into.add(c);
+    }
+  }
+}
+
+/** Cube refs of an `analytics`-kind portlet: walk the embedded drizzle-cube
+ *  dashboard's portlets and collect every cube prefix referenced through any
+ *  query surface. */
+function analyticsCubeRefs(portlet: PortletConfigV12): string[] {
+  const refs = new Set<string>();
+  const dashboard = (portlet.config as Record<string, unknown> | undefined)?.dashboard;
+  const dcPortlets = (dashboard as { portlets?: unknown } | null | undefined)?.portlets;
+  if (!Array.isArray(dcPortlets)) return [];
+  for (const dcPortlet of dcPortlets) {
+    if (typeof dcPortlet !== "object" || dcPortlet === null) continue;
+    const dp = dcPortlet as Record<string, unknown>;
+    // DC portlets carry the query under analysisConfig.query (the canonical
+    // shape) and/or a top-level `query` (legacy DC portlet field) — scan both.
+    const analysisQuery = (dp.analysisConfig as { query?: unknown } | null | undefined)?.query;
+    cubesFromQuery(analysisQuery, refs);
+    cubesFromQuery(dp.query, refs);
+  }
+  return [...refs];
+}
 
 export type ExtensionCubeUsageInput = {
   /**
@@ -57,6 +134,11 @@ export type ExtensionCubeUsageVerdict = {
 
 /** Extract the cube name(s) a single portlet references via config. */
 function cubeRefsOf(portlet: PortletConfigV12): string[] {
+  // analytics keystone (cinatra#325): refs live inside the embedded DC config,
+  // not in a flat cube/cubeRef field — use the deep query extractor.
+  if (isAnalyticsPortletKind(portlet.kind)) {
+    return analyticsCubeRefs(portlet);
+  }
   const refs: string[] = [];
   const config = portlet.config ?? {};
   for (const field of PORTLET_CUBE_CONFIG_FIELDS) {

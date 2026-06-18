@@ -7,6 +7,7 @@
 // server-side by each portlet's loader — the host only passes config + resolved
 // selection values.
 import { useState, type ComponentType } from "react";
+import dynamic from "next/dynamic";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import type { PortletComponentProps } from "./portlets/types";
 import { ObjectListPortlet } from "./portlets/object-list-portlet";
@@ -29,6 +30,29 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
   "workflow-launcher": WorkflowLauncherPortlet,
   "agent-launcher": AgentLauncherPortlet,
   "workflow-status": WorkflowStatusPortlet,
+};
+
+// The `analytics` keystone kind (cinatra#325) embeds a WHOLE drizzle-cube
+// dashboard at `config.dashboard`. Its renderer lives in the dashboards package
+// (ESLint Layer 4) because it mounts `drizzle-cube/client`; this app-dir host
+// cannot import that, so it lazy-loads the view through the app-local re-export
+// — exactly like `[id]/page.tsx` lazy-loads `LegacyDashboardView`. The dynamic
+// import keeps the DC client bundle off non-analytics dashboards.
+const AnalyticsPortletView = dynamic(() =>
+  import("@/components/dashboards/analytics-portlet-view").then((m) => m.AnalyticsPortletView),
+);
+// Type-only — erased at build, so it never pulls drizzle-cube/client into the
+// app-dir bundle (the runtime component is the dynamic import above).
+type AnalyticsDashboardConfig = import("@/components/dashboards/analytics-portlet-view").AnalyticsPortletViewProps["dashboard"];
+
+// Per-kind chrome policy. Most kinds render as a titled `<Card>` in the vertical
+// stack; the `analytics` kind renders BARE (no surrounding card chrome,
+// full-width) so the embedded drizzle-cube grid paints its own toolbar / filter
+// bar / grid edge-to-edge (cinatra#325 §2b). Default is `"card"`.
+type PortletChrome = "card" | "bare";
+const KIND_CHROME: Record<string, PortletChrome> = {
+  analytics: "bare",
+  "cube-dashboard": "bare",
 };
 
 type Binding = { fromInstanceId: string; key: string } | { fromDashboard: string };
@@ -68,6 +92,26 @@ export function PortletHost({
   return (
     <div className="flex flex-col gap-4">
       {portlets.map((p) => {
+        // analytics keystone (cinatra#325): render the embedded drizzle-cube
+        // dashboard BARE (no card chrome), full-width. The view owns its own
+        // CubeProvider/QueryClient shell, so the host never touches
+        // drizzle-cube/client (Layer-4 boundary stays clean).
+        if ((KIND_CHROME[p.kind] ?? "card") === "bare") {
+          const dashboard = (p.config as { dashboard?: unknown }).dashboard;
+          return (
+            <div key={p.instanceId} className="w-full">
+              {dashboard && typeof dashboard === "object" ? (
+                <AnalyticsPortletView dashboard={dashboard as AnalyticsDashboardConfig} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Analytics portlet <span className="font-mono">{p.instanceId}</span> is missing its
+                  embedded dashboard config.
+                </p>
+              )}
+            </div>
+          );
+        }
+
         const Comp = COMPONENT_MAP[p.kind];
         return (
           <Card key={p.instanceId} className="border-line bg-surface backdrop-blur-none">

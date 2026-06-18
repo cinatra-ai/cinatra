@@ -1,4 +1,5 @@
-// Registration of the 9 generic portlet KIND metadata.
+// Registration of the generic portlet KIND metadata: the 9 generic kinds plus
+// the keystone `analytics` kind (and its `cube-dashboard` alias, cinatra#325).
 // METADATA ONLY (scopePolicy, input/output keys, install-time validateConfig) —
 // server-safe, imported by the dashboard install validator. The interactive
 // client components are resolved separately by the client PortletHost
@@ -10,8 +11,51 @@
 // instanceId — NOT instance-specific output names. Launcher kinds set
 // allowsArbitraryInputs (dynamic prefill keys).
 import { registerPortletKind, type PortletConfigError, type PortletInstanceForValidation } from "./registry";
+import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
 
 const PORTLET_VERSION = "1.0.0";
+
+/** The kind name for the keystone analytics portlet (cinatra#325) and its alias.
+ *  Both names register identical metadata so either validates. The portlet wraps
+ *  a WHOLE drizzle-cube DashboardConfig as one embedded view at
+ *  `config.dashboard` (NOT one portlet per chart) — see the apiVersion 1.2 design §1. */
+export const ANALYTICS_PORTLET_KIND = "analytics" as const;
+export const ANALYTICS_PORTLET_KIND_ALIAS = "cube-dashboard" as const;
+export const ANALYTICS_PORTLET_KINDS = [
+  ANALYTICS_PORTLET_KIND,
+  ANALYTICS_PORTLET_KIND_ALIAS,
+] as const;
+
+/** True when a portlet kind is the embedded-analytics (drizzle-cube) kind. */
+export function isAnalyticsPortletKind(kind: string): boolean {
+  return kind === ANALYTICS_PORTLET_KIND || kind === ANALYTICS_PORTLET_KIND_ALIAS;
+}
+
+/** Install-time validation for the analytics kind: `config.dashboard` must be a
+ *  structurally-valid drizzle-cube DashboardConfig (the 1.1 shape, which is the
+ *  embedded format). The 1.1 schema is `.passthrough()`, so future DC fields are
+ *  tolerated; deep chart semantics stay DC-owned (mirrors how 1.1 keeps
+ *  `analysisConfig` opaque). Codex round-0: tightened from a loose "object with
+ *  portlets array" to the real 1.1 schema so a malformed embedded config fails
+ *  closed at materialization. */
+function validateAnalyticsPortletConfig(p: PortletInstanceForValidation): PortletConfigError[] {
+  const dashboard = p.config.dashboard;
+  if (typeof dashboard !== "object" || dashboard === null) {
+    return [{ code: "port_analytics_missing_dashboard", message: "config.dashboard (the embedded drizzle-cube dashboard config) is required" }];
+  }
+  const res = DashboardConfigV1_1Schema.safeParse(dashboard);
+  if (!res.success) {
+    return [
+      {
+        code: "port_analytics_invalid_dashboard",
+        message: `config.dashboard is not a valid analytics dashboard: ${res.error.issues
+          .map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`)
+          .join("; ")}`,
+      },
+    ];
+  }
+  return [];
+}
 
 function reqConfigString(portlet: PortletInstanceForValidation, key: string, code: string): PortletConfigError[] {
   return typeof portlet.config[key] === "string" && (portlet.config[key] as string).length > 0
@@ -135,4 +179,22 @@ export function registerCorePortletKinds(): void {
         : [{ code: "port_workflow_status_missing_binding", message: "workflow-status requires a workflowId or projectId input binding" }];
     },
   });
+
+  // analytics (keystone, cinatra#325) — embeds a WHOLE drizzle-cube
+  // DashboardConfig at `config.dashboard` and renders the full interactive grid
+  // (charts/filters/save/drag-resize) via PortletHost → analytics-portlet-view.
+  // Self-contained: no inputs/outputs (the cube SQL predicate owns tenant
+  // isolation, so the scopePolicy carries no op — like the launcher kinds that
+  // delegate authz to the wrapped primitive). Registered under both the
+  // canonical name and the `cube-dashboard` alias.
+  for (const kind of ANALYTICS_PORTLET_KINDS) {
+    registerPortletKind({
+      kind,
+      version: PORTLET_VERSION,
+      scopePolicy: { scopeFrom: "session", resource: "dashboard" },
+      inputKeys: [],
+      outputKeys: [],
+      validateConfig: validateAnalyticsPortletConfig,
+    });
+  }
 }

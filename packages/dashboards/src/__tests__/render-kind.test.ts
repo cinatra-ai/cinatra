@@ -70,4 +70,28 @@ describe("resolveDashboardRenderKind (cinatra#272)", () => {
     // 'Unsupported dashboard format' card.
     expect(resolveDashboardRenderKind("1.1.0", AGENTS_DEFAULT_CONFIG)).not.toBe("unsupported");
   });
+
+  it("routes an apiVersion 1.2 ANALYTICS row (the #325 keystone shape) to 'v12' → PortletHost", () => {
+    // The §2e acceptance row: an apiVersion 1.2 config whose single portlet is
+    // the `analytics` kind wrapping a whole drizzle-cube DashboardConfig at
+    // config.dashboard. resolveDashboardRenderKind validates structurally (no
+    // registry), so the strict apiVersion 1.2 schema must accept the analytics portlet
+    // (config is z.record(string, unknown) → config.dashboard passes opaquely),
+    // routing it to "v12" — i.e. `[id]/page.tsx` mounts <PortletHost>, which
+    // renders the embedded analytics grid. This binds the keystone render path.
+    const ANALYTICS_V12_ROW = {
+      apiVersion: DASHBOARD_CONFIG_V12_VERSION,
+      scopeLevel: "user",
+      portlets: [
+        {
+          instanceId: "analytics",
+          kind: "analytics",
+          version: "1.0.0",
+          slot: "fixed",
+          config: { dashboard: AGENTS_DEFAULT_CONFIG },
+        },
+      ],
+    };
+    expect(resolveDashboardRenderKind(DASHBOARD_CONFIG_V12_VERSION, ANALYTICS_V12_ROW)).toBe("v12");
+  });
 });
