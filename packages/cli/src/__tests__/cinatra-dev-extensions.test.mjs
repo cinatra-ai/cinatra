@@ -115,7 +115,7 @@ describe("dirty-tree remediation points at the extension force flag", () => {
     const logs = [];
     const deps = {
       readFile: () =>
-        JSON.stringify({ cinatraDevExtensions: { "@cinatra-ai/resend-connector": { url: "https://github.com/cinatra-ai/resend-connector.git", branch: "main" } } }),
+        JSON.stringify({ cinatra: { devExtensions: { "@cinatra-ai/resend-connector": { url: "https://github.com/cinatra-ai/resend-connector.git", branch: "main" } } } }),
       exists: (p) => p === dest || p === path.join(dest, ".git"),
       readdir: () => ["x"],
       mkdirp: () => {},
@@ -147,7 +147,7 @@ describe("partial deps injection merges with defaultRepoSyncDeps (regression)", 
     const gitCalls = [];
     const deps = {
       readFile: () =>
-        JSON.stringify({ cinatraDevExtensions: { "@cinatra-ai/resend-connector": { url: "/nonexistent/repo.git", branch: "main" } } }),
+        JSON.stringify({ cinatra: { devExtensions: { "@cinatra-ai/resend-connector": { url: "/nonexistent/repo.git", branch: "main" } } } }),
       git: (args) => {
         gitCalls.push(args.join(" "));
         return "";
@@ -235,7 +235,7 @@ describe("loadDevExtensionPins — fail-closed lock partition", () => {
       if (dev === undefined) throw new Error("ENOENT");
       return JSON.stringify(dev);
     }
-    return JSON.stringify({ cinatraDevExtensions: config });
+    return JSON.stringify({ cinatra: { devExtensions: config } });
   };
 
   const baseConfig = {
@@ -268,7 +268,7 @@ describe("loadDevExtensionPins — fail-closed lock partition", () => {
     );
   });
 
-  it("a dev-lock entry that is not a cinatraDevExtensions entry is a stale pin (refused)", () => {
+  it("a dev-lock entry that is not a cinatra.devExtensions entry is a stale pin (refused)", () => {
     const dev = { packages: [...baseDev.packages, { packageName: "@cinatra-ai/gone-connector", repo: "cinatra-ai/gone-connector", resolvedSha: SHA_B }] };
     expect(() => loadDevExtensionPins("/repo", makeReadFile({ config: baseConfig, required: baseRequired, dev }))).toThrow(
       /stale pin/,
@@ -331,14 +331,14 @@ describe("syncCinatraDevExtensions --pinned — sha plumbing + override semantic
   const dev = {
     packages: [{ packageName: "@cinatra-ai/resend-connector", repo: "cinatra-ai/resend-connector", resolvedSha: SHA_B }],
   };
-  // Required-lock packages need not be cinatraDevExtensions entries (prod-only
+  // Required-lock packages need not be cinatra.devExtensions entries (prod-only
   // packages are simply not cloned back), so `required` above referencing a
   // package outside `config` must be accepted.
   const makeDeps = (gitCalls) => ({
     readFile: (p) => {
       if (p.endsWith("cinatra-required-extensions.lock.json")) return JSON.stringify(required);
       if (p.endsWith("cinatra-dev-extensions.lock.json")) return JSON.stringify(dev);
-      return JSON.stringify({ cinatraDevExtensions: config });
+      return JSON.stringify({ cinatra: { devExtensions: config } });
     },
     exists: () => false, // absent slot → clone path
     readdir: () => [],

@@ -183,7 +183,7 @@ const nextConfig: NextConfig = {
     // (workspace deps of packages/llm / packages/agents, or the root nango
     // dep). Connectors resolved purely via tsconfig path aliases compile as
     // sources and need no entry; entries for packages outside the declared
-    // bootable set (cinatra.requiredExtensions) were pruned with the shrink.
+    // bootable set (cinatra.extensions) were pruned with the shrink.
     "@cinatra-ai/extension-types",
     "@cinatra-ai/extensions",
     "@cinatra-ai/agents",

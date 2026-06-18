@@ -6,7 +6,7 @@
 // (cinatra-required-extensions.lock.json + cinatra-dev-extensions.lock.json),
 // so companion-repo drift no longer reds host `main` — it accumulates
 // silently until a deliberate bump PR. This report makes that drift VISIBLE:
-// for every `cinatraDevExtensions` entry it resolves the companion repo's
+// for every `cinatra.devExtensions` entry it resolves the companion repo's
 // current branch head (`git ls-remote`) and compares it to the committed pin,
 // emitting one `::warning::` annotation per diverged repo and a summary
 // table. Exit code is 0 by default (a report, not a gate); the
@@ -61,7 +61,7 @@ function main() {
 
   const config = readDevExtensionsConfig(repoRoot);
   if (!config || Object.keys(config).length === 0) {
-    console.error("[extension-pin-divergence] FAIL: cinatraDevExtensions is empty/absent.");
+    console.error("[extension-pin-divergence] FAIL: cinatra.devExtensions is empty/absent.");
     process.exit(1);
   }
   // Reuses the fail-closed pin loader — a malformed/incomplete lock set is a

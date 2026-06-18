@@ -1,7 +1,7 @@
-// Lock ↔ requiredExtensions consistency — the acquisition half of the
+// Lock ↔ extensions consistency — the acquisition half of the
 // host↔extension compatibility contract.
 //
-// `cinatra.requiredExtensions` (root package.json) declares the prod
+// `cinatra.extensions` (root package.json) declares the prod
 // base-image bootable set as versioned `name@range` entries; the committed
 // cinatra-required-extensions.lock.json pins each entry to an immutable
 // commit SHA + concrete packageVersion + treeSha256 that prod acquires from
@@ -35,7 +35,7 @@ type LockEntry = {
 
 function readDeclared() {
   const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8"));
-  const raw: string[] = pkg?.cinatra?.requiredExtensions ?? [];
+  const raw: string[] = pkg?.cinatra?.extensions ?? [];
   return raw
     .map((entry) => parseRequiredExtensionEntry(entry))
     .filter((e): e is NonNullable<typeof e> => e !== null);
@@ -47,7 +47,7 @@ function readLock(): LockEntry[] {
 }
 
 describe("required-extensions acquisition lock", () => {
-  it("is a bijection with cinatra.requiredExtensions", () => {
+  it("is a bijection with cinatra.extensions", () => {
     const declared = readDeclared().map((e) => e.packageName);
     const locked = readLock().map((p) => p.packageName);
     expect(new Set(declared).size).toBe(declared.length); // no duplicate declarations

@@ -75,7 +75,7 @@ directions of the IoC rule:
 
 On top of the pinned-empty gates:
 - the cover gate enforces the **declaration equality**
-  `requiredExtensions == systemExtensions == lock` (cinatra#151 Stage 7) ON
+  `extensions == systemExtensions == lock` (cinatra#151 Stage 7) ON
   TOP of its live bootable-coverage derivation: the prod bootable declaration
   may not grow beyond the system set without an owner ruling that also
   declares the package a systemExtension. The equality pins the DECLARATIONS
@@ -245,7 +245,7 @@ fix-with-the-reveal policy, with no floor that can rise.)
 | `discovery-dispatcher-bypass-ban` | **0 files** (5 documented sanctioned readers, justified in-gate) | PINNED EMPTY (#36 flip) |
 | `extension-import-ban` | **0 `@/` + 0 cross-extension + 0 sdkOnly** (allowlist EMPTY) | PINNED EMPTY (cinatra#172 flip) |
 | `host-peer-value-import-ban` | **0** over all serverEntry graphs | hold at 0 |
-| cover gate declarations | **requiredExtensions == systemExtensions == lock == 8** (0 hard-imported, 8 generated-required, 0 root-dep; every other extension guardedOptional/acquirable-on-demand) | equality, live-enforced |
+| cover gate declarations | **extensions == systemExtensions == lock == 8** (0 hard-imported, 8 generated-required, 0 root-dep; every other extension guardedOptional/acquirable-on-demand) | equality, live-enforced |
 | Root + package-level concrete connector `workspace:*` deps | **0** | hold at 0 |
 
 The journey (for the record): the corrected epoch-2 instance-coupling
@@ -255,10 +255,10 @@ phases (#27–#35) and the Plan-B lazy/guarded cutover (#7) drove it to the
 Stage 1 nango serverEntry cutover (−15 occ, import-ban 10→0),
 Stage 2 packages/llm provider adapters (−7), Stage 3 transport-DI inversion
 (−4, import-ban pinned empty + shared lexer), Stage 4 packages/agents
-connector edges + catalog metadata (−4, requiredExtensions floor 8 reached),
+connector edges + catalog metadata (−4, extensions floor 8 reached),
 Stage 5 agent-identity decoupling (−85), Stage 6 artifact/blog/seed tail
 (−20, baseline EMPTY), Stage 7 pinned the zero + the declaration equality.
-`requiredExtensions` shrank 16 → 8 == `systemExtensions` along the same train
+`extensions` shrank 16 → 8 == `systemExtensions` along the same train
 (gemini at Stage 2; openai/anthropic/drupal-mcp/wordpress-mcp at Stage 3;
 crm/gmail/google-calendar at Stage 4).
 

@@ -16,7 +16,7 @@
 // and no workspace install required (relative .mjs + node builtins + `git`).
 //
 // FAIL-CLOSED, by design — the whole point is to keep the extension gates
-// HONEST. If the `cinatraDevExtensions` manifest is empty, or fewer than the
+// HONEST. If the `cinatra.devExtensions` manifest is empty, or fewer than the
 // declared number of extension dirs materialize (or a materialized
 // package.json names a different package), it exits non-zero. Without this
 // the IoC gates would scan an empty tree and pass VACUOUSLY (a silent
@@ -42,7 +42,7 @@ const config = readDevExtensionsConfig(repoRoot);
 const expected = config ? Object.keys(config).length : 0;
 if (expected === 0) {
   console.error(
-    "[ci sync-dev-extensions] FAIL: `cinatraDevExtensions` is empty/absent in package.json.\n" +
+    "[ci sync-dev-extensions] FAIL: `cinatra.devExtensions` is empty/absent in package.json.\n" +
       "  CI must clone the companion extension repos so the build + IoC gates run against real\n" +
       "  source — refusing to continue (an empty extensions/ tree would pass the gates vacuously).",
   );

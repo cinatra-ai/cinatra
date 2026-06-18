@@ -1,5 +1,5 @@
 /**
- * Lifecycle proof for the requiredExtensions shrink 33 → 16 (cinatra#7):
+ * Lifecycle proof for the extensions shrink 33 → 16 (cinatra#7):
  * BOTH sides of the fixed invariant are TEST deliverables, not side effects.
  *
  *   1. UPGRADED EXISTING DB — the demotion migration
@@ -48,7 +48,7 @@ const hasDb =
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
-const requiredNames: string[] = (rootPkg.cinatra.requiredExtensions as string[]).map((e) => {
+const requiredNames: string[] = (rootPkg.cinatra.extensions as string[]).map((e) => {
   const at = e.lastIndexOf("@");
   return at <= 0 ? e : e.slice(0, at);
 });

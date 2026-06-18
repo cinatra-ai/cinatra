@@ -599,7 +599,7 @@ export async function buildManifest() {
   // loaders import UNGUARDED — absence stays a loud failure);
   // `"guardedOptional"` = everything else (its loaders route through the
   // standardized degraded-result guard, src/lib/extension-load-guard.ts).
-  // Deliberately keyed on `systemExtensions`, NOT `requiredExtensions` (the
+  // Deliberately keyed on `systemExtensions`, NOT `extensions` (the
   // prod-acquisition set) — keying on the acquisition set would be circular
   // for the planned 33→systemExtensions shrink (cinatra#7). Downstream gates key
   // EXCLUSIVELY on this emitted field (missing/unknown ⇒ required,

@@ -6,7 +6,7 @@
  * `/configuration/environment/jobs-dashboard` have been retired.
  * The BullMQ board has no other UI route today;
  * if a successor surface is wanted, it must be wired into a fresh route via
- * `cinatraDevExtensions` + an explicit allowlist entry here.
+ * `cinatra.devExtensions` + an explicit allowlist entry here.
  *
  * Bans:
  *   - the literal path `/configuration/environment/jobs-dashboard`
@@ -143,7 +143,7 @@ function main() {
   }
   console.error(
     "\nThe BullMQ board has no UI route today. If you need a successor, create\n" +
-      "it under a different route via cinatraDevExtensions and add the path to\n" +
+      "it under a different route via cinatra.devExtensions and add the path to\n" +
       "this gate's allowlist with a recorded reason.",
   );
   process.exit(1);

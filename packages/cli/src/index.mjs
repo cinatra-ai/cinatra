@@ -3653,7 +3653,7 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       }
       // Clone the companion extension repos (cinatra-ai/<slug>) into
       // extensions/<scope>/<name>. Source of truth is the companion repos
-      // (post-cutover); a no-op when `cinatraDevExtensions` is empty.
+      // (post-cutover); a no-op when `cinatra.devExtensions` is empty.
       // Loud-but-non-fatal, like the dev-app sync above.
       let extensionSync;
       let extensionSyncFailed = false;
@@ -4460,7 +4460,7 @@ async function runSetupBranch(argv) {
   }
 
   // 6c. Sync the companion extension repos into THIS worktree (no-op until
-  // `cinatraDevExtensions` is populated). Same loud-but-non-fatal posture.
+  // `cinatra.devExtensions` is populated). Same loud-but-non-fatal posture.
   let branchExtensionSync;
   let branchExtensionSyncFailed = false;
   try {
@@ -5424,7 +5424,7 @@ async function runSetupClone(argv) {
   }
 
   // Sync the companion extension repos into THIS clone worktree (no-op until
-  // `cinatraDevExtensions` is populated). Same loud-but-non-fatal posture.
+  // `cinatra.devExtensions` is populated). Same loud-but-non-fatal posture.
   let extensionSync;
   let extensionSyncFailed = false;
   try {

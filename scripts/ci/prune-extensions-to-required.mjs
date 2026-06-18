@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Prune the on-disk extension universe to the DECLARED bootable set
-// (cinatra.requiredExtensions) — the full fresh-public-clone build gate's
+// (cinatra.extensions) — the full fresh-public-clone build gate's
 // presence shape (cinatra#7, dep-drop slice; graduates the one-probe check).
 //
 // Deletes every extensions/<scope>/<name>/ package directory whose
-// package.json name is NOT declared in `cinatra.requiredExtensions` (root
+// package.json name is NOT declared in `cinatra.extensions` (root
 // package.json) and prints the removed package names (one per line) to the
 // `--out` file so the caller can assert the regenerated maps omit each one.
 //
 // Data-driven, no extension-name literals. Fail-closed:
-//   - refuses an empty/absent requiredExtensions declaration;
+//   - refuses an empty/absent extensions declaration;
 //   - fails when NOTHING was removed (the clone-back tree always carries
 //     optional packages — a no-op prune means the gate degenerated);
 //   - fails when a REQUIRED package is missing from disk after the prune
@@ -28,9 +28,9 @@ const outIdx = args.indexOf("--out");
 const outFile = outIdx >= 0 ? args[outIdx + 1] : null;
 
 const rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
-const requiredRaw = rootPkg?.cinatra?.requiredExtensions;
+const requiredRaw = rootPkg?.cinatra?.extensions;
 if (!Array.isArray(requiredRaw) || requiredRaw.length === 0) {
-  console.error("[prune-extensions-to-required] FAIL: cinatra.requiredExtensions is empty/absent.");
+  console.error("[prune-extensions-to-required] FAIL: cinatra.extensions is empty/absent.");
   process.exit(1);
 }
 // Mirror the canonical parser's last-@ split (name@range entries).
@@ -96,6 +96,6 @@ removed.sort();
 if (outFile) writeFileSync(outFile, removed.join("\n") + "\n");
 console.log(
   `[prune-extensions-to-required] OK — pruned ${removed.length} optional package(s); ` +
-    `kept the declared bootable set (${kept.length} package(s) = requiredExtensions ${required.size}).`,
+    `kept the declared bootable set (${kept.length} package(s) = extensions ${required.size}).`,
 );
 console.log(removed.map((n) => `  - ${n}`).join("\n"));

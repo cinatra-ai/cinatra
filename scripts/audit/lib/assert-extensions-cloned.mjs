@@ -10,17 +10,17 @@ import path from "node:path";
 // inventory gate that scans an ABSENT or UNDER-POPULATED `extensions/` tree
 // would derive an empty banned-set and pass VACUOUSLY — a silent protection
 // regression. This asserts the tree carries at least as many extension packages
-// as `cinatraDevExtensions` declares, so a job that forgot the clone-back step
+// as `cinatra.devExtensions` declares, so a job that forgot the clone-back step
 // fails LOUDLY instead of greenwashing.
 //
-// Floor = the declared `cinatraDevExtensions` count (not a bare "0 extensions"
+// Floor = the declared `cinatra.devExtensions` count (not a bare "0 extensions"
 // check): a job that cloned back only SOME of the declared extensions still
 // fails loudly, which a "found 0" check would miss.
 export function assertExtensionsPresent(repoRoot, gateName) {
   let expected = 0;
   try {
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    expected = Object.keys(pkg.cinatraDevExtensions || {}).length;
+    expected = Object.keys(pkg.cinatra?.devExtensions || {}).length;
   } catch {
     return; // no/unreadable package.json — not our concern here
   }
@@ -45,7 +45,7 @@ export function assertExtensionsPresent(repoRoot, gateName) {
   if (found < expected) {
     console.error(
       `[${gateName}] FAIL-CLOSED: found ${found} extension package(s) under extensions/, but ` +
-        `cinatraDevExtensions declares ${expected}. The extension source must be cloned back before ` +
+        `cinatra.devExtensions declares ${expected}. The extension source must be cloned back before ` +
         `this gate runs (CI: the clone-extensions action / scripts/ci/sync-dev-extensions.mjs; ` +
         `dev: cinatra setup dev). Refusing to run vacuously.`,
     );

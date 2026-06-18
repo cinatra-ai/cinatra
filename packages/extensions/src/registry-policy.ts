@@ -12,9 +12,9 @@
 // Source of truth (in precedence order):
 //   1. env override `CINATRA_REGISTRY_POLICY_TEMPORARY` ("1"/"true" → temporary)
 //      with optional `CINATRA_REGISTRY_POLICY_NOTICE` for the banner copy
-//   2. root `package.json` top-level key `cinatraRegistryPolicy`
-//      (mirrors the flat `cinatraDevExtensions` convention — NO nested
-//      `cinatra` object)
+//   2. root `package.json` key `cinatra.registryPolicy`
+//      (nested under the shared `cinatra` object, alongside
+//      `cinatra.devExtensions` / `cinatra.extensions`)
 //   3. safe default { temporary: false }
 import "server-only";
 
@@ -66,15 +66,15 @@ export function readRegistryPolicy(packageJsonPath?: string): RegistryPolicy {
   );
   const envNotice = process.env.CINATRA_REGISTRY_POLICY_NOTICE?.trim();
 
-  // 2. root package.json `cinatraRegistryPolicy`.
+  // 2. root package.json `cinatra.registryPolicy`.
   let fileTemporary: boolean | null = null;
   let fileNotice: string | null = null;
   try {
     const raw = readFileSync(packageJsonPath ?? rootPackageJsonPath(), "utf8");
     const parsed = JSON.parse(raw) as {
-      cinatraRegistryPolicy?: { temporary?: unknown; notice?: unknown };
+      cinatra?: { registryPolicy?: { temporary?: unknown; notice?: unknown } };
     };
-    const policy = parsed.cinatraRegistryPolicy;
+    const policy = parsed.cinatra?.registryPolicy;
     if (policy && typeof policy === "object") {
       if (typeof policy.temporary === "boolean") {
         fileTemporary = policy.temporary;

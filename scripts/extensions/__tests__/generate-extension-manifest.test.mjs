@@ -47,7 +47,7 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
 describe("generator-owned resolution classification + guarded emission (cinatra#7)", () => {
   // Real-tree assertions (the cloned-back extension universe): the
   // classification is keyed EXCLUSIVELY on the host-owned
-  // cinatra.systemExtensions declaration — never on requiredExtensions and
+  // cinatra.systemExtensions declaration — never on extensions and
   // never inferred from source shape.
   it("classifies every record: systemExtensions ⇒ required, everything else ⇒ guardedOptional", async () => {
     const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");

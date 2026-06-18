@@ -7,13 +7,13 @@
 //
 // The inventory is DATA, not code (cinatra#35 / IOC-43): the set is the
 // HOST-owned `cinatra.systemExtensions` declaration in the root package.json —
-// the same host-trust home (and read pattern) as `cinatra.requiredExtensions`
+// the same host-trust home (and read pattern) as `cinatra.extensions`
 // (./required-in-prod). It is deliberately NOT an extension-side declaration:
 // system/locked status is a host trust decision, and letting an extension's
 // own manifest self-declare it would be a privilege-escalation channel.
 // Alignment invariants:
-//   - systemExtensions ⊆ requiredExtensions (drift test) — a system package
-//     missing from requiredExtensions would leave the prod-boot verifier
+//   - systemExtensions ⊆ extensions (drift test) — a system package
+//     missing from extensions would leave the prod-boot verifier
 //     unable to ensure it is installed;
 //   - every entry must exist in the generated extension manifest — enforced
 //     fail-closed by scripts/extensions/generate-extension-manifest.mjs.
@@ -83,7 +83,7 @@ export function readSystemExtensions(
   }
   for (const entry of declared) {
     // Scoped bare NAME only — `@scope/name` (no version range; lock semantics
-    // key on names, and ranges live in requiredExtensions).
+    // key on names, and ranges live in extensions).
     if (
       typeof entry !== "string" ||
       !/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i.test(entry)

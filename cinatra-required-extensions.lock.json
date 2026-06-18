@@ -1,5 +1,5 @@
 {
-  "note": "SHA-pinned acquisition lock for the prod base-image bootable set (every cinatra.requiredExtensions entry). Production acquires extension source EXCLUSIVELY from this file via packages/cli/src/prod-extension-acquisition.mjs (codeload tarball at resolvedSha, hardened extraction, treeSha256 + package.json verification). Regenerate with `node scripts/extensions/update-required-extension-lock.mjs`; keep it in step with pnpm-lock.yaml.",
+  "note": "SHA-pinned acquisition lock for the prod base-image bootable set (every cinatra.extensions entry). Production acquires extension source EXCLUSIVELY from this file via packages/cli/src/prod-extension-acquisition.mjs (codeload tarball at resolvedSha, hardened extraction, treeSha256 + package.json verification). Regenerate with `node scripts/extensions/update-required-extension-lock.mjs`; keep it in step with pnpm-lock.yaml.",
   "schemaVersion": 1,
   "packages": [
     {

@@ -1,5 +1,5 @@
 {
-  "note": "Committed clone-back pins for the NON-required cinatraDevExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/extension-clone-pinning.md.",
+  "note": "Committed clone-back pins for the NON-required cinatra.devExtensions universe (cinatra#141). CI checks each companion repo out detached at resolvedSha (scripts/ci/sync-dev-extensions.mjs --pinned); the prod bootable set is pinned separately in cinatra-required-extensions.lock.json (never duplicated here). Regenerate with scripts/extensions/update-dev-extension-lock.mjs and move pnpm-lock.yaml + the generated maps in the SAME PR — see docs/extension-clone-pinning.md.",
   "schemaVersion": 1,
   "packages": [
     {

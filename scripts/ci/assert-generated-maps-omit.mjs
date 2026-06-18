@@ -27,7 +27,7 @@
 //         `cinatra.systemExtensions` (the generator's classification
 //         authority), so when the PRESENT universe (the extensions/ tree)
 //         contains ONLY system extensions — the floor regime, where
-//         requiredExtensions == systemExtensions — the correct emission has
+//         extensions == systemExtensions — the correct emission has
 //         ZERO guardedOptional loaders, and ANY `guardedExtensionImport(…)`
 //         is itself a failure (a guarded loader can only reference a
 //         non-system package, which is absent from this universe — a

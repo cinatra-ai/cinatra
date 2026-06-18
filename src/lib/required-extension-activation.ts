@@ -10,7 +10,7 @@ import "server-only";
 // disappear (e.g. platform mail dead because the email facade never
 // activated). This module closes that gap: after the boot loaders run,
 // cross-check the activation results against the intersection of
-//   (a) the `cinatra.requiredExtensions` set (required-in-prod), and
+//   (a) the `cinatra.extensions` set (required-in-prod), and
 //   (b) the manifest records that declare a `serverEntry`
 // and FAIL LOUDLY on any miss — console.error always; THROW outside
 // development (prod boots must not come up half-wired), kill-switchable via

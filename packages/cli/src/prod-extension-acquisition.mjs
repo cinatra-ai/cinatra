@@ -1,7 +1,7 @@
 // Production required-extension acquisition.
 //
 // The prod base image needs the full "bootable set" of extension packages on
-// disk at build time: every package declared in `cinatra.requiredExtensions`
+// disk at build time: every package declared in `cinatra.extensions`
 // (root package.json). That set is the union of the genuine system packages
 // and every extension package the host source still value-imports — see the
 // coverage gate (scripts/audit/required-extensions-cover-host-imports.mjs),
@@ -148,7 +148,7 @@ export function readRequiredExtensionsLock(lockPath) {
 }
 
 /**
- * The declared `cinatra.requiredExtensions` package NAMES (ranges stripped —
+ * The declared `cinatra.extensions` package NAMES (ranges stripped —
  * the same last-`@` split as the canonical host parser in
  * packages/extensions/src/required-in-prod.ts). Returns an empty set when the
  * manifest or block is absent/unreadable (the caller treats that as
@@ -157,7 +157,7 @@ export function readRequiredExtensionsLock(lockPath) {
 export function readDeclaredRequiredExtensionNames(packageJsonPath) {
   try {
     const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-    const raw = Array.isArray(pkg?.cinatra?.requiredExtensions) ? pkg.cinatra.requiredExtensions : [];
+    const raw = Array.isArray(pkg?.cinatra?.extensions) ? pkg.cinatra.extensions : [];
     const names = new Set();
     for (const entry of raw) {
       if (typeof entry !== "string" || entry.trim().length === 0) continue;
@@ -554,7 +554,7 @@ export async function acquireProdRequiredExtensions({
     const staleInLock = [...lockedNames].filter((n) => !declared.has(n)).sort();
     if (missingFromLock.length > 0 || staleInLock.length > 0) {
       throw new Error(
-        `[prod-extension-acquisition] the acquisition lock does not match cinatra.requiredExtensions:` +
+        `[prod-extension-acquisition] the acquisition lock does not match cinatra.extensions:` +
           (missingFromLock.length ? `\n  declared but not locked: ${missingFromLock.join(", ")}` : "") +
           (staleInLock.length ? `\n  locked but not declared: ${staleInLock.join(", ")}` : "") +
           `\nRegenerate with \`node scripts/extensions/update-required-extension-lock.mjs\` and commit the lock.`,

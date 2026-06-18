@@ -32,7 +32,7 @@ set -euo pipefail
 #      a. the static-bundle lifecycle anchor seeding wrote platform-scoped
 #         anchor rows on the fresh DB, including required-in-prod rows, and
 #         live (active|locked) rows — proving the boot loaders ran AND
-#         `cinatra.requiredExtensions` was readable at runtime;
+#         `cinatra.extensions` was readable at runtime;
 #      b. the app log carries the StaticBundleLoader boot line and carries
 #         NO fatal boot markers (activation-assert failures are loud even
 #         when a code path swallows the throw).
@@ -246,7 +246,7 @@ echo "    GET / -> ${PAGE_CODE} at ${PAGE_URL}"
 # bundled serverEntry package BEFORE its allow-list gate (static-bundle-
 # lifecycle.ts), and required-in-prod anchors auto-lock in production. All
 # three counts must be non-zero on a fresh DB — this proves the boot loaders
-# ran against the real schema AND `cinatra.requiredExtensions` was readable
+# ran against the real schema AND `cinatra.extensions` was readable
 # at runtime, without naming a single extension.
 echo "==> fresh-DB assertion: static-bundle lifecycle anchor rows"
 ANCHOR_COUNTS=$(docker exec "$PG" psql -U postgres -d postgres -tA -F ' ' -c "
@@ -266,7 +266,7 @@ fi
 
 # ── 6a-bis. Required-set EQUALITY (still data-driven; no extension-name
 # literals). The required_in_prod anchor rows on the fresh DB must equal —
-# exactly, both directions — the image's OWN `cinatra.requiredExtensions`
+# exactly, both directions — the image's OWN `cinatra.extensions`
 # declaration. After the bootable-set shrink (cinatra#7) this pins that a
 # fresh prod DB is seeded with ONLY the declared required/system set: a
 # stale image declaration, a leftover hardcoded list, or a seeding path that
@@ -275,7 +275,7 @@ echo "==> fresh-DB assertion: required anchors == the image's declared required 
 DECLARED_REQUIRED=$(docker exec "$APP" node -e '
   const fs = require("fs");
   const pkg = JSON.parse(fs.readFileSync("/app/package.json", "utf8"));
-  const names = ((pkg.cinatra && pkg.cinatra.requiredExtensions) || []).map((e) => {
+  const names = ((pkg.cinatra && pkg.cinatra.extensions) || []).map((e) => {
     const at = e.lastIndexOf("@");
     return at <= 0 ? e : e.slice(0, at);
   });
@@ -293,7 +293,7 @@ DB_REQUIRED=$(docker exec "$PG" psql -U postgres -d postgres -tA -c "
 if [ "$DECLARED_REQUIRED" != "$DB_REQUIRED" ]; then
   echo "--- declared (image package.json):"; printf '%s\n' "$DECLARED_REQUIRED"
   echo "--- required_in_prod anchors (fresh DB):"; printf '%s\n' "$DB_REQUIRED"
-  fail "required_in_prod anchor set != the image's declared requiredExtensions."
+  fail "required_in_prod anchor set != the image's declared extensions."
 fi
 echo "    required anchors == declared required set ($(printf '%s\n' "$DB_REQUIRED" | wc -l | tr -d ' ') packages)"
 

@@ -500,13 +500,13 @@ describe("acquireProdRequiredExtensions", () => {
     expect(debris).toEqual([]);
   });
 
-  it("fails loud when the lock and the declared requiredExtensions drift apart", async () => {
+  it("fails loud when the lock and the declared extensions drift apart", async () => {
     const gz = await goodArchive();
     const root = await workspaceWithLock(gz);
     writeFileSync(
       path.join(root, "package.json"),
       JSON.stringify({
-        cinatra: { requiredExtensions: ["@scope/sample-connector@^0.1.0", "@scope/undeclared-in-lock@^0.1.0"] },
+        cinatra: { extensions: ["@scope/sample-connector@^0.1.0", "@scope/undeclared-in-lock@^0.1.0"] },
       }),
     );
     await expect(

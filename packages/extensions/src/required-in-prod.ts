@@ -1,6 +1,6 @@
 // Required-in-prod declaration.
 //
-// Root `package.json` declares the list under `cinatra.requiredExtensions`.
+// Root `package.json` declares the list under `cinatra.extensions`.
 // Each entry is `"<packageName>@<versionRange>"` (e.g.
 // `"@cinatra-ai/nango-connector@^0.1.0"`) — the host's pinned compatibility
 // intent for that extension (the host → extension half of the compatibility
@@ -31,10 +31,10 @@ import { staticBundleAnchorVersion } from "./static-bundle-anchor";
 const PACKAGE_JSON_PATH = resolve(process.cwd(), "package.json");
 
 type CinatraBlock = {
-  requiredExtensions?: string[];
+  extensions?: string[];
 };
 
-/** One parsed `cinatra.requiredExtensions` entry. */
+/** One parsed `cinatra.extensions` entry. */
 export type RequiredExtensionEntry = {
   packageName: string;
   /** The pinned version range, or null for a bare (unpinned) entry. */
@@ -63,7 +63,7 @@ export type RequiredVerificationResult =
 let cachedEntries: RequiredExtensionEntry[] | null = null;
 
 /**
- * Parse one `requiredExtensions` entry. Split on the LAST `@` with index > 0 so
+ * Parse one `cinatra.extensions` entry. Split on the LAST `@` with index > 0 so
  * a scoped bare name (`@scope/name`, lastIndexOf === 0) stays a name; an
  * empty range (trailing `@`) parses as unpinned.
  */
@@ -93,7 +93,7 @@ export function readRequiredInProdEntries(
   try {
     const raw = readFileSync(packageJsonPath, "utf8");
     const pkg = JSON.parse(raw) as { cinatra?: CinatraBlock };
-    cachedEntries = (pkg.cinatra?.requiredExtensions ?? [])
+    cachedEntries = (pkg.cinatra?.extensions ?? [])
       .filter((v): v is string => typeof v === "string" && v.length > 0)
       .map(parseRequiredExtensionEntry)
       .filter((e): e is RequiredExtensionEntry => e !== null);
@@ -207,7 +207,7 @@ export type RequiredVersionPinVerdict =
 
 /**
  * The host-installer gate: an install/update of a package PINNED in
- * `cinatra.requiredExtensions` must target a CONCRETE version that satisfies
+ * `cinatra.extensions` must target a CONCRETE version that satisfies
  * the pinned range. Non-required and unpinned packages always pass. A pinned
  * package with an absent / non-concrete (dist-tag) / out-of-range version is
  * refused with an actionable reason. Pure read of the host's own manifest —
@@ -227,7 +227,7 @@ export function checkRequiredExtensionVersionPin(
       requiredRange,
       reason:
         `${input.op} of ${input.packageName}${got ? `@${got}` : ""} refused: this host pins the ` +
-        `required extension to "${requiredRange}" (cinatra.requiredExtensions in the host's ` +
+        `required extension to "${requiredRange}" (cinatra.extensions in the host's ` +
         `package.json), and ${got ? `version "${got}"` : "an install without an explicit version"} ` +
         `does not satisfy that pin (a non-concrete version such as a dist-tag fails closed). ` +
         `Choose a concrete ${input.packageName} version inside "${requiredRange}", or change the ` +

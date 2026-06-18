@@ -1,17 +1,17 @@
-// Dev-extensions clone-back lock ↔ cinatraDevExtensions consistency
+// Dev-extensions clone-back lock ↔ cinatra.devExtensions consistency
 // (cinatra#141 — the pinning half of the reproducible-CI contract).
 //
 // CI materializes the companion extension repos DETACHED at committed shas
 // (scripts/ci/sync-dev-extensions.mjs --pinned). The pin set is PARTITIONED:
 // cinatra-required-extensions.lock.json is the single authority for the prod
 // bootable set; cinatra-dev-extensions.lock.json pins every OTHER
-// `cinatraDevExtensions` entry. This suite is the gate of record that the
+// `cinatra.devExtensions` entry. This suite is the gate of record that the
 // partition stays exact:
 //   - disjoint: no package pinned in both locks;
-//   - complete: every cinatraDevExtensions entry has exactly one pin across
+//   - complete: every cinatra.devExtensions entry has exactly one pin across
 //     the two locks (the pinned clone-back would fail closed at run time,
 //     but THIS catches it at PR time, before 15 jobs each discover it);
-//   - no stale pins: every dev-lock entry is a cinatraDevExtensions entry;
+//   - no stale pins: every dev-lock entry is a cinatra.devExtensions entry;
 //   - shape-valid + sorted (deterministic diffs) + repo slug matches the
 //     committed config URL (a retargeted repo requires a re-pin).
 import { readFileSync } from "node:fs";
@@ -30,7 +30,7 @@ type DevLockEntry = {
 
 function readDevConfig(): Record<string, unknown> {
   const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8"));
-  return pkg?.cinatraDevExtensions ?? pkg?.cinatra?.devExtensions ?? {};
+  return pkg?.cinatra?.devExtensions ?? {};
 }
 
 function readDevLock(): DevLockEntry[] {

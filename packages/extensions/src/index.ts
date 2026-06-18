@@ -661,7 +661,7 @@ class ExtensionRegistryImpl {
     const handler = this.resolve(typeId);
 
     // 0. REQUIRED-PIN GATE (the host → extension half of the compatibility
-    //    contract). A package PINNED in the host's `cinatra.requiredExtensions`
+    //    contract). A package PINNED in the host's `cinatra.extensions`
     //    may only be installed/updated at a CONCRETE version satisfying the
     //    pinned range — so an update can never silently move a required
     //    extension outside the host's declared compatibility intent, on ANY

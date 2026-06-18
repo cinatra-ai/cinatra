@@ -904,12 +904,12 @@ describe("restore dependency-closure gate", () => {
 });
 
 // ---------------------------------------------------------------------------
-// REQUIRED-PIN GATE — a package pinned in `cinatra.requiredExtensions` may only
+// REQUIRED-PIN GATE — a package pinned in `cinatra.extensions` may only
 // be installed/updated at a concrete version satisfying the pinned range. The
 // gate runs at the TOP of the host installer, on EVERY kind's path, BEFORE the
 // row-ensure / native handler / pipeline — so a refusal mutates NOTHING.
 // ---------------------------------------------------------------------------
-describe("dispatcher REQUIRED-PIN GATE (versioned cinatra.requiredExtensions)", () => {
+describe("dispatcher REQUIRED-PIN GATE (versioned cinatra.extensions)", () => {
   const refusal = {
     ok: false as const,
     requiredRange: "^0.1.0",

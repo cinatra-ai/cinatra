@@ -32,7 +32,7 @@ describe("readDeclaredRequiredNames", () => {
   it("strips version ranges with the last-@ split (scoped names intact)", () => {
     const names = readDeclaredRequiredNames({
       cinatra: {
-        requiredExtensions: ["@scope/a@^0.1.0", "@scope/b", "@scope/c@", "  ", 42],
+        extensions: ["@scope/a@^0.1.0", "@scope/b", "@scope/c@", "  ", 42],
       },
     });
     expect([...names].sort()).toEqual(["@scope/a", "@scope/b", "@scope/c"]);
@@ -334,13 +334,13 @@ describe("coverageDefects", () => {
     expect([...bootable].sort()).toEqual(["@scope/a-connector", "@scope/b-connector"]);
   });
 
-  it("fails when a host import is missing from requiredExtensions", () => {
+  it("fails when a host import is missing from extensions", () => {
     const { defects } = coverageDefects({
       ...base,
       required: new Set(["@scope/b-connector", "@scope/system-agent"]),
       locked: new Set(["@scope/a-connector", "@scope/b-connector", "@scope/system-agent"]),
     });
-    expect(defects.some((d) => d.includes("@scope/a-connector") && d.includes("requiredExtensions"))).toBe(true);
+    expect(defects.some((d) => d.includes("@scope/a-connector") && d.includes("extensions"))).toBe(true);
   });
 
   it("fails when a host import is missing from the lock", () => {
@@ -351,7 +351,7 @@ describe("coverageDefects", () => {
     expect(defects.some((d) => d.includes("@scope/a-connector") && d.includes("acquisition lock"))).toBe(true);
   });
 
-  it("fails on lock ↔ requiredExtensions drift in both directions", () => {
+  it("fails on lock ↔ extensions drift in both directions", () => {
     const { defects } = coverageDefects({
       hostImported: new Set(),
       rootDepExtensions: new Set(),
@@ -362,17 +362,17 @@ describe("coverageDefects", () => {
     expect(defects.some((d) => d.includes("@scope/only-locked") && d.includes("stale lock"))).toBe(true);
   });
 
-  it("fails when systemExtensions ⊄ requiredExtensions", () => {
+  it("fails when systemExtensions ⊄ extensions", () => {
     const { defects } = coverageDefects({
       ...base,
       systemExtensions: new Set(["@scope/system-agent", "@scope/missing-system-skill"]),
     });
     expect(
-      defects.some((d) => d.includes("@scope/missing-system-skill") && d.includes("systemExtensions ⊆ requiredExtensions")),
+      defects.some((d) => d.includes("@scope/missing-system-skill") && d.includes("systemExtensions ⊆ extensions")),
     ).toBe(true);
   });
 
-  it("DECLARATION EQUALITY (cinatra#151 Stage 7): fails when requiredExtensions ⊃ systemExtensions", () => {
+  it("DECLARATION EQUALITY (cinatra#151 Stage 7): fails when extensions ⊃ systemExtensions", () => {
     const { defects } = coverageDefects({
       ...base,
       required: new Set([...base.required, "@scope/extra-connector"]),

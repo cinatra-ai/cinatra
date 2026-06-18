@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("root package.json declares required extensions", () => {
-  it("root package.json includes cinatra.requiredExtensions list", () => {
+  it("root package.json includes cinatra.extensions list", () => {
     const rootPkg = path.join(REPO_ROOT, "package.json");
     const list = readRequiredInProdPackages(rootPkg);
     expect(list.length).toBeGreaterThan(0);
@@ -65,7 +65,7 @@ describe("root package.json declares required extensions", () => {
 function writeTmpPkg(entries: unknown[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "required-versioned-"));
   const p = path.join(dir, "package.json");
-  fs.writeFileSync(p, JSON.stringify({ cinatra: { requiredExtensions: entries } }));
+  fs.writeFileSync(p, JSON.stringify({ cinatra: { extensions: entries } }));
   return p;
 }
 
@@ -95,7 +95,7 @@ describe("parseRequiredExtensionEntry (name@range format)", () => {
 });
 
 describe("root package.json carries a version pin on EVERY required extension", () => {
-  it("every cinatra.requiredExtensions entry parses to a name + non-null range", () => {
+  it("every cinatra.extensions entry parses to a name + non-null range", () => {
     _resetCachedRequiredForTesting();
     const entries = readRequiredInProdEntries(path.join(REPO_ROOT, "package.json"));
     expect(entries.length).toBeGreaterThan(0);

@@ -2,7 +2,7 @@
 // Regenerate cinatra-required-extensions.lock.json — the committed,
 // SHA-pinned acquisition lock for the prod base-image bootable set.
 //
-// For every `cinatra.requiredExtensions` entry (root package.json) this
+// For every `cinatra.extensions` entry (root package.json) this
 // resolves the companion repo's current `main` head to an immutable commit
 // SHA, downloads the codeload tarball at that exact SHA, runs it through the
 // SAME hardening + canonical tree-hash pipeline prod uses at acquisition time
@@ -14,7 +14,7 @@
 // never runs this — it consumes only the committed lock (no git/gh binary).
 //
 // Range gate: each locked packageVersion must satisfy the version range the
-// requiredExtensions entry declares. The committed gate of record for that
+// extensions entry declares. The committed gate of record for that
 // contract is the vitest consistency suite
 // (packages/extensions/src/__tests__/required-extensions-lock.test.ts, which
 // uses the canonical host-side range checker); this script enforces the
@@ -53,7 +53,7 @@ function fail(msg) {
   process.exit(1);
 }
 
-/** Parse one requiredExtensions entry — mirrors the canonical host parser
+/** Parse one extensions entry — mirrors the canonical host parser
  * (packages/extensions/src/required-in-prod.ts parseRequiredExtensionEntry):
  * split on the LAST `@` with index > 0; empty range → unpinned. */
 function parseEntry(raw) {
@@ -122,11 +122,11 @@ function parseArgs(argv) {
 const { select } = parseArgs(process.argv.slice(2));
 
 const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
-const requiredRaw = rootPkg?.cinatra?.requiredExtensions;
+const requiredRaw = rootPkg?.cinatra?.extensions;
 if (!Array.isArray(requiredRaw) || requiredRaw.length === 0) {
-  fail("cinatra.requiredExtensions is empty/absent in the root package.json");
+  fail("cinatra.extensions is empty/absent in the root package.json");
 }
-const devExtensions = rootPkg?.cinatraDevExtensions ?? {};
+const devExtensions = rootPkg?.cinatra?.devExtensions ?? {};
 
 const existingByName = new Map();
 if (existsSync(LOCK_PATH)) {
@@ -153,7 +153,7 @@ if (select.length > 0) {
   if (unmatched.length > 0) {
     fail(
       `--select entries match no required extension: ${unmatched.join(", ")} ` +
-        `(valid: the full @scope/name or the short name of a cinatra.requiredExtensions entry)`,
+        `(valid: the full @scope/name or the short name of a cinatra.extensions entry)`,
     );
   }
 }
@@ -172,8 +172,8 @@ for (const entry of entries) {
   const repoUrl = devExtensions[entry.packageName];
   if (typeof repoUrl !== "string" || repoUrl.length === 0) {
     fail(
-      `no cinatraDevExtensions repo mapping for required extension ${entry.packageName} — every ` +
-        `requiredExtensions entry must map to its companion repo`,
+      `no cinatra.devExtensions repo mapping for required extension ${entry.packageName} — every ` +
+        `extensions entry must map to its companion repo`,
     );
   }
   const repo = repoSlugFromUrl(repoUrl);
@@ -199,7 +199,7 @@ for (const entry of entries) {
     if (ok === false) {
       fail(
         `${entry.packageName}: companion repo version ${manifest.version} does not satisfy the declared ` +
-          `range "${entry.versionRange}" (cinatra.requiredExtensions) — update the pin or the extension first`,
+          `range "${entry.versionRange}" (cinatra.extensions) — update the pin or the extension first`,
       );
     }
     if (ok === null) {
@@ -224,7 +224,7 @@ locked.sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.pa
 
 const doc = {
   note:
-    "SHA-pinned acquisition lock for the prod base-image bootable set (every cinatra.requiredExtensions " +
+    "SHA-pinned acquisition lock for the prod base-image bootable set (every cinatra.extensions " +
     "entry). Production acquires extension source EXCLUSIVELY from this file via " +
     "packages/cli/src/prod-extension-acquisition.mjs (codeload tarball at resolvedSha, hardened extraction, " +
     "treeSha256 + package.json verification). Regenerate with " +

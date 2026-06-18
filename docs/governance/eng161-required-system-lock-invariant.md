@@ -10,9 +10,9 @@ Today, three artifacts agree on the same set of **8 packages**:
 
 | Artifact | What it declares | Where |
 | --- | --- | --- |
-| `cinatra.requiredExtensions` | the prod-boot **required** set (must be installed for prod boot to succeed; carries version ranges) | root `package.json` |
+| `cinatra.extensions` | the prod-boot **required** set (must be installed for prod boot to succeed; carries version ranges) | root `package.json` |
 | `cinatra.systemExtensions` | the **system/locked** set (locked on install; destructive ops — archive/uninstall/force-delete/purge/registry-removal — are refused; update preserves the lock) | root `package.json` |
-| `cinatra-required-extensions.lock.json` | the SHA-pinned **acquisition lock** for the prod bootable set (one entry per `requiredExtensions` package) | repo root |
+| `cinatra-required-extensions.lock.json` | the SHA-pinned **acquisition lock** for the prod bootable set (one entry per `extensions` package) | repo root |
 
 All three are length **8** and name the same 8 packages
 (`@cinatra-ai/nango-connector`, `code-reviewer-agent`, `planner-agent`,
@@ -30,27 +30,27 @@ constraints that must hold forever.
 
 What is the law, and what is incidental:
 
-- **LAW (must always hold):** `systemExtensions ⊆ requiredExtensions`. A system
+- **LAW (must always hold):** `systemExtensions ⊆ extensions`. A system
   (locked) package that is not also required would leave the prod-boot verifier
   unable to guarantee it is installed. This subset relation is enforced
   fail-closed today by
   `packages/extensions/src/__tests__/system-extension-inventory.test.ts`
-  ("system inventory is a SUBSET of cinatra.requiredExtensions") and is the
+  ("system inventory is a SUBSET of cinatra.extensions") and is the
   permanent invariant.
 - **LAW (must always hold):** the acquisition lock covers exactly the required
-  set — one pinned entry per `requiredExtensions` package — so prod can acquire
+  set — one pinned entry per `extensions` package — so prod can acquire
   every required package from SHA-pinned source. The two locks are a disjoint
   partition (the dev lock must never carry a required package); see
   [extension-clone-pinning.md](./../extension-clone-pinning.md).
 - **INCIDENTAL (true today, may change):** that `systemExtensions` happens to
-  *equal* (not merely be a subset of) `requiredExtensions`, and that both equal
+  *equal* (not merely be a subset of) `extensions`, and that both equal
   **8**. The first required-but-not-system extension makes the sets diverge in
   size while the subset law still holds.
 
 ## `required-but-not-system`: the intended future behavior
 
 A **required-but-not-system** extension is one that prod boot must find
-installed (it is in `requiredExtensions`) but that is *not* in
+installed (it is in `extensions`) but that is *not* in
 `systemExtensions`. It is legal under the subset law and is the expected shape
 of the first divergence. The conceptual split eng#122 #20 asked for: *required*
 answers "must this be installed for prod?"; *system* answers "is this protected
@@ -59,7 +59,7 @@ have the same answer for all 8 of today's packages.
 
 **Current code does not yet honor that split.** Today, in production, the
 required set is auto-locked: `requiredInProd` is sourced from
-`cinatra.requiredExtensions` (`packages/extensions/src/required-in-prod.ts`),
+`cinatra.extensions` (`packages/extensions/src/required-in-prod.ts`),
 and a required-in-prod install is coerced to `status: "locked"` in non-dev mode
 (`packages/extensions/src/index.ts` install seam;
 `lifecycle-primitive.ts`/`system-extension-inventory.ts` boot-lock), after
@@ -81,7 +81,7 @@ to adopt, is to decouple the prod-lock from "required" so that:
   longer applies to a not-system package). Locking would then track
   `systemExtensions` membership alone, not `requiredInProd`.
 - **Drift guards** assert the **subset** relation, not the equality: the
-  `systemExtensions ⊆ requiredExtensions` test continues to hold; the
+  `systemExtensions ⊆ extensions` test continues to hold; the
   size-equality and the literal `8` are *not* asserted as invariants.
 
 Until that code change lands, the equality is not merely incidental in

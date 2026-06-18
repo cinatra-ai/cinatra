@@ -3,7 +3,7 @@
 // readRegistryPolicy() declares — via config — whether the resolved registry
 // is operating under a TEMPORARY policy. The default MUST be off (no banner
 // ships by default); it only turns on when explicitly configured via the root
-// package.json `cinatraRegistryPolicy` key or the env override.
+// package.json `cinatra.registryPolicy` key or the env override.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -12,7 +12,7 @@ import * as path from "node:path";
 
 import { readRegistryPolicy } from "../registry-policy";
 
-// Write a throwaway package.json with the given top-level keys and return its path.
+// Write a throwaway package.json with the given keys and return its path.
 function writeFixturePackageJson(contents: Record<string, unknown>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "registry-policy-"));
   const file = path.join(dir, "package.json");
@@ -52,16 +52,18 @@ describe("readRegistryPolicy", () => {
 
   it("defaults to NOT temporary when configured temporary:false", () => {
     const file = writeFixturePackageJson({
-      cinatraRegistryPolicy: { temporary: false, notice: "ignored when off" },
+      cinatra: { registryPolicy: { temporary: false, notice: "ignored when off" } },
     });
     expect(readRegistryPolicy(file).temporary).toBe(false);
   });
 
   it("reports temporary with the configured notice when temporary:true", () => {
     const file = writeFixturePackageJson({
-      cinatraRegistryPolicy: {
-        temporary: true,
-        notice: "Private packages may be deleted without notice.",
+      cinatra: {
+        registryPolicy: {
+          temporary: true,
+          notice: "Private packages may be deleted without notice.",
+        },
       },
     });
     const policy = readRegistryPolicy(file);
@@ -71,7 +73,7 @@ describe("readRegistryPolicy", () => {
 
   it("falls back to the default notice when temporary:true but notice missing", () => {
     const file = writeFixturePackageJson({
-      cinatraRegistryPolicy: { temporary: true },
+      cinatra: { registryPolicy: { temporary: true } },
     });
     const policy = readRegistryPolicy(file);
     expect(policy.temporary).toBe(true);
@@ -91,7 +93,7 @@ describe("readRegistryPolicy", () => {
 
   it("env override CINATRA_REGISTRY_POLICY_TEMPORARY wins over file (on)", () => {
     const file = writeFixturePackageJson({
-      cinatraRegistryPolicy: { temporary: false },
+      cinatra: { registryPolicy: { temporary: false } },
     });
     process.env.CINATRA_REGISTRY_POLICY_TEMPORARY = "true";
     process.env.CINATRA_REGISTRY_POLICY_NOTICE = "env notice copy";
@@ -102,7 +104,7 @@ describe("readRegistryPolicy", () => {
 
   it("env override can force temporary OFF even when file says true", () => {
     const file = writeFixturePackageJson({
-      cinatraRegistryPolicy: { temporary: true, notice: "file says on" },
+      cinatra: { registryPolicy: { temporary: true, notice: "file says on" } },
     });
     process.env.CINATRA_REGISTRY_POLICY_TEMPORARY = "false";
     expect(readRegistryPolicy(file).temporary).toBe(false);

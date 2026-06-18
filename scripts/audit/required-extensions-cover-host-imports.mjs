@@ -2,7 +2,7 @@
 // CI gate: the required-extension declaration + acquisition lock must COVER
 // the host's real extension import surface.
 //
-// `cinatra.requiredExtensions` (root package.json) declares the prod
+// `cinatra.extensions` (root package.json) declares the prod
 // base-image BOOTABLE SET: every extension package the production build
 // cannot resolve without. The committed acquisition lock
 // (cinatra-required-extensions.lock.json) pins exactly that set for the prod
@@ -33,16 +33,16 @@
 //     required (the system set), even without a loader entry.
 //
 // This gate FAILS when:
-//   - a bootable extension package is missing from requiredExtensions, or
+//   - a bootable extension package is missing from extensions, or
 //   - a bootable extension package is missing from the acquisition lock, or
-//   - the lock and requiredExtensions drift apart in either direction
+//   - the lock and extensions drift apart in either direction
 //     (run scripts/extensions/update-required-extension-lock.mjs), or
-//   - cinatra.systemExtensions ⊄ cinatra.requiredExtensions (the system set
+//   - cinatra.systemExtensions ⊄ cinatra.extensions (the system set
 //     must always ride the bootable declaration), or
-//   - cinatra.requiredExtensions ⊄ cinatra.systemExtensions — the DECLARATION
+//   - cinatra.extensions ⊄ cinatra.systemExtensions — the DECLARATION
 //     EQUALITY guard (cinatra#151 Stage 7, the zero-floor end-state):
 //     together with the two subset checks above this pins
-//     requiredExtensions == systemExtensions == lock. The prod bootable
+//     extensions == systemExtensions == lock. The prod bootable
 //     declaration may not grow beyond the system set; a package that must
 //     become required needs an owner ruling that also declares it a
 //     systemExtension (one reviewed edit, both lists). This guard pins the
@@ -318,10 +318,10 @@ export function readGeneratedArtifacts(repoRoot = REPO_ROOT) {
   return { generatedSources, generatedTestSource };
 }
 
-/** Names (ranges stripped) declared in cinatra.requiredExtensions — mirrors
+/** Names (ranges stripped) declared in cinatra.extensions — mirrors
  * the canonical parser's last-`@` split. */
 export function readDeclaredRequiredNames(pkgJson) {
-  const raw = Array.isArray(pkgJson?.cinatra?.requiredExtensions) ? pkgJson.cinatra.requiredExtensions : [];
+  const raw = Array.isArray(pkgJson?.cinatra?.extensions) ? pkgJson.cinatra.extensions : [];
   const names = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || entry.trim().length === 0) continue;
@@ -338,7 +338,7 @@ export function coverageDefects({ hostImported, rootDepExtensions, required, loc
   const defects = [];
   for (const name of [...bootable].sort()) {
     if (!required.has(name)) {
-      defects.push(`host-imported extension ${name} is MISSING from cinatra.requiredExtensions`);
+      defects.push(`host-imported extension ${name} is MISSING from cinatra.extensions`);
     }
     if (!locked.has(name)) {
       defects.push(`host-imported extension ${name} is MISSING from the acquisition lock`);
@@ -351,23 +351,23 @@ export function coverageDefects({ hostImported, rootDepExtensions, required, loc
   }
   for (const name of [...locked].sort()) {
     if (!required.has(name)) {
-      defects.push(`acquisition-lock entry ${name} is not declared in cinatra.requiredExtensions (stale lock)`);
+      defects.push(`acquisition-lock entry ${name} is not declared in cinatra.extensions (stale lock)`);
     }
   }
   for (const name of [...systemExtensions].sort()) {
     if (!required.has(name)) {
-      defects.push(`system extension ${name} is MISSING from cinatra.requiredExtensions (systemExtensions ⊆ requiredExtensions must hold)`);
+      defects.push(`system extension ${name} is MISSING from cinatra.extensions (systemExtensions ⊆ extensions must hold)`);
     }
   }
-  // DECLARATION EQUALITY (cinatra#151 Stage 7): requiredExtensions may not
+  // DECLARATION EQUALITY (cinatra#151 Stage 7): extensions may not
   // exceed systemExtensions — with the subset check above and the lock<->
-  // required drift checks this enforces requiredExtensions == systemExtensions
+  // required drift checks this enforces extensions == systemExtensions
   // == lock. Fail-closed by construction: an empty/absent systemExtensions
   // declaration flags every required name.
   for (const name of [...required].sort()) {
     if (!systemExtensions.has(name)) {
       defects.push(
-        `required extension ${name} is NOT declared in cinatra.systemExtensions (requiredExtensions == systemExtensions equality guard — the bootable declaration may not grow beyond the system set without an owner ruling that also declares the package a systemExtension)`,
+        `required extension ${name} is NOT declared in cinatra.systemExtensions (extensions == systemExtensions equality guard — the bootable declaration may not grow beyond the system set without an owner ruling that also declares the package a systemExtension)`,
       );
     }
   }
@@ -465,15 +465,15 @@ function main() {
     const coverageDefectsPresent = defects.length > equalityDefects.length;
     if (equalityDefects.length) {
       console.error(
-        "\nEquality-guard remediation: requiredExtensions == systemExtensions is the zero-floor end-state " +
-          "(cinatra#151 Stage 7). Either REMOVE the package from cinatra.requiredExtensions (and regenerate the " +
+        "\nEquality-guard remediation: extensions == systemExtensions is the zero-floor end-state " +
+          "(cinatra#151 Stage 7). Either REMOVE the package from cinatra.extensions (and regenerate the " +
           "lock via `node scripts/extensions/update-required-extension-lock.mjs`), or — with an owner ruling — " +
           "declare it in cinatra.systemExtensions too (then regenerate the generated maps AND the lock).",
       );
     }
     if (coverageDefectsPresent) {
       console.error(
-        "\nCoverage remediation: add the package to cinatra.requiredExtensions (with its version range), run " +
+        "\nCoverage remediation: add the package to cinatra.extensions (with its version range), run " +
           "`node scripts/extensions/update-required-extension-lock.mjs`, and commit both. Hard import sites:",
       );
       for (const [file, names] of Object.entries(byFile)) {
@@ -492,7 +492,7 @@ function main() {
   console.log(
     `[required-extensions-cover-host-imports] OK — bootable set covered: ${bootable.size} package(s) ` +
       `(${hardImported.size} hard-imported, ${generated.bootable.size} generated-required, ` +
-      `${rootDepExtensions.size} root-dep) ⊆ requiredExtensions (${required.size}) == systemExtensions (${systemExtensions.size}) == lock (${locked.size}) ` +
+      `${rootDepExtensions.size} root-dep) ⊆ extensions (${required.size}) == systemExtensions (${systemExtensions.size}) == lock (${locked.size}) ` +
       `(declaration equality pinned — cinatra#151 Stage 7); ` +
       `${generated.acquirable.size} generated-map package(s) classified guardedOptional ⇒ acquirable-on-demand.`,
   );

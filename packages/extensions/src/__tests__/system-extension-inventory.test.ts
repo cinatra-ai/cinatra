@@ -4,7 +4,7 @@
 // `cinatra.systemExtensions` declaration in the root package.json, read
 // fail-closed by `readSystemExtensions`. These tests pin (1) the data
 // sourcing (no code-resident list), (2) the fail-closed reader behavior,
-// and (3) the ⊆ requiredExtensions drift invariant.
+// and (3) the ⊆ extensions drift invariant.
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -52,9 +52,9 @@ describe("system-extension inventory", () => {
     expect(isSystemExtension("not-a-cinatra-package")).toBe(false);
   });
 
-  it("system inventory is a SUBSET of cinatra.requiredExtensions", () => {
+  it("system inventory is a SUBSET of cinatra.extensions", () => {
     // Adding a package to cinatra.systemExtensions without also declaring it
-    // in cinatra.requiredExtensions would leave the prod-boot verifier
+    // in cinatra.extensions would leave the prod-boot verifier
     // unable to ensure system extensions are installed.
     _resetCachedRequiredForTesting();
     const required = new Set(
@@ -63,7 +63,7 @@ describe("system-extension inventory", () => {
     for (const pkg of SYSTEM_EXTENSIONS) {
       expect(
         required.has(pkg),
-        `${pkg} is in cinatra.systemExtensions but not in cinatra.requiredExtensions`,
+        `${pkg} is in cinatra.systemExtensions but not in cinatra.extensions`,
       ).toBe(true);
     }
   });
@@ -79,7 +79,7 @@ describe("system-extension inventory", () => {
       expect(() => readSystemExtensions(file)).toThrow(/non-empty/);
     });
 
-    it("throws on a non-name entry (version ranges live in requiredExtensions)", () => {
+    it("throws on a non-name entry (version ranges live in extensions)", () => {
       for (const bad of ["@cinatra-ai/nango-connector@^0.1.0", "bare-name", 42, null]) {
         const file = tmpPackageJson({ name: "x", cinatra: { systemExtensions: [bad] } });
         expect(() => readSystemExtensions(file)).toThrow(/invalid|scoped/);
