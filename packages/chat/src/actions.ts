@@ -249,11 +249,13 @@ export async function renameChatThread(threadId: string, newTitle: string): Prom
   const threads = readChatThreadsFromDatabase();
   const thread = threads.find((t) => t.id === threadId);
   if (!thread) return;
+  // A title-only rename is not conversational activity — preserve the existing
+  // updatedAt (spread from `thread`) so renaming does NOT bump the thread to the
+  // top of the activity-sorted sidebar (#283). createdAt is likewise preserved.
   upsertChatThreadInDatabase({
     ...thread,
     id: thread.id as string,
     title: newTitle,
-    updatedAt: new Date().toISOString(),
   });
 }
 
@@ -367,9 +369,11 @@ export async function setAssistantPauseState(
     current.delete(assistantId);
   }
 
+  // Pausing/resuming a participant is not conversational activity — preserve the
+  // existing updatedAt (spread from `thread`) so it does NOT bump the thread to
+  // the top of the activity-sorted sidebar (#283).
   upsertChatThreadInDatabase({
     ...thread,
     pausedParticipants: Array.from(current),
-    updatedAt: new Date().toISOString(),
   } as unknown as { id: string } & Record<string, unknown>);
 }
