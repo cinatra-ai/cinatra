@@ -4,6 +4,26 @@ All notable changes to Cinatra are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-06-18
+
+Extensions Dev Kit and milestone hardening.
+
+### Added
+
+- Extensions Dev Kit: author agents, artifacts, skills, and workflows declaratively from chat, backed by a typed extension SDK (`@cinatra-ai/sdk-extensions`) with a stable host ABI and a `migrationsDir` contract for connector-owned schema.
+- `create-cinatra-extension` scaffolder for all five extension kinds (agent, artifact, skill, workflow, connector), wired to the SDK with per-kind authoring guidance.
+- Marketplace connector vendor-identity publish gate: per-vendor-key ownership binding plus an owner-controlled provider-mapping check (with a manual-review fallback), preventing vendor-namespace squatting and provider misrepresentation.
+
+### Changed
+
+- Dependency currency: bounded patch/minor updates and added security overrides across the workspace.
+- Documented and CI-gated the SDK ABI policy and the source-mirror model for first-party `@cinatra-ai/*` packages.
+
+### Fixed
+
+- Fresh development setup no longer fails to boot when `OPENAI_API_KEY` is unset — it is optional (used only for Graphiti object embeddings); the assistant's model provider is configured in-app.
+- Documentation: corrected the self-hosting production deploy-flow runbook and an extension-authoring guide.
+
 ## [0.1.0] - 2026-06-08
 
 The first public open source release of Cinatra, the open source AI workspace.
@@ -22,4 +42,5 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
+[0.1.1]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.0
