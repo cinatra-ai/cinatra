@@ -18,6 +18,8 @@ export type ModelPricing = {
 // TODO: Verify all values against current provider pricing pages
 export const LLM_PRICING: Record<string, ModelPricing> = {
   // OpenAI — https://openai.com/api/pricing
+  // Canonical OpenAI default; without this fallback, gpt-5.5 usage records NULL cost_usd (#271).
+  "gpt-5.5":          { inputPerMillion: 5.00, outputPerMillion: 30.00, cachedInputPerMillion: 0.50 },
   "gpt-5":            { inputPerMillion: 2.50, outputPerMillion: 10.00, cachedInputPerMillion: 1.25 },
   "gpt-4o":           { inputPerMillion: 2.50, outputPerMillion: 10.00, cachedInputPerMillion: 1.25 },
   "gpt-4o-mini":      { inputPerMillion: 0.15, outputPerMillion: 0.60,  cachedInputPerMillion: 0.075 },
