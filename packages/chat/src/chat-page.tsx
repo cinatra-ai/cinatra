@@ -70,6 +70,7 @@ async function fetchThreadListViaFetch(): Promise<ThreadSummary[]> {
 
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill } from "./chat-badges";
+import { fingerprintMessages, isRealActivity } from "./thread-activity";
 import { resolveAssistantDisplayName } from "./assistant-display-name";
 import { CINATRA_LOGO } from "@/lib/cinatra-brand";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
@@ -1640,6 +1641,20 @@ const skipNextThreadLoadRef = useRef(false);
   // effect from saving stale messages to a new activeThreadId while the async
   // load is still in flight.
   const loadedThreadIdRef = useRef<string | null>(initialThreadId ?? null);
+  // Fingerprint of the message list as it was last LOADED for the active
+  // thread. The persist effect compares the current fingerprint against this to
+  // tell "messages changed because of real activity (user submit / LLM
+  // response / edit / external message)" from "messages changed because we just
+  // opened/loaded the thread". Only the former advances `updatedAt` and the
+  // sidebar position (issue #283). Empty string == nothing loaded yet (a
+  // brand-new thread starts empty, so its first user message reads as activity).
+  const loadedFingerprintRef = useRef<string>("");
+  // The active thread's immutable createdAt as read from the loaded thread
+  // data. Used as the createdAt fallback when persisting so the payload's
+  // createdAt does not drift to `now`/updatedAt if the local `threads` summary
+  // list has not arrived yet (#283 — the typed created_at column is immutable
+  // on conflict, but readChatThreadsFromDatabase reads the payload JSON).
+  const loadedThreadCreatedAtRef = useRef<string | null>(null);
   // Map of assistantId → AbortController for every in-flight streamResponse call.
   const streamingAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   // Latest-value ref for messages so re-entrant senders never read a stale
@@ -1798,6 +1813,8 @@ const skipNextThreadLoadRef = useRef(false);
     }
     if (!activeThreadId) {
       loadedThreadIdRef.current = null;
+      loadedFingerprintRef.current = "";
+      loadedThreadCreatedAtRef.current = null;
       setMessages([]);
       setIsSlackMode(false);
       setAnimating(false);
@@ -1810,7 +1827,11 @@ const skipNextThreadLoadRef = useRef(false);
       if (thread) {
         // Backfill missing ids — threads stored before the id field was added won't have them,
         // causing key={undefined} in the messages list and React's missing-key warning.
-        setMessages(thread.messages.map((m) => ({ ...m, id: m.id || generateId() })));
+        // Build the loaded array ONCE and reuse it for both setMessages and the
+        // activity fingerprint: re-mapping a second time would mint different
+        // backfilled ids and make a pure open look like real activity (#283).
+        const loadedMessages = thread.messages.map((m) => ({ ...m, id: m.id || generateId() }));
+        setMessages(loadedMessages);
         // Restore active assistant handle so subsequent messages route correctly.
         setActiveAssistantHandle(thread.activeAssistantHandle);
         // Synchronise Slack-mode state on cold reload. Set prevIsSlackModeRef.current
@@ -1825,6 +1846,15 @@ const skipNextThreadLoadRef = useRef(false);
         setTaggedAssistantUserIds(slackIds);
         setIsSlackMode(restoredSlack);
         setPausedParticipants((thread as unknown as { pausedParticipants?: string[] }).pausedParticipants ?? []);
+        // Snapshot the loaded messages' fingerprint so the persist effect can
+        // tell this load echo apart from real activity and NOT bump updatedAt
+        // (and the sidebar position) on a plain open (#283). Uses the SAME
+        // loadedMessages array that was handed to setMessages.
+        loadedFingerprintRef.current = fingerprintMessages(loadedMessages);
+        // Remember the thread's immutable createdAt so a later persist never
+        // rewrites it even if the threads-summary list has not loaded yet.
+        loadedThreadCreatedAtRef.current =
+          (thread as unknown as { createdAt?: string }).createdAt ?? null;
         // Mark this thread's data as fully loaded — unblocks the persist effect.
         loadedThreadIdRef.current = activeThreadId;
       }
@@ -1972,34 +2002,51 @@ const skipNextThreadLoadRef = useRef(false);
     return () => clearTimeout(id);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Persist thread whenever messages change (debounced via hasActiveStream).
+  // Persist thread on real conversational activity (debounced via hasActiveStream).
   useEffect(() => {
     if (!activeThreadId || messages.length === 0) return;
     if (hasActiveStream) return; // Wait until streaming finishes.
     // Bail out if the thread load is still in flight — prevents saving stale
     // messages (from the previous thread) to the newly-selected activeThreadId.
     if (loadedThreadIdRef.current !== activeThreadId) return;
+    // Bail out if the messages are identical to what was loaded for this thread
+    // — i.e. this effect fired only because opening/selecting the thread set the
+    // messages. A passive open must NOT advance updatedAt or reorder the sidebar
+    // (#283); only real activity (user submit, LLM response, edit, externally
+    // added message) changes the fingerprint and falls through here.
+    if (!isRealActivity(loadedFingerprintRef.current, messages)) return;
 
+    const existing = threads.find((t) => t.id === activeThreadId);
+    const updatedAt = new Date().toISOString();
     const thread: Thread = {
       id: activeThreadId,
-      title: threads.find((t) => t.id === activeThreadId)?.title
+      title: existing?.title
         ?? deriveThreadTitle(messages.find((m) => m.role === "user")?.content ?? ""),
       messages,
-      createdAt: threads.find((t) => t.id === activeThreadId)?.updatedAt ?? new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      // createdAt is immutable — never derive it from updatedAt (that conflation
+      // made the "created" timestamp drift on every save, #283). Prefer the
+      // local summary, then the loaded thread's createdAt (covers the case where
+      // the summary list has not arrived), and only fall back to updatedAt for a
+      // genuinely new thread that has no createdAt anywhere.
+      createdAt: existing?.createdAt ?? loadedThreadCreatedAtRef.current ?? updatedAt,
+      updatedAt,
       activeAssistantHandle,
       taggedAssistantUserIds,
       slackMode: isSlackMode,
       ownerUserId: userId,
     };
     saveChatThreadViaFetch(thread).catch(() => {});
-    // Update only the updatedAt and title in-place — do NOT reorder; list is
-    // sorted by createdAt (immutable) so position must remain stable.
+    // Real activity: advance this thread's updatedAt in-place. The sidebar's
+    // default "Activity" mode sorts by updatedAt desc, so this re-positions the
+    // thread to the top without an explicit array reorder here.
     setThreads((prev) =>
       prev.map((t) =>
         t.id === thread.id ? { ...t, title: thread.title, updatedAt: thread.updatedAt } : t,
       ),
     );
+    // Adopt the persisted message set as the new baseline so an unrelated
+    // re-render with the SAME messages does not bump updatedAt a second time.
+    loadedFingerprintRef.current = fingerprintMessages(messages);
   }, [messages, hasActiveStream, activeThreadId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Emit active thread title so AppShell can show it in the breadcrumb.
@@ -2063,18 +2110,23 @@ const skipNextThreadLoadRef = useRef(false);
     }
     const newTitle = titleDraft.trim();
     const now = new Date().toISOString();
+    const existing = threads.find((t) => t.id === activeThreadId);
+    // A title-only edit is NOT conversational activity: preserve the thread's
+    // existing updatedAt (and immutable createdAt) so renaming does not bump the
+    // thread to the top of the activity-sorted sidebar (#283).
+    const preservedUpdatedAt = existing?.updatedAt ?? now;
     // Save updated title to API — build full thread from current state.
     const thread: Thread = {
       id: activeThreadId,
       title: newTitle,
       messages,
-      createdAt: threads.find((t) => t.id === activeThreadId)?.updatedAt ?? now,
-      updatedAt: now,
+      createdAt: existing?.createdAt ?? loadedThreadCreatedAtRef.current ?? now,
+      updatedAt: preservedUpdatedAt,
       ownerUserId: userId,
     };
     saveChatThreadViaFetch(thread).catch(() => {});
     setThreads((prev) =>
-      prev.map((t) => (t.id === activeThreadId ? { ...t, title: newTitle, updatedAt: now } : t)),
+      prev.map((t) => (t.id === activeThreadId ? { ...t, title: newTitle } : t)),
     );
     setEditingTitle(false);
     titleUserEditedRef.current = true;
@@ -2611,7 +2663,10 @@ const skipNextThreadLoadRef = useRef(false);
     if (threadId) {
       const now = new Date().toISOString();
       const title = threads.find((t) => t.id === threadId)?.title ?? deriveThreadTitle(editedMessage.content);
-      const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? now;
+      // createdAt is immutable: prefer the summary, then the loaded thread's
+      // createdAt (covers the body loading before the summary list), then now
+      // for a genuinely new thread (#283).
+      const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
       saveChatThreadViaFetch({ id: threadId, title, messages: truncated, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string })
         .catch((err) => console.error("[chat] saveChatThread failed (edit):", err));
     }
@@ -2730,7 +2785,9 @@ const skipNextThreadLoadRef = useRef(false);
     {
       const now = new Date().toISOString();
       const title = threads.find((t) => t.id === threadId)?.title ?? deriveThreadTitle(trimmed);
-      const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? now;
+      // createdAt is immutable: prefer the summary, then the loaded thread's
+      // createdAt, then now for a genuinely new thread (#283).
+      const createdAt = threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
       saveChatThreadViaFetch({ id: threadId, title, messages: currentMessages, createdAt, updatedAt: now, activeAssistantHandle, taggedAssistantUserIds, slackMode: isSlackMode, ownerUserId: userId } as Record<string, unknown> & { id: string }).catch((err) => console.error("[chat] saveChatThread failed:", err));
     }
 
@@ -2767,8 +2824,10 @@ const skipNextThreadLoadRef = useRef(false);
           const title =
             threads.find((t) => t.id === threadId)?.title ??
             deriveThreadTitle(trimmed);
+          // createdAt is immutable: prefer the summary, then the loaded
+          // thread's createdAt, then now for a genuinely new thread (#283).
           const createdAt =
-            threads.find((t) => t.id === threadId)?.createdAt ?? now;
+            threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
           saveChatThreadViaFetch({
             id: threadId,
             title,

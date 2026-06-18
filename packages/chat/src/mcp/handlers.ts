@@ -620,10 +620,12 @@ async function handleChatThreadPauseAssistant(request: PrimitiveRequest): Promis
 
   const current = new Set(thread.pausedParticipants ?? []);
   current.add(assistantId);
+  // Pausing a participant is not conversational activity — preserve the
+  // existing updatedAt (spread from `thread`) so it does NOT bump the thread to
+  // the top of the activity-sorted sidebar (#283).
   upsertChatThreadInDatabase({
     ...thread,
     pausedParticipants: Array.from(current),
-    updatedAt: new Date().toISOString(),
   } as unknown as { id: string } & Record<string, unknown>);
   return { ok: true, pausedParticipants: Array.from(current) };
 }
@@ -636,10 +638,12 @@ async function handleChatThreadResumeAssistant(request: PrimitiveRequest): Promi
 
   const current = new Set(thread.pausedParticipants ?? []);
   current.delete(assistantId);
+  // Resuming a participant is not conversational activity — preserve the
+  // existing updatedAt (spread from `thread`) so it does NOT bump the thread to
+  // the top of the activity-sorted sidebar (#283).
   upsertChatThreadInDatabase({
     ...thread,
     pausedParticipants: Array.from(current),
-    updatedAt: new Date().toISOString(),
   } as unknown as { id: string } & Record<string, unknown>);
   return { ok: true, pausedParticipants: Array.from(current) };
 }
