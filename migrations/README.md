@@ -47,6 +47,54 @@ Cinatra talks to PostgreSQL raw via `pg`. Two mechanisms evolve the schema:
   statement is guarded, so the run only backfills the ledger. `psql`-applied release-note
   migrations are retired going forward — new changes auto-apply at boot/setup.
 
+## Previous-release upgrade proof
+
+The operator upgrade path above is verified end to end by
+[`scripts/ci/upgrade-proof.sh`](../scripts/ci/upgrade-proof.sh). Where the
+prod-boot e2e proves a FRESH database boots (the easy case — the chain is
+ledger-faked, see below), the upgrade proof exercises the path that can
+actually lose user data: an EXISTING deployment whose tables already hold rows.
+
+It boots `cinatra setup prod` from the **previous release image**
+(`PREV_IMAGE`, e.g. `ghcr.io/cinatra-ai/cinatra:0.1.0`) against a fresh
+Postgres — provisioning the OLD schema shape plus its `metadata` table — seeds
+representative data-bearing rows, then UPGRADES in place to the current
+checkout: it applies the candidate bootstrap DDL
+(`buildCreateStoreSchemaQueries`, the exact `ensureStoreSchema` boot pass) and
+runs the candidate core migration chain through the same runner production uses
+(`cinatra db migrate`). `db migrate` **always executes** the chain — it never
+ledger-fakes (the freshness/fake decision lives in `setup`, where
+`isFreshCoreSchema` ledger-fakes a brand-new schema; see
+`packages/cli/src/index.mjs` — it is NOT a `db migrate` decision).
+Provisioning from the previous release first means the chain executes against a
+populated, non-fresh schema, so the migrations' transformations run against the
+seeded data. It then asserts:
+
+- **migration-ledger integrity** — every `core__NNNN` runner module the
+  candidate ships is recorded in the `pgmigrations` ledger with a non-null
+  `run_on`, the ledger count matches the shipped set, and ledger ids are
+  strictly distinct (no double-apply); the module set is cross-checked against
+  `manifest.json`;
+- **data preservation** — the seeded rows survive the upgrade byte-identical;
+- **idempotency** — re-running the chain is a no-op.
+
+Run it:
+
+```sh
+PREV_IMAGE=ghcr.io/cinatra-ai/cinatra:0.1.0 bash scripts/ci/upgrade-proof.sh
+```
+
+On Apple Silicon the published `amd64` image runs under emulation; the script
+passes `--platform "$PREV_IMAGE_PLATFORM"` (default `linux/amd64`) to the
+previous-release container. It seeds `notifications` (preserved across the
+upgrade — only additively `ALTER`ed) and deliberately NOT `agent_templates`:
+the previous release ships that table as the legacy `(id, payload)` placeholder
+and the candidate bootstrap DDL intentionally `DROP`s + rebuilds it into the
+typed schema (the "Pre-structured-column schema detection and cleanup" block in
+`src/lib/drizzle-store.ts`, repopulated from the source schema on
+`setup branch`) — intended structural replacement, not data loss. Later
+milestones simply bump `PREV_IMAGE` to the prior published tag and re-run.
+
 The runner (single implementation:
 [`packages/cli/src/core-migrations.mjs`](../packages/cli/src/core-migrations.mjs))
 drives node-pg-migrate's programmatic `runner()` on a dedicated short-lived
