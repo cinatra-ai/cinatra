@@ -1,0 +1,42 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreWorkspaces": [
+    "extensions/**"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/instrumentation.node.ts",
+        "src/proxy.ts",
+        "src/app/plugins-registry.tsx",
+        "src/app/plugins-routes.tsx",
+        "src/app/field-renderer-init.tsx",
+        "src/lib/generated/**/*.{ts,tsx}",
+        "scripts/**/*.{mjs,mts,js}"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "scripts/**/*.{mjs,mts,js}"
+      ]
+    },
+    "packages/*": {
+      "entry": [
+        "src/index.{ts,tsx,mjs,mts}"
+      ]
+    }
+  },
+  "ignore": [
+    "**/__fixtures__/**",
+    "**/__tests__/__stubs__/**",
+    "**/__tests__/fixtures/**",
+    "**/tests/__stubs__/**",
+    "**/tests/fixtures/**",
+    "**/vendor/**",
+    "src/lib/generated/**",
+    "src/lib/__tests__/fixtures/**",
+    "**/*.generated.{ts,tsx}",
+    "tests/e2e/**",
+    "**/vitest.integration.config.ts"
+  ],
+  "ignoreExportsUsedInFile": true
+}
