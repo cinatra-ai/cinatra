@@ -1,5 +1,11 @@
 # Pinned extension clone-back (CI) — locks, canary, and the bump recipe
 
+> The root manifest keys this doc references live under the `cinatra` namespace
+> (cinatra#297): `cinatra.extensions` (the prod bootable set, formerly
+> `cinatra.requiredExtensions`), `cinatra.devExtensions` (formerly the top-level
+> `cinatraDevExtensions`), and `cinatra.registryPolicy` (formerly the top-level
+> `cinatraRegistryPolicy`).
+
 > This doc covers how the STATIC path acquires extension SOURCE. The other
 > acquisition path — marketplace installs into the runtime package store —
 > accepts BUILT artifacts only; see the
