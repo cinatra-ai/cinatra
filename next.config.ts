@@ -4,7 +4,13 @@ import type { NextConfig } from "next";
 // Required environment variables — fail fast at server startup.
 // ---------------------------------------------------------------------------
 const REQUIRED_ENV: string[] = [
-  "OPENAI_API_KEY",
+  // NOTE: OPENAI_API_KEY is intentionally NOT required here. The Next.js app
+  // never reads it (provider config is in-app via /setup/ai; the var only powers
+  // the Graphiti objects container, which gets it from docker-compose's
+  // `${OPENAI_API_KEY:-}` and tolerates it being unset). Requiring it at app
+  // boot crashed fresh `make setup && make dev` (the copied .env.example ships
+  // it empty) for no functional reason. See .env.example for when to set it.
+  //
   // Required at build time too: `next build` page-data collection imports
   // DB-backed modules. The Dockerfile / CI build step supplies a placeholder
   // value; runtime supplies the real connection string. Asserting it here gives
