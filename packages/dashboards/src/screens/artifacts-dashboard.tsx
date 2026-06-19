@@ -30,8 +30,7 @@ import {
   ARTIFACTS_DEFAULT_CONFIG,
   buildArtifactsDashboardId,
 } from "../components/seed-configs/artifacts-default";
-import { DashboardGridContainer } from "../components/dashboard-grid-container";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { AnalyticsPortletView } from "../components/analytics-portlet-view";
 import { saveArtifactsDashboardAction } from "../actions";
 
 async function loadArtifactsConfig(
@@ -54,7 +53,8 @@ async function loadArtifactsConfig(
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
   // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
+  // → seed). #328 swaps only the RENDER to AnalyticsPortletView (the PortletHost
+  // grid renderer); the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(rows[0], ARTIFACTS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
@@ -82,13 +82,12 @@ export async function ArtifactsDashboardPage() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell dashboardModes={["grid", "rows"]}>
-          <DashboardGridContainer
-            initialConfig={initialConfig}
-            editable
-            onSave={saveArtifactsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <AnalyticsPortletView
+          dashboard={initialConfig}
+          editable
+          onSave={saveArtifactsDashboardAction}
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );

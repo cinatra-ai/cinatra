@@ -26,8 +26,7 @@ import {
   TEAMS_DEFAULT_CONFIG,
   buildTeamsDashboardId,
 } from "../components/seed-configs/teams-default";
-import { DashboardGridContainer } from "../components/dashboard-grid-container";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { AnalyticsPortletView } from "../components/analytics-portlet-view";
 import { saveTeamsDashboardAction } from "../actions";
 
 async function loadTeamsConfig(
@@ -50,7 +49,8 @@ async function loadTeamsConfig(
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
   // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
+  // → seed). #328 swaps only the RENDER to AnalyticsPortletView (the PortletHost
+  // grid renderer); the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(rows[0], TEAMS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
@@ -89,13 +89,13 @@ export async function TeamsDashboardPage() {
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell pageAnchor="teams" dashboardModes={["grid", "rows"]}>
-          <DashboardGridContainer
-            initialConfig={initialConfig}
-            editable
-            onSave={saveTeamsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <AnalyticsPortletView
+          dashboard={initialConfig}
+          editable
+          onSave={saveTeamsDashboardAction}
+          pageAnchor="teams"
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );

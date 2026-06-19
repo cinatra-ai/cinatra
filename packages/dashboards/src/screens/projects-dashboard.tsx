@@ -2,8 +2,8 @@
  * `/projects` screen.
  *
  * Replaces the legacy custom-table page with a DC dashboard mounted via
- * `<DashboardsClientShell>` + `<DashboardGridContainer>`. Loads the
- * user's per-org-per-user dashboard row (or the
+ * the apiVersion 1.2 `<AnalyticsPortletView>` (the single PortletHost
+ * analytics-grid renderer, #328). Loads the user's per-org-per-user row (or the
  * `PROJECTS_DEFAULT_CONFIG` seed) and passes it to the same
  * `cinatraLinkedTable` chart plugin used by the other dashboards
  * so Name cells render as real `<Link>`s.
@@ -39,8 +39,7 @@ import {
   PROJECTS_DEFAULT_CONFIG,
   buildProjectsDashboardId,
 } from "../components/seed-configs/projects-default";
-import { DashboardGridContainer } from "../components/dashboard-grid-container";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { AnalyticsPortletView } from "../components/analytics-portlet-view";
 import { saveProjectsDashboardAction } from "../actions";
 
 async function loadProjectsConfig(
@@ -63,7 +62,8 @@ async function loadProjectsConfig(
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
   // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
+  // → seed). #328 swaps only the RENDER to AnalyticsPortletView (the PortletHost
+  // grid renderer); the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(rows[0], PROJECTS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
@@ -102,13 +102,13 @@ export async function ProjectsDashboardPage() {
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell pageAnchor="projects" dashboardModes={["grid", "rows"]}>
-          <DashboardGridContainer
-            initialConfig={initialConfig}
-            editable
-            onSave={saveProjectsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <AnalyticsPortletView
+          dashboard={initialConfig}
+          editable
+          onSave={saveProjectsDashboardAction}
+          pageAnchor="projects"
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );

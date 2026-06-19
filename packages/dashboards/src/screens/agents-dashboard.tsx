@@ -11,7 +11,9 @@
  *      via the dashboards store. If missing, mounts AGENTS_DEFAULT_CONFIG
  *      directly - first save materializes the row via
  *      upsertDashboardConfig.
- *   3. Mounts <DashboardsClientShell> hosting <AgentsDashboardGrid>.
+ *   3. Mounts the apiVersion 1.2 `<AnalyticsPortletView>` (the single
+ *      PortletHost analytics-grid renderer) editable, threading the same page
+ *      anchor + Grid/Rows modes + save action the legacy grid used (#328).
  *
  * Page chrome lives inside Cinatra's standard `<Main>` + `<PageHeader>`
  * + `<PageContent>` shell.
@@ -42,8 +44,7 @@ import {
   AGENTS_DEFAULT_CONFIG,
   buildAgentsDashboardId,
 } from "../components/seed-configs/agents-default";
-import { AgentsDashboardGrid } from "../components/agents-dashboard-grid";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { AnalyticsPortletView } from "../components/analytics-portlet-view";
 import { saveAgentsDashboardAction } from "../actions";
 
 /**
@@ -81,8 +82,9 @@ async function loadAgentsConfig(
   // persisted row is an apiVersion 1.2 analytics envelope, so unwrap the
   // embedded `config.dashboard` (legacy 1.0/1.1 rows still parse via the
   // dispatcher; an absent / corrupt / mislabeled row falls back to the seed —
-  // first save then materializes via upsertDashboardConfig). The screen stays on
-  // the legacy drizzle-cube grid (entity-screen→PortletHost switch is #328).
+  // first save then materializes via upsertDashboardConfig). #328 swaps only the
+  // RENDER (now AnalyticsPortletView, the PortletHost grid renderer) — the data
+  // shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
@@ -132,13 +134,13 @@ export async function AgentsDashboardPage() {
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell pageAnchor="agents" dashboardModes={["grid", "rows"]}>
-          <AgentsDashboardGrid
-            initialConfig={initialConfig}
-            editable
-            onSave={saveAgentsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <AnalyticsPortletView
+          dashboard={initialConfig}
+          editable
+          onSave={saveAgentsDashboardAction}
+          pageAnchor="agents"
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );

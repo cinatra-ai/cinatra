@@ -23,8 +23,7 @@ import {
   ORGANIZATIONS_DEFAULT_CONFIG,
   buildOrganizationsDashboardId,
 } from "../components/seed-configs/organizations-default";
-import { DashboardGridContainer } from "../components/dashboard-grid-container";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { AnalyticsPortletView } from "../components/analytics-portlet-view";
 import { saveOrganizationsDashboardAction } from "../actions";
 
 async function loadOrganizationsConfig(
@@ -47,7 +46,8 @@ async function loadOrganizationsConfig(
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
   // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
+  // → seed). #328 swaps only the RENDER to AnalyticsPortletView (the PortletHost
+  // grid renderer); the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(rows[0], ORGANIZATIONS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
@@ -75,13 +75,12 @@ export async function OrganizationsDashboardPage() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell dashboardModes={["grid", "rows"]}>
-          <DashboardGridContainer
-            initialConfig={initialConfig}
-            editable
-            onSave={saveOrganizationsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <AnalyticsPortletView
+          dashboard={initialConfig}
+          editable
+          onSave={saveOrganizationsDashboardAction}
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );
