@@ -57,7 +57,7 @@ import {
   type SecurityContext,
 } from "@cinatra-ai/sdk-dashboard";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { listAccessibleOrgIdsForUser } from "@/lib/better-auth-db";
 import {
   buildSecurityContextWithVisibility,
@@ -96,11 +96,17 @@ async function resolveSecurityContext(): Promise<SecurityContext | null> {
   // resolver delegates to the canonical scope helpers so the cube layer
   // never re-implements sealed-room / project_access / ownership-tier
   // authz. Resolver failures fail closed per-field.
-  return buildSecurityContextWithVisibility(
+  const ctx = await buildSecurityContextWithVisibility(
     { userId: session.user.id, organizationId },
     listAccessibleOrgIdsForUser,
     DASHBOARD_VISIBILITY_RESOLVERS,
   );
+  if (!ctx) return null;
+  // Decorate with the platform-admin flag the `llm_usage` cube reads as its
+  // fail-closed visibility gate. The session is already in hand, so this is
+  // a pure comma-split role check — no extra query. The `isPlatformAdmin`
+  // helper reuses the canonical role-parsing used across the app.
+  return { ...ctx, isPlatformAdmin: isPlatformAdmin(session) };
 }
 
 function clampQuery<T extends { limit?: number }>(q: T): T & { limit: number } {

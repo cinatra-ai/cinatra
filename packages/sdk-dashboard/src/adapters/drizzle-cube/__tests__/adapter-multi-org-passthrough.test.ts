@@ -56,6 +56,77 @@ describe("_buildAdapterFromLayer accessibleOrgIds passthrough", () => {
   });
 });
 
+describe("_buildAdapterFromLayer isPlatformAdmin passthrough", () => {
+  it("forwards isPlatformAdmin into drizzle-cube SecurityContext on executeQuery", async () => {
+    const captured: Array<{ ctx: Record<string, unknown> }> = [];
+    const stubLayer = {
+      executeQuery: async (_cubeName: string, _query: unknown, ctx: Record<string, unknown>) => {
+        captured.push({ ctx });
+        return { data: [], annotation: {}, query: {} };
+      },
+    } as unknown as Parameters<typeof _buildAdapterFromLayer>[0];
+
+    const fakeCube = {
+      descriptor: { id: "llm_usage", version: "1.0.0", displayName: "LLM Usage", dimensions: [], measures: [] },
+      dcCube: { name: "llm_usage" },
+    } as unknown as RegisteredCube;
+
+    const adapter = _buildAdapterFromLayer(stubLayer, [fakeCube]);
+
+    await adapter.executeQuery(
+      "llm_usage",
+      { measures: ["total_cost_usd"] },
+      {
+        userId: "u1",
+        organizationId: "org",
+        workspaceId: "",
+        teamIds: [],
+        ownerLevel: "organization",
+        accessibleOrgIds: ["org"],
+        isPlatformAdmin: true,
+      },
+    );
+
+    expect(captured).toHaveLength(1);
+    // `toDcSecurityContext` hand-whitelists fields; dropping isPlatformAdmin
+    // would make the llm_usage cube always read `undefined` → zero rows even
+    // for an admin.
+    expect(captured[0].ctx.isPlatformAdmin).toBe(true);
+  });
+
+  it("forwards a falsey/absent isPlatformAdmin verbatim (fail-closed)", async () => {
+    const captured: Array<{ ctx: Record<string, unknown> }> = [];
+    const stubLayer = {
+      executeQuery: async (_cubeName: string, _query: unknown, ctx: Record<string, unknown>) => {
+        captured.push({ ctx });
+        return { data: [], annotation: {}, query: {} };
+      },
+    } as unknown as Parameters<typeof _buildAdapterFromLayer>[0];
+    const fakeCube = {
+      descriptor: { id: "llm_usage", version: "1.0.0", displayName: "LLM Usage", dimensions: [], measures: [] },
+      dcCube: { name: "llm_usage" },
+    } as unknown as RegisteredCube;
+    const adapter = _buildAdapterFromLayer(stubLayer, [fakeCube]);
+
+    await adapter.executeQuery(
+      "llm_usage",
+      { measures: ["total_cost_usd"] },
+      {
+        userId: "u1",
+        organizationId: "org",
+        workspaceId: "",
+        teamIds: [],
+        ownerLevel: "organization",
+        accessibleOrgIds: ["org"],
+        // isPlatformAdmin omitted entirely
+      },
+    );
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0].ctx.isPlatformAdmin).toBeUndefined();
+  });
+});
+
 describe("_buildAdapterFromLayer filter prefixing", () => {
   it("re-prefixes same-cube equals filters into <cube>.<member> for SemanticQuery", async () => {
     const captured: Array<{ query: Record<string, unknown> }> = [];

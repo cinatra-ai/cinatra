@@ -18,12 +18,14 @@ import { agentRuns, agentTemplates } from "@cinatra-ai/agents/schema";
 import {
   AGENT_RUNS_CUBE_DESCRIPTOR,
   ARTIFACTS_CUBE_DESCRIPTOR,
+  LLM_USAGE_CUBE_DESCRIPTOR,
   ORGANIZATIONS_CUBE_DESCRIPTOR,
   PROJECTS_CUBE_DESCRIPTOR,
   TEAMS_CUBE_DESCRIPTOR,
   createAgentRunsCube,
   createArtifactsCube,
   createDashboardCubesPlatform,
+  createLlmUsageCube,
   createOrganizationsCube,
   createProjectsCube,
   createTeamsCube,
@@ -36,6 +38,7 @@ import {
   organizationsForCube,
   projectsForCube,
   teamsForCube,
+  usageEventsForCube,
 } from "./dashboard-cube-bindings";
 
 /**
@@ -55,12 +58,13 @@ const REGISTERED_CUBE_NAMES = [
   TEAMS_CUBE_DESCRIPTOR.id,
   ORGANIZATIONS_CUBE_DESCRIPTOR.id,
   ARTIFACTS_CUBE_DESCRIPTOR.id,
+  LLM_USAGE_CUBE_DESCRIPTOR.id,
 ] as const;
 
 /**
  * Host-owned accessor returning the set of cube names registered into the
  * platform (`agent_runs`, `projects`, `teams`, `organizations`,
- * `artifacts`). The runtime extension installer calls this to learn the
+ * `artifacts`, `llm_usage`). The runtime extension installer calls this to learn the
  * fixed cube catalog before validating an extension's dashboard config /
  * declared cube contributions. Returns a fresh array each call.
  */
@@ -113,6 +117,7 @@ export function getDashboardCubesPlatform(): DashboardCubesPlatform {
       teamsForCube,
       membersForCube,
       objectsForCube,
+      usageEventsForCube,
     },
     cubes: [
       createAgentRunsCube({
@@ -188,6 +193,23 @@ export function getDashboardCubesPlatform(): DashboardCubesPlatform {
           data: objectsForCube.data,
           createdAt: objectsForCube.createdAt,
           deletedAt: objectsForCube.deletedAt,
+        },
+      }),
+      createLlmUsageCube({
+        tableRef: usageEventsForCube,
+        columns: {
+          id: usageEventsForCube.id,
+          costUsd: usageEventsForCube.costUsd,
+          inputTokens: usageEventsForCube.inputTokens,
+          outputTokens: usageEventsForCube.outputTokens,
+          cachedInputTokens: usageEventsForCube.cachedInputTokens,
+          reasoningOutputTokens: usageEventsForCube.reasoningOutputTokens,
+          model: usageEventsForCube.model,
+          provider: usageEventsForCube.provider,
+          agentLabel: usageEventsForCube.agentLabel,
+          skillLabel: usageEventsForCube.skillLabel,
+          operation: usageEventsForCube.operation,
+          occurredAt: usageEventsForCube.occurredAt,
         },
       }),
     ],

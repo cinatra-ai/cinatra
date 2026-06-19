@@ -35,10 +35,11 @@ import { join } from "node:path";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
 import {
-  buildSecurityContextWithAccessibleOrgIds,
-} from "../auth/security-context";
-import { listAccessibleOrgIdsForUser } from "@/lib/better-auth-db";
+  listAccessibleOrgIdsForUser,
+  readUserIsPlatformAdmin,
+} from "@/lib/better-auth-db";
 import { getMcpCubeTools } from "./cubes-singleton";
+import { buildDashboardCubeMcpSecurityContext } from "./security-context";
 
 // ─── Identity resolution ─────────────────────────────────────────────────
 /**
@@ -150,9 +151,13 @@ export function createDashboardCubeMcpHandlers() {
           "dashboards_cube_*: missing user/organization identity in MCP request context",
         );
       }
-      const sc = await buildSecurityContextWithAccessibleOrgIds(
+      // Shared resolver: widens accessibleOrgIds AND decorates
+      // isPlatformAdmin (DB role lookup) for the llm_usage cube gate.
+      // registry.ts uses the SAME helper so the two MCP sites never drift.
+      const sc = await buildDashboardCubeMcpSecurityContext(
         identity,
         listAccessibleOrgIdsForUser,
+        readUserIsPlatformAdmin,
       );
       if (!sc) {
         throw new Error(

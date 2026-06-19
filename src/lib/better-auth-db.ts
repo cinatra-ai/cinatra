@@ -402,6 +402,34 @@ export async function readUserById(userId: string): Promise<{ id: string } | nul
 }
 
 /**
+ * Look up whether `userId` is a platform admin, reading Better Auth's
+ * `user.role` column directly. Better Auth's admin plugin stores roles as a
+ * comma-separated string ("user,admin"), so we apply the same comma-split
+ * test used by `src/lib/auth-session.ts:isPlatformAdmin`.
+ *
+ * Used by the MCP cube-tools transport: the MCP identity chain carries only
+ * `{userId, organizationId}` (no role), so the `llm_usage` cube's
+ * platform-admin visibility gate needs this explicit by-userId lookup.
+ * Returns `false` on any error or missing row (fail-closed).
+ */
+export async function readUserIsPlatformAdmin(userId: string): Promise<boolean> {
+  try {
+    const rows = await betterAuthDb
+      .select({ role: betterAuthUsers.role })
+      .from(betterAuthUsers)
+      .where(eq(betterAuthUsers.id, userId))
+      .limit(1);
+    return String(rows[0]?.role ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .includes("admin");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Tenant-membership existence check for installRegistryPackageAtScope.
  *
  * Returns the team row if a team with `teamId` exists AND belongs to the

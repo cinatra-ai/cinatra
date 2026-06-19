@@ -6,7 +6,7 @@ import {
 } from "../cube-guard";
 import { DASHBOARD_CONFIG_V12_VERSION, type DashboardConfigV12 } from "../dashboard-config-v12";
 
-const KNOWN_CUBES = ["agent_runs", "projects", "teams", "organizations", "artifacts"];
+const KNOWN_CUBES = ["agent_runs", "projects", "teams", "organizations", "artifacts", "llm_usage"];
 
 function portlet(config: Record<string, unknown>, instanceId = "p1") {
   return {
@@ -44,6 +44,14 @@ describe("validateExtensionCubeUsage", () => {
   it("returns ok via the cubeRef alias field", () => {
     const r = validateExtensionCubeUsage(
       { dashboardConfig: dashboard([portlet({ cubeRef: "projects" })]) },
+      { knownCubes: KNOWN_CUBES },
+    );
+    expect(r.verdict).toBe("ok");
+  });
+
+  it("returns ok for a portlet referencing the registered llm_usage cube", () => {
+    const r = validateExtensionCubeUsage(
+      { dashboardConfig: dashboard([portlet({ cube: "llm_usage" })]) },
       { knownCubes: KNOWN_CUBES },
     );
     expect(r.verdict).toBe("ok");

@@ -49,6 +49,12 @@ export {
   type ObjectsTable,
   type CreateArtifactsCubeOptions,
 } from "./cubes/artifacts";
+export {
+  createLlmUsageCube,
+  LLM_USAGE_CUBE_DESCRIPTOR,
+  type UsageEventsTable,
+  type CreateLlmUsageCubeOptions,
+} from "./cubes/llm-usage";
 
 // MCP bridge — wraps `drizzle-cube/mcp`'s `getCubeTools` into Cinatra-typed
 // `{ definitions, handle }` so the Cinatra MCP server registry can host

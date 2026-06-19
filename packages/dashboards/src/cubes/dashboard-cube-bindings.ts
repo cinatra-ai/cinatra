@@ -24,7 +24,7 @@
  * truth.
  */
 import "server-only";
-import { pgSchema, pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, pgTable, text, timestamp, jsonb, integer, numeric } from "drizzle-orm/pg-core";
 
 const cinatraSchema = pgSchema(
   process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra",
@@ -90,4 +90,31 @@ export const membersForCube = pgTable("member", {
   organizationId: text("organizationId").notNull(),
   userId: text("userId").notNull(),
   role: text("role"),
+});
+
+/**
+ * Narrow projection of `cinatra.usage_events`, sized for the llm_usage cube.
+ * Carries the cost/token measures (cost_usd, *_tokens), the grouping
+ * dimensions (model, provider, agent_label, skill_label, operation,
+ * occurred_at), and id (for the event_count COUNT). The canonical Drizzle
+ * binding for usage_events lives in
+ * `packages/metric-cost-api/src/schema.ts`; we rebind a narrow projection
+ * here so the dashboards package never imports the metric-cost-api schema
+ * (keeps the cube wiring self-contained, same pattern as `objectsForCube`).
+ * Same underlying Postgres table — this only widens the Drizzle TYPE
+ * surface, never the runtime schema.
+ */
+export const usageEventsForCube = cinatraSchema.table("usage_events", {
+  id: text("id").primaryKey(),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 8 }),
+  inputTokens: integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+  reasoningOutputTokens: integer("reasoning_output_tokens").notNull().default(0),
+  model: text("model"),
+  provider: text("provider").notNull(),
+  agentLabel: text("agent_label"),
+  skillLabel: text("skill_label"),
+  operation: text("operation"),
+  occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
 });
