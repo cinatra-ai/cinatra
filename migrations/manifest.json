@@ -56,6 +56,13 @@
       "summary": "Convert the extension install-op journal to APPEND-ONLY (cinatra#158): drop the two single-row-per-(package,org) unique indexes (pkg_org_uniq / pkg_global_uniq), add partial-UNIQUE indexes enforcing at most one finalized op per (package,org) (the install anchor) + the global org_id-IS-NULL twin, add a (package_name, org_id, phase) scan index, and widen the phase CHECK to admit the new terminal 'superseded' phase. Existing rows are preserved (append-only is strictly more permissive than single-row, so the new partial-unique-on-finalized cannot collide: a single-row schema had at most one row per (package,org), hence at most one finalized). COORDINATED, NON-ROLLING boundary: apply with pre-0005 writers drained — old reset-on-begin UPDATE keyed by (package,org) could touch multiple appended rows once the full unique indexes are gone.",
       "destructive": true,
       "tables": ["extension_install_ops"]
+    },
+    {
+      "seq": "0006",
+      "file": "core/core__0006_dashboards-v12.mjs",
+      "summary": "One-time migration of legacy dashboard configs to the v1.2 analytics envelope (cinatra#327). Rewrites every dashboards row AND dashboard_revisions row at config_version IN ('1.0.0','1.1.0') into the SAME single-analytics-portlet v1.2 envelope #326's wrapDcAsV12 emits ({apiVersion:'v1.2', scopeLevel:<derived>, portlets:[{instanceId/kind:'analytics', version:'1.0.0', slot:'fixed', config:{dashboard:<old config_json>}}]}) and sets config_version='v1.2'. scopeLevel derives from the row's project_id/template_scope (-> 'project') else owner_level; revisions JOIN dashboards on dashboard_id for scope (revisions carry no scope columns). Also flips the EXISTING-DB dashboards.config_version column DEFAULT '1.0.0' -> 'v1.2' (distinct from the fresh-install bootstrap-DDL/Drizzle-mirror default, also flipped this PR). Idempotent (the legacy-version predicate excludes already-v1.2 rows). down() reverses ONLY migrated-wrapper-shaped rows (portlets[0].kind='analytics' AND extension_id IS NULL), unwrapping back to the bare DC config + config_version '1.1.0' and resetting the column default, so genuine extension v1.2 rows are untouched.",
+      "destructive": true,
+      "tables": ["dashboards", "dashboard_revisions"]
     }
   ]
 }

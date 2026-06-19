@@ -1190,7 +1190,7 @@ END $$` },
       name                      text NOT NULL,
       description               text,
       config_json               jsonb NOT NULL,
-      config_version            text NOT NULL DEFAULT '1.0.0',
+      config_version            text NOT NULL DEFAULT 'v1.2', -- DASHBOARD_CONFIG_VERSION=v1.2 (fresh-install apiVersion default; existing-DB flip in core__0006, cinatra#327)
       dashboard_version         integer NOT NULL DEFAULT 1,
       published_revision_number integer,
       owner_level               text NOT NULL CHECK (owner_level IN ('user','team','organization','workspace')),

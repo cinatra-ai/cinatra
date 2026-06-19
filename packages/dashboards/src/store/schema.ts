@@ -29,7 +29,7 @@ export const dashboards = cinatraSchema.table(
     name: text("name").notNull(),
     description: text("description"),
     configJson: jsonb("config_json").notNull(),
-    configVersion: text("config_version").notNull().default("1.0.0"),
+    configVersion: text("config_version").notNull().default("v1.2"), // DASHBOARD_CONFIG_VERSION=v1.2 (apiVersion default; mirrors drizzle-store.ts DDL — cinatra#327)
     dashboardVersion: integer("dashboard_version").notNull().default(1),
     /** Pointer at the latest published revision; NULL while status='draft'. */
     publishedRevisionNumber: integer("published_revision_number"),

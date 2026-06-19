@@ -1,7 +1,7 @@
-diff --git a/migrations/0006_narrow-usage-events-cost-usd.sql b/migrations/0006_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0007_narrow-usage-events-cost-usd.sql b/migrations/0007_narrow-usage-events-cost-usd.sql
 new file mode 100644
 --- /dev/null
-+++ b/migrations/0006_narrow-usage-events-cost-usd.sql
++++ b/migrations/0007_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -12,15 +12,13 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -55,6 +55,13 @@
-       "file": "core/core__0005_extension-install-ops-append-only.mjs",
-       "summary": "Convert the extension install-op journal to APPEND-ONLY (cinatra#158): drop the two single-row-per-(package,org) unique indexes (pkg_org_uniq / pkg_global_uniq), add partial-UNIQUE indexes enforcing at most one finalized op per (package,org) (the install anchor) + the global org_id-IS-NULL twin, add a (package_name, org_id, phase) scan index, and widen the phase CHECK to admit the new terminal 'superseded' phase. Existing rows are preserved (append-only is strictly more permissive than single-row, so the new partial-unique-on-finalized cannot collide: a single-row schema had at most one row per (package,org), hence at most one finalized). COORDINATED, NON-ROLLING boundary: apply with pre-0005 writers drained — old reset-on-begin UPDATE keyed by (package,org) could touch multiple appended rows once the full unique indexes are gone.",
+@@ -64,5 +64,12 @@
        "destructive": true,
-       "tables": ["extension_install_ops"]
+       "tables": ["dashboards", "dashboard_revisions"]
 +    },
 +    {
-+      "seq": "0006",
-+      "file": "0006_narrow-usage-events-cost-usd.sql",
++      "seq": "0007",
++      "file": "0007_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
