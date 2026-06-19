@@ -3,9 +3,9 @@
 //
 // The 6 seed-configs (agents/artifacts/organizations/projects/teams-default +
 // the two entity-detail builders) stay authored as bare drizzle-cube
-// `DashboardConfig`s — the merged #326 entity screens consume them via
-// `readDcConfigFromRow(row, <DC seed>, parseDashboardConfig)`, which wraps the
-// DC config into the apiVersion-1.2 envelope at the load boundary (ONE wrap site, design
+// `DashboardConfig`s — the entity screens consume them via
+// `readDcConfigFromRow(row, <DC seed>)`, which reads the apiVersion-1.2 envelope
+// back at the load boundary (ONE wrap site, design
 // §4b recommendation + Q2). "No 1.0/1.1 seeds remain" is therefore satisfied
 // because no seed is ever PERSISTED as 1.1 — the first save (and the one-time
 // migration core__0006) writes apiVersion 1.2.

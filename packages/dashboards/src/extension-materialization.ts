@@ -25,19 +25,13 @@ export {
   type PortletKindDescriptor,
 } from "./extension/dashboard-config-v12";
 
-// Renderer version-dispatch (cinatra#272). Pure read-only helpers so the
-// `/dashboards/[id]` route can pick a render path from the row's config_version
-// instead of running the apiVersion 1.2-only validator unconditionally. No writes — these
-// are structural validators only, so the single-writer invariant is untouched.
+// Config-version constant + the embedded analytics body type. As of cinatra#329
+// there is ONE dashboard format (apiVersion 1.2, validated by the registry
+// validator above); the legacy 1.0.0/1.1.0 parse path + the #272 render-kind
+// dispatcher were removed. `DashboardConfigV1_1` is the embedded drizzle-cube
+// body an `analytics` portlet wraps. No writes — type/constant re-exports only.
 export {
-  resolveDashboardRenderKind,
-  type DashboardRenderKind,
-} from "./render-kind";
-export {
-  parseDashboardConfig,
-  isValidDashboardConfig,
   CURRENT_CONFIG_VERSION,
-  type DashboardConfig,
   type DashboardConfigV1_1,
 } from "./store/dashboard-config";
 

@@ -22,7 +22,6 @@ import { getPortletKindDescriptor, validatePortletConfig } from "../portlets/reg
 import {
   AGENTS_DEFAULT_CONFIG,
 } from "../components/seed-configs/agents-default";
-import { parseDashboardConfig } from "../store/dashboard-config";
 
 // A minimal valid drizzle-cube DashboardConfig (the 1.1 embedded shape).
 const DC = {
@@ -202,17 +201,19 @@ describe("v12-envelope — readDcConfigFromRow", () => {
   const SEED = { portlets: [{ id: "seed", title: "Seed", w: 1, h: 1, x: 0, y: 0, query: {} }] };
 
   it("returns the seed when the row is absent", () => {
-    expect(readDcConfigFromRow(undefined, SEED, parseDashboardConfig)).toBe(SEED);
+    expect(readDcConfigFromRow(undefined, SEED)).toBe(SEED);
   });
 
   it("unwraps an apiVersion 1.2 analytics row back to the bare DC", () => {
     const row = { configVersion: DASHBOARD_CONFIG_V12_VERSION, configJson: wrapDcAsV12(DC, "user") };
-    expect(readDcConfigFromRow(row, SEED, parseDashboardConfig)).toEqual(DC);
+    expect(readDcConfigFromRow(row, SEED)).toEqual(DC);
   });
 
-  it("parses a legacy 1.1 row via the dispatcher", () => {
+  it("falls back to the seed for a non-apiVersion-1.2 (legacy/stale) row", () => {
+    // The legacy 1.0/1.1 read path was removed in cinatra#329 after the
+    // migration; any non-1.2 row degrades to the seed.
     const row = { configVersion: "1.1.0", configJson: DC };
-    expect(readDcConfigFromRow(row, SEED, parseDashboardConfig)).toEqual(DC);
+    expect(readDcConfigFromRow(row, SEED)).toBe(SEED);
   });
 
   it("falls back to the seed for an apiVersion 1.2 row whose embedded dashboard is corrupt", () => {
@@ -224,7 +225,7 @@ describe("v12-envelope — readDcConfigFromRow", () => {
         portlets: [{ instanceId: "analytics", kind: "analytics", version: "1.0.0", slot: "fixed", config: { dashboard: { portlets: "not-an-array" } } }],
       },
     };
-    expect(readDcConfigFromRow(row, SEED, parseDashboardConfig)).toBe(SEED);
+    expect(readDcConfigFromRow(row, SEED)).toBe(SEED);
   });
 
   it("falls back to the seed for an apiVersion 1.2 row with no analytics portlet", () => {
@@ -232,11 +233,11 @@ describe("v12-envelope — readDcConfigFromRow", () => {
       configVersion: DASHBOARD_CONFIG_V12_VERSION,
       configJson: { apiVersion: DASHBOARD_CONFIG_V12_VERSION, scopeLevel: "user", portlets: [] },
     };
-    expect(readDcConfigFromRow(row, SEED, parseDashboardConfig)).toBe(SEED);
+    expect(readDcConfigFromRow(row, SEED)).toBe(SEED);
   });
 
   it("falls back to the seed for an unknown version", () => {
     const row = { configVersion: "9.9.9", configJson: DC };
-    expect(readDcConfigFromRow(row, SEED, parseDashboardConfig)).toBe(SEED);
+    expect(readDcConfigFromRow(row, SEED)).toBe(SEED);
   });
 });

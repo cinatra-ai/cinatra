@@ -73,7 +73,7 @@ function isAnalyticsPortletRecord(p: unknown): boolean {
 /**
  * Is `config` already an apiVersion 1.2 envelope? Discriminated purely by the
  * `apiVersion` literal — the same discriminator the row's `config_version`
- * column and `resolveDashboardRenderKind` use. Deliberately structural-lite
+ * column uses. Deliberately structural-lite
  * (does not deep-validate portlets): callers that need full validation run the
  * registry validator (`assertConfigV12`) separately.
  */
@@ -175,40 +175,31 @@ export function unwrapV12ToDc(config: unknown): unknown | null {
 }
 
 /**
- * Read-side resolver for the entity screens (cinatra#326 §3c). Given a row's
- * stored `config_version` + `config_json` (or `undefined` when the row is
- * absent) and the screen's seed config, return the bare drizzle-cube config the
- * legacy grid mounts:
+ * Read-side resolver for the entity screens. Given a row's stored
+ * `config_version` + `config_json` (or `undefined` when the row is absent) and
+ * the screen's seed config, return the bare drizzle-cube config the analytics
+ * grid mounts:
  *
  *   - row absent → seed.
  *   - apiVersion 1.2 row → unwrap the analytics portlet's `config.dashboard`,
- *     re-validated as a 1.1 DC config (defensive: a corrupt/mislabeled embedded
+ *     re-validated as a 1.1 DC body (defensive: a corrupt/mislabeled embedded
  *     config degrades to the seed instead of crashing the grid).
- *   - legacy 1.0/1.1 row → `parseDashboardConfig` (unchanged behavior).
- *   - anything else / parse failure → seed.
+ *   - anything else (non-apiVersion-1.2 version) / unwrap failure → seed.
  *
- * This keeps the 5 entity screens on the legacy drizzle-cube grid (#328 is NOT
- * part of #326) while making the save→reload round-trip show the saved layout
- * rather than snapping back to the seed.
+ * The legacy 1.0/1.1 read path was removed in cinatra#329: all pre-existing rows
+ * were migrated to the apiVersion 1.2 envelope (cinatra#327), so a row that is
+ * not apiVersion 1.2 can only be a corrupt/stale row — it degrades to the seed.
  */
 export function readDcConfigFromRow<T>(
   row: { readonly configVersion: string; readonly configJson: unknown } | undefined,
   seed: T,
-  parseLegacy: (version: string, payload: unknown) => unknown,
 ): T {
   if (!row) return seed;
-  try {
-    if (row.configVersion === DASHBOARD_CONFIG_V12_VERSION) {
-      const dc = unwrapV12ToDc(row.configJson);
-      if (dc === null) return seed;
-      const parsed = DashboardConfigV1_1Schema.safeParse(dc);
-      // Return the VALIDATED output (parity with the legacy parseDashboardConfig
-      // path), not the raw unwrapped object, so both read paths yield the same
-      // normalized config even if the schema gains defaults/coercions.
-      return parsed.success ? (parsed.data as T) : seed;
-    }
-    return parseLegacy(row.configVersion, row.configJson) as T;
-  } catch {
-    return seed;
-  }
+  if (row.configVersion !== DASHBOARD_CONFIG_V12_VERSION) return seed;
+  const dc = unwrapV12ToDc(row.configJson);
+  if (dc === null) return seed;
+  const parsed = DashboardConfigV1_1Schema.safeParse(dc);
+  // Return the VALIDATED output, not the raw unwrapped object, so the read path
+  // yields a normalized config even if the schema gains defaults/coercions.
+  return parsed.success ? (parsed.data as T) : seed;
 }

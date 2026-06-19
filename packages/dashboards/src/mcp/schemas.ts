@@ -45,7 +45,7 @@ export const dashboardsCreateSchema = z.object({
   dashboardId: writeDashboardIdSchema.optional(),
   name: z.string().min(1),
   description: z.string().optional(),
-  /** DashboardConfig payload - validated by parseDashboardConfig(version, payload). */
+  /** DashboardConfig payload - validated as an apiVersion 1.2 envelope by the mutation service. */
   config: z.unknown(),
   configVersion: z.string().min(1).optional(),
   ownerLevel: ownerLevelSchema,

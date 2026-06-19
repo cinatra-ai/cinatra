@@ -1,15 +1,13 @@
 "use client";
 /**
  * `DashboardGridContainer` — generic client-side wrapper around
- * `<ComposedDashboard>` used by the
- * /projects, /teams, /organizations, and /artifacts dashboards. Identical
- * state-management shape to `AgentsDashboardGrid` — debounced auto-save
- * through an `AutoSaveCoordinator` plus a local `config` mirror so the
- * visible grid doesn't snap back to the seed when DC re-derives layout
- * from `props.config`. Kept as a separate component (not a refactor
- * of agents) so the agents surface stays untouched.
+ * `<ComposedDashboard>` used by the analytics portlet view and the
+ * /projects, /teams, /organizations, and /artifacts dashboards. Provides
+ * debounced auto-save through an `AutoSaveCoordinator` plus a local `config`
+ * mirror so the visible grid doesn't snap back to the seed when DC re-derives
+ * layout from `props.config`.
  *
- * Belt-and-suspenders save handling matches agents:
+ * Belt-and-suspenders save handling:
  *   - `onConfigChange` debounces by 350 ms (drag-stop / resize-stop / etc.).
  *   - `onSave` flushes immediately (cancels any pending debounce).
  *   - Pending changes flush on unmount via a no-op `mountedRef` guard.

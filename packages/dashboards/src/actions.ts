@@ -2,8 +2,8 @@
 /**
  * Server Actions for the dashboards package.
  *
- * `saveAgentsDashboardAction` is invoked from the client component
- * `AgentsDashboardGrid` via `<DashboardGrid onSave>`. It funnels every
+ * `saveAgentsDashboardAction` is invoked from the /agents screen via the
+ * `AnalyticsPortletView` `onSave` prop (cinatra#328). It funnels every
  * save through the mutation service's `upsertDashboardConfig`, which
  * is the single writer (audit-event row written inside the
  * same TX; advisory-lock serializes concurrent writers).

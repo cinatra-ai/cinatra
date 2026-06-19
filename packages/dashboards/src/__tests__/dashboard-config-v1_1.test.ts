@@ -3,24 +3,21 @@ import { describe, expect, it } from "vitest";
 import {
   CURRENT_CONFIG_VERSION,
   DashboardConfigV1_1Schema,
-  DashboardConfigV1Schema,
-  parseDashboardConfig,
-  isValidDashboardConfig,
 } from "../store/dashboard-config";
 import { DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12";
 import { AGENTS_DEFAULT_CONFIG } from "../components/seed-configs/agents-default";
 
 /**
- * The schema mirrors drizzle-cube's DashboardConfig shape:
- * portlets with w/h/x/y at the root + analysisConfig (canonical) or
- * legacy query (deprecated). The older schema required portlets[].type
- * and a flat `query` record, which would have rejected the drizzle-cube
- * shape and failed the first save of /agents.
+ * `DashboardConfigV1_1Schema` is the embedded analytics body an apiVersion 1.2
+ * `analytics` portlet wraps at `config.dashboard`. It mirrors drizzle-cube's
+ * DashboardConfig shape: portlets with w/h/x/y at the root + analysisConfig
+ * (canonical) or legacy query (deprecated). The legacy 1.0.0 schema +
+ * `parseDashboardConfig` dispatcher were removed in cinatra#329 (one format only).
  *
  * This test asserts the current schema:
  *   - parses the AGENTS_DEFAULT_CONFIG seed cleanly.
- *   - keeps read-compat for the older dashboard config schema.
  *   - enforces invariants via .superRefine().
+ *   - tolerates unknown drizzle-cube fields via .passthrough().
  */
 
 describe("DashboardConfig schema", () => {
@@ -33,23 +30,6 @@ describe("DashboardConfig schema", () => {
   it("current schema parses the AGENTS_DEFAULT_CONFIG seed cleanly", () => {
     const result = DashboardConfigV1_1Schema.safeParse(AGENTS_DEFAULT_CONFIG);
     expect(result.success).toBe(true);
-  });
-
-  it("older schema would have REJECTED the drizzle-cube seed shape", () => {
-    // This is the regression evidence: the older schema rejected
-    // the actual config we now ship.
-    const result = DashboardConfigV1Schema.safeParse(AGENTS_DEFAULT_CONFIG);
-    expect(result.success).toBe(false);
-  });
-
-  it("parseDashboardConfig dispatches by version (both 1.0.0 and 1.1.0)", () => {
-    expect(() => parseDashboardConfig("1.1.0", AGENTS_DEFAULT_CONFIG)).not.toThrow();
-    expect(() => parseDashboardConfig("1.0.0", { portlets: [{ id: "p1", type: "chart" }] })).not.toThrow();
-    expect(() => parseDashboardConfig("9.0.0", {})).toThrow(/Unsupported DashboardConfig version/);
-  });
-
-  it("isValidDashboardConfig returns true for the seed under 1.1.0", () => {
-    expect(isValidDashboardConfig("1.1.0", AGENTS_DEFAULT_CONFIG)).toBe(true);
   });
 
   describe(".superRefine invariants", () => {

@@ -30,10 +30,7 @@ import {
 } from "../auth/security-context";
 
 import { dashboards, getDashboardsDb } from "../store/db";
-import {
-  parseDashboardConfig,
-  type DashboardConfigV1_1,
-} from "../store/dashboard-config";
+import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
   PROJECTS_DEFAULT_CONFIG,
@@ -61,10 +58,11 @@ async function loadProjectsConfig(
     )
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
-  // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). #328 swaps only the RENDER to AnalyticsPortletView (the PortletHost
-  // grid renderer); the data shape stays the bare DC config the view mounts.
-  return readDcConfigFromRow(rows[0], PROJECTS_DEFAULT_CONFIG, parseDashboardConfig);
+  // config the grid mounts (an absent/corrupt/non-1.2 row falls back to the
+  // seed; the legacy 1.0/1.1 read path was removed in cinatra#329 after the
+  // migration). #328 renders via AnalyticsPortletView (the PortletHost grid
+  // renderer); the data shape stays the bare DC config the view mounts.
+  return readDcConfigFromRow(rows[0], PROJECTS_DEFAULT_CONFIG);
 }
 
 export async function ProjectsDashboardPage() {

@@ -35,9 +35,8 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
 // The `analytics` keystone kind (cinatra#325) embeds a WHOLE drizzle-cube
 // dashboard at `config.dashboard`. Its renderer lives in the dashboards package
 // (ESLint Layer 4) because it mounts `drizzle-cube/client`; this app-dir host
-// cannot import that, so it lazy-loads the view through the app-local re-export
-// — exactly like `[id]/page.tsx` lazy-loads `LegacyDashboardView`. The dynamic
-// import keeps the DC client bundle off non-analytics dashboards.
+// cannot import that, so it lazy-loads the view through the app-local re-export.
+// The dynamic import keeps the DC client bundle off non-analytics dashboards.
 const AnalyticsPortletView = dynamic(() =>
   import("@/components/dashboards/analytics-portlet-view").then((m) => m.AnalyticsPortletView),
 );

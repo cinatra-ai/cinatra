@@ -6,9 +6,8 @@
 // `drizzle-cube/client` import is only permitted there (ESLint Layer 4). This
 // thin re-export keeps `<PortletHost>` (an app-dir client file that may NOT
 // import drizzle-cube/client) referencing a stable app-local module it can
-// `next/dynamic`-import behind the analytics branch — exactly mirroring
-// `legacy-dashboard-view.tsx`. The dynamic import keeps the DC client bundle off
-// non-analytics dashboards.
+// `next/dynamic`-import behind the analytics branch. The dynamic import keeps
+// the DC client bundle off non-analytics dashboards.
 export {
   AnalyticsPortletView,
   type AnalyticsPortletViewProps,

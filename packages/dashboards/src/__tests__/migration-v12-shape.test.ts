@@ -9,8 +9,8 @@
 // using the REAL bundled normalizer (not a TS replica of the old SQL):
 //
 //   Finding 2 (BLOCKER): a pure-1.0.0 dashboard body (type-discriminated
-//     portlets, NO title/w/h/x/y — the `render-kind.test.ts` LEGACY_V1_0_CONFIG
-//     shape) is NORMALIZED to the schema-1.1 grid shape before wrapping, so the
+//     portlets, NO title/w/h/x/y — see LEGACY_V1_0_CONFIG below)
+//     is NORMALIZED to the schema-1.1 grid shape before wrapping, so the
 //     migrated row's embedded config.dashboard PASSES the analytics deep
 //     validator (assertConfigV12). Wrapping a 1.0 body VERBATIM (no normalize)
 //     still FAILS — proving the normalize is load-bearing.
@@ -22,16 +22,36 @@
 //     (no marker) is now ALSO left untouched, not just multi-portlet/extension
 //     rows. Here we replicate the down() WHERE predicate and assert it.
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { wrapDcAsV12 } from "../v12-envelope";
 import {
   validateDashboardConfigV12,
   DASHBOARD_CONFIG_V12_VERSION,
 } from "../extension/dashboard-config-v12";
-import {
-  DashboardConfigV1Schema,
-  DashboardConfigV1_1Schema,
-} from "../store/dashboard-config";
+import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
+
+// Local replica of the (now-removed, cinatra#329) permissive 1.0.0 schema —
+// type-discriminated portlets, no required grid layout. The migration must
+// accept a pure-1.0.0 body shaped like this; we assert that contrast locally
+// rather than depend on the deleted production schema.
+const LegacyConfigV1Schema = z.object({
+  portlets: z.array(
+    z.object({
+      id: z.string().min(1),
+      type: z.string().min(1),
+      title: z.string().optional(),
+      cubeId: z.string().optional(),
+      query: z.record(z.string(), z.unknown()).optional(),
+    }),
+  ),
+  layout: z
+    .object({
+      columns: z.number().int().positive().optional(),
+      gap: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+});
 import { registerCorePortletKinds, isAnalyticsPortletKind, ANALYTICS_PORTLET_KIND } from "../portlets/kinds";
 import {
   getPortletKindDescriptor,
@@ -94,9 +114,9 @@ function downGuardMatches(row: { configVersion: string; extensionId: string | nu
   return dashboard !== undefined && dashboard !== null;
 }
 
-// The render-kind.test.ts LEGACY_V1_0_CONFIG shape: type-discriminated portlets,
-// no title/w/h/x/y. (Second portlet carries a 1.0 title+query to prove normalize
-// PRESERVES them; third has an empty title — valid 1.0, invalid strict 1.1.)
+// A pure-1.0.0 body: type-discriminated portlets, no title/w/h/x/y. (Second
+// portlet carries a 1.0 title+query to prove normalize PRESERVES them; third has
+// an empty title — valid 1.0, invalid strict 1.1.)
 const LEGACY_V1_0_CONFIG = {
   portlets: [
     { id: "p1", type: "chart" },
@@ -114,7 +134,7 @@ const VALID_GRID_CONFIG = {
 
 describe("core__0006 up(): pure-1.0.0 normalization (cinatra#327 Finding 2, robust-B)", () => {
   it("a pure-1.0.0 body is a VALID 1.0.0 config but NOT a valid grid (schema-1.1) body (the root cause)", () => {
-    expect(DashboardConfigV1Schema.safeParse(LEGACY_V1_0_CONFIG).success).toBe(true);
+    expect(LegacyConfigV1Schema.safeParse(LEGACY_V1_0_CONFIG).success).toBe(true);
     expect(DashboardConfigV1_1Schema.safeParse(LEGACY_V1_0_CONFIG).success).toBe(false);
   });
 

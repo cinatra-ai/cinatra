@@ -4,7 +4,7 @@ import { createAutoSaveCoordinator } from "../components/auto-save-coordinator";
 
 /**
  * Hermetic tests for `createAutoSaveCoordinator` — the pure coordinator
- * powering `<AgentsDashboardGrid>`'s auto-save. We exercise the
+ * powering `<DashboardGridContainer>`'s auto-save. We exercise the
  * guarantees that the "resize doesn't save" behavior depends on:
  *
  *   - dedup by JSON.stringify(next) vs the last persisted JSON

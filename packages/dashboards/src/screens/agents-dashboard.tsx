@@ -35,10 +35,7 @@ import { buildSecurityContextFromSession } from "../auth/security-context";
 import { and } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "../store/db";
-import {
-  parseDashboardConfig,
-  type DashboardConfigV1_1,
-} from "../store/dashboard-config";
+import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
   AGENTS_DEFAULT_CONFIG,
@@ -79,13 +76,13 @@ async function loadAgentsConfig(
     .limit(1);
   const existing = rows[0];
   // Resolve the bare drizzle-cube config the grid mounts. After cinatra#326 the
-  // persisted row is an apiVersion 1.2 analytics envelope, so unwrap the
-  // embedded `config.dashboard` (legacy 1.0/1.1 rows still parse via the
-  // dispatcher; an absent / corrupt / mislabeled row falls back to the seed —
-  // first save then materializes via upsertDashboardConfig). #328 swaps only the
-  // RENDER (now AnalyticsPortletView, the PortletHost grid renderer) — the data
-  // shape stays the bare DC config the view mounts.
-  return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG, parseDashboardConfig);
+  // persisted row is an apiVersion 1.2 analytics envelope, so unwrap the embedded
+  // `config.dashboard` (an absent / corrupt / mislabeled / non-1.2 row falls
+  // back to the seed — first save then materializes via upsertDashboardConfig;
+  // the legacy 1.0/1.1 read path was removed in cinatra#329 after the migration).
+  // #328 swapped the RENDER (now AnalyticsPortletView, the PortletHost grid
+  // renderer) — the data shape stays the bare DC config the view mounts.
+  return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG);
 }
 
 export async function AgentsDashboardPage() {
