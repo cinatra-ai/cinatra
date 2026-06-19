@@ -83,8 +83,8 @@ test("findLeaks does NOT flag legitimate author value exports", () => {
   assert.deepEqual(leaks, []);
 });
 
-test("FENCED_CONSTANTS lists exactly 20 known host capability ids", () => {
-  assert.equal(FENCED_CONSTANTS.length, 20);
+test("FENCED_CONSTANTS lists exactly 21 known host capability ids", () => {
+  assert.equal(FENCED_CONSTANTS.length, 21);
 });
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@
 // proves the same fence by import-reachability.
 //
 // Caught (any VALUE export of one of these identifiers from index.ts):
-//   - the named 20 fenced constants (HOST_CONNECTOR_SERVICE_CAPABILITIES,
+//   - the named fenced constants (HOST_CONNECTOR_SERVICE_CAPABILITIES,
 //     NANGO_SYSTEM_CAPABILITY, …), AND
 //   - ANY future identifier matching /_CAPABILITY$/ /_CAPABILITY_ID$/ —
 //     fail-closed so a new host capability id can't silently leak.
@@ -38,7 +38,7 @@ import { execSync } from "node:child_process";
 
 export const INDEX_REL = "packages/sdk-extensions/src/index.ts";
 
-// The 20 known host-internal capability-id constants (the fence's explicit
+// The known host-internal capability-id constants (the fence's explicit
 // contract). Listed so the gate names them precisely when one leaks back.
 export const FENCED_CONSTANTS = Object.freeze([
   "HOST_CONNECTOR_SERVICE_CAPABILITIES",
@@ -47,6 +47,7 @@ export const FENCED_CONSTANTS = Object.freeze([
   "LLM_TOOLBOX_CAPABILITY",
   "SOCIAL_POST_CAPABILITY",
   "CRM_PROVIDER_CAPABILITY",
+  "PM_PROVIDER_CAPABILITY",
   "EMAIL_SEND_CAPABILITY",
   "OBJECT_TYPE_REGISTRAR_CAPABILITY",
   "CRM_SYNC_BOOTSTRAP_CAPABILITY",

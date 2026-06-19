@@ -77,6 +77,13 @@ import "@/lib/register-objects-provider";
 // capability.)
 import "@/lib/register-crm-providers";
 
+// Bind the SDK PM provider registry's external resolver to the capability
+// registry so a PM provider registered from an extension serverEntry
+// (`pm-provider` capability) resolves through lookupPmProvider — the host names
+// no concrete PM provider. The trigger lifecycle mirrors run triggers into the
+// registered PM connector (plane today) via src/lib/pm-integration-providers.ts.
+import "@/lib/register-pm-providers";
+
 // Publish the host-side blog ROUTING services (`@cinatra-ai/host:blog-routing`)
 // and keep the SDK blog-connector slot bound (routing into the `blog-connector`
 // capability). The blog facade extension configures itself at serverEntry

@@ -816,6 +816,10 @@ export const SOCIAL_POST_CAPABILITY = "social-post";
 /** The crm-provider capability id concrete CRM providers register under. */
 export const CRM_PROVIDER_CAPABILITY = "crm-provider";
 
+/** The pm-provider capability id concrete project-management providers
+ *  (plane-connector today; linear/jira later) register under. */
+export const PM_PROVIDER_CAPABILITY = "pm-provider";
+
 /** The email-send capability id concrete email providers register under. */
 export const EMAIL_SEND_CAPABILITY = "email-send";
 

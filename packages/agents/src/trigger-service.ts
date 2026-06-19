@@ -28,6 +28,18 @@ import {
   RunTransitionError,
   readAgentRunById,
 } from "./store";
+// Host PM (project-management) bridge (Option-2 thin host indirection): mirror
+// run triggers into the registered `pm-provider` (plane today) at the two
+// trigger lifecycle points. Resolves through the Next.js "@/lib/*" alias —
+// trigger-service.ts is server-only and compiles inside the host bundle. BOTH
+// functions are FAIL-OPEN (they catch internally and never throw); the extra
+// `.catch` below is belt-and-suspenders so a PM mirror can never break a
+// trigger op. Mirrors the precedent in external-mcp-caller.ts (a packages/agents
+// module reaching a host-resolved outbound integration via "@/lib/*").
+import {
+  syncRunTriggerPmTask,
+  deleteRunTriggerPmTask,
+} from "@/lib/pm-integration-providers";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -340,6 +352,26 @@ export async function setRunTriggerForActor(
     }
   }
 
+  // PM mirror (Option-2 host indirection): after the schedule is persisted and
+  // the status flip has settled, push/upsert the Plane work item that mirrors
+  // this trigger. Fail-open — never let a PM outage fail an otherwise-successful
+  // trigger config (the bridge already swallows errors; the .catch is a final
+  // backstop).
+  await syncRunTriggerPmTask({
+    runId: args.runId,
+    triggerType: args.triggerType,
+    scheduledAt: args.scheduledAt ?? null,
+    cronExpression: args.cronExpression ?? null,
+    timezone: tz,
+    enabled: args.enabled ?? true,
+  }).catch((err) => {
+    console.warn(
+      "[setRunTriggerForActor] PM mirror sync failed (continuing)",
+      args.runId,
+      err,
+    );
+  });
+
   return {
     ok: true,
     runId: args.runId,
@@ -401,7 +433,20 @@ export async function deleteRunTriggerForActor(
   }
 
   const trigger = await readRunTriggerByRunId(args.runId);
-  if (!trigger) return { ok: true };
+  if (!trigger) {
+    // No trigger row — but a PM mirror task may still exist (e.g. a prior
+    // fail-open PM delete failed AFTER the DB row was deleted). Make the PM
+    // delete retry-idempotent by still attempting it here (it's a no-op when
+    // no task is mapped). Fail-open.
+    await deleteRunTriggerPmTask({ runId: args.runId }).catch((err) => {
+      console.warn(
+        "[deleteRunTriggerForActor] PM mirror delete (no-trigger-row path) failed (continuing)",
+        args.runId,
+        err,
+      );
+    });
+    return { ok: true };
+  }
 
   try {
     await cancelTriggerSchedule({
@@ -436,6 +481,19 @@ export async function deleteRunTriggerForActor(
       }
     }
   }
+
+  // PM mirror (Option-2 host indirection): after the trigger row is deleted and
+  // the armed→stopped transition has settled, delete/unschedule the Plane work
+  // item mirroring this run. Fail-open and idempotent (a no-op when no task was
+  // mapped); the .catch is a final backstop on top of the bridge's own
+  // error-swallowing.
+  await deleteRunTriggerPmTask({ runId: args.runId }).catch((err) => {
+    console.warn(
+      "[deleteRunTriggerForActor] PM mirror delete failed (continuing)",
+      args.runId,
+      err,
+    );
+  });
 
   return { ok: true };
 }
