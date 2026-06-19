@@ -391,6 +391,7 @@ services:
   wayflow:
     build:
       context: ./docker/wayflow
+    restart: unless-stopped
     ports:
       - "3010:3010"
     environment:
