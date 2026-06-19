@@ -165,7 +165,10 @@ export function reEnvelopeDcSave(
  */
 export function unwrapV12ToDc(config: unknown): unknown | null {
   if (!isV12Envelope(config)) return null;
-  const portlets = (config as { portlets?: unknown[] }).portlets ?? [];
+  const rawPortlets = (config as { portlets?: unknown }).portlets;
+  // Defensive: a malformed envelope may carry a non-array `portlets`; degrade to
+  // null (caller falls back to seed) rather than throwing on `.find`.
+  const portlets = Array.isArray(rawPortlets) ? rawPortlets : [];
   const analytics = portlets.find(isAnalyticsPortletRecord);
   const cfg = asRecord(asRecord(analytics)?.config);
   return cfg?.dashboard ?? null;
@@ -199,7 +202,10 @@ export function readDcConfigFromRow<T>(
       const dc = unwrapV12ToDc(row.configJson);
       if (dc === null) return seed;
       const parsed = DashboardConfigV1_1Schema.safeParse(dc);
-      return parsed.success ? (dc as T) : seed;
+      // Return the VALIDATED output (parity with the legacy parseDashboardConfig
+      // path), not the raw unwrapped object, so both read paths yield the same
+      // normalized config even if the schema gains defaults/coercions.
+      return parsed.success ? (parsed.data as T) : seed;
     }
     return parseLegacy(row.configVersion, row.configJson) as T;
   } catch {

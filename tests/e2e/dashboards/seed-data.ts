@@ -149,10 +149,13 @@ export async function seedV12AnalyticsDashboard(opts: {
           organization_id, visibility, status, created_by)
        VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
        ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
          config_json = EXCLUDED.config_json,
          config_version = EXCLUDED.config_version,
          owner_id = EXCLUDED.owner_id,
-         organization_id = EXCLUDED.organization_id`,
+         organization_id = EXCLUDED.organization_id,
+         visibility = EXCLUDED.visibility,
+         status = EXCLUDED.status`,
       [
         V12_ANALYTICS_DASHBOARD_ID,
         "E2E apiVersion 1.2 Analytics",
@@ -166,9 +169,14 @@ export async function seedV12AnalyticsDashboard(opts: {
       `SELECT config_version FROM ${schema}.dashboards WHERE id = $1 LIMIT 1`,
       [V12_ANALYTICS_DASHBOARD_ID],
     );
+    if (check.rows.length === 0) {
+      throw new Error(
+        `seedV12AnalyticsDashboard: read-after-write found no row for ${V12_ANALYTICS_DASHBOARD_ID}`,
+      );
+    }
     return {
       dashboardId: V12_ANALYTICS_DASHBOARD_ID,
-      configVersion: (check.rows[0]?.config_version as string) ?? "",
+      configVersion: check.rows[0].config_version as string,
     };
   } finally {
     await pool.end();

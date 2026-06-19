@@ -29,7 +29,14 @@ import { AGENTS_DEFAULT_CONFIG } from "../components/seed-configs/agents-default
 import type { DashboardActor } from "../permissions";
 
 const RUN_IT = process.env.DASH_DB_IT === "1" && !!process.env.SUPABASE_DB_URL;
-const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it";
+const RAW_SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra_it";
+// This value is interpolated into raw SQL identifiers (CREATE/DROP SCHEMA, table
+// refs). Reject anything that is not a plain unquoted identifier so a crafted
+// env value cannot break out of the identifier (the suite DROPs the schema CASCADE).
+if (RUN_IT && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(RAW_SCHEMA)) {
+  throw new Error(`Unsafe SUPABASE_SCHEMA for the integration test: ${RAW_SCHEMA}`);
+}
+const SCHEMA = RAW_SCHEMA;
 
 const actor: DashboardActor = {
   userId: "u-it-1",
