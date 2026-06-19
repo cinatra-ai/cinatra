@@ -7,6 +7,7 @@ import {
   parseDashboardConfig,
   isValidDashboardConfig,
 } from "../store/dashboard-config";
+import { DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12";
 import { AGENTS_DEFAULT_CONFIG } from "../components/seed-configs/agents-default";
 
 /**
@@ -23,8 +24,10 @@ import { AGENTS_DEFAULT_CONFIG } from "../components/seed-configs/agents-default
  */
 
 describe("DashboardConfig schema", () => {
-  it("CURRENT_CONFIG_VERSION bumped to 1.1.0", () => {
-    expect(CURRENT_CONFIG_VERSION).toBe("1.1.0");
+  it("CURRENT_CONFIG_VERSION is the apiVersion 1.2 literal (cinatra#326)", () => {
+    // NEW operator/agent writes now persist the apiVersion 1.2 envelope; the
+    // current-version constant re-exports the apiVersion 1.2 literal (single source).
+    expect(CURRENT_CONFIG_VERSION).toBe(DASHBOARD_CONFIG_V12_VERSION);
   });
 
   it("current schema parses the AGENTS_DEFAULT_CONFIG seed cleanly", () => {

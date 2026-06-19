@@ -37,6 +37,7 @@ import {
   parseDashboardConfig,
   type DashboardConfigV1_1,
 } from "../store/dashboard-config";
+import { readDcConfigFromRow } from "../v12-envelope";
 import {
   AGENTS_DEFAULT_CONFIG,
   buildAgentsDashboardId,
@@ -76,20 +77,13 @@ async function loadAgentsConfig(
     )
     .limit(1);
   const existing = rows[0];
-  if (!existing) {
-    // First-visit-after-deploy path (or a pre-poisoned row that didn't
-    // match the caller's actor). Render the seed; first save materializes
-    // via upsertDashboardConfig.
-    return AGENTS_DEFAULT_CONFIG;
-  }
-  try {
-    const parsed = parseDashboardConfig(existing.configVersion, existing.configJson);
-    return parsed as DashboardConfigV1_1;
-  } catch {
-    // Defensive: if a future schema version slips in or the DB row is
-    // corrupt, fall back to the seed rather than 500.
-    return AGENTS_DEFAULT_CONFIG;
-  }
+  // Resolve the bare drizzle-cube config the grid mounts. After cinatra#326 the
+  // persisted row is an apiVersion 1.2 analytics envelope, so unwrap the
+  // embedded `config.dashboard` (legacy 1.0/1.1 rows still parse via the
+  // dispatcher; an absent / corrupt / mislabeled row falls back to the seed —
+  // first save then materializes via upsertDashboardConfig). The screen stays on
+  // the legacy drizzle-cube grid (entity-screen→PortletHost switch is #328).
+  return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
 export async function AgentsDashboardPage() {

@@ -49,6 +49,11 @@ import {
 } from "./extension/dashboard-config-v12";
 import { registerCorePortletKinds } from "./portlets/kinds";
 import { getPortletKindDescriptor, validatePortletConfig } from "./portlets/registry";
+import {
+  isV12Envelope,
+  ownerLevelToScopeLevel,
+  reEnvelopeDcSave,
+} from "./v12-envelope";
 
 export class DashboardForbiddenError extends Error {
   readonly code = "dashboard_forbidden";
@@ -133,15 +138,107 @@ async function writeAudit(
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Validate a dashboard config against its `configVersion` (cinatra#326 §3a).
+ *
+ * Dispatches on the version discriminator:
+ *   - apiVersion 1.2 → the SAME registry-backed validator the extension-install
+ *     materializer uses (`assertConfigV12`), which (post-#325) accepts the
+ *     `analytics` portlet kind. This is where a wrapped operator/agent dashboard
+ *     gets its deep per-kind validation.
+ *   - 1.0.0 / 1.1.0 → the existing legacy `parseDashboardConfig` (UNCHANGED;
+ *     kept until the legacy path is removed in cinatra#329). `parseDashboardConfig`
+ *     is deliberately NOT widened to know apiVersion 1.2 — the mutation service is
+ *     the dispatcher, the legacy parser stays legacy-only.
+ */
 async function validateConfig(
   config: unknown,
   configVersion: string,
 ): Promise<unknown> {
+  if (configVersion === DASHBOARD_CONFIG_V12_VERSION) {
+    // assertConfigV12 already throws DashboardConfigInvalidError on failure.
+    return assertConfigV12(config);
+  }
   try {
     return parseDashboardConfig(configVersion, config);
   } catch (err) {
     throw new DashboardConfigInvalidError(err);
   }
+}
+
+/**
+ * Resolve the effective `{ config, configVersion }` a write should PERSIST
+ * (cinatra#326 §3b/§3c), then validate it. Callers (create/update/upsert) pass
+ * the incoming config + requested version + (for update/upsert) the existing
+ * row's config + scope, and persist the returned pair.
+ *
+ * Rules:
+ *   1. Effective version: an existing apiVersion 1.2 row STAYS apiVersion 1.2 —
+ *      a write is never silently downgraded to a legacy version (which would
+ *      drop sibling portlets / mislabel the row). Otherwise the requested
+ *      version (already defaulted to `CURRENT_CONFIG_VERSION` = apiVersion 1.2
+ *      for new writes) wins.
+ *   2. apiVersion 1.2 target + the provided config is NOT already an envelope
+ *      (bare drizzle-cube config from an agent / the entity-screen save action)
+ *      → wrap it, preserving the existing envelope's scope + other portlets
+ *      (re-envelope). A config that is ALREADY an apiVersion 1.2 envelope passes through
+ *      untouched (sophisticated callers).
+ *   3. Version-only change with no new config (e.g. an MCP update sending only
+ *      `configVersion`) → normalize the EXISTING config to the target version
+ *      so the row can never be relabeled apiVersion 1.2 while still holding a
+ *      bare legacy body.
+ *   4. Non-apiVersion-1.2 target → pass the config through (legacy create/update).
+ *
+ * Always validates the resolved config under the resolved version before
+ * returning, so an invalid wrap/body fails closed.
+ */
+async function normalizeConfigForWrite(opts: {
+  /** The incoming config from the caller, or `undefined` for a version-only update. */
+  readonly config: unknown;
+  /** Whether the caller supplied a `config` at all (distinguishes `undefined` body from absent). */
+  readonly hasConfig: boolean;
+  /** The requested config version (already defaulted by the caller where applicable). */
+  readonly requestedVersion: string;
+  /** The existing row's persisted config (for re-envelope), if any. */
+  readonly existingConfig?: unknown;
+  /** The existing row's config version (for the downgrade guard), if any. */
+  readonly existingVersion?: string;
+  /** Scope to stamp on a FRESH wrap (no existing apiVersion 1.2 envelope to inherit from).
+   *  Raw `string` — the Drizzle row column is typed `string`; the mapper
+   *  validates + defaults it. */
+  readonly fallbackScopeOwnerLevel: string;
+}): Promise<{ config: unknown; configVersion: string }> {
+  const existingIsV12 = opts.existingVersion === DASHBOARD_CONFIG_V12_VERSION;
+  // Rule 1: never silently downgrade an existing apiVersion 1.2 row.
+  const effectiveVersion = existingIsV12
+    ? DASHBOARD_CONFIG_V12_VERSION
+    : opts.requestedVersion;
+
+  if (effectiveVersion !== DASHBOARD_CONFIG_V12_VERSION) {
+    // Rule 4: legacy target — pass through (validated below).
+    const config = opts.hasConfig ? opts.config : opts.existingConfig;
+    await validateConfig(config, effectiveVersion);
+    return { config, configVersion: effectiveVersion };
+  }
+
+  // apiVersion 1.2 target.
+  const fallbackScope = ownerLevelToScopeLevel(opts.fallbackScopeOwnerLevel);
+  let resolved: unknown;
+  if (!opts.hasConfig) {
+    // Rule 3: version-only change. Normalize the existing body to apiVersion 1.2.
+    resolved = isV12Envelope(opts.existingConfig)
+      ? opts.existingConfig
+      : reEnvelopeDcSave(opts.existingConfig, opts.existingConfig, fallbackScope);
+  } else if (isV12Envelope(opts.config)) {
+    // Already an envelope — pass through.
+    resolved = opts.config;
+  } else {
+    // Rule 2: bare DC config → wrap, preserving the existing envelope's siblings/scope.
+    resolved = reEnvelopeDcSave(opts.existingConfig, opts.config, fallbackScope);
+  }
+  await validateConfig(resolved, DASHBOARD_CONFIG_V12_VERSION);
+  return { config: resolved, configVersion: DASHBOARD_CONFIG_V12_VERSION };
 }
 
 async function selectForUpdate(
@@ -166,8 +263,16 @@ export async function createDashboard(
   input: CreateDashboardInput,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const configVersion = input.configVersion ?? CURRENT_CONFIG_VERSION;
-  await validateConfig(input.config, configVersion);
+  // Resolve + validate the persisted shape: a bare drizzle-cube config (the
+  // shape agents emit) is wrapped into the apiVersion 1.2 analytics envelope
+  // when the (defaulted) target version is apiVersion 1.2; an explicit legacy
+  // version or an already-wrapped config passes through (cinatra#326 §3b).
+  const { config, configVersion } = await normalizeConfigForWrite({
+    config: input.config,
+    hasConfig: true,
+    requestedVersion: input.configVersion ?? CURRENT_CONFIG_VERSION,
+    fallbackScopeOwnerLevel: input.ownerLevel,
+  });
 
   const id = input.id ?? randomUUID();
   const visibility: Visibility = input.visibility ?? "private";
@@ -178,7 +283,7 @@ export async function createDashboard(
     id,
     name: input.name,
     description: input.description ?? null,
-    configJson: input.config as never,
+    configJson: config as never,
     configVersion,
     dashboardVersion: 1,
     publishedRevisionNumber: null,
@@ -209,7 +314,7 @@ export async function createDashboard(
       id,
       name: input.name,
       description: input.description ?? null,
-      configJson: input.config as never,
+      configJson: config as never,
       configVersion,
       dashboardVersion: 1,
       publishedRevisionNumber: null,
@@ -245,22 +350,30 @@ export async function updateDashboard(
       throw new DashboardForbiddenError("dashboards.update", id);
     }
 
-    if (patch.config !== undefined) {
-      await validateConfig(
-        patch.config,
-        patch.configVersion ?? row.configVersion,
-      );
-    }
-
     const next: Partial<NewDashboardRow> = {
       updatedAt: new Date(),
       updatedBy: actor.userId,
       dashboardVersion: row.dashboardVersion + 1,
     };
+    // Normalize the persisted config whenever the body OR the version changes.
+    // A version-only update (config absent) still has to re-shape the existing
+    // body to the target version, and a bare drizzle-cube body update gets
+    // wrapped into the apiVersion 1.2 envelope (re-enveloped against the
+    // existing row so sibling portlets + scope survive) — cinatra#326 §3b/§3c.
+    if (patch.config !== undefined || patch.configVersion !== undefined) {
+      const { config, configVersion } = await normalizeConfigForWrite({
+        config: patch.config,
+        hasConfig: patch.config !== undefined,
+        requestedVersion: patch.configVersion ?? row.configVersion,
+        existingConfig: row.configJson,
+        existingVersion: row.configVersion,
+        fallbackScopeOwnerLevel: row.ownerLevel,
+      });
+      next.configJson = config as never;
+      next.configVersion = configVersion;
+    }
     if (patch.name !== undefined) next.name = patch.name;
     if (patch.description !== undefined) next.description = patch.description;
-    if (patch.config !== undefined) next.configJson = patch.config as never;
-    if (patch.configVersion !== undefined) next.configVersion = patch.configVersion;
     if (patch.visibility !== undefined) next.visibility = patch.visibility;
 
     const [updated] = await tx
@@ -412,8 +525,12 @@ export async function upsertDashboardConfig(
   patch: UpsertDashboardConfigInput,
   actor: DashboardActor,
 ): Promise<DashboardRow> {
-  const configVersion = patch.configVersion ?? CURRENT_CONFIG_VERSION;
-  await validateConfig(patch.config, configVersion);
+  // The persisted shape is resolved + validated AFTER the row probe below — the
+  // re-envelope (cinatra#326 §3c) needs the EXISTING row's config to preserve
+  // its scope + sibling portlets. This `requestedVersion` is only the
+  // provisional version stamped on the auth pseudo-row (ownership-only check;
+  // config content is never inspected for auth).
+  const requestedVersion = patch.configVersion ?? CURRENT_CONFIG_VERSION;
 
   const db = getDashboardsDb();
   return db.transaction(async (tx) => {
@@ -447,7 +564,7 @@ export async function upsertDashboardConfig(
         name: patch.name,
         description: null,
         configJson: patch.config as never,
-        configVersion,
+        configVersion: requestedVersion,
         dashboardVersion: 1,
         publishedRevisionNumber: null,
         ownerLevel: patch.ownerLevel,
@@ -472,16 +589,33 @@ export async function upsertDashboardConfig(
       }
     }
 
+    // 2b. Resolve + validate the persisted shape under the lock. A bare
+    //     drizzle-cube config (the shape the entity-screen save action emits)
+    //     is wrapped into the apiVersion 1.2 analytics envelope, re-enveloped
+    //     against the EXISTING row so its scope + any sibling portlets survive
+    //     the save (cinatra#326 §3c). The effective ownerLevel used for a fresh
+    //     wrap's scopeLevel matches the row's resolved ownerLevel.
+    const effectiveOwnerLevel: OwnerLevel =
+      patch.ownerLevel ?? existing?.ownerLevel ?? "user";
+    const { config: nextConfig, configVersion } = await normalizeConfigForWrite({
+      config: patch.config,
+      hasConfig: true,
+      requestedVersion,
+      existingConfig: existing?.configJson,
+      existingVersion: existing?.configVersion,
+      fallbackScopeOwnerLevel: effectiveOwnerLevel,
+    });
+
     // 3. INSERT ... ON CONFLICT DO UPDATE — atomic upsert.
     const insertRow: NewDashboardRow = {
       id,
       name: patch.name ?? existing?.name ?? "Untitled",
       description: existing?.description ?? null,
-      configJson: patch.config as never,
+      configJson: nextConfig as never,
       configVersion,
       dashboardVersion: (existing?.dashboardVersion ?? 0) + 1,
       publishedRevisionNumber: existing?.publishedRevisionNumber ?? null,
-      ownerLevel: patch.ownerLevel ?? existing?.ownerLevel ?? "user",
+      ownerLevel: effectiveOwnerLevel,
       ownerId: patch.ownerId ?? existing?.ownerId ?? actor.userId,
       organizationId: actor.organizationId,
       visibility: patch.visibility ?? existing?.visibility ?? "private",
@@ -490,7 +624,7 @@ export async function upsertDashboardConfig(
       updatedBy: actor.userId,
     };
     const updateSet: Record<string, unknown> = {
-      configJson: patch.config as never,
+      configJson: nextConfig as never,
       configVersion,
       updatedAt: new Date(),
       updatedBy: actor.userId,

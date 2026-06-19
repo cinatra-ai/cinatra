@@ -10,12 +10,19 @@
  *   Version 1.1.0. Portlets have w/h/x/y at the root + `analysisConfig`
  *   (canonical) or the legacy DC `query?: string` shape. All fields pass
  *   through so DC internals (`migrations`, `colorPalette`, `thumbnailData`)
- *   round-trip cleanly. New writes use schema version 1.1.0.
+ *   round-trip cleanly. This is the embedded drizzle-cube shape an apiVersion
+ *   1.2 `analytics` portlet wraps at `config.dashboard`.
  *
- * `parseDashboardConfig(version, payload)` is the single entry point —
- * dispatches by `config_version` so future versions can coexist.
+ * As of cinatra#326, NEW operator/agent dashboards are persisted as the
+ * apiVersion 1.2 envelope (`CURRENT_CONFIG_VERSION`, validated by the registry
+ * validator, NOT this dispatcher) carrying that 1.1 config as an `analytics`
+ * portlet. `parseDashboardConfig` stays the legacy (1.0.0/1.1.0) dispatcher —
+ * it deliberately does NOT know apiVersion 1.2; the mutation service routes
+ * apiVersion 1.2 to the registry validator.
  */
 import { z } from "zod";
+
+import { DASHBOARD_CONFIG_V12_VERSION } from "../extension/dashboard-config-v12";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Schema version 1.0.0 — permissive baseline.
@@ -107,11 +114,19 @@ export type DashboardConfigV1_1 = z.infer<typeof DashboardConfigV1_1Schema>;
 export type DashboardConfig = DashboardConfigV1 | DashboardConfigV1_1;
 
 /**
- * Current version for NEW writes. Dashboards saved by `<DashboardGrid onSave>`
- * validate cleanly against this shape. Existing rows written under schema
- * version 1.0.0 still parse via the dispatcher below.
+ * Current `config_version` for NEW operator/agent dashboard writes (cinatra#326).
+ *
+ * Flipped from the legacy semver `1.1.0` to the apiVersion 1.2 literal: the
+ * create/save paths now persist NEW dashboards as an apiVersion 1.2 envelope
+ * carrying a single `analytics` portlet (the bare drizzle-cube config the
+ * caller emits is wrapped server-side in the mutation service), so
+ * `/dashboards/[id]` renders them through the one `PortletHost` path instead of
+ * the legacy read-only branch. Re-exported from the apiVersion 1.2 module so
+ * there is a SINGLE source for the literal (no duplicated string). Existing rows
+ * written under schema versions 1.0.0/1.1.0 still parse via the dispatcher below
+ * until the one-time migration (cinatra#327) rewrites them.
  */
-export const CURRENT_CONFIG_VERSION = "1.1.0" as const;
+export const CURRENT_CONFIG_VERSION = DASHBOARD_CONFIG_V12_VERSION;
 
 /**
  * Validate a DashboardConfig payload against the schema for the given version.

@@ -4,12 +4,15 @@
 // `config_json` column, discriminated by the row's `config_version`:
 //
 //   - Legacy operator/agent family — semver `config_version` 1.0.0/1.1.0,
-//     drizzle-cube portlets (id/title/w/h/x/y + analysisConfig|query). Produced
-//     at runtime by the agent `dashboards_create` MCP path and the operator
-//     `/agents` save actions. Schema: `store/dashboard-config.ts`.
-//   - Extension family — `config_version` literal apiVersion 1.2, typed-portlet
-//     compositions keyed to the closed portlet registry. Produced ONLY by the
-//     extension-install materializer. Schema: `extension/dashboard-config-v12.ts`.
+//     drizzle-cube portlets (id/title/w/h/x/y + analysisConfig|query). The shape
+//     of EXISTING rows written before cinatra#326; new writes no longer produce
+//     it (the create/save path now emits apiVersion 1.2). Migrated away by
+//     cinatra#327. Schema: `store/dashboard-config.ts`.
+//   - apiVersion 1.2 family — `config_version` literal apiVersion 1.2,
+//     typed-portlet compositions keyed to the closed portlet registry. Produced
+//     by the extension-install materializer AND (as of cinatra#326) by the
+//     operator/agent create/save path, which wraps the drizzle-cube config in an
+//     `analytics` portlet. Schema: `extension/dashboard-config-v12.ts`.
 //
 // The `[id]` renderer previously ran the apiVersion 1.2-only validator unconditionally and
 // showed an "Unsupported dashboard format" card for everything else, so every

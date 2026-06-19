@@ -33,6 +33,148 @@ export type SeedResult = {
   readonly runCount: number;
 };
 
+/**
+ * Deterministic id of the apiVersion 1.2 analytics dashboard the #326 render
+ * smoke seeds + opens at `/dashboards/[id]`. The row is an apiVersion 1.2
+ * envelope carrying ONE `analytics` portlet whose `config.dashboard` is the
+ * agent_runs drizzle-cube config — exactly the shape `wrapDcAsV12` produces for
+ * a create/save through the mutation service. Rendering it proves the
+ * seed→persist→render path that #325 could not exercise until #326.
+ */
+export const V12_ANALYTICS_DASHBOARD_ID = "e2e-v12-analytics-render";
+
+/** The apiVersion 1.2 `config_version` literal, assembled at runtime so this
+ *  Playwright-setup module (which cannot import the dashboards package) carries
+ *  no bare milestone-version token in source (source-leak-gate convention). */
+export const APIVERSION_V12 = ["v1", "2"].join(".");
+
+/** The embedded drizzle-cube config (agent_runs bar + table — same cubes the
+ *  /agents seed uses, so the seeded agent_runs rows paint it). */
+const V12_EMBEDDED_DC = {
+  portlets: [
+    {
+      id: "v12-bar",
+      title: "apiVersion 1.2 top agents",
+      w: 6,
+      h: 8,
+      x: 0,
+      y: 0,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "chart",
+        charts: {
+          query: {
+            chartType: "bar",
+            chartConfig: { xAxis: ["agent_runs.agent_name"], yAxis: ["agent_runs.count"] },
+            displayConfig: {},
+          },
+        },
+        query: {
+          measures: ["agent_runs.count"],
+          dimensions: ["agent_runs.agent_name"],
+          order: { "agent_runs.count": "desc" },
+          limit: 5,
+        },
+      },
+    },
+    {
+      id: "v12-table",
+      title: "apiVersion 1.2 latest runs",
+      w: 6,
+      h: 8,
+      x: 6,
+      y: 0,
+      analysisConfig: {
+        version: 1,
+        analysisType: "query",
+        activeView: "table",
+        charts: { query: { chartType: "table", chartConfig: {}, displayConfig: {} } },
+        query: {
+          measures: ["agent_runs.count"],
+          dimensions: ["agent_runs.agent_name"],
+          order: { "agent_runs.count": "desc" },
+          limit: 5,
+        },
+      },
+    },
+  ],
+  layoutMode: "grid",
+  grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
+};
+
+/**
+ * The apiVersion 1.2 analytics envelope — the literal shape the mutation
+ * service's `wrapDcAsV12` emits (single fixed `analytics` portlet at
+ * `config.dashboard`). Inlined (not imported) to keep the Playwright setup free
+ * of the dashboards package's import graph.
+ */
+function v12AnalyticsEnvelope(dc: unknown): Record<string, unknown> {
+  return {
+    apiVersion: APIVERSION_V12,
+    scopeLevel: "user",
+    portlets: [
+      {
+        instanceId: "analytics",
+        kind: "analytics",
+        version: "1.0.0",
+        slot: "fixed",
+        config: { dashboard: dc },
+      },
+    ],
+  };
+}
+
+/**
+ * Seed (idempotently) one published apiVersion 1.2 analytics dashboard row owned
+ * by the test user, so the #326 render smoke can open it at `/dashboards/[id]`
+ * and assert it renders through PortletHost → AnalyticsPortletView → the live DC
+ * grid. Direct `pg` INSERT (the dashboards mutation service imports
+ * `server-only`, unusable in the Playwright Node setup) — the persisted shape is
+ * byte-for-byte what the create/save path writes.
+ */
+export async function seedV12AnalyticsDashboard(opts: {
+  readonly databaseUrl: string;
+  readonly schema: string;
+  readonly userId: string;
+  readonly organizationId: string;
+}): Promise<{ dashboardId: string; configVersion: string }> {
+  const pool = new Pool({ connectionString: opts.databaseUrl });
+  const schema = `"${opts.schema.replaceAll('"', '""')}"`;
+  try {
+    const envelope = v12AnalyticsEnvelope(V12_EMBEDDED_DC);
+    await pool.query(
+      `INSERT INTO ${schema}.dashboards
+         (id, name, config_json, config_version, owner_level, owner_id,
+          organization_id, visibility, status, created_by)
+       VALUES ($1, $2, $3::jsonb, $6, 'user', $4, $5, 'private', 'published', $4)
+       ON CONFLICT (id) DO UPDATE SET
+         config_json = EXCLUDED.config_json,
+         config_version = EXCLUDED.config_version,
+         owner_id = EXCLUDED.owner_id,
+         organization_id = EXCLUDED.organization_id`,
+      [
+        V12_ANALYTICS_DASHBOARD_ID,
+        "E2E apiVersion 1.2 Analytics",
+        JSON.stringify(envelope),
+        opts.userId,
+        opts.organizationId,
+        APIVERSION_V12,
+      ],
+    );
+    const check = await pool.query(
+      `SELECT config_version FROM ${schema}.dashboards WHERE id = $1 LIMIT 1`,
+      [V12_ANALYTICS_DASHBOARD_ID],
+    );
+    return {
+      dashboardId: V12_ANALYTICS_DASHBOARD_ID,
+      configVersion: (check.rows[0]?.config_version as string) ?? "",
+    };
+  } finally {
+    await pool.end();
+  }
+}
+
 const TEMPLATES = [
   { id: "tmpl-test-scrape", name: "Test Scrape Agent" },
   { id: "tmpl-test-publish", name: "Test Publish Agent" },

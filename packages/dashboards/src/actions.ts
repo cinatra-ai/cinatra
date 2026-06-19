@@ -23,6 +23,7 @@ import { getAuthSession } from "@/lib/auth-session";
 
 import { buildSecurityContextFromSession } from "./auth/security-context";
 import { upsertDashboardConfig } from "./mutation-service";
+import { DASHBOARD_CONFIG_V12_VERSION } from "./extension/dashboard-config-v12";
 import { buildAgentsDashboardId } from "./components/seed-configs/agents-default";
 import { buildProjectsDashboardId } from "./components/seed-configs/projects-default";
 import { buildTeamsDashboardId } from "./components/seed-configs/teams-default";
@@ -44,8 +45,11 @@ export async function saveAgentsDashboardAction(config: unknown): Promise<void> 
   await upsertDashboardConfig(
     buildAgentsDashboardId(ctx.organizationId, ctx.userId),
     {
+      // The grid hands back a bare drizzle-cube config; the mutation service
+      // wraps it into the apiVersion 1.2 analytics envelope (cinatra#326 §3b),
+      // re-enveloping against the existing row so a re-save preserves scope.
       config,
-      configVersion: "1.1.0",
+      configVersion: DASHBOARD_CONFIG_V12_VERSION,
       name: "Agents",
       ownerLevel: "user",
       ownerId: ctx.userId,
@@ -80,8 +84,10 @@ async function saveCinatraDashboardAction(
   await upsertDashboardConfig(
     buildDashboardId(ctx.organizationId, ctx.userId),
     {
+      // Bare drizzle-cube config in; the mutation service wraps it into the
+      // apiVersion 1.2 analytics envelope (cinatra#326 §3b).
       config,
-      configVersion: "1.1.0",
+      configVersion: DASHBOARD_CONFIG_V12_VERSION,
       name,
       ownerLevel: "user",
       ownerId: ctx.userId,

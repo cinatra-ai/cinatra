@@ -40,7 +40,12 @@
  */
 import { test as setup, expect, type APIResponse } from "@playwright/test";
 
-import { seedDashboardFixtures } from "./seed-data";
+import {
+  APIVERSION_V12,
+  seedDashboardFixtures,
+  seedV12AnalyticsDashboard,
+  V12_ANALYTICS_DASHBOARD_ID,
+} from "./seed-data";
 
 const EMAIL = process.env.E2E_USER_EMAIL ?? "option-a-test@local.test";
 const PASSWORD = process.env.E2E_USER_PASSWORD ?? "OptionATest2026!";
@@ -146,6 +151,21 @@ setup("create test user + seed dashboard fixtures + save session", async ({ requ
   expect(seeded.templateCount).toBeGreaterThanOrEqual(3);
   expect(seeded.runCount).toBeGreaterThanOrEqual(3);
 
+  // 5b. Seed one published apiVersion 1.2 analytics dashboard owned by this
+  //     user so the #326 render smoke can open it at `/dashboards/[id]` and
+  //     prove the seed→persist→render path (PortletHost → analytics view → DC
+  //     grid) that #325 could not exercise until #326 enabled apiVersion 1.2 writes.
+  const v12 = await seedV12AnalyticsDashboard({
+    databaseUrl: DATABASE_URL,
+    schema: SCHEMA,
+    userId: seeded.userId,
+    organizationId: seeded.organizationId,
+  });
+  expect(
+    v12.configVersion,
+    `seeded apiVersion 1.2 analytics row must persist its config_version (got "${v12.configVersion}")`,
+  ).toBe(APIVERSION_V12);
+
   // 6. Preflight `/agents` (200) — and, under a local `pnpm dev`, warm its per-route compile — so the
   //    chromium project's first `page.goto("/agents")` does NOT pay the
   //    cold-compile cost. In dev mode Next.js compiles each page on first
@@ -193,6 +213,20 @@ setup("create test user + seed dashboard fixtures + save session", async ({ requ
     `cube meta warm-up failed: ${await describe(cubeMetaWarmup)}`,
   ).toBe(200);
   await cubeMetaWarmup.text();
+
+  // 7b. Preflight the `/dashboards/[id]` detail route (200) for the seeded
+  //     apiVersion 1.2 analytics row; under a local `pnpm dev` this also warms
+  //     its per-route compile (a different module from `/agents`) so the #326
+  //     render smoke's first `page.goto` does not pay the cold-compile cost.
+  const v12RenderWarmup = await request.get(
+    `/dashboards/${V12_ANALYTICS_DASHBOARD_ID}`,
+    { failOnStatusCode: false, maxRedirects: 0 },
+  );
+  expect(
+    v12RenderWarmup.status(),
+    `apiVersion 1.2 detail warm-up GET failed: ${await describe(v12RenderWarmup)}`,
+  ).toBe(200);
+  await v12RenderWarmup.text();
 
   // 8. Persist the cookie state for chromium project tests.
   await request.storageState({ path: STORAGE_PATH });

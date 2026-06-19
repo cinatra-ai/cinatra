@@ -46,6 +46,10 @@ export default defineConfig({
     // `.tsx` covers the React component tests (per-file `@vitest-environment
     // jsdom` pragmas opt those into the DOM environment).
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    // DB-backed integration tests (cinatra#326) are gated on DASH_DB_IT + a real
+    // SUPABASE_DB_URL and run explicitly; keep them out of the default unit run
+    // (which has no Postgres) so the green unit gate never imports them.
+    exclude: ["**/node_modules/**", "src/**/*.integration.test.ts"],
     testTimeout: 60_000,
   },
 });

@@ -15,6 +15,11 @@ import { DashboardConfigV1_1Schema } from "../store/dashboard-config";
 
 const PORTLET_VERSION = "1.0.0";
 
+/** Version stamped on the analytics portlet a wrapped operator/agent dashboard
+ *  carries (cinatra#326 wrap path). Exported so the apiVersion 1.2 envelope
+ *  helper stamps the SAME version the kind is registered under — no drift. */
+export const ANALYTICS_PORTLET_VERSION = PORTLET_VERSION;
+
 /** The kind name for the keystone analytics portlet (cinatra#325) and its alias.
  *  Both names register identical metadata so either validates. The portlet wraps
  *  a WHOLE drizzle-cube DashboardConfig as one embedded view at

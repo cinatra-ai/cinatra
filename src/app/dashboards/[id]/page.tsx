@@ -63,12 +63,14 @@ export default async function DashboardDetailPage({ params }: Props) {
     throw e;
   }
 
-  // Version-aware dispatch on the row's config_version (cinatra#272). apiVersion 1.2
-  // extension dashboards render via PortletHost; legacy operator/agent
-  // dashboards (config_version 1.0.0/1.1.0) render via the drizzle-cube grid —
-  // the SAME path the /agents screen uses — so agent-created dashboards show
-  // their real analytics portlets instead of the "unsupported format" card.
-  // Genuinely unknown versions still fall through to that card.
+  // Version-aware dispatch on the row's config_version (cinatra#272). apiVersion
+  // 1.2 dashboards render via PortletHost — both extension dashboards AND (as of
+  // cinatra#326) operator/agent dashboards, whose drizzle-cube config rides in an
+  // `analytics` portlet that PortletHost renders as the full interactive grid.
+  // EXISTING legacy rows (config_version 1.0.0/1.1.0, pre-#326) render via the
+  // drizzle-cube grid — the SAME path the /agents screen uses — until cinatra#327
+  // migrates them. Genuinely unknown versions still fall through to the
+  // "unsupported format" card.
   const renderKind = resolveDashboardRenderKind(row.configVersion, row.configJson);
 
   let body: ReactNode;

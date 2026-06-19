@@ -34,6 +34,7 @@ import {
   parseDashboardConfig,
   type DashboardConfigV1_1,
 } from "../store/dashboard-config";
+import { readDcConfigFromRow } from "../v12-envelope";
 import {
   PROJECTS_DEFAULT_CONFIG,
   buildProjectsDashboardId,
@@ -60,16 +61,10 @@ async function loadProjectsConfig(
       ),
     )
     .limit(1);
-  const existing = rows[0];
-  if (!existing) return PROJECTS_DEFAULT_CONFIG;
-  try {
-    return parseDashboardConfig(
-      existing.configVersion,
-      existing.configJson,
-    ) as DashboardConfigV1_1;
-  } catch {
-    return PROJECTS_DEFAULT_CONFIG;
-  }
+  // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
+  // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
+  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
+  return readDcConfigFromRow(rows[0], PROJECTS_DEFAULT_CONFIG, parseDashboardConfig);
 }
 
 export async function ProjectsDashboardPage() {
