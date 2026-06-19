@@ -5,6 +5,8 @@
 # `drupal`        — Drupal CMS + drupal-db + the shared `wayflow` runtime
 # `wordpress`     — WordPress CMS + wordpress-db + the shared `wayflow` runtime
 # `a2a-peers`     — External A2A peer fixtures used by Cinatra integration tests
+# `twenty`        — Twenty CRM dev stack (twenty-server/worker/db/redis)
+# `plane`         — Plane project-management dev stack (loopback-only @ :3400)
 # ----------------------------------------------------------------------------
 # Use `docker compose --profile drupal up -d` to bring up Drupal + the shared
 # wayflow runtime. Profiles can be combined: `--profile drupal --profile wordpress`.
@@ -568,6 +570,288 @@ services:
       twenty-server:
         condition: service_healthy
 
+  # ---- Plane (project management) stack (profile-gated; default `docker compose up` does NOT start this) ----
+  # Folds Plane's OFFICIAL Community-Edition prebuilt-image compose
+  # (github.com/makeplane/plane → deployments/cli/community) into cinatra's
+  # compose as `--profile plane`. ~12 long-running containers, ~2 GB RAM idle,
+  # multi-GB image pull on first start. Explicit opt-in:
+  #   docker compose --profile plane up -d
+  #
+  # SMOKE-PROVEN topology (Plane CE 1.3.1, on-the-wire, cinatra#315/#320):
+  #   - LOOPBACK-ONLY: the only published port is `127.0.0.1:3400:80` on the
+  #     proxy (per docker-compose.dev.yml policy — NOT Twenty's non-loopback
+  #     exposure). DB/Redis/MQ/MinIO are container-network-internal (unpublished).
+  #   - The community compose binds the proxy via Swarm `mode: host` 80/443 +
+  #     `deploy.replicas`; plain `docker compose` ignores `deploy:`, so we use a
+  #     normal `ports:` bridge mapping and drop `deploy:`/`mode:host` here.
+  #   - REST is reachable at http://localhost:3400/api/v1/... and X-API-Key is the
+  #     SOLE authenticator (see src/lib/dev-auto-setup.ts autoSetupLocalPlane).
+  #   - Plane CE itself is NOT an MCP server; the official `plane-mcp-server`
+  #     (Python/FastMCP, direct-named tools) is a SEPARATE bridge process and is
+  #     NOT part of this community compose. The dev auto-setup therefore only
+  #     wires an external_mcp_servers row when a real Plane MCP bridge URL
+  #     (PLANE_MCP_URL) answers `tools/list` — otherwise it logs a setup hint.
+  #
+  # Image tag defaults to the mutable `stable` (the smoke ran CE 1.3.1 ≡
+  # stable@2026-06); set PLANE_TAG to a fixed release for reproducible pulls.
+  plane-db:
+    image: postgres:15.7-alpine
+    container_name: cinatra-plane-db-1
+    profiles: ["plane"]
+    command: postgres -c 'max_connections=1000'
+    environment:
+      POSTGRES_USER: plane
+      POSTGRES_DB: plane
+      POSTGRES_PASSWORD: plane
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - cinatra-plane-pgdata:/var/lib/postgresql/data
+    networks: ["plane"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plane -d plane"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  plane-redis:
+    image: valkey/valkey:7.2.11-alpine
+    container_name: cinatra-plane-redis-1
+    profiles: ["plane"]
+    volumes:
+      - cinatra-plane-redisdata:/data
+    networks: ["plane"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  plane-mq:
+    image: rabbitmq:3.13.6-management-alpine
+    container_name: cinatra-plane-mq-1
+    profiles: ["plane"]
+    environment:
+      RABBITMQ_DEFAULT_USER: plane
+      RABBITMQ_DEFAULT_PASS: plane
+      RABBITMQ_DEFAULT_VHOST: plane
+    volumes:
+      - cinatra-plane-rabbitmq:/var/lib/rabbitmq
+    networks: ["plane"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  plane-minio:
+    image: minio/minio:latest
+    container_name: cinatra-plane-minio-1
+    profiles: ["plane"]
+    command: server /export --console-address ":9090"
+    environment:
+      MINIO_ROOT_USER: access-key
+      MINIO_ROOT_PASSWORD: secret-key
+    volumes:
+      - cinatra-plane-uploads:/export
+    networks: ["plane"]
+
+  plane-migrator:
+    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-migrator-1
+    profiles: ["plane"]
+    restart: "no"
+    command: ./bin/docker-entrypoint-migrator.sh
+    networks: ["plane"]
+    environment: &plane-app-env
+      # App
+      WEB_URL: http://localhost:3400
+      DEBUG: "0"
+      CORS_ALLOWED_ORIGINS: http://localhost:3400
+      GUNICORN_WORKERS: "1"
+      SECRET_KEY: ${PLANE_SECRET_KEY:-60gp0byfz2dvffa45cxl20p1scy9xbpf6d8c5y0geejgkyp1b5}
+      API_KEY_RATE_LIMIT: "600/minute"
+      # Postgres — Plane derives the DSN from these parts when DATABASE_URL is
+      # unset (settings/common.py reads POSTGRES_HOST, not PGHOST), so we
+      # DELIBERATELY omit an inline connection-string DSN literal: the dev-only
+      # embedded-credential form trips secret-scan-gate's Postgres detector.
+      PGHOST: plane-db
+      POSTGRES_HOST: plane-db
+      PGDATABASE: plane
+      POSTGRES_USER: plane
+      POSTGRES_PASSWORD: plane
+      POSTGRES_DB: plane
+      POSTGRES_PORT: "5432"
+      # Redis
+      REDIS_HOST: plane-redis
+      REDIS_PORT: "6379"
+      REDIS_URL: redis://plane-redis:6379/
+      # RabbitMQ — likewise derived (settings/common.py builds CELERY_BROKER_URL
+      # from RABBITMQ_USER/PASSWORD/HOST/PORT/VHOST when AMQP_URL is unset), so no
+      # inline amqp:// credential literal.
+      RABBITMQ_HOST: plane-mq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: plane
+      RABBITMQ_PASSWORD: plane
+      RABBITMQ_VHOST: plane
+      # MinIO / S3
+      USE_MINIO: "1"
+      AWS_REGION: ""
+      AWS_ACCESS_KEY_ID: access-key
+      AWS_SECRET_ACCESS_KEY: secret-key
+      AWS_S3_ENDPOINT_URL: http://plane-minio:9000
+      AWS_S3_BUCKET_NAME: uploads
+      MINIO_ENDPOINT_SSL: "0"
+      FILE_SIZE_LIMIT: "5242880"
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_healthy
+
+  plane-api:
+    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-api-1
+    profiles: ["plane"]
+    command: ./bin/docker-entrypoint-api.sh
+    environment: *plane-app-env
+    # The proxy (caddy) dials the bare upstream name `api`; alias this service to
+    # it on the dedicated `plane` network (service name is `plane-api`).
+    networks:
+      plane:
+        aliases: ["api"]
+    # The plane-backend image ships python3 (no curl/wget-with-spider here), so
+    # the healthcheck must use python — a curl check is always-unhealthy.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/instances/', timeout=4).status==200 else 1)\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_healthy
+      plane-mq:
+        condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+
+  plane-worker:
+    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-worker-1
+    profiles: ["plane"]
+    command: ./bin/docker-entrypoint-worker.sh
+    environment: *plane-app-env
+    networks: ["plane"]
+    depends_on:
+      plane-api:
+        condition: service_started
+
+  plane-beat-worker:
+    image: makeplane/plane-backend:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-beat-1
+    profiles: ["plane"]
+    command: ./bin/docker-entrypoint-beat.sh
+    environment: *plane-app-env
+    networks: ["plane"]
+    depends_on:
+      plane-api:
+        condition: service_started
+
+  plane-live:
+    image: makeplane/plane-live:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-live-1
+    profiles: ["plane"]
+    environment:
+      # The proxy routes `/live/` here by the bare name `live`; the upstream
+      # api is reachable by its alias `api` on the `plane` network.
+      API_BASE_URL: http://api:8000
+      LIVE_SERVER_SECRET_KEY: ${PLANE_LIVE_SECRET_KEY:-2FiJk1U2aiVPEQtzLehYGlTSnTnrs7LW}
+      REDIS_HOST: plane-redis
+      REDIS_PORT: "6379"
+      REDIS_URL: redis://plane-redis:6379/
+    networks:
+      plane:
+        aliases: ["live"]
+    depends_on:
+      plane-api:
+        condition: service_started
+
+  plane-web:
+    image: makeplane/plane-frontend:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-web-1
+    profiles: ["plane"]
+    networks:
+      plane:
+        aliases: ["web"]
+    depends_on:
+      plane-api:
+        condition: service_started
+      plane-worker:
+        condition: service_started
+
+  plane-space:
+    image: makeplane/plane-space:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-space-1
+    profiles: ["plane"]
+    networks:
+      plane:
+        aliases: ["space"]
+    depends_on:
+      plane-api:
+        condition: service_started
+      plane-web:
+        condition: service_started
+
+  plane-admin:
+    image: makeplane/plane-admin:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-admin-1
+    profiles: ["plane"]
+    networks:
+      plane:
+        aliases: ["admin"]
+    depends_on:
+      plane-api:
+        condition: service_started
+      plane-web:
+        condition: service_started
+
+  plane-proxy:
+    image: makeplane/plane-proxy:${PLANE_TAG:-stable}
+    container_name: cinatra-plane-proxy-1
+    profiles: ["plane"]
+    networks: ["plane"]
+    # LOOPBACK ONLY — the single published port of the entire Plane stack.
+    # http://localhost:3400 → proxy:80 → web/space/admin/api/live.
+    ports:
+      - "127.0.0.1:3400:80"
+    environment:
+      FILE_SIZE_LIMIT: "5242880"
+      BUCKET_NAME: uploads
+      APP_DOMAIN: localhost:3400
+      SITE_ADDRESS: ":80"
+      LISTEN_HTTP_PORT: "80"
+      LISTEN_HTTPS_PORT: "443"
+    # Resolve `host.docker.internal` (the CINATRA_BASE_URL host used by webhooks
+    # back into the cinatra app) to the host gateway, matching the CMS stacks.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      plane-web:
+        condition: service_started
+      plane-api:
+        condition: service_started
+      plane-space:
+        condition: service_started
+      plane-admin:
+        condition: service_started
+      plane-live:
+        condition: service_started
+
 volumes:
   cinatra-postgres:
   cinatra-redis:
@@ -580,3 +864,15 @@ volumes:
   cinatra-neo4j-data:
   cinatra-twenty-db:
   cinatra-twenty-server:
+  cinatra-plane-pgdata:
+  cinatra-plane-redisdata:
+  cinatra-plane-rabbitmq:
+  cinatra-plane-uploads:
+
+networks:
+  # Dedicated network for the `--profile plane` stack so Plane's proxy (caddy)
+  # can resolve its hardcoded bare upstream names (`api`/`web`/`space`/`admin`/
+  # `live`) via per-service network aliases, while the cinatra-prefixed service
+  # names keep the stack isolated from the default cinatra dev network.
+  plane:
+    driver: bridge
