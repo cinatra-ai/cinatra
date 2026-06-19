@@ -21,14 +21,51 @@
 //     "scopeLevel": <derived>,
 //     "portlets": [
 //       { "instanceId": "analytics", "kind": "analytics", "version": "1.0.0",
-//         "slot": "fixed", "config": { "dashboard": <old config_json> } }
+//         "slot": "fixed", "config": { "dashboard": <1.1-shaped config> } }
 //     ]
 //   }
 // and `config_version` becomes `v1.2`. This is byte-for-byte the envelope
-// `packages/dashboards/src/v12-envelope.ts::wrapDcAsV12(<old>, <scope>)` emits
+// `packages/dashboards/src/v12-envelope.ts::wrapDcAsV12(<dc>, <scope>)` emits
 // (the create/save path), so a migrated row is indistinguishable from a
 // freshly-saved one and passes the SAME registry validator (`assertConfigV12`
 // → `validateDashboardConfigV12` + the analytics kind's `validateConfig`).
+//
+//   - **`config.dashboard` is always the v1.1 (drizzle-cube grid) DC shape.**
+//     The analytics kind's install-time `validateConfig` deep-validates
+//     `config.dashboard` against the STRICT `DashboardConfigV1_1Schema`
+//     (`packages/dashboards/src/portlets/kinds.ts`
+//     ::`validateAnalyticsPortletConfig`), which requires every portlet to carry
+//     `title` + `w/h/x/y` + a content spec (`analysisConfig`|`query`). A
+//     genuine `1.1.0` row already has that shape, so it is embedded verbatim.
+//     But a genuine `1.0.0` row is the PERMISSIVE, type-discriminated shape
+//     (`{portlets:[{id,type,title?,cubeId?,query?}]}` — no `w/h/x/y`, see
+//     `store/dashboard-config.ts::DashboardConfigV1Schema` and the pure-1.0
+//     fixture `render-kind.test.ts` `LEGACY_V1_0_CONFIG`). Embedding a `1.0.0`
+//     body verbatim would produce a v1.2 envelope that FAILS that deep validator
+//     (`portlets.0.title/w/h/x/y: expected …, received undefined`) — i.e. an
+//     invalid-at-rest row the renderer would reject. `1.0.0` rows ARE reachable
+//     in prod: the MCP create/update schema accepts an arbitrary `configVersion`
+//     and the mutation service's Rule 4 passes a `1.0.0` write through the
+//     permissive `parseDashboardConfig` check. So this migration UP-CONVERTS a
+//     `1.0.0` body to the v1.1 portlet shape BEFORE wrapping (see
+//     `upconvertV1_0ToV1_1Expr`): for each portlet it ADDS the v1.1-required
+//     layout fields (`title := COALESCE(NULLIF(title,''), id)`, `w/h/x/y := 0`,
+//     `query := COALESCE(query, '{}')` so the `analysisConfig|query` superRefine
+//     is satisfied) while PRESERVING every original key (`type`, `cubeId`, a
+//     non-empty existing `title`/`query`, top-level `layout`) via `jsonb`
+//     concat. `NULLIF(title,'')` is load-bearing: the `1.0.0` schema permits
+//     `title: ""` (optional `z.string()`, no `.min(1)`) but the strict v1.1
+//     schema requires `title.min(1)`, so an empty title falls back to the
+//     always-non-empty `id` [codex merge-safe review]. The
+//     synthetic-zero grid coordinates match the drizzle-cube grid's own
+//     missing-layout fallback (`render-kind.ts` note: a 1.0 row "renders
+//     DEGRADED … the grid tolerates missing layout"), so nothing renders WORSE
+//     than it did pre-migration — it now renders through `PortletHost` with a
+//     valid embedded DC instead of being rejected. This mirrors, in set-based
+//     SQL, the 1.0→1.1 normalization the read path assumes. NOTE: the original
+//     design §4a embedded `<old config_json>` verbatim and did NOT call out this
+//     1.0→1.1 step — that was a spec gap (a 1.0 row would have migrated to an
+//     invalid v1.2 envelope); this migration closes it.
 //
 //   - `scopeLevel` derivation (design §4a): a project-scoped row
 //     (`project_id IS NOT NULL` OR `template_scope = 'project'`) maps to
@@ -64,13 +101,26 @@
 // migration produced — gated on the migrated-wrapper shape
 // (`config_json -> 'portlets' -> 0 ->> 'kind' = 'analytics'`) AND
 // `extension_id IS NULL` (migrated rows are always operator/agent, never
-// extension-owned). A blanket unwrap of every `v1.2` row would corrupt genuine
-// extension v1.2 dashboards and any future non-analytics v1.2 dashboard, so the
-// guard is load-bearing. It unwraps `portlets[0].config.dashboard` back to the
-// column root and restores `config_version = '1.1.0'` (the `1.0.0` vs `1.1.0`
-// provenance is intentionally not recoverable — create always stamped `1.1.0`,
-// design §4a), and resets the column default to `'1.0.0'`. A pre-existing
-// extension/non-analytics `v1.2` row is left untouched.
+// extension-owned) AND **exactly ONE portlet**
+// (`jsonb_array_length(config_json -> 'portlets') = 1`). The single-portlet
+// clause is load-bearing: this migration ONLY ever produces a single-analytics-
+// portlet envelope, but a NON-migrated operator/agent v1.2 row can legitimately
+// be analytics-first WITH sibling portlets — `#326`'s `reEnvelopeDcSave`
+// preserves existing siblings when it re-wraps a save. The kind+extension guard
+// alone would match such a multi-portlet row and unwrap it to ONLY
+// `portlets[0].config.dashboard`, DROPPING its siblings. Requiring a single
+// portlet excludes every such row, so a multi-portlet operator v1.2 row is left
+// untouched (a blanket unwrap of every `v1.2` row would likewise corrupt genuine
+// extension v1.2 dashboards). It unwraps `portlets[0].config.dashboard` back to
+// the column root and restores `config_version = '1.1.0'`. The `1.0.0` vs
+// `1.1.0` provenance is intentionally NOT recoverable: a migrated `1.0.0` row's
+// embedded `config.dashboard` is the UP-CONVERTED v1.1 body (see above), so
+// `down()` correctly restores it to a valid `1.1.0` row, not the original
+// invalid-as-v1.2 `1.0.0` shape — the 1.0→1.1 up-convert is a lossless upgrade
+// (a strict superset of the layout fields), so restoring to `1.1.0` never yields
+// a WORSE shape (create always stamped `1.1.0` anyway, design §4a). `down()`
+// also resets the column default to `'1.0.0'`. A pre-existing
+// extension/non-analytics/multi-portlet `v1.2` row is left untouched.
 //
 // Set-based, run entirely in Postgres via `jsonb_build_object` (no app
 // round-trip). Unqualified names ride the runner's session `search_path`
@@ -115,26 +165,90 @@ function wrapEnvelopeExpr(dcCol, scopeExpr) {
   )`;
 }
 
+/**
+ * SQL expression up-converting a bare `1.0.0` DC config to the `1.1.0` (grid)
+ * shape the analytics kind's deep validator (`DashboardConfigV1_1Schema`)
+ * requires, BEFORE it is embedded at `config.dashboard`. See the header doc:
+ * a `1.0.0` portlet (`{id,type,title?,cubeId?,query?}`) lacks the v1.1-required
+ * `title` + `w/h/x/y` + content spec, so wrapping it verbatim would yield an
+ * invalid-at-rest v1.2 envelope. For EACH portlet this ADDS the missing fields
+ * (`title := COALESCE(NULLIF(title,''), id)`; `w/h/x/y := 0`;
+ * `query := COALESCE(query,{})` so the `analysisConfig|query` superRefine
+ * passes) while PRESERVING every original key — `elem || {added}` keeps
+ * `type`/`cubeId`/a NON-EMPTY existing `title`/`query` because the added object
+ * only fills gaps via COALESCE. The `NULLIF(title,'')` is load-bearing: the
+ * permissive `1.0.0` schema allows `title: ""` (optional `z.string()`, NO
+ * `.min(1)`), but the strict v1.1 schema requires `title.min(1)`, so a bare
+ * `COALESCE` (which only replaces SQL NULL, not the empty string) would leave a
+ * `""` title that FAILS the analytics deep validator — `NULLIF` coerces `''` to
+ * NULL so the fallback to the (always non-empty, `id.min(1)`) `id` fires
+ * [codex merge-safe review]. The top-level config (including a `1.0.0` `layout`)
+ * is preserved via `jsonb_set`, which only replaces `{portlets}`. A
+ * non-array/absent `portlets` degrades to `[]` (the source row would already be
+ * a malformed DC). `1.1.0` rows do NOT pass through this — they are wrapped
+ * verbatim (they already satisfy v1.1).
+ * @param {string} dcCol  column holding the bare 1.0 DC config (e.g. "config_json")
+ */
+function upconvertV1_0ToV1_1Expr(dcCol) {
+  return `jsonb_set(
+    ${dcCol},
+    '{portlets}',
+    COALESCE((
+      SELECT jsonb_agg(
+        elem || jsonb_build_object(
+          'title', COALESCE(NULLIF(elem->>'title', ''), elem->>'id'),
+          'w', 0, 'h', 0, 'x', 0, 'y', 0,
+          'query', COALESCE(elem->'query', '{}'::jsonb)
+        )
+      )
+      FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(${dcCol} -> 'portlets') = 'array'
+             THEN ${dcCol} -> 'portlets' ELSE '[]'::jsonb END
+      ) AS elem
+    ), '[]'::jsonb)
+  )`;
+}
+
 /** @param {import("node-pg-migrate").MigrationBuilder} pgm */
 export function up(pgm) {
-  // 1. Rewrite every legacy `dashboards` row to the v1.2 analytics envelope.
-  //    Predicated on the legacy version set → idempotent (already-v1.2 rows,
-  //    incl. extension dashboards, are excluded).
+  // 1a. Rewrite every legacy `1.1.0` `dashboards` row to the v1.2 envelope —
+  //     the body is already the v1.1 grid shape the analytics deep validator
+  //     accepts, so it is embedded verbatim. Predicated on the version, so
+  //     re-running is a no-op (already-v1.2 rows, incl. extension dashboards,
+  //     are excluded).
   pgm.sql(`UPDATE dashboards
     SET config_json = ${wrapEnvelopeExpr("config_json", scopeLevelExpr("dashboards"))},
         config_version = 'v1.2'
-    WHERE config_version IN ('1.0.0', '1.1.0');`);
+    WHERE config_version = '1.1.0';`);
 
-  // 2. Rewrite every legacy `dashboard_revisions` row. Revisions carry no scope
-  //    columns, so JOIN the parent `dashboards` row for scopeLevel (design §4a).
-  //    An orphan revision (no parent — impossible under the FK, but defensive)
-  //    is left as-is by the inner-join semantics.
+  // 1b. Rewrite every legacy `1.0.0` `dashboards` row — UP-CONVERT the bare DC
+  //     body to the v1.1 grid shape FIRST (header doc), THEN wrap. Without the
+  //     up-convert a 1.0 body produces a v1.2 envelope that fails the analytics
+  //     deep validator (`config.dashboard` portlets missing title/w/h/x/y).
+  pgm.sql(`UPDATE dashboards
+    SET config_json = ${wrapEnvelopeExpr(upconvertV1_0ToV1_1Expr("config_json"), scopeLevelExpr("dashboards"))},
+        config_version = 'v1.2'
+    WHERE config_version = '1.0.0';`);
+
+  // 2a. Rewrite every legacy `1.1.0` `dashboard_revisions` row. Revisions carry
+  //     no scope columns, so JOIN the parent `dashboards` row for scopeLevel
+  //     (design §4a). An orphan revision (no parent — impossible under the FK,
+  //     but defensive) is left as-is by the inner-join semantics.
   pgm.sql(`UPDATE dashboard_revisions r
     SET config_json = ${wrapEnvelopeExpr("r.config_json", scopeLevelExpr("d"))},
         config_version = 'v1.2'
     FROM dashboards d
     WHERE r.dashboard_id = d.id
-      AND r.config_version IN ('1.0.0', '1.1.0');`);
+      AND r.config_version = '1.1.0';`);
+
+  // 2b. Rewrite every legacy `1.0.0` `dashboard_revisions` row — up-convert the
+  //     bare DC body to v1.1 FIRST, THEN wrap (same JOIN-for-scope semantics).
+  pgm.sql(`UPDATE dashboard_revisions r
+    SET config_json = ${wrapEnvelopeExpr(upconvertV1_0ToV1_1Expr("r.config_json"), scopeLevelExpr("d"))},
+        config_version = 'v1.2'
+    FROM dashboards d
+    WHERE r.dashboard_id = d.id
+      AND r.config_version = '1.0.0';`);
 
   // 3. Flip the EXISTING-DB column default for `dashboards.config_version`
   //    ('1.0.0' -> 'v1.2'). Guarded so it is a no-op when already 'v1.2'
@@ -162,7 +276,9 @@ export function down(pgm) {
   //
   // 1. `dashboard_revisions` first (FK child): unwrap via the PARENT's wrapper
   //    shape + extension guard so a revision is only reverted when its parent
-  //    is a migrated operator/agent row. Restore the bare DC config + '1.1.0'.
+  //    is a migrated operator/agent row. The single-portlet clause excludes a
+  //    multi-portlet operator v1.2 revision (siblings must be preserved).
+  //    Restore the bare DC config + '1.1.0'.
   pgm.sql(`UPDATE dashboard_revisions r
     SET config_json = (r.config_json -> 'portlets' -> 0 -> 'config' -> 'dashboard'),
         config_version = '1.1.0'
@@ -170,16 +286,24 @@ export function down(pgm) {
     WHERE r.dashboard_id = d.id
       AND r.config_version = 'v1.2'
       AND d.extension_id IS NULL
+      AND jsonb_typeof(r.config_json -> 'portlets') = 'array'
+      AND jsonb_array_length(r.config_json -> 'portlets') = 1
       AND (r.config_json -> 'portlets' -> 0 ->> 'kind') = 'analytics'
       AND (r.config_json -> 'portlets' -> 0 -> 'config' -> 'dashboard') IS NOT NULL;`);
 
   // 2. `dashboards`: unwrap portlets[0].config.dashboard back to the root,
-  //    restore '1.1.0'. Same wrapper-shape + extension guard.
+  //    restore '1.1.0'. Same wrapper-shape + extension guard, AND exactly one
+  //    portlet — a NON-migrated analytics-first operator v1.2 row with sibling
+  //    portlets (producible via #326 reEnvelopeDcSave) is left UNTOUCHED so its
+  //    siblings are not dropped (this migration only ever produced a single-
+  //    analytics-portlet envelope).
   pgm.sql(`UPDATE dashboards
     SET config_json = (config_json -> 'portlets' -> 0 -> 'config' -> 'dashboard'),
         config_version = '1.1.0'
     WHERE config_version = 'v1.2'
       AND extension_id IS NULL
+      AND jsonb_typeof(config_json -> 'portlets') = 'array'
+      AND jsonb_array_length(config_json -> 'portlets') = 1
       AND (config_json -> 'portlets' -> 0 ->> 'kind') = 'analytics'
       AND (config_json -> 'portlets' -> 0 -> 'config' -> 'dashboard') IS NOT NULL;`);
 
