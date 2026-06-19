@@ -1,7 +1,7 @@
 // cinatra#327 (PR #336) — the robust-B TOTAL-normalizer guard for the
 // core__0006 migration. Owner decision eng#206: NO backward compat — a ONE-SHOT
 // migration must rewrite EVERY legacy/corrupt-at-rest dashboard body into a
-// registry-VALID v1.2 analytics envelope; the strict validator STAYS strict.
+// registry-VALID apiVersion-1.2 analytics envelope; the strict validator STAYS strict.
 //
 // The migration's transform now lives as a JS-side TOTAL normalizer BUNDLED into
 // the runtime artifact `migrations/core/core__0006_dashboards-v12.mjs` (core
@@ -73,9 +73,16 @@ function realRegistryErrors(config: unknown): string[] {
   return errors;
 }
 
+/** The structural shape of a migrated envelope (the bundled .mjs is untyped JS). */
+type MigratedEnvelope = {
+  apiVersion: string;
+  scopeLevel: string;
+  portlets: Array<{ instanceId: string; kind: string; version: string; slot: string; config: Record<string, unknown> }>;
+};
+
 /** Build a migrated envelope from a raw legacy body (the migration's pipeline). */
-function migrate(raw: unknown, scope = { ownerLevel: "user" }) {
-  return buildMigratedEnvelope(raw, scope, "test:row", () => {});
+function migrate(raw: unknown, scope: Record<string, unknown> = { ownerLevel: "user" }): MigratedEnvelope {
+  return buildMigratedEnvelope(raw, scope, "test:row", () => {}) as MigratedEnvelope;
 }
 
 // ── 1. TOTALITY: every named adversarial body migrates to a VALID envelope ───
@@ -130,7 +137,7 @@ describe("core__0006 normalizer TOTALITY (cinatra#327 robust-B)", () => {
   ];
 
   for (const { name, raw } of ADVERSARIAL) {
-    it(`migrates [${name}] to a registry-VALID v1.2 envelope (bundled AND real validator agree ok)`, () => {
+    it(`migrates [${name}] to a registry-VALID apiVersion-1.2 envelope (bundled AND real validator agree ok)`, () => {
       // The migration pipeline never throws and final-validation passes (or it
       // would have thrown). Assert BOTH validators say ok.
       const env = migrate(raw);
@@ -257,7 +264,7 @@ describe("core__0006 bundled-validator EQUIVALENCE with the package validators (
     { name: "canonical migrated envelope (valid)", env: wrapMigratedEnvelope(validDc, "user") },
     { name: "valid, project scope", env: wrapMigratedEnvelope(validDc, "project") },
     { name: "INVALID scopeLevel", env: { apiVersion: V12_API_VERSION, scopeLevel: "galaxy", portlets: [{ instanceId: "analytics", kind: "analytics", version: "1.0.0", slot: "fixed", config: { dashboard: validDc } }] } },
-    { name: "INVALID apiVersion", env: { apiVersion: "v9.9", scopeLevel: "user", portlets: [{ instanceId: "analytics", kind: "analytics", version: "1.0.0", slot: "fixed", config: { dashboard: validDc } }] } },
+    { name: "INVALID apiVersion", env: { apiVersion: "not-a-version", scopeLevel: "user", portlets: [{ instanceId: "analytics", kind: "analytics", version: "1.0.0", slot: "fixed", config: { dashboard: validDc } }] } },
     { name: "INVALID unknown kind", env: { apiVersion: V12_API_VERSION, scopeLevel: "user", portlets: [{ instanceId: "x", kind: "made-up", version: "1.0.0", slot: "fixed", config: {} }] } },
     { name: "INVALID embedded DC (1.0 body, no layout)", env: wrapMigratedEnvelope({ portlets: [{ id: "p", type: "chart" }] }, "user") },
     { name: "INVALID embedded DC (grid cols -1)", env: wrapMigratedEnvelope({ portlets: [], grid: { cols: -1, rowHeight: 1, minW: 1, minH: 1 } }, "user") },
@@ -358,7 +365,7 @@ describe("core__0006 migration MARKER + byte-equivalence (cinatra#327)", () => {
     const resaved = reEnvelopeDcSave(env, nextDc, "user") as { portlets: Array<{ config: Record<string, unknown> }> };
     expect(resaved.portlets[0].config[MIGRATION_MARKER_KEY]).toBe(MIGRATION_MARKER_VALUE);
     expect((resaved.portlets[0].config as { dashboard: unknown }).dashboard).toEqual(nextDc);
-    // still registry-valid (config is opaque to the v1.2 validator).
+    // still registry-valid (config is opaque to the apiVersion-1.2 validator).
     expect(realRegistryErrors(resaved)).toEqual([]);
   });
 

@@ -225,7 +225,7 @@ describe.skipIf(!RUN_IT)("core__0006 dashboards migration (real Postgres, cinatr
     await ins({ id: "d-pure-v10", version: "1.0.0", ownerLevel: "user", config: pureV10() });
     await ins({ id: "d-legacy-grid", version: "1.1.0", ownerLevel: "team", config: dc("team") });
     await ins({ id: "d-proj", version: "1.1.0", ownerLevel: "user", projectId: "proj-1", config: dc("proj") });
-    // Pre-existing v1.2 rows that must be UNTOUCHED.
+    // Pre-existing apiVersion-1.2 rows that must be UNTOUCHED.
     await ins({ id: "d-ext", version: V12, ownerLevel: "organization", extensionId: "@cinatra-ai/ext", config: envelope(dc("ext"), "organization") });
     await ins({ id: "d-multi", version: V12, ownerLevel: "team", config: multiEnvelope(dc("multi"), "team") });
     // A NATIVE #326 single-analytics operator row — same SHAPE as a migrated row
@@ -285,7 +285,7 @@ describe.skipIf(!RUN_IT)("core__0006 dashboards migration (real Postgres, cinatr
     expect(marker(rv)).toBe(MIGRATION_MARKER_VALUE);
   });
 
-  it("TOTALITY: EVERY adversarial + fuzz row migrates to a registry-VALID v1.2 envelope (none aborted)", async () => {
+  it("TOTALITY: EVERY adversarial + fuzz row migrates to a registry-VALID apiVersion-1.2 envelope (none aborted)", async () => {
     for (const { id, raw } of [...ADVERSARIAL, ...FUZZ]) {
       const r = await row(id);
       expect(r.config_version, `${id} version`).toBe(V12);
@@ -317,7 +317,7 @@ describe.skipIf(!RUN_IT)("core__0006 dashboards migration (real Postgres, cinatr
     expect(marker(r)).toBe(MIGRATION_MARKER_VALUE);
   });
 
-  it("up() leaves pre-existing extension + multi-portlet + native single-analytics v1.2 rows UNTOUCHED", async () => {
+  it("up() leaves pre-existing extension + multi-portlet + native single-analytics apiVersion-1.2 rows UNTOUCHED", async () => {
     expect(eq((await row("d-ext")).config_json, envelope(dc("ext"), "organization"))).toBe(true);
     expect(eq((await row("d-multi")).config_json, multiEnvelope(dc("multi"), "team"))).toBe(true);
     expect(eq((await row("d-native")).config_json, envelope(dc("native"), "user"))).toBe(true);

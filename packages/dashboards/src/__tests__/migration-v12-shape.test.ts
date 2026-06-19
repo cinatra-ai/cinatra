@@ -18,7 +18,7 @@
 //   Finding 1 (secondary): the migration's down() guard reverts ONLY the rows
 //     it produced. The NEW guard keys on the migration MARKER
 //     (portlets[0].config.__cinatraMigration='core__0006') — strictly safer than
-//     the old shape-only guard: a NATIVE #326 single-analytics operator v1.2 row
+//     the old shape-only guard: a NATIVE #326 single-analytics operator apiVersion-1.2 row
 //     (no marker) is now ALSO left untouched, not just multi-portlet/extension
 //     rows. Here we replicate the down() WHERE predicate and assert it.
 import { describe, expect, it } from "vitest";
