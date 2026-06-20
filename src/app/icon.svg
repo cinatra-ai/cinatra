@@ -10,22 +10,28 @@
   This is DISTINCT from the app icon (src/app/apple-icon.png, rasterized from docs/design/apple-icon.svg), which is the
   mustard fedora on a navy ground with a larger 14px corner radius.
 
-  The fedora glyph was previously centred at scale 0.625
-  (62.5% of the 32x32 surface) which read as small with padding in browser
-  tabs across the room. We scale it up to 0.92 (~88% of the surface width)
-  so the brand mark fills the icon and is visible from a distance. The
-  fedora's native viewBox is 0 0 512 320 so a 512 canvas at scale 0.92 gives
-  471 wide / 295 tall, centred via translate(20 108).
+  The fedora reads small when the glyph is shrunk inside its card, so we
+  scale it to match the marketplace favicon (cinatra-ai/marketplace
+  cinatra-favicon.svg), which is the size reference for cross-surface
+  branding consistency (cinatra#387). The fedora's NATIVE drawn path occupies
+  a 368x192 box (starting at native 72,64) inside its 0 0 512 320 viewBox, so
+  the rendered glyph width is 368 * scale, not 512 * scale. At scale 1.10 the
+  drawn fedora is 405 wide on the 512 canvas (~79% of the surface) — measured
+  by rasterising both icons and comparing the gold-pixel bbox, this matches
+  the marketplace favicon at 32/48px tab size.
 
   Geometry (scaled to 512 canvas for sharp downsampling to 16/32/48px):
   - Container: 512x512, rx=88, 16-unit stroke, inset by 8.
-  - Fedora: scale 0.92, translate (20 108) — visually fills the icon.
+  - Fedora: scale 1.10, translate (-25.6 80) — centres the 368x192 drawn path
+    on the 512 canvas: tx = (512 - 368*1.10)/2 - 72*1.10 = -25.6;
+    ty = (512 - 192*1.10)/2 - 64*1.10 = 80. Like the marketplace's slight
+    bleed, this fills the card edge-to-edge without clipping.
 
   SOURCE OF TRUTH for the fedora paths: src/lib/cinatra-brand.ts (CINATRA_LOGO).
 -->
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Cinatra">
   <rect x="8" y="8" width="496" height="496" rx="88" fill="#ffffff" stroke="rgba(21,33,58,0.14)" stroke-width="16" />
-  <g transform="translate(20 108) scale(0.92)" fill="#c79545">
+  <g transform="translate(-25.6 80) scale(1.1)" fill="#c79545">
     <path d="M72 214 C 72 200 96 190 130 188 C 168 186 196 200 256 210 C 316 220 358 214 400 200 C 426 192 440 196 440 208 C 440 222 420 234 388 242 C 340 254 288 256 256 256 C 202 256 132 248 100 238 C 80 232 72 224 72 214 Z" />
     <path d="M146 188 C 150 130 176 86 212 72 C 226 66 240 64 252 64 C 262 64 270 70 268 80 L 264 100 C 272 88 288 82 300 82 C 332 82 356 118 362 188 Z" />
   </g>
