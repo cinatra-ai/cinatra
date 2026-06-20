@@ -409,11 +409,11 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   // `workflow_template_*` runtime tools (the @cinatra-ai/workflows MCP surface)
   // which create/edit a workflow DRAFT or INSTANCE (rows in the `workflow`
   // table). Package vs draft: a package is reusable, versioned, and shippable;
-  // a draft is one operator's concrete planned-run on the Gantt. ADMIN-ONLY.
+  // a draft is one operator's concrete planned run. ADMIN-ONLY.
   // ----------------------------------------------------------------------
   "workflow_source_write": {
     description:
-      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a WORKFLOW EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"workflow\"), cinatra/workflow.bpmn (the declarative BPMN definition), and an optional skills/<packageSlug>/SKILL.md. DISTINCT from workflow_draft_create / workflow_template_instantiate, which author a workflow DRAFT/INSTANCE row (a planned run on the Gantt) — NOT a reusable package. Validates the BPMN before writing (fails closed on a structurally-invalid workflow) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: workflow_source_write → workflow_source_validate → workflow_source_compile → workflow_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a WORKFLOW EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"workflow\"), cinatra/workflow.bpmn (the declarative BPMN definition), and an optional skills/<packageSlug>/SKILL.md. DISTINCT from workflow_draft_create / workflow_template_instantiate, which author a workflow DRAFT/INSTANCE row (a planned run) — NOT a reusable package. Validates the BPMN before writing (fails closed on a structurally-invalid workflow) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: workflow_source_write → workflow_source_validate → workflow_source_compile → workflow_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
     inputSchema: z.object({
       packageSlug: z
         .string()

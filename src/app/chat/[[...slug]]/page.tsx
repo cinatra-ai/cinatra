@@ -27,8 +27,8 @@ export default async function ChatPageMount({
   const threadId = slug?.[0];
   const mention = typeof sp.mention === "string" ? sp.mention : undefined;
   const mode = typeof sp.mode === "string" ? sp.mode : undefined;
-  // Workflow-task handoff from the Gantt "Open in chat" context action
-  // (/chat?wf=<id>&task=<key>) → a concise prompt the user can complete.
+  // Workflow-task handoff via the /chat?wf=<id>&task=<key> deep link →
+  // a concise prompt the user can complete.
   const wf = typeof sp.wf === "string" ? sp.wf : undefined;
   const task = typeof sp.task === "string" ? sp.task : undefined;
   const initialPrompt = wf

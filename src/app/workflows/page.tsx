@@ -25,14 +25,14 @@ import { findStuckTasks } from "@cinatra-ai/workflows/engine";
 import { filterReadable } from "@cinatra-ai/workflows/scope";
 import { type WorkflowStatus } from "@/lib/status-adapter";
 import {
-  WorkflowsIndexGantt,
+  WorkflowsIndexList,
   type WorkflowsIndexRow,
-} from "@/components/workflows/workflows-index-gantt";
+} from "@/components/workflows/workflows-index-list";
 
 export const metadata: Metadata = { title: "Workflows" };
 
-// Fallback: workflows with no dated tasks still need a visible bar. We use
-// `targetAtUtc` (the workflow's release/anchor) if present, otherwise
+// Fallback: workflows with no dated tasks still need a visible schedule window.
+// We use `targetAtUtc` (the workflow's release/anchor) if present, otherwise
 // `createdAt` → `createdAt + 1 day`.
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -49,13 +49,13 @@ export default async function WorkflowsPage() {
   const windows = rows.length > 0 ? await listWorkflowWindows(rows.map((w) => w.id)) : [];
   const windowById = new Map(windows.map((w) => [w.workflowId, w]));
 
-  const ganttRows: WorkflowsIndexRow[] = rows.map((w) => {
+  const indexRows: WorkflowsIndexRow[] = rows.map((w) => {
     const win = windowById.get(w.id);
     let startUtc = win?.windowStartUtc ?? null;
     let endUtc = win?.windowEndUtc ?? null;
     if (!startUtc || !endUtc) {
       // Fallback — anchor on target / createdAt so untimed workflows
-      // still render in the index Gantt.
+      // still show a schedule window in the index list.
       const anchor = w.targetAtUtc ?? w.createdAt;
       startUtc = anchor;
       endUtc = new Date(anchor.getTime() + DAY_MS);
@@ -108,7 +108,7 @@ export default async function WorkflowsPage() {
             </AlertDescription>
           </Alert>
         )}
-        {ganttRows.length === 0 ? (
+        {indexRows.length === 0 ? (
           <Empty>
             <EmptyHeader>
               <EmptyTitle>No workflows yet</EmptyTitle>
@@ -118,7 +118,7 @@ export default async function WorkflowsPage() {
             </EmptyHeader>
           </Empty>
         ) : (
-          <WorkflowsIndexGantt rows={ganttRows} />
+          <WorkflowsIndexList rows={indexRows} />
         )}
       </PageContent>
     </Main>

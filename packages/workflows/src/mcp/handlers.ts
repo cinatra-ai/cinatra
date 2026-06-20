@@ -104,7 +104,10 @@ const DEEP_LINK = (id: string) => `/workflows/${id}`;
 const handoff = (workflowId: string, extra: Record<string, unknown> = {}) => ({
   workflowId,
   deepLink: DEEP_LINK(workflowId),
-  renderHint: "gantt" as const,
+  // The chat handoff renders as a workflow deep-link card. (Was "gantt" before
+  // the built-in GANTT was removed in cinatra#321; the deep link targets the
+  // workflow detail page — task list + lifecycle controls — not a chart.)
+  renderHint: "workflow" as const,
   ...extra,
 });
 
@@ -373,7 +376,7 @@ export function createWorkflowPrimitiveHandlers(deps: WorkflowHandlerDeps = {}) 
       if (!existing || !isReadable(rowScope(existing.workflow), actor)) return { error: "Workflow not found.", code: "NOT_FOUND" };
       if (!canManage(rowScope(existing.workflow), actor)) return { error: "You cannot edit this workflow.", code: "FORBIDDEN" };
       if (existing.workflow.status !== "draft") {
-        return { error: "Only draft workflows can be edited from chat. Manage active workflows on the Gantt.", code: "DRAFT_ONLY" };
+        return { error: "Only draft workflows can be edited from chat. Manage active workflows on the workflow page.", code: "DRAFT_ONLY" };
       }
       const mat = materializeSpec(req.input.spec);
       if (!mat.ok) return { error: "Spec is invalid.", validation: { errors: mat.errors } };
@@ -608,8 +611,8 @@ export function createWorkflowPrimitiveHandlers(deps: WorkflowHandlerDeps = {}) 
       const spec = await reconstructSpec(req.input.workflowId);
       if (!spec) return { error: "Workflow not found.", code: "NOT_FOUND" };
       const cascade = computeCascadeDiff(spec, { targetAtUtc: req.input.targetAt });
-      // Return the workflow's current `lockVersion` with the preview so the Gantt's Apply uses the exact
-      // version the preview was computed against. On stale at Apply time, the
+      // Return the workflow's current `lockVersion` with the preview so the target-date control's Apply
+      // uses the exact version the preview was computed against. On stale at Apply time, the
       // UI refetches + recomputes the preview rather than committing a stale diff.
       return {
         ...handoff(req.input.workflowId),

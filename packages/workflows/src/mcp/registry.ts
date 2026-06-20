@@ -72,7 +72,7 @@ export function registerWorkflowPrimitives(
         const content = [{ type: "text" as const, text: JSON.stringify(result) }];
         const structuredContent =
           typeof result === "object" && result !== null ? (result as Record<string, unknown>) : { result };
-        // Gantt handoff render hint when the result carries a deep link.
+        // Workflow handoff render hint when the result carries a deep link.
         let renderMeta: Record<string, unknown> | undefined;
         if (
           result &&
@@ -83,7 +83,9 @@ export function registerWorkflowPrimitives(
         ) {
           const r = result as { workflowId: string; deepLink: string };
           renderMeta = {
-            "io.cinatra.render": { type: "workflow", workflowId: r.workflowId, deepLink: r.deepLink, surface: "gantt" },
+            // surface was "gantt" before the built-in GANTT was removed
+            // (cinatra#321); the deep link targets the workflow detail page.
+            "io.cinatra.render": { type: "workflow", workflowId: r.workflowId, deepLink: r.deepLink, surface: "workflow" },
           };
         }
         return { content, structuredContent, ...(renderMeta ? { _meta: renderMeta } : {}) };

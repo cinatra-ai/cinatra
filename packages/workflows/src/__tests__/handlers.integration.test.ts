@@ -57,7 +57,7 @@ beforeAll(async () => {
 }, 60_000);
 
 describe("chat MCP handlers (integration)", () => {
-  it("creates a draft, returns a Gantt handoff, and reads it back", async () => {
+  it("creates a draft, returns a workflow handoff, and reads it back", async () => {
     const created = (await handlers.workflow_draft_create(req({ spec: nonAgentFixture }))) as {
       workflowId: string;
       deepLink: string;
@@ -65,7 +65,7 @@ describe("chat MCP handlers (integration)", () => {
     };
     expect(created.workflowId).toBeTruthy();
     expect(created.deepLink).toBe(`/workflows/${created.workflowId}`);
-    expect(created.renderHint).toBe("gantt");
+    expect(created.renderHint).toBe("workflow");
 
     const got = (await handlers.workflow_draft_get(req({ workflowId: created.workflowId }))) as {
       workflow: { id: string; status: string };

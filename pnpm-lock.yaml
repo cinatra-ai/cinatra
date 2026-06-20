@@ -165,9 +165,6 @@ importers:
       '@sentry/opentelemetry':
         specifier: ^10.58.0
         version: 10.58.0(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@1.30.1(@opentelemetry/api@1.9.1))(@opentelemetry/semantic-conventions@1.41.1)
-      '@svar-ui/react-gantt':
-        specifier: 2.6.1
-        version: 2.6.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       '@tanstack/react-query':
         specifier: ^5.101.0
         version: 5.101.0(react@19.2.6)
@@ -1084,7 +1081,7 @@ importers:
         version: link:../../../packages/sdk-ui
       '@openai/agents':
         specifier: ^0.11.4
-        version: 0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+        version: 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -3641,26 +3638,26 @@ packages:
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
 
-  '@openai/agents-core@0.11.6':
-    resolution: {integrity: sha512-jWeo4mF+zjp9R80OPg+9prAnwF53dIpok2ymp9OkC3DpK2qcqBO8CfoEgocNp+E5HXXFW4uvCaY0olNCCcmTFw==}
+  '@openai/agents-core@0.11.8':
+    resolution: {integrity: sha512-TrE34RXXPoWYv2PjXf5hq3Eq+uvRJMNiY+Q5WBgEPjAg60yt2hya8cS2I8qkO6i25MjNJl37a25X0vL/gs5Wdg==}
     peerDependencies:
       zod: ^4.0.0
     peerDependenciesMeta:
       zod:
         optional: true
 
-  '@openai/agents-openai@0.11.6':
-    resolution: {integrity: sha512-63zXy+EPmg3WErLO12jLEjCTqGBZ/f0ApsW/t5wpccqUYCtImIT6IYZDgGM+zSEafHNGJmNOwGtEqHjz/Pyl+A==}
+  '@openai/agents-openai@0.11.8':
+    resolution: {integrity: sha512-XjHCnJPGapgZBlh8y5oxU7zV0hrAQTF5im6HpUwaPcH5CeRFLtc06VXLso0vJ5G3g9e/J5gIh3S1iAxiJqEAVQ==}
     peerDependencies:
       zod: ^4.0.0
 
-  '@openai/agents-realtime@0.11.6':
-    resolution: {integrity: sha512-jw4lLO6B2xyCBtgLtAXZmqhjEAqSLO1EtJzfwfrZuzGpPgs4nJBQ+O7ybtdPPKt8iWdIOlrYRDqxhBHv7Qqo7w==}
+  '@openai/agents-realtime@0.11.8':
+    resolution: {integrity: sha512-i1qEGUE8GTW0neWgAc1aj/3wZFtstz8bVG2BvVbU/BzQbyhZV8j3CvndkMJGFfgeobvVmn2qGTV5Ry6ibfuxeQ==}
     peerDependencies:
       zod: ^4.0.0
 
-  '@openai/agents@0.11.6':
-    resolution: {integrity: sha512-YLwycYJQ65ETEq1SzjdFO6U9VhWHOKKIVh6wZCd/FmTZoqYq9UF/5uvX+wF8cZ58J+wIyyLynPdCmzEEov2rhw==}
+  '@openai/agents@0.11.8':
+    resolution: {integrity: sha512-D4XHF2g+Ub/L9fRJT/xpuiCqHyxiKzZbi0BqQxnso42t+J049O/OSvVzFBcRskF4uPFAvs0TOOB7KBbanCwaYQ==}
     peerDependencies:
       zod: ^4.0.0
 
@@ -5521,120 +5518,6 @@ packages:
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
 
-  '@svar-ui/comments-locales@2.5.0':
-    resolution: {integrity: sha512-oFcW/2YwRG3R4sy8DGKOypiUdwknu9+zJgAqS7DrUZ83f8rdI7WI9BXAB1TOqFa4nyb5Tz4brtY0Zk6seLorPw==}
-
-  '@svar-ui/core-locales@2.5.0':
-    resolution: {integrity: sha512-vL8y8B1/YeHd89cd6x5jzSWLxYxNICXZY2Gx4+Op26L8N8IhCR26r8fpuptugodKLIQkyua3fh27ZB+5sJSXHg==}
-
-  '@svar-ui/core-locales@2.6.0':
-    resolution: {integrity: sha512-Sma/BkR3we76Ix/67NmSh511yvtKVpi8LFK06ZbWSiC3xEsCSoKsJ5AtLmi8dxaXPa5HuCWI/jMwJsKRwQ0F2Q==}
-
-  '@svar-ui/editor-locales@2.5.0':
-    resolution: {integrity: sha512-OrI07rysre6/KvSGeDdegfKC0HN3JQq4W3W8M4CQLVkvkRD+U2/vb1i1C3iIDXWrvTtQlpZedZqYZ8nraQyWGA==}
-
-  '@svar-ui/filter-locales@2.5.0':
-    resolution: {integrity: sha512-3SuoJoKRAQ2RGRf/KhYd5FSNsNfCGcgT1YMz9nxaeRHLaFXYb+ny5scmOiLoAfvz3oygXtrPYzU0BA0q1Hb7uw==}
-
-  '@svar-ui/filter-store@2.5.0':
-    resolution: {integrity: sha512-3L70sOwAyhOOHnU0j7f+ENcti0SQux3J4epFi757h3fBHt5FWMTXn7VuyucjUHZNrjsQ/dgP3GZ00/ykmjkzug==}
-
-  '@svar-ui/gantt-data-provider@2.6.1':
-    resolution: {integrity: sha512-upiAJe16aEvr+KmVhJo4UNca0oxFw3YBQv6Geh759zmthyPqsP8q3ejk+/kSR+N3BzG7IWUJZ+LIurT7EvT9sQ==}
-
-  '@svar-ui/gantt-locales@2.6.1':
-    resolution: {integrity: sha512-A3dgtDZQ9bfKugXxn7XjULvvx8og5ymHfOtBKguOQbMK1GH2An0QvQoa7hSbvPD1mHnWEtY2ML08Hqemma4sFg==}
-
-  '@svar-ui/gantt-store@2.6.1':
-    resolution: {integrity: sha512-22gCU1iJf2mxGBHKONOjqpM/K6TFX3FXYlf6XZ0+DsiUgGf7OL4hoo7ubl0AE3ypyW4pzn8i64evAfbYZ/lgXA==}
-
-  '@svar-ui/grid-data-provider@2.6.1':
-    resolution: {integrity: sha512-9vCxSbjXj173xurlFOSvOfM4h63zt1bxQH2WRYi6YhdARwV3iVuhu/MVTszSSqrq86CDmv2aqeyuqQXKZKgRGg==}
-
-  '@svar-ui/grid-locales@2.6.1':
-    resolution: {integrity: sha512-UDrTCdvsoZAdVOQ1KRRZ3xHiOwn5iaykOVv8amO/PY2onzK04Hlz/WN5jfqJGdR57WXIY7p0/4VMoJUSGSi9LA==}
-
-  '@svar-ui/grid-store@2.6.1':
-    resolution: {integrity: sha512-BR9vuO8X1uj97mkFO9inl5sRfM/iSoHrqCwiMoxqnbZu3A4H9C7d5BmxGQQDxX1wuTh9F04jQEwRuknmMHI34w==}
-
-  '@svar-ui/lib-data-provider@1.7.1':
-    resolution: {integrity: sha512-5Bi9ywngcMTKpGtan0s7q8ivd84Bp0ZnRP+5bLZg6oiRB7YMyN5D5X+apc3CWDAnG4zZn3en4YwS2qc/aHIIuQ==}
-
-  '@svar-ui/lib-data-provider@1.7.2':
-    resolution: {integrity: sha512-Od93Iiy0vBwVzgJm25WdizH3d4Xlli/HAA2kqoUj1pzeZ2SWBeFzvE59iihQz8NuIlfAtQJ6MMe168458T+2lQ==}
-
-  '@svar-ui/lib-dom@0.11.1':
-    resolution: {integrity: sha512-4wgerhDVttvrQ9t6OjHur34Of+VVr2VygA16HHGcWHytgdnOuGgfZb5PeBEhCJw/pO3RKfJvBHbaMIzL4IR//g==}
-
-  '@svar-ui/lib-dom@0.12.1':
-    resolution: {integrity: sha512-srvDleQqR6stBBDijCgzDHMFTTffI6sv3XCpNPKmurrnE83L1MDNqezqg6j3+0dUVPd4AAEGOez2DvK6byblTQ==}
-
-  '@svar-ui/lib-react@1.2.2':
-    resolution: {integrity: sha512-bB+Vou2NM0JhMuFW03MsjjoV5Y3xcFfuuK48+7uzUC9Ui1oSWpCK+txOZ+dnUFJISSVjSsXuF34AzMw/2CA63w==}
-
-  '@svar-ui/lib-react@1.3.0':
-    resolution: {integrity: sha512-jVcREYAMAXOhZB/lbMmLteGKIZoUW3rzmoXCMcFLGcHIGUH7AjFrKOAG/SJvgV0grcG9XyuRTG3jp++6NIGtuw==}
-
-  '@svar-ui/lib-state@1.9.6':
-    resolution: {integrity: sha512-twoHa8wZvzdxtES68s6Wnp4Xi1WivScNaFFK6sJ6WDgqVYOzJw0ZhVVrdwHQgieLITTKl/DYh/U3nuqtMetKYw==}
-
-  '@svar-ui/react-comments@2.5.0':
-    resolution: {integrity: sha512-2dfrYOwo8Rl/zT0i2DppH5TnrkFNaE32HETWSZwtE6HwckJyLTLVZFCt9vXWlVNYc0kDRR5uURk3uAeneDUS1g==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-core@2.5.0':
-    resolution: {integrity: sha512-eZxuDKrptyIXkTjLy+Bnw7EdeDjWP6FlWZyhFPjtC/2RkwNbubbxRdW1ycmR+4hFnnrwnrNR2dmr5OwLXRKJbQ==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-editor@2.5.0':
-    resolution: {integrity: sha512-ei67pp65nn2P9qEvWRO3LmS/+UnaTUWfHXQ4TrKW+qyruZ3c7CD5eXErshVjViAR2572neXesdECu7L//s3SAg==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-filter@2.5.0':
-    resolution: {integrity: sha512-/HE8YyNgZEv2jebvVq7oUQl+KpVINXxDzJZOqdqXWA8a5t77ivTNERCofzaXKynV2mAxAfTQJ9eRdeW1cwT4KA==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-gantt@2.6.1':
-    resolution: {integrity: sha512-e3Ba/Lgxuuq5lAIaBuL44xSHG9RPUUZfR71ODohWZyjGU+rtyKC1SjRsOCfV8D0/NN9VsuHaC7vMRIZ39rScfw==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-grid@2.6.1':
-    resolution: {integrity: sha512-Hv0K+YEDTgs1rUf4sb8qUvGDz5JeMKs1IfHhtk3JdMAbYVvb52Re3uPnK5Civk3ZlkKnL/0OnnBKIFqmJOpWKA==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-menu@2.5.0':
-    resolution: {integrity: sha512-UbALXtlneRM+O0KnOx024aY7UIxkqALhwGYuEQQYTOoX6oonOuvGQpSx19h4mWRE3TU/3prCYL0PFPO2ixS/yA==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-tasklist@2.5.0':
-    resolution: {integrity: sha512-KZeSNyM1sB0FCqR5gJIAXbmyMaSElaj57ImGBfAxjwo7HG5KOmJrm5pZ8TJzo7EgUDvBfMJO4Hhz5IuGDpUo6Q==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/react-toolbar@2.5.0':
-    resolution: {integrity: sha512-lrs5G7pdXKZypDA9NNw1pbAChNRrMpaJ5ormYH0c6xgQlIL2h/xZDczt6sBaZTSJT8BLz4KgV//Q1ngws/cMQQ==}
-    peerDependencies:
-      react: 19.2.6
-      react-dom: 19.2.6
-
-  '@svar-ui/tasklist-locales@2.5.0':
-    resolution: {integrity: sha512-4S3Q1y5wfYDOt4LsTMpJfJ/5p/chyBtiyxpUaKX3vBu0l81/MuyPhihpoc2imAvwRPdQ+VblUqXKlOMZc31O7Q==}
-
   '@swc/helpers@0.5.15':
     resolution: {integrity: sha512-JQ5TuMi45Owi4/BIMAJBoSQoOJu12oOk/gADqlcUL9JEdHB8vyjUSsxqeNXnmXHjYKMi2WcYtezGEEhqUI/E2g==}
 
@@ -7111,9 +6994,6 @@ packages:
     resolution: {integrity: sha512-sg8HqoTEulcbbbVXeg84u5UnlsQa8GS5QXMqjjYIhS4abEVVKIUwe0/l/UhrZdKaL/W5eWZNlbTeEIiOXTcsBQ==}
     peerDependencies:
       date-fns: ^3.0.0 || ^4.0.0
-
-  date-fns@3.6.0:
-    resolution: {integrity: sha512-fRHTG8g/Gif+kSh50gaGEdToemgfj74aRX3swtiouboip5JDLAyDE9F11nHMIcvOaXeOC6D7SpNhi7uFyB7Uww==}
 
   date-fns@4.4.0:
     resolution: {integrity: sha512-+1UMbeh68lH1SegH83CGWwpb6OHHbpSgr3+s5Eww5M4CAgswBpoWS0AjTOfEJ33HiYKz1hdj/KTFprzXHmq/6w==}
@@ -11906,7 +11786,7 @@ snapshots:
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
 
-  '@openai/agents-core@0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents-core@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       debug: 4.4.3
       openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
@@ -11918,9 +11798,9 @@ snapshots:
       - supports-color
       - ws
 
-  '@openai/agents-openai@0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents-openai@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
       debug: 4.4.3
       openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
@@ -11929,9 +11809,9 @@ snapshots:
       - supports-color
       - ws
 
-  '@openai/agents-realtime@0.11.6(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+  '@openai/agents-realtime@0.11.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
       '@types/ws': 8.18.1
       debug: 4.4.3
       ws: 8.21.0
@@ -11942,11 +11822,11 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@openai/agents@0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      '@openai/agents-openai': 0.11.6(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      '@openai/agents-realtime': 0.11.6(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-openai': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-realtime': 0.11.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       debug: 4.4.3
       openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
@@ -13727,168 +13607,6 @@ snapshots:
 
   '@standard-schema/utils@0.3.0': {}
 
-  '@svar-ui/comments-locales@2.5.0': {}
-
-  '@svar-ui/core-locales@2.5.0': {}
-
-  '@svar-ui/core-locales@2.6.0': {}
-
-  '@svar-ui/editor-locales@2.5.0': {}
-
-  '@svar-ui/filter-locales@2.5.0': {}
-
-  '@svar-ui/filter-store@2.5.0':
-    dependencies:
-      '@svar-ui/lib-state': 1.9.6
-
-  '@svar-ui/gantt-data-provider@2.6.1':
-    dependencies:
-      '@svar-ui/lib-data-provider': 1.7.1
-
-  '@svar-ui/gantt-locales@2.6.1': {}
-
-  '@svar-ui/gantt-store@2.6.1':
-    dependencies:
-      '@svar-ui/lib-state': 1.9.6
-      date-fns: 3.6.0
-
-  '@svar-ui/grid-data-provider@2.6.1':
-    dependencies:
-      '@svar-ui/lib-data-provider': 1.7.2
-
-  '@svar-ui/grid-locales@2.6.1': {}
-
-  '@svar-ui/grid-store@2.6.1':
-    dependencies:
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-state': 1.9.6
-
-  '@svar-ui/lib-data-provider@1.7.1':
-    dependencies:
-      '@svar-ui/lib-state': 1.9.6
-
-  '@svar-ui/lib-data-provider@1.7.2':
-    dependencies:
-      '@svar-ui/lib-state': 1.9.6
-
-  '@svar-ui/lib-dom@0.11.1': {}
-
-  '@svar-ui/lib-dom@0.12.1': {}
-
-  '@svar-ui/lib-react@1.2.2':
-    dependencies:
-      '@svar-ui/lib-dom': 0.11.1
-
-  '@svar-ui/lib-react@1.3.0':
-    dependencies:
-      '@svar-ui/lib-dom': 0.12.1
-
-  '@svar-ui/lib-state@1.9.6': {}
-
-  '@svar-ui/react-comments@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/comments-locales': 2.5.0
-      '@svar-ui/core-locales': 2.5.0
-      '@svar-ui/lib-data-provider': 1.7.1
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-menu': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-core@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/core-locales': 2.6.0
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-react': 1.2.2
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-editor@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/editor-locales': 2.5.0
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-comments': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-tasklist': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-toolbar': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-filter@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/filter-locales': 2.5.0
-      '@svar-ui/filter-store': 2.5.0
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-react': 1.3.0
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-menu': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-gantt@2.6.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/gantt-data-provider': 2.6.1
-      '@svar-ui/gantt-locales': 2.6.1
-      '@svar-ui/gantt-store': 2.6.1
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-react': 1.3.0
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-editor': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-filter': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-grid': 2.6.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-menu': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-toolbar': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-grid@2.6.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/grid-data-provider': 2.6.1
-      '@svar-ui/grid-locales': 2.6.1
-      '@svar-ui/grid-store': 2.6.1
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-react': 1.3.0
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-editor': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-filter': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/react-menu': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-menu@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/core-locales': 2.5.0
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-tasklist@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/lib-data-provider': 1.7.1
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/lib-state': 1.9.6
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      '@svar-ui/tasklist-locales': 2.5.0
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/react-toolbar@2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
-    dependencies:
-      '@svar-ui/core-locales': 2.5.0
-      '@svar-ui/lib-dom': 0.12.1
-      '@svar-ui/react-core': 2.5.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
-      react: 19.2.6
-      react-dom: 19.2.6(react@19.2.6)
-
-  '@svar-ui/tasklist-locales@2.5.0': {}
-
   '@swc/helpers@0.5.15':
     dependencies:
       tslib: 2.8.1
@@ -14320,8 +14038,8 @@ snapshots:
 
   '@typescript-eslint/project-service@8.61.0(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/tsconfig-utils': 8.61.0(typescript@5.9.3)
-      '@typescript-eslint/types': 8.61.0
+      '@typescript-eslint/tsconfig-utils': 8.61.1(typescript@5.9.3)
+      '@typescript-eslint/types': 8.61.1
       debug: 4.4.3
       typescript: 5.9.3
     transitivePeerDependencies:
@@ -14347,6 +14065,10 @@ snapshots:
       '@typescript-eslint/visitor-keys': 8.61.1
 
   '@typescript-eslint/tsconfig-utils@8.61.0(typescript@5.9.3)':
+    dependencies:
+      typescript: 5.9.3
+
+  '@typescript-eslint/tsconfig-utils@8.61.1(typescript@5.9.3)':
     dependencies:
       typescript: 5.9.3
 
@@ -15458,8 +15180,6 @@ snapshots:
   date-fns-tz@3.2.0(date-fns@4.4.0):
     dependencies:
       date-fns: 4.4.0
-
-  date-fns@3.6.0: {}
 
   date-fns@4.4.0: {}
 

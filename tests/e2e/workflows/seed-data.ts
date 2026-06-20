@@ -12,7 +12,7 @@
  * cover and that the live walk verified: a PAUSED workflow that already carries
  * an attempt (a succeeded checkpoint) plus an idle dependent — i.e. the
  * "paused-edit with attempts" surface. Because it is paused + user-owned,
- * the detail page renders the editable Gantt + the Target-date control.
+ * the detail page renders the task list + the editable Target-date control.
  *
  * Idempotent: every run deletes the seeded workflow's rows (in FK-safe order)
  * and re-inserts, so the suite is deterministic on re-run.
@@ -43,14 +43,6 @@ const SHIP_TASK_ID = "wtask_e2e_ship";
 const PHASE_PARENT_ID = "wtask_e2e_phase_1_release";
 const DESIGN_CHILD_ID = "wtask_e2e_design_doc";
 const QA_CHILD_ID = "wtask_e2e_qa_pass";
-
-// Screenshot-only status coverage (opt-in via `CAPTURE_SCREENSHOTS=1`).
-// Three additional flat tasks covering succeeded/running/failed actual-bar
-// statuses; each has a NONZERO planned span (computeActualBarMetrics returns
-// null on milestones / zero-width planned bars).
-const RESEARCH_TASK_ID = "wtask_e2e_research";
-const PROTOTYPE_TASK_ID = "wtask_e2e_prototype";
-const AUDIT_TASK_ID = "wtask_e2e_audit";
 
 export async function seedWorkflowFixtures(opts: SeedOptions): Promise<SeedResult> {
   const pool = new Pool({ connectionString: opts.databaseUrl });
@@ -112,7 +104,7 @@ export async function seedWorkflowFixtures(opts: SeedOptions): Promise<SeedResul
     const buildDue = new Date(Date.now() - 24 * 3_600_000); // yesterday (already ran)
     const shipDue = new Date(Date.now() + 7 * 24 * 3_600_000); // next week
 
-    // PAUSED workflow, user-owned (→ manageable → editable Gantt + Target ctrl).
+    // PAUSED workflow, user-owned (→ manageable → task list + editable Target ctrl).
     await pool.query(
       `INSERT INTO ${schema}.workflow
          (id, name, product, target_at_utc, target_tz, status, owner_level, owner_id, org_id, spec_version, lock_version, created_by)
@@ -127,7 +119,7 @@ export async function seedWorkflowFixtures(opts: SeedOptions): Promise<SeedResul
        VALUES ($1, $2, 'build', 'checkpoint', 'Build', 'succeeded', $3, $3, $3, 1)`,
       [BUILD_TASK_ID, WORKFLOW_ID, buildDue],
     );
-    // Idle manual dependent (editable bar).
+    // Idle manual dependent (depends on build).
     await pool.query(
       `INSERT INTO ${schema}.workflow_task
          (id, workflow_id, key, type, title, status, planned_start_utc, planned_end_utc, due_at_utc, lock_version)
@@ -192,42 +184,6 @@ export async function seedWorkflowFixtures(opts: SeedOptions): Promise<SeedResul
       `UPDATE ${schema}.workflow_task SET parent_task_id = $1 WHERE id = ANY($2::text[])`,
       [PHASE_PARENT_ID, [DESIGN_CHILD_ID, QA_CHILD_ID]],
     );
-
-    // Optional status-coverage tasks (screenshot grid only). Each carries a
-    // NONZERO planned span + actuals so computeActualBarMetrics renders the
-    // ghost actual-bar overlay; spans straddle "now" so the today-line cuts
-    // through them. Gated by env so the durable e2e suite is unaffected.
-    if (process.env.CAPTURE_SCREENSHOTS === "1") {
-      const researchStart = new Date(Date.now() - 6 * 24 * 3_600_000); // -6d
-      const researchEnd = new Date(Date.now() - 2 * 24 * 3_600_000); // -2d
-      const prototypeStart = new Date(Date.now() - 3 * 24 * 3_600_000); // -3d
-      const prototypeEnd = new Date(Date.now() + 4 * 24 * 3_600_000); // +4d
-      const auditStart = new Date(Date.now() - 4 * 24 * 3_600_000); // -4d
-      const auditEnd = new Date(Date.now() - 1 * 24 * 3_600_000); // -1d
-      const auditActualEnd = new Date(Date.now() + 1 * 24 * 3_600_000); // +1d (overrun)
-
-      // Succeeded (actuals fully within planned window).
-      await pool.query(
-        `INSERT INTO ${schema}.workflow_task
-           (id, workflow_id, key, type, title, status, planned_start_utc, planned_end_utc, due_at_utc, actual_start_utc, actual_end_utc, lock_version)
-         VALUES ($1, $2, 'research', 'agent_task', 'Research', 'succeeded', $3, $4, $4, $3, $4, 1)`,
-        [RESEARCH_TASK_ID, WORKFLOW_ID, researchStart, researchEnd],
-      );
-      // Running (actualStart only; ghost clips to "now").
-      await pool.query(
-        `INSERT INTO ${schema}.workflow_task
-           (id, workflow_id, key, type, title, status, planned_start_utc, planned_end_utc, due_at_utc, actual_start_utc, lock_version)
-         VALUES ($1, $2, 'prototype', 'agent_task', 'Prototype', 'running', $3, $4, $4, $3, 1)`,
-        [PROTOTYPE_TASK_ID, WORKFLOW_ID, prototypeStart, prototypeEnd],
-      );
-      // Failed (overran planned end → slip-days > 0).
-      await pool.query(
-        `INSERT INTO ${schema}.workflow_task
-           (id, workflow_id, key, type, title, status, planned_start_utc, planned_end_utc, due_at_utc, actual_start_utc, actual_end_utc, lock_version)
-         VALUES ($1, $2, 'audit', 'agent_task', 'Audit', 'failed', $3, $4, $4, $3, $5, 1)`,
-        [AUDIT_TASK_ID, WORKFLOW_ID, auditStart, auditEnd, auditActualEnd],
-      );
-    }
 
     return { userId, organizationId, workflowId: WORKFLOW_ID };
   } finally {

@@ -170,7 +170,7 @@ export function registerCorePortletKinds(): void {
         : [{ code: "port_agent_launcher_missing_agent", message: "config.agentRef or config.agentPackage is required" }],
   });
 
-  // workflow-status — Gantt/status; single-workflow OR project-scope mode.
+  // workflow-status — status summary; single-workflow OR project-scope mode.
   registerPortletKind({
     kind: "workflow-status",
     version: PORTLET_VERSION,

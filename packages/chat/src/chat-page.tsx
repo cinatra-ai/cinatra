@@ -1409,8 +1409,8 @@ type ChatPageProps = {
   userId?: string;
   initialMention?: string;
   initialMode?: ChatPageMode;
-  /** Pre-fills the prompt field on mount (e.g. workflow-task handoff from the
-   *  Gantt "Open in chat" context action). Ignored if `initialMention` is set. */
+  /** Pre-fills the prompt field on mount (e.g. a `?wf=&task=` workflow-task
+   *  handoff). Ignored if `initialMention` is set. */
   initialPrompt?: string;
   /** Live chat-widget catalog, resolved server-side by the chat mount from the
    *  generated extension manifest + extension lifecycle
@@ -1991,9 +1991,8 @@ const skipNextThreadLoadRef = useRef(false);
     return () => clearTimeout(id);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Pre-fill prompt with a workflow-task handoff (?wf=&task= from the Gantt
-  // "Open in chat" action). Mention wins if both are present (mention is the
-  // more specific intent).
+  // Pre-fill prompt with a workflow-task handoff (?wf=&task= deep link).
+  // Mention wins if both are present (mention is the more specific intent).
   useEffect(() => {
     if (initialMention || !initialPrompt) return;
     const id = setTimeout(() => {

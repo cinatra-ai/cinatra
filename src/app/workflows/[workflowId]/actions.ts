@@ -30,16 +30,10 @@ import {
   readApprovalById,
   decideWorkflowApproval,
   renameWorkflowCas,
-  rescheduleWorkflowTask,
   rescheduleWorkflow,
-  deleteWorkflowTask,
-  applyWorkflowTaskWindow,
-  addWorkflowDependency,
-  removeWorkflowDependency,
   reconstructSpec,
   listAgentHitlEvents,
   type ApprovalDecision,
-  type RescheduleTaskMode,
 } from "@cinatra-ai/workflows/store";
 import { computeCascadeDiff } from "@cinatra-ai/workflows/schedule";
 import { canManage } from "@cinatra-ai/workflows/scope";
@@ -238,15 +232,18 @@ export async function cancelWorkflowAction(workflowId: string): Promise<Lifecycl
 }
 
 // ---------------------------------------------------------------------------
-// Gantt interactive drag server actions.
+// Workflow target-date reschedule action.
 //
-// Each calls the package's narrow store mutation (rescheduleWorkflowTask /
-// rescheduleWorkflow) which:
-//   - draft-only (the underlying updateWorkflowDraftSpec CAS enforces it)
+// `rescheduleAction` moves the workflow's release/target date and cascades the
+// task windows via the package's `rescheduleWorkflow` store mutation, which:
+//   - draft/paused-only (the underlying updateWorkflowDraftSpec CAS enforces it)
 //   - validates the patched spec
 //   - CAS via expectedLockVersion
 //   - freezes pinned tasks on rebuild
-// All actions re-check `canManage` server-side (the client gate is UX).
+// Re-checks `canManage` server-side (the client gate is UX). This is the
+// EXECUTION-timing control that survives the Gantt removal (#321) — it drives
+// when the workflow runs, not just a chart. The per-task drag/resize/dependency
+// edit actions that the Gantt offered were removed with the chart.
 // ---------------------------------------------------------------------------
 
 export type RescheduleActionResult = {
@@ -254,25 +251,6 @@ export type RescheduleActionResult = {
   reason?: string;
   lockVersion?: number;
 };
-
-export async function rescheduleTaskAction(
-  workflowId: string,
-  taskKey: string,
-  newDueAtUtc: string,
-  mode: RescheduleTaskMode,
-  expectedLockVersion: number,
-): Promise<RescheduleActionResult> {
-  await authorizeManage(workflowId);
-  const r = await rescheduleWorkflowTask({
-    workflowId,
-    taskKey,
-    newDueAtUtc,
-    mode,
-    expectedLockVersion,
-  });
-  if (r.ok) revalidate(workflowId);
-  return { ok: r.ok, reason: r.reason, lockVersion: r.lockVersion };
-}
 
 export async function rescheduleAction(
   workflowId: string,
@@ -295,18 +273,6 @@ export type CascadePreviewResult = {
   lockVersion: number;
 };
 
-/**
- * Cascade-preview for a proposed release move. Returns the diff + the
- * workflow's current `lockVersion` so the Apply CAS
- * targets the EXACT version the preview was computed against. Read-only;
- * gated on `isReadable` (anyone who can see the workflow can preview).
- */
-/**
- * Delete a task from a draft workflow. Rejects when other tasks
- * depend on it; the UI surfaces the dependent keys so the user can remove them
- * first. The underlying `updateWorkflowDraftSpec` enforces draft-only +
- * lockVersion CAS.
- */
 /**
  * Resolve agent_hitl events to ACTIVE child runs only. The raw
  * `listAgentHitlEvents` returns all historical events, so the banner would say
@@ -359,68 +325,13 @@ export async function loadActiveAgentHitlForWorkflow(workflowId: string): Promis
   return items;
 }
 
-// ---------------------------------------------------------------------------
-// SVAR Gantt edit actions — task window move/resize + dependency add/remove.
-// All re-check canManage, draft-only enforced by the store CAS. The SVAR
-// component calls these from `api.intercept(...)` handlers and reverts the
-// optimistic local mutation on `{ ok: false }`.
-// ---------------------------------------------------------------------------
-
-export async function applyTaskWindowAction(
-  workflowId: string,
-  taskKey: string,
-  startAtUtc: string,
-  endAtUtc: string,
-  expectedLockVersion: number,
-): Promise<RescheduleActionResult> {
-  await authorizeManage(workflowId);
-  const r = await applyWorkflowTaskWindow({ workflowId, taskKey, startAtUtc, endAtUtc, expectedLockVersion });
-  if (r.ok) revalidate(workflowId);
-  return { ok: r.ok, reason: r.reason, lockVersion: r.lockVersion };
-}
-
-export async function addDependencyAction(
-  workflowId: string,
-  taskKey: string,
-  dependsOnKey: string,
-  expectedLockVersion: number,
-): Promise<RescheduleActionResult> {
-  await authorizeManage(workflowId);
-  const r = await addWorkflowDependency({ workflowId, taskKey, dependsOnKey, expectedLockVersion });
-  if (r.ok) revalidate(workflowId);
-  return { ok: r.ok, reason: r.reason, lockVersion: r.lockVersion };
-}
-
-export async function removeDependencyAction(
-  workflowId: string,
-  taskKey: string,
-  dependsOnKey: string,
-  expectedLockVersion: number,
-): Promise<RescheduleActionResult> {
-  await authorizeManage(workflowId);
-  const r = await removeWorkflowDependency({ workflowId, taskKey, dependsOnKey, expectedLockVersion });
-  if (r.ok) revalidate(workflowId);
-  return { ok: r.ok, reason: r.reason, lockVersion: r.lockVersion };
-}
-
-export type DeleteTaskActionResult = {
-  ok: boolean;
-  reason?: string;
-  lockVersion?: number;
-  dependents?: string[];
-};
-
-export async function deleteTaskAction(
-  workflowId: string,
-  taskKey: string,
-  expectedLockVersion: number,
-): Promise<DeleteTaskActionResult> {
-  await authorizeManage(workflowId);
-  const r = await deleteWorkflowTask({ workflowId, taskKey, expectedLockVersion });
-  if (r.ok) revalidate(workflowId);
-  return { ok: r.ok, reason: r.reason, lockVersion: r.lockVersion, dependents: r.dependents };
-}
-
+/**
+ * Cascade-preview for a proposed release move. Returns the diff + the
+ * workflow's current `lockVersion` so the Apply CAS targets the EXACT version
+ * the preview was computed against. Read-only; gated on `canManage`. Drives the
+ * Target-date control's confirmation preview (the surviving execution-timing
+ * editor after the Gantt removal — #321).
+ */
 export async function previewCascadeAction(
   workflowId: string,
   newTargetAt: string,
@@ -428,7 +339,7 @@ export async function previewCascadeAction(
   // Validate the release date BEFORE invoking the resolver.
   // computeCascadeDiff -> resolveSchedule ultimately calls
   // Date.parse + toISOString on invalid input and throws; we'd rather return a
-  // null so the UI renders no overlay than throw on every pointermove.
+  // null so the UI renders no overlay than throw on a stray invalid input.
   if (typeof newTargetAt !== "string" || Number.isNaN(Date.parse(newTargetAt))) return null;
   const { actor } = await buildWorkflowActorFromSession();
   const result = await readWorkflow(workflowId);

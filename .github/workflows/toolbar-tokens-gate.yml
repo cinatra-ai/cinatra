@@ -9,10 +9,10 @@ name: Toolbar Design-System Gate
 #      DOM that cannot mount <Toolbar>);
 #   3. no spec ground hexes hardcoded outside the token files.
 #
-# Deliberately NOT paths-scoped (unlike gantt-css-tokens-gate): check 2 must
-# see every PR — a hand-rolled toolbar can land in any .tsx file. The gate
-# is a single sub-second node script, so running it unconditionally is
-# cheaper than the paths-filter bookkeeping it would take to skip it.
+# Deliberately NOT paths-scoped: check 2 must see every PR — a hand-rolled
+# toolbar can land in any .tsx file. The gate is a single sub-second node
+# script, so running it unconditionally is cheaper than the paths-filter
+# bookkeeping it would take to skip it.
 
 on:
   push:

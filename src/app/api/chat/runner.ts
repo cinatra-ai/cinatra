@@ -110,7 +110,7 @@ const CHAT_SKILL_SLUGS = [
   // (which is recursion-ledger-gated + matcher-suppressed).
   "chat-create-artifact",
   // Workflow DRAFT/INSTANCE authoring + read-only status Q&A. Creates one-off
-  // planned runs on the Gantt — NOT reusable workflow PACKAGES (that is
+  // planned runs — NOT reusable workflow PACKAGES (that is
   // chat-workflow-extension-authoring above, via the workflow_source_* tools).
   // Proposal-only: create/revise/preview drafts, never start/approve/reject.
   "chat-workflow-authoring",
