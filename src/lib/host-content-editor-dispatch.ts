@@ -9,7 +9,7 @@ import {
   readLatestAgentVersionIdForTemplate,
   transitionRunStatus,
 } from "@cinatra-ai/agents";
-import { resolveSingleTenantContentEditorIdentity } from "@/lib/content-editor-run-identity";
+import { resolveContentEditorIdentityForInstance } from "@/lib/content-editor-run-identity";
 
 // Host-side A2A blocking-dispatch helper shared by the Drupal + WordPress
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
@@ -29,8 +29,10 @@ import { resolveSingleTenantContentEditorIdentity } from "@/lib/content-editor-r
 // the worker (packages/agents/src/execution.ts), this host-initiated dispatch has
 // NO session. To authorize the downstream `/api/mcp` CMS write through the REAL
 // agent-run OBO path (NOT the dev-admin bypass), we pre-create a real `agent_run`
-// row bound to a concrete {orgId, runBy} (resolved single-tenant; see
-// content-editor-run-identity.ts) and inject `cinatra_run_id: run.id` into the
+// row bound to a concrete {orgId, runBy} (resolved PER-INSTALL from the
+// connector config's persisted install→org binding, origin-authoritative —
+// cinatra#274 — falling back to single-tenant; see content-editor-run-identity.ts)
+// and inject `cinatra_run_id: run.id` into the
 // A2A message text. The agent_loader.py alias (cinatra_run_id → agent_run_id)
 // plus each agent's OAS DataFlowEdge forward that id into the `/api/llm-bridge`
 // ApiNode body as `agent_run_id`; the bridge resolves the run and mints the OBO
@@ -69,6 +71,21 @@ export type ContentEditorDispatchInput = {
    * production OBO path requires the up-to-date connectors that pass it.
    */
   packageName?: string;
+  /**
+   * Multi-tenant install→org resolution anchors (cinatra#274). Supplied by the
+   * widget-stream route so the OBO identity binds to THIS install's persisted
+   * {orgId, runBy} rather than the single-tenant default:
+   *   • instancesConfigKey — `connector_config` key holding the install rows
+   *     ("wordpress" | "drupal"), from the widget-stream agent's `auth`.
+   *   • origin — the token-bound, SERVER-VERIFIED site origin (authoritative).
+   *   • instanceId — the client-supplied (sanitized) instance id; used ONLY to
+   *     disambiguate among origin-matched rows, never to outrank the origin.
+   * All OPTIONAL: the connector-side `deps.dispatchContentEditor` path carries
+   * no install context, so it omits these and keeps single-tenant behavior.
+   */
+  instancesConfigKey?: string;
+  origin?: string | null;
+  instanceId?: string | null;
 };
 
 /**
@@ -124,11 +141,19 @@ async function prepareDispatch(
     return { text: anonymousText, runId: null };
   }
 
-  // Resolve the single-tenant OBO identity + the agent template row.
-  const identity = await resolveSingleTenantContentEditorIdentity();
+  // Resolve the OBO identity: PREFER this install's persisted {orgId, runBy}
+  // (cinatra#274), origin-authoritative; FALL BACK to single-tenant when the
+  // install has no binding (pre-#274 rows) or no match. The single-tenant
+  // fallback lives inside the per-instance resolver, so this one call covers
+  // both. A null result (neither available) → anonymous dispatch.
+  const identity = await resolveContentEditorIdentityForInstance({
+    instancesConfigKey: input.instancesConfigKey ?? "",
+    origin: input.origin,
+    instanceId: input.instanceId,
+  });
   if (!identity) {
     console.warn(
-      `[content-editor-dispatch] no single-tenant identity resolved for ${input.packageName}; ` +
+      `[content-editor-dispatch] no content-editor identity resolved for ${input.packageName}; ` +
         `dispatching anonymously (CMS write will fail closed at the MCP boundary).`,
     );
     return { text: anonymousText, runId: null };

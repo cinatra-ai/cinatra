@@ -113,6 +113,13 @@ export async function POST(
   const auth = request.headers.get("Authorization");
   const bearer = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 
+  // Token-bound, SERVER-VERIFIED site origin for the install→org binding
+  // resolution (cinatra#274). It is set from the AUTHORITATIVE source per path
+  // (the short-lived token's bound origin; the legacy path's configured-origin
+  // match) — NEVER from the raw request Origin header alone. A request-body
+  // instanceId is forgeable, so this verified origin is what binds identity.
+  let verifiedOrigin: string | null = null;
+
   // Discriminate by Bearer prefix.
   if (bearer.startsWith(SHORT_LIVED_TOKEN_PREFIX)) {
     // ----- SHORT-LIVED PATH (preferred). The token is authoritative: it binds
@@ -129,6 +136,9 @@ export async function POST(
       console.warn(`[agent-stream:${agentSlug}] short-lived token rejected:`, consumed.reason);
       return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
     }
+    // The consume path re-checked this origin against the stored row AND the
+    // live configured-instance list — authoritative.
+    verifiedOrigin = consumed.origin;
   } else {
     // ----- LEGACY LONG-LIVED PATH (back-compat, DEPRECATED). The browser holds
     // the long-lived integration key directly. Retain the configured-origin
@@ -155,6 +165,11 @@ export async function POST(
     );
     corsHeaders.Deprecation = "true";
     corsHeaders.Sunset = LONG_LIVED_SUNSET;
+    // The legacy path has no token-bound origin; `allowedOrigin` is the request
+    // Origin AFTER it matched a configured instance's siteUrl
+    // (resolveWidgetStreamOrigin), so it is a server-validated origin suitable
+    // for install→org binding resolution (cinatra#274).
+    verifiedOrigin = allowedOrigin;
   }
 
   let body: StreamRequestBody;
@@ -235,6 +250,13 @@ export async function POST(
           payload,
           timeoutMs: 300_000, // aligned with the /chat blocking budget
           packageName: relay.agentPackageName,
+          // Multi-tenant install→org binding anchors (cinatra#274). The
+          // verified origin is authoritative; the client-supplied instanceId
+          // only disambiguates among origin-matched rows.
+          instancesConfigKey: entry.auth.instancesConfigKey,
+          origin: verifiedOrigin,
+          instanceId:
+            typeof context.instanceId === "string" ? context.instanceId : null,
         });
 
         // Parse the agent's reply. A structured `{ postId|nodeId, changes[] }`

@@ -34,10 +34,14 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
 }));
 
-// --- single-tenant identity resolver ----------------------------------------
-const resolveSingleTenantContentEditorIdentity = vi.fn();
+// --- per-instance (cinatra#274) identity resolver ----------------------------
+// The dispatcher resolves identity through the per-install resolver, which
+// internally falls back to single-tenant. We mock the per-install resolver and
+// assert the install→org anchors (instancesConfigKey/origin/instanceId) reach it.
+const resolveContentEditorIdentityForInstance = vi.fn();
 vi.mock("@/lib/content-editor-run-identity", () => ({
-  resolveSingleTenantContentEditorIdentity: () => resolveSingleTenantContentEditorIdentity(),
+  resolveContentEditorIdentityForInstance: (...a: unknown[]) =>
+    resolveContentEditorIdentityForInstance(...a),
 }));
 
 import { dispatchContentEditorViaA2A } from "@/lib/host-content-editor-dispatch";
@@ -54,7 +58,7 @@ beforeEach(() => {
   // Default happy-path: a resolved identity + installed template + agent reply.
   buildA2aBearerToken.mockResolvedValue("bearer-token");
   createExternalA2AClient.mockResolvedValue({ sendTask });
-  resolveSingleTenantContentEditorIdentity.mockResolvedValue({
+  resolveContentEditorIdentityForInstance.mockResolvedValue({
     orgId: "org_1",
     runBy: "u_admin",
   });
@@ -132,7 +136,7 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
   });
 
   it("falls back to anonymous dispatch when identity cannot be resolved", async () => {
-    resolveSingleTenantContentEditorIdentity.mockResolvedValue(null);
+    resolveContentEditorIdentityForInstance.mockResolvedValue(null);
     await dispatchContentEditorViaA2A({
       agentUrl: "http://localhost:3021",
       payload: { postId: "7" },
@@ -140,6 +144,48 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
       packageName: "@cinatra-ai/wordpress-agent",
     });
     expect(createAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("threads the install→org anchors (instancesConfigKey/origin/instanceId) into the per-install resolver (cinatra#274)", async () => {
+    // A per-install binding resolves to a NON-default org/user.
+    resolveContentEditorIdentityForInstance.mockResolvedValue({
+      orgId: "org_tenantB",
+      runBy: "u_tenantB_admin",
+    });
+    await dispatchContentEditorViaA2A({
+      agentUrl: "http://localhost:3021",
+      payload: { instanceId: "wp-b", postId: "7", instructions: "edit" },
+      timeoutMs: 300_000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      instancesConfigKey: "wordpress",
+      origin: "https://tenant-b.example",
+      instanceId: "wp-b",
+    });
+
+    expect(resolveContentEditorIdentityForInstance).toHaveBeenCalledWith({
+      instancesConfigKey: "wordpress",
+      origin: "https://tenant-b.example",
+      instanceId: "wp-b",
+    });
+    // The carrier run binds to THIS install's org/user, not the default.
+    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    expect(runArg.orgId).toBe("org_tenantB");
+    expect(runArg.runBy).toBe("u_tenantB_admin");
+  });
+
+  it("passes empty anchors when the connector-side path supplies no install context (back-compat)", async () => {
+    await dispatchContentEditorViaA2A({
+      agentUrl: "http://localhost:3021",
+      payload: { postId: "7" },
+      timeoutMs: 300_000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      // no instancesConfigKey / origin / instanceId — single-tenant behavior.
+    });
+    expect(resolveContentEditorIdentityForInstance).toHaveBeenCalledWith({
+      instancesConfigKey: "",
+      origin: undefined,
+      instanceId: undefined,
+    });
   });
 
   it("falls back to anonymous dispatch when the template is not installed", async () => {

@@ -387,6 +387,13 @@ const wordpressSchema = z.object({
 });
 
 export async function saveWordPressInstanceAction(formData: FormData) {
+  // Admin gate + identity capture in one step. The configuring admin's
+  // {orgId, runBy} is persisted as the install→org binding (cinatra#274) so a
+  // host-initiated content-editor write for THIS install executes as the
+  // admin's org/user instead of the single-tenant default.
+  const session = await requireAdminSession();
+  const orgId = session.session?.activeOrganizationId?.trim() || undefined;
+  const runBy = session.user.id?.trim() || undefined;
   const parsed = wordpressSchema.parse({
     id: (formData.get("id") as string | null) ?? undefined,
     siteUrl: formData.get("siteUrl"),
@@ -400,6 +407,8 @@ export async function saveWordPressInstanceAction(formData: FormData) {
     username: parsed.username,
     applicationPassword: parsed.applicationPassword,
     blogConnectorId: parsed.blogConnectorId,
+    orgId,
+    runBy,
   });
   redirect("/configuration/llm");
 }
