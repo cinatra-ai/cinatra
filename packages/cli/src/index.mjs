@@ -294,7 +294,8 @@ Usage:
   cinatra dev tunnel start
   cinatra dev tunnel stop
   cinatra dev tunnel status
-  cinatra status
+  cinatra login --app-url <https://instance> [--profile <name>] [--default]
+  cinatra status [--app-url <url>|--profile <name>]
   cinatra backup create [--file <path>]
   cinatra backup import [--file <path>|<filename>] [--yes]
   cinatra backup export-api-configs [--file <path>]
@@ -8429,7 +8430,21 @@ async function runExtensionsPurge(argv) {
   );
 }
 
-async function runStatus() {
+async function runStatus(argv = []) {
+  // Remote path: when an explicit target is selected (--app-url or --profile),
+  // call the instance's authenticated /api/cli/status over HTTP using the
+  // cached login token. This is the published-bin path — no DB connection
+  // string needed. The LOCAL direct-Postgres path below is preserved unchanged
+  // as the fallback for the in-repo dev workflow (no target selected).
+  const appUrl = readOptionValue(argv, "--app-url");
+  const profile = readOptionValue(argv, "--profile");
+  if (appUrl || profile) {
+    const { fetchRemoteStatus } = await import("./login.mjs");
+    const status = await fetchRemoteStatus({ appUrl, profile });
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+
   const repoRoot = getRepoRoot();
   const env = collectEnvironment(repoRoot);
   const runtimeMode = readConfiguredRuntimeMode(env);
@@ -8749,8 +8764,23 @@ function readCliVersion() {
  */
 function buildHandlers() {
   return {
-    status: async () => {
-      await runStatus();
+    login: async (rest, mode) => {
+      // `login` is a command-only descriptor, so the dispatcher's `mode` slot
+      // (argv[1]) holds the FIRST option token (e.g. `--app-url`) and is NOT in
+      // `rest`. Re-prepend it so all flags are visible to readOptionValue.
+      const args = mode !== undefined ? [mode, ...rest] : rest;
+      const { runLogin } = await import("./login.mjs");
+      await runLogin({
+        appUrl: readOptionValue(args, "--app-url"),
+        profile: readOptionValue(args, "--profile"),
+        makeDefault: args.includes("--default"),
+      });
+    },
+    status: async (rest, mode) => {
+      // Same command-only flag-reconstruction as `login` (see above): the
+      // remote-target flags (`--app-url` / `--profile`) can land in `mode`.
+      const args = mode !== undefined ? [mode, ...rest] : rest;
+      await runStatus(args);
     },
     "skills.reset-repo": async (rest) => {
       await runSkillsResetRepo(rest);

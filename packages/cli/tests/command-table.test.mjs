@@ -48,6 +48,12 @@ describe("command table — descriptor snapshot", () => {
     expect(shape).toMatchInlineSnapshot(`
       [
         {
+          "command": "login",
+          "hidden": false,
+          "id": "login",
+          "match": "command",
+        },
+        {
           "command": "status",
           "hidden": false,
           "id": "status",

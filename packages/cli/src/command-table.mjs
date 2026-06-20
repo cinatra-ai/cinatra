@@ -51,6 +51,12 @@
  */
 export const COMMAND_DESCRIPTORS = [
   {
+    id: "login",
+    path: ["login"],
+    match: "command",
+    summary: "Sign in to a Cinatra instance (browser OAuth) and cache the token.",
+  },
+  {
     id: "status",
     path: ["status"],
     match: "command",
