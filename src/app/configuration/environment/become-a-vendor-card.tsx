@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import Link from "next/link";
+
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,9 +47,13 @@ import { applyVendorApplicationAction } from "./vendor-application-actions";
  * not here, so the card never has to defend against being rendered out of
  * context.
  *
- * The card body is a short copy block describing scope; click "Apply for
- * vendor status" to open the application Dialog. The form posts the server
- * action `applyVendorApplicationAction`.
+ * The card body is a short copy block describing the vendor scope: what it is
+ * (the namespace published packages live under), that it only matters when
+ * publishing to the Marketplace, and where to rename it — linking to the
+ * Instance tab while the namespace is still editable, or noting it is locked
+ * once the instance has published under it (`firstPublishedAt` set). Click
+ * "Apply for vendor status" to open the application Dialog, whose form posts
+ * the server action `applyVendorApplicationAction`.
  */
 export function BecomeAVendorCard({
   identity,
@@ -64,16 +70,40 @@ export function BecomeAVendorCard({
 }) {
   const isRejected = identity.vendorState === "rejected";
   const scope = `@${identity.instanceNamespace}`;
+  // The namespace can only be renamed before the instance first publishes
+  // under it — same `firstPublishedAt` freeze gate the Instance tab uses
+  // (see InstanceTabContent in ./page.tsx). Tailor the copy so an editable
+  // scope links to the rename flow and a frozen one explains why it's locked.
+  const isFrozen = identity.firstPublishedAt !== null;
 
   return (
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardHeader>
         <CardTitle>Become a vendor</CardTitle>
         <CardDescription className="max-w-2xl leading-6">
-          Publish your own extensions to the Cinatra Marketplace. Your vendor
-          scope will be{" "}
-          <code className="font-mono text-xs">{scope}</code> — the namespace
-          you set during instance setup.
+          Publish your own extensions to the Cinatra Marketplace under your
+          vendor scope — the namespace your published packages live under. This
+          instance&apos;s scope is{" "}
+          <code className="font-mono text-xs">{scope}</code>
+          {isFrozen ? (
+            <>
+              , now locked because this instance has already published under
+              it. It only matters when you publish to the Marketplace.
+            </>
+          ) : (
+            <>
+              . It may have been auto-generated during setup; you can rename it
+              on the{" "}
+              <Link
+                href="/configuration/environment?tab=instance"
+                className="underline underline-offset-4 hover:text-primary"
+              >
+                Instance tab
+              </Link>{" "}
+              until you first publish under it. It only matters when you publish
+              to the Marketplace.
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
