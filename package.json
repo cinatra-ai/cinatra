@@ -83,6 +83,7 @@
       "@cinatra-ai/media-transcript-agent": "https://github.com/cinatra-ai/media-transcript-agent.git",
       "@cinatra-ai/nango-connector": "https://github.com/cinatra-ai/nango-connector.git",
       "@cinatra-ai/openai-connector": "https://github.com/cinatra-ai/openai-connector.git",
+      "@cinatra-ai/plane-connector": "https://github.com/cinatra-ai/plane-connector.git",
       "@cinatra-ai/planner-agent": "https://github.com/cinatra-ai/planner-agent.git",
       "@cinatra-ai/product-portfolio-artifact": "https://github.com/cinatra-ai/product-portfolio-artifact.git",
       "@cinatra-ai/resend-connector": "https://github.com/cinatra-ai/resend-connector.git",
