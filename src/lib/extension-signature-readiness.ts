@@ -162,7 +162,15 @@ export function classifyRowReadiness(
 export async function assessSignatureReadiness(
   overrides: Partial<SignatureReadinessDeps> = {},
 ): Promise<SignatureReadinessResult> {
-  const deps = overrides.loadTrustedKeyCount
+  // Only treat the overrides as a COMPLETE deps injection when ALL three
+  // required functions are present (tests inject the full set). A PARTIAL
+  // override must merge over the real defaults, or a missing function would
+  // be undefined and crash mid-scan.
+  const hasFullDepsOverride =
+    typeof overrides.loadTrustedKeyCount === "function" &&
+    typeof overrides.listLiveVerdaccioRows === "function" &&
+    typeof overrides.simulateRequiredVerdict === "function";
+  const deps = hasFullDepsOverride
     ? (overrides as SignatureReadinessDeps)
     : { ...(await makeDefaultSignatureReadinessDeps()), ...overrides };
 
@@ -201,7 +209,10 @@ export async function assessSignatureReadiness(
     // The EXACT activation verdict with require=true (the simulated flip) — over
     // the CANONICAL packageName, matching `runtime-package-loader.ts`.
     const verdict = deps.simulateRequiredVerdict({ packageName: canonicalPackageName, version, integrity, signature, closureHash });
-    const assessment = classifyRowReadiness(verdict, Boolean(signature));
+    // Presence flag must mirror how `resolveSignatureVerdict` reads the signature
+    // (it `.trim()`s it), so a whitespace-only value is classified as "unsigned"
+    // (matching the verdict's view) rather than "unverified".
+    const assessment = classifyRowReadiness(verdict, Boolean(signature?.trim()));
     if (assessment.ready) readyCount++;
     else {
       notReadyCount++;

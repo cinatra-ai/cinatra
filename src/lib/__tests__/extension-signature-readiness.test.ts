@@ -236,4 +236,35 @@ describe("assessSignatureReadiness — fleet verdict", () => {
       ),
     ).rejects.toThrow(/db down/);
   });
+
+  it("classifies a WHITESPACE-ONLY signature as 'unsigned' (mirroring the verdict's trim)", async () => {
+    // resolveSignatureVerdict trims the signature, so "   " is treated as absent;
+    // the readiness label must agree → 'unsigned', not 'unverified'.
+    const res = await assessSignatureReadiness(
+      deps({
+        listLiveVerdaccioRows: async () => [vrow("ws-1", { signature: "   " })],
+        simulateRequiredVerdict: () => undefined, // no signing => undefined under require=true
+      }),
+    );
+    expect(res.ready).toBe(false);
+    const row = res.rows.find((r) => r.id === "ws-1");
+    expect(row?.verdict).toBe("unsigned");
+  });
+});
+
+describe("assessSignatureReadiness — partial deps override safety", () => {
+  it("a PARTIAL override (missing simulateRequiredVerdict) merges over defaults — does not crash", async () => {
+    // Override loadTrustedKeyCount + listLiveVerdaccioRows but NOT
+    // simulateRequiredVerdict. The old gate (truthy loadTrustedKeyCount) would
+    // have treated this as a COMPLETE injection and left simulateRequiredVerdict
+    // undefined → crash on the first row. The full-deps gate instead merges over
+    // the real defaults, so simulateRequiredVerdict is defined. We give zero keys
+    // so the assessment never needs the DB and returns the blocker cleanly.
+    const res = await assessSignatureReadiness({
+      loadTrustedKeyCount: () => 0,
+      listLiveVerdaccioRows: async () => [],
+    });
+    expect(res.ready).toBe(false);
+    expect(res.blockingReason).toBe("no-trusted-keys");
+  });
 });
