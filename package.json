@@ -182,6 +182,7 @@
     "typecheck": "tsgo --noEmit",
     "typecheck:slow": "tsc --noEmit",
     "check:fresh-schema": "node --env-file=.env.local --import tsx scripts/check-fresh-schema-ddl.mjs",
+    "extensions:signature-readiness": "node --conditions=react-server --env-file=.env.local --import tsx scripts/extensions/signature-readiness.mjs",
     "authz:inventory": "node scripts/build-authz-inventory.mjs",
     "authz:retention": "node --env-file=.env.local --import tsx scripts/enforce-audit-retention.mjs",
     "authz:inventory:check": "node scripts/build-authz-inventory.mjs --check",
