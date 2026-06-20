@@ -385,10 +385,18 @@ async function executeLocalSkillCommand(
   const verb = parts[0]?.toLowerCase();
 
   if (verb !== "cat" && verb !== "head" && verb !== "tail") {
+    // Self-correcting guidance. The model commonly probes with `find` / `ls`
+    // / `grep` to discover where the mounted skills live, then echoes the
+    // resulting error verbatim into its user-visible reply (cinatra#361). Make
+    // the error actionable and non-alarming: name the exact supported verb and
+    // path shape so even an echoed message reads as guidance, not a failure —
+    // and so the next attempt uses `cat /skills/<slug>/SKILL.md`. The shell
+    // contract stays read-only (cat/head/tail on skill files); we do NOT add
+    // find/ls/grep.
     throw new Error(
-      `This shell reads skill files only (cat/head/tail). ` +
-      `To fetch web pages use the web_search tool — do not write shell scripts for HTTP requests. ` +
-      `Unsupported command: ${verb}`,
+      `This shell reads skill files only — use \`cat /skills/<slug>/SKILL.md\` ` +
+      `(supported verbs: cat, head, tail). Do not use find, ls, grep, or other ` +
+      `commands. To fetch web pages use the web_search tool. Unsupported command: ${verb}`,
     );
   }
 

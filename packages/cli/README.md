@@ -34,6 +34,7 @@ Or via the binary:
 ```bash
 cinatra setup dev
 cinatra --help
+cinatra --version   # prints this CLI's version
 ```
 
 ## Docs

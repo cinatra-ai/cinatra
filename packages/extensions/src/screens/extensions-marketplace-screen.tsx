@@ -14,6 +14,7 @@ import {
   restoreExtensionPackageFormAction,
 } from "../actions";
 import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
+import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
 import { Star } from "lucide-react";
@@ -154,9 +155,16 @@ export async function ExtensionsMarketplaceScreen({
           <div className="flex items-center gap-2">
             {cta.state === "restore" ? (
               // Restore re-activates an already-installed (archived) template — DB-only.
-              <form action={restoreAction} className="flex-1">
-                <Button type="submit" size="sm" variant="outline" className="w-full">Restore</Button>
-              </form>
+              // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
+              <MarketplaceInstallForm
+                action={restoreAction}
+                failureMessage={`Could not restore ${card.displayName}. Please try again.`}
+                className="flex-1"
+              >
+                <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…" className="w-full">
+                  Restore
+                </MarketplaceInstallSubmit>
+              </MarketplaceInstallForm>
             ) : cta.state === "install" ? (
               // Install fetches the tarball from the registry — a live CTA only
               // when the registry is connected; otherwise a disabled button so
@@ -166,9 +174,17 @@ export async function ExtensionsMarketplaceScreen({
                   Install Now
                 </Button>
               ) : (
-                <form action={installAction} className="flex-1">
-                  <Button type="submit" size="sm" className="w-full">Install Now</Button>
-                </form>
+                // A failed install (package absent from the connected registry → 404,
+                // registry unreachable, lifecycle error) toasts instead of crashing the route (#356).
+                <MarketplaceInstallForm
+                  action={installAction}
+                  failureMessage={`Could not install ${card.displayName}. The package may be unavailable in the connected registry.`}
+                  className="flex-1"
+                >
+                  <MarketplaceInstallSubmit pendingLabel="Installing…" className="w-full">
+                    Install Now
+                  </MarketplaceInstallSubmit>
+                </MarketplaceInstallForm>
               )
             ) : cta.state === "update" ? (
               cta.disabled ? (
@@ -176,9 +192,15 @@ export async function ExtensionsMarketplaceScreen({
                   Update Now
                 </Button>
               ) : (
-                <form action={updateAction} className="flex-1">
-                  <Button type="submit" size="sm" className="w-full">Update Now</Button>
-                </form>
+                <MarketplaceInstallForm
+                  action={updateAction}
+                  failureMessage={`Could not update ${card.displayName}. The package may be unavailable in the connected registry.`}
+                  className="flex-1"
+                >
+                  <MarketplaceInstallSubmit pendingLabel="Updating…" className="w-full">
+                    Update Now
+                  </MarketplaceInstallSubmit>
+                </MarketplaceInstallForm>
               )
             ) : (
               <Button size="sm" variant="secondary" disabled className="w-full flex-1">Installed</Button>

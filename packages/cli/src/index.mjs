@@ -59,8 +59,18 @@ import {
   truncateCloneLog,
   validateTailscaleAuthkey,
 } from "./clone-runtime.mjs";
-// Pure URL-shape helper shared with the TS in-process MCP writer.
-import { buildMcpPublicBaseUrlRow } from "../../mcp-server/src/mcp-public-base-url-shape.mjs";
+// Pure URL-shape helper shared with the TS in-process MCP writer. The CLI
+// carries a package-LOCAL byte-identical copy (`./mcp-public-base-url-shape.mjs`)
+// instead of reaching across the package boundary into `../../mcp-server/src/`,
+// so the publishable CLI core holds no cross-package source reach. The copy is
+// kept byte-for-byte in sync with the mcp-server source-of-truth by the drift
+// test `tests/mcp-url-shape-drift.test.mjs` (cinatra#255 Stage-1).
+import { buildMcpPublicBaseUrlRow } from "./mcp-public-base-url-shape.mjs";
+// Declarative command surface + pure first-match-wins matcher (cinatra#255
+// Stage-1). The descriptors are the single source of truth for "what commands
+// exist"; `runCli` dispatches through `matchDescriptor` onto the id-keyed
+// HANDLERS map below (behavior-preserving migration of the old if-chain).
+import { COMMAND_DESCRIPTORS, matchDescriptor } from "./command-table.mjs";
 // Manifest-driven dev-CLI module discovery (local leaf module — static import
 // is extension-empty safe; the actual extension reach stays a lazy import()).
 import { loadDevCliModule } from "./dev-cli-modules.mjs";
@@ -298,6 +308,7 @@ Usage:
   cinatra extensions acquire-prod
   cinatra mcp llm-access setup
   cinatra mcp llm-access refresh
+  cinatra mcp llm-access verify
   cinatra doctor [--strict]
   cinatra agent export <id-or-name> [--file <output.zip>]
   cinatra agent import <file.zip> [--name <override-name>]
@@ -8710,202 +8721,187 @@ export {
   MCP_SETTINGS_KEY,
 };
 
+/**
+ * Read the CLI's own SemVer from `packages/cli/package.json`. Decoupled from
+ * the app's `cinatra.apiVersion` string and from any `--ref` value: `--version`
+ * prints THIS tool's version (cinatra#255 §6 Q5 — never aliased to `--ref`).
+ *
+ * @returns {string}
+ */
+function readCliVersion() {
+  // index.mjs lives at packages/cli/src/, so package.json is one dir up.
+  const pkgPath = fileURLToPath(new URL("../package.json", import.meta.url));
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  return String(pkg.version ?? "0.0.0");
+}
+
+/**
+ * Build the id-keyed handler map for `runCli`. Each handler is the
+ * behavior-preserving body of the original if-chain branch, closing over the
+ * local run* implementations. Handlers receive the LEGACY
+ * `rest = argv.slice(2)`; the 3-token handlers re-slice themselves exactly as
+ * before (`mcp llm-access verify` -> `runDoctor(rest.slice(1))`).
+ *
+ * Returning (vs awaiting) is preserved where it was load-bearing:
+ * `agents install` returns the `runAgentsInstall(rest)` promise.
+ *
+ * @returns {Record<string, (rest: string[]) => unknown>}
+ */
+function buildHandlers() {
+  return {
+    status: async () => {
+      await runStatus();
+    },
+    "skills.reset-repo": async (rest) => {
+      await runSkillsResetRepo(rest);
+    },
+    "extensions.purge": async (rest) => {
+      await runExtensionsPurge(rest);
+    },
+    "extensions.acquire-prod": async () => {
+      const { acquireProdRequiredExtensions } = await import("./prod-extension-acquisition.mjs");
+      const repoRoot = getRepoRoot();
+      const outcome = await acquireProdRequiredExtensions({ repoRoot });
+      if (outcome.skipped) {
+        console.log(`extensions acquire-prod: skipped (${outcome.reason}).`);
+        return;
+      }
+      console.log(
+        "Run `corepack pnpm install` next so the acquired extension packages are linked into the workspace.",
+      );
+    },
+    "extensions.submit": async (rest) => {
+      const { runExtensionsSubmit } = await import("./extensions-submit.mjs");
+      await runExtensionsSubmit(rest);
+    },
+    "mcp.tunnel": () => {
+      throw new Error(
+        "`cinatra mcp tunnel` was removed when the Cloudflare quick-tunnel feature was retired. " +
+        "Run your own tunnel (Tailscale Funnel, named Cloudflare Tunnel, ngrok, etc.) pointing at " +
+        "http://localhost:3000 and paste the public URL into /configuration/development?tab=tunnel.",
+      );
+    },
+    "backup.create": async (rest) => {
+      await runBackupCreate(rest);
+    },
+    "backup.import": async (rest) => {
+      await runBackupImport(rest);
+    },
+    "backup.export-api-configs": async (rest) => {
+      await runBackupExportApiConfigs(rest);
+    },
+    "backup.import-api-configs": async (rest) => {
+      await runBackupImportApiConfigs(rest);
+    },
+    // `setup` with NO mode: env-driven dev|prod dispatch.
+    setup: async () => {
+      const env = collectEnvironment(getRepoRoot());
+      await runSetup(readConfiguredRuntimeMode(env) === "production" ? "prod" : "dev");
+    },
+    "setup.dev|prod": async (rest, mode) => {
+      await runSetup(mode);
+    },
+    "setup.nango": async () => {
+      await runSetupNango();
+    },
+    "setup.branch": async (rest) => {
+      await runSetupBranch(rest);
+    },
+    "teardown.branch": async (rest) => {
+      await runTeardownBranch(rest);
+    },
+    "setup.clone": async (rest) => {
+      await runSetupClone(rest);
+    },
+    "clone.refresh-seed": async (rest) => {
+      await runRefreshSeed(rest);
+    },
+    "clone.prune": async (rest) => {
+      await runClonePrune(rest);
+    },
+    "clone.list": () => {
+      runCloneList();
+    },
+    "clone.start": async (rest) => {
+      await runCloneStart(rest);
+    },
+    "clone.stop": async (rest) => {
+      await runCloneStop(rest);
+    },
+    "clone.status": async (rest) => {
+      await runCloneStatus(rest);
+    },
+    "clone.slug-for-worktree": (rest) => {
+      runCloneSlugForWorktree(rest);
+    },
+    "db.migrate": async (rest) => {
+      await runDbMigrate(rest);
+    },
+    "dev.refresh": async (rest) => {
+      await runDevRefresh(rest);
+    },
+    "dev.tunnel": async (rest) => {
+      await runDevTunnel(rest);
+    },
+    "reset.dev": async (rest) => {
+      await runResetDev(rest);
+    },
+    "mcp.llm-access.setup": async () => {
+      await runLlmMcpAccessSetup();
+    },
+    "mcp.llm-access.refresh": async () => {
+      await runLlmMcpAccessRefresh();
+    },
+    // cinatra#260 Step 5 — content-editor write-path self-check.
+    doctor: async (rest) => {
+      await runDoctor(rest);
+    },
+    // Alias: `cinatra mcp llm-access verify` — drop the `verify` sub-token.
+    "mcp.llm-access.verify": async (rest) => {
+      await runDoctor(rest.slice(1));
+    },
+    "agents.install": async (rest) => {
+      const { runAgentsInstall } = await import("./agents-install.mjs");
+      return runAgentsInstall(rest);
+    },
+    "agent.export": async (rest) => {
+      await runAgentExport(rest);
+    },
+    "agent.import": async (rest) => {
+      await runAgentImport(rest);
+    },
+  };
+}
+
 export async function runCli(argv) {
   const [command, mode, ...rest] = argv;
+
+  // Reserve `--version` / `-v` for THIS CLI's SemVer (cinatra#255 §6 Q5). It is
+  // handled at the very top so it never falls through to "Unknown command", and
+  // it is deliberately NOT aliased to `--ref` (which selects the app version).
+  if (command === "--version" || command === "-v") {
+    console.log(readCliVersion());
+    return;
+  }
 
   if (!command || command === "--help" || command === "-h") {
     printHelp();
     return;
   }
 
-  if (command === "status") {
-    await runStatus();
-    return;
+  const descriptor = matchDescriptor(COMMAND_DESCRIPTORS, argv);
+  if (descriptor) {
+    const handlers = buildHandlers();
+    const handler = handlers[descriptor.id];
+    // `setup.dev|prod` needs the concrete mode token; everything else ignores it.
+    return handler(rest, mode);
   }
 
-
-  if (command === "skills" && mode === "reset-repo") {
-    await runSkillsResetRepo(rest);
-    return;
-  }
-
-  if (command === "extensions" && mode === "purge") {
-    await runExtensionsPurge(rest);
-    return;
-  }
-
-  if (command === "extensions" && mode === "acquire-prod") {
-    const { acquireProdRequiredExtensions } = await import("./prod-extension-acquisition.mjs");
-    const repoRoot = getRepoRoot();
-    const outcome = await acquireProdRequiredExtensions({ repoRoot });
-    if (outcome.skipped) {
-      console.log(`extensions acquire-prod: skipped (${outcome.reason}).`);
-      return;
-    }
-    console.log(
-      "Run `corepack pnpm install` next so the acquired extension packages are linked into the workspace.",
-    );
-    return;
-  }
-
-  if (command === "extensions" && mode === "submit") {
-    const { runExtensionsSubmit } = await import("./extensions-submit.mjs");
-    await runExtensionsSubmit(rest);
-    return;
-  }
-
-  if (command === "mcp" && mode === "tunnel") {
-    throw new Error(
-      "`cinatra mcp tunnel` was removed when the Cloudflare quick-tunnel feature was retired. " +
-      "Run your own tunnel (Tailscale Funnel, named Cloudflare Tunnel, ngrok, etc.) pointing at " +
-      "http://localhost:3000 and paste the public URL into /configuration/development?tab=tunnel.",
-    );
-  }
-
-  if (command === "backup" && mode === "create") {
-    await runBackupCreate(rest);
-    return;
-  }
-
-  if (command === "backup" && mode === "import") {
-    await runBackupImport(rest);
-    return;
-  }
-
-  if (command === "backup" && mode === "export-api-configs") {
-    await runBackupExportApiConfigs(rest);
-    return;
-  }
-
-  if (command === "backup" && mode === "import-api-configs") {
-    await runBackupImportApiConfigs(rest);
-    return;
-  }
-
-  if (command === "setup" && !mode) {
-    const env = collectEnvironment(getRepoRoot());
-    await runSetup(readConfiguredRuntimeMode(env) === "production" ? "prod" : "dev");
-    return;
-  }
-
-  if (command === "setup" && (mode === "dev" || mode === "prod")) {
-    await runSetup(mode);
-    return;
-  }
-
-  if (command === "setup" && mode === "nango") {
-    await runSetupNango();
-    return;
-  }
-
-  if (command === "setup" && mode === "branch") {
-    await runSetupBranch(rest);
-    return;
-  }
-
-  if (command === "teardown" && mode === "branch") {
-    await runTeardownBranch(rest);
-    return;
-  }
-
-  if (command === "setup" && mode === "clone") {
-    await runSetupClone(rest);
-    return;
-  }
-
-  if (command === "clone" && mode === "refresh-seed") {
-    await runRefreshSeed(rest);
-    return;
-  }
-
-  if (command === "clone" && mode === "prune") {
-    await runClonePrune(rest);
-    return;
-  }
-
-  if (command === "clone" && mode === "list") {
-    runCloneList();
-    return;
-  }
-
-  // Clone start/stop/status lifecycle.
-  if (command === "clone" && mode === "start") {
-    await runCloneStart(rest);
-    return;
-  }
-  if (command === "clone" && mode === "stop") {
-    await runCloneStop(rest);
-    return;
-  }
-  if (command === "clone" && mode === "status") {
-    await runCloneStatus(rest);
-    return;
-  }
-  // Registry lookup for shell hooks.
-  if (command === "clone" && mode === "slug-for-worktree") {
-    runCloneSlugForWorktree(rest);
-    return;
-  }
-
-  if (command === "db" && mode === "migrate") {
-    await runDbMigrate(rest);
-    return;
-  }
-
-  // dev-main Tailscale Funnel verb.
-  if (command === "dev" && mode === "refresh") {
-    await runDevRefresh(rest);
-    return;
-  }
-
-  if (command === "dev" && mode === "tunnel") {
-    await runDevTunnel(rest);
-    return;
-  }
-
-  if (command === "reset" && mode === "dev") {
-    await runResetDev(rest);
-    return;
-  }
-
-  if (command === "mcp" && mode === "llm-access" && rest[0] === "setup") {
-    await runLlmMcpAccessSetup();
-    return;
-  }
-
-  if (command === "mcp" && mode === "llm-access" && rest[0] === "refresh") {
-    await runLlmMcpAccessRefresh();
-    return;
-  }
-
-  // cinatra#260 Step 5 — content-editor write-path self-check.
-  if (command === "doctor") {
-    await runDoctor(rest);
-    return;
-  }
-  // Alias: `cinatra mcp llm-access verify`.
-  if (command === "mcp" && mode === "llm-access" && rest[0] === "verify") {
-    await runDoctor(rest.slice(1));
-    return;
-  }
-
+  // `agents` with no `install` mode is a fallback (NOT a real command): print
+  // help and exit non-zero, exactly as before. Kept outside descriptor matching.
   if (command === "agents") {
-    if (mode === "install") {
-      const { runAgentsInstall } = await import("./agents-install.mjs");
-      return runAgentsInstall(rest);
-    }
     printHelp();
     process.exit(1);
-  }
-
-  if (command === "agent" && mode === "export") {
-    await runAgentExport(rest);
-    return;
-  }
-
-  if (command === "agent" && mode === "import") {
-    await runAgentImport(rest);
-    return;
   }
 
   throw new Error(`Unknown command: ${[command, mode].filter(Boolean).join(" ")}. Run "cinatra --help" for usage.`);
