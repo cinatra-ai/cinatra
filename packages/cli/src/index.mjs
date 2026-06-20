@@ -608,8 +608,99 @@ function normalizeOptionalUrl(value) {
   }
 }
 
+// True only for a real cinatra MONOREPO ROOT — a directory that carries the
+// pnpm workspace manifest AND the @cinatra-ai/cli package manifest. This is the
+// sentinel that lets `getRepoRoot()` distinguish "running inside the monorepo"
+// from "running standalone from the published, esbuild-bundled `cinatra`
+// tarball" (where the bundled file lives at e.g. node_modules/cinatra/dist/…
+// and `../../..` would otherwise point at an arbitrary node_modules ancestor).
+// Cheap, sync, git-free, and NOT satisfiable by a stray node_modules ancestor:
+// it requires BOTH files AND the exact cli package name. Any read/parse error
+// (missing file, malformed JSON) fails closed to `false`.
+function isCinatraRepoRoot(dir) {
+  try {
+    if (!existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
+      return false;
+    }
+    const cliPkgPath = path.join(dir, "packages", "cli", "package.json");
+    if (!existsSync(cliPkgPath)) {
+      return false;
+    }
+    const pkg = JSON.parse(readFileSync(cliPkgPath, "utf8"));
+    return pkg?.name === "@cinatra-ai/cli";
+  } catch {
+    return false;
+  }
+}
+
+// Walk UP from `fromDir` (inclusive) to the filesystem root, returning the
+// first ancestor that is a valid cinatra monorepo root, or `null` if none.
+// Bounded: `path.dirname(root) === root` is the fixpoint that stops the loop at
+// "/" (or a drive root on Windows), so it can never spin.
+function findCinatraRepoRootUpward(fromDir) {
+  let dir = path.resolve(fromDir);
+  for (;;) {
+    if (isCinatraRepoRoot(dir)) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return null;
+    }
+    dir = parent;
+  }
+}
+
+// Resolve the cinatra monorepo root for repo-bound commands (setup, db, clone,
+// dev, backup, doctor, status, …) — every one of these reads `<root>/.env.local`
+// via `collectEnvironment()` and/or anchors docker-compose `cwd`, backup dirs,
+// and migration dirs at the root.
+//
+//   IN-REPO (the dominant case): the module-relative candidate `../../..` from
+//   packages/cli/src/index.mjs IS the monorepo root, so `isCinatraRepoRoot`
+//   passes and it is returned immediately — behavior is unchanged from the
+//   prior one-line module-relative implementation.
+//
+//   STANDALONE (published `cinatra` tarball, esbuild-bundled): the candidate is
+//   NOT a cinatra root (no packages/cli/package.json beside it), so we resolve
+//   the operator's actual checkout in priority order, and if we cannot find a
+//   valid one we FAIL with a clear, actionable message instead of silently
+//   returning a wrong path (which previously made `collectEnvironment` read a
+//   non-existent `.env.local` → a misleading "SUPABASE_DB_URL missing" / wrong
+//   docker cwd). A global `--repo` flag is intentionally deferred to a later
+//   additive PR; `CINATRA_REPO_ROOT` + the cwd-walk fully cover the need here.
 function getRepoRoot() {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const moduleRelativeCandidate = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../..",
+  );
+  if (isCinatraRepoRoot(moduleRelativeCandidate)) {
+    return moduleRelativeCandidate;
+  }
+
+  // --- standalone resolution -----------------------------------------------
+  const envOverride = process.env.CINATRA_REPO_ROOT?.trim();
+  if (envOverride) {
+    const resolved = path.resolve(envOverride);
+    if (!isCinatraRepoRoot(resolved)) {
+      throw new Error(
+        `CINATRA_REPO_ROOT="${envOverride}" (resolved to ${resolved}) is not a cinatra checkout ` +
+          `(missing pnpm-workspace.yaml or packages/cli/package.json). Point it at the root of a cloned cinatra repo.`,
+      );
+    }
+    return resolved;
+  }
+
+  const fromCwd = findCinatraRepoRootUpward(process.cwd());
+  if (fromCwd) {
+    return fromCwd;
+  }
+
+  throw new Error(
+    "This cinatra command must run from inside a cinatra checkout (it needs the repo's " +
+      ".env.local, docker compose files, and migration sources). cd into your cloned cinatra " +
+      "repo, or set CINATRA_REPO_ROOT=<path-to-checkout>.",
+  );
 }
 
 function buildTimestampLabel() {
@@ -7061,7 +7152,10 @@ async function runDevTunnel(argv) {
   // changes only take effect once merged to main. dev-tunnel provisions THIS
   // dev instance (not a clone), so the local checkout's
   // `docker/wayflow/compose.clone.template.yml` IS the correct one — hence
-  // `getRepoRoot()` (module-relative). Not an oversight.
+  // `getRepoRoot()` (the cinatra-monorepo root: module-relative when run in
+  // repo, or the operator's checkout when run standalone). Not an oversight.
+  // (`dev tunnel` is dev-only and hard-refuses below, so the standalone path
+  // would only ever apply to a local dev checkout anyway.)
   const repoRoot = getRepoRoot();
   const env = collectEnvironment(repoRoot);
 
