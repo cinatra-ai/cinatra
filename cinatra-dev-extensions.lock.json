@@ -273,6 +273,11 @@
       "resolvedSha": "42416cef2175dbfaa234e5308a3716ea8239c6a5"
     },
     {
+      "packageName": "@cinatra-ai/plane-connector",
+      "repo": "cinatra-ai/plane-connector",
+      "resolvedSha": "052f8074078dcef68a7cf932e3df6138ab0bc3b8"
+    },
+    {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
       "repo": "cinatra-ai/product-portfolio-artifact",
       "resolvedSha": "adf9ae59b2a3e6901818760018df41930b4a78bc"

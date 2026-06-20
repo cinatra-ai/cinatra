@@ -25,6 +25,7 @@
     "./auditor-apply": "./src/auditor-apply.ts",
     "./db": "./src/db.ts",
     "./pm-link-store": "./src/pm-link-store.ts",
+    "./trigger-store": "./src/trigger-store.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts"

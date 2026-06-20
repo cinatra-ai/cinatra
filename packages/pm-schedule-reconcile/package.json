@@ -1,0 +1,19 @@
+{
+  "name": "@cinatra-ai/pm-schedule-reconcile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reconcile worker that repairs failed/deferred OUTBOUND mirrors of cinatra agent-run schedules to a PM provider (Plane today) — re-pushes errored/unsynced links and finishes deferred deletes via the existing outbound PM contract.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/reconcile-worker.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
+  }
+}

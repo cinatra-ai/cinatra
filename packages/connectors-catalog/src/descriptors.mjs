@@ -200,6 +200,18 @@ const RAW_DESCRIPTORS = [
     mcpPrimitivePrefixes: ["crm_", "twenty_"],
     setupSubroute: "setup",
   },
+  // plane-connector is a provider for the provider-agnostic pm-connector
+  // (project-management) facade — the schedule↔PM-task mirror (cinatra#317).
+  // Only the provider appears here; the pm-connector facade is a
+  // dependency, not a setup-discoverable surface (same shape as twenty-connector
+  // above).
+  {
+    slug: "plane-connector",
+    displayName: "Plane",
+    defaultVisibility: "admin",
+    mcpPrimitivePrefixes: ["plane_"],
+    setupSubroute: "setup",
+  },
 ];
 
 /**
