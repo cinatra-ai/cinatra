@@ -46,6 +46,15 @@ const dbMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/database", () => dbMock);
 
+// Better-auth-db: the decide path counts OTHER platform admins (issue #392)
+// to decide whether the self-approval SoD guard applies. Default to 1 (another
+// admin exists → guard stays on / SoD preserved); single-admin tests override
+// to 0.
+const betterAuthDbMock = vi.hoisted(() => ({
+  countOtherPlatformAdmins: vi.fn(async () => 1),
+}));
+vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);
+
 // Mock the handlers.ts circular target (materializeAndPublish lazy-imports it).
 const innerHandlersMock = vi.hoisted(() => ({
   createAgentBuilderPrimitiveHandlers: vi.fn(() => ({
@@ -123,6 +132,7 @@ describe("agent_creation_request handlers", () => {
     notificationsMock.createNotificationForRecipient.mockResolvedValue([]);
     dbMock.readConnectorConfigFromDatabase.mockReturnValue({ allowSelfApproval: false });
     storeReadMock.readAgentTemplates.mockResolvedValue({ items: [], total: 0 });
+    betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
   });
 
   describe("propose", () => {
@@ -166,7 +176,9 @@ describe("agent_creation_request handlers", () => {
       expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
     });
 
-    it("rejects self-approval by default", async () => {
+    it("rejects self-approval by default when another admin exists (SoD)", async () => {
+      // Default mock: countOtherPlatformAdmins → 1, so segregation of duties
+      // applies and the self-approval guard fires.
       storeMock.readAgentCreationRequestById.mockReturnValue({
         id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
         packageName: "@test/test-agent", proposalSnapshot: SAMPLE_INPUT,
@@ -178,6 +190,69 @@ describe("agent_creation_request handlers", () => {
       )) as { error?: string };
       expect(out.error).toMatch(/self-approval is disallowed/i);
       expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).toHaveBeenCalledWith("user-admin");
+    });
+
+    it("allows self-approval on a single-admin instance (issue #392 deadlock fix)", async () => {
+      // No OTHER platform_admin exists → SoD is impossible, so the only admin
+      // must be able to clear their own pre-existing `proposed` request.
+      betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(0);
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(storeMock.decideAgentCreationRequestCas).toHaveBeenCalled();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).toHaveBeenCalledWith("user-admin");
+    });
+
+    it("keeps the guard when the admin-count read fails closed (returns >=1)", async () => {
+      // countOtherPlatformAdmins fails CLOSED at the source; here we simulate a
+      // resolved value of 1 (its error fallback) and assert the guard holds.
+      betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/self-approval is disallowed/i);
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+    });
+
+    it("does NOT count admins for a cross-author approval (no self-approval)", async () => {
+      // Admin approving someone ELSE's proposal never touches the SoD guard.
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-other", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).not.toHaveBeenCalled();
     });
 
     it("allows self-approval when connector_config flag is set", async () => {

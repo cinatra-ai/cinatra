@@ -20,6 +20,7 @@ import {
 import {
   readConnectorConfigFromDatabase,
 } from "@/lib/database";
+import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
 import { logAuditEventStrict } from "@/lib/authz/audit";
 
 // ---------------------------------------------------------------------------
@@ -528,16 +529,32 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
   if (!cur) {
     return { error: `agent_creation_request '${input.id}' not found` };
   }
-  // Self-approval (off by default; admin-overridable via connector_config).
-  // Reviewer-UI rubber-stamp protection: an admin acting as reviewer must not
-  // approve a proposal they themselves authored. (The admin-authoring instant
-  // grant in handleAgentCreationRequestPropose is a distinct path and is NOT
-  // subject to this guard.)
+  // Self-approval guard. Reviewer-UI rubber-stamp protection: an admin acting
+  // as reviewer must not approve a proposal they themselves authored — the
+  // approvals UI exists for segregation of duties between author and reviewer.
+  // (The admin-authoring instant grant in handleAgentCreationRequestPropose is
+  // a distinct path and is NOT subject to this guard.)
+  //
+  // Single-admin exception (issue #392): on an instance where the approving
+  // admin is the ONLY platform_admin, there is no second reviewer who could
+  // ever clear their proposal, so an unconditional guard is a permanent
+  // deadlock for any request already sitting at `proposed` (e.g. one created
+  // before the #382 propose-path instant grant existed). When no OTHER
+  // platform_admin exists, SoD is impossible and the only admin is allowed to
+  // approve their own request — the same documented "admin publishes the agent
+  // they authored" semantic #382 established on the propose path. The
+  // connector_config override remains a global escape hatch for orgs that want
+  // self-approval even with multiple admins. countOtherPlatformAdmins fails
+  // CLOSED (returns ≥1 on a read error), so an error keeps the guard on.
   if (input.decision === "approve" && cur.authorId === userId && !readAllowSelfApproval()) {
-    return {
-      error:
-        "self-approval is disallowed (set connector_config.agent_creation.allowSelfApproval=true to override).",
-    };
+    const otherAdmins = await countOtherPlatformAdmins(userId);
+    if (otherAdmins > 0) {
+      return {
+        error:
+          "self-approval is disallowed (set connector_config.agent_creation.allowSelfApproval=true to override).",
+      };
+    }
+    // No other admin can review → fall through and allow the self-approval.
   }
 
   if (input.decision === "reject") {

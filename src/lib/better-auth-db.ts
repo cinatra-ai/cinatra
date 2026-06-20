@@ -1,4 +1,4 @@
-import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
 import { toPgTextArrayLiteral } from "@/lib/pg-array";
 import { projectsDb, projects } from "@/lib/projects-store";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -426,6 +426,44 @@ export async function readUserIsPlatformAdmin(userId: string): Promise<boolean> 
       .includes("admin");
   } catch {
     return false;
+  }
+}
+
+/**
+ * Count platform admins OTHER than `excludeUserId` — i.e. how many distinct
+ * users (besides the given one) carry the global `admin` platform role.
+ *
+ * Used by the agent-creation approval flow (issue #392) to decide whether a
+ * `platform_admin` approving their OWN authored proposal is the *only* possible
+ * reviewer (single-admin instance → no segregation-of-duties available, so the
+ * self-approval guard must yield) or whether another admin could review it
+ * instead (multi-admin org → keep the guard, preserve SoD).
+ *
+ * The `user.role` column is GLOBAL (Better Auth's admin plugin has no org
+ * dimension on it), so this count is instance-wide, matching the scope of
+ * `isPlatformAdmin` / `readUserIsPlatformAdmin`. Roles are stored as a
+ * comma-separated string ("user,admin"), so candidate rows are filtered with
+ * the SAME comma-split token test rather than a LIKE (which would false-match
+ * a hypothetical "nonadmin"). Returns a conservative HIGH count on error
+ * (fail-closed: on a read failure we KEEP the self-approval guard rather than
+ * silently bypass it).
+ */
+export async function countOtherPlatformAdmins(excludeUserId: string): Promise<number> {
+  try {
+    const rows = await betterAuthDb
+      .select({ id: betterAuthUsers.id, role: betterAuthUsers.role })
+      .from(betterAuthUsers)
+      .where(and(ne(betterAuthUsers.id, excludeUserId), sql`${betterAuthUsers.role} IS NOT NULL`));
+    return rows.filter((row) =>
+      String(row.role ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .includes("admin"),
+    ).length;
+  } catch {
+    // Fail-closed: pretend another reviewer exists so the SoD guard stays on.
+    return 1;
   }
 }
 
