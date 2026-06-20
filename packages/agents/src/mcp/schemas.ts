@@ -736,12 +736,15 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_creation_request_propose": {
     description:
-      "NON-ADMIN proposal entry for the agent-creation approval workflow. Captures the agent " +
+      "Chat authoring entry for the agent-creation workflow. Captures the agent " +
       "OAS + package.json + SKILL.md as an isolated agent_creation_request row at status 'proposed' " +
-      "and runs the existing agent_creation_review to populate review_report. NEVER calls live " +
-      "agent_source_* tools or touches agent_templates. An admin reviews + approves at " +
-      "/configuration/agents/approvals; only on approval does the existing gated publish run " +
-      "(private-scoped, under the admin's actor frame).",
+      "and runs the existing agent_creation_review to populate review_report. For a NON-ADMIN author " +
+      "the proposal NEVER calls live agent_source_* tools or touches agent_templates and queues at " +
+      "'proposed'; an admin then reviews + approves at /configuration/agents/approvals, where the gated " +
+      "publish runs (private-scoped, under the admin's actor frame). For a platform_admin author the " +
+      "documented 'instant grant' fires: the proposal is immediately auto-approved + published under the " +
+      "admin actor via that same gated pipeline (no manual approval step) — only platform_admin reaches " +
+      "the publish path here.",
     inputSchema: z
       .object({
         packageSlug: z.string().describe("On-disk slug (no path separators)."),

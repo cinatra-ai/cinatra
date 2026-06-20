@@ -121,20 +121,25 @@ export const CARVE_OUTS: readonly CarveOut[] = [
     reviewedAt: "2026-05-23",
     reviewerId: "platform-authz-reviewer",
   },
-  // Agent-Creation Approval Workflow — non-admin proposal path. The 4
-  // primitives below write into the ISOLATED agent_creation_request store
-  // (NEVER the live agent_source_* tree); list/get are author-or-admin reads
-  // of their own requests. agent_creation_request_decide + retry_publish are
-  // admin-only and INTENTIONALLY not in this carve-out (admin acts via the
-  // /configuration/agents/approvals UI; a prompt-injected chat must not
-  // auto-approve — mirrors the agent_run_resume rule).
+  // Agent-Creation Approval Workflow — chat authoring path. The 4
+  // primitives below write into the ISOLATED agent_creation_request store;
+  // for a NON-admin author propose/edit NEVER reach the live agent_source_*
+  // tree (the proposal queues for admin review); list/get are author-or-admin
+  // reads of their own requests. agent_creation_request_decide + retry_publish
+  // remain admin-only and INTENTIONALLY not in this carve-out (admin acts via
+  // the /configuration/agents/approvals UI). A prompt-injected NON-admin chat
+  // still cannot auto-approve — mirrors the agent_run_resume rule. The ONLY
+  // chat path that auto-publishes is the platform_admin instant-grant inside
+  // propose (issue #382), gated to platform_admin (a role that already holds
+  // full publish authority via decide + the live tools), so the publish
+  // surface is not widened for non-admins.
   {
     primitiveName: "agent_creation_request_propose",
     resourceType: "agent",
     action: "create",
     boundary: "delegated_chat_token",
     reason:
-      "Non-admin proposal entry. Writes into the isolated agent_creation_request store at status 'proposed' and runs agent_creation_review for the report. NEVER touches agent_source_* or agent_templates. The 'create' verb token is denied at the policy boundary; this carve-out gates the token policy only — the handler enforces actor + author binding internally.",
+      "Chat authoring entry. Writes into the isolated agent_creation_request store at status 'proposed' and runs agent_creation_review for the report. For a NON-ADMIN author it NEVER touches agent_source_* or agent_templates (the proposal queues for admin review). For a platform_admin author the handler additionally fires the documented admin instant-grant (issue #382): auto-approve + publish via the SAME gated approve→publish pipeline the admin-only decide path uses, under the admin actor — only platform_admin (already publish-authorized via agent_creation_request_decide) reaches that branch, so the chat publish surface is NOT widened for non-admins. The 'create' verb token is denied at the policy boundary; this carve-out gates the token policy only — the handler enforces actor + author binding internally.",
     risk: "low",
     owningTeam: "platform-authz",
     reviewedAt: "2026-05-24",

@@ -25,10 +25,16 @@ import { logAuditEventStrict } from "@/lib/authz/audit";
 // ---------------------------------------------------------------------------
 // Agent-Creation Approval Workflow — MCP primitive handlers.
 //
-// The proposal path NEVER touches the live agent_source_* tools (those stay
-// admin-only). All five primitives below are exposed to non-admin
-// chat actors EXCEPT `agent_creation_request_decide`, which is admin-only at
-// the handler boundary AND not on the delegated-chat allowlist.
+// For a NON-admin author the proposal path NEVER touches the live
+// agent_source_* tools (those stay admin-only) — the proposal queues at
+// 'proposed' for admin review. For a platform_admin author the propose handler
+// additionally fires the documented "instant grant" (issue #382): it
+// auto-approves + publishes the freshly-created proposal under the admin actor
+// via the SAME gated approve→publish pipeline the admin-only decide path uses
+// (only platform_admin reaches that branch). All five primitives below are
+// exposed to non-admin chat actors EXCEPT `agent_creation_request_decide`,
+// which is admin-only at the handler boundary AND not on the delegated-chat
+// allowlist.
 // ---------------------------------------------------------------------------
 
 const SnapshotSchema = z.object({
@@ -115,9 +121,17 @@ function toEnvelope(
 }
 
 // ---------------------------------------------------------------------------
-// agent_creation_request_propose — non-admin authoring entry point.
-// Captures the proposal snapshot + runs the existing agent_creation_review.
-// NEVER calls agent_source_write/write_files/compile/publish.
+// agent_creation_request_propose — chat authoring entry point.
+// Captures the proposal snapshot + runs the existing agent_creation_review,
+// creating an agent_creation_request row at status 'proposed'.
+//
+// For a NON-admin author the row is returned as-is (queues for admin review).
+// For a platform_admin author the documented "instant grant" fires (issue
+// #382): the proposal is immediately auto-approved + published under the admin
+// actor via the SAME gated approve→publish pipeline the reviewer decide path
+// uses — the admin publishes directly rather than waiting on the approvals UI.
+// The non-admin path itself NEVER calls agent_source_write/write_files/compile/
+// publish; only the admin instant-grant reaches them (under the admin actor).
 // ---------------------------------------------------------------------------
 export async function handleAgentCreationRequestPropose(
   req: PrimitiveReq,
@@ -189,6 +203,48 @@ export async function handleAgentCreationRequestPropose(
     proposalSnapshot: snapshot,
     reviewReport,
   });
+
+  // Admin "instant grant" (issue #382): when the authoring actor is a
+  // platform_admin, the documented design is that the admin publishes DIRECTLY
+  // — they do not queue behind a manual approval step (the approvals UI exists
+  // for NON-admin proposals). Since the live agent_source_* tools are
+  // intentionally NOT chat-reachable (prompt-injection boundary), the faithful
+  // way to honor "admin publishes directly" from the chat-authoring surface is
+  // to auto-approve+publish the freshly-created proposal under the admin actor,
+  // reusing the SAME gated approve→publish pipeline the reviewer decide path
+  // uses (collision checks, private-scoped publish, strict audit). This does
+  // NOT widen who can publish: only platform_admin — exactly the role
+  // agent_creation_request_decide already authorizes — reaches this branch.
+  //
+  // The reviewer self-approval guard is deliberately NOT applied here: it
+  // protects the approvals-UI reviewer from rubber-stamping their own
+  // proposal, which is a different concern from an admin publishing the agent
+  // they authored. A NON-admin actor falls through and returns the `proposed`
+  // row unchanged (the proposal still queues for admin review).
+  if (isPlatformAdminActor(req.actor)) {
+    const grant = (await approveAndPublishCreationRequest({
+      current: row,
+      adminActor: req.actor,
+      orgId,
+      decidedBy: userId,
+      expectedSnapshotHash: row.snapshotHash,
+      decisionOrigin: "admin_authoring_instant_grant",
+    })) as { error?: string; structuredContent?: Record<string, unknown> };
+    // On a materialize/publish failure the row stays at `approved`; surface the
+    // error to the admin (recoverable via agent_creation_request_retry_publish),
+    // mirroring the reviewer decide path's failure contract.
+    if (grant.error) {
+      return { ...grant, instantGrant: true };
+    }
+    // Success: the proposal was auto-approved + published. Re-attach the
+    // collisionWarning meta (best-effort) so the chat surface keeps parity
+    // with the non-admin propose response shape.
+    if (collisionWarning && grant.structuredContent) {
+      grant.structuredContent = { ...grant.structuredContent, collisionWarning };
+    }
+    return grant;
+  }
+
   return toEnvelope(row, collisionWarning ? { collisionWarning } : undefined);
 }
 
@@ -361,6 +417,100 @@ async function notifyAuthorOfDecision(after: AgentCreationRequestRow): Promise<v
 }
 
 // ---------------------------------------------------------------------------
+// Shared approve→publish pipeline. Performs the CAS proposed → approved, the
+// STRICT audit, the author notification, then materialize + publish under the
+// admin actor, then markPublished. Used by BOTH the manual reviewer decide
+// path (handleAgentCreationRequestDecide, after reviewer policy — admin gate +
+// self-approval guard — has passed) AND the platform_admin authoring
+// "instant grant" path (handleAgentCreationRequestPropose). Extracting it
+// keeps the privileged side-effects (audit parity, private-scoped publish,
+// failure semantics) identical across both callers.
+//
+// The caller owns reviewer policy: this helper performs NO self-approval check
+// (the admin-authoring instant grant is a distinct documented semantic — the
+// self-approval guard exists only to stop a reviewer rubber-stamping their own
+// proposal from the approvals UI, NOT to block an admin publishing their own
+// authored agent).
+//
+// Returns the published-row envelope on success, or { error, request } when a
+// materialize/publish step fails (the row stays at `approved`; the admin can
+// retry via agent_creation_request_retry_publish — same recovery contract as
+// the manual decide path).
+// ---------------------------------------------------------------------------
+async function approveAndPublishCreationRequest(input: {
+  current: AgentCreationRequestRow;
+  adminActor: ActorEnvelope;
+  orgId: string;
+  decidedBy: string;
+  expectedSnapshotHash: string;
+  /** Distinguishes the auto instant-grant from a manual reviewer decision in
+   *  the audit trail. */
+  decisionOrigin: "reviewer_decide" | "admin_authoring_instant_grant";
+}): Promise<unknown> {
+  const { current: cur, adminActor, orgId, decidedBy, expectedSnapshotHash, decisionOrigin } = input;
+
+  // CAS update proposed → approved. StaleProposalError if the snapshot hash
+  // changed since this approval was prepared.
+  let after: AgentCreationRequestRow;
+  try {
+    after = decideAgentCreationRequestCas({
+      id: cur.id,
+      orgId,
+      decidedBy,
+      decision: "approve",
+      expectedSnapshotHash,
+    });
+  } catch (err) {
+    if (err instanceof StaleProposalError || err instanceof InvalidStateTransitionError
+        || err instanceof AgentCreationRequestNotFoundError) {
+      return { error: err.message };
+    }
+    throw err;
+  }
+
+  // STRICT audit — privileged approval; propagate failures. operation:"approve"
+  // for parity with the manual decide path; decisionOrigin records WHICH path.
+  await logAuditEventStrict({
+    organizationId: orgId,
+    actorPrincipalId: decidedBy,
+    actorPrincipalType: "human",
+    authSource: "ui",
+    resourceType: "agent_creation_request",
+    resourceId: cur.id,
+    operation: "approve",
+    decision: "allowed",
+    metadata: {
+      snapshotHash: expectedSnapshotHash,
+      packageName: cur.packageName,
+      authorId: cur.authorId,
+      decisionOrigin,
+    },
+  });
+
+  // Author-facing decision notification — winning the decide CAS above IS the
+  // notification claim. The decision stands regardless of the publish outcome
+  // below (retry_publish never re-notifies).
+  await notifyAuthorOfDecision(after);
+
+  // Materialize snapshot to disk + compile + publish (PRIVATE) under the admin
+  // actor. Each step is hard-checked; the row stays at `approved` if anything
+  // fails (admin retries via retry_publish; no auto-rollback — by design).
+  const result = await materializeAndPublish({
+    request: after,
+    adminActor,
+  });
+  if (result.error) {
+    return { error: result.error, request: after };
+  }
+  const published = markAgentCreationRequestPublished({
+    id: cur.id,
+    orgId,
+    publishResult: result.publishResult,
+  });
+  return toEnvelope(published);
+}
+
+// ---------------------------------------------------------------------------
 // agent_creation_request_decide — admin-only. CAS-guarded. Approve dispatches
 // the existing gated publish under the approving admin's actor frame.
 // State machine: proposed → approved (durable intermediate) → published
@@ -379,6 +529,10 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
     return { error: `agent_creation_request '${input.id}' not found` };
   }
   // Self-approval (off by default; admin-overridable via connector_config).
+  // Reviewer-UI rubber-stamp protection: an admin acting as reviewer must not
+  // approve a proposal they themselves authored. (The admin-authoring instant
+  // grant in handleAgentCreationRequestPropose is a distinct path and is NOT
+  // subject to this guard.)
   if (input.decision === "approve" && cur.authorId === userId && !readAllowSelfApproval()) {
     return {
       error:
@@ -386,71 +540,54 @@ export async function handleAgentCreationRequestDecide(req: PrimitiveReq): Promi
     };
   }
 
-  // CAS update proposed → (approved | rejected). StaleProposalError if the
-  // snapshot hash changed since the admin loaded the request.
-  let after: AgentCreationRequestRow;
-  try {
-    after = decideAgentCreationRequestCas({
-      id: input.id,
-      orgId,
-      decidedBy: userId,
-      decision: input.decision,
-      reason: input.reason,
-      expectedSnapshotHash: input.expectedSnapshotHash,
-    });
-  } catch (err) {
-    if (err instanceof StaleProposalError || err instanceof InvalidStateTransitionError
-        || err instanceof AgentCreationRequestNotFoundError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  // STRICT audit — this is a privileged admin decision; propagate failures.
-  await logAuditEventStrict({
-    organizationId: orgId,
-    actorPrincipalId: userId,
-    actorPrincipalType: "human",
-    authSource: "ui",
-    resourceType: "agent_creation_request",
-    resourceId: input.id,
-    operation: input.decision,
-    decision: "allowed",
-    metadata: {
-      snapshotHash: input.expectedSnapshotHash,
-      packageName: cur.packageName,
-      authorId: cur.authorId,
-      ...(input.reason ? { reason: input.reason } : {}),
-    },
-  });
-
-  // Author-facing decision notification — fires for BOTH decisions right
-  // after the CAS + audit (winning the decide CAS above IS the notification
-  // claim). The decision stands regardless of the approve-path publish
-  // outcome below (retry_publish never re-notifies).
-  await notifyAuthorOfDecision(after);
-
   if (input.decision === "reject") {
+    // Reject path: CAS proposed → rejected, audit, notify. No publish.
+    let after: AgentCreationRequestRow;
+    try {
+      after = decideAgentCreationRequestCas({
+        id: input.id,
+        orgId,
+        decidedBy: userId,
+        decision: "reject",
+        reason: input.reason,
+        expectedSnapshotHash: input.expectedSnapshotHash,
+      });
+    } catch (err) {
+      if (err instanceof StaleProposalError || err instanceof InvalidStateTransitionError
+          || err instanceof AgentCreationRequestNotFoundError) {
+        return { error: err.message };
+      }
+      throw err;
+    }
+    await logAuditEventStrict({
+      organizationId: orgId,
+      actorPrincipalId: userId,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "agent_creation_request",
+      resourceId: input.id,
+      operation: "reject",
+      decision: "allowed",
+      metadata: {
+        snapshotHash: input.expectedSnapshotHash,
+        packageName: cur.packageName,
+        authorId: cur.authorId,
+        ...(input.reason ? { reason: input.reason } : {}),
+      },
+    });
+    await notifyAuthorOfDecision(after);
     return toEnvelope(after);
   }
 
-  // Approve path: materialize snapshot to disk + compile + publish under the
-  // admin actor. Each step is hard-checked for { error } and the row stays at
-  // `approved` if anything fails (admin can retry; no auto-rollback of
-  // partial side effects — by design, surfaced via publish_result).
-  const result = await materializeAndPublish({
-    request: after,
+  // Approve path — delegate to the shared approve→publish pipeline.
+  return approveAndPublishCreationRequest({
+    current: cur,
     adminActor: req.actor,
-  });
-  if (result.error) {
-    return { error: result.error, request: after };
-  }
-  const published = markAgentCreationRequestPublished({
-    id: input.id,
     orgId,
-    publishResult: result.publishResult,
+    decidedBy: userId,
+    expectedSnapshotHash: input.expectedSnapshotHash,
+    decisionOrigin: "reviewer_decide",
   });
-  return toEnvelope(published);
 }
 
 // ---------------------------------------------------------------------------
