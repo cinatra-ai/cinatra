@@ -12,6 +12,7 @@ import { resolveTeardownNames } from "./teardown-config.mjs";
 import { runCoreMigrations, runNamespacedMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
 import { syncDevApps, readDevAppsConfig } from "./dev-apps.mjs";
 import { syncCinatraDevExtensions } from "./cinatra-dev-extensions.mjs";
+import { seedLocalRegistryExtensions } from "./seed-local-registry.mjs";
 import { parseDevRefreshFlags, describeDockerDecision } from "./dev-refresh.mjs";
 import {
   SEED_DB_NAME,
@@ -3696,6 +3697,23 @@ async function runSetup(mode, { skipDevApps = false } = {}) {
       regenerateExtensionManifestAfterSync(repoRoot, extensionSync, {
         failed: extensionSyncFailed,
       });
+      // cinatra#386 — seed the on-disk first-party extensions into the LOCAL
+      // bundled Verdaccio so they resolve + install out of the box (the fresh
+      // local registry starts empty; the installer is registry-only). Runs
+      // AFTER the extension sync/manifest regen, where the on-disk tree is
+      // guaranteed present. Loud-but-non-fatal + loopback-only — never aborts
+      // setup, never publishes at a remote/production registry. See
+      // seed-local-registry.mjs for the full guardrail set.
+      try {
+        await seedLocalRegistryExtensions({ repoRoot });
+      } catch (err) {
+        // Defensive: the helper is already loud-but-non-fatal, but never let an
+        // unexpected escape undo the completed setup.
+        console.error(
+          `\n⚠ Local registry seed FAILED:\n  ${err && err.message ? err.message : err}\n`,
+        );
+        process.exitCode = 1;
+      }
       console.log(
         "- Dev auto-setup: local docker Drupal + WordPress will be auto-wired on next `pnpm dev` boot (idempotent; see src/lib/dev-auto-setup.ts).",
       );
