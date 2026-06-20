@@ -35,15 +35,25 @@ vi.mock("server-only", () => ({}));
 import {
   syncRunTriggerPmTask,
   deleteRunTriggerPmTask,
+  readRunTriggerPmState,
 } from "../pm-integration-providers";
 
 function fakeProvider(overrides: Partial<{
   providerId: string;
   upsertTriggerTask: ReturnType<typeof vi.fn>;
   deleteTriggerTask: ReturnType<typeof vi.fn>;
+  readTriggerTask: ReturnType<typeof vi.fn>;
 }> = {}) {
   return {
     providerId: overrides.providerId ?? "plane",
+    readTriggerTask:
+      overrides.readTriggerTask ??
+      vi.fn(async () => ({
+        externalTaskId: "wi-1",
+        paused: false,
+        cronExpression: null,
+        scheduledAt: null,
+      })),
     upsertTriggerTask:
       overrides.upsertTriggerTask ??
       vi.fn(async () => ({ externalTaskId: "wi-1", providerId: "plane" })),
@@ -253,5 +263,261 @@ describe("deleteRunTriggerPmTask", () => {
     await deleteRunTriggerPmTask({ runId: "run-1" });
     expect(deletePmLinkByRunId).toHaveBeenCalledWith("run-1");
     expect(lookupPmProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe("readRunTriggerPmState — pre-execution PM check (cinatra#319)", () => {
+  const linkRow = {
+    runId: "run-1",
+    provider: "plane",
+    externalTaskId: "wi-1",
+    syncError: null,
+  };
+
+  it("no pm-link row → no-provider (the schedule was never mirrored)", async () => {
+    readPmLinkByRunId.mockResolvedValue(null);
+    await expect(readRunTriggerPmState({ runId: "run-1" })).resolves.toEqual({
+      kind: "no-provider",
+    });
+    expect(lookupPmProvider).not.toHaveBeenCalled();
+  });
+
+  it("link row with no external task id → no-link (nothing to read by id)", async () => {
+    readPmLinkByRunId.mockResolvedValue({ ...linkRow, externalTaskId: null });
+    await expect(readRunTriggerPmState({ runId: "run-1" })).resolves.toEqual({
+      kind: "no-link",
+    });
+  });
+
+  it("pm-link READ failure → unreachable, never throws", async () => {
+    readPmLinkByRunId.mockRejectedValue(new Error("db blip"));
+    const res = await readRunTriggerPmState({ runId: "run-1" });
+    expect(res.kind).toBe("unreachable");
+  });
+
+  it("link row names a provider that is NOT registered → unreachable (misconfigured, NOT no-provider)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(null); // named provider gone
+    const res = await readRunTriggerPmState({ runId: "run-1" });
+    expect(res.kind).toBe("unreachable");
+    // It resolved by the link-named id, never guessed another provider.
+    expect(lookupPmProvider).toHaveBeenCalledWith("plane");
+  });
+
+  it("provider read returns null → deleted (definitive upstream delete)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({ readTriggerTask: vi.fn(async () => null) }),
+    );
+    await expect(readRunTriggerPmState({ runId: "run-1" })).resolves.toEqual({
+      kind: "deleted",
+    });
+  });
+
+  it("provider read returns undefined (malformed) → unreachable, NOT deleted (codex#319)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({ readTriggerTask: vi.fn(async () => undefined) }),
+    );
+    const res = await readRunTriggerPmState({ runId: "run-1" });
+    // undefined is NOT a clean null delete signal and NOT a valid state — fail open.
+    expect(res.kind).toBe("unreachable");
+  });
+
+  it("provider read returns a malformed object (missing fields) → unreachable, never throws", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        // `paused` missing / wrong types — accessing state.paused must not throw
+        // out of the bridge; the structural guard maps it to unreachable.
+        readTriggerTask: vi.fn(async () => ({ externalTaskId: "wi-1" })),
+      }),
+    );
+    const res = await readRunTriggerPmState({ runId: "run-1" });
+    expect(res.kind).toBe("unreachable");
+  });
+
+  it("provider read throws → unreachable (fail-open), never null/deleted", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => {
+          throw new Error("plane down");
+        }),
+      }),
+    );
+    const res = await readRunTriggerPmState({ runId: "run-1" });
+    expect(res.kind).toBe("unreachable");
+  });
+
+  it("provider read that never settles → bounded 3s pre-exec timeout → unreachable", async () => {
+    vi.useFakeTimers();
+    try {
+      readPmLinkByRunId.mockResolvedValue(linkRow);
+      lookupPmProvider.mockReturnValue(
+        fakeProvider({ readTriggerTask: vi.fn(() => new Promise(() => {})) }),
+      );
+      const p = readRunTriggerPmState({ runId: "run-1" });
+      await vi.advanceTimersByTimeAsync(3_000);
+      const res = await p;
+      expect(res.kind).toBe("unreachable");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("paused task → paused (skip this fire)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: true,
+          cronExpression: "0 9 * * *",
+          scheduledAt: null,
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        localCronExpression: "0 9 * * *",
+      }),
+    ).resolves.toEqual({ kind: "paused" });
+  });
+
+  it("paused wins over a schedule diff (do not refresh a paused task)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: true,
+          cronExpression: "0 10 * * *", // differs from local, but paused wins
+          scheduledAt: null,
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        localCronExpression: "0 9 * * *",
+      }),
+    ).resolves.toEqual({ kind: "paused" });
+  });
+
+  it("PM cron differs from local → rescheduled with the PM cron", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: false,
+          cronExpression: "0 12 * * *",
+          scheduledAt: null,
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        localCronExpression: "0 9 * * *",
+      }),
+    ).resolves.toEqual({
+      kind: "rescheduled",
+      cronExpression: "0 12 * * *",
+      scheduledAt: null,
+    });
+  });
+
+  it("PM instant differs from local → rescheduled with the PM instant", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: false,
+          cronExpression: null,
+          scheduledAt: "2026-07-01T09:00:00.000Z",
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        localScheduledAt: "2026-06-25T09:00:00.000Z",
+      }),
+    ).resolves.toEqual({
+      kind: "rescheduled",
+      cronExpression: null,
+      scheduledAt: "2026-07-01T09:00:00.000Z",
+    });
+  });
+
+  it("recurring: a provider-returned scheduledAt is IGNORED in the diff (no phantom reschedule loop, codex#319)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: false,
+          cronExpression: "0 9 * * *", // matches local cron
+          scheduledAt: "2026-06-25T09:00:00.000Z", // derived next-fire — must be ignored
+        })),
+      }),
+    );
+    // Local recurring row has cron only; scheduledAt is null. With triggerType
+    // "recurring" the instant diff is skipped → present, not a phantom reschedule.
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        triggerType: "recurring",
+        localCronExpression: "0 9 * * *",
+        localScheduledAt: null,
+      }),
+    ).resolves.toEqual({ kind: "present" });
+  });
+
+  it("scheduled: a provider-returned cronExpression is IGNORED in the diff (instant-only)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: false,
+          cronExpression: "0 9 * * *", // spurious cron on a one-shot — ignore
+          scheduledAt: "2026-06-25T09:00:00.000Z", // matches local instant
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        triggerType: "scheduled",
+        localCronExpression: null,
+        localScheduledAt: "2026-06-25T09:00:00.000Z",
+      }),
+    ).resolves.toEqual({ kind: "present" });
+  });
+
+  it("PM state matches local (cron + instant) → present (fire normally)", async () => {
+    readPmLinkByRunId.mockResolvedValue(linkRow);
+    lookupPmProvider.mockReturnValue(
+      fakeProvider({
+        readTriggerTask: vi.fn(async () => ({
+          externalTaskId: "wi-1",
+          paused: false,
+          cronExpression: "0 9 * * *",
+          scheduledAt: null,
+        })),
+      }),
+    );
+    await expect(
+      readRunTriggerPmState({
+        runId: "run-1",
+        localCronExpression: "0 9 * * *",
+        localScheduledAt: null,
+      }),
+    ).resolves.toEqual({ kind: "present" });
   });
 });

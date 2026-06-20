@@ -24,6 +24,7 @@ import {
   lookupPmProvider,
   listPmProviders,
   type PmConnector,
+  type PmTaskState,
 } from "@cinatra-ai/sdk-extensions";
 import {
   readPmLinkByRunId,
@@ -43,12 +44,22 @@ export { PM_PROVIDER_CAPABILITY };
 // connector owns its own per-request timeouts; this is the host's backstop.
 const PM_CALL_TIMEOUT_MS = 10_000;
 
+// SEPARATE, tighter ceiling for the PRE-EXECUTION read (cinatra#319). This call
+// is on the trigger fire path (the run is about to execute), so it must not hold
+// the worker for the full 10s write ceiling — a slow PM read fails open FAST and
+// the schedule proceeds. Distinct from PM_CALL_TIMEOUT_MS (the write ceiling).
+const PM_PREEXEC_READ_TIMEOUT_MS = 3_000;
+
 /** Race a provider call against a bounded ceiling; reject (fail-open) on timeout. */
-function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
+function withTimeout<T>(
+  p: Promise<T>,
+  label: string,
+  timeoutMs: number = PM_CALL_TIMEOUT_MS,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${PM_CALL_TIMEOUT_MS}ms`));
-    }, PM_CALL_TIMEOUT_MS);
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     // Do not keep the event loop alive solely for this timer.
     (timer as { unref?: () => void }).unref?.();
     p.then(
@@ -254,6 +265,162 @@ export async function deleteRunTriggerPmTask(input: {
   await dropPmLinkRow(input.runId);
 }
 
+// ---------------------------------------------------------------------------
+// readRunTriggerPmState — the PRE-EXECUTION PM check (cinatra#319)
+// ---------------------------------------------------------------------------
+// Called from runAgentRunTriggerReleaseJob at fire time, BEFORE the release
+// logic, so a PM-side delete / reschedule / pause is honored before the run
+// fires. Resolves the link row + the named provider, reads the PM-side state,
+// and diffs it against the LOCAL trigger snapshot the caller passes in.
+//
+// Returns a DISCRIMINATED result the caller switches on (NEVER throws — this is
+// the execution hot path; any throw/timeout/outage maps to `unreachable`):
+//   - no-provider : no pm-link row at all (the schedule was never mirrored) →
+//                   fail-open proceed (run fires normally).
+//   - no-link     : a pm-link row exists but has no external task id yet (a push
+//                   that never resolved an id) → fail-open proceed; reconcile
+//                   (#318) repairs the link.
+//   - unreachable : the named provider is not registered (misconfigured), or the
+//                   read threw / timed out → fail-open proceed (+ warn).
+//   - deleted     : the provider returned null (the upstream task is GONE) →
+//                   caller tears the local schedule down.
+//   - paused      : the PM surface has the task paused → caller skips THIS fire
+//                   only, leaving the schedule intact.
+//   - rescheduled : the PM cron and/or instant differs from the local trigger →
+//                   caller refreshes the schedule to the PM values.
+//   - present     : the task exists, is not paused, and matches local → fail-open
+//                   proceed (run fires normally).
+// ---------------------------------------------------------------------------
+
+export type PmPreExecState =
+  | { kind: "no-provider" }
+  | { kind: "no-link" }
+  | { kind: "unreachable"; reason: string }
+  | { kind: "deleted" }
+  | { kind: "paused" }
+  | { kind: "rescheduled"; cronExpression: string | null; scheduledAt: string | null }
+  | { kind: "present" };
+
+export type ReadRunTriggerPmStateInput = {
+  runId: string;
+  /**
+   * The local trigger type. The reschedule diff is type-scoped (codex#319):
+   *   - "recurring" → diff ONLY the cron. A provider may ALSO return a derived
+   *     next-fire `scheduledAt` for a recurring task; comparing it against the
+   *     local recurring row (whose scheduledAt is always null) would flag a
+   *     phantom reschedule EVERY tick → refresh-skip forever, never firing.
+   *   - "scheduled" → diff ONLY the instant (cron is always null for one-shots).
+   * When omitted, both fields are diffed (legacy/test convenience).
+   */
+  triggerType?: "scheduled" | "recurring" | "immediate";
+  /** The local trigger's cron (recurring) or null — diffed against PM state. */
+  localCronExpression?: string | null;
+  /** The local trigger's exact instant as ISO-8601 (scheduled) or null. */
+  localScheduledAt?: string | null;
+};
+
+/**
+ * Read the PM-side state for a run's mirrored task and classify it against the
+ * local trigger snapshot. NEVER throws: every error/outage path returns an
+ * `unreachable`/`no-*` result so the caller can fail open and fire the run.
+ */
+export async function readRunTriggerPmState(
+  input: ReadRunTriggerPmStateInput,
+): Promise<PmPreExecState> {
+  // 1. Resolve the link row. A read FAILURE (vs a clean "no row") leaves the
+  //    mirror state unknown — fail open rather than risk a false delete/pause.
+  let existing: Awaited<ReturnType<typeof readPmLinkByRunId>> = null;
+  try {
+    existing = await readPmLinkByRunId(input.runId);
+  } catch (err) {
+    return { kind: "unreachable", reason: `pm-link read failed: ${errText(err)}` };
+  }
+
+  // No row at all → the schedule was never mirrored to any PM provider.
+  if (!existing) return { kind: "no-provider" };
+
+  // A row exists but carries no external task id (a push that never resolved an
+  // id, or an errored/timed-out first push). There is nothing to read upstream
+  // by id — fail open; the reconcile loop (#318) repairs the link.
+  if (!existing.externalTaskId) return { kind: "no-link" };
+
+  // 2. Resolve the OWNING provider by the id the link row pins. An existing link
+  //    whose named provider is NOT registered is MISCONFIGURED (the provider
+  //    extension was removed/disabled) — that is `unreachable`, NOT `no-provider`
+  //    (codex#319: never silently fire-and-forget a real mirrored task).
+  const provider = resolvePmProvider(existing.provider);
+  if (!provider) {
+    return {
+      kind: "unreachable",
+      reason: `pm provider "${existing.provider}" for task ${existing.externalTaskId} is not registered`,
+    };
+  }
+
+  // 3. Read PM state under the TIGHT pre-exec ceiling. Any throw/timeout → fail
+  //    open as `unreachable`. ONLY a clean `null` means the task was deleted.
+  let state: PmTaskState | null;
+  try {
+    state = await withTimeout(
+      provider.readTriggerTask({
+        runId: input.runId,
+        externalTaskId: existing.externalTaskId,
+      }),
+      `[pm-preexec] read for run ${input.runId}`,
+      PM_PREEXEC_READ_TIMEOUT_MS,
+    );
+  } catch (err) {
+    return {
+      kind: "unreachable",
+      reason: `pm read for run ${input.runId} failed: ${errText(err)}`,
+    };
+  }
+
+  // Definitive upstream delete: ONLY a clean `null` (NOT undefined, NOT a
+  // malformed object) means the task was deleted. Distinguish them explicitly.
+  if (state === null) return { kind: "deleted" };
+
+  // Defense in depth (codex#319): the structural provider guard only validates
+  // that `readTriggerTask` is a function, NOT the SHAPE it resolves. A
+  // misbehaving extension that resolves `undefined` or a malformed object would
+  // make `state.paused` / the field reads below throw OUT of this "never throws"
+  // bridge and into the fire path. Treat any non-conforming state as a fail-open
+  // `unreachable` (proceed to fire) — never as delete/pause/reschedule.
+  if (!isPmTaskState(state)) {
+    return {
+      kind: "unreachable",
+      reason: `pm read for run ${input.runId} returned a malformed task state`,
+    };
+  }
+
+  // Paused wins over a reschedule diff: a paused task should not fire OR refresh
+  // this tick — skip and re-check next tick (codex#319: PM-authoritative).
+  if (state.paused) return { kind: "paused" };
+
+  // 4. Diff the PM schedule against the local snapshot, SCOPED to the trigger
+  //    type so a recurring task's provider-derived next-fire `scheduledAt` does
+  //    not flag a phantom reschedule every tick (codex#319). Recurring diffs the
+  //    cron only; scheduled diffs the instant only; an unknown/omitted type
+  //    diffs both (conservative). Normalize undefined → null for a stable compare.
+  const localCron = input.localCronExpression ?? null;
+  const localAt = input.localScheduledAt ?? null;
+  const pmCron = state.cronExpression ?? null;
+  const pmAt = state.scheduledAt ?? null;
+  const cronChanged = pmCron !== localCron;
+  const atChanged = pmAt !== localAt;
+  const changed =
+    input.triggerType === "recurring"
+      ? cronChanged
+      : input.triggerType === "scheduled"
+        ? atChanged
+        : cronChanged || atChanged;
+  if (changed) {
+    return { kind: "rescheduled", cronExpression: pmCron, scheduledAt: pmAt };
+  }
+
+  // Task exists, not paused, matches local → fire normally.
+  return { kind: "present" };
+}
+
 async function dropPmLinkRow(runId: string): Promise<void> {
   try {
     await deletePmLinkByRunId(runId);
@@ -263,6 +430,29 @@ async function dropPmLinkRow(runId: string): Promise<void> {
         errText(err),
     );
   }
+}
+
+/**
+ * Structural guard for a provider-returned PmTaskState. A conforming state has a
+ * non-empty string externalTaskId, a boolean paused, and string-or-null cron /
+ * scheduledAt. Anything else (undefined, wrong types, missing fields) is treated
+ * by the caller as a fail-open `unreachable`, never as a definitive PM signal.
+ */
+function isPmTaskState(v: unknown): v is PmTaskState {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as {
+    externalTaskId?: unknown;
+    paused?: unknown;
+    cronExpression?: unknown;
+    scheduledAt?: unknown;
+  };
+  return (
+    typeof s.externalTaskId === "string" &&
+    s.externalTaskId.length > 0 &&
+    typeof s.paused === "boolean" &&
+    (s.cronExpression === null || typeof s.cronExpression === "string") &&
+    (s.scheduledAt === null || typeof s.scheduledAt === "string")
+  );
 }
 
 function errText(err: unknown): string {

@@ -174,6 +174,7 @@ export type {
   PmConnectorId,
   PmTriggerTask,
   PmTaskRef,
+  PmTaskState,
 } from "./pm-connector-contract";
 export {
   registerPmProvider,

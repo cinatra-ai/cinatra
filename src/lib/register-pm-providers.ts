@@ -22,19 +22,23 @@ import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registr
 
 // Structural guard: a capability registered under `pm-provider` carries an
 // `impl: unknown`. Validate the PmConnector shape before the SDK registry
-// trusts it, so a mis-registered provider can never reach a PM call.
-function isPmConnector(impl: unknown): impl is PmConnector {
+// trusts it, so a mis-registered provider can never reach a PM call. Exported
+// for the structural-guard contract test (it must require every PmConnector
+// verb, incl. the cinatra#319 read seam `readTriggerTask`).
+export function isPmConnector(impl: unknown): impl is PmConnector {
   if (typeof impl !== "object" || impl === null) return false;
   const candidate = impl as {
     providerId?: unknown;
     upsertTriggerTask?: unknown;
     deleteTriggerTask?: unknown;
+    readTriggerTask?: unknown;
   };
   return (
     typeof candidate.providerId === "string" &&
     candidate.providerId.length > 0 &&
     typeof candidate.upsertTriggerTask === "function" &&
-    typeof candidate.deleteTriggerTask === "function"
+    typeof candidate.deleteTriggerTask === "function" &&
+    typeof candidate.readTriggerTask === "function"
   );
 }
 

@@ -54,6 +54,34 @@ export type PmTaskRef = {
 };
 
 /**
+ * The PM-side state of a mirrored task, READ back at execution time so the host
+ * can honor a PM-side delete / reschedule / pause before firing the schedule
+ * (cinatra#319 pre-execution PM check; cinatra#318 reconcile loop).
+ *
+ * This is the inbound dual of `PmTriggerTask` (the outbound mirror): it carries
+ * ONLY the fields the host diffs against the local trigger row to decide
+ * delete / refresh / pause / proceed. The provider maps its own work-item shape
+ * BACK to these provider-agnostic fields (Plane: `is_paused`/state, the cron
+ * stamped on the item, and `target_date`/`start_date` → `scheduledAt`).
+ *
+ * A `null` return from `readTriggerTask` (NOT a `PmTaskState` with empty fields)
+ * is the explicit "the upstream task was DELETED" signal — the host tears the
+ * local schedule down. Any provider outage/timeout must NOT surface as `null`
+ * (that would falsely delete a live schedule on a blip); the host treats a
+ * thrown/timed-out read as "unreachable → fail-open proceed", never as delete.
+ */
+export type PmTaskState = {
+  /** The provider's stable work-item id this state belongs to. */
+  externalTaskId: string;
+  /** Whether the PM surface currently has the task paused. */
+  paused: boolean;
+  /** The cron expression the PM side currently holds, or null (one-shot / none). */
+  cronExpression: string | null;
+  /** The exact next/target fire instant as an ISO-8601 string, or null. */
+  scheduledAt: string | null;
+};
+
+/**
  * Provider-agnostic PM connector surface. A PM provider extension registers an
  * impl behind the `pm-provider` capability from its own `register(ctx)`; the
  * host resolves it lazily through the SDK registry's external resolver.
@@ -95,4 +123,29 @@ export interface PmConnector {
     runId: string;
     externalTaskId: string;
   }): Promise<void>;
+
+  /**
+   * Read back the PM-side state of a mirrored task at EXECUTION time so the host
+   * can honor a PM-side delete / reschedule / pause before firing the schedule
+   * (cinatra#319 pre-execution check; cinatra#318 reconcile loop). This is the
+   * inbound READ dual of `upsertTriggerTask`'s outbound write.
+   *
+   * Returns:
+   *   - `PmTaskState` — the current PM-side snapshot (paused / cron / instant).
+   *   - `null`        — the task was DELETED upstream (a definitive 404 for this
+   *                     `externalTaskId`). The host tears down the local
+   *                     schedule on this signal ONLY.
+   *
+   * FAIL-OPEN CONTRACT (load-bearing, codex#319): this runs on the execution
+   * hot path. A provider outage / network error / timeout MUST surface as a
+   * THROWN error, NEVER as `null` — the host maps a throw to "unreachable →
+   * fail-open proceed" (the schedule fires) and maps ONLY a clean `null` to
+   * "deleted → tear down". Returning `null` on a transient blip would wrongly
+   * delete a live schedule. A provider must therefore distinguish a definitive
+   * "task gone" (→ `null`) from "could not reach the PM API" (→ throw).
+   */
+  readTriggerTask(input: {
+    runId: string;
+    externalTaskId: string;
+  }): Promise<PmTaskState | null>;
 }
