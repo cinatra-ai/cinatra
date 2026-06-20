@@ -238,6 +238,7 @@
       "@cinatra-ai/mcp-server": ["./packages/mcp-server/src/index.tsx"],
       "@cinatra-ai/mcp-server/auth-plugins": ["./packages/mcp-server/src/auth-plugins.ts"],
       "@cinatra-ai/mcp-server/credentials": ["./packages/mcp-server/src/llm-credentials.ts"],
+      "@cinatra-ai/mcp-server/dev-admin-bypass": ["./packages/mcp-server/src/dev-admin-bypass.ts"],
       "@cinatra-ai/mcp-server/delegated-chat-tool-policy": ["./packages/mcp-server/src/delegated-chat-tool-policy.ts"],
       "@modelcontextprotocol/server": ["./packages/mcp-server/vendor/modelcontextprotocol-server"],
       "@cinatra-ai/mcp-client": ["./packages/mcp-client/src/index.ts"],

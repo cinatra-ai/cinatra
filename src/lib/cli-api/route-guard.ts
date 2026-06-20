@@ -1,0 +1,213 @@
+// ---------------------------------------------------------------------------
+// Shared authorization guard for the `/api/cli/*` instance control-plane.
+//
+// cinatra#255 (G2). These endpoints re-home today's direct-Postgres Class-A
+// CLI commands (`cinatra status`, `cinatra agent export|import`,
+// `cinatra agents install`) onto authenticated server contracts so the
+// published `cinatra` bin can drive a *remote* instance as an ordinary
+// OAuth API client — without shipping `pg` / DB credentials.
+//
+// AUTHENTICATION — reuses the EXISTING surface; invents nothing:
+//   * A Better-Auth session resolved through `auth.api.getSession({ headers })`
+//     — i.e. a cookie session (or a Better-Auth session token the resolver
+//     accepts). The token is NOT decoded-and-trusted here; the resolver
+//     verifies it. We never read claims from an undecoded token.
+//   * Dev-admin loopback bypass (`shouldGrantDevAdminBypass`) for the
+//     local-CLI → local-instance path, gated by the SAME three guards as the
+//     MCP transport: `NODE_ENV !== production` + `CINATRA_MCP_DEV_ADMIN_BYPASS=true`
+//     + a trusted-dev host. This is what makes `cinatra status` against your
+//     OWN dev box work without an OAuth dance, exactly as the MCP path already
+//     does.
+//
+// SCOPE BOUNDARY (cinatra#255 G2 PR split) — remote OAuth Bearer access tokens
+// are NOT resolved here yet. The MCP server verifies those through a SEPARATE
+// machinery (`verifyMcpAccessToken` → per-origin aud/iss/jwks → service-account
+// → userId), which is wired in the SAME unit as `cinatra login` (the flow that
+// MINTS those tokens). Until that lands, a remote Bearer token FAILS CLOSED
+// (401) here — by design, never a false-accept. So today this guard authorizes
+// exactly two paths: an established Better-Auth session, or the dev-admin
+// loopback bypass.
+//
+// AUTHORIZATION — scope admits, ROLE authorizes (codex G2 decision):
+//   The OAuth `mcp:connect` scope is the admission ticket, but it must NEVER
+//   by itself grant control-plane authority. We resolve the role from the
+//   authenticated identity, not from a token claim, and gate per-endpoint:
+//
+//     * `minTier: "org-admin"` (default) — `platform_admin` OR an active-org
+//       `org_owner` / `org_admin`.
+//     * `minTier: "platform-admin"` — `platform_admin` (or the loopback
+//       dev-admin bypass) ONLY. Used by endpoints whose underlying read/write
+//       is NOT org-scoped (agent export/import query `agent_templates` by
+//       id/name with no org predicate), so an org-admin must NOT get
+//       cross-org reach. (codex review: org-admins are not given global agent
+//       access.)
+//
+// NO new OAuth scope is minted here — the admin-only operator scope is
+// deferred to the G3 security-hardening track, and NO remote-destructive
+// command is exposed by this guard (status + agent export/import/install are
+// read / authoring only).
+// ---------------------------------------------------------------------------
+
+import { headers as nextHeaders } from "next/headers";
+
+import { auth } from "@/lib/auth";
+import {
+  isPlatformAdmin,
+  resolveOrgRoleForUser,
+  type AuthzOrgRole,
+} from "@/lib/auth-session";
+import {
+  isTrustedDevHost,
+  shouldGrantDevAdminBypass,
+} from "@cinatra-ai/mcp-server/dev-admin-bypass";
+
+/** The role tiers permitted to drive the CLI control plane. */
+const AUTHORIZED_ORG_ROLES: ReadonlySet<AuthzOrgRole> = new Set<AuthzOrgRole>([
+  "org_owner",
+  "org_admin",
+]);
+
+export type CliActor = {
+  /** Authenticated user id, or `null` for the loopback dev-admin bypass. */
+  userId: string | null;
+  /** True when the resolved identity is a platform admin. */
+  isPlatformAdmin: boolean;
+  /** Active-org role (when resolvable), used for the org-admin tier. */
+  orgRole?: AuthzOrgRole;
+  /** Active organization id resolved for this request, when known. */
+  organizationId: string | null;
+  /**
+   * How the caller was authorized. `dev-admin-bypass` marks the loopback path
+   * (no real session); `session` marks a cookie/Bearer session.
+   */
+  via: "session" | "dev-admin-bypass";
+};
+
+export type CliGuardSuccess = { ok: true; actor: CliActor };
+export type CliGuardFailure = { ok: false; status: 401 | 403; error: string };
+export type CliGuardResult = CliGuardSuccess | CliGuardFailure;
+
+/** Minimum role tier an endpoint requires. Defaults to `org-admin`. */
+export type CliAuthTier = "org-admin" | "platform-admin";
+
+export type AuthorizeCliOptions = {
+  /** Minimum tier required. `platform-admin` excludes org owners/admins. */
+  minTier?: CliAuthTier;
+};
+
+/**
+ * Resolve and authorize the caller of a `/api/cli/*` route.
+ *
+ * Order:
+ *   1. Try the authenticated session (cookie OR verified Bearer JWT). When
+ *      present, authorize on platform-admin / org-admin role.
+ *   2. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
+ *   3. Otherwise deny (401 if unauthenticated, 403 if authenticated but
+ *      under-privileged).
+ *
+ * Never throws on auth failure — returns a typed failure the route turns into
+ * a JSON response. Unexpected internal errors propagate to the route's 500.
+ */
+export async function authorizeCliRequest(
+  request: Request,
+  options?: AuthorizeCliOptions,
+): Promise<CliGuardResult> {
+  const minTier: CliAuthTier = options?.minTier ?? "org-admin";
+  const requestHeaders = await nextHeaders();
+
+  // ---- 1. Established Better-Auth session (cookie / session token). -------
+  // `auth.api.getSession` verifies the credential; we read identity ONLY from
+  // the resolved session, never from an unverified decode of the raw header.
+  // (Remote OAuth Bearer tokens are NOT resolved by this call — see the
+  // SCOPE BOUNDARY note above; they fail closed to the 401 below.)
+  const session = await auth.api
+    .getSession({ headers: requestHeaders })
+    .catch(() => null);
+
+  if (session?.user?.id) {
+    const platformAdmin = isPlatformAdmin(session);
+    const organizationId = session.session?.activeOrganizationId ?? null;
+    const orgRole = organizationId
+      ? await resolveOrgRoleForUser(organizationId, session.user.id)
+      : undefined;
+
+    const orgAdminTier =
+      orgRole !== undefined && AUTHORIZED_ORG_ROLES.has(orgRole);
+    const authorized =
+      minTier === "platform-admin"
+        ? platformAdmin
+        : platformAdmin || orgAdminTier;
+
+    if (!authorized) {
+      return {
+        ok: false,
+        status: 403,
+        error:
+          minTier === "platform-admin"
+            ? "Forbidden: this CLI endpoint requires platform admin."
+            : "Forbidden: the CLI control plane requires platform admin or an organization owner/admin role.",
+      };
+    }
+
+    return {
+      ok: true,
+      actor: {
+        userId: session.user.id,
+        isPlatformAdmin: platformAdmin,
+        ...(orgRole ? { orgRole } : {}),
+        organizationId,
+        via: "session",
+      },
+    };
+  }
+
+  // ---- 2. Dev-admin loopback bypass (local CLI → local instance). ---------
+  // SAME guards the MCP transport uses; never fires in production.
+  const url = request.url;
+  const trustedDevHost = isTrustedDevHost({
+    nodeEnv: process.env.NODE_ENV,
+    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
+    trustedHostsEnv: process.env.CINATRA_MCP_DEV_TRUSTED_HOSTS,
+    urlHost: safeUrlHost(url),
+    forwardedHostRaw: requestHeaders.get("x-forwarded-host"),
+  });
+
+  const grantBypass = shouldGrantDevAdminBypass({
+    nodeEnv: process.env.NODE_ENV,
+    envBypassFlag: process.env.CINATRA_MCP_DEV_ADMIN_BYPASS,
+    isTrustedDevHost: trustedDevHost,
+  });
+
+  if (grantBypass) {
+    return {
+      ok: true,
+      actor: {
+        userId: null,
+        isPlatformAdmin: true,
+        organizationId: null,
+        via: "dev-admin-bypass",
+      },
+    };
+  }
+
+  // ---- 3. Deny (fail closed). ---------------------------------------------
+  // Reached when there is no established session AND the loopback bypass did
+  // not apply — including the remote OAuth Bearer case, which this guard does
+  // not yet resolve (see the SCOPE BOUNDARY note). Failing closed here is
+  // intentional; a remote Bearer is never silently accepted.
+  return {
+    ok: false,
+    status: 401,
+    error:
+      "Unauthorized: sign in to this instance (or run against a trusted dev host with the admin bypass enabled).",
+  };
+}
+
+/** Extract just the host portion of a request URL; null on a malformed URL. */
+function safeUrlHost(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
