@@ -140,9 +140,49 @@ describe("editVendorAction (pre-publish, no oldInstanceNamespaces append)", () =
   it("replaces credentials WITHOUT appending to oldInstanceNamespaces[]", async () => {
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(PRE_PUBLISH_IDENTITY);
     await editVendorAction(buildRenameFormData("newvendor"));
-    const passedIdentity = vi.mocked(writeInstanceIdentity).mock.calls[0]?.[0];
+    // The provisioning (credential-replacing) write is the LAST writeInstanceIdentity
+    // call. Since cinatra#357 the display-name change is pre-persisted first, so the
+    // namespace+credential write is no longer calls[0].
+    const calls = vi.mocked(writeInstanceIdentity).mock.calls;
+    const passedIdentity = calls[calls.length - 1]?.[0];
+    expect(passedIdentity?.instanceNamespace).toBe("newvendor");
     // Either oldInstanceNamespaces is undefined or unchanged from the input shape (also undefined).
     expect(passedIdentity?.oldInstanceNamespaces ?? []).toEqual([]);
+  });
+
+  // cinatra#357 — defect #2: a failed namespace rename must NOT discard a valid
+  // display-name edit. The display-name change is a plain metadata write that
+  // needs no provisioning; pre-persisting it guarantees a downstream
+  // provisioning failure (createNpmUser) no longer loses the edit.
+  it("persists the display-name edit BEFORE namespace provisioning, so a provisioning failure does not lose it", async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValueOnce(PRE_PUBLISH_IDENTITY);
+    // Force the registry adduser to fail so provisionAndPersist redirects with
+    // an error and never reaches its own writeInstanceIdentity.
+    globalThis.fetch = vi.fn(async () =>
+      new Response("registration is unavailable", { status: 503 }),
+    ) as unknown as typeof fetch;
+
+    const fd = new FormData();
+    fd.append("instanceNamespace", "newvendor"); // namespace IS changing
+    fd.append("instanceDisplayName", "Edited Display Name");
+
+    // redirectWithError() calls next/navigation `redirect` then throws an
+    // "unreachable" guard. In production `redirect` throws its own control-flow
+    // error first; the mocked `redirect` is a no-op, so the guard surfaces here.
+    // Either way the action does NOT complete normally on a provisioning
+    // failure — what matters is the persisted write state below.
+    await expect(editVendorAction(fd)).rejects.toThrow();
+
+    const calls = vi.mocked(writeInstanceIdentity).mock.calls;
+    // Exactly one write happened — the display-name pre-persist — and the
+    // provisioning write never ran because adduser failed.
+    expect(calls).toHaveLength(1);
+    const persisted = calls[0]?.[0];
+    expect(persisted?.instanceDisplayName).toBe("Edited Display Name");
+    // The display-name write keeps the CURRENT namespace (no rename committed).
+    expect(persisted?.instanceNamespace).toBe(PRE_PUBLISH_IDENTITY.instanceNamespace);
+    // And it must NOT carry the rename flag — it's a same-namespace metadata edit.
+    expect(calls[0]?.[1]?.allowNamespaceRename).toBeFalsy();
   });
 });
 

@@ -33,6 +33,11 @@ import { VendorApplicationStatusCard } from "./vendor-application-status-card";
 import { InstanceSaveButton } from "./instance-save-button";
 import { getMarketplaceTermsAcceptance } from "@/lib/marketplace-terms";
 
+/** Normalize a possibly-array search param to its first string value. */
+function firstSearchParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Environment" };
 
@@ -53,7 +58,7 @@ export default async function EnvironmentSettingsPage({
   const { tab, requestedConnections } = resolveEnvTab(rawTab, tabs);
   const activeContent =
     tab === "instance" ? (
-      await InstanceTabContent()
+      await InstanceTabContent({ error: params.error, saved: params.saved })
     ) : tab === "registries" ? (
       <RegistriesTabContent params={params} defaultContactEmail={session.user.email ?? null} />
     ) : (
@@ -160,7 +165,15 @@ function ModeTabContent({
   );
 }
 
-async function InstanceTabContent() {
+async function InstanceTabContent({
+  error,
+  saved,
+}: {
+  error?: string | string[] | undefined;
+  saved?: string | string[] | undefined;
+} = {}) {
+  const errorMessage = firstSearchParam(error);
+  const savedMessage = firstSearchParam(saved);
   const identity = readInstanceIdentity();
 
   if (!identity) {
@@ -207,6 +220,21 @@ async function InstanceTabContent() {
   return (
     <NamespaceValidationProvider initialValue={identity.instanceNamespace}>
       <ReconciliationMount />
+      {/* Surface the post-action redirect result (cinatra#357). A failed Save
+          redirects back with ?error=<msg>; without rendering it the form just
+          shows the old values again and the failure looks like a silent revert.
+          Rendered server-side (no client island) so it survives a refresh. */}
+      {errorMessage ? (
+        <Alert variant="destructive" className="rounded-panel">
+          <AlertTitle>Could not save instance changes</AlertTitle>
+          <AlertDescription className="break-words">{errorMessage}</AlertDescription>
+        </Alert>
+      ) : savedMessage ? (
+        <Alert variant="success" className="rounded-panel">
+          <AlertTitle>Instance saved</AlertTitle>
+          <AlertDescription>Your instance identity changes have been saved.</AlertDescription>
+        </Alert>
+      ) : null}
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
