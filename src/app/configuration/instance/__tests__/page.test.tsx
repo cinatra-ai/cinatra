@@ -193,4 +193,36 @@ describe("Environment instance tab — registry destination card moved out", () 
     expect(texts.some((t) => t.includes("Instance display name"))).toBe(true);
     expect(texts.some((t) => t.includes("Instance namespace"))).toBe(true);
   });
+
+  // cinatra#357 — defect #1: a failed Save redirects back with ?error=<msg>,
+  // which the instance tab must surface (instead of silently reverting).
+  it("renders the ?error= banner so a failed Save is visible, not a silent revert", async () => {
+    const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
+    vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
+    const { default: Page } = await import("@/app/configuration/environment/page");
+    const tree = await Page({
+      searchParams: Promise.resolve({ tab: "instance", error: "That vendor name is already taken." }),
+    });
+    const texts = collectText(tree);
+    expect(texts.some((t) => t.includes("Could not save instance changes"))).toBe(true);
+    expect(texts.some((t) => t.includes("That vendor name is already taken."))).toBe(true);
+  });
+
+  it("does not render the error banner when no ?error= param is present", async () => {
+    const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
+    vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
+    const { default: Page } = await import("@/app/configuration/environment/page");
+    const tree = await Page({ searchParams: Promise.resolve({ tab: "instance" }) });
+    const texts = collectText(tree);
+    expect(texts.some((t) => t.includes("Could not save instance changes"))).toBe(false);
+  });
+
+  it("renders the ?saved=1 success banner after a successful Save", async () => {
+    const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
+    vi.mocked(readInstanceIdentity).mockReturnValue(BASE_IDENTITY_223 as never);
+    const { default: Page } = await import("@/app/configuration/environment/page");
+    const tree = await Page({ searchParams: Promise.resolve({ tab: "instance", saved: "1" }) });
+    const texts = collectText(tree);
+    expect(texts.some((t) => t.includes("Instance saved"))).toBe(true);
+  });
 });
