@@ -220,7 +220,7 @@ export async function AgentApprovalInboxBody({
     riskClass: string;      // repurposed: status as risk pill
     itemCount: number;      // repurposed: rejection-cycle count or 0
     status: string;
-    expiresAt: Date;        // repurposed: created_at
+    createdAt: Date;        // when the creation request was filed
   };
   let tasks: ApprovalInboxTask[] = [];
   if (orgId) {
@@ -242,7 +242,7 @@ export async function AgentApprovalInboxBody({
       riskClass: r.status === "proposed" ? "medium" : r.status === "rejected" ? "high" : "low",
       itemCount: r.rejectionReason ? 1 : 0,
       status: r.status,
-      expiresAt: new Date(r.createdAt),
+      createdAt: new Date(r.createdAt),
     }));
   }
 
@@ -289,7 +289,7 @@ export async function AgentApprovalInboxBody({
                   <TableHead>Risk</TableHead>
                   <TableHead>Items</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Deadline</TableHead>
+                  <TableHead>Requested</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -316,7 +316,7 @@ export async function AgentApprovalInboxBody({
                       <Badge variant="outline">{task.status}</Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(task.expiresAt), { addSuffix: true })}
+                      {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true })}
                     </TableCell>
                   </TableRow>
                 ))}
