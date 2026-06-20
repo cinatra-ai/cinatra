@@ -197,6 +197,11 @@ const SYSTEM_JOBS = new Set<string>([
   // loop that finishes broker-OK-but-DB-failed approval transitions via the
   // sync-worker-only complete-recovery ability. System-initiated.
   "vendor-application-state-reconcile",
+  // Schedule↔PM-task OUTBOUND-REPAIR reconcile. ~10-minute self-rescheduling
+  // loop that re-projects local agent-run triggers outward to the PM provider
+  // for link rows whose last mirror failed or never synced (cinatra#318).
+  // System-initiated.
+  "pm-schedule-reconcile",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

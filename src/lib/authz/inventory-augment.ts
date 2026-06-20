@@ -290,6 +290,11 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   remote_effect_attempt_retry:                 { resourceType: "object", action: "update", status: "unenforced" },
   remote_effect_attempts_list_for_change_set:  { resourceType: "object", action: "read",   status: "unenforced" },
 
+  // ───── plane (connector_instance) ─────
+  plane_instances_list: { resourceType: "connector_instance", action: "list", status: "enforced" },
+  plane_projects_list:  { resourceType: "connector_instance", action: "list", status: "enforced" },
+  plane_status:         { resourceType: "connector_instance", action: "read", status: "enforced" },
+
   // ───── permissions (administration / organization-membership) ─────
   permissions_invitations_cancel:           { resourceType: "administration", action: "update", status: "enforced" },
   permissions_members_invite:               { resourceType: "administration", action: "update", status: "enforced" },

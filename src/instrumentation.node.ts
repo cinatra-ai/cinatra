@@ -769,6 +769,41 @@ export async function register() {
     );
   }
 
+  // Seed the PM schedule reconcile loop (cinatra#318). The handler self-
+  // reschedules at ~10-min cadence after each run via moveToDelayed (matches
+  // the canonical loop pattern enforced by the perpetual-system-loops CI gate).
+  // The stable jobId dedups against crash-restart per the BullMQ convention; on
+  // each tick the worker re-projects the LOCAL trigger (source of truth)
+  // outward for any agent_run_pm_links rows whose last PM mirror failed or
+  // never synced — re-pushing errored/unsynced links and finishing deferred
+  // deletes via the existing host PM bridge.
+  try {
+    const {
+      enqueueBackgroundJob,
+      BACKGROUND_JOB_NAMES,
+      PM_SCHEDULE_RECONCILE_LOOP_JOB_ID,
+    } = await import("@/lib/background-jobs");
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.PM_SCHEDULE_RECONCILE,
+      {},
+      {
+        jobId: PM_SCHEDULE_RECONCILE_LOOP_JOB_ID,
+        delay: 10 * 60 * 1000, // 10m
+        overwriteIfStale: true,
+        skipWorker: true,
+        inheritActorContext: false,
+      },
+    );
+    console.log(
+      "[pm-schedule-reconcile] ~10-minute reconcile loop scheduled (10m delay)",
+    );
+  } catch (err) {
+    console.warn(
+      "[pm-schedule-reconcile] Could not schedule reconcile loop:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+
   // Schedule the Graphiti projection repair loop. The shared
   // jobId "graphiti-projection-repair-loop" is the BullMQ-level dedup key:
   // on crash-restart, instrumentation re-enqueues the same jobId and BullMQ

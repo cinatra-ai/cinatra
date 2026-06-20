@@ -913,6 +913,21 @@
       "line": 29
     },
     {
+      "primitiveName": "plane_instances_list",
+      "file": "extensions/cinatra-ai/plane-connector/src/mcp/module.ts",
+      "line": 37
+    },
+    {
+      "primitiveName": "plane_projects_list",
+      "file": "extensions/cinatra-ai/plane-connector/src/mcp/module.ts",
+      "line": 48
+    },
+    {
+      "primitiveName": "plane_status",
+      "file": "extensions/cinatra-ai/plane-connector/src/mcp/module.ts",
+      "line": 26
+    },
+    {
       "primitiveName": "project_access_check",
       "file": "packages/projects/src/mcp/registry.ts",
       "line": 120
