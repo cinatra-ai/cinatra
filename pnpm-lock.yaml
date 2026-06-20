@@ -1551,9 +1551,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@cinatra-ai/agents':
-        specifier: workspace:*
-        version: link:../agents
       '@cinatra-ai/connectors-catalog':
         specifier: workspace:*
         version: link:../connectors-catalog
