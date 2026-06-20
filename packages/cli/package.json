@@ -14,7 +14,6 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@cinatra-ai/agents": "workspace:*",
     "@cinatra-ai/connectors-catalog": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
