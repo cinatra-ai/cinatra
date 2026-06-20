@@ -106,6 +106,16 @@ export const BACKGROUND_JOB_NAMES = {
   // WORKER-only) under the sync-worker bearer, idempotent, self-rescheduling
   // at 5-min cadence. See `@cinatra-ai/marketplace-application-reconcile`.
   VENDOR_APPLICATION_STATE_RECONCILE: "vendor-application-state-reconcile",
+  // Schedule↔PM-task OUTBOUND-REPAIR reconcile (cinatra#318, part of #313).
+  // Periodic ~10-min sweep over the agent_run_pm_links rows that failed /
+  // never-synced and RE-PROJECTS the LOCAL trigger (source of truth) outward
+  // via the existing host PM bridge — re-pushing errored/unsynced links and
+  // finishing deferred deletes. Outbound-only: it never applies inbound PM
+  // state to local schedules (the SDK PmConnector contract has no read-back,
+  // and Plane stores only a day-granularity target_date). Every row warns-and-
+  // skips, never throws (a PM outage must not poison the queue or alter local
+  // schedules). See `@cinatra-ai/pm-schedule-reconcile`.
+  PM_SCHEDULE_RECONCILE: "pm-schedule-reconcile",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -289,6 +299,16 @@ export const MARKETPLACE_CATALOG_SYNC_LOOP_JOB_ID = "marketplace-catalog-sync-lo
  */
 export const VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID =
   "vendor-application-state-reconcile-loop";
+/**
+ * Canonical loop-job id for the PM schedule reconcile sweep (cinatra#318).
+ * Same contract as `VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID`: the boot
+ * seed (instrumentation.node.ts) creates the job under this id and the handler
+ * re-delays THIS job via moveToDelayed each cycle; any other id is a legacy
+ * anonymous duplicate that runs once WITHOUT rescheduling. Drift here re-
+ * introduces the per-restart queue storm guarded by the perpetual-system-loops
+ * CI gate.
+ */
+export const PM_SCHEDULE_RECONCILE_LOOP_JOB_ID = "pm-schedule-reconcile-loop";
 
 async function dispatchBackgroundJob(job: Job, token?: string) {
   return runJobHandlerWithActorContext(job.data, () => dispatchBackgroundJobImpl(job, token));
@@ -927,6 +947,59 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
         } catch (rescheduleErr) {
           console.warn(
             "[vendor-application-state-reconcile] re-delay failed:",
+            rescheduleErr,
+          );
+          return;
+        }
+        throw new DelayedError();
+      }
+      case BACKGROUND_JOB_NAMES.PM_SCHEDULE_RECONCILE: {
+        // ~10-minute OUTBOUND-REPAIR sweep over agent_run_pm_links rows that
+        // failed / never-synced (cinatra#318). Re-projects the LOCAL trigger
+        // (source of truth) outward via the host PM bridge — re-pushing
+        // errored/unsynced links and finishing deferred deletes. The worker
+        // never throws (per-row warn-and-skip), but the sweep is still wrapped
+        // so any unexpected throw logs + the canonical loop re-delays (matches
+        // the vendor-application-state-reconcile + marketplace-catalog-sync
+        // full-sweep mode). A PM outage must not poison the queue or alter
+        // local schedules.
+        const TEN_MINUTES_MS = 10 * 60 * 1000;
+        try {
+          const { buildPmScheduleReconcileDeps } = await import(
+            "@/lib/pm-schedule-reconcile-deps"
+          );
+          const { runPmScheduleReconcile } = await import(
+            "@cinatra-ai/pm-schedule-reconcile"
+          );
+          const deps = buildPmScheduleReconcileDeps();
+          const summary = await runPmScheduleReconcile(deps);
+          if (
+            summary.attempted > 0 ||
+            summary.repaired > 0 ||
+            summary.failed > 0
+          ) {
+            console.log(
+              `[pm-schedule-reconcile] attempted=${summary.attempted} repaired=${summary.repaired} skipped=${summary.skipped} failed=${summary.failed}`,
+            );
+          }
+        } catch (sweepErr) {
+          console.warn(
+            "[pm-schedule-reconcile] sweep failed:",
+            sweepErr instanceof Error ? sweepErr.message : sweepErr,
+          );
+        }
+
+        // Re-delay the canonical loop job. Legacy / anonymous duplicates
+        // (id !== loop id) run-once-and-die (mirrors the vendor-application-
+        // state-reconcile reschedule guard). NEVER enqueue the same name here.
+        if (String(job.id ?? "") !== PM_SCHEDULE_RECONCILE_LOOP_JOB_ID) {
+          return;
+        }
+        try {
+          await job.moveToDelayed(Date.now() + TEN_MINUTES_MS, job.token);
+        } catch (rescheduleErr) {
+          console.warn(
+            "[pm-schedule-reconcile] re-delay failed:",
             rescheduleErr,
           );
           return;

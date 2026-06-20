@@ -1,5 +1,5 @@
 import "server-only";
-import { eq, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import { agentRunPmLinks } from "./schema";
 
@@ -133,4 +133,49 @@ export async function recordPmLinkError(input: {
 
 export async function deletePmLinkByRunId(runId: string): Promise<void> {
   await db.delete(agentRunPmLinks).where(eq(agentRunPmLinks.runId, runId));
+}
+
+/**
+ * Keyset enumerator for the OUTBOUND-REPAIR reconcile loop (cinatra#318).
+ *
+ * Returns the bounded page of pm-link rows that need a repair attempt — rows
+ * that are NOT in the healthy mirrored state. A healthy row is
+ * `sync_error IS NULL AND external_task_id IS NOT NULL AND synced_at IS NOT
+ * NULL`; this query is its complement:
+ *
+ *   sync_error IS NOT NULL   -- the last fail-open push errored (retry it)
+ *   OR external_task_id IS NULL  -- never successfully pushed (no upstream id)
+ *   OR synced_at IS NULL         -- never successfully mirrored
+ *
+ * (A row whose trigger CHANGED after a successful sync is already re-pushed by
+ * the trigger lifecycle hook, so it carries no error and stays out of this set;
+ * this loop is the REPAIR net for FAILED/DEFERRED pushes, not a trigger-diff.)
+ *
+ * Keyset-paginated on `run_id` ascending: pass the last `runId` of the prior
+ * page as `afterRunId` (exclusive cursor) to fetch the next page. NEVER
+ * full-scans into memory — callers page until a short page returns. `limit`
+ * bounds the page size.
+ */
+export async function listPmLinksForReconcile(input: {
+  afterRunId?: string;
+  limit: number;
+}): Promise<PmLinkRecord[]> {
+  const needsAttention = or(
+    sql`${agentRunPmLinks.syncError} IS NOT NULL`,
+    isNull(agentRunPmLinks.externalTaskId),
+    isNull(agentRunPmLinks.syncedAt),
+  );
+  const where =
+    input.afterRunId !== undefined
+      ? and(needsAttention, gt(agentRunPmLinks.runId, input.afterRunId))
+      : needsAttention;
+
+  const rows = await db
+    .select()
+    .from(agentRunPmLinks)
+    .where(where)
+    .orderBy(asc(agentRunPmLinks.runId))
+    .limit(input.limit);
+
+  return rows.map(deserialize);
 }
