@@ -476,25 +476,41 @@ export async function editVendorAction(formData: FormData): Promise<void> {
   }
   const newName = namespaceResult.canonical;
 
+  const updatedCurrent: InstanceIdentity = { ...current, instanceDisplayName };
+
   if (current.firstPublishedAt !== null) {
-    writeInstanceIdentity({ ...current, instanceDisplayName });
+    writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");
-    redirect("/configuration/environment?tab=instance");
+    redirect("/configuration/environment?tab=instance&saved=1");
   }
   // Short-circuit no-op edits so the registry never sees a duplicate adduser
   // call, which Verdaccio answers with 409 and we misinterpret as "name taken
   // by someone else".
   if (newName === current.instanceNamespace) {
-    writeInstanceIdentity({ ...current, instanceDisplayName });
+    writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");
-    redirect("/configuration/environment?tab=instance");
+    redirect("/configuration/environment?tab=instance&saved=1");
   }
 
-  await provisionAndPersist({ ...current, instanceDisplayName }, newName, operatorEmail, { append: false });
+  // Decouple the display-name edit from namespace provisioning (cinatra#357).
+  // The namespace change routes through provisionAndPersist, which is
+  // all-or-nothing: a registry-provisioning failure (createNpmUser) calls
+  // redirectWithError and persists NOTHING. Pre-persisting the validated
+  // display-name change here — a plain metadata write that needs no
+  // provisioning — guarantees that a downstream provisioning failure no longer
+  // discards an unrelated, valid display-name edit. Safe pre-publish: this is a
+  // same-namespace metadata write (firstPublishedAt === null), which
+  // writeInstanceIdentity allows without { allowNamespaceRename }.
+  writeInstanceIdentity(updatedCurrent);
+  invalidateInstanceIdentityCache();
 
-  redirect("/configuration/environment?tab=instance");
+  // provisionAndPersist spreads from `updatedCurrent`, so the rename write
+  // carries the new display name forward (never the stale value) on success.
+  await provisionAndPersist(updatedCurrent, newName, operatorEmail, { append: false });
+
+  redirect("/configuration/environment?tab=instance&saved=1");
 }
 
 // -----------------------------------------------------------------------------
@@ -537,7 +553,7 @@ export async function renameInstanceNamespaceAction(formData: FormData): Promise
 
   await provisionAndPersist(current, newName, operatorEmail, { append: true });
 
-  redirect("/configuration/environment?tab=instance");
+  redirect("/configuration/environment?tab=instance&saved=1");
 }
 
 // -----------------------------------------------------------------------------
