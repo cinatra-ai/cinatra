@@ -39,6 +39,8 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { resolveDefaultOrgId } from "@cinatra-ai/agents";
 import { betterAuthDb, betterAuthMembers } from "@/lib/better-auth-db";
+import { readConnectorConfigFromDatabase } from "@/lib/database";
+import { originMatchesSiteUrl } from "@/lib/widget-stream-auth";
 
 export type SingleTenantContentEditorIdentity = {
   /** Oldest organization id (the single tenant). */
@@ -88,4 +90,116 @@ export async function resolveSingleTenantContentEditorIdentity(): Promise<Single
   if (!admin?.userId) return null;
 
   return { orgId, runBy: admin.userId };
+}
+
+// ---------------------------------------------------------------------------
+// MULTI-TENANT install→org resolver (cinatra#274).
+//
+// Resolves the {orgId, runBy} a host-initiated content-editor run should
+// execute as from the PERSISTED install→org binding on the matching
+// connector_config instance row, instead of the single-tenant default. Each
+// CMS install (WordPress / Drupal) that configured the widget carries the
+// configuring admin's {orgId, runBy} (captured at save; see wordpress-api.ts /
+// drupal-api.ts), so a multi-tenant deployment writes as the correct org per
+// install.
+//
+// ORIGIN IS AUTHORITATIVE (codex#274 correction). The request-body `instanceId`
+// is client-supplied (only sanitized) and therefore FORGEABLE — it must never
+// outrank, NOR substitute for, the verified origin. `origin` is the token-bound,
+// server-verified site origin (from consumeWidgetStreamToken). Matching:
+//   • A verified `origin` is REQUIRED to select a per-install binding. Rows are
+//     matched by origin; a supplied `instanceId` may only DISAMBIGUATE among
+//     those origin-matched rows. An `instanceId` that names a DIFFERENT row is
+//     ignored (never binds the id-only row), closing the cross-tenant
+//     confused-deputy hole.
+//   • With NO verified origin, there is NO per-install binding — a client-
+//     asserted `instanceId` alone is forgeable, so we go straight to the
+//     single-tenant fallback. (The connector-side dispatch path carries neither
+//     origin nor instanceId and lands here too.)
+//
+// A matched row is used ONLY when it carries a COMPLETE binding (both orgId and
+// runBy non-empty). Any miss — no row, an incomplete (pre-binding) row, or an
+// id/origin disagreement — FALLS THROUGH to the single-tenant resolver, which
+// itself fails soft to `null`. So this resolver preserves #246's posture
+// exactly: it never elevates, and a no-binding install writes via the
+// single-tenant fallback (or fails closed at the MCP boundary), never via a
+// forged or borrowed identity.
+// ---------------------------------------------------------------------------
+
+type StoredInstanceRow = {
+  id?: unknown;
+  siteUrl?: unknown;
+  orgId?: unknown;
+  runBy?: unknown;
+};
+
+function completeBinding(
+  row: StoredInstanceRow | undefined,
+): SingleTenantContentEditorIdentity | null {
+  const orgId = typeof row?.orgId === "string" ? row.orgId.trim() : "";
+  const runBy = typeof row?.runBy === "string" ? row.runBy.trim() : "";
+  if (!orgId || !runBy) return null;
+  return { orgId, runBy };
+}
+
+export type ContentEditorInstanceContext = {
+  /** `connector_config` key whose `instances[]` hold the install rows
+   * ("wordpress" | "drupal"). From the widget-stream agent's `auth`. */
+  instancesConfigKey: string;
+  /** Token-bound, server-verified site origin (authoritative). */
+  origin?: string | null;
+  /** Client-supplied (sanitized) instance id — disambiguation ONLY. */
+  instanceId?: string | null;
+};
+
+/**
+ * Resolve the {orgId, runBy} for a host-initiated content-editor run, PREFERRING
+ * the per-install persisted binding (cinatra#274) and falling back to the
+ * single-tenant identity. See the block comment above for the full matching
+ * contract. Returns `null` only when BOTH the per-install binding and the
+ * single-tenant fallback are unavailable (caller then dispatches anonymously —
+ * the write fails closed at the MCP boundary, never elevated).
+ */
+export async function resolveContentEditorIdentityForInstance(
+  ctx: ContentEditorInstanceContext,
+): Promise<SingleTenantContentEditorIdentity | null> {
+  const instancesConfigKey = String(ctx.instancesConfigKey ?? "").trim();
+  const origin = typeof ctx.origin === "string" ? ctx.origin.trim() : "";
+  const instanceId = typeof ctx.instanceId === "string" ? ctx.instanceId.trim() : "";
+
+  if (instancesConfigKey) {
+    const config = readConnectorConfigFromDatabase<{ instances?: unknown }>(
+      instancesConfigKey,
+      { instances: [] },
+    );
+    const instances: StoredInstanceRow[] = Array.isArray(config?.instances)
+      ? (config.instances.filter((r) => r && typeof r === "object") as StoredInstanceRow[])
+      : [];
+
+    // Origin is REQUIRED and authoritative. With no verified origin there is no
+    // per-install binding (a client-asserted instanceId alone is forgeable) — we
+    // fall through to single-tenant. Match rows by origin; an instanceId may only
+    // narrow among origin-matched rows, never select a different row.
+    let matched: StoredInstanceRow | undefined;
+    if (origin) {
+      const originMatches = instances.filter((r) =>
+        originMatchesSiteUrl(origin, typeof r.siteUrl === "string" ? r.siteUrl : ""),
+      );
+      matched = instanceId
+        ? originMatches.find((r) => typeof r.id === "string" && r.id.trim() === instanceId) ??
+          // A mismatched instanceId is ignored: still bind to the verified
+          // origin's row when it is unambiguous.
+          (originMatches.length === 1 ? originMatches[0] : undefined)
+        : originMatches.length === 1
+          ? originMatches[0]
+          : undefined;
+    }
+
+    const binding = completeBinding(matched);
+    if (binding) return binding;
+  }
+
+  // No per-install binding (no match, incomplete row, or no anchors) → the
+  // single-tenant fallback (which itself fails soft to null).
+  return resolveSingleTenantContentEditorIdentity();
 }

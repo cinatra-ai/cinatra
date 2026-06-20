@@ -88,6 +88,22 @@ function normalizeStoredSiteUrl(value: string): string {
 const forCompare = (v: string) => v.replace(/\/+$/, "").toLowerCase();
 
 /**
+ * Does a server-verified request `origin` (always `scheme://host[:port]`) match
+ * a stored instance `siteUrl`? Uses the SAME normalization the configured-origin
+ * authorization primitive (`isConfiguredOrigin`) applies, so per-install identity
+ * resolution (cinatra#274) and origin authorization never diverge. Empty/invalid
+ * inputs never match.
+ */
+export function originMatchesSiteUrl(
+  origin: string | null | undefined,
+  siteUrl: string | null | undefined,
+): boolean {
+  const want = forCompare(String(origin ?? "").trim());
+  const have = forCompare(normalizeStoredSiteUrl(String(siteUrl ?? "").trim()));
+  return want.length > 0 && have.length > 0 && want === have;
+}
+
+/**
  * Is `origin` the site origin of a VALID configured instance under the
  * declared `instancesConfigKey` (all `requiredInstanceFields` non-empty)?
  *

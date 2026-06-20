@@ -36,6 +36,22 @@ export type WordPressInstanceSettings = {
    * edit + reconnect-via-Nango flows.
    */
   blogConnectorId?: string;
+  /**
+   * Multi-tenant install→org binding (cinatra#274). Captured from the
+   * configuring admin's session at save time:
+   *   • orgId — the admin's active organization id,
+   *   • runBy — the admin's user id (the OBO write actor for this install).
+   * Resolved by `resolveContentEditorIdentityForInstance` so a host-initiated
+   * content-editor write executes as THIS install's org/user instead of the
+   * single-tenant default. Persisted as part of the wordpress
+   * connector_config JSON blob — no schema migration. Both
+   * `saveWordPressInstance` and `saveWordPressInstanceFromNangoConnection`
+   * preserve these across edit + reconnect-via-Nango flows. Undefined on rows
+   * saved before this change (pre-binding) and on session-less dev-auto-setup
+   * persists — the resolver then falls back to single-tenant identity.
+   */
+  orgId?: string;
+  runBy?: string;
 };
 
 type WordPressAPISettings = {
@@ -282,6 +298,9 @@ export function getWordPressAPISettings() {
             // Optional vendor-scoped blog-connector binding.
             // Persisted as part of the wordpress connector_config JSON blob.
             blogConnectorId: typeof instance.blogConnectorId === "string" ? instance.blogConnectorId.trim() || undefined : undefined,
+            // Optional multi-tenant install→org binding (cinatra#274).
+            orgId: typeof instance.orgId === "string" ? instance.orgId.trim() || undefined : undefined,
+            runBy: typeof instance.runBy === "string" ? instance.runBy.trim() || undefined : undefined,
           }))
           .filter((instance) => instance.id && instance.name && instance.siteUrl && instance.username && instance.applicationPassword)
       : [],
@@ -442,6 +461,16 @@ export async function saveWordPressInstance(input: {
    * field round-trips through edit-save without callers having to re-pass it).
    */
   blogConnectorId?: string;
+  /**
+   * Multi-tenant install→org binding (cinatra#274), captured from the
+   * configuring admin's session by `saveWordPressInstanceAction`. When omitted
+   * (e.g. session-less dev-auto-setup), the existing instance's values are
+   * preserved on edit, and left undefined on a new row — the resolver then
+   * falls back to single-tenant identity. NEVER overwrites an existing binding
+   * with undefined.
+   */
+  orgId?: string;
+  runBy?: string;
 }) {
   const current = getWordPressAPISettings();
   const existing = input.id ? current.instances.find((instance) => instance.id === input.id) : null;
@@ -463,6 +492,17 @@ export async function saveWordPressInstance(input: {
     input.blogConnectorId !== undefined
       ? (input.blogConnectorId.trim() || undefined)
       : existing?.blogConnectorId;
+  // Multi-tenant install→org binding (cinatra#274). Treat {orgId, runBy} as an
+  // ATOMIC unit: only adopt the supplied binding when BOTH are present (never
+  // mix a new runBy with a stale orgId, e.g. a session with no active org);
+  // otherwise preserve the existing pair unchanged. A new row with an
+  // incomplete supplied binding simply has no binding.
+  const suppliedBinding =
+    input.orgId?.trim() && input.runBy?.trim()
+      ? { orgId: input.orgId.trim(), runBy: input.runBy.trim() }
+      : undefined;
+  const nextOrgId = suppliedBinding?.orgId ?? existing?.orgId;
+  const nextRunBy = suppliedBinding?.runBy ?? existing?.runBy;
   const nextInstance: WordPressInstanceSettings = {
     id: instanceId,
     name: validated.detectedSiteTitle || validated.siteUrl,
@@ -478,6 +518,12 @@ export async function saveWordPressInstance(input: {
     // caller doesn't pass an override, inherit from existing). Without this,
     // the JSON-blob save path would silently drop the field on every edit.
     blogConnectorId: nextBlogConnectorId,
+    // Multi-tenant install→org binding (cinatra#274), persisted atomically (see
+    // suppliedBinding above): a complete supplied pair sets it; otherwise the
+    // existing pair is inherited unchanged so an edit-without-session never
+    // drops — nor half-overwrites — a captured binding.
+    orgId: nextOrgId,
+    runBy: nextRunBy,
   };
 
   writeSettings({
@@ -575,6 +621,10 @@ export async function persistLocalDevWordPressInstanceUnvalidated(input: {
     createdAt: existing?.createdAt ?? timestamp,
     updatedAt: timestamp,
     blogConnectorId: existing?.blogConnectorId,
+    // Preserve any existing multi-tenant install→org binding (cinatra#274).
+    // This recovery persist has no session, so it never sets a new binding.
+    orgId: existing?.orgId,
+    runBy: existing?.runBy,
   };
 
   writeSettings({
@@ -639,6 +689,11 @@ export async function saveWordPressInstanceFromNangoConnection(input: {
     // drop the operator's site-connector binding and re-route the live site to
     // the generic path.
     blogConnectorId: existing?.blogConnectorId,
+    // Same rationale for the multi-tenant install→org binding (cinatra#274):
+    // Nango carries no Cinatra identity, so a reconnect must preserve the
+    // existing {orgId, runBy} unconditionally rather than drop it.
+    orgId: existing?.orgId,
+    runBy: existing?.runBy,
   };
 
   writeSettings({
