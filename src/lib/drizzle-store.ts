@@ -1345,6 +1345,24 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_triggers_released_at_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (released_at)` },
+    // agent_run_pm_links: schedule↔PM-task sync link table (cinatra#317). One
+    // row per schedule-defining trigger mirrored to an external PM provider
+    // (Plane). Keyed by run_id (one-to-one with the trigger). A link table, not
+    // columns on agent_run_triggers, so a PM outage / absent provider leaves the
+    // trigger untouched. external_task_id/synced_at are null until the first
+    // successful push; sync_error holds the last fail-open error (null=healthy);
+    // version is the optimistic-concurrency counter for the reconcile loop.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      provider text NOT NULL,
+      external_task_id text,
+      synced_at timestamptz,
+      sync_error text,
+      version integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per

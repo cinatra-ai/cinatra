@@ -28,6 +28,18 @@ import {
   RunTransitionError,
   readAgentRunById,
 } from "./store";
+// Schedule↔PM-task sync (cinatra#317). packages/agents calls OUT to the
+// host-owned PM provider bridge via the Next.js "@/lib/*" alias (Option 2 / the
+// host-owned PM provider bridge); it NEVER imports the SDK PM registry or any
+// Plane code. Both functions are fail-open — the trigger lifecycle is
+// authoritative for the LOCAL schedule and never throws on a PM outage.
+// trigger-service.ts is server-only and compiles inside the host bundle, so
+// "@/lib/*" resolves at runtime (the same indirection list-picker-actions.ts /
+// external-mcp-caller.ts use for host-resolved outbound integration).
+import {
+  syncRunTriggerPmTask,
+  deleteRunTriggerPmTask,
+} from "@/lib/pm-integration-providers";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -340,6 +352,31 @@ export async function setRunTriggerForActor(
     }
   }
 
+  // HOOK POINT A (cinatra#317) — outbound PM mirror of the schedule-DEFINING
+  // trigger, AFTER the final createOrUpdateRunTrigger (jobSchedulerId persisted)
+  // and the status flip have succeeded. Fail-open: the local schedule is already
+  // durable, so a PM outage must never fail this call (the bridge swallows + logs
+  // its own errors, and the .catch is defense-in-depth). Mirrors the trigger
+  // CONFIG, not the recurring child runs.
+  await syncRunTriggerPmTask({
+    runId: args.runId,
+    triggerType: args.triggerType,
+    scheduledAt: args.scheduledAt
+      ? new Date(naiveDatetimeToUtcMs(args.scheduledAt, tz)).toISOString()
+      : null,
+    cronExpression: args.cronExpression ?? null,
+    timezone: tz,
+    enabled: args.enabled ?? true,
+  }).catch((err) => {
+    // runId + err passed as ARGUMENTS (not interpolated into the format string)
+    // so a runId is never treated as a console format spec (js/tainted-format-string).
+    console.warn(
+      "[setRunTriggerForActor] PM mirror failed (schedule unaffected) for run",
+      args.runId,
+      err,
+    );
+  });
+
   return {
     ok: true,
     runId: args.runId,
@@ -436,6 +473,21 @@ export async function deleteRunTriggerForActor(
       }
     }
   }
+
+  // HOOK POINT B (cinatra#317) — unschedule/delete the mirrored PM work item
+  // AFTER the local trigger row is deleted and the armed→stopped transition has
+  // run. Fail-open: the local trigger is already gone, so a PM outage must never
+  // fail this call (the bridge leaves the pm-link row for the reconcile loop and
+  // swallows + logs its own errors; the .catch is defense-in-depth).
+  await deleteRunTriggerPmTask({ runId: args.runId }).catch((err) => {
+    // runId + err passed as ARGUMENTS (not interpolated into the format string)
+    // so a runId is never treated as a console format spec (js/tainted-format-string).
+    console.warn(
+      "[deleteRunTriggerForActor] PM unschedule failed (trigger already deleted) for run",
+      args.runId,
+      err,
+    );
+  });
 
   return { ok: true };
 }

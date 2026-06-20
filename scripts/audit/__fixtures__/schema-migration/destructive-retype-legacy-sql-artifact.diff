@@ -1,7 +1,7 @@
-diff --git a/migrations/0007_narrow-usage-events-cost-usd.sql b/migrations/0007_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0008_narrow-usage-events-cost-usd.sql b/migrations/0008_narrow-usage-events-cost-usd.sql
 new file mode 100644
 --- /dev/null
-+++ b/migrations/0007_narrow-usage-events-cost-usd.sql
++++ b/migrations/0008_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -12,13 +12,13 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -64,5 +64,12 @@
-       "destructive": true,
-       "tables": ["dashboards", "dashboard_revisions"]
+@@ -71,5 +71,12 @@
+       "destructive": false,
+       "tables": ["agent_run_pm_links"]
 +    },
 +    {
-+      "seq": "0007",
-+      "file": "0007_narrow-usage-events-cost-usd.sql",
++      "seq": "0008",
++      "file": "0008_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

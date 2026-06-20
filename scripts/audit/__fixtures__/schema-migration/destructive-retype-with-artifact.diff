@@ -1,9 +1,9 @@
-diff --git a/migrations/core/core__0007_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0007_narrow-usage-events-cost-usd.mjs
+diff --git a/migrations/core/core__0008_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0008_narrow-usage-events-cost-usd.mjs
 new file mode 100644
 --- /dev/null
-+++ b/migrations/core/core__0007_narrow-usage-events-cost-usd.mjs
++++ b/migrations/core/core__0008_narrow-usage-events-cost-usd.mjs
 @@ -0,0 +1,16 @@
-+// core__0007 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
++// core__0008 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +// The extra scale was never populated (ingest rounds to 4 decimal places)
 +// and the narrower type matches the rollup views. Safe to re-run: converting
 +// a column to the type it already has succeeds as a no-op.
@@ -22,13 +22,13 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -64,5 +64,12 @@
-       "destructive": true,
-       "tables": ["dashboards", "dashboard_revisions"]
+@@ -71,5 +71,12 @@
+       "destructive": false,
+       "tables": ["agent_run_pm_links"]
 +    },
 +    {
-+      "seq": "0007",
-+      "file": "core/core__0007_narrow-usage-events-cost-usd.mjs",
++      "seq": "0008",
++      "file": "core/core__0008_narrow-usage-events-cost-usd.mjs",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

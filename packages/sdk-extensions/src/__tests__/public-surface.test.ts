@@ -20,7 +20,7 @@ import * as internal from "../internal";
 // source-text level before tests even run.
 // ---------------------------------------------------------------------------
 
-// The exact 20 host-internal capability-id constants that were fenced out of the
+// The exact host-internal capability-id constants that were fenced out of the
 // public root. This is the explicit denylist — the fence's contract.
 const FENCED_CAPABILITY_CONSTANTS = [
   "HOST_CONNECTOR_SERVICE_CAPABILITIES",
@@ -29,6 +29,7 @@ const FENCED_CAPABILITY_CONSTANTS = [
   "LLM_TOOLBOX_CAPABILITY",
   "SOCIAL_POST_CAPABILITY",
   "CRM_PROVIDER_CAPABILITY",
+  "PM_PROVIDER_CAPABILITY",
   "EMAIL_SEND_CAPABILITY",
   "OBJECT_TYPE_REGISTRAR_CAPABILITY",
   "CRM_SYNC_BOOTSTRAP_CAPABILITY",
@@ -86,7 +87,7 @@ describe("@cinatra-ai/sdk-extensions public surface fence", () => {
     expect(leaked).toEqual([]);
   });
 
-  it("re-exports exactly those 20 constants through the host-only ./internal subpath", () => {
+  it("re-exports exactly those fenced constants through the host-only ./internal subpath", () => {
     const internalKeys = new Set(Object.keys(internal));
     const missing = FENCED_CAPABILITY_CONSTANTS.filter(
       (name) => !internalKeys.has(name),

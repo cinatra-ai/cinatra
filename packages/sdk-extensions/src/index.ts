@@ -165,6 +165,24 @@ export {
 } from "./crm-request-actor-contract";
 export type { CrmRequestActor, CrmRequestActorResolver } from "./crm-request-actor-contract";
 
+// PM (project-management) connector→SDK decouple (cinatra#317): provider-agnostic
+// PM contract types + the host-shared provider registry, so the host PM bridge
+// and PM provider extensions (plane-connector) depend only on the SDK, not on
+// each other. Same shape as the CRM provider registry above.
+export type {
+  PmConnector,
+  PmConnectorId,
+  PmTriggerTask,
+  PmTaskRef,
+} from "./pm-connector-contract";
+export {
+  registerPmProvider,
+  lookupPmProvider,
+  listPmProviders,
+  setPmProviderExternalResolver,
+  _resetPmProviderRegistry,
+} from "./pm-provider-registry-contract";
+
 export {
   setExtensionConnectorConfigStore,
   getExtensionConnectorConfig,

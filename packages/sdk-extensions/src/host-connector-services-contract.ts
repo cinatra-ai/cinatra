@@ -816,6 +816,12 @@ export const SOCIAL_POST_CAPABILITY = "social-post";
 /** The crm-provider capability id concrete CRM providers register under. */
 export const CRM_PROVIDER_CAPABILITY = "crm-provider";
 
+/** The pm-provider capability id concrete PM (project-management) providers
+ *  register under (plane-connector today). The host PM bridge
+ *  (src/lib/register-pm-providers.ts) feeds the SDK PM provider registry's
+ *  external resolver from this capability — same shape as crm-provider. */
+export const PM_PROVIDER_CAPABILITY = "pm-provider";
+
 /** The email-send capability id concrete email providers register under. */
 export const EMAIL_SEND_CAPABILITY = "email-send";
 

@@ -77,6 +77,12 @@ import "@/lib/register-objects-provider";
 // capability.)
 import "@/lib/register-crm-providers";
 
+// Bind the SDK PM (project-management) provider registry's external resolver to
+// the host capability registry (cinatra#317), so a PM provider extension
+// (plane-connector) registering behind the `pm-provider` capability is resolved
+// lazily by the schedule↔PM-task sync bridge. Mirrors register-crm-providers.
+import "@/lib/register-pm-providers";
+
 // Publish the host-side blog ROUTING services (`@cinatra-ai/host:blog-routing`)
 // and keep the SDK blog-connector slot bound (routing into the `blog-connector`
 // capability). The blog facade extension configures itself at serverEntry

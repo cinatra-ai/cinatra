@@ -71,6 +71,7 @@
       "@cinatra-ai/agents/schema": ["./packages/agents/src/schema.ts"],
       "@cinatra-ai/agents/mcp-client": ["./packages/agents/src/mcp/client/deterministic-client.ts"],
       "@cinatra-ai/agents/db": ["./packages/agents/src/db.ts"],
+      "@cinatra-ai/agents/pm-link-store": ["./packages/agents/src/pm-link-store.ts"],
       "@cinatra-ai/agents/auditor-apply": ["./packages/agents/src/auditor-apply.ts"],
       "@cinatra-ai/agents/agent-install-path": ["./packages/agents/src/agent-install-path.ts"],
       "@cinatra-ai/agents/client-entry": ["./packages/agents/src/client-entry.ts"],
