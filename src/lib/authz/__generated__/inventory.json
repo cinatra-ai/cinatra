@@ -10,22 +10,22 @@
     {
       "primitiveName": "agent_creation_request_decide",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 786
+      "line": 789
     },
     {
       "primitiveName": "agent_creation_request_edit",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 756
+      "line": 759
     },
     {
       "primitiveName": "agent_creation_request_get",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 782
+      "line": 785
     },
     {
       "primitiveName": "agent_creation_request_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 770
+      "line": 773
     },
     {
       "primitiveName": "agent_creation_request_propose",
@@ -35,7 +35,7 @@
     {
       "primitiveName": "agent_creation_request_retry_publish",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 802
+      "line": 805
     },
     {
       "primitiveName": "agent_delete",
@@ -210,7 +210,7 @@
     {
       "primitiveName": "agents_list",
       "file": "packages/agents/src/mcp/schemas.ts",
-      "line": 815
+      "line": 818
     },
     {
       "primitiveName": "apollo_administration_get",
