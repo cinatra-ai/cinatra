@@ -109,6 +109,13 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // stubbed. Test-only mock, not new production coupling; moves to the contract
   // import alongside actions.ts when the swap lands.
   "src/lib/__tests__/rename-instance-namespace-action.test.ts",
+  // Regression test for cinatra#396 (offline local namespace rename). Mirrors
+  // actions.ts's existing (allowlisted) vendored import to exercise the rename
+  // gate's MarketplaceMcpError-vs-transport-error discrimination; its vi.mock of
+  // `@cinatra-ai/marketplace-mcp-client/http-client` stubs the vendor-status
+  // probe. Test-only, not new production coupling; moves to the contract import
+  // alongside actions.ts when the swap lands.
+  "src/lib/__tests__/namespace-rename-offline-override.test.ts",
   "src/app/configuration/marketplace/vendor-applications/actions.ts",
   "src/app/configuration/marketplace/vendor-applications/admin-action-buttons.tsx",
   "src/app/configuration/marketplace/vendor-applications/page.tsx",
