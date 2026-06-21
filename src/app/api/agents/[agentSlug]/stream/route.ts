@@ -199,7 +199,7 @@ export async function POST(
   }
 
   // -------------------------------------------------------------------------
-  // cinatra#408 — DUAL-TOKEN per-user validation (FAIL-CLOSED).
+  // cinatra#408 — DUAL-TOKEN per-user validation (FAIL-CLOSED BY DEFAULT).
   //
   // The widget sends the site `cit_` token on Authorization (verified above)
   // PLUS a per-user `cwu_` token on `X-Cinatra-Widget-User-Token`. When that
@@ -209,14 +209,24 @@ export async function POST(
   // authenticated END USER. ANY failure denies (401) with no fallback to the
   // install/single-tenant/anonymous identity — and creates NO carrier run.
   //
-  // When NO user token is present this whole block is skipped and today's
-  // site-identity dispatch (headless / un-upgraded widgets) is untouched —
-  // UNLESS the agent's auth policy sets `requireUserToken`, in which case a
-  // missing token is itself a fail-closed 401 re-login.
+  // EVERY request that reaches THIS route is the interactive `public_site_widget`
+  // surface (a browser widget relaying a CMS edit to a content-editor agent). So
+  // the per-user token is REQUIRED BY DEFAULT here: a missing/absent token is a
+  // fail-closed 401 re-login. This is a SECURITY DEFAULT, not an opt-in — a
+  // production manifest entry that simply OMITS the flag still enforces, so the
+  // confused-deputy bypass (omit the user token → fall back to the install/site
+  // identity) cannot exist. The ONLY way to permit a token-less dispatch is an
+  // EXPLICIT, audited `requireUserToken: false` in the entry's declared auth
+  // policy (carried verbatim into the generated manifest, so any opt-out is
+  // visible + reviewable). The headless content-editor path (cinatra#405) is
+  // UNAFFECTED — it never reaches this route; it calls dispatchContentEditorViaA2A
+  // directly via the host `contentEditorDispatch` service with no actorOverride.
   // -------------------------------------------------------------------------
   const userTokenHeader = request.headers.get(USER_TOKEN_HEADER)?.trim() ?? "";
   const userTokenPresent = userTokenHeader.length > 0;
-  const requireUserToken = entry.auth.requireUserToken === true;
+  // FAIL-CLOSED BY DEFAULT: enforce unless the entry EXPLICITLY opts out with
+  // `requireUserToken: false`. Absent (undefined) or true → enforce.
+  const requireUserToken = entry.auth.requireUserToken !== false;
 
   // The single generic deny — never leaks WHICH check failed to the browser
   // (a scrubbed, reason-coded audit line is emitted server-side instead).

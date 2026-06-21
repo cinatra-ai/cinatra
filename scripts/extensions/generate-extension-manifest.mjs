@@ -465,7 +465,8 @@ export function validateWidgetStreamDeclaration(pkgName, ws) {
       errors.push(`${at}.auth.requiredInstanceFields: must be an array of non-empty strings`);
     }
     // cinatra#408 — optional per-agent "require user token" flag. Absent is
-    // valid (defaults off); when present it MUST be a boolean.
+    // valid (defaults to ENFORCE on the public_site_widget surface); when
+    // present it MUST be a boolean. An explicit `false` is the audited opt-out.
     if ("requireUserToken" in ws.auth && typeof ws.auth.requireUserToken !== "boolean") {
       errors.push(`${at}.auth.requireUserToken: must be a boolean when present`);
     }
@@ -855,8 +856,11 @@ export async function buildManifest() {
           tokenConfigKey: ws.auth.tokenConfigKey,
           instancesConfigKey: ws.auth.instancesConfigKey,
           requiredInstanceFields: [...ws.auth.requiredInstanceFields],
-          // cinatra#408 — carry the optional flag through only when declared, so
-          // the generated literal stays minimal (absent === off).
+          // cinatra#408 — carry the optional flag through ONLY when explicitly
+          // declared, so the generated literal stays minimal. The route enforces
+          // BY DEFAULT (absent === ENFORCE for the public_site_widget surface);
+          // an explicit `false` is the only opt-out and is preserved verbatim
+          // here so it stays visible + auditable in the generated manifest.
           ...(typeof ws.auth.requireUserToken === "boolean"
             ? { requireUserToken: ws.auth.requireUserToken }
             : {}),
@@ -1216,8 +1220,10 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  tokenConfigKey: string;\n` +
     `  instancesConfigKey: string;\n` +
     `  requiredInstanceFields: string[];\n` +
-    `  // cinatra#408 — when true the stream route REQUIRES a per-user cwu_\n` +
-    `  // token (missing → 401 re-login). Default off (absent === false).\n` +
+    `  // cinatra#408 — the stream route REQUIRES a per-user cwu_ token BY DEFAULT\n` +
+    `  // (a missing token is a fail-closed 401 re-login). This is the security\n` +
+    `  // default for the interactive public_site_widget surface: an absent flag\n` +
+    `  // (undefined) ENFORCES. Only an EXPLICIT \`false\` opts out (audited).\n` +
     `  requireUserToken?: boolean;\n` +
     `};\n` +
     `export type GeneratedWidgetStreamAgentEntry = {\n` +

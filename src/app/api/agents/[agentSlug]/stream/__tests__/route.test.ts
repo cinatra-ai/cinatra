@@ -72,6 +72,13 @@ vi.mock("@/lib/widget-auth-audit", () => ({
 const WP_ORIGIN = "https://wp.test";
 const ACME_ORIGIN = "https://acme.test";
 
+// cinatra#408 — the per-user proof token. The route now FAIL-CLOSES BY DEFAULT,
+// so every request that must REACH dispatch (transport / SSE / contract tests)
+// carries this header; the `beforeEach` happy-path mocks make it validate
+// (member, agreeing origin/instance). Tests that target the per-user fail-closed
+// branches override the relevant mock to drive each denial.
+const CWU = "cwu_validusertoken";
+
 // Generated-manifest DATA (what the generator emits from cinatra.widgetStream
 // declarations). The wordpress entry mirrors the real one; the acme entry is a
 // synthetic third agent that proves manifest+auth routing is generic — but,
@@ -202,6 +209,11 @@ function wpRequest(body: unknown, headers: Record<string, string> = {}): Request
     headers: {
       Origin: WP_ORIGIN,
       Authorization: "Bearer test-key",
+      // cinatra#408 — the route fail-closes WITHOUT a per-user token by default,
+      // so the generic happy-path request carries it (the beforeEach mocks make
+      // it validate). A test can override this header to drive a token-less or
+      // failing per-user branch.
+      "X-Cinatra-Widget-User-Token": CWU,
       "Content-Type": "application/json",
       ...headers,
     },
@@ -354,12 +366,31 @@ describe("widget stream route — contract gate wiring", () => {
     // Acme is a valid widgetStream manifest entry with valid auth, so it passes
     // auth + contract — but it has no entry in the host relay table, so the
     // route fails visibly (pre-SSE) rather than half-opening a stream.
+    // cinatra#408 — the route now requires the per-user token by default, so the
+    // acme request carries one and the consume/agreement mocks are pointed at the
+    // acme origin/instance for THIS test (the 500 is reached AFTER the per-user
+    // block passes).
+    consumeUserWidgetTokenMock.mockReturnValueOnce({
+      ok: true,
+      claims: {
+        userId: "u_enduser",
+        orgId: "org_1",
+        siteId: "site_acme",
+        client: "acme",
+        siteOrigin: ACME_ORIGIN,
+        agentSlug: "acme-content-editor",
+        instanceId: "acme-1",
+        jti: "jti_acme",
+      },
+    });
+    resolveCanonicalInstanceForOriginMock.mockReturnValueOnce("acme-1");
     const res = await POST(
       new Request("http://localhost/api/agents/acme-content-editor/stream", {
         method: "POST",
         headers: {
           Origin: ACME_ORIGIN,
           Authorization: "Bearer acme-key",
+          "X-Cinatra-Widget-User-Token": CWU,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ contractVersion: "v1", messages: [{ role: "user", content: "edit" }] }),
@@ -510,6 +541,12 @@ describe("widget stream route — dual-path auth (cinatra#220)", () => {
       headers: {
         Origin: WP_ORIGIN,
         Authorization: `Bearer ${token}`,
+        // cinatra#408 — carry the per-user proof so the site-token-path tests
+        // that EXPECT to reach dispatch (cit_/legacy accepted) pass the now
+        // default-on per-user gate. Site-auth FAILURE tests (wrong origin /
+        // rotated key / kill-switch) deny earlier at the site gate, before the
+        // per-user block, so this header is inert for them.
+        "X-Cinatra-Widget-User-Token": CWU,
         "Content-Type": "application/json",
         ...headers,
       },
@@ -574,8 +611,8 @@ describe("widget stream route — dual-path auth (cinatra#220)", () => {
 // cinatra#408 — DUAL-TOKEN per-user validation (fail-closed runBy=userId).
 // The legacy long-lived `Authorization` key (`test-key`) carries the site/origin
 // proof; the new `X-Cinatra-Widget-User-Token` header carries the per-user proof.
+// (CWU is declared near the top — the route now fail-closes by default.)
 // ---------------------------------------------------------------------------
-const CWU = "cwu_validusertoken";
 
 function dualTokenRequest(
   headers: Record<string, string> = {},
@@ -725,9 +762,13 @@ describe("widget stream route — dual-token per-user validation (cinatra#408)",
     expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("NO user token present (back-compat): site-identity dispatch, NO override", async () => {
+  it("NO user token present + no flag (production default): 401 fail-closed, NO dispatch", async () => {
+    // cinatra#408 fail-closed-by-DEFAULT: the wordpress-content-editor entry
+    // declares NO requireUserToken (mirrors the real generated manifest). The
+    // route MUST still require the per-user cwu_ token on this interactive
+    // public_site_widget surface — a missing token can NEVER fall back to the
+    // install/site identity (the confused-deputy bypass this change closes).
     dispatchMock.mockResolvedValueOnce("ok");
-    // Legacy site token only, no X-Cinatra-Widget-User-Token header.
     const res = await POST(
       new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
         method: "POST",
@@ -740,13 +781,45 @@ describe("widget stream route — dual-token per-user validation (cinatra#408)",
       }),
       wpParams,
     );
-    expect(res.status).toBe(200);
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const arg = dispatchMock.mock.calls[0]![0] as { actorOverride?: unknown };
-    // No override → today's install/single-tenant resolver path (no regression).
-    expect(arg.actorOverride).toBeUndefined();
-    // No per-user token consumed.
+    expect(res.status).toBe(401);
+    expect(res.headers.get("X-Cinatra-Widget-Auth")).toBe("required");
+    // No carrier run / install-identity dispatch may occur on the token-less path.
+    expect(dispatchMock).not.toHaveBeenCalled();
     expect(consumeUserWidgetTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("EXPLICIT requireUserToken=false opt-out: token-less dispatch allowed (install identity, NO override)", async () => {
+    // The ONLY way to permit a token-less dispatch is an EXPLICIT, audited
+    // opt-out. This is the deliberate escape hatch — proving (a) it works and
+    // (b) it is the SOLE path to a token-less site-identity dispatch.
+    const { GENERATED_WIDGET_STREAM_AGENTS } = await import("@/lib/generated/extensions.server");
+    const entry = GENERATED_WIDGET_STREAM_AGENTS["wordpress-content-editor"] as {
+      auth: { requireUserToken?: boolean };
+    };
+    entry.auth.requireUserToken = false;
+    try {
+      dispatchMock.mockResolvedValueOnce("ok");
+      const res = await POST(
+        new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+          method: "POST",
+          headers: {
+            Origin: WP_ORIGIN,
+            Authorization: "Bearer test-key",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ contractVersion: "v1", messages: [{ role: "user", content: "edit" }] }),
+        }),
+        wpParams,
+      );
+      expect(res.status).toBe(200);
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      const arg = dispatchMock.mock.calls[0]![0] as { actorOverride?: unknown };
+      // No override → the install/single-tenant resolver path (legacy back-compat).
+      expect(arg.actorOverride).toBeUndefined();
+      expect(consumeUserWidgetTokenMock).not.toHaveBeenCalled();
+    } finally {
+      delete entry.auth.requireUserToken;
+    }
   });
 
   it("requireUserToken=true + NO user token: 401 re-login (fail-closed mandatory path)", async () => {

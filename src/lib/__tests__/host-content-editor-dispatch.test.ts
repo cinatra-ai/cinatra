@@ -307,4 +307,34 @@ describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)",
     expect(createAgentRun).not.toHaveBeenCalled();
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
   });
+
+  it("HEADLESS path (cinatra#405): NO actorOverride / NO user token is still ALLOWED under install identity", async () => {
+    // Regression guard for the #408 fail-closed-by-default route change: that
+    // change lives ONLY in the widget-stream ROUTE. The headless content-editor
+    // dispatch (cinatra#405 cinatra_run_id/agent_run_id) is host-initiated and
+    // calls THIS helper directly (via the contentEditorDispatch service), with
+    // NO actorOverride and NO user token — it legitimately runs under the
+    // install/single-tenant identity and MUST NOT be denied. Proves the route
+    // fail-closed default did not leak into / regress this path.
+    const reply = await dispatchContentEditorViaA2A({
+      agentUrl: "http://localhost:3021",
+      payload: { instanceId: "wp1", postId: "7", instructions: "headless edit" },
+      timeoutMs: 300_000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      // NOTE: no actorOverride — this is the headless install-identity path.
+    });
+
+    // The install resolver IS consulted (no override), and a carrier run is
+    // created under the install identity with the content_editor_dispatch
+    // discriminator (NOT public_site_widget) — i.e. allowed, not denied.
+    expect(resolveContentEditorIdentityForInstance).toHaveBeenCalledTimes(1);
+    expect(createAgentRun).toHaveBeenCalledTimes(1);
+    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    expect(runArg.runBy).toBe("u_admin");
+    expect(runArg.orgId).toBe("org_1");
+    expect(runArg.sourceType).toBe("content_editor_dispatch");
+    const sent = JSON.parse(lastSentText());
+    expect(sent.cinatra_run_id).toBe(runArg.id);
+    expect(reply).toBe('{"postId":"7"}');
+  });
 });
