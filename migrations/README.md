@@ -96,7 +96,7 @@ typed schema (the "Pre-structured-column schema detection and cleanup" block in
 milestones simply bump `PREV_IMAGE` to the prior published tag and re-run.
 
 The runner (single implementation:
-[`packages/cli/src/core-migrations.mjs`](../packages/cli/src/core-migrations.mjs))
+[`packages/migrations/src/core-migrations.mjs`](../packages/migrations/src/core-migrations.mjs))
 drives node-pg-migrate's programmatic `runner()` on a dedicated short-lived
 `pg` client created inside the call — never a top-level pool — and serializes
 under the same database-global advisory lock the bootstrap DDL and the

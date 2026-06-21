@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import net from "node:net";
 import pg from "pg";
 import { resolveTeardownNames } from "./teardown-config.mjs";
-import { runCoreMigrations, runNamespacedMigrations, isFreshCoreSchema } from "./core-migrations.mjs";
+import { runCoreMigrations, runNamespacedMigrations, isFreshCoreSchema } from "@cinatra-ai/migrations";
 import { syncDevApps, readDevAppsConfig } from "./dev-apps.mjs";
 import { syncCinatraDevExtensions } from "./cinatra-dev-extensions.mjs";
 import { seedLocalRegistryExtensions } from "./seed-local-registry.mjs";
@@ -663,25 +663,40 @@ function normalizeOptionalUrl(value) {
 }
 
 // True only for a real cinatra MONOREPO ROOT — a directory that carries the
-// pnpm workspace manifest AND the @cinatra-ai/cli package manifest. This is the
-// sentinel that lets `getRepoRoot()` distinguish "running inside the monorepo"
-// from "running standalone from the published, esbuild-bundled `cinatra`
-// tarball" (where the bundled file lives at e.g. node_modules/cinatra/dist/…
-// and `../../..` would otherwise point at an arbitrary node_modules ancestor).
+// pnpm workspace manifest AND the never-removed internal `@cinatra-ai/migrations`
+// package manifest. This is the sentinel that lets `getRepoRoot()` distinguish
+// "running inside the monorepo" from "running standalone from the published,
+// esbuild-bundled `cinatra` tarball" (where the bundled file lives at e.g.
+// node_modules/cinatra/dist/… and `../../..` would otherwise point at an
+// arbitrary node_modules ancestor).
+//
+// The marker deliberately does NOT gate on `packages/cli` (this CLI's own
+// package goes external at P1/P2, cinatra#402; the in-repo sentinel must survive
+// that removal) and NOT on the root package name `cinatra` alone (it collides
+// with the published `cinatra` bin package name, so a stray standalone install
+// could satisfy it). It anchors on `packages/migrations` — the internal runner
+// package that always rides the monorepo — by its exact package name.
+//
+// This also holds in the production runtime image, where this command must
+// resolve /app: `pnpm-workspace.yaml` arrives via Next's output-file tracing and
+// `packages/migrations/package.json` is copied in explicitly (Dockerfile runtime
+// stage), so getRepoRoot resolves /app exactly as the old packages/cli marker
+// did. The root `cinatra.apiVersion` is intentionally NOT a marker here: Next
+// rewrites /app/package.json in the standalone image, so it would not survive.
+//
 // Cheap, sync, git-free, and NOT satisfiable by a stray node_modules ancestor:
-// it requires BOTH files AND the exact cli package name. Any read/parse error
-// (missing file, malformed JSON) fails closed to `false`.
+// it requires the workspace file AND the migrations package's exact name. Any
+// read/parse error (missing file, malformed JSON) fails closed to `false`.
 function isCinatraRepoRoot(dir) {
   try {
     if (!existsSync(path.join(dir, "pnpm-workspace.yaml"))) {
       return false;
     }
-    const cliPkgPath = path.join(dir, "packages", "cli", "package.json");
-    if (!existsSync(cliPkgPath)) {
+    const migrationsPkgPath = path.join(dir, "packages", "migrations", "package.json");
+    if (!existsSync(migrationsPkgPath)) {
       return false;
     }
-    const pkg = JSON.parse(readFileSync(cliPkgPath, "utf8"));
-    return pkg?.name === "@cinatra-ai/cli";
+    return JSON.parse(readFileSync(migrationsPkgPath, "utf8"))?.name === "@cinatra-ai/migrations";
   } catch {
     return false;
   }
@@ -716,7 +731,7 @@ function findCinatraRepoRootUpward(fromDir) {
 //   prior one-line module-relative implementation.
 //
 //   STANDALONE (published `cinatra` tarball, esbuild-bundled): the candidate is
-//   NOT a cinatra root (no packages/cli/package.json beside it), so we resolve
+//   NOT a cinatra root (no packages/migrations/package.json beside it), so we resolve
 //   the operator's actual checkout in priority order, and if we cannot find a
 //   valid one we FAIL with a clear, actionable message instead of silently
 //   returning a wrong path (which previously made `collectEnvironment` read a
@@ -739,7 +754,7 @@ function getRepoRoot() {
     if (!isCinatraRepoRoot(resolved)) {
       throw new Error(
         `CINATRA_REPO_ROOT="${envOverride}" (resolved to ${resolved}) is not a cinatra checkout ` +
-          `(missing pnpm-workspace.yaml or packages/cli/package.json). Point it at the root of a cloned cinatra repo.`,
+          `(missing pnpm-workspace.yaml or packages/migrations/package.json). Point it at the root of a cloned cinatra repo.`,
       );
     }
     return resolved;

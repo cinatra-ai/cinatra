@@ -54,6 +54,8 @@ let standaloneBin;
 let outsideCwd;
 /** @type {string} */
 let bogusRepo;
+/** @type {string} */
+let runtimeImageDir;
 
 beforeAll(() => {
   sandbox = mkdtempSync(path.join(os.tmpdir(), "cinatra-standalone-"));
@@ -61,7 +63,8 @@ beforeAll(() => {
   // Reproduce the published-install layout:
   //   <sandbox>/lib/node_modules/cinatra/{src,bin,package.json}
   // so `../../..` from src/index.mjs === <sandbox>/lib/node_modules, which is
-  // NOT a cinatra root (no pnpm-workspace.yaml / packages/cli/package.json).
+  // NOT a cinatra root (no pnpm-workspace.yaml / packages/migrations marker /
+  // root cinatra.apiVersion — the cinatra#403 checkout sentinel triad).
   const installDir = path.join(sandbox, "lib", "node_modules", "cinatra");
   mkdirSync(installDir, { recursive: true });
   cpSync(CLI_SRC_DIR, path.join(installDir, "src"), { recursive: true });
@@ -86,6 +89,27 @@ beforeAll(() => {
   // A dir that exists but is NOT a cinatra checkout (for the bad-override case).
   bogusRepo = path.join(sandbox, "not-a-checkout");
   mkdirSync(bogusRepo, { recursive: true });
+
+  // Reproduce the PRODUCTION RUNTIME IMAGE /app layout (cinatra#403): a Next
+  // standalone root carrying `pnpm-workspace.yaml` (arrives via Next output-file
+  // tracing) + an explicitly-copied `packages/migrations/package.json` (the
+  // checkout sentinel marker), a Next-rewritten MINIMAL root package.json with
+  // NO `cinatra` block, and NO `packages/cli`-name marker. The checkout sentinel
+  // must STILL resolve this as a valid root so `cinatra db migrate` / `setup
+  // prod` work in the image. This is the regression guard for the sentinel
+  // moving off the `packages/cli` marker.
+  runtimeImageDir = path.join(sandbox, "runtime-image");
+  mkdirSync(path.join(runtimeImageDir, "packages", "migrations"), { recursive: true });
+  writeFileSync(path.join(runtimeImageDir, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
+  writeFileSync(
+    path.join(runtimeImageDir, "packages", "migrations", "package.json"),
+    JSON.stringify({ name: "@cinatra-ai/migrations", version: "0.0.0" }),
+  );
+  // Next's standalone package.json — minimal, NO cinatra.apiVersion block.
+  writeFileSync(
+    path.join(runtimeImageDir, "package.json"),
+    JSON.stringify({ name: "cinatra", version: "0.0.0", private: true }),
+  );
 });
 
 afterAll(() => {
@@ -167,6 +191,19 @@ describe("standalone getRepoRoot — resolves the operator's real checkout", () 
     // Run from packages/cli (a subdir of the real root) so the upward walk has
     // to climb to find the marker — exercising findCinatraRepoRootUpward.
     const res = runStandaloneStatus({ cwd: CLI_PKG_DIR });
+    const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    expect(out).not.toMatch(ROOT_GUIDANCE);
+    expect(out).not.toMatch(/is not a cinatra checkout/i);
+    expect(out).toMatch(PAST_ROOT_SYMPTOM);
+  });
+
+  it("CINATRA_REPO_ROOT at a PRODUCTION RUNTIME IMAGE /app layout → resolves (cinatra#403 sentinel guard)", () => {
+    // The image has pnpm-workspace.yaml + packages/migrations/package.json but
+    // NO packages/cli-name marker and a Next-minimal root package.json (no
+    // cinatra block). The post-#403 sentinel anchors on the migrations package
+    // name, so it resolves — exactly as the old packages/cli marker did, which
+    // is what keeps `cinatra db migrate` / `setup prod` working in the image.
+    const res = runStandaloneStatus({ cwd: outsideCwd, env: { CINATRA_REPO_ROOT: runtimeImageDir } });
     const out = `${res.stdout ?? ""}${res.stderr ?? ""}`;
     expect(out).not.toMatch(ROOT_GUIDANCE);
     expect(out).not.toMatch(/is not a cinatra checkout/i);

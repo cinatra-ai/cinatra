@@ -36,9 +36,6 @@ importers:
       '@cinatra-ai/agents':
         specifier: workspace:*
         version: link:packages/agents
-      '@cinatra-ai/cli':
-        specifier: workspace:*
-        version: link:packages/cli
       '@cinatra-ai/connectors':
         specifier: workspace:*
         version: link:packages/connectors
@@ -60,6 +57,9 @@ importers:
       '@cinatra-ai/mcp-server':
         specifier: workspace:*
         version: link:packages/mcp-server
+      '@cinatra-ai/migrations':
+        specifier: workspace:*
+        version: link:packages/migrations
       '@cinatra-ai/notifications':
         specifier: workspace:*
         version: link:packages/notifications
@@ -1551,15 +1551,15 @@ importers:
       '@cinatra-ai/connectors-catalog':
         specifier: workspace:*
         version: link:../connectors-catalog
+      '@cinatra-ai/migrations':
+        specifier: workspace:*
+        version: link:../migrations
       '@cinatra-ai/skills':
         specifier: workspace:*
         version: link:../skills
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
-      node-pg-migrate:
-        specifier: 8.0.4
-        version: 8.0.4(@types/pg@8.20.0)(pg@8.21.0)
       pacote:
         specifier: ^21.5.1
         version: 21.5.1
@@ -1820,6 +1820,19 @@ importers:
       recharts:
         specifier: ^3.8.1
         version: 3.8.1(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.7)(react@19.2.6)(redux@5.0.1)
+
+  packages/migrations:
+    dependencies:
+      node-pg-migrate:
+        specifier: 8.0.4
+        version: 8.0.4(@types/pg@8.20.0)(pg@8.21.0)
+      pg:
+        specifier: ^8.21.0
+        version: 8.21.0
+    devDependencies:
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/notifications:
     dependencies:

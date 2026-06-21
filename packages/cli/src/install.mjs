@@ -303,12 +303,18 @@ function composeAvailable() {
 // Target-dir resolution + checkout state.
 // ---------------------------------------------------------------------------
 
+// A real cinatra checkout — the pnpm workspace file AND the never-removed
+// internal `@cinatra-ai/migrations` package manifest (by exact name). Mirrors
+// `isCinatraRepoRoot` in index.mjs: it does NOT gate on `packages/cli` (that
+// package goes external at P1/P2, cinatra#402, and this sentinel must survive
+// its removal) nor on the bin-colliding root package name `cinatra`. Any
+// read/parse error fails closed.
 function isCinatraCheckout(dir) {
   try {
     if (!existsSync(path.join(dir, "pnpm-workspace.yaml"))) return false;
-    const cliPkg = path.join(dir, "packages", "cli", "package.json");
-    if (!existsSync(cliPkg)) return false;
-    return JSON.parse(readFileSync(cliPkg, "utf8"))?.name === "@cinatra-ai/cli";
+    const migrationsPkg = path.join(dir, "packages", "migrations", "package.json");
+    if (!existsSync(migrationsPkg)) return false;
+    return JSON.parse(readFileSync(migrationsPkg, "utf8"))?.name === "@cinatra-ai/migrations";
   } catch {
     return false;
   }
@@ -617,7 +623,7 @@ export async function runInstall(argv = [], { log = console.log } = {}) {
   if (!isCinatraCheckout(targetDir)) {
     throw new Error(
       `After cloning, ${targetDir} is not a valid cinatra checkout ` +
-        `(missing pnpm-workspace.yaml or packages/cli/package.json). The --ref "${opts.ref}" may be invalid.`,
+        `(missing pnpm-workspace.yaml or packages/migrations/package.json). The --ref "${opts.ref}" may be invalid.`,
     );
   }
   log(`✓ Cinatra checked out at ${targetDir} @ ${resolvedSha} (ref: ${opts.ref}).`);

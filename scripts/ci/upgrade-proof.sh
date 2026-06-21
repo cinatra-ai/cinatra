@@ -11,7 +11,7 @@ set -euo pipefail
 # WHY this is the real engineering (not just another boot gate): a fresh
 # database is the easy case — the bootstrap DDL emits the CURRENT shape and
 # the migration chain is LEDGER-FAKED (recorded, never executed; see
-# packages/cli/src/core-migrations.mjs `isFreshCoreSchema`). The path that can
+# packages/migrations/src/core-migrations.mjs `isFreshCoreSchema`). The path that can
 # actually lose user data is the EXISTING deployment: the bootstrap DDL runs
 # additively over real tables and then the migration chain EXECUTES its
 # transformations (drops/renames/retypes/backfills) against rows that already

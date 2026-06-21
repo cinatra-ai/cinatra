@@ -174,7 +174,8 @@ const nextConfig: NextConfig = {
     // migration modules at runtime via `await import(\`file://...\`)` over
     // migrations/core/ — that dynamic import must stay native Node, never
     // bundled. Output tracing still copies the package into the standalone
-    // image (it is statically imported via @cinatra-ai/cli/core-migrations).
+    // image (it is statically imported via @cinatra-ai/migrations, which the
+    // host pulls in through src/lib/core-migrations.ts).
     "node-pg-migrate",
   ],
   transpilePackages: [

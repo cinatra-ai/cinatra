@@ -102,9 +102,21 @@ COPY --from=build /app/public ./public
 #   docker exec <cid> node packages/cli/bin/cinatra.mjs setup prod
 COPY --from=build /app/packages/cli ./packages/cli
 
+# The migration runner package (@cinatra-ai/migrations, cinatra#403), which the
+# CLI imports for `db migrate` / `setup`. Copied explicitly for TWO reasons:
+#   1. `getRepoRoot()`'s checkout sentinel (packages/cli/src/index.mjs) anchors
+#      on `packages/migrations/package.json` (the never-removed internal marker
+#      that survives packages/cli going external at P1/P2). Without this dir the
+#      sentinel fails and every repo-bound CLI command in the image errors.
+#   2. It carries the runner source the CLI's `@cinatra-ai/migrations` import
+#      resolves to (its node-pg-migrate + pg deps still ride the traced
+#      standalone node_modules below).
+COPY --from=build /app/packages/migrations ./packages/migrations
+
 # Core schema migrations (node-pg-migrate modules, cinatra#116). The boot pass
 # and `cinatra db migrate` resolve migrations/core/ relative to /app; the
-# node-pg-migrate package itself rides the traced standalone node_modules.
+# @cinatra-ai/migrations runner + its node-pg-migrate dep ride the traced
+# standalone node_modules.
 COPY --from=build /app/migrations ./migrations
 
 # Self-contained Better Auth migration runner (see build stage). The CLI prefers

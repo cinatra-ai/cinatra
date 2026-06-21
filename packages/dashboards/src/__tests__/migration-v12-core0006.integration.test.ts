@@ -2,7 +2,7 @@
  * Real-Postgres integration proof for the cinatra#327 core__0006 data migration
  * AFTER the robust-B rewrite (owner decision eng#206: a ONE-SHOT TOTAL
  * normalizer; NO backward compat; the strict validator stays strict). Drives the
- * REPO's ACTUAL migration runner (`packages/cli/src/core-migrations.mjs` →
+ * REPO's ACTUAL migration runner (`packages/migrations/src/core-migrations.mjs` →
  * `runCoreMigrations`, the same node-pg-migrate runner production boot uses)
  * against a live Postgres, executing the REAL core__0006 module — so the SQL +
  * JS-normalize behavior the unit suite can't reach is verified end-to-end at the
@@ -192,7 +192,7 @@ describe.skipIf(!RUN_IT)("core__0006 dashboards migration (real Postgres, cinatr
   let runnerRoot: string;
 
   beforeAll(async () => {
-    ({ runCoreMigrations } = await import(path.join(REPO_ROOT, "packages/cli/src/core-migrations.mjs")));
+    ({ runCoreMigrations } = await import(path.join(REPO_ROOT, "packages/migrations/src/core-migrations.mjs")));
     // Runner root: migrations/core holding ONLY the 0006 module (symlink).
     runnerRoot = mkdtempSync(path.join(os.tmpdir(), "it-mig327-"));
     mkdirSync(path.join(runnerRoot, "migrations", "core"), { recursive: true });

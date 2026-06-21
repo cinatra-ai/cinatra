@@ -1034,6 +1034,7 @@ jobs:
           scripts/extensions/__tests__/strip-comments.test.mjs
           scripts/extensions/__tests__/vendor-extension-primitives.test.mjs
           packages/cli/src/__tests__
+          packages/migrations/src
           src/lib/__tests__/extension-host-context.test.ts
           src/lib/__tests__/extension-mcp-registry.test.ts
           src/app/campaigns/__tests__/linkedin-actions-extension-gate.test.ts

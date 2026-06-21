@@ -275,6 +275,10 @@ export default defineConfig({
       "scripts/__tests__/**/*.test.{ts,mjs}",
       // CLI dev-marketplace plugin sync (dependency-injected git; no real git).
       "packages/cli/src/__tests__/**/*.test.{ts,mjs}",
+      // Schema-migration runner contract (cinatra#403: relocated from
+      // packages/cli to the internal @cinatra-ai/migrations package; pure
+      // filename/sequence preflight + assertion helpers, no DB).
+      "packages/migrations/src/**/__tests__/**/*.test.{ts,mjs}",
       // SDK ABI contract: dependency-normalization shim (pure; no IO).
       "packages/sdk-extensions/src/**/__tests__/**/*.test.{ts,tsx}",
       // SDK Nango connect surfaces: orphaned Connect UI cleanup contract (#48)

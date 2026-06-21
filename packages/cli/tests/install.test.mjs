@@ -279,14 +279,21 @@ describe("runInstall — from zero (local remote, --no-infra --no-setup)", () =>
     // origin so `git clone file://…` exercises the real clone path.
     const src = path.join(sandbox, "src");
     mkdirSync(path.join(src, "packages", "cli"), { recursive: true });
-    // The isCinatraCheckout sentinels: pnpm-workspace.yaml + cli package.json
-    // whose name is @cinatra-ai/cli.
+    mkdirSync(path.join(src, "packages", "migrations"), { recursive: true });
+    // The isCinatraCheckout sentinel (cinatra#403): pnpm-workspace.yaml + the
+    // internal @cinatra-ai/migrations package manifest by exact name.
+    // (packages/cli stays in-repo at P0 and is asserted-present below, but it is
+    // NO LONGER the checkout marker — it goes external at P1/P2.)
     writeFileSync(path.join(src, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n");
     writeFileSync(
       path.join(src, "packages", "cli", "package.json"),
       JSON.stringify({ name: "@cinatra-ai/cli", version: "0.0.0" }),
     );
-    // A package.json with an EMPTY devExtensions map → sync skips cleanly.
+    writeFileSync(
+      path.join(src, "packages", "migrations", "package.json"),
+      JSON.stringify({ name: "@cinatra-ai/migrations", version: "0.0.0" }),
+    );
+    // A root package.json with an EMPTY devExtensions map → sync skips cleanly.
     writeFileSync(
       path.join(src, "package.json"),
       JSON.stringify({ name: "cinatra-host", cinatra: { devExtensions: {} } }),

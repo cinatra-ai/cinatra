@@ -1,9 +1,9 @@
 // Boot-side policy wrapper around the core migration runner (cinatra#116).
 //
-// The runner implementation lives in `@cinatra-ai/cli/core-migrations`
-// (packages/cli/src/core-migrations.mjs) — ONE source of truth shared with
-// `cinatra setup` and `cinatra db migrate`, so the runner options can never
-// drift between boot and ops. This module only adds the boot policy:
+// The runner implementation lives in `@cinatra-ai/migrations`
+// (packages/migrations/src/core-migrations.mjs) — ONE source of truth shared
+// with `cinatra setup` and `cinatra db migrate`, so the runner options can
+// never drift between boot and ops. This module only adds the boot policy:
 //
 //   - missing SUPABASE_DB_URL          -> skip (fresh install pre-setup-wizard)
 //   - bootstrap DDL fails / DB down    -> warn + skip (parity with today's
@@ -20,7 +20,7 @@
 // Deliberately NOT importing "server-only": vitest unit tests import this
 // module directly.
 
-import { runCoreMigrations } from "@cinatra-ai/cli/core-migrations";
+import { runCoreMigrations } from "@cinatra-ai/migrations";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";

@@ -1,0 +1,22 @@
+{
+  "name": "@cinatra-ai/migrations",
+  "description": "The canonical schema-migration runner (node-pg-migrate, driven programmatically) shared by the CLI, the app boot pass, and the extension migration host.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/core-migrations.mjs",
+  "exports": {
+    ".": "./src/core-migrations.mjs",
+    "./core-migrations": "./src/core-migrations.mjs"
+  },
+  "scripts": {
+    "test": "vitest"
+  },
+  "dependencies": {
+    "node-pg-migrate": "8.0.4",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
+  }
+}

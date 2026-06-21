@@ -91,7 +91,7 @@ export const MIGRATION_SQL_RE = /^migrations\/(\d{4})_([a-z0-9][a-z0-9-]*)\.sql$
  * Runner-module artifacts (node-pg-migrate, cinatra#116): the artifact form a
  * NEW destructive change must ship. The `core__` prefix is the per-source
  * ledger namespace (#115). Capture group 1 = the NNNN sequence number.
- * Mirrors CORE_MIGRATION_FILE_RE in packages/cli/src/core-migrations.mjs.
+ * Mirrors CORE_MIGRATION_FILE_RE in packages/migrations/src/core-migrations.mjs.
  */
 export const MIGRATION_MODULE_RE = /^migrations\/core\/core__(\d{4})_([a-z0-9][a-z0-9-]*)\.mjs$/;
 

@@ -7,17 +7,14 @@
   "bin": {
     "cinatra": "./bin/cinatra.mjs"
   },
-  "exports": {
-    "./core-migrations": "./src/core-migrations.mjs"
-  },
   "scripts": {
     "test": "vitest"
   },
   "dependencies": {
     "@cinatra-ai/connectors-catalog": "workspace:*",
+    "@cinatra-ai/migrations": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "node-pg-migrate": "8.0.4",
     "pacote": "^21.5.1",
     "pg": "^8.21.0",
     "semver": "^7.8.4"
