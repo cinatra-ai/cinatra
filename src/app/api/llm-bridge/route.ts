@@ -966,6 +966,13 @@ export async function POST(req: Request): Promise<Response> {
                 runId: runForPorts.id,
                 runBy: runForPorts.runBy!,
                 orgId: runForPorts.orgId!,
+                // cinatra#408 — LOAD-BEARING: the carrier run's source_type
+                // drives the resolver's platform-admin suppression. For a
+                // `public_site_widget` run this makes the actor resolve to
+                // `member` (or null), NEVER `platform_admin`, so the MCP
+                // boundary's platform-admin immediate-allow is never reached
+                // and the end-user's rights gate the write (with #409).
+                sourceType: runForPorts.sourceType,
               });
               if (!actor) return null;
               return buildLlmMcpServerToolForAgentRun(

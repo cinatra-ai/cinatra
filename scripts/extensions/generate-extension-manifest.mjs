@@ -464,6 +464,11 @@ export function validateWidgetStreamDeclaration(pkgName, ws) {
     ) {
       errors.push(`${at}.auth.requiredInstanceFields: must be an array of non-empty strings`);
     }
+    // cinatra#408 — optional per-agent "require user token" flag. Absent is
+    // valid (defaults off); when present it MUST be a boolean.
+    if ("requireUserToken" in ws.auth && typeof ws.auth.requireUserToken !== "boolean") {
+      errors.push(`${at}.auth.requireUserToken: must be a boolean when present`);
+    }
   }
   return errors;
 }
@@ -850,6 +855,11 @@ export async function buildManifest() {
           tokenConfigKey: ws.auth.tokenConfigKey,
           instancesConfigKey: ws.auth.instancesConfigKey,
           requiredInstanceFields: [...ws.auth.requiredInstanceFields],
+          // cinatra#408 — carry the optional flag through only when declared, so
+          // the generated literal stays minimal (absent === off).
+          ...(typeof ws.auth.requireUserToken === "boolean"
+            ? { requireUserToken: ws.auth.requireUserToken }
+            : {}),
         },
       };
     })
@@ -1206,6 +1216,9 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  tokenConfigKey: string;\n` +
     `  instancesConfigKey: string;\n` +
     `  requiredInstanceFields: string[];\n` +
+    `  // cinatra#408 — when true the stream route REQUIRES a per-user cwu_\n` +
+    `  // token (missing → 401 re-login). Default off (absent === false).\n` +
+    `  requireUserToken?: boolean;\n` +
     `};\n` +
     `export type GeneratedWidgetStreamAgentEntry = {\n` +
     `  resolution: ExtensionResolution;\n` +

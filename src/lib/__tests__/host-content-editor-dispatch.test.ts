@@ -251,3 +251,60 @@ describe("dispatchContentEditorViaA2A — production OBO identity (cinatra#246)"
     expect(createExternalA2AClient).not.toHaveBeenCalled();
   });
 });
+
+describe("dispatchContentEditorViaA2A — per-user actorOverride (cinatra#408)", () => {
+  it("uses the override {runBy, orgId, sourceType} and SKIPS the install resolver entirely", async () => {
+    const reply = await dispatchContentEditorViaA2A({
+      agentUrl: "http://localhost:3021",
+      payload: { instanceId: "wp-1", postId: "7", instructions: "edit" },
+      timeoutMs: 300_000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      // The route passes the install anchors AND the override; the override wins.
+      instancesConfigKey: "wordpress",
+      origin: "https://wp.test",
+      instanceId: "wp-1",
+      actorOverride: {
+        runBy: "u_enduser",
+        orgId: "org_1",
+        instanceId: "wp-1",
+        sourceType: "public_site_widget",
+      },
+    });
+
+    // The install/single-tenant resolver MUST NOT be consulted on this path.
+    expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
+
+    expect(createAgentRun).toHaveBeenCalledTimes(1);
+    const runArg = createAgentRun.mock.calls[0][0] as Record<string, unknown>;
+    // runBy is the END USER, never the install's service identity (org admin).
+    expect(runArg.runBy).toBe("u_enduser");
+    expect(runArg.orgId).toBe("org_1");
+    expect(runArg.sourceType).toBe("public_site_widget");
+    expect(runArg.templateId).toBe("tmpl_wp");
+
+    const sent = JSON.parse(lastSentText());
+    expect(sent.cinatra_run_id).toBe(runArg.id);
+    expect(reply).toBe('{"postId":"7"}');
+  });
+
+  it("does NOT downgrade to anonymous when the template is missing (throws instead — no fallback)", async () => {
+    readAgentTemplateByPackageName.mockResolvedValue(null);
+    await expect(
+      dispatchContentEditorViaA2A({
+        agentUrl: "http://localhost:3021",
+        payload: { postId: "7" },
+        timeoutMs: 300_000,
+        packageName: "@cinatra-ai/wordpress-agent",
+        actorOverride: {
+          runBy: "u_enduser",
+          orgId: "org_1",
+          instanceId: "wp-1",
+          sourceType: "public_site_widget",
+        },
+      }),
+    ).rejects.toThrow(/no agent template installed/);
+    // No carrier run, but crucially NO anonymous dispatch either.
+    expect(createAgentRun).not.toHaveBeenCalled();
+    expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
+  });
+});

@@ -19,7 +19,16 @@ export type WidgetAuthAuditEvent =
   | "consent_denied" // user not a member, or explicit deny
   | "code_issued"
   | "redeem_success"
-  | "redeem_failure";
+  | "redeem_failure"
+  // cinatra#408 stream-side dual-token validation (CHILD 3). The stream route
+  // emits exactly one of these per per-user widget request: an AUTHORIZED event
+  // when the `cwu_` validates and a per-user OBO override is minted (this marks
+  // the authorization DECISION and precedes the actual A2A dispatch — the
+  // carrier run's own lifecycle is the run-outcome trail, so the name does not
+  // imply the dispatch succeeded), or a reject (with a reason CODE — never the
+  // failing secret) on any fail-closed deny.
+  | "stream_user_dispatch_authorized"
+  | "stream_user_token_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

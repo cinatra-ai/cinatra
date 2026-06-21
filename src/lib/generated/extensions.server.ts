@@ -225,6 +225,9 @@ export type GeneratedWidgetStreamAuth = {
   tokenConfigKey: string;
   instancesConfigKey: string;
   requiredInstanceFields: string[];
+  // cinatra#408 — when true the stream route REQUIRES a per-user cwu_
+  // token (missing → 401 re-login). Default off (absent === false).
+  requireUserToken?: boolean;
 };
 export type GeneratedWidgetStreamAgentEntry = {
   resolution: ExtensionResolution;

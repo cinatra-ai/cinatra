@@ -15,11 +15,23 @@ const {
   readConnectorConfigMock,
   readMetadataValueMock,
   runPostgresQueriesSyncMock,
+  consumeUserWidgetTokenMock,
+  resolveCanonicalInstanceForOriginMock,
+  resolveOrgRoleForUserMock,
+  emitWidgetAuthAuditMock,
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
   readMetadataValueMock: vi.fn(),
   runPostgresQueriesSyncMock: vi.fn(),
+  // cinatra#408 dual-token seams (the #407 verify surface + the membership
+  // gate). Mocked at the route's call boundary so the test exercises the route's
+  // AGREEMENT / fail-closed / override-build / resolver-skip logic, not the
+  // (separately, exhaustively #407-tested) token-consume internals.
+  consumeUserWidgetTokenMock: vi.fn(),
+  resolveCanonicalInstanceForOriginMock: vi.fn(),
+  resolveOrgRoleForUserMock: vi.fn(),
+  emitWidgetAuthAuditMock: vi.fn(),
 }));
 
 // The single host-side relay seam — the route awaits this and maps its returned
@@ -42,6 +54,19 @@ vi.mock("@/lib/postgres-schema-init", () => ({
 vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: runPostgresQueriesSyncMock,
   quotePostgresIdentifier: (v: string) => `"${v}"`,
+}));
+// cinatra#408 — the #407 user-token verify surface + the canonical instance
+// re-resolver, mocked at the route boundary.
+vi.mock("@/lib/widget-user-auth", () => ({
+  consumeUserWidgetToken: consumeUserWidgetTokenMock,
+  resolveCanonicalInstanceForOrigin: resolveCanonicalInstanceForOriginMock,
+}));
+// The up-front org-membership gate (resolves a role, undefined = non-member).
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: resolveOrgRoleForUserMock,
+}));
+vi.mock("@/lib/widget-auth-audit", () => ({
+  emitWidgetAuthAudit: emitWidgetAuthAuditMock,
 }));
 
 const WP_ORIGIN = "https://wp.test";
@@ -206,6 +231,29 @@ beforeEach(() => {
   tokenNowMs = Date.now();
   runPostgresQueriesSyncMock.mockReset();
   runPostgresQueriesSyncMock.mockImplementation(brokerRunQueries);
+
+  // cinatra#408 dual-token defaults — happy path: a valid cwu_ that AGREES with
+  // the site token (origin/agent/instance) and a user who IS an org member.
+  // Individual tests override these to drive each fail-closed branch.
+  consumeUserWidgetTokenMock.mockReset();
+  consumeUserWidgetTokenMock.mockReturnValue({
+    ok: true,
+    claims: {
+      userId: "u_enduser",
+      orgId: "org_1",
+      siteId: "site_1",
+      client: "wordpress",
+      siteOrigin: WP_ORIGIN,
+      agentSlug: "wordpress-content-editor",
+      instanceId: "wp-1",
+      jti: "jti_1",
+    },
+  });
+  resolveCanonicalInstanceForOriginMock.mockReset();
+  resolveCanonicalInstanceForOriginMock.mockReturnValue("wp-1");
+  resolveOrgRoleForUserMock.mockReset();
+  resolveOrgRoleForUserMock.mockResolvedValue("org_member");
+  emitWidgetAuthAuditMock.mockReset();
 });
 
 describe("widget stream route — manifest-driven resolution + auth", () => {
@@ -519,5 +567,226 @@ describe("widget stream route — dual-path auth (cinatra#220)", () => {
     const res = await POST(streamRequestWith("test-key"), wpParams);
     expect(res.status).toBe(401);
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#408 — DUAL-TOKEN per-user validation (fail-closed runBy=userId).
+// The legacy long-lived `Authorization` key (`test-key`) carries the site/origin
+// proof; the new `X-Cinatra-Widget-User-Token` header carries the per-user proof.
+// ---------------------------------------------------------------------------
+const CWU = "cwu_validusertoken";
+
+function dualTokenRequest(
+  headers: Record<string, string> = {},
+  body?: unknown,
+): Request {
+  return new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+    method: "POST",
+    headers: {
+      Origin: WP_ORIGIN,
+      Authorization: "Bearer test-key", // site proof (legacy path, accepted)
+      "X-Cinatra-Widget-User-Token": CWU, // per-user proof
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(
+      body ?? { contractVersion: "v1", messages: [{ role: "user", content: "edit the title" }] },
+    ),
+  });
+}
+
+describe("widget stream route — dual-token per-user validation (cinatra#408)", () => {
+  it("authed member: dispatches with an actorOverride runBy=userId, sourceType=public_site_widget, instance pinned", async () => {
+    dispatchMock.mockResolvedValueOnce("ok");
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(200);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const arg = dispatchMock.mock.calls[0]![0] as {
+      actorOverride?: { runBy: string; orgId: string; instanceId: string; sourceType: string };
+      payload: Record<string, unknown>;
+    };
+    expect(arg.actorOverride).toEqual({
+      runBy: "u_enduser",
+      orgId: "org_1",
+      instanceId: "wp-1",
+      sourceType: "public_site_widget",
+    });
+    // The write target in the payload is the SERVER-DERIVED token instance.
+    expect(arg.payload.instanceId).toBe("wp-1");
+    // An authorization audit event is emitted (the per-user OBO override was
+    // minted; the event marks the decision, not dispatch success).
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_dispatch_authorized",
+      expect.objectContaining({ actor: "u_enduser", orgId: "org_1" }),
+    );
+  });
+
+  it("invalid/expired cwu_: 401 with X-Cinatra-Widget-Auth: required, NO run, resolver-skip", async () => {
+    consumeUserWidgetTokenMock.mockReturnValueOnce({ ok: false, reason: "expired" });
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(401);
+    expect(res.headers.get("X-Cinatra-Widget-Auth")).toBe("required");
+    // FAIL-CLOSED: no dispatch (so no carrier run), and the reject is audited.
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_token_rejected",
+      expect.objectContaining({ reason: "expired" }),
+    );
+  });
+
+  it("not_found cwu_ (tampered token): 401, no run", async () => {
+    consumeUserWidgetTokenMock.mockReturnValueOnce({ ok: false, reason: "not_found" });
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(401);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("origin disagreement (cwu_ siteOrigin ≠ verified cit_ origin): 401, no run", async () => {
+    // The token validates but is bound to a DIFFERENT site than the request.
+    consumeUserWidgetTokenMock.mockReturnValueOnce({
+      ok: true,
+      claims: {
+        userId: "u_enduser",
+        orgId: "org_1",
+        siteId: "site_2",
+        client: "wordpress",
+        siteOrigin: "https://other.test", // ≠ WP_ORIGIN (the verified cit_ origin)
+        agentSlug: "wordpress-content-editor",
+        instanceId: "wp-1",
+        jti: "jti_1",
+      },
+    });
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(401);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_token_rejected",
+      expect.objectContaining({ reason: "origin_disagreement" }),
+    );
+  });
+
+  it("instance re-assert fails (zero/multiple origin rows): 401, no run", async () => {
+    resolveCanonicalInstanceForOriginMock.mockReturnValueOnce(null);
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(401);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_token_rejected",
+      expect.objectContaining({ reason: "instance_binding_failed" }),
+    );
+  });
+
+  it("non-member (valid cwu_ but not in claims.org): 401, no run, no dispatch", async () => {
+    resolveOrgRoleForUserMock.mockResolvedValueOnce(undefined); // non-member
+    const res = await POST(dualTokenRequest(), wpParams);
+    expect(res.status).toBe(401);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_token_rejected",
+      expect.objectContaining({ reason: "not_org_member" }),
+    );
+  });
+
+  it("forged body.context.instanceId (≠ token instance): 401, no run", async () => {
+    const res = await POST(
+      dualTokenRequest(
+        {},
+        {
+          contractVersion: "v1",
+          messages: [{ role: "user", content: "edit" }],
+          context: { instanceId: "wp-FORGED" }, // ≠ claims.instanceId "wp-1"
+        },
+      ),
+      wpParams,
+    );
+    expect(res.status).toBe(401);
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(emitWidgetAuthAuditMock).toHaveBeenCalledWith(
+      "stream_user_token_rejected",
+      expect.objectContaining({ reason: "instance_mismatch" }),
+    );
+  });
+
+  it("matching body.context.instanceId == token instance: allowed", async () => {
+    dispatchMock.mockResolvedValueOnce("ok");
+    const res = await POST(
+      dualTokenRequest(
+        {},
+        {
+          contractVersion: "v1",
+          messages: [{ role: "user", content: "edit" }],
+          context: { instanceId: "wp-1" }, // == claims.instanceId
+        },
+      ),
+      wpParams,
+    );
+    expect(res.status).toBe(200);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("NO user token present (back-compat): site-identity dispatch, NO override", async () => {
+    dispatchMock.mockResolvedValueOnce("ok");
+    // Legacy site token only, no X-Cinatra-Widget-User-Token header.
+    const res = await POST(
+      new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+        method: "POST",
+        headers: {
+          Origin: WP_ORIGIN,
+          Authorization: "Bearer test-key",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ contractVersion: "v1", messages: [{ role: "user", content: "edit" }] }),
+      }),
+      wpParams,
+    );
+    expect(res.status).toBe(200);
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const arg = dispatchMock.mock.calls[0]![0] as { actorOverride?: unknown };
+    // No override → today's install/single-tenant resolver path (no regression).
+    expect(arg.actorOverride).toBeUndefined();
+    // No per-user token consumed.
+    expect(consumeUserWidgetTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("requireUserToken=true + NO user token: 401 re-login (fail-closed mandatory path)", async () => {
+    // Flip the per-agent policy flag on the resolved manifest entry for this test.
+    const { GENERATED_WIDGET_STREAM_AGENTS } = await import("@/lib/generated/extensions.server");
+    const entry = GENERATED_WIDGET_STREAM_AGENTS["wordpress-content-editor"] as {
+      auth: { requireUserToken?: boolean };
+    };
+    entry.auth.requireUserToken = true;
+    try {
+      const res = await POST(
+        new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+          method: "POST",
+          headers: {
+            Origin: WP_ORIGIN,
+            Authorization: "Bearer test-key",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ contractVersion: "v1", messages: [{ role: "user", content: "edit" }] }),
+        }),
+        wpParams,
+      );
+      expect(res.status).toBe(401);
+      expect(res.headers.get("X-Cinatra-Widget-Auth")).toBe("required");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    } finally {
+      delete entry.auth.requireUserToken;
+    }
+  });
+
+  it("CORS: OPTIONS allow-headers includes X-Cinatra-Widget-User-Token; expose includes X-Cinatra-Widget-Auth", async () => {
+    const res = await OPTIONS(
+      new Request("http://localhost/api/agents/wordpress-content-editor/stream", {
+        method: "OPTIONS",
+        headers: { Origin: WP_ORIGIN },
+      }),
+      wpParams,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Access-Control-Allow-Headers")).toContain("X-Cinatra-Widget-User-Token");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toContain("X-Cinatra-Widget-Auth");
   });
 });

@@ -373,12 +373,19 @@ export function buildWidgetStreamCorsHeaders(allowedOrigin: string): Record<stri
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    // `X-Cinatra-Widget-User-Token` is the per-user identity proof the widget
+    // sends ALONGSIDE the site `Authorization` token (cinatra#408 dual-token).
+    // A cross-origin browser fetch may only send a custom request header named
+    // here, so the preflight must allow it for the per-user login path to work.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Cinatra-Widget-User-Token",
     "Access-Control-Allow-Credentials": "false",
     // The local widget reads `Deprecation`/`Sunset` (emitted on the legacy
-    // long-lived path) to surface a one-line admin notice — a cross-origin
-    // browser fetch can only read response headers named here (cinatra#220).
-    "Access-Control-Expose-Headers": "Deprecation, Sunset",
+    // long-lived path) to surface a one-line admin notice, and
+    // `X-Cinatra-Widget-Auth` (emitted on a fail-closed per-user 401, cinatra#408)
+    // to distinguish "re-login required" from a generic error and swap back to
+    // the login window — a cross-origin browser fetch can only READ response
+    // headers named here (cinatra#220).
+    "Access-Control-Expose-Headers": "Deprecation, Sunset, X-Cinatra-Widget-Auth",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
