@@ -71,7 +71,11 @@ import { buildMcpPublicBaseUrlRow } from "./mcp-public-base-url-shape.mjs";
 // Stage-1). The descriptors are the single source of truth for "what commands
 // exist"; `runCli` dispatches through `matchDescriptor` onto the id-keyed
 // HANDLERS map below (behavior-preserving migration of the old if-chain).
-import { COMMAND_DESCRIPTORS, matchDescriptor } from "./command-table.mjs";
+import {
+  COMMAND_DESCRIPTORS,
+  matchDescriptor,
+  hasHelpFlag,
+} from "./command-table.mjs";
 // Manifest-driven dev-CLI module discovery (local leaf module — static import
 // is extension-empty safe; the actual extension reach stays a lazy import()).
 import { loadDevCliModule } from "./dev-cli-modules.mjs";
@@ -540,6 +544,32 @@ Commands:
                     --registry-url <url>    Verdaccio registry URL override.
                     --registry-token <tok>  Verdaccio token override.
 `);
+}
+
+/**
+ * Print a single matched subcommand's usage (synopsis + summary) and nothing
+ * else. This is the body of the `<cmd> --help|-h` short-circuit in `runCli`: it
+ * runs INSTEAD of the handler, so no side effect occurs. The text is
+ * deliberately minimal (synopsis + one-line summary + a pointer to the full
+ * banner) — it does not need to enumerate every flag, it only must NOT execute.
+ *
+ * For a hidden / removed descriptor (e.g. the dispatch-only `setup` no-mode
+ * entry or the removed `mcp tunnel` stub) there is no public command to
+ * advertise, so we fall back to the full banner rather than print a synopsis
+ * for something the help surface intentionally does not list.
+ *
+ * @param {import("./command-table.mjs").CommandDescriptor} descriptor
+ */
+function printCommandHelp(descriptor) {
+  if (descriptor.hidden || !descriptor.summary) {
+    // No standalone help row for hidden/summary-less descriptors — show the
+    // full command list instead of inventing a synopsis.
+    printHelp();
+    return;
+  }
+  const command = descriptor.path.join(" ");
+  console.log(`Usage: cinatra ${command}\n\n  ${descriptor.summary}\n`);
+  console.log(`Run "cinatra --help" for the full command list and flags.`);
 }
 
 async function promptYesNo(question) {
@@ -9063,6 +9093,25 @@ export async function runCli(argv) {
 
   if (!command || command === "--help" || command === "-h") {
     printHelp();
+    return;
+  }
+
+  // Central `--help`/`-h` guard (cinatra#255 footgun). A help flag on ANY
+  // subcommand (`cinatra install --help`, `cinatra setup dev -h`, …) must print
+  // usage and exit 0 WITHOUT running the handler — the per-command parsers used
+  // to silently ignore the unknown flag, so a destructive handler (install,
+  // setup, db, clone, dev, backup, reset) would EXECUTE on `--help`. This fires
+  // BEFORE dispatch, so no side effect can occur. `matchDescriptor` keys on the
+  // leading literal tokens and ignores trailing flags, so `install --help`
+  // still resolves to the `install` descriptor. An unknown command carrying a
+  // help flag (`cinatra bogus --help`) falls back to the full banner (exit 0).
+  if (hasHelpFlag(argv)) {
+    const helpDescriptor = matchDescriptor(COMMAND_DESCRIPTORS, argv);
+    if (helpDescriptor) {
+      printCommandHelp(helpDescriptor);
+    } else {
+      printHelp();
+    }
     return;
   }
 

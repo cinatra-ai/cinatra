@@ -363,3 +363,28 @@ export function buildHelpIndex(descriptors) {
       summary: d.summary ?? "",
     }));
 }
+
+/**
+ * True when `argv` carries a help request (`--help` or `-h`) as a recognized
+ * affordance. The dispatcher uses this to SHORT-CIRCUIT to a usage print BEFORE
+ * any handler (and therefore any side effect) runs — this is the guard that
+ * stops `cinatra install --help` from kicking off a real from-zero install
+ * (cinatra#255 footgun: `--help` was an unknown flag the per-command parsers
+ * silently ignored, so the destructive handler executed).
+ *
+ * Scanning stops at the conventional `--` end-of-flags separator, so a literal
+ * `-h` / `--help` that a future command might accept as a positional VALUE
+ * (after `--`) is not mistaken for a help request. A `--help`/`-h` BEFORE `--`
+ * is always treated as help (the conventional meaning, and no current command
+ * takes either token as a value).
+ *
+ * @param {string[]} argv
+ * @returns {boolean}
+ */
+export function hasHelpFlag(argv) {
+  for (const token of argv) {
+    if (token === "--") break; // end-of-flags: anything after is positional.
+    if (token === "--help" || token === "-h") return true;
+  }
+  return false;
+}
