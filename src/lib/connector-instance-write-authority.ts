@@ -73,23 +73,60 @@ import { logAuditEvent } from "@/lib/authz/audit";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { readWordPressInstanceById } from "@/lib/wordpress-api";
 import { getDrupalAPISettings } from "@/lib/drupal-api";
+import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
 /**
  * The CLOSED set of CMS content connectors this authority gates, mapping the
  * connector KIND (the connector's OWN static identity it passes) to its
- * host-bound package id. The connector never supplies a package id — it names
- * only its kind, and the host owns the kind→package mapping (codex must-fix:
- * the package whose policy is evaluated is host-bound, never caller input).
+ * CATALOG SLUG — NOT to a concrete package-name literal. The connector never
+ * supplies a package id; it names only its kind, and the host owns the
+ * kind→slug mapping. The package id is then DERIVED at resolution time from the
+ * single sanctioned connector-catalog registry (`getConnectorDescriptorBySlug`)
+ * — never named in this core file — so the package whose policy is evaluated is
+ * host-bound and registry-resolved, never caller input AND never a frozen core
+ * vendor literal (true-IoC: vendor identity is registry-declared + host-gated,
+ * not a hardcoded core constant).
  */
-const CONNECTOR_KIND_TO_PACKAGE_ID = {
-  wordpress: "@cinatra-ai/wordpress-mcp-connector",
-  drupal: "@cinatra-ai/drupal-mcp-connector",
+const CONNECTOR_KIND_TO_CATALOG_SLUG = {
+  wordpress: "wordpress-mcp-connector",
+  drupal: "drupal-mcp-connector",
 } as const;
 
-export type InstanceWriteConnectorKind = keyof typeof CONNECTOR_KIND_TO_PACKAGE_ID;
+export type InstanceWriteConnectorKind = keyof typeof CONNECTOR_KIND_TO_CATALOG_SLUG;
 
-/** Back-compat alias: the package ids this authority gates (host allowlist). */
-export const INSTANCE_WRITE_AUTHORITY_PACKAGE_IDS = CONNECTOR_KIND_TO_PACKAGE_ID;
+/**
+ * Resolve the host-bound connector package id for a CMS-write kind THROUGH the
+ * sanctioned connector-catalog registry: the host maps the kind to its catalog
+ * SLUG, then the registry derives the package id (no package-name literal lives
+ * in core). Fail-closed: an unknown kind, or a slug the registry does not cover,
+ * THROWS — the connector can never select another package's policy, and a
+ * resolution miss can never silently fall through to a write.
+ */
+function resolvePackageIdForKind(kind: InstanceWriteConnectorKind): string {
+  const slug = CONNECTOR_KIND_TO_CATALOG_SLUG[kind];
+  const packageId = getConnectorDescriptorBySlug(slug)?.packageId;
+  if (!packageId) {
+    throw new InstanceWriteAuthorityError(`unresolved_connector_kind:${kind}`);
+  }
+  return packageId;
+}
+
+/**
+ * The package ids this authority gates (the host allowlist for this kind set),
+ * DERIVED from the connector-catalog registry via the host-owned kind→slug map
+ * — this core module names no package literal; the ids are registry-resolved.
+ * A kind whose slug the registry does not cover resolves to `undefined` here
+ * (diagnostics-only surface); the load-bearing path uses `resolvePackageIdForKind`,
+ * which fails closed. Exposed for host wiring/diagnostics and test assertions.
+ */
+export const INSTANCE_WRITE_AUTHORITY_PACKAGE_IDS: Record<
+  InstanceWriteConnectorKind,
+  string | undefined
+> = Object.fromEntries(
+  (Object.keys(CONNECTOR_KIND_TO_CATALOG_SLUG) as InstanceWriteConnectorKind[]).map(
+    (kind) => [kind, getConnectorDescriptorBySlug(CONNECTOR_KIND_TO_CATALOG_SLUG[kind])?.packageId],
+  ),
+) as Record<InstanceWriteConnectorKind, string | undefined>;
 
 /** A resolved instance's persisted org binding (cinatra#274). `orgId` is the org
  * that owns the install; `null` for a legacy/unbound row (which fails closed). */
@@ -188,7 +225,7 @@ export type RequireInstanceWriteAuthority = (
 export function createInstanceWriteAuthority(
   kind: InstanceWriteConnectorKind,
 ): RequireInstanceWriteAuthority {
-  const packageId = CONNECTOR_KIND_TO_PACKAGE_ID[kind];
+  const packageId = resolvePackageIdForKind(kind);
   const resolveInstanceOrg = CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER[kind];
 
   return async function requireInstanceWriteAuthority({
@@ -249,7 +286,8 @@ export function createInstanceWriteAuthority(
     if (instanceOrgId !== orgId) await deny("instance_org_mismatch", { userId, orgId });
 
     // (e) Connector-PACKAGE entitlement via the existing connector authority. The
-    // package id is the HOST-BOUND constant for this kind — never caller-supplied.
+    // package id is HOST-BOUND for this kind — resolved through the connector
+    // catalog registry from the host-owned kind→slug map, never caller-supplied.
     // `requireConnectorAuthority` evaluates the connector-package policy for the
     // actor's org and emits its own `connector_instance` audit row.
     const decision = await requireConnectorAuthority(packageId, actor, {
@@ -267,16 +305,17 @@ export function createInstanceWriteAuthority(
  * into the capability registry. `selectForConnector` accepts the CLOSED
  * connector-kind enum (`"wordpress" | "drupal"`) — the connector's OWN static
  * identity — and returns a guard bound HOST-SIDE to that kind's package id +
- * instance reader. An unknown kind THROWS, so the package whose policy is
- * evaluated and the instance rows that can be read are always host-controlled,
- * never arbitrary caller input (codex must-fix).
+ * instance reader. The package id is resolved through the connector catalog
+ * registry (never a core package-name literal); an unknown kind THROWS, so the
+ * package whose policy is evaluated and the instance rows that can be read are
+ * always host-controlled, never arbitrary caller input (codex must-fix).
  */
 export function createInstanceWriteAuthorityService(): {
   selectForConnector(kind: string): { requireWrite: RequireInstanceWriteAuthority };
 } {
   return {
     selectForConnector(kind: string) {
-      if (!Object.prototype.hasOwnProperty.call(CONNECTOR_KIND_TO_PACKAGE_ID, kind)) {
+      if (!Object.prototype.hasOwnProperty.call(CONNECTOR_KIND_TO_CATALOG_SLUG, kind)) {
         throw new InstanceWriteAuthorityError(`unsupported_connector_kind:${kind}`);
       }
       const requireWrite = createInstanceWriteAuthority(kind as InstanceWriteConnectorKind);
