@@ -12,6 +12,7 @@ import { isValidCodeChallenge, verifyPkceS256 } from "@/lib/connect-provisioning
 import {
   validateConnectServerCredential,
   originMatchesSiteUrl,
+  type ValidatedConnectCredential,
 } from "@/lib/widget-stream-auth";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
 import {
@@ -208,15 +209,32 @@ export type VerifiedSiteContext = {
   credentialVersion: number;
 };
 
-function siteContextFromRow(row: ConnectSiteRow | null): VerifiedSiteContext | null {
-  if (!row) return null;
-  const orgId = typeof row.orgId === "string" ? row.orgId.trim() : "";
-  const siteOrigin = normalizeOriginStrict(row.widgetOrigin);
+/**
+ * Build the fully-bound, strictly-validated site context from a connect-site
+ * binding. Shared by the consume-time live re-read (`ConnectSiteRow`) and the
+ * mint-time single-read credential validation (`ValidatedConnectCredential`).
+ * A site with no bound org, no resolvable origin, or a non-finite credential
+ * generation cannot anchor a per-user authz transaction → null.
+ */
+function siteContextFromBinding(binding: {
+  siteId: string;
+  client: string;
+  orgId: string | null;
+  widgetOrigin: string;
+  credentialVersion: number;
+} | null): VerifiedSiteContext | null {
+  if (!binding) return null;
+  const orgId = typeof binding.orgId === "string" ? binding.orgId.trim() : "";
+  const siteOrigin = normalizeOriginStrict(binding.widgetOrigin);
   // A site with no bound org cannot anchor a per-user authz transaction.
   if (!orgId || !siteOrigin) return null;
-  const credentialVersion = Number(row.credentialVersion);
+  const credentialVersion = Number(binding.credentialVersion);
   if (!Number.isFinite(credentialVersion)) return null;
-  return { siteId: row.siteId, client: row.client, orgId, siteOrigin, credentialVersion };
+  return { siteId: binding.siteId, client: binding.client, orgId, siteOrigin, credentialVersion };
+}
+
+function siteContextFromRow(row: ConnectSiteRow | null): VerifiedSiteContext | null {
+  return siteContextFromBinding(row);
 }
 
 /**
@@ -224,21 +242,32 @@ function siteContextFromRow(row: ConnectSiteRow | null): VerifiedSiteContext | n
  * request Origin and the expected client) and resolve the fully-bound site
  * context. Returns null on any failure (unknown/revoked site, hash mismatch,
  * origin mismatch, client mismatch, or an incompletely-bound site row).
+ *
+ * ROTATION TOCTOU FIX (codex merge-time finding, #407): the context — and
+ * crucially its `credentialVersion` — is derived from the SINGLE row that
+ * `validateConnectServerCredential` constant-time hash-checked the presented
+ * credential against. There is NO second `getActiveConnectSiteById` read here:
+ * a concurrent `cnx_` rotation bumps `credential_version` WITHOUT revoking the
+ * row, so a re-read could have handed an OLD (still-passing read #1) credential
+ * the NEW version and pinned a stale-but-bumped generation into the minted
+ * `cwu_`. Binding the version to the hash-checked credential closes that window;
+ * the authoritative live re-check still runs at consume (`consumeUserWidgetToken`).
  */
 export function resolveVerifiedSiteFromCredential(input: {
   credential: string;
   requestOrigin: string | null;
   expectedClient: string;
 }): VerifiedSiteContext | null {
-  const validated = validateConnectServerCredential({
+  const validated: ValidatedConnectCredential | null = validateConnectServerCredential({
     credential: input.credential,
     requestOrigin: input.requestOrigin,
     expectedClient: input.expectedClient,
     // enforcePairedOrigin defaults true — a blank/missing Origin rejects.
   });
   if (!validated) return null;
-  const row = getActiveConnectSiteById(validated.siteId);
-  return siteContextFromRow(row);
+  // Single authoritative read: the version is the generation of the credential
+  // that just authenticated, never a fresher row's.
+  return siteContextFromBinding(validated);
 }
 
 // ---------------------------------------------------------------------------

@@ -596,22 +596,171 @@ describe("consumeUserWidgetToken — live binding re-checks (CHILD 3 surface)", 
   });
 });
 
-describe("resolveVerifiedSiteFromCredential", () => {
-  it("returns the fully-bound site context on a valid cnx_", () => {
-    validateConnectServerCredentialMock.mockReturnValue({ siteId: SITE_A.siteId, client: "wordpress" });
+describe("rotation TOCTOU regression (cinatra#407 merge-time codex finding)", () => {
+  // The headline invariant: a `cnx_` rotation invalidates outstanding user
+  // tokens immediately. The TOCTOU was: resolveVerifiedSiteFromCredential
+  // hash-checked the credential against row read #1 but pinned the
+  // credentialVersion from a SECOND read — so an OLD credential validating in
+  // the rotation race window inherited the NEW version, and the minted `cwu_`
+  // then survived the rotation. The fix derives the version from the SAME row
+  // the credential was hash-checked against (single read in
+  // validateConnectServerCredential), so the minted token carries the OLD
+  // (pre-rotation) version and dies at the consume-time live re-check.
+
+  const STREAM_PATH = "/api/agents/wordpress-content-editor/stream";
+
+  // Mint a cwu_ exactly as the token route would: resolve the verified site
+  // from the presented cnx_ (real resolveVerifiedSiteFromCredential, fed by the
+  // mocked validator returning the SAME-ROW binding), then redeem an auth code
+  // against that resolved context.
+  function mintViaCredential(validatorBinding: Record<string, unknown>) {
+    validateConnectServerCredentialMock.mockReturnValue(validatorBinding);
+    const site = resolveVerifiedSiteFromCredential({
+      credential: "cnx_presented",
+      requestOrigin: SITE_A.siteOrigin,
+      expectedClient: "wordpress",
+    });
+    if (!site) throw new Error("resolve failed");
+    const t = createAuthTransaction({
+      site,
+      agentSlug: "wordpress-content-editor",
+      instancesConfigKey: "wordpress",
+      codeChallenge: CHALLENGE,
+      state: STATE,
+    });
+    if (!t.ok) throw new Error("txn failed");
+    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    if (!issued.ok) throw new Error("issue failed");
+    const r = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    if (!r.ok) throw new Error("redeem failed");
+    return r.token;
+  }
+
+  it("an OLD credential validating in the rotation window pins the OLD version → its cwu_ is rejected after rotation", () => {
+    // The presented credential authenticated against the row at generation 1
+    // (validateConnectServerCredential hash-checked THAT row and returns
+    // credentialVersion: 1 — the fix). Even though a concurrent rotation is
+    // about to bump the live row to generation 2, the minted token is bound to
+    // version 1.
+    const token = mintViaCredential({
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      orgId: SITE_A.orgId,
+      widgetOrigin: SITE_A.siteOrigin,
+      credentialVersion: 1, // bound to the hash-checked (old) credential
+    });
+
+    // Now the cnx_ is ROTATED: the live connect-site row advances to generation
+    // 2 (reconnect bumps credential_version WITHOUT revoking — same org/origin).
     getActiveConnectSiteByIdMock.mockReturnValue({
       siteId: SITE_A.siteId,
       client: "wordpress",
       widgetOrigin: SITE_A.siteOrigin,
       orgId: SITE_A.orgId,
-      credentialVersion: SITE_A.credentialVersion,
+      credentialVersion: 2, // rotated
     });
+
+    // The outstanding cwu_ (pinned to version 1) must die immediately at the
+    // stream-route consume — the rotation invariant holds.
+    expect(
+      consumeUserWidgetToken({
+        token,
+        agentSlug: "wordpress-content-editor",
+        routePath: STREAM_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }),
+    ).toEqual({ ok: false, reason: "site_revoked" });
+  });
+
+  it("REGRESSION GUARD: if the version were taken from a fresher (rotated) read, the token would WRONGLY survive — assert it does NOT", () => {
+    // Demonstrate the bug shape and that the fix defeats it: had the version
+    // been read post-rotation (generation 2), the minted token would carry 2 and
+    // PASS the consume-time equality against the rotated live row. With the fix,
+    // the token carries 1 (the hash-checked credential's generation) and FAILS.
+    const token = mintViaCredential({
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      orgId: SITE_A.orgId,
+      widgetOrigin: SITE_A.siteOrigin,
+      credentialVersion: 1,
+    });
+    getActiveConnectSiteByIdMock.mockReturnValue({
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      widgetOrigin: SITE_A.siteOrigin,
+      orgId: SITE_A.orgId,
+      credentialVersion: 2,
+    });
+    const result = consumeUserWidgetToken({
+      token,
+      agentSlug: "wordpress-content-editor",
+      routePath: STREAM_PATH,
+      requestOrigin: SITE_A.siteOrigin,
+    });
+    // MUST be rejected — a stale-but-bumped version must never be accepted.
+    expect(result.ok).toBe(false);
+  });
+
+  it("a token minted at the CURRENT (un-rotated) generation still consumes (no false rejection)", () => {
+    const token = mintViaCredential({
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      orgId: SITE_A.orgId,
+      widgetOrigin: SITE_A.siteOrigin,
+      credentialVersion: 1,
+    });
+    getActiveConnectSiteByIdMock.mockReturnValue({
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      widgetOrigin: SITE_A.siteOrigin,
+      orgId: SITE_A.orgId,
+      credentialVersion: 1, // no rotation
+    });
+    expect(
+      consumeUserWidgetToken({
+        token,
+        agentSlug: "wordpress-content-editor",
+        routePath: STREAM_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }).ok,
+    ).toBe(true);
+  });
+});
+
+describe("resolveVerifiedSiteFromCredential", () => {
+  // cinatra#407 rotation TOCTOU fix: the verified context is built from the
+  // SINGLE row that validateConnectServerCredential hash-checked. That validator
+  // now returns the binding fields (siteId/client/orgId/widgetOrigin/
+  // credentialVersion) of THAT row; resolveVerifiedSiteFromCredential does NOT
+  // perform a second getActiveConnectSiteById read (which a concurrent rotation
+  // could have advanced). The validator mock therefore carries the full binding.
+  function validatedBinding(overrides: Record<string, unknown> = {}) {
+    return {
+      siteId: SITE_A.siteId,
+      client: "wordpress",
+      orgId: SITE_A.orgId,
+      widgetOrigin: SITE_A.siteOrigin,
+      credentialVersion: SITE_A.credentialVersion,
+      ...overrides,
+    };
+  }
+
+  it("returns the fully-bound site context on a valid cnx_", () => {
+    validateConnectServerCredentialMock.mockReturnValue(validatedBinding());
     const ctx = resolveVerifiedSiteFromCredential({
       credential: "cnx_x",
       requestOrigin: SITE_A.siteOrigin,
       expectedClient: "wordpress",
     });
     expect(ctx).toEqual(SITE_A);
+    // The fix MUST NOT do a second connect_sites read for the version — the
+    // version is bound to the hash-checked credential, not a fresher row.
+    expect(getActiveConnectSiteByIdMock).not.toHaveBeenCalled();
   });
   it("returns null when the credential is invalid", () => {
     validateConnectServerCredentialMock.mockReturnValue(null);
@@ -623,14 +772,8 @@ describe("resolveVerifiedSiteFromCredential", () => {
       }),
     ).toBeNull();
   });
-  it("returns null when the resolved site row has no bound org", () => {
-    validateConnectServerCredentialMock.mockReturnValue({ siteId: SITE_A.siteId, client: "wordpress" });
-    getActiveConnectSiteByIdMock.mockReturnValue({
-      siteId: SITE_A.siteId,
-      client: "wordpress",
-      widgetOrigin: SITE_A.siteOrigin,
-      orgId: null,
-    });
+  it("returns null when the validated binding has no bound org", () => {
+    validateConnectServerCredentialMock.mockReturnValue(validatedBinding({ orgId: null }));
     expect(
       resolveVerifiedSiteFromCredential({
         credential: "cnx_x",
@@ -638,5 +781,32 @@ describe("resolveVerifiedSiteFromCredential", () => {
         expectedClient: "wordpress",
       }),
     ).toBeNull();
+  });
+  it("returns null when the validated binding has a non-finite credentialVersion", () => {
+    validateConnectServerCredentialMock.mockReturnValue(validatedBinding({ credentialVersion: Number.NaN }));
+    expect(
+      resolveVerifiedSiteFromCredential({
+        credential: "cnx_x",
+        requestOrigin: SITE_A.siteOrigin,
+        expectedClient: "wordpress",
+      }),
+    ).toBeNull();
+  });
+  it("pins the credentialVersion of the hash-checked credential (a rotation cannot lift the bound version)", () => {
+    // The credential authenticated at generation 3 (its hash matched a row at
+    // version 3). Even if the live row is concurrently rotated to a higher
+    // generation, the validator returns version 3 because it is bound to the row
+    // it hash-checked — so the context the redeem path pins is 3, not the bumped
+    // version. (The validator's same-row guarantee is covered in the stream-auth
+    // suite; here we assert resolveVerifiedSiteFromCredential propagates it.)
+    validateConnectServerCredentialMock.mockReturnValue(validatedBinding({ credentialVersion: 3 }));
+    const ctx = resolveVerifiedSiteFromCredential({
+      credential: "cnx_old",
+      requestOrigin: SITE_A.siteOrigin,
+      expectedClient: "wordpress",
+    });
+    expect(ctx).not.toBeNull();
+    expect(ctx?.credentialVersion).toBe(3);
+    expect(getActiveConnectSiteByIdMock).not.toHaveBeenCalled();
   });
 });

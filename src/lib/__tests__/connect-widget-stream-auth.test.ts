@@ -71,6 +71,19 @@ function activeSite(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Expected validated-binding shape for the default activeSite() fixture
+// (cinatra#407 rotation TOCTOU fix: validateConnectServerCredential returns the
+// binding fields — orgId/widgetOrigin/credentialVersion — from the SAME row it
+// hash-checked, so the credential generation is bound to the credential that
+// authenticated, never a fresher row's).
+const VALIDATED_SITE_A = {
+  siteId: SITE_ID,
+  client: "wordpress",
+  orgId: "o1",
+  widgetOrigin: "https://shop.example.com",
+  credentialVersion: 1,
+};
+
 beforeEach(() => {
   for (const k of Object.keys(dbConfig)) delete dbConfig[k];
   connectStore.getActiveConnectSiteById.mockReset();
@@ -89,7 +102,7 @@ describe("validateConnectServerCredential (server-to-server cnx_ path)", () => {
         credential: CREDENTIAL,
         requestOrigin: "https://shop.example.com",
       }),
-    ).toEqual({ siteId: SITE_ID, client: "wordpress" });
+    ).toEqual(VALIDATED_SITE_A);
     expect(connectStore.touchConnectSiteLastUsed).toHaveBeenCalledWith(SITE_ID);
   });
 
@@ -99,7 +112,7 @@ describe("validateConnectServerCredential (server-to-server cnx_ path)", () => {
     // An explicit server-internal opt-out skips the binding.
     expect(
       validateConnectServerCredential({ credential: CREDENTIAL, enforcePairedOrigin: false }),
-    ).toEqual({ siteId: SITE_ID, client: "wordpress" });
+    ).toEqual(VALIDATED_SITE_A);
   });
 
   it("rejects a non-cnx_ bearer and an unknown/revoked site", () => {
@@ -129,7 +142,7 @@ describe("validateConnectServerCredential (server-to-server cnx_ path)", () => {
         credential: CREDENTIAL,
         requestOrigin: "https://shop.example.com",
       }),
-    ).toEqual({ siteId: SITE_ID, client: "wordpress" });
+    ).toEqual(VALIDATED_SITE_A);
     // A different (even if otherwise-valid) origin is a confused-deputy attempt.
     expect(
       validateConnectServerCredential({
@@ -156,7 +169,30 @@ describe("validateConnectServerCredential (server-to-server cnx_ path)", () => {
         requestOrigin: "https://shop.example.com",
         expectedClient: "wordpress",
       }),
-    ).toEqual({ siteId: SITE_ID, client: "wordpress" });
+    ).toEqual(VALIDATED_SITE_A);
+  });
+
+  it("returns credentialVersion + orgId + widgetOrigin FROM the hash-checked row (cinatra#407 rotation TOCTOU)", () => {
+    // The binding the caller pins MUST come from the SAME row whose
+    // credential_hash matched the presented credential — never a fresher read.
+    // Here the active row is at generation 7; the returned credentialVersion
+    // must be 7 (and org/origin from this same row), so a caller can bind the
+    // minted user token to the generation that actually authenticated.
+    connectStore.getActiveConnectSiteById.mockReturnValue(
+      activeSite({ credentialVersion: 7, orgId: "o-rotated", widgetOrigin: "https://shop.example.com" }),
+    );
+    expect(
+      validateConnectServerCredential({
+        credential: CREDENTIAL,
+        requestOrigin: "https://shop.example.com",
+      }),
+    ).toEqual({
+      siteId: SITE_ID,
+      client: "wordpress",
+      orgId: "o-rotated",
+      widgetOrigin: "https://shop.example.com",
+      credentialVersion: 7,
+    });
   });
 });
 

@@ -211,10 +211,28 @@ export function resolveWidgetStreamOrigin(
  * origin (e.g. a server-internal self-check) must pass
  * `enforcePairedOrigin: false` EXPLICITLY. On success, bumps lastUsedAt.
  *
- * Returns the matched siteId on success or null on any failure (unknown site,
- * revoked, hash mismatch, origin mismatch/missing). Never accepts the legacy
- * shared apiKey and never accepts a non-cnx_ bearer.
+ * Returns the matched site binding on success or null on any failure (unknown
+ * site, revoked, hash mismatch, origin mismatch/missing). Never accepts the
+ * legacy shared apiKey and never accepts a non-cnx_ bearer.
+ *
+ * ROTATION TOCTOU (codex merge-time finding, #407): the returned binding —
+ * including `credentialVersion`, `orgId`, and `widgetOrigin` — is taken from
+ * the SAME row whose `credential_hash` this function just constant-time-matched
+ * against the presented credential. Callers MUST derive the credential
+ * generation from THIS result, never from a second `getActiveConnectSiteById`
+ * read: a `cnx_` rotation bumps `credential_version` WITHOUT revoking the row,
+ * so a fresh read could hand an OLD credential the NEW version. Binding the
+ * version to the hash-checked row makes the version authoritative for the
+ * credential that actually authenticated.
  */
+export type ValidatedConnectCredential = {
+  siteId: string;
+  client: string;
+  orgId: string | null;
+  widgetOrigin: string;
+  credentialVersion: number;
+};
+
 export function validateConnectServerCredential(input: {
   credential: string;
   requestOrigin?: string | null;
@@ -224,7 +242,7 @@ export function validateConnectServerCredential(input: {
   // (codex adversarial High): a valid Drupal cnx_ must NEVER authorize a
   // WordPress agent and vice-versa. Omit only for client-agnostic callers.
   expectedClient?: string | null;
-}): { siteId: string; client: string } | null {
+}): ValidatedConnectCredential | null {
   const credential = input.credential;
   if (!credential) return null;
   const m = CNX_PREFIX_RE.exec(credential);
@@ -260,7 +278,17 @@ export function validateConnectServerCredential(input: {
   } catch {
     /* best-effort */
   }
-  return { siteId, client: site.client };
+  // Return the binding fields from THIS hash-checked row (codex #407 TOCTOU
+  // fix): `credentialVersion`/`orgId`/`widgetOrigin` are bound to the credential
+  // that just matched `credential_hash`, so a caller pinning the version never
+  // inherits a concurrently-rotated row's newer version.
+  return {
+    siteId,
+    client: site.client,
+    orgId: site.orgId,
+    widgetOrigin: site.widgetOrigin,
+    credentialVersion: site.credentialVersion,
+  };
 }
 
 /**
