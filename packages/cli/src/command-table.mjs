@@ -51,6 +51,12 @@
  */
 export const COMMAND_DESCRIPTORS = [
   {
+    id: "install",
+    path: ["install"],
+    match: "command",
+    summary: "Bootstrap a Cinatra dev/prod instance from zero (clone, env, infra, setup).",
+  },
+  {
     id: "login",
     path: ["login"],
     match: "command",

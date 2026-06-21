@@ -271,6 +271,9 @@ function printHelp() {
   console.log(`Cinatra setup CLI
 
 Usage:
+  cinatra install [--dir <path>] [--ref <main|tag|sha>] [--mode dev|prod]
+                  [--repo-url <url>] [--yes] [--force] [--reset-env]
+                  [--skip-dev-apps] [--no-infra] [--no-install] [--no-setup]
   cinatra setup dev [--skip-dev-apps] [--force-dev-apps]
   cinatra setup prod
   cinatra setup nango
@@ -317,6 +320,27 @@ Usage:
   cinatra agents install [<name>[@<range>]] [options]
 
 Commands:
+  install           Bootstrap a Cinatra instance FROM ZERO — the only command
+                    that runs before any checkout exists (npx cinatra install).
+                    Checks requirements FIRST (Node 24+, git, pnpm via Corepack,
+                    Docker + Compose), then clones the cinatra repo at --ref
+                    (default main; the resolved commit SHA is recorded), clones
+                    ONLY the repos declared in cinatra.devExtensions (never an
+                    org-wide enumeration), creates .env.local, brings up the
+                    docker infra, runs pnpm install, and runs setup inside the
+                    target. Idempotent: re-running updates an existing checkout;
+                    a dirty checkout is refused unless --force (which stashes).
+                    --dir <path>      Install location (default: ./cinatra; prompts on a TTY).
+                    --ref <ref>       Branch, tag, or commit to install (default: main).
+                    --mode dev|prod   Install mode (default: dev).
+                    --repo-url <url>  Override the cinatra repo remote (HTTPS-token or SSH).
+                    --yes             Accept defaults / confirmations (non-interactive / CI).
+                    --force           Update a DIRTY checkout (stash first); clone into a non-empty dir.
+                    --reset-env       Regenerate .env.local (fresh BETTER_AUTH_SECRET).
+                    --skip-dev-apps   Do not clone the WordPress/Drupal dev apps (passed to setup).
+                    --no-infra        Do not start docker infra (point at external Postgres/Redis/Nango).
+                    --no-install      Clone + env only; skip pnpm install and setup.
+                    --no-setup        Clone + install only; skip running setup.
   dev refresh       Reconcile your local dev environment (dependencies + dev
                     database schema) to the code you have checked out. Run it
                     after a git pull or branch switch. Dev mode only; it never
@@ -8876,6 +8900,17 @@ function readCliVersion() {
  */
 function buildHandlers() {
   return {
+    install: async (rest, mode) => {
+      // `install` is a command-only descriptor, so the dispatcher's `mode` slot
+      // (argv[1]) holds the FIRST option token (e.g. `--dir`) and is NOT in
+      // `rest`. Re-prepend it so all flags are visible to the parser. The heavy
+      // bootstrap body is lazy-loaded to keep the dependency-light core lean —
+      // install.mjs uses only node builtins + git/docker/corepack subprocesses
+      // + the pre-install-safe sync modules, and never imports this graph.
+      const args = mode !== undefined ? [mode, ...rest] : rest;
+      const { runInstall } = await import("./install.mjs");
+      await runInstall(args);
+    },
     login: async (rest, mode) => {
       // `login` is a command-only descriptor, so the dispatcher's `mode` slot
       // (argv[1]) holds the FIRST option token (e.g. `--app-url`) and is NOT in

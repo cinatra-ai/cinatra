@@ -48,6 +48,12 @@ describe("command table — descriptor snapshot", () => {
     expect(shape).toMatchInlineSnapshot(`
       [
         {
+          "command": "install",
+          "hidden": false,
+          "id": "install",
+          "match": "command",
+        },
+        {
           "command": "login",
           "hidden": false,
           "id": "login",
@@ -285,6 +291,9 @@ describe("command table — descriptor snapshot", () => {
 describe("command table — routing equivalence with the prior if-chain", () => {
   const cases = [
     // [argv, expected descriptor id | null]
+    [["install"], "install"],
+    [["install", "--dir", "/tmp/x"], "install"], // command-only: flags ignored by the matcher.
+    [["install", "--ref", "main"], "install"],
     [["status"], "status"],
     [["status", "extra"], "status"], // command-only: ignores trailing tokens.
     [["skills", "reset-repo"], "skills.reset-repo"],
