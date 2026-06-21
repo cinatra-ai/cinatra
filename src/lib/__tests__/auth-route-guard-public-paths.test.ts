@@ -86,6 +86,41 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
   });
 });
 
+describe("auth-route-guard - cinatra#407 hosted /widget-auth surface", () => {
+  // The two server-to-server routes are PREFIX-exempt (self-authenticated by the
+  // per-site cnx_ credential inside the handler); the hosted PAGE is EXACT-exempt
+  // so a sessionless visitor renders the login form instead of being 307'd.
+
+  it("exempts /api/widget-auth/init (server-to-server transaction init; in-handler cnx_ auth)", () => {
+    expect(guardSource).toMatch(/"\/api\/widget-auth\/init"/);
+    const line = guardSource.split("\n").find((l) => l.includes('"/api/widget-auth/init"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+  });
+
+  it("exempts /api/widget-auth/token (server-to-server redeem; in-handler cnx_ + PKCE auth)", () => {
+    expect(guardSource).toMatch(/"\/api\/widget-auth\/token"/);
+    const line = guardSource.split("\n").find((l) => l.includes('"/api/widget-auth/token"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+  });
+
+  it("EXACT-exempts the /widget-auth page so a sessionless visitor renders login (not 307→/sign-in)", () => {
+    // It must be in PUBLIC_EXACT_PATHS (so it matches the bare pathname, the
+    // ?txn=... query stripped), NOT a broad prefix that would expose sub-paths.
+    expect(guardSource).toMatch(/"\/widget-auth",\s*\/\//);
+    expect(guardSource).not.toMatch(/"\/widget-auth\//); // never a prefix entry
+  });
+
+  it("does NOT exempt /api/widget-auth as a broad prefix (only the two precise routes)", () => {
+    // A bare "/api/widget-auth" prefix would expose any future sub-route. Only
+    // the init + token leaf paths are listed.
+    const lines = guardSource.split("\n");
+    const hasBroad = lines.some((l) => /"\/api\/widget-auth"\s*,/.test(l));
+    expect(hasBroad).toBe(false);
+  });
+});
+
 describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
   // The WP plugin / Drupal module extraction narrowed the public WordPress
   // surface from the broad legacy `/api/wordpress-widget` prefix to the precise

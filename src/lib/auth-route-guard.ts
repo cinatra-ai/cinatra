@@ -24,6 +24,8 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/wordpress/bundle.js", // Assistant widget bundle (public JS; also matcher-excluded as *.js). Precise path — do NOT broaden to /api/wordpress. Widget chat is covered by the generated PUBLIC_AGENT_STREAM_PATHS below.
   "/api/webhooks/wordpress", // WordPress publish-event webhook receiver — auth enforced inside route handler (HMAC-SHA256)
   "/api/connect/token", // cinatra#221 Connect provisioning code/install-code exchange — server-to-server (CMS backend); auth enforced inside via the authorization-code/PKCE/install-code itself (no session, no cookies), mirrors /api/webhooks/wordpress. NOTE: /connect/authorize is NOT exempted — it stays session-gated (org-admin consent screen).
+  "/api/widget-auth/init", // cinatra#407 hosted /widget-auth PKCE login — server-to-server transaction init; auth enforced inside via the per-site `cnx_` credential (no session). NOTE: the /widget-auth PAGE is exempted separately below (it must render the login form for a SESSIONLESS visitor instead of 307→/sign-in).
+  "/api/widget-auth/token", // cinatra#407 hosted /widget-auth PKCE login — server-to-server code→user-token redeem; auth enforced inside via the per-site `cnx_` credential + PKCE (no session), mirrors /api/connect/token.
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available
   "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only, mirrors /api/skills/reset-repo). Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
 ];
@@ -54,6 +56,7 @@ const PUBLIC_EXACT_PATHS = [
   "/favicon.ico",
   "/sign-in",
   "/sign-up",
+  "/widget-auth", // cinatra#407 hosted widget login — a SESSIONLESS visitor must render the login form here (NOT be 307'd to /sign-in). The page itself reads a present session normally and gates issuing a code on org membership + explicit consent. Exact path only (the ?txn=... query carries the transaction id).
   "/api/openai/connection-status",
   "/api/app/setup-status",
   "/api/app/route-guard-status",

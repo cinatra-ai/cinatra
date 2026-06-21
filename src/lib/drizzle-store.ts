@@ -4084,6 +4084,85 @@ END $$` },
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
     // -----------------------------------------------------------------------
+    // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
+    //
+    // Three short-lived, single-use-discipline tables for the per-user widget
+    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST (only sha256 of
+    // each code/token is stored). Dedicated tables (NOT TTL-cached
+    // connector_config JSON) so the single-use consume is an atomic
+    // UPDATE/DELETE...RETURNING free of read-modify-write races. Each carries an
+    // expires_at index driving the on-write sweep (no external cron). The full
+    // engine + the security rationale live in src/lib/widget-user-auth.ts.
+    //
+    // Table 1 — auth transactions. Created by the site-token-authenticated init
+    // route; pins the SERVER-VERIFIED context {site_id, client, org_id,
+    // site_origin, agent_slug, instance_id} + the widget's PKCE code_challenge +
+    // single-use state. consumed_at marks single-use (set when the code issues).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (
+      txn_id         uuid PRIMARY KEY,
+      site_id        uuid NOT NULL,
+      client         text NOT NULL,
+      org_id         text NOT NULL,
+      site_origin    text NOT NULL,
+      agent_slug     text NOT NULL,
+      instance_id    text NOT NULL,
+      code_challenge text NOT NULL,
+      state          text NOT NULL,
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      expires_at     timestamptz NOT NULL,
+      consumed_at    timestamptz
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` },
+    // Table 2 — user authorization codes. Issued by the hosted page after the
+    // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
+    // (which is postMessage'd to the verified opener origin and never stored).
+    // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (
+      code_hash      text PRIMARY KEY,
+      user_id        text NOT NULL,
+      site_id        uuid NOT NULL,
+      client         text NOT NULL,
+      org_id         text NOT NULL,
+      site_origin    text NOT NULL,
+      agent_slug     text NOT NULL,
+      instance_id    text NOT NULL,
+      code_challenge text NOT NULL,
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      expires_at     timestamptz NOT NULL
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` },
+    // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
+    // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
+    // is stored. Multi-use within TTL; instant revoke via row delete or the live
+    // connect-site re-check (see consumeUserWidgetToken). NO refresh token.
+    //
+    // `credential_version` pins the `connect_sites` credential generation the
+    // token was minted against (rotation binding, mirroring the site-scoped
+    // broker's `token_key_fingerprint` re-check in widget-token-broker.ts:384).
+    // A reconnect ROTATES the same active site row (bumping credential_version)
+    // WITHOUT revoking it, so the live org/origin re-check alone would let an
+    // outstanding `cwu_` survive a rotation for its full TTL. Re-checking this
+    // version at consume kills outstanding user tokens the instant the site
+    // credential is rotated.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (
+      token_hash         text PRIMARY KEY,
+      jti                text NOT NULL,
+      user_id            text NOT NULL,
+      site_id            uuid NOT NULL,
+      client             text NOT NULL,
+      org_id             text NOT NULL,
+      site_origin        text NOT NULL,
+      agent_slug         text NOT NULL,
+      instance_id        text NOT NULL,
+      credential_version integer NOT NULL,
+      aud                text NOT NULL,
+      iss                text NOT NULL,
+      scope              text NOT NULL,
+      expires_at         timestamptz NOT NULL,
+      created_at         timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_user_tokens_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (expires_at)` },
+    // -----------------------------------------------------------------------
     // cinatra#221 "Connect with Cinatra" provisioning tables.
     //
     // Dedicated tables (NOT TTL-cached connector_config JSON) so single-use
