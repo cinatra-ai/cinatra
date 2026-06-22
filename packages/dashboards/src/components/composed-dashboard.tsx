@@ -80,8 +80,8 @@ export function ComposedDashboard(props: ComposedDashboardProps) {
           <div className="rounded-panel border border-line bg-surface-strong px-5 py-4 text-sm leading-6 text-muted-foreground">
             <p className="font-medium text-foreground">Your personal dashboard</p>
             <p className="mt-1 max-w-[70ch]">
-              Build an at-a-glance view by adding <strong>cards</strong> — each shows your data or an
-              action: objects, artifacts, workflows, agents, or a quick text note. Drag to arrange.
+              Build an at-a-glance view by adding <strong>cards</strong>. Each card shows your data or
+              an action: objects, artifacts, workflows, agents, or a quick text note. Drag to arrange.
               It&rsquo;s private to you and saved to your account, so it&rsquo;s here next time.
             </p>
           </div>
