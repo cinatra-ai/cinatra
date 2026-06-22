@@ -49,7 +49,7 @@ overrides:
   # next, vitest) so a global override is the only in-range fix. Majors-only
   # advisories (e.g. @opentelemetry/core 1.x -> 2.8.0) are NOT overridden here;
   # they are deferred to the discretionary-majors milestone.
-  dompurify@<3.4.9: ">=3.4.9 <4" # monaco-editor 0.55.1 pins 3.2.7 (GHSA-gvmj/-vxr8/-76mc + mermaid path)
+  dompurify@<3.4.11: ">=3.4.11 <4" # lifts all sub-3.4.11 copies (monaco-editor 0.55.1 via @queuedash/ui pins 3.2.7; mermaid 11.15.0 resolves 3.4.10) to the patched 3.4.11 (GHSA-gvmj/-vxr8/-76mc + GHSA-cmwh-pvxp-8882 ALLOWED_ATTR pollution)
   # vite (GHSA-fx2h-pf6j-xcff high + GHSA-v2wj-q39q-566r / -p9ff-h696-f583) NOT
   # overridden: vite is dev/test-only here (sole consumer is vitest/@vitest/
   # mocker; this repo dev/builds on Next + Turbopack, ships no Vite dev server),
