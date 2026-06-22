@@ -38,19 +38,26 @@ import "server-only";
 //       from connector / tool input;
 //   (b) DENIES (throws) fail-closed when no `userId` + `orgId` resolve (a
 //       synthetic / anonymous actor can never write);
-//   (c) FAILS CLOSED against platform-admin STANDING on EVERY path (cinatra#406
-//       — the merge-time review caught that the public-widget-only suppression
-//       left a fail-OPEN default). A per-user/per-instance CONTENT WRITE must
-//       rest on the user's ACTUAL org membership + per-instance grant, NEVER on
-//       platform-admin standing. So for an actor carrying
-//       `platformRole: "platform_admin"` (regardless of `sourceType`), the
-//       authority resolves the user's REAL membership role host-side
-//       (`resolveOrgRoleForUser` against the trusted org), DENIES fail-closed if
-//       there is no membership row (`platform_admin_without_org_membership`) or
-//       the lookup errors (`org_membership_resolution_error`), and otherwise
-//       delegates with the platform-admin role STRIPPED and `orgRole` pinned to
-//       the REAL membership role — so the package authority decides on the
-//       actual grant, never the admin bypass. The
+//   (c) RE-VERIFIES LIVE ORG MEMBERSHIP for EVERY actor on EVERY path
+//       (cinatra#406 + the 4th-gap fix). A per-user/per-instance CONTENT WRITE
+//       must rest on the user's ACTUAL, CURRENT org membership + per-instance
+//       grant — NEVER on the STAMPED org/role a carrier asserts, and NEVER on
+//       platform-admin standing. The connector-package evaluator decides a
+//       `workspace`-visibility connector on `actor.organizationId === ownerOrg`
+//       ALONE with no membership-row read, so a REVOKED/stale same-org member
+//       (stale cookie `activeOrganizationId`, or a not-yet-rotated delegated
+//       agent-run token) could otherwise write — the revocation-TOCTOU /
+//       fail-open family (cf. #413/#415). So for EVERY actor the authority
+//       resolves the user's REAL membership role host-side
+//       (`resolveOrgRoleForUser` against the trusted/instance-bound org),
+//       DENIES fail-closed if there is no membership row
+//       (`platform_admin_without_org_membership` for an admin carrier, else
+//       `member_without_org_membership`) or the lookup errors
+//       (`org_membership_resolution_error`), and otherwise delegates with
+//       `platformRole` STRIPPED unconditionally and `orgRole` PINNED to the REAL
+//       live membership role (never the carried role — a stale/forged claim can
+//       never select privilege) — so the package authority decides on the
+//       actual current grant, never admin bypass nor a stale carrier. The
 //       `sourceType: "public_site_widget"` defensive deny is kept (belt-and-
 //       braces, audited) so a future regression on the widget carrier still
 //       short-circuits before any read;
@@ -284,52 +291,110 @@ export function createInstanceWriteAuthority(
       await deny("platform_admin_on_public_widget", { userId, orgId });
     }
 
+    // (c-universal) LIVE ORG-MEMBERSHIP RE-VERIFICATION on EVERY path — a
+    // mandatory precondition for ANY per-instance CMS write (cinatra#406 +
+    // the 4th-gap fix), run BEFORE the per-instance read so a revoked/stale actor
+    // is denied UNIFORMLY and cannot use the precise instance deny reasons
+    // (`unknown_instance` / `instance_unbound` / `instance_org_mismatch`) as an
+    // instance-existence / org-binding ORACLE (self-review hardening). The
+    // connector-package authority's delegated evaluator (`evaluateExtensionAccess`)
+    // decides a `workspace`-visibility connector on the STAMPED org alone
+    // (`actor.organizationId === ownerOrg`), with NO membership-row read — and
+    // BOTH the canonical evaluator and the legacy `isOrgAdmin` fallback grant
+    // `platform_admin` UNCONDITIONALLY. So passing ANY actor through on its
+    // CARRIED standing would let a stale/revoked same-org member (stale cookie
+    // `activeOrganizationId`, or a not-yet-rotated delegated agent-run token) —
+    // or platform-admin standing — authorize a content write, the
+    // revocation-TOCTOU / fail-open family (cf. #413/#415).
+    //
+    // We therefore resolve the user's REAL membership in the trusted org and
+    // delegate ONLY a membership-DERIVED actor:
+    //   - membership lookup errors     → DENY (fail-closed, never allow on error)
+    //   - no membership row            → DENY: standing (member OR platform-admin)
+    //                                     is not a LIVE org grant. A revoked
+    //                                     member with a stale carrier is denied
+    //                                     here even under `workspace` visibility.
+    //   - real member/org_admin/owner  → continue to the per-instance gate, then
+    //                                     delegate with `orgRole` PINNED to the
+    //                                     REAL live role (never the carried role
+    //                                     — a stale/forged `orgRole` claim can
+    //                                     never select privilege) and
+    //                                     `platformRole` STRIPPED unconditionally
+    //                                     (so admin standing can never decide a
+    //                                     content write, and future carrier drift
+    //                                     can never become load-bearing).
+    // The deny reason names the carrier class for diagnostics:
+    // `platform_admin_without_org_membership` when the actor carried platform
+    // admin, else `member_without_org_membership`. An entitled member HAS a live
+    // row → continues, so the #405 headless and #408 widget entitled-user paths
+    // are unaffected (they resolve their real role and delegate as it).
+    let realOrgRole: ActorContext["orgRole"] | undefined;
+    try {
+      realOrgRole = await resolveOrgRoleForUser(orgId, userId);
+    } catch {
+      await deny("org_membership_resolution_error", { userId, orgId });
+    }
+    if (!realOrgRole) {
+      await deny(
+        actor.platformRole === "platform_admin"
+          ? "platform_admin_without_org_membership"
+          : "member_without_org_membership",
+        { userId, orgId },
+      );
+    }
+
     // (d) PER-INSTANCE gate — the missing layer (codex must-fix). Resolve the
     // instance row HOST-SIDE and assert its persisted org binding == the trusted
     // actor's org. `instanceId` is load-bearing in the decision here, not just
     // audit. Unknown / unbound (no orgId) / different-org → DENY fail-closed. A
     // forged instanceId (same-org-config-mismatch OR different-org) is caught by
     // the org mismatch; a row with no persisted org binding cannot prove
-    // entitlement → deny (stricter, safe).
-    const binding = resolveInstanceOrg(instanceId);
+    // entitlement → deny (stricter, safe). Reached only AFTER a live membership
+    // row is confirmed, so these precise reasons never leak to a revoked actor.
+    let binding: InstanceOrgBinding | null;
+    try {
+      binding = resolveInstanceOrg(instanceId);
+    } catch {
+      // A thrown instance-reader error fails CLOSED with a normalized audited
+      // deny row (never propagate raw / allow on a read fault).
+      await deny("instance_resolution_error", { userId, orgId });
+      return; // unreachable — deny() throws; satisfies definite-assignment
+    }
     if (!binding) await deny("unknown_instance", { userId, orgId });
     const instanceOrgId = (binding as InstanceOrgBinding).orgId;
     if (!instanceOrgId) await deny("instance_unbound", { userId, orgId });
     if (instanceOrgId !== orgId) await deny("instance_org_mismatch", { userId, orgId });
 
-    // (c-universal) FAIL CLOSED against platform-admin STANDING on EVERY path
-    // (cinatra#406). The connector-package authority's delegated evaluator
-    // (`evaluateExtensionAccess`) and the legacy fallback (`isOrgAdmin`) BOTH
-    // grant `platform_admin` UNCONDITIONALLY before any per-user/per-instance
-    // grant check — so passing a platform-admin actor through would let
-    // admin STANDING alone authorize a content write, defeating this authority's
-    // intent. We therefore resolve the platform admin's REAL membership in the
-    // trusted org and delegate with the admin role STRIPPED:
-    //   - no membership row            → DENY (admin standing is not an org grant)
-    //   - membership lookup errors     → DENY (fail-closed, never allow on error)
-    //   - real member/org_admin/owner  → delegate with platformRole removed and
-    //                                     orgRole pinned to the REAL role, so the
-    //                                     package policy decides on the actual
-    //                                     grant (a real org_admin still gets the
-    //                                     owner-aware admin tier; a plain member
-    //                                     gets workspace visibility as a member).
-    // A non-admin actor is a NO-OP here (`decisionActor === actor`), so the #405
-    // headless and #408 widget entitled-user paths are unaffected. The per-
-    // instance org gate above already pinned the decision to the trusted org, so
-    // membership is only ever resolved for the org the instance is bound to.
-    let decisionActor: ActorContext = actor;
-    if (actor.platformRole === "platform_admin") {
-      let realOrgRole: ActorContext["orgRole"] | undefined;
-      try {
-        realOrgRole = await resolveOrgRoleForUser(orgId, userId);
-      } catch {
-        await deny("org_membership_resolution_error", { userId, orgId });
-      }
-      if (!realOrgRole) {
-        await deny("platform_admin_without_org_membership", { userId, orgId });
-      }
-      decisionActor = { ...actor, platformRole: undefined, orgRole: realOrgRole };
-    }
+    // Build the delegated decision actor FROM SCRATCH as a sanitized human
+    // SUBJECT — NEVER by spreading the carrier actor (the 4th-gap self-review
+    // must-fix). Spreading would forward the carrier's STALE authorization scope
+    // (`teamIds` / `teamRoles` / `projectIds` / `projectGrants`) into the package
+    // evaluator, which authorizes `team:<id>` / `project:<id>` connector
+    // visibility tiers off those fields — so a member REMOVED from a team/project
+    // but carrying stale scope could still write (the same stale-scope family as
+    // the org-membership gap). We therefore drop EVERY carried authorization
+    // field and supply only host-verified facts:
+    //   - principalType "HumanUser" + principalId = the trusted SUBJECT userId,
+    //     so the evaluator's `humanUserId()` resolves the real human and an
+    //     entitled installer / co-owner is recognized even when the transport
+    //     carrier was a model / A2A principal (fixes the non-human-carrier
+    //     false-deny);
+    //   - organizationId pinned to the trusted, instance-bound org;
+    //   - orgRole pinned to the LIVE membership role (never a carried/forged claim);
+    //   - platformRole stripped (admin standing can never decide a content write).
+    // Scoped tiers (`team:` / `project:`) therefore FAIL CLOSED here (`not_visible`)
+    // rather than ride stale scope — correct for WP/Drupal, which are org-owned
+    // admin|workspace connectors. `authSource` / `policyVersion` are carried
+    // (non-authorization audit/version metadata only).
+    const decisionActor: ActorContext = {
+      principalType: "HumanUser",
+      principalId: userId,
+      organizationId: orgId,
+      orgRole: realOrgRole,
+      platformRole: undefined,
+      authSource: actor.authSource,
+      policyVersion: actor.policyVersion,
+    };
 
     // (e) Connector-PACKAGE entitlement via the existing connector authority. The
     // package id is HOST-BOUND for this kind — resolved through the connector
@@ -337,10 +402,18 @@ export function createInstanceWriteAuthority(
     // `requireConnectorAuthority` evaluates the connector-package policy for the
     // actor's org and emits its own `connector_instance` audit row. The actor
     // passed here NEVER carries platform-admin standing (stripped above).
-    const decision = await requireConnectorAuthority(packageId, decisionActor, {
-      mode: "use",
-      instanceId,
-    });
+    let decision: Awaited<ReturnType<typeof requireConnectorAuthority>>;
+    try {
+      decision = await requireConnectorAuthority(packageId, decisionActor, {
+        mode: "use",
+        instanceId,
+      });
+    } catch {
+      // A thrown package-authority error fails CLOSED with a normalized audited
+      // deny row (never propagate raw / allow on a policy-evaluation fault).
+      await deny("connector_authority_error", { userId, orgId });
+      return; // unreachable — deny() throws; satisfies definite-assignment
+    }
     if (!decision.allowed) {
       await deny(decision.reason, { userId, orgId });
     }

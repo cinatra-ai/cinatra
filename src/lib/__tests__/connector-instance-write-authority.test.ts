@@ -28,16 +28,28 @@
  *   - connector-PACKAGE deny propagates even when the instance org matches
  *   - the connector KIND is host-bound; an unknown kind throws (no reader/policy)
  *
- * PLATFORM-ADMIN FAIL-CLOSED on EVERY path (cinatra#406 — the merge-time review).
+ * LIVE ORG-MEMBERSHIP RE-VERIFICATION on EVERY path (cinatra#406 + the 4th-gap
+ * fix — the merge-time review). The membership row is a MANDATORY precondition
+ * for ANY per-instance CMS write: the host re-reads the user's REAL membership
+ * in the instance-bound org for EVERY actor and delegates only a membership-
+ * DERIVED actor (platformRole STRIPPED, orgRole PINNED to the live role).
  * These assert with the connector-PACKAGE policy mocked to ALLOW (NOT mocked-away
  * to deny), so each denial proves the NEW host-side gate denies on its own:
- *   - platform-admin, NO membership, sourceType UNDEFINED → DENIED (without_org_membership)
+ *   - NON-platform member, NO membership row, WORKSPACE-visibility connector
+ *       → DENIED (member_without_org_membership) — THE 4th GAP: a revoked/stale
+ *         same-org member can no longer write even when the package policy
+ *         (workspace visibility) would allow any same-org actor.
+ *   - NON-platform member, NO membership row (admin-visibility / package allows)
+ *       → DENIED (member_without_org_membership) — stale member under admin tier.
+ *   - platform-admin, NO membership, sourceType UNDEFINED → DENIED (platform_admin_without_org_membership)
  *   - platform-admin, NO membership, sourceType=widget    → DENIED (defensive widget)
  *   - platform-admin, membership lookup ERRORS            → DENIED (resolution_error)
+ *   - NON-platform member, membership lookup ERRORS       → DENIED (resolution_error)
  *   - platform-admin who IS a real org_admin → ALLOWED but delegated with
  *     platform_admin STRIPPED + orgRole pinned to the REAL role (no admin bypass)
  *   - platform-admin who is a real plain MEMBER → ALLOWED, stripped (delegates as member)
- *   - non-admin entitled user (#405/#408)     → NO-OP (no membership lookup, actor unchanged)
+ *   - non-admin entitled user (#405/#408)     → ALLOWED, delegated with orgRole
+ *     pinned to the live role (membership lookup HAPPENS now — it is universal)
  *   - non-member (no trusted actor)           → DENIED before any lookup/policy
  */
 import "server-only";
@@ -370,18 +382,126 @@ describe("connector-instance write authority (cinatra#409)", () => {
     );
   });
 
-  it("a NON-admin entitled user (#405 headless / #408 widget) is a NO-OP for the strip gate — the actor reaches the package policy unchanged, no membership lookup", async () => {
-    // A normal entitled member: no platformRole. The strip branch must not fire.
+  it("a NON-admin entitled user (#405 headless / #408 widget) WITH a live membership row is ALLOWED — membership IS re-verified (universal), and delegates with orgRole pinned to the live role + platformRole stripped", async () => {
+    // A normal entitled member: no platformRole, and they HAVE a live membership
+    // row. The universal re-verification runs for them too (it is not platform-
+    // admin-gated) — an entitled member has a row, so they are allowed.
     trusted(actor({ organizationId: "org-1", orgRole: "member" }));
     wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member"); // live row present
     await expect(
       wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
     ).resolves.toBeUndefined();
-    // The membership resolver is NEVER consulted for a non-admin actor.
-    expect(resolveOrgRoleForUserMock).not.toHaveBeenCalled();
+    // The membership resolver IS consulted for EVERY actor now (universal re-verify),
+    // keyed on the trusted (instance-bound org, userId).
+    expect(resolveOrgRoleForUserMock).toHaveBeenCalledWith("org-1", "user-1");
+    // The actor reaching the package authority is membership-DERIVED: orgRole
+    // pinned to the live role, platformRole stripped (undefined).
     expect(authoritySpy).toHaveBeenCalledWith(
       WP_PKG,
-      expect.objectContaining({ organizationId: "org-1", orgRole: "member" }),
+      expect.objectContaining({ organizationId: "org-1", orgRole: "member", platformRole: undefined }),
+      { mode: "use", instanceId: "wp-1" },
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // THE 4th GAP (PR#417 merge-time review): a NON-platform actor with a trusted
+  // userId+orgId SKIPPED the live membership re-read entirely (it was gated on
+  // `platformRole === "platform_admin"`). Against a WORKSPACE-visibility connector
+  // (an org admin can set `connector_access_policy.visibility=workspace`), the
+  // package evaluator allows ANY same-org actor with NO membership-row check — so
+  // a REVOKED/stale same-org member (stale cookie activeOrganizationId, or a
+  // not-yet-rotated delegated agent-run token) whose membership row is GONE could
+  // WRITE. The fix makes the live re-verification UNIVERSAL. These denial tests
+  // keep the connector-PACKAGE policy mocked to ALLOW (the beforeEach default),
+  // so each denial proves the NEW host gate denies on its OWN — exactly the
+  // #415-masking-class trap (a test that mocks the package to deny would hide it).
+  // ---------------------------------------------------------------------------
+
+  it("DENIES a NON-platform trusted member with NO membership row against a WORKSPACE-visibility connector — THE 4th GAP (package policy ALLOWS; the host membership re-verify denies)", async () => {
+    // A same-org member carrier (no platformRole) whose org-stamped cookie/token
+    // still says org-1, but whose membership row has been REVOKED. The instance is
+    // bound to org-1, so the per-instance gate passes; the package policy ALLOWS
+    // (workspace visibility = any same-org actor, no membership read). The ONLY
+    // thing that can deny is the universal host-side membership re-verification.
+    trusted(actor({ organizationId: "org-1", orgRole: "member", platformRole: undefined }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" }; // instance org MATCHES
+    resolveOrgRoleForUserMock.mockResolvedValue(undefined); // membership REVOKED — no live row
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "member_without_org_membership" });
+    // The package authority is NEVER consulted — the host gate denies first.
+    expect(authoritySpy).not.toHaveBeenCalled();
+    expect(resolveOrgRoleForUserMock).toHaveBeenCalledWith("org-1", "user-1");
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        resourceType: "connector_instance",
+        metadata: expect.objectContaining({
+          reason: "member_without_org_membership",
+          packageId: WP_PKG,
+        }),
+      }),
+    );
+  });
+
+  it("denies a REVOKED member with the UNIFORM membership reason BEFORE the per-instance gate — no instance-existence / org-binding ORACLE leaks (membership re-verify runs first)", async () => {
+    // A revoked member (no live row) targets a NON-EXISTENT / cross-org instance.
+    // The membership re-verify runs BEFORE the instance read, so the deny reason
+    // is the uniform `member_without_org_membership` — NOT `unknown_instance` /
+    // `instance_org_mismatch`. A revoked actor therefore cannot probe which
+    // instance ids exist or which org they're bound to.
+    trusted(actor({ organizationId: "org-1", orgRole: "member", platformRole: undefined }));
+    // A cross-org instance row exists for this id (would yield instance_org_mismatch
+    // for a LIVE member) — and also test a totally unknown id.
+    wpRows["wp-cross"] = { id: "wp-cross", orgId: "org-2" };
+    resolveOrgRoleForUserMock.mockResolvedValue(undefined); // membership REVOKED
+    await expect(
+      wpGuard()({ instanceId: "wp-cross", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "member_without_org_membership" });
+    await expect(
+      wpGuard()({ instanceId: "wp-does-not-exist", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "member_without_org_membership" });
+    // The package authority is never consulted; the instance reader's RESULT never
+    // determines the deny reason for a revoked actor (membership gate wins first).
+    expect(authoritySpy).not.toHaveBeenCalled();
+  });
+
+  it("DENIES a NON-platform stale member with NO membership row even when the package policy ALLOWS (admin-visibility connector) — stale member under any visibility tier", async () => {
+    // Same revoked-member carrier; here the package policy is left at the ALLOW
+    // default to stand in for ANY visibility tier that would otherwise admit the
+    // actor. The host membership re-verify denies regardless of tier.
+    trusted(actor({ organizationId: "org-1", orgRole: "org_admin", platformRole: undefined }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue(undefined); // no live row
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "member_without_org_membership" });
+    expect(authoritySpy).not.toHaveBeenCalled();
+  });
+
+  it("DENIES a NON-platform member when the membership lookup ERRORS — fail-closed on a DB read error for non-admin actors too", async () => {
+    trusted(actor({ organizationId: "org-1", orgRole: "member", platformRole: undefined }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockRejectedValue(new Error("db down"));
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "org_membership_resolution_error" });
+    expect(authoritySpy).not.toHaveBeenCalled();
+  });
+
+  it("a NON-platform member whose live role DIFFERS from the carried role delegates with the LIVE role pinned (never the carried/forged role)", async () => {
+    // The carrier asserts org_admin, but the live membership row says member.
+    // The decision actor MUST carry the live role (member), not the stale claim.
+    trusted(actor({ organizationId: "org-1", orgRole: "org_admin", platformRole: undefined }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member"); // live role is plain member
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    expect(authoritySpy).toHaveBeenCalledWith(
+      WP_PKG,
+      expect.objectContaining({ orgRole: "member", platformRole: undefined }),
       { mode: "use", instanceId: "wp-1" },
     );
   });
@@ -394,6 +514,121 @@ describe("connector-instance write authority (cinatra#409)", () => {
     ).rejects.toMatchObject({ reason: "no_trusted_actor" });
     expect(resolveOrgRoleForUserMock).not.toHaveBeenCalled();
     expect(authoritySpy).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // SANITIZED DECISION ACTOR (the 4th-gap self-review must-fix). The delegated
+  // actor is built FROM SCRATCH (never by spreading the carrier), so:
+  //   - STALE team/project scope can never reach the package evaluator (a member
+  //     removed from a team/project cannot ride stale scope into a team:/project:
+  //     connector tier — it fails closed);
+  //   - a non-human transport carrier (model / A2A) with a trusted human SUBJECT
+  //     userId is re-synthesized as principalType:"HumanUser"+principalId:userId,
+  //     so an entitled installer/co-owner is recognized (no false-deny).
+  // ---------------------------------------------------------------------------
+
+  it("does NOT forward STALE teamIds/projectIds/projectGrants into the package policy — the decision actor is rebuilt from host-verified facts only", async () => {
+    // The carrier actor carries team/project scope that may be stale (the user
+    // was removed from team-x / project-y but the carrier still asserts them).
+    trusted(
+      actor({
+        organizationId: "org-1",
+        orgRole: "member",
+        teamIds: ["team-x"],
+        projectIds: ["project-y"],
+        projectGrants: [{ projectId: "project-y", effectiveRole: "admin", accessSource: "user" }],
+      } as Partial<ActorContext>),
+    );
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    // The actor reaching the package authority must NOT carry teamIds / projectIds
+    // / projectGrants / teamRoles — they were dropped, not spread.
+    const passedActor = authoritySpy.mock.calls[0]?.[1] as ActorContext;
+    expect(passedActor).toMatchObject({
+      principalType: "HumanUser",
+      principalId: "user-1",
+      organizationId: "org-1",
+      orgRole: "member",
+      platformRole: undefined,
+    });
+    expect(passedActor.teamIds).toBeUndefined();
+    expect(passedActor.projectIds).toBeUndefined();
+    expect((passedActor as { projectGrants?: unknown }).projectGrants).toBeUndefined();
+    expect(passedActor.teamRoles).toBeUndefined();
+  });
+
+  it("re-synthesizes a NON-HUMAN transport carrier (model/A2A) as the trusted HUMAN subject — principalType HumanUser + principalId=userId reach the package policy", async () => {
+    // The transport carrier principal is a model (non-human), but the host
+    // summary resolves a trusted human SUBJECT userId. The delegated decision
+    // actor must present as that human so installer/co-owner matching works.
+    const carrier = actor({
+      principalType: "ServiceAccount",
+      principalId: "svc-model-principal",
+      organizationId: "org-1",
+      orgRole: "member",
+    } as Partial<ActorContext>);
+    ctxSpy.mockResolvedValue(carrier);
+    // The summary carries the REAL human subject userId (differs from the carrier principal).
+    summarySpy.mockResolvedValue({ userId: "human-subject-1", organizationId: "org-1", orgRole: "member" });
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    // Membership is resolved for the HUMAN subject, and the decision actor is the human.
+    expect(resolveOrgRoleForUserMock).toHaveBeenCalledWith("org-1", "human-subject-1");
+    expect(authoritySpy).toHaveBeenCalledWith(
+      WP_PKG,
+      expect.objectContaining({
+        principalType: "HumanUser",
+        principalId: "human-subject-1",
+        organizationId: "org-1",
+        orgRole: "member",
+        platformRole: undefined,
+      }),
+      { mode: "use", instanceId: "wp-1" },
+    );
+  });
+
+  it("FAILS CLOSED with an audited instance_resolution_error when the instance reader THROWS", async () => {
+    trusted(actor({ organizationId: "org-1" }));
+    // Make the WP reader throw for this id.
+    const wpApi = await import("@/lib/wordpress-api");
+    const readSpy = vi
+      .spyOn(wpApi, "readWordPressInstanceById")
+      .mockImplementation(() => {
+        throw new Error("reader exploded");
+      });
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "instance_resolution_error" });
+    expect(authoritySpy).not.toHaveBeenCalled();
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        metadata: expect.objectContaining({ reason: "instance_resolution_error" }),
+      }),
+    );
+    readSpy.mockRestore();
+  });
+
+  it("FAILS CLOSED with an audited connector_authority_error when the package authority THROWS", async () => {
+    trusted(actor({ organizationId: "org-1" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
+    authoritySpy.mockRejectedValue(new Error("policy store down"));
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "connector_authority_error" });
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        metadata: expect.objectContaining({ reason: "connector_authority_error" }),
+      }),
+    );
   });
 
   it("gates the Drupal connector through its own host-bound kind (package + reader)", async () => {
