@@ -5,9 +5,9 @@
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "2b65ef8260bda21d0ecdfb90ed300b47b8295820",
+      "resolvedSha": "538a8176f12a5e9dfe0c95f29b4b74cd711f7038",
       "packageVersion": "0.1.0",
-      "treeSha256": "81390bd207434d5c0c6645d72d76d3917fffd181cf85e5651676d5bbeb5f0ff6"
+      "treeSha256": "16af1c45f35e63dce29b420be021ae529c85245d9bfe690304951a1c4c9adaab"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
