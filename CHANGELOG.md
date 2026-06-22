@@ -4,6 +4,34 @@ All notable changes to Cinatra are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-06-22
+
+Authenticated in-CMS assistant, an installable developer CLI, project-management integration, and unified analytics dashboards.
+
+### Added
+
+- The in-CMS assistant widget now requires the end user to sign in (hosted sign-in flow) and authorizes content edits per user and per connected site. Edits are bound to the specific connector instance and fail closed, so a signed-out, stale, or non-member user cannot write — each change is attributed to the person who made it.
+- A developer CLI you can run without cloning the repo: `npx @cinatra-ai/cinatra` installs, bootstraps, and manages a Cinatra instance from zero. `cinatra login` authenticates against a running server, and the CLI can export and import agents over the server API. The self-hosting production image now installs the published CLI.
+- Project-management tool integration: connect an external PM tool (Plane) so schedules sync to PM tasks both ways, a background reconcile loop repairs drifted links, and scheduled release jobs check their PM task's state before running. The development environment can stand up Plane on its own.
+- A dashboard analytics portlet backed by embedded analytics, including a new LLM cost-and-usage view that surfaces token spend directly on a dashboard.
+
+### Changed
+
+- Dashboards are unified on a single analytics format. Existing dashboards are migrated automatically on upgrade, and the legacy dashboard rendering path has been removed.
+- The Workflows GANTT view is replaced by a task list and index list driven by the PM-tool integration.
+- The CLI's commands are unified under one consistent dispatch surface with `--help`/`-h` and `--version` available everywhere.
+- Marketplace and registry screens clarify vendor scope, and an instance's display name is decoupled from its provisioning namespace (with offline rename when the marketplace is unreachable).
+- LLM cost estimates now include gpt-5.5 pricing.
+
+### Fixed
+
+- The assistant widget no longer returns an empty "(no response)" when editing content from a connected CMS.
+- A workspace whose only platform administrator authored an agent can now approve it, clearing a single-admin deadlock; admin-authored chat agents publish immediately instead of getting stuck as "proposed".
+- Agent-approval pages now show the reason when a decision fails instead of silently reloading, aggregated approval notifications open on the correct tab, and the approvals timestamp column is labelled "Requested".
+- A failed marketplace install no longer crashes the page.
+- The thread list reorders only on real activity and sorts by most recently updated.
+- Polished UI details: a themed not-found page, a pointer cursor on the sidebar rail, a correctly scaled app favicon, and no raw diagnostic output leaking into the authoring chat.
+
 ## [0.1.1] - 2026-06-18
 
 Extensions Dev Kit and milestone hardening.
@@ -42,5 +70,6 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
+[0.1.2]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.0
