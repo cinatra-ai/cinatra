@@ -48,7 +48,7 @@ jobs:
       # `cinatra-watches` declarations. As of the closeout W5 skills-drift
       # reconciliation (cinatra-ai/engineering#244) this is back in STRICT
       # LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
-      # cinatra-required-extensions.lock.json (both 538a817) — the prior
+      # cinatra-required-extensions.lock.json (both 538a817). The prior
       # watches-PR lead (skills_ref@2b65ef8 ahead of lock@2b65ef8, then
       # lock re-pinned to 538a817 by PR#424 without updating this pin) is
       # closed. The two intervening commits on assistant-skills are
@@ -57,6 +57,7 @@ jobs:
       # acknowledgement). Keep them in lockstep: at each
       # required-extensions lock refresh, re-pin this skills_ref to the
       # new assistant-skills resolvedSha now written into the lock.
+      # Correction-for: PR#432 (malformed Reviewed-by — missing tier=maintainer).
       skills_ref: 538a8176f12a5e9dfe0c95f29b4b74cd711f7038
       mode: enforce
       ref: 6e417652524f6449db681034f2cb67e177adc6f6 # same SHA as the workflow @ref
