@@ -396,18 +396,28 @@ services:
     restart: unless-stopped
     ports:
       - "3010:3010"
+    # Host-secret env (CINATRA_BRIDGE_TOKEN / OPENAI_API_KEY / WAYFLOW_BASE_URL)
+    # is sourced from a NARROW, generated file — NOT inlined as
+    # `environment: CINATRA_BRIDGE_TOKEN: "${CINATRA_BRIDGE_TOKEN}"`. That
+    # interpolation reads the *shell* env, so a bring-up that does not first
+    # `source .env.local` (a bare `docker compose up`, a CI harness) leaves the
+    # token EMPTY; worse, an empty `environment:` value OVERRIDES an `env_file`
+    # value on the same key, so the bridge silently 403s and the widget
+    # content-edit returns "(no response)". `scripts/gen-wayflow-env.mjs`
+    # (run by `npm run services`) writes docker/wayflow/.wayflow.env with ONLY
+    # those three keys; `required: false` keeps a fresh checkout bootable
+    # (the wayflow runtime then fails LOUD at boot if the bridge token is
+    # absent — agent_loader.py main()). Static, non-secret keys stay inline
+    # below: they are not interpolated, share no key with the env_file, and so
+    # never hit the empty-override trap (PORT especially must be 3010 here, NOT
+    # .env.local's app PORT 3000).
+    env_file:
+      - path: ./docker/wayflow/.wayflow.env
+        required: false
     environment:
       PORT: "3010"
       CINATRA_AGENTS_DIR: "/agents"
       CINATRA_BASE_URL: "http://host.docker.internal:3000"
-      CINATRA_BRIDGE_TOKEN: "${CINATRA_BRIDGE_TOKEN}"   # required for container-side bridge auth
-      WAYFLOW_BASE_URL: "${WAYFLOW_BASE_URL:-http://localhost:3010}"
-      # pyagentspec's `OpenAiConfig` resolves `api_key`
-      # from the wayflow container env. Agents that declare `llm_config:
-      # OpenAiConfig` (e.g. single-AgentNode agents and orchestrator summary
-      # composers) fail to mount when this isn't set. The key is sourced from
-      # the host shell or `.env.local` of the Cinatra app process.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       # Multi-tenant loader auto-discovers all agents/<vendor>/<slug>/cinatra/oas.json.
       # No per-agent pinning env var is needed.
     volumes:

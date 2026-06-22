@@ -3061,7 +3061,48 @@ def build_parent_app(agents_dir: Path) -> Starlette:
 # ---------------------------------------------------------------------------
 
 
+def _preflight_bridge_token() -> None:
+    """Fail LOUD at boot when CINATRA_BRIDGE_TOKEN is missing/whitespace-only.
+
+    The runtime authenticates EVERY callback to the host `/api/llm-bridge` with
+    this shared secret (X-Cinatra-Bridge-Token; see
+    _patch_api_call_step_bridge_token). When it is empty the bridge returns 403,
+    the agent produces no text, and the interactive widget content-edit surfaces
+    "(no response)" with no obvious cause. Historically the loader only WARNED
+    and kept serving, so the misconfiguration was invisible until a user hit it.
+
+    Exiting non-zero here turns that silent, downstream 403 into an immediate,
+    actionable boot failure (and a restart-loop the operator will notice). The
+    container env is supplied by docker/wayflow/.wayflow.env (generated from
+    .env.local by scripts/gen-wayflow-env.mjs); the per-clone path injects it via
+    the spawned-process env (docker/wayflow/compose.clone.template.yml).
+
+    Opt out with CINATRA_ALLOW_NO_BRIDGE_TOKEN=1 for the rare harness that runs
+    the loader with no host bridge (e.g. an isolated mount/health test).
+    """
+    if os.environ.get("CINATRA_ALLOW_NO_BRIDGE_TOKEN") == "1":
+        return
+    token = (os.environ.get("CINATRA_BRIDGE_TOKEN") or "").strip()
+    if token:
+        return
+    import sys
+
+    print(
+        "[agent_loader] FATAL: CINATRA_BRIDGE_TOKEN is unset or empty. The "
+        "runtime cannot authenticate its callback to /api/llm-bridge; the bridge "
+        'would return 403 and every agent reply would be empty ("(no response)" '
+        "in the widget). Refusing to start. Set CINATRA_BRIDGE_TOKEN (the dev "
+        "setup mints one in .env.local; `npm run services` propagates it via "
+        "docker/wayflow/.wayflow.env). To bypass for an isolated test harness, "
+        "set CINATRA_ALLOW_NO_BRIDGE_TOKEN=1.",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(1)
+
+
 def main() -> None:
+    _preflight_bridge_token()
     agents_dir = Path(os.environ.get("CINATRA_AGENTS_DIR", "/agents"))
     parent_app = build_parent_app(agents_dir)
     host = os.environ.get("HOST", "0.0.0.0")

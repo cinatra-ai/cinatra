@@ -435,11 +435,21 @@ export function ensureEnvLocal({ targetDir, mode, resetEnv = false, log = consol
   }
   copyFileSync(examplePath, envPath);
   const secret = randomBytes(32).toString("hex");
+  // The wayflow container authenticates every callback to /api/llm-bridge with
+  // CINATRA_BRIDGE_TOKEN; .env.example ships it COMMENTED, so without minting it
+  // here a fresh install would have no token and `npm run services` (strict via
+  // gen-wayflow-env.mjs --require-bridge-token) would abort. Mint it like
+  // BETTER_AUTH_SECRET. upsertEnvKey anchors on `^CINATRA_BRIDGE_TOKEN=`; the
+  // example's line is commented (`# CINATRA_BRIDGE_TOKEN=`), so the regex misses
+  // and the key is APPENDED as an active assignment — the documentation comment
+  // above it stays intact.
+  const bridgeToken = randomBytes(16).toString("hex");
   let body = readFileSync(envPath, "utf8");
   body = upsertEnvKey(body, "BETTER_AUTH_SECRET", secret);
   body = upsertEnvKey(body, "CINATRA_RUNTIME_MODE", wantMode);
+  body = upsertEnvKey(body, "CINATRA_BRIDGE_TOKEN", bridgeToken);
   writeFileSync(envPath, body);
-  log(`  .env.local created from .env.example with a fresh BETTER_AUTH_SECRET and CINATRA_RUNTIME_MODE=${wantMode}.`);
+  log(`  .env.local created from .env.example with a fresh BETTER_AUTH_SECRET, CINATRA_BRIDGE_TOKEN, and CINATRA_RUNTIME_MODE=${wantMode}.`);
   return { created: true, envPath };
 }
 

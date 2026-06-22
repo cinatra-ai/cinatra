@@ -238,6 +238,9 @@ describe("ensureEnvLocal", () => {
     expect(body).toMatch(/^BETTER_AUTH_SECRET=[0-9a-f]{64}$/m);
     expect(body).toMatch(/^CINATRA_RUNTIME_MODE=development$/m);
     expect(body).toMatch(/^OTHER=keepme$/m); // other keys preserved.
+    // The wayflow bridge token is minted so `npm run services` (strict) runs
+    // out of the box on a fresh install. 16 random bytes → 32 hex chars.
+    expect(body).toMatch(/^CINATRA_BRIDGE_TOKEN=[0-9a-f]{32}$/m);
   });
 
   it("preserves an existing .env.local (same mode) without rewriting the secret", () => {

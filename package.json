@@ -187,7 +187,7 @@
     "authz:retention": "node --env-file=.env.local --import tsx scripts/enforce-audit-retention.mjs",
     "authz:inventory:check": "node scripts/build-authz-inventory.mjs --check",
     "closeout:suite": "node scripts/ci/closeout-suite.mjs",
-    "services": "set -a && source .env.local && set +a && docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
+    "services": "set -a && source .env.local && set +a && node scripts/gen-wayflow-env.mjs --require-bridge-token && docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d",
     "services:down": "docker compose down",
     "setup:dev": "node packages/cli/bin/cinatra.mjs setup dev",
     "setup:prod": "node packages/cli/bin/cinatra.mjs setup prod",

@@ -87,20 +87,32 @@ if [ ! -f .env.local ]; then
 
   # Generate a random auth secret.
   SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p -c 64 | head -1)
+  # Generate the WayFlow bridge shared secret. The wayflow container
+  # authenticates EVERY callback to /api/llm-bridge with this value
+  # (X-Cinatra-Bridge-Token); when it is empty the bridge returns 403, the
+  # agent produces no text, and the interactive widget content-edit surfaces
+  # "(no response)". .env.example ships it COMMENTED (`# CINATRA_BRIDGE_TOKEN=`),
+  # so a fresh dev env would otherwise have no token and `npm run services`
+  # (which now hard-fails on a missing token via gen-wayflow-env.mjs
+  # --require-bridge-token) would abort. Mint it here, like BETTER_AUTH_SECRET.
+  BRIDGE_TOKEN=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32 | head -1)
   # Replace by KEY, not by placeholder text: .env.example ships an empty
   # `BETTER_AUTH_SECRET=` line (no placeholder), so the old
   # `s/replace-with-a-random-32-byte-hex-secret/.../` substitution was a no-op
   # and left the secret blank — `setup:dev` then aborts with "Missing
   # BETTER_AUTH_SECRET". Anchoring on the key works whether the value is empty
-  # or a placeholder.
+  # or a placeholder. The bridge token line ships COMMENTED, so its substitution
+  # anchors on the commented form and rewrites it to an active assignment.
   if [ "$(uname)" = "Darwin" ]; then
     sed -i '' "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i '' "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
+    sed -i '' "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
   else
     sed -i "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
+    sed -i "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
   fi
-  info ".env.local created with a random BETTER_AUTH_SECRET and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
+  info ".env.local created with a random BETTER_AUTH_SECRET, CINATRA_BRIDGE_TOKEN, and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
 else
   # If the user picked a mode that differs from what's in .env.local, refuse
   # to silently mutate the file — surface the conflict so they can resolve it.
