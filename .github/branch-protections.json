@@ -12,7 +12,7 @@
     "Tags, or a `v*` tag protection rule) \u2014 branch protection does not cover tags."
   ],
   "required_status_checks": {
-    "strict": false,
+    "strict": true,
     "contexts": [
       "RBAC browser e2e",
       "Workflows browser e2e",
@@ -20,7 +20,13 @@
       "RBAC authz unit tests",
       "CRM migration gates",
       "/agents Playwright smoke",
-      "source-leak-gate / source-leak-gate"
+      "source-leak-gate / source-leak-gate",
+      "Core-store schema migration gate",
+      "Perpetual system loops invariants",
+      "build",
+      "ui-design-system-gate / ui-design-system-gate",
+      "skills-drift-gate / skills-drift-gate",
+      "truthful-attribution-gate / truthful-attribution-gate"
     ]
   },
   "enforce_admins": false,
