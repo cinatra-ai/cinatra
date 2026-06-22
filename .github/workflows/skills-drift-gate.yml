@@ -45,15 +45,18 @@ jobs:
     uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
     with:
       # assistant-skills pin: points at the commit that carries the skills'
-      # `cinatra-watches` declarations. As of the closeout W1 lock refresh
-      # (cinatra#72) this is back in STRICT LOCKSTEP with the
-      # @cinatra-ai/assistant-skills resolvedSha in
-      # cinatra-required-extensions.lock.json (both 2b65ef8) — the prior
-      # watches-PR lead (skills_ref@4dd273d ahead of lock@d471248) is closed, so
-      # the gate sees the watch metadata for the post-#17/#18 skills while the
-      # product ships the same acquired skill source. Keep them in lockstep: at
-      # each required-extensions lock refresh, re-pin this skills_ref to the new
-      # assistant-skills resolvedSha now written into the lock.
-      skills_ref: 2b65ef8260bda21d0ecdfb90ed300b47b8295820
+      # `cinatra-watches` declarations. As of the closeout W5 skills-drift
+      # reconciliation (cinatra-ai/engineering#244) this is back in STRICT
+      # LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
+      # cinatra-required-extensions.lock.json (both 538a817) — the prior
+      # watches-PR lead (skills_ref@2b65ef8 ahead of lock@2b65ef8, then
+      # lock re-pinned to 538a817 by PR#424 without updating this pin) is
+      # closed. The two intervening commits on assistant-skills are
+      # docs-only (cat /skills/ mount guidance + chat-agent-authoring
+      # instant-grant docs, the latter covered by the PR#382 Skills-PR
+      # acknowledgement). Keep them in lockstep: at each
+      # required-extensions lock refresh, re-pin this skills_ref to the
+      # new assistant-skills resolvedSha now written into the lock.
+      skills_ref: 538a8176f12a5e9dfe0c95f29b4b74cd711f7038
       mode: enforce
       ref: 6e417652524f6449db681034f2cb67e177adc6f6 # same SHA as the workflow @ref
