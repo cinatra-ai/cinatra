@@ -19,7 +19,11 @@ export async function PersonalDashboardPage() {
 
   return (
     <Main className="min-h-screen">
-      <PageHeader title="Personal" divider={false} />
+      <PageHeader
+        title="Personal"
+        description="Your private dashboard, built from the cards you add."
+        divider={false}
+      />
       <PageContent className="flex flex-col gap-6 pb-8">
         <DashboardsClientShell>
           <DeskDashboardGrid />
