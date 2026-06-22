@@ -38,11 +38,22 @@ import "server-only";
 //       from connector / tool input;
 //   (b) DENIES (throws) fail-closed when no `userId` + `orgId` resolve (a
 //       synthetic / anonymous actor can never write);
-//   (c) defensively asserts the platform-admin bypass is NOT honored on the
-//       public-site-widget path (already true post-#408 because
-//       `resolveAgentRunMcpActor` suppresses `platform_admin` for
-//       `sourceType: "public_site_widget"`, so the resolved actor never carries
-//       it) — a belt-and-braces check, audited;
+//   (c) FAILS CLOSED against platform-admin STANDING on EVERY path (cinatra#406
+//       — the merge-time review caught that the public-widget-only suppression
+//       left a fail-OPEN default). A per-user/per-instance CONTENT WRITE must
+//       rest on the user's ACTUAL org membership + per-instance grant, NEVER on
+//       platform-admin standing. So for an actor carrying
+//       `platformRole: "platform_admin"` (regardless of `sourceType`), the
+//       authority resolves the user's REAL membership role host-side
+//       (`resolveOrgRoleForUser` against the trusted org), DENIES fail-closed if
+//       there is no membership row (`platform_admin_without_org_membership`) or
+//       the lookup errors (`org_membership_resolution_error`), and otherwise
+//       delegates with the platform-admin role STRIPPED and `orgRole` pinned to
+//       the REAL membership role — so the package authority decides on the
+//       actual grant, never the admin bypass. The
+//       `sourceType: "public_site_widget"` defensive deny is kept (belt-and-
+//       braces, audited) so a future regression on the widget carrier still
+//       short-circuits before any read;
 //   (d) RESOLVES THE INSTANCE ROW host-side (host-bound reader) and asserts its
 //       persisted org binding == the trusted actor's org — THE per-instance gate
 //       (`instanceId` is load-bearing in the decision, not just audit). A row
@@ -69,6 +80,7 @@ import {
   resolveExtensionActorSummary,
 } from "@/lib/extension-host-actor";
 import { requireConnectorAuthority } from "@/lib/connector-authority";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { logAuditEvent } from "@/lib/authz/audit";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { readWordPressInstanceById } from "@/lib/wordpress-api";
@@ -285,12 +297,47 @@ export function createInstanceWriteAuthority(
     if (!instanceOrgId) await deny("instance_unbound", { userId, orgId });
     if (instanceOrgId !== orgId) await deny("instance_org_mismatch", { userId, orgId });
 
+    // (c-universal) FAIL CLOSED against platform-admin STANDING on EVERY path
+    // (cinatra#406). The connector-package authority's delegated evaluator
+    // (`evaluateExtensionAccess`) and the legacy fallback (`isOrgAdmin`) BOTH
+    // grant `platform_admin` UNCONDITIONALLY before any per-user/per-instance
+    // grant check — so passing a platform-admin actor through would let
+    // admin STANDING alone authorize a content write, defeating this authority's
+    // intent. We therefore resolve the platform admin's REAL membership in the
+    // trusted org and delegate with the admin role STRIPPED:
+    //   - no membership row            → DENY (admin standing is not an org grant)
+    //   - membership lookup errors     → DENY (fail-closed, never allow on error)
+    //   - real member/org_admin/owner  → delegate with platformRole removed and
+    //                                     orgRole pinned to the REAL role, so the
+    //                                     package policy decides on the actual
+    //                                     grant (a real org_admin still gets the
+    //                                     owner-aware admin tier; a plain member
+    //                                     gets workspace visibility as a member).
+    // A non-admin actor is a NO-OP here (`decisionActor === actor`), so the #405
+    // headless and #408 widget entitled-user paths are unaffected. The per-
+    // instance org gate above already pinned the decision to the trusted org, so
+    // membership is only ever resolved for the org the instance is bound to.
+    let decisionActor: ActorContext = actor;
+    if (actor.platformRole === "platform_admin") {
+      let realOrgRole: ActorContext["orgRole"] | undefined;
+      try {
+        realOrgRole = await resolveOrgRoleForUser(orgId, userId);
+      } catch {
+        await deny("org_membership_resolution_error", { userId, orgId });
+      }
+      if (!realOrgRole) {
+        await deny("platform_admin_without_org_membership", { userId, orgId });
+      }
+      decisionActor = { ...actor, platformRole: undefined, orgRole: realOrgRole };
+    }
+
     // (e) Connector-PACKAGE entitlement via the existing connector authority. The
     // package id is HOST-BOUND for this kind — resolved through the connector
     // catalog registry from the host-owned kind→slug map, never caller-supplied.
     // `requireConnectorAuthority` evaluates the connector-package policy for the
-    // actor's org and emits its own `connector_instance` audit row.
-    const decision = await requireConnectorAuthority(packageId, actor, {
+    // actor's org and emits its own `connector_instance` audit row. The actor
+    // passed here NEVER carries platform-admin standing (stripped above).
+    const decision = await requireConnectorAuthority(packageId, decisionActor, {
       mode: "use",
       instanceId,
     });

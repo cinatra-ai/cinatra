@@ -27,6 +27,18 @@
  *   - entitled user, instance bound to actor's org  → ALLOWED
  *   - connector-PACKAGE deny propagates even when the instance org matches
  *   - the connector KIND is host-bound; an unknown kind throws (no reader/policy)
+ *
+ * PLATFORM-ADMIN FAIL-CLOSED on EVERY path (cinatra#406 — the merge-time review).
+ * These assert with the connector-PACKAGE policy mocked to ALLOW (NOT mocked-away
+ * to deny), so each denial proves the NEW host-side gate denies on its own:
+ *   - platform-admin, NO membership, sourceType UNDEFINED → DENIED (without_org_membership)
+ *   - platform-admin, NO membership, sourceType=widget    → DENIED (defensive widget)
+ *   - platform-admin, membership lookup ERRORS            → DENIED (resolution_error)
+ *   - platform-admin who IS a real org_admin → ALLOWED but delegated with
+ *     platform_admin STRIPPED + orgRole pinned to the REAL role (no admin bypass)
+ *   - platform-admin who is a real plain MEMBER → ALLOWED, stripped (delegates as member)
+ *   - non-admin entitled user (#405/#408)     → NO-OP (no membership lookup, actor unchanged)
+ *   - non-member (no trusted actor)           → DENIED before any lookup/policy
  */
 import "server-only";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,6 +57,18 @@ vi.mock("@/lib/wordpress-api", () => ({
 }));
 vi.mock("@/lib/drupal-api", () => ({
   getDrupalAPISettings: () => ({ instances: drupalRows }),
+}));
+
+// Mock the membership resolver (cinatra#406). The platform-admin fail-closed
+// gate resolves the actor's REAL org membership host-side before delegating;
+// the test controls what membership the trusted (orgId,userId) pair has. The
+// FAIL-CLOSED comparison that DENIES (no row / lookup error) is the module's
+// OWN un-mocked logic — this mock only supplies the membership lookup result.
+// Mocking the module also keeps auth-session's heavy import graph out of the
+// unit under test.
+const resolveOrgRoleForUserMock = vi.fn();
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: (...args: unknown[]) => resolveOrgRoleForUserMock(...args),
 }));
 
 import {
@@ -85,6 +109,10 @@ describe("connector-instance write authority (cinatra#409)", () => {
     // Default: the connector-PACKAGE policy ALLOWS — so a denial below is proven
     // to come from the PER-INSTANCE gate, not the package check.
     authoritySpy.mockResolvedValue({ allowed: true });
+    // Default membership lookup: the trusted (orgId,userId) is a plain member.
+    // Platform-admin cases override this per-test to control the REAL membership.
+    resolveOrgRoleForUserMock.mockReset();
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
   });
   afterEach(() => {
     auditSpy.mockRestore();
@@ -234,15 +262,138 @@ describe("connector-instance write authority (cinatra#409)", () => {
     );
   });
 
-  it("a platform-admin on a NON-widget path is still subject to BOTH host gates (no special-case allow)", async () => {
+  // ---------------------------------------------------------------------------
+  // Platform-admin FAIL-CLOSED on EVERY path (cinatra#406).
+  //
+  // The merge-time review caught a fail-OPEN-by-default trap: the public-widget
+  // suppression was OPT-IN via the OPTIONAL `sourceType` field. With sourceType
+  // OMITTED (the default on every non-widget path), a platform-admin actor was
+  // passed UNMODIFIED into the package authority, whose delegated evaluator
+  // grants platform_admin UNCONDITIONALLY before any per-user/per-instance grant
+  // check — so admin STANDING alone could authorize a content write.
+  //
+  // CRITICAL for these tests: the connector-PACKAGE policy is mocked to ALLOW
+  // (the beforeEach default `{ allowed: true }`) — i.e. we DELIBERATELY do NOT
+  // mock-away the bypass. A platform-admin denial below therefore proves the NEW
+  // host-side fail-closed gate denies, NOT that the package mock happened to
+  // deny. The prior test for this case mocked the package policy to DENY, which
+  // masked the real bypass; that is exactly the trap being closed here.
+  // ---------------------------------------------------------------------------
+
+  it("DENIES a platform-admin with NO org membership on the NON-widget path (sourceType UNDEFINED) — even though the package policy ALLOWS", async () => {
     trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
-    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
-    // Instance org matches; the package policy denies → still denied (no bypass).
-    authoritySpy.mockResolvedValue({ allowed: false, reason: "no_grant", skipped: false });
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" }; // instance org MATCHES the actor org
+    // No real membership row for this (orgId,userId) → admin standing is not a grant.
+    resolveOrgRoleForUserMock.mockResolvedValue(undefined);
+    // Package policy ALLOWS (default) — so the denial MUST come from the host gate.
     await expect(
       wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
-    ).rejects.toMatchObject({ reason: "no_grant" });
-    expect(authoritySpy).toHaveBeenCalled();
+    ).rejects.toMatchObject({ reason: "platform_admin_without_org_membership" });
+    // The fail-closed gate denies BEFORE the package authority is ever consulted.
+    expect(authoritySpy).not.toHaveBeenCalled();
+    expect(resolveOrgRoleForUserMock).toHaveBeenCalledWith("org-1", "user-1");
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        metadata: expect.objectContaining({
+          reason: "platform_admin_without_org_membership",
+          packageId: WP_PKG,
+        }),
+      }),
+    );
+  });
+
+  it("DENIES a platform-admin with NO org membership when sourceType is EXPLICITLY public_site_widget — via the defensive widget deny (still fail-closed)", async () => {
+    trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue(undefined);
+    await expect(
+      wpGuard()({
+        instanceId: "wp-1",
+        primitiveName: "wordpress_post_update",
+        sourceType: "public_site_widget",
+      }),
+    ).rejects.toMatchObject({ reason: "platform_admin_on_public_widget" });
+    expect(authoritySpy).not.toHaveBeenCalled();
+  });
+
+  it("DENIES a platform-admin when the membership lookup ERRORS — fail-closed (never allow on a DB read error)", async () => {
+    trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockRejectedValue(new Error("db down"));
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "org_membership_resolution_error" });
+    expect(authoritySpy).not.toHaveBeenCalled();
+    expect(auditSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        decision: "denied",
+        metadata: expect.objectContaining({ reason: "org_membership_resolution_error" }),
+      }),
+    );
+  });
+
+  it("a platform-admin who IS a real org member delegates with platform_admin STRIPPED + orgRole pinned to the REAL role (no admin bypass reaches the package policy)", async () => {
+    trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    // The platform admin is ALSO a real org_admin of org-1 (a legitimate org grant).
+    resolveOrgRoleForUserMock.mockResolvedValue("org_admin");
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    // The actor that reaches the package authority must NOT carry platformRole,
+    // and its orgRole must be the REAL membership role — so the decision rests on
+    // the actual org grant, never platform-admin standing.
+    expect(authoritySpy).toHaveBeenCalledWith(
+      WP_PKG,
+      expect.objectContaining({
+        organizationId: "org-1",
+        principalId: "user-1",
+        platformRole: undefined,
+        orgRole: "org_admin",
+      }),
+      { mode: "use", instanceId: "wp-1" },
+    );
+  });
+
+  it("a platform-admin who is a real plain MEMBER still has platform_admin stripped (delegates as a member, not an admin)", async () => {
+    trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    expect(authoritySpy).toHaveBeenCalledWith(
+      WP_PKG,
+      expect.objectContaining({ platformRole: undefined, orgRole: "member" }),
+      { mode: "use", instanceId: "wp-1" },
+    );
+  });
+
+  it("a NON-admin entitled user (#405 headless / #408 widget) is a NO-OP for the strip gate — the actor reaches the package policy unchanged, no membership lookup", async () => {
+    // A normal entitled member: no platformRole. The strip branch must not fire.
+    trusted(actor({ organizationId: "org-1", orgRole: "member" }));
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).resolves.toBeUndefined();
+    // The membership resolver is NEVER consulted for a non-admin actor.
+    expect(resolveOrgRoleForUserMock).not.toHaveBeenCalled();
+    expect(authoritySpy).toHaveBeenCalledWith(
+      WP_PKG,
+      expect.objectContaining({ organizationId: "org-1", orgRole: "member" }),
+      { mode: "use", instanceId: "wp-1" },
+    );
+  });
+
+  it("a NON-member (no trusted actor) is DENIED before any membership lookup or package policy", async () => {
+    untrusted();
+    wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
+    await expect(
+      wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" }),
+    ).rejects.toMatchObject({ reason: "no_trusted_actor" });
+    expect(resolveOrgRoleForUserMock).not.toHaveBeenCalled();
+    expect(authoritySpy).not.toHaveBeenCalled();
   });
 
   it("gates the Drupal connector through its own host-bound kind (package + reader)", async () => {
