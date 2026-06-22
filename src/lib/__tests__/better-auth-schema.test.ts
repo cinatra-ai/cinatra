@@ -33,7 +33,7 @@ import { buildMigrationAuthOptions } from "../../../scripts/better-auth-migrate.
 
 // Exact set of Better Auth models the migration must create. This is the full
 // plugin-derived set — note it is a superset of `AUTH_TABLES` in
-// packages/cli/src/index.mjs (that list is only a setup-time presence
+// the published @cinatra-ai/cinatra CLI (that list is only a setup-time presence
 // sentinel and intentionally omits `twoFactor`).
 const EXPECTED_MODELS = [
   "account",

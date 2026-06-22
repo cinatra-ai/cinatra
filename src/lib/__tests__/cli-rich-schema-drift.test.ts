@@ -51,7 +51,14 @@ function ssotTableNames(): Set<string> {
 }
 
 function cliSource(): string {
-  return readFileSync(join(process.cwd(), "packages/cli/src/index.mjs"), "utf8");
+  // The `cinatra` CLI now ships as the published @cinatra-ai/cinatra package
+  // (cinatra#402 P2), installed as a pinned root devDependency. Read its
+  // hand-maintained RICH_TABLES / STORE_TABLES lists from node_modules — the
+  // same source this guard tracked when the CLI lived at packages/cli/src.
+  return readFileSync(
+    join(process.cwd(), "node_modules/@cinatra-ai/cinatra/src/index.mjs"),
+    "utf8",
+  );
 }
 
 describe("runtime-installer schema drift guard", () => {

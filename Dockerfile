@@ -24,18 +24,33 @@ COPY scripts scripts
 # Two-phase install around the pinned extension acquisition:
 #   1. first frozen install WITHOUT extensions/ — pnpm tolerates the missing
 #      workspace members (it lays down dangling extension symlinks) and this
-#      install provides the root `tar` dependency + a runnable packages/cli;
+#      install provides the root `tar` dependency + the exact-pinned published
+#      CLI (@cinatra-ai/cinatra, a root devDependency) at node_modules/.bin/cinatra;
 #   2. acquire the required-extension bootable set from the committed lock —
 #      codeload tarballs pinned to commit SHAs, hardened extraction, tree-hash
-#      + package.json verification (packages/cli/src/prod-extension-acquisition.mjs).
+#      + package.json verification (@cinatra-ai/cinatra's prod-extension-acquisition).
 #      Any network / 404 / integrity failure FAILS the image build right here;
 #   3. second frozen install links the now-present extension packages so their
 #      workspace SDK deps resolve (else the later `next build` cannot).
 # The build context never supplies extensions/ (.dockerignore excludes it);
 # the verified in-image acquisition is the only source of extension code.
+# The CLI itself is the published @cinatra-ai/cinatra@<pinned> (cinatra#402 P2),
+# resolved from the lockfile (NOT npx/`latest`) for reproducible prod builds.
 RUN pnpm install --frozen-lockfile
-RUN node packages/cli/bin/cinatra.mjs extensions acquire-prod
+RUN pnpm exec cinatra extensions acquire-prod
 RUN pnpm install --frozen-lockfile
+
+# Materialize a self-contained, symlink-free copy of the published CLI for the
+# runtime stage. `.next/standalone` only carries SERVER-traced node_modules, so
+# the CLI (a devDependency, never imported by server.js) would otherwise be
+# absent from the runtime image. `cp -RL` DEREFERENCES pnpm's virtual-store
+# symlink so the copied tree is real files (a plain `COPY node_modules/...`
+# would copy a dangling .pnpm symlink). The CLI's own deps (pacote/pg/semver/
+# tar/@modelcontextprotocol/sdk, node-pg-migrate via @cinatra-ai/migrations) are
+# already in the standalone-traced node_modules — the materialized CLI resolves
+# them by walking up to /app/node_modules at runtime, exactly as the old in-repo
+# packages/cli did. See the runtime-stage COPY below.
+RUN cp -RL node_modules/@cinatra-ai/cinatra /app/.cinatra-cli
 
 COPY . .
 
@@ -59,7 +74,8 @@ RUN node scripts/extensions/generate-extension-manifest.mjs \
 # migrate runner, not the server) — so the loose scripts/better-auth-migrate.mts
 # cannot resolve it there and `setup prod` fails on a FRESH DB. Bundling here
 # (full node_modules present, AFTER `COPY . .` so src/lib is available) makes the
-# runner independent of the pruned tree. See packages/cli runBetterAuthMigrate.
+# runner independent of the pruned tree. The published @cinatra-ai/cinatra CLI's
+# `setup prod` prefers this bundle over the loose .mts when present.
 RUN pnpm build:auth-migrate-bundle
 
 ENV NODE_ENV=production
@@ -98,19 +114,37 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 
-# Setup CLI — for one-shot tasks via `docker exec`:
-#   docker exec <cid> node packages/cli/bin/cinatra.mjs setup prod
-COPY --from=build /app/packages/cli ./packages/cli
+# Setup CLI — the published @cinatra-ai/cinatra (cinatra#402 P2), materialized
+# symlink-free in the build stage. Placed at its canonical node_modules path so
+# `node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs` resolves both the bin
+# and its deps (the latter ride the standalone-traced node_modules copied above).
+# For one-shot tasks via `docker exec`:
+#   docker exec <cid> node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod
+# (CINATRA_REPO_ROOT=/app is implicit — getRepoRoot() walks up from cwd=/app to
+# the pnpm-workspace.yaml + packages/migrations sentinel; see below.)
+COPY --from=build /app/.cinatra-cli ./node_modules/@cinatra-ai/cinatra
+
+# Deploy-compat transition forwarder (cinatra#402 P2). External deploy tooling
+# (cinatra-ai/ops: deploy-instance.sh, the staging/coolify docker-compose
+# `setup prod` one-shots, setup-{prod,demo}-server.sh) still hardcodes the
+# LEGACY path `node /app/packages/cli/bin/cinatra.mjs setup prod`. This ~5-line
+# file (NOT the old CLI — it re-execs the published CLI copied above) keeps that
+# path working so the image switch does not force a lockstep cross-repo deploy.
+# Dropped in a later release once ops has migrated to the published-CLI path.
+COPY --from=build /app/packages/cli/bin ./packages/cli/bin
 
 # The migration runner package (@cinatra-ai/migrations, cinatra#403), which the
-# CLI imports for `db migrate` / `setup`. Copied explicitly for TWO reasons:
-#   1. `getRepoRoot()`'s checkout sentinel (packages/cli/src/index.mjs) anchors
-#      on `packages/migrations/package.json` (the never-removed internal marker
-#      that survives packages/cli going external at P1/P2). Without this dir the
-#      sentinel fails and every repo-bound CLI command in the image errors.
-#   2. It carries the runner source the CLI's `@cinatra-ai/migrations` import
-#      resolves to (its node-pg-migrate + pg deps still ride the traced
-#      standalone node_modules below).
+# CLI resolves from the checkout for `db migrate` / `setup`. Copied explicitly
+# for TWO reasons:
+#   1. `getRepoRoot()`'s checkout sentinel (in the published @cinatra-ai/cinatra
+#      CLI) anchors on `packages/migrations/package.json` (the never-removed
+#      internal marker that survives packages/cli going external at P1/P2).
+#      Without this dir the sentinel fails and every repo-bound CLI command in
+#      the image errors. (The other half of the sentinel, pnpm-workspace.yaml,
+#      rides the standalone trace copied above.)
+#   2. It carries the runner source the published CLI's checkout-resolved
+#      `@cinatra-ai/migrations` import resolves to (its node-pg-migrate + pg deps
+#      still ride the traced standalone node_modules below).
 COPY --from=build /app/packages/migrations ./packages/migrations
 
 # Core schema migrations (node-pg-migrate modules, cinatra#116). The boot pass

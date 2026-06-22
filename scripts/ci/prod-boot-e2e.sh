@@ -155,10 +155,35 @@ done
 
 # ── 2. One-shot `setup prod` on the FRESH database ───────────────────────────
 # Mirrors ops deploy-instance.sh: docker run --rm --env-file <secrets>
-#   -e CINATRA_RUNTIME_MODE=production <image> node packages/cli/bin/cinatra.mjs setup prod
+#   -e CINATRA_RUNTIME_MODE=production <image> \
+#     node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod
+# The CLI is now the PUBLISHED @cinatra-ai/cinatra (cinatra#402 P2), materialized
+# into the image at node_modules/@cinatra-ai/cinatra (Dockerfile runtime stage).
+# CINATRA_REPO_ROOT=/app is set explicitly: with the published CLI at
+# node_modules/, getRepoRoot()'s module-relative candidate no longer resolves, so
+# the repo root comes from the cwd-walk (cwd=/app, the image WORKDIR) — the env
+# override makes that load-bearing resolution explicit and cwd-independent.
 # Asserting exit 0 here covers: the standalone-image acquisition no-op guard
 # (runs BEFORE any DB mutation), the bundled Better Auth migration on a fresh
 # DB, store schema + default organization + MCP settings rows.
+#
+# First, prove the DEPLOY-COMPAT LEGACY FORWARDER path (cinatra#402 P2). External
+# deploy tooling (cinatra-ai/ops) still invokes `node packages/cli/bin/cinatra.mjs`
+# (cwd=/app); the image ships a thin shim at that path that re-execs the published
+# CLI. This DB-free `--help` smoke fails the boot gate if that forwarder is broken
+# (missing target, wrong exec, non-zero exit), so the legacy path ops depends on
+# is proven by CI — not just static review.
+echo "==> deploy-compat legacy forwarder smoke (node packages/cli/bin/cinatra.mjs --help)"
+LEGACY_HELP="$(docker run --rm "$IMAGE" node packages/cli/bin/cinatra.mjs --help 2>&1)" || {
+  printf '%s\n' "$LEGACY_HELP"
+  fail "legacy deploy-compat forwarder (packages/cli/bin/cinatra.mjs) did not run --help cleanly."
+}
+if ! printf '%s' "$LEGACY_HELP" | grep -qiE 'Cinatra setup CLI|Usage:'; then
+  printf '%s\n' "$LEGACY_HELP"
+  fail "legacy forwarder ran but did not forward to the published CLI (no help banner)."
+fi
+echo "    legacy forwarder OK — re-execs the published @cinatra-ai/cinatra CLI"
+
 echo "==> cinatra setup prod (fresh database)"
 docker run --rm --network "$NET" \
   -e SUPABASE_DB_URL="$DB_URL_IN_NET" \
@@ -167,7 +192,8 @@ docker run --rm --network "$NET" \
   -e BETTER_AUTH_URL="$APP_ORIGIN" \
   -e CINATRA_ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -e CINATRA_RUNTIME_MODE=production \
-  "$IMAGE" node packages/cli/bin/cinatra.mjs setup prod
+  -e CINATRA_REPO_ROOT=/app \
+  "$IMAGE" node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod
 
 # ── 3. Boot the app container (Next standalone server.js) ────────────────────
 # Env mirrors the ops app-container contract (environments/cinatra_cinatra_app):

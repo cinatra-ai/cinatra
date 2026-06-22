@@ -3,7 +3,7 @@
 // (cinatra#255 G2).
 //
 // Stores files UNCOMPRESSED (method 0) — byte-compatible with the CLI's own
-// codec (packages/cli/src/index.mjs `createZipBufferCli` / `readZipFilesCli`)
+// codec (the published @cinatra-ai/cinatra CLI's `createZipBufferCli` / `readZipFilesCli`)
 // so a ZIP produced by either side is readable by the other. This is the same
 // algorithm `@cinatra-ai/agents/zip-helpers` uses; duplicated locally to keep
 // the `/api/cli/*` surface self-contained (no cross-package surface widening).

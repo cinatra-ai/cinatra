@@ -7,7 +7,7 @@ setup:
 # Update an existing checkout: after `git pull`, reconcile dependencies and the
 # dev database schema to the code on disk. Dev-only; never touches git.
 refresh:
-	node packages/cli/bin/cinatra.mjs dev refresh
+	pnpm exec cinatra dev refresh
 
 # Validate that every supporting service is reachable.
 check:
@@ -29,7 +29,7 @@ reset:
 # Full reset: equivalent to a fresh clone — wipes Docker volumes, node_modules,
 # build artifacts, regenerates .env.local, reinstalls everything from scratch.
 reset-full:
-	node packages/cli/bin/cinatra.mjs reset dev --yes --full --rebuild-env
+	pnpm exec cinatra reset dev --yes --full --rebuild-env
 
 # Show infrastructure logs.
 logs:

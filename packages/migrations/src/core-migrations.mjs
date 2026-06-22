@@ -2,7 +2,7 @@
 //
 // THE canonical implementation for cinatra#116 + #118 (umbrella #115: one
 // migration engine org-wide). Consumers share it so the options can never drift:
-//   - `cinatra setup dev|prod` / `setup branch` (packages/cli/src/index.mjs),
+//   - `cinatra setup dev|prod` / `setup branch` (the @cinatra-ai/cinatra CLI),
 //   - the app boot pass (src/lib/core-migrations.ts -> src/instrumentation.node.ts),
 //   - the ops entry point (`cinatra db migrate [--down] [--count=N]`),
 //   - the extension migration host (src/lib/extension-migration-host.ts), which

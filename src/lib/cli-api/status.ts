@@ -2,9 +2,9 @@
 // Server-side `cinatra status` payload (cinatra#255 G2).
 //
 // Re-homes the read that `cinatra status` performs directly against Postgres
-// today (packages/cli/src/index.mjs `gatherStatus`) onto the instance, so the
-// published `cinatra` bin can fetch the same JSON over an authenticated API
-// instead of needing the DB connection string.
+// today (the published @cinatra-ai/cinatra CLI's `gatherStatus`) onto the
+// instance, so the published `cinatra` bin can fetch the same JSON over an
+// authenticated API instead of needing the DB connection string.
 //
 // The returned shape MUST stay byte-compatible with what the CLI's
 // `gatherStatus()` returns (plus the `runtimeMode` the CLI prepends), so the
@@ -19,9 +19,9 @@
 import { betterAuthPool } from "@/lib/better-auth-db";
 import { readMetadataValueFromDatabase } from "@/lib/database";
 
-// Kept in lockstep with packages/cli/src/index.mjs `AUTH_TABLES`. The CLI is
-// the source of truth; this server mirror is asserted equal by the CLI's
-// status snapshot test against the documented shape.
+// Kept in lockstep with the published @cinatra-ai/cinatra CLI's `AUTH_TABLES`.
+// The CLI is the source of truth; this server mirror is asserted equal by the
+// CLI's status snapshot test against the documented shape.
 const AUTH_TABLES = [
   "user",
   "session",

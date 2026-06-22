@@ -274,6 +274,9 @@ importers:
       '@axe-core/playwright':
         specifier: ^4.11.3
         version: 4.11.3(playwright-core@1.61.0)
+      '@cinatra-ai/cinatra':
+        specifier: 0.1.1
+        version: 0.1.1(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@playwright/test':
         specifier: ^1.61.0
         version: 1.61.0
@@ -1548,27 +1551,9 @@ importers:
 
   packages/cli:
     dependencies:
-      '@cinatra-ai/connectors-catalog':
-        specifier: workspace:*
-        version: link:../connectors-catalog
-      '@cinatra-ai/migrations':
-        specifier: workspace:*
-        version: link:../migrations
-      '@cinatra-ai/skills':
-        specifier: workspace:*
-        version: link:../skills
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
-      pacote:
-        specifier: ^21.5.1
-        version: 21.5.1
-      pg:
-        specifier: ^8.21.0
-        version: 8.21.0
-      semver:
-        specifier: ^7.8.4
-        version: 7.8.4
+      tar:
+        specifier: ^7.5.16
+        version: 7.5.16
     devDependencies:
       vitest:
         specifier: ^4.1.9
@@ -2369,6 +2354,11 @@ packages:
 
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
+
+  '@cinatra-ai/cinatra@0.1.1':
+    resolution: {integrity: sha512-1ZTrmd+9N88JfG2cdWdcf8kwDhj5SYdFjCj3/KGAXZUqDnGE8VZxZHOJS/m1+Ygk/KoQHfJK+f50vjYLTg+Zsw==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   '@csstools/color-helpers@6.0.2':
     resolution: {integrity: sha512-LMGQLS9EuADloEFkcTBR3BwV/CGHV7zyDxVRtVDTwdI2Ca4it0CCVTT9wCkxSgokjE5Ho41hEPgb8OEUwoXr6Q==}
@@ -10586,6 +10576,19 @@ snapshots:
 
   '@chevrotain/types@11.1.2': {}
 
+  '@cinatra-ai/cinatra@0.1.1(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      pacote: 21.5.1
+      pg: 8.21.0
+      semver: 7.8.4
+      tar: 7.5.16
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - pg-native
+      - supports-color
+      - zod
+
   '@csstools/color-helpers@6.0.2': {}
 
   '@csstools/css-calc@3.2.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)':
@@ -14113,7 +14116,7 @@ snapshots:
       '@typescript-eslint/visitor-keys': 8.61.0
       debug: 4.4.3
       minimatch: 10.2.5
-      semver: 7.8.4
+      semver: 7.8.0
       tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
@@ -14128,7 +14131,7 @@ snapshots:
       '@typescript-eslint/visitor-keys': 8.61.1
       debug: 4.4.3
       minimatch: 10.2.5
-      semver: 7.8.4
+      semver: 7.8.0
       tinyglobby: 0.2.17
       ts-api-utils: 2.5.0(typescript@6.0.3)
       typescript: 6.0.3
@@ -16318,7 +16321,7 @@ snapshots:
 
   is-bun-module@2.0.0:
     dependencies:
-      semver: 7.8.4
+      semver: 7.8.0
 
   is-callable@1.2.7: {}
 
@@ -18038,7 +18041,7 @@ snapshots:
     dependencies:
       '@img/colour': 1.1.0
       detect-libc: 2.1.2
-      semver: 7.8.4
+      semver: 7.8.0
     optionalDependencies:
       '@img/sharp-darwin-arm64': 0.34.5
       '@img/sharp-darwin-x64': 0.34.5

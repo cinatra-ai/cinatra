@@ -8,7 +8,7 @@ import { betterAuthDb } from "@/lib/better-auth-db";
 
 // Single source of truth (app-runtime TS) for INSERTs/DELETEs against
 // public."oauthClient" — the Better Auth oauth-provider table. The CLI
-// (packages/cli/src/index.mjs) issues raw pg queries against the same
+// (the published @cinatra-ai/cinatra) issues raw pg queries against the same
 // table and is intentionally out of scope here; it owns its own
 // connection pool and a larger column set (skipConsent, requirePKCE,
 // scopes, etc.) than the runtime callers need. Keep this module narrow

@@ -1,5 +1,5 @@
 // CLI-safe connector descriptors. Plain JS, no imports, no transitive Node-only or
-// browser-only deps. Imported by both `packages/cli/` (plain Node, agents-install.mjs)
+// browser-only deps. Imported by both the @cinatra-ai/cinatra CLI (plain Node, agents-install.mjs)
 // and the host server registry (`src/lib/connectors-registry.server.ts`).
 //
 // Catalog layering: this file holds pure data only. Readiness probes + setup-page

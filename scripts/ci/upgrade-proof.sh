@@ -72,8 +72,18 @@ set -euo pipefail
 #   SUPABASE_SCHEMA      app schema (default cinatra).
 #
 # The CANDIDATE side runs from the current checkout (this repo): its bootstrap
-# DDL via tsx + its migration runner via `node packages/cli/bin/cinatra.mjs`.
-# Run from the repo root.
+# DDL via tsx + its migration runner via the published `cinatra` CLI resolved
+# from node_modules (@cinatra-ai/cinatra, a pinned devDependency; cinatra#402 P2).
+# Run from the repo root (so node_modules/.bin/cinatra and the migrations/ +
+# packages/migrations checkout sentinel are present).
+#
+# NOTE (cinatra#402 P2 transition): the PREV_IMAGE side below deliberately keeps
+# the legacy `node packages/cli/bin/cinatra.mjs` invocation — older published
+# release images (e.g. 0.1.x) still ship the in-image packages/cli bin and do
+# NOT carry node_modules/@cinatra-ai/cinatra. Only the candidate (current-
+# checkout) side moves to the published CLI. Once a release built FROM this
+# change becomes a PREV_IMAGE, switch that side to
+# `node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod` too.
 
 PREV_IMAGE="${PREV_IMAGE:-}"
 PREV_IMAGE_PLATFORM="${PREV_IMAGE_PLATFORM:-linux/amd64}"
@@ -251,7 +261,7 @@ echo "    pre-migrate core__ ledger: $(printf '%s' "$PRE_LEDGER_CORE" | grep -c 
 
 echo "==> [candidate] run core migration chain (cinatra db migrate)"
 MIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node packages/cli/bin/cinatra.mjs db migrate 2>&1)" \
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs db migrate 2>&1)" \
   || { printf '%s\n' "$MIGRATE_OUT"; fail "candidate core migration chain failed against the upgraded database."; }
 printf '%s\n' "$MIGRATE_OUT"
 
@@ -374,7 +384,7 @@ echo "    data preserved — 3/3 seeded rows survive, every (id, payload) byte-i
 # ── 5c. IDEMPOTENCY ──────────────────────────────────────────────────────────
 echo "==> assert: re-running the candidate chain is a no-op"
 REMIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node packages/cli/bin/cinatra.mjs db migrate 2>&1)"
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs db migrate 2>&1)"
 printf '%s\n' "$REMIGRATE_OUT" | tail -2
 if ! printf '%s' "$REMIGRATE_OUT" | grep -qiE 'No migrations to run|up to date'; then
   fail "re-running the migration chain was NOT a no-op — idempotency broken."

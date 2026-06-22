@@ -1,5 +1,5 @@
 // Plain-Node smoke test — exercises the import path that
-// `packages/cli/src/agents-install.mjs` will use. Runs under vitest but
+// the @cinatra-ai/cinatra CLI's agents-install will use. Runs under vitest but
 // MUST NOT transitively pull anything that requires bundler/Next.js
 // resolution. If this test starts failing because some dependency leaked in,
 // the catalog has been broken by the change you just made.

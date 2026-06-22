@@ -273,7 +273,10 @@ export default defineConfig({
       // Vendor Anthropic skills fetcher safety tests (spawn-based; no network;
       // CI-postinstall env safety).
       "scripts/__tests__/**/*.test.{ts,mjs}",
-      // CLI dev-marketplace plugin sync (dependency-injected git; no real git).
+      // Monorepo-owned dev/CI extension tooling (cinatra#402 P2): dev-extension
+      // sync + prod-extension acquisition helpers (dependency-injected git/IO;
+      // no real git/network). The user-facing CLI now ships externally as
+      // @cinatra-ai/cinatra and is tested in the cinatra-ai/cinatra-cli repo.
       "packages/cli/src/__tests__/**/*.test.{ts,mjs}",
       // Schema-migration runner contract (cinatra#403: relocated from
       // packages/cli to the internal @cinatra-ai/migrations package; pure

@@ -1,23 +1,14 @@
 {
   "name": "@cinatra-ai/cli",
-  "description": "The cinatra command-line tool for setting up, operating, and maintaining a Cinatra instance",
+  "description": "Internal, monorepo-owned dev/CI extension tooling (dev-extension sync + prod-extension acquisition helpers). The user-facing `cinatra` CLI now ships as the published @cinatra-ai/cinatra package; this package carries ONLY the checkout-operating helper modules the host's dev/release scripts import in-repo (cinatra#402 P2).",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "cinatra": "./bin/cinatra.mjs"
-  },
   "scripts": {
     "test": "vitest"
   },
   "dependencies": {
-    "@cinatra-ai/connectors-catalog": "workspace:*",
-    "@cinatra-ai/migrations": "workspace:*",
-    "@cinatra-ai/skills": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "pacote": "^21.5.1",
-    "pg": "^8.21.0",
-    "semver": "^7.8.4"
+    "tar": "^7.5.16"
   },
   "devDependencies": {
     "vitest": "^4.1.9"

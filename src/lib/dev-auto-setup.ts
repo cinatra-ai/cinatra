@@ -241,7 +241,7 @@ function cinatraBrowserBaseUrl(): string {
  * Strip trailing slashes via a LINEAR char-index trim. The anchored greedy
  * `/\/+$/` is polynomial-ReDoS on input with many trailing slashes (CodeQL
  * `js/polynomial-redos`, high) — the codebase has standardised on this linear
- * form (see `resolveLocalOrigin` in packages/cli and
+ * form (see `resolveLocalOrigin` in the @cinatra-ai/cinatra CLI and
  * `normaliseMcpPublicBaseUrl` in packages/mcp-server). Never use `/\/+$/`.
  */
 export function trimTrailingSlashes(input: string): string {

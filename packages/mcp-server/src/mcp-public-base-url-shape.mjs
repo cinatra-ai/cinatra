@@ -5,7 +5,7 @@
 // from anywhere:
 //   - TS in-process callers (`packages/mcp-server/src/llm-credentials.ts`)
 //     via `import { normaliseMcpPublicBaseUrl } from "./mcp-public-base-url-shape.mjs"`.
-//   - The plain-`.mjs` Cinatra CLI (`packages/cli/src/index.mjs`) directly.
+//   - The plain-`.mjs` Cinatra CLI (the published @cinatra-ai/cinatra) directly.
 //
 // Why a separate file: the CLI must write `mcp_server.publicBaseUrl` into a
 // clone's Postgres DB, but the existing TS
@@ -19,7 +19,7 @@
 /**
  * The metadata row key under which the MCP server's settings live. Stable
  * across the writers; matches `MCP_SETTINGS_KEY` in
- * `packages/mcp-server/src/llm-credentials.ts` and `packages/cli/src/index.mjs`.
+ * `packages/mcp-server/src/llm-credentials.ts` and the published @cinatra-ai/cinatra CLI.
  */
 export const MCP_PUBLIC_BASE_URL_METADATA_KEY = "connector_config:mcp_server";
 
