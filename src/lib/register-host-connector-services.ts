@@ -56,6 +56,7 @@ import {
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
+  type HostInstanceWriteAuthorityService,
   type HostWordPressWidgetAuthService,
   type WordPressInstanceRowShape,
   type HostExternalMcpRegistryService,
@@ -90,6 +91,14 @@ import {
 // content-editor connectors). Carries the @cinatra-ai/llm + @cinatra-ai/a2a
 // runtime edges host-side so neither connector imports them.
 import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
+// Per-user / per-connector-instance WRITE authority for the CMS content path
+// (cinatra#409): the host-owned authority the wordpress/drupal content-editor
+// connectors call before EVERY write primitive. It resolves the TRUSTED user
+// actor host-side (never from connector input), fails closed on no actor, and
+// delegates to the existing per-instance connector-authority policy. The
+// package whose policy is evaluated is host-bound (allowlist-validated in
+// `selectForPackage`) — never caller-supplied.
+import { createInstanceWriteAuthorityService } from "./connector-instance-write-authority";
 // WordPress instance settings + hard-delete + LinkedIn account
 // materialization for the nango connection-save flow — published as the
 // BLOCKING `nango-connection-materializer` capability and the
@@ -430,6 +439,22 @@ export function registerHostConnectorServices(): void {
         fields: input.fields,
       }),
   } satisfies HostWordPressContentService);
+
+  // Per-user / per-connector-instance WRITE authority (cinatra#409). The
+  // wordpress/drupal content-editor MCP connectors resolve this service and
+  // call `selectForConnector(<their kind>).requireWrite(...)` at the TOP of
+  // every write primitive (after schema-parse + instance resolve, before any
+  // host content writer). The host resolves the TRUSTED user actor from the
+  // active MCP/llm/cookie frame (NEVER connector input), DENIES fail-closed when
+  // no userId+orgId resolve, then enforces TWO host-side gates keyed on the
+  // trusted actor's org: (1) PER-INSTANCE — resolves the instance row host-side
+  // and asserts its persisted org binding (cinatra#274) == the actor's org, so a
+  // forged instanceId (same-org-mismatch or different-org) is DENIED and an
+  // unknown/unbound row is DENIED fail-closed; (2) CONNECTOR-PACKAGE — the
+  // existing `requireConnectorAuthority` policy (emits a `connector_instance`
+  // audit row). `selectForConnector` maps the connector KIND to BOTH the package
+  // id and the instance reader host-side — neither is ever caller-supplied.
+  register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
 
   // Widget auth-config storage for the wordpress assistant widget (cinatra#172
   // Stage H3): `generate` MINTS+PERSISTS a fresh key + webhook secret

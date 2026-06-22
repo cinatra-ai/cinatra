@@ -406,6 +406,8 @@ export type {
   HostDrupalWidgetAuthService,
   HostWordPressMcpService,
   HostWordPressContentService,
+  HostInstanceWriteAuthorityService,
+  InstanceWriteConnectorKind,
   HostWordPressWidgetAuthService,
   WordPressInstanceRowShape,
   HostGitHubConnectionService,

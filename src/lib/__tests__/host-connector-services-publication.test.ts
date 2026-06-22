@@ -334,6 +334,7 @@ import {
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
+  type HostInstanceWriteAuthorityService,
   type HostWordPressWidgetAuthService,
   type HostExternalMcpRegistryService,
   type HostGitHubConnectionService,
@@ -697,6 +698,31 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     });
     expect(wpWidgetAuthCalls.read).toBe(1);
     expect(wpWidgetAuthCalls.generate).toBe(1);
+  });
+});
+
+describe("per-user/per-instance write authority service (cinatra#409)", () => {
+  it("publishes @cinatra-ai/host:instance-write-authority with a HOST-BOUND selectForConnector guard", () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority).toBe(
+      "@cinatra-ai/host:instance-write-authority",
+    );
+    const authority = resolveSingle<HostInstanceWriteAuthorityService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority,
+    );
+    // The two CMS content connectors bind their own static KIND → a guard. The
+    // host maps the kind to BOTH the package id and the instance reader.
+    const wp = authority.selectForConnector("wordpress");
+    const drupal = authority.selectForConnector("drupal");
+    expect(typeof wp.requireWrite).toBe("function");
+    expect(typeof drupal.requireWrite).toBe("function");
+    // An unknown connector kind THROWS host-side — the package whose policy is
+    // evaluated and the instance reader can never be arbitrary caller input
+    // (codex must-fix). A package id passed where a KIND is expected is unknown.
+    // The contract type is the closed union `"wordpress" | "drupal"`; cast to
+    // exercise the RUNTIME guard against an off-union string.
+    const selectAny = authority.selectForConnector as (kind: string) => unknown;
+    expect(() => selectAny("@attacker/evil")).toThrow();
+    expect(() => selectAny("@cinatra-ai/wordpress-mcp-connector")).toThrow();
   });
 });
 
