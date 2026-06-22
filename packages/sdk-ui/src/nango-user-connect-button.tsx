@@ -27,6 +27,11 @@ type NangoUserConnectButtonProps = {
   nangoFrontendConfig?: NangoFrontendConfig;
   className?: string;
   prerequisiteErrorMessage?: string;
+  // Disable the button when a precondition is unmet (e.g. a required OAuth
+  // client is not configured yet). Mirrors tailscale-connect-form's
+  // `disabled={isPending || !canSubmit}` — pair with guidance text explaining
+  // what to do. Always OR-ed with the internal pending state.
+  disabled?: boolean;
   onError?: (message: string) => void;
   onClickOverride?: () => void | Promise<void>;
 };
@@ -162,6 +167,7 @@ export function NangoUserConnectButton({
   nangoFrontendConfig,
   className,
   prerequisiteErrorMessage,
+  disabled = false,
   onError,
   onClickOverride,
 }: NangoUserConnectButtonProps) {
@@ -187,7 +193,7 @@ export function NangoUserConnectButton({
         }
         void openConnection();
       }}
-      disabled={pending}
+      disabled={pending || disabled}
       className={className}
     >
       {pending ? "Opening..." : connected ? reconnectLabel : connectLabel}
@@ -208,7 +214,7 @@ export function NangoUserConnectButton({
 
 type NangoUserConnectCardProps = Pick<
   NangoUserConnectButtonProps,
-  "connectorKey" | "reconnectConnectionId" | "connected" | "nangoFrontendConfig" | "prerequisiteErrorMessage"
+  "connectorKey" | "reconnectConnectionId" | "connected" | "nangoFrontendConfig" | "prerequisiteErrorMessage" | "disabled"
 > & {
   title: string;
   icon: ReactNode;
@@ -223,6 +229,7 @@ export function NangoUserConnectCard({
   connected = false,
   nangoFrontendConfig,
   prerequisiteErrorMessage,
+  disabled = false,
   title,
   subtitle,
   icon,
@@ -249,7 +256,7 @@ export function NangoUserConnectCard({
         }
         void openConnection();
       }}
-      disabled={pending}
+      disabled={pending || disabled}
       className={
         className ??
         "group flex h-full w-full flex-col justify-between rounded-card border border-line bg-surface-strong p-6 text-left transition hover:border-primary hover:shadow-strong disabled:cursor-wait disabled:opacity-80 h-auto items-stretch whitespace-normal"
