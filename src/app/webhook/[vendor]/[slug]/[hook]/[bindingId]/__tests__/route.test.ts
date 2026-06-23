@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHmac } from "node:crypto";
 import { signOutbound } from "@cinatra-ai/webhooks";
 import type {
   ResolvedBinding,
@@ -289,17 +290,111 @@ describe("generic /webhook route — outcome → HTTP", () => {
   });
 });
 
-describe("generic /webhook route — legacy branch is DORMANT in #340", () => {
-  it("a non-legacy binding NEVER takes the legacy branch (verifies normally)", async () => {
+describe("generic /webhook route — #343 legacy HMAC bridge", () => {
+  const LEGACY_SECRET = "shared-legacy-secret-xyz";
+
+  function legacyBinding(over: Partial<ResolvedBinding> = {}): ResolvedBinding {
+    return baseBinding({ legacyEnabled: true, secrets: [], legacySecret: LEGACY_SECRET, ...over });
+  }
+
+  function legacyRequest(
+    payload: unknown,
+    {
+      messageId = "wp-msg-1",
+      secret = LEGACY_SECRET,
+      withId = true,
+      withSig = true,
+      bodyOverride,
+    }: {
+      messageId?: string;
+      secret?: string;
+      withId?: boolean;
+      withSig?: boolean;
+      bodyOverride?: string;
+    } = {},
+  ): Request {
+    const body = bodyOverride ?? JSON.stringify(payload);
+    const sig = "sha256=" + createHmac("sha256", secret).update(Buffer.from(body, "utf8")).digest("hex");
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (withId) headers["x-cinatra-webhook-id"] = messageId;
+    if (withSig) headers["x-cinatra-sig-256"] = sig;
+    return new Request(`http://localhost/webhook/${VENDOR}/${SLUG}/${HOOK}/${BINDING_ID}`, {
+      method: "POST",
+      headers,
+      body,
+    });
+  }
+
+  it("a non-legacy binding NEVER takes the legacy branch (Standard-Webhooks verifies normally)", async () => {
     handlerReturning({ outcome: "accepted" });
     const res = await POST(signedRequest({ a: 1 }), params());
-    // A normal accepted outcome proves the legacy branch was skipped.
     expect(res.status).toBe(200);
   });
 
-  it("a (hypothetical) legacyEnabled binding fails closed 401 in #340 (no legacy secret stored)", async () => {
-    resolveByBindingId.mockResolvedValue(baseBinding({ legacyEnabled: true }));
-    const res = await POST(signedRequest({ a: 1 }), params());
+  it("a legacy binding with a valid HMAC + id → dispatch (200) keyed on the header id", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    handlerReturning({ outcome: "accepted" });
+    const res = await POST(legacyRequest({ event: "post_published", postId: 7 }), params());
+    expect(res.status).toBe(200);
+    // The idempotency ledger is keyed on the X-Cinatra-Webhook-Id header value.
+    expect(claim).toHaveBeenCalledWith(expect.any(String), SITE_ID, "wp-msg-1");
+    expect(finalize).toHaveBeenCalledWith(expect.any(String), SITE_ID, "wp-msg-1", 1, "done");
+  });
+
+  it("the handler sees the binding siteId + the parsed legacy payload (not Standard-Webhooks)", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    let seenPayload: unknown;
+    let seenSiteId: string | undefined;
+    buildWebhookHandler.mockResolvedValue(async (ctx: { webhook: { siteId: string; payload: unknown } }) => {
+      seenSiteId = ctx.webhook.siteId;
+      seenPayload = ctx.webhook.payload;
+      return { outcome: "accepted" } as WebhookHandlerOutcome;
+    });
+    await POST(legacyRequest({ event: "post_published", postId: 42 }), params());
+    expect(seenSiteId).toBe(SITE_ID);
+    expect(seenPayload).toEqual({ event: "post_published", postId: 42 });
+  });
+
+  it("a legacy binding with a BAD HMAC → 401 (no dispatch)", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    const res = await POST(legacyRequest({ a: 1 }, { secret: "wrong-secret" }), params());
+    expect(res.status).toBe(401);
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("a legacy binding MISSING the X-Cinatra-Webhook-Id → fail closed 401 (even with a valid HMAC)", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    const res = await POST(legacyRequest({ a: 1 }, { withId: false }), params());
+    expect(res.status).toBe(401);
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("a legacy binding MISSING the X-Cinatra-Sig-256 → 401", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    const res = await POST(legacyRequest({ a: 1 }, { withSig: false }), params());
+    expect(res.status).toBe(401);
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("a legacy binding with a valid HMAC over a NON-JSON body → 400 invalid-payload", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    const res = await POST(legacyRequest(null, { bodyOverride: "not json" }), params());
+    expect(res.status).toBe(400);
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it("dedupes a replayed legacy delivery (same X-Cinatra-Webhook-Id) → 200 deduped, no dispatch", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    claim.mockResolvedValue({ kind: "deduped" });
+    const res = await POST(legacyRequest({ a: 1 }), params());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ deduped: true });
+    expect(buildWebhookHandler).not.toHaveBeenCalled();
+  });
+
+  it("a legacyEnabled binding with NO stored legacy secret fails closed 401 (defensive)", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding({ legacySecret: undefined }));
+    const res = await POST(legacyRequest({ a: 1 }), params());
     expect(res.status).toBe(401);
     expect(claim).not.toHaveBeenCalled();
   });

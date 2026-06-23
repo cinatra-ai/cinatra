@@ -4244,9 +4244,10 @@ END $$` },
     // ref), with the bounded dual-secret rotation window (previous_* until
     // previous_expires_at). Resolved by the server-issued opaque binding_id
     // (NEVER the payload). Partial-unique active-row index enforces at most one
-    // active binding per tuple. legacy_enabled is the #343 structural hook
-    // (legacy-secret storage deferred to #343; false in #340). site_id uuid.
-    // Migration parity: core__0009.
+    // active binding per tuple. legacy_enabled flags the #343 legacy bridge; the
+    // legacy_secret_ciphertext/iv columns store its shared HMAC secret ENCRYPTED
+    // (host secretsCodec blob, AAD field "legacy"), null for a Standard-Webhooks
+    // binding. site_id uuid. Migration parity: core__0009 + core__0011.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (
       binding_id                 text PRIMARY KEY,
       vendor                     text NOT NULL,
@@ -4260,6 +4261,8 @@ END $$` },
       previous_expires_at        timestamptz,
       rotated_at                 timestamptz,
       legacy_enabled             boolean NOT NULL DEFAULT false,
+      legacy_secret_ciphertext   text,
+      legacy_secret_iv           text,
       revoked_at                 timestamptz,
       created_at                 timestamptz NOT NULL DEFAULT now()
     )` },
