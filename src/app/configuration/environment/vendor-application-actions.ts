@@ -27,6 +27,7 @@ import {
   VendorCredentialsMissingError,
 } from "@/lib/marketplace-credentials";
 import { getMarketplaceTermsAcceptance } from "@/lib/marketplace-terms";
+import { isTerminalAuthFailure } from "./vendor-application-cm-errors";
 
 /**
  * Server actions for the "Become a vendor" UI on
@@ -175,6 +176,53 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
   const priorVendorState: NonNullable<typeof identity.vendorState> =
     identity.vendorState ?? "none";
   const priorVendorApplicationId = identity.vendorApplicationId ?? null;
+  // Captured for the rollback's success-detection: every cm-success write sets
+  // `vendorScope` to the cm-confirmed `response.scope`, whereas the persist-first
+  // stamp leaves it untouched. A change here therefore proves a concurrent
+  // success committed (a real cm row exists) and must block the rollback.
+  const priorVendorScope = identity.vendorScope ?? null;
+
+  // Roll back the persist-first marker to the prior (concrete) state. Only the
+  // FRESH case ever stamps the marker, so reuse-existing applications are left
+  // untouched (their marker pre-dates this submit and must survive for retry).
+  //
+  // COMPARE-AND-CLEAR against the EXACT transient shape this invocation wrote.
+  // We re-read inside the boundary and only clear when the row is still our own
+  // un-advanced persist-first stamp on ALL of:
+  //   - vendorApplicationId === our applicationId   (still our id)
+  //   - vendorState === "applied"                   (not flipped to approved)
+  //   - vendorApplicationRepairStuckAt == null       (no reconcile worker write)
+  //   - vendorScope === priorVendorScope             (NO cm-success write landed)
+  //
+  // The last clause is the success guard. The cm-success branch is the ONLY
+  // writer of `vendorScope = response.scope`; the persist-first stamp never
+  // touches it. So if a CONCURRENT invocation (e.g. one that reused our id with
+  // valid terms) successfully created the cm row, it will have advanced
+  // `vendorScope`, and this rollback is blocked — we never erase a marker that
+  // backs a real cm row. This closes the structured-terms + terminal-auth
+  // rollback races regardless of why this invocation failed (no-row terms
+  // rejection, terminal auth, etc.): a committed concurrent success always
+  // moves at least one of these fields off the transient stamp shape.
+  const rollbackPersistFirstMarker = (): void => {
+    if (reuseExisting) {
+      return;
+    }
+    const reverted = readInstanceIdentity();
+    if (
+      reverted &&
+      reverted.vendorApplicationId === applicationId &&
+      reverted.vendorState === "applied" &&
+      (reverted.vendorApplicationRepairStuckAt ?? null) === null &&
+      (reverted.vendorScope ?? null) === priorVendorScope
+    ) {
+      writeInstanceIdentity({
+        ...reverted,
+        vendorState: priorVendorState,
+        vendorApplicationId: priorVendorApplicationId,
+      });
+      invalidateInstanceIdentityCache();
+    }
+  };
 
   if (!reuseExisting) {
     // PERSIST-FIRST defence: stamp vendorState='applied' +
@@ -213,9 +261,19 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[vendor-application] apply failed:", err);
-    // Thrown error: the cm row MAY exist (e.g. a network failure after the
-    // INSERT committed server-side). The marker survives so a retry reuses
-    // the same application_id — do NOT roll back here.
+    // A TERMINAL auth refusal (-32010 / "Unauthorized: User not authenticated")
+    // is rejected at cm's auth middleware BEFORE any reservation row is created
+    // — so NO cm row exists and retrying the same application_id can never
+    // reconcile. Roll back the persist-first marker (fresh case only, mirroring
+    // the structured-terms path below) so the operator isn't trapped in a false
+    // "applied (pending review or recovery)" state that never clears.
+    //
+    // Any OTHER thrown error stays ambiguous: the cm row MAY exist (e.g. a
+    // network failure after the INSERT committed server-side), so the marker
+    // survives and a retry reuses the same application_id — do NOT roll back.
+    if (isTerminalAuthFailure(err)) {
+      rollbackPersistFirstMarker();
+    }
     redirectWithVendorError(`Vendor application failed: ${message}`);
   }
 
@@ -225,17 +283,7 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
   // paths — roll back the local persist-first marker (fresh case only) so the
   // operator isn't trapped in a false "applied" state, then re-prompt.
   if ("error_code" in response) {
-    if (!reuseExisting) {
-      const reverted = readInstanceIdentity();
-      if (reverted) {
-        writeInstanceIdentity({
-          ...reverted,
-          vendorState: priorVendorState,
-          vendorApplicationId: priorVendorApplicationId,
-        });
-        invalidateInstanceIdentityCache();
-      }
-    }
+    rollbackPersistFirstMarker();
     if (response.error_code === "TERMS_VERSION_STALE") {
       redirectWithVendorError(
         `Marketplace terms have been updated (current version: ${response.current_version}). ` +
@@ -323,15 +371,45 @@ export async function cancelVendorApplicationAction(formData: FormData): Promise
     redirectWithVendorError("No open vendor application to cancel.");
   }
 
-  const token = resolveTokenOrFail();
-  const client = createHttpMarketplaceMcpClient({ token });
-
+  // Cancel must ALWAYS clear the local marker — even when cm is unreachable or
+  // refuses the bearer. The cm `vendorApplicationCancel` is therefore
+  // best-effort: a stranded marker most commonly arises in exactly the
+  // situation where cm is down/unauthorized (see Defect 1), and gating the
+  // local reset on a successful cm round-trip would leave the operator unable
+  // to withdraw the application from the UI at all (the only recovery left
+  // being a hand-edit of the `instance_identity` row). Releasing the cm-side
+  // reservation slot is the happy path; on failure we log and fall through to
+  // the local reset so withdrawal works offline. A reset boot-reconcile /
+  // status refresh later reconciles any cm-side row that did survive.
+  //
+  // resolveTokenOrFail() is intentionally NOT used here: it redirects on a
+  // missing token, which would block a local withdrawal. We resolve the bearer
+  // defensively — a missing OR crypto-corrupted token must not stop the
+  // operator from clearing a stranded marker — and only attempt the cm release
+  // when a token is available. ALL failures (token resolution + the cm call
+  // itself) are swallowed; we log and fall through to the local reset.
   try {
-    await client.vendorApplicationCancel({ application_id: applicationId });
+    let token: string | null = null;
+    try {
+      token = resolveConsumerOrVendorMarketplaceToken(identity);
+    } catch (tokenErr) {
+      console.warn(
+        "[vendor-application] cancel: marketplace token unavailable; skipping " +
+          "cm release and clearing the local marker only:",
+        tokenErr,
+      );
+    }
+    if (token) {
+      const client = createHttpMarketplaceMcpClient({ token });
+      await client.vendorApplicationCancel({ application_id: applicationId });
+    }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[vendor-application] cancel failed:", err);
-    redirectWithVendorError(`Cancel vendor application failed: ${message}`);
+    // Best-effort: log and continue to the local reset so the operator can
+    // always withdraw, even when cm is down/unauthorized.
+    console.error(
+      "[vendor-application] cancel: cm release failed (clearing local marker anyway):",
+      err,
+    );
   }
 
   // Re-read inside the persist boundary so concurrent writes (e.g. boot-hook
