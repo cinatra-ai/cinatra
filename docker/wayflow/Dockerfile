@@ -16,12 +16,27 @@
 # variables — env vars are process-global and would leak between concurrent
 # sessions.
 
-FROM python:3.11-slim
+# Upgrade-track candidate knobs (cinatra#352 works-after harness). These pin the
+# Python image + the wayflowcore/pyagentspec versions as build-args so the
+# major-upgrade lane can build a CANDIDATE image (e.g. PYTHON_TAG=3.14-slim,
+# WAYFLOWCORE_VERSION=<next>) and run the works-after wayflow proof against it.
+# The DEFAULTS are the current production pins, so a plain `docker build` is
+# byte-equivalent to before and green on main today. See docs/upgrade-track.md
+# (python 3.11→3.14; wayflowcore/pyagentspec tracked as a unit).
+ARG PYTHON_TAG=3.11-slim
+ARG WAYFLOWCORE_VERSION=26.1.1
+ARG PYAGENTSPEC_VERSION=26.1.0
+
+FROM python:${PYTHON_TAG}
+
+# Re-declare the ARGs AFTER FROM so they are visible in the build stage (Docker
+# scopes a pre-FROM ARG to the FROM line only).
+ARG WAYFLOWCORE_VERSION=26.1.1
+ARG PYAGENTSPEC_VERSION=26.1.0
 
 WORKDIR /app
 
-# Pin wayflowcore[a2a]==26.1.1 (the [a2a] extra pulls fasta2a
-# transitively).
+# Pin wayflowcore[a2a] (the [a2a] extra pulls fasta2a transitively).
 # pyagentspec is a wayflowcore sub-dependency; pin it explicitly to prevent
 # future rebuilds from pulling a version with breaking InputMessageNode
 # validation (26.1.0 rejects inputs[] with title fields).
@@ -30,8 +45,8 @@ WORKDIR /app
 # declare it explicitly so the import surface is stable. pytest-asyncio is
 # required by the production test suite (asyncio_mode="auto").
 RUN pip install --no-cache-dir \
-    'wayflowcore[a2a]==26.1.1' \
-    'pyagentspec==26.1.0' \
+    "wayflowcore[a2a]==${WAYFLOWCORE_VERSION}" \
+    "pyagentspec==${PYAGENTSPEC_VERSION}" \
     'pydantic>=2.0,<2.12' \
     'starlette' \
     'uvicorn' \

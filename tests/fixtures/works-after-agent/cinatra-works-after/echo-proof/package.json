@@ -1,0 +1,6 @@
+{
+  "name": "@cinatra-works-after/echo-proof",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic no-LLM echo agent fixture for the works-after wayflow proof (scripts/ci/works-after/wayflow.sh). Not a marketplace extension; never published. A StartNode -> OutputMessageNode -> EndNode flow that echoes a nonce, exercising the WayFlow A2A runtime (wayflowcore/pyagentspec/python image) without any LLM or secret."
+}

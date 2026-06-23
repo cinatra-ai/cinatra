@@ -43,6 +43,49 @@ Docker and are owned elsewhere):
   the push-event `build-image` workflow (`.github/workflows/build-image.yml`).
 - Operator previous-release upgrade proof → `scripts/ci/upgrade-proof.sh`
   (closeout W3, cinatra#74).
+- Per-service **works-after** functional proof → `scripts/ci/works-after-proof.sh`
+  + `.github/workflows/works-after-proof.yml` (cinatra#352).
+
+## Works-after proof harness
+
+`works-after-proof.sh` is the per-service FUNCTIONAL proof the four existing
+harnesses don't cover (cinatra#352, part of the major-version upgrade track).
+It brings each env-app service up at a **candidate** version and runs a
+real round-trip through (where possible) the repo's OWN client code, asserting
+the functional result and failing loud with per-service diagnostics — the
+"no env-app/stack major lands without this green" gate.
+
+```sh
+pnpm works-after:proof                       # all arms, default = current pins (green today)
+WORKS_AFTER_ONLY=redis,nango pnpm works-after:proof   # a subset (fast, single-major lane)
+REDIS_TAG=8-alpine pnpm works-after:proof    # exercise a candidate redis major
+PG_TO_TAG=18-alpine pnpm works-after:proof   # exercise a candidate postgres major
+pnpm works-after:test                        # the fast service-free unit tests
+```
+
+The six arms (each a standalone script under `scripts/ci/works-after/`):
+
+| Arm | What it asserts | Candidate env |
+| --- | --- | --- |
+| `redis` | enqueue → worker runs → completion (3-way: state + returned nonce + worker-written key), via `bullmq` + `ioredis` (the repo deps) | `REDIS_TAG` |
+| `postgres` | data survives a documented `pg_dump`/`pg_restore` into a NEW PGDATA volume; the bare same-mount tag bump REFUSES to start (negative). Also runs `upgrade-proof.sh` when `PREV_IMAGE` is set | `PG_FROM_TAG`, `PG_TO_TAG` |
+| `nango` | a synthetic connection round-trips byte-equal through the records-DB store + the `@nangohq/node` API contract (create integration → import connection → `setMetadata` → `getConnection`). Hermetic, no egress; the AES-GCM credential envelope is out of scope for the secret-free arm | `NANGO_SERVER_IMAGE` |
+| `graphiti` | object projection → store → search round-trip through `graphiti-client.ts`. **Needs a real `OPENAI_API_KEY`** (graphiti does LLM extraction before the Neo4j write, and the image doesn't honor a custom LLM base-URL) — so it is NOT secret-free: it runs in the major lane / `workflow_dispatch` with a key, and SKIPs otherwise | `NEO4J_TAG`, `GRAPHITI_IMAGE`, `OPENAI_API_KEY` |
+| `wayflow` | agent execution over A2A (`message/send` → `completed` task, nonce surfaced) using a committed no-LLM echo-flow fixture, building `docker/wayflow` at candidate pins | `PYTHON_TAG`, `WAYFLOWCORE_VERSION`, `PYAGENTSPEC_VERSION` |
+| `verdaccio` | publish → install round-trip (mint a throwaway user via the repo's `createNpmUser`, publish `@works-after/proof`, install it back, assert the sentinel), with the real immutability `config.yaml` mounted | `VERDACCIO_TAG` |
+
+Each candidate env defaults to the **current pin**, so a bare run is green on
+today's `main`; the major-upgrade lane runs the same script with the new
+version(s) set. `WORKS_AFTER_GATE_MODE=1` promotes a SKIP to a FAIL (no false
+green when a gate run can't actually exercise an arm). Throwaway crypto/users are
+minted per run — **no ops secret, no external OAuth, no private data**.
+
+The harness is wired as a required check via
+`.github/workflows/works-after-proof.yml`, which runs the real six-service job
+only when an upgrade-relevant path changed (an internal `detect` paths-filter)
+and reports a green stub otherwise — so the same required context concludes
+`success` on every PR. It is deliberately NOT a `closeout-suite.mjs` member
+(that battery is service-free + static).
 
 ## Other scripts
 

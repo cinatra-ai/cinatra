@@ -1,0 +1,331 @@
+name: works-after proof
+
+# Per-service FUNCTIONAL proof harness (cinatra#352, major-version upgrade
+# track): no env-app/stack major lands without this green. The harness brings each service
+# up at a CANDIDATE version and runs a real round-trip through the repo's own
+# client code (scripts/ci/works-after-proof.sh). See scripts/ci/README.md.
+#
+# REQUIRED-CHECK SHAPE (do NOT use workflow-level pull_request.paths — GitHub
+# leaves a required context PENDING forever when paths filters the workflow out,
+# which would block every non-upgrade PR). Instead, mirror build-image.yml: the
+# workflow triggers on ALL PRs; an internal `detect` job runs a paths-filter over
+# the upgrade-relevant paths; the heavy `proof` job runs the real harness when an
+# upgrade path changed and reports a GREEN STUB otherwise — so the SAME required
+# context (`works-after proof / proof`) concludes success on every PR.
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      # The candidate version of each service is, by default, READ FROM THE REPO
+      # at the checked-out ref (the `derive` step below scrapes docker-compose.yml
+      # + docker/wayflow/Dockerfile). So on a PR that bumps a pin, the harness
+      # tests the NEW pin the PR introduces — NOT a hard-coded current value
+      # (that would let a broken major bump pass by testing the old version).
+      # These dispatch inputs are OVERRIDES for testing a candidate that is not
+      # yet committed; an EMPTY input falls back to the repo-derived pin.
+      redis_tag:
+        description: "Override redis image tag (blank = repo pin)"
+        required: false
+        default: ""
+      pg_from_tag:
+        description: "Override postgres source image tag (blank = repo pin)"
+        required: false
+        default: ""
+      pg_to_tag:
+        description: "Override postgres candidate image tag, e.g. 18-alpine (blank = repo pin)"
+        required: false
+        default: ""
+      neo4j_tag:
+        description: "Override neo4j image tag, e.g. 6-community (blank = repo pin)"
+        required: false
+        default: ""
+      graphiti_image:
+        description: "Override full graphiti image ref (blank = repo pin)"
+        required: false
+        default: ""
+      nango_server_image:
+        description: "Override full nango-server image ref incl. digest (blank = repo pin)"
+        required: false
+        default: ""
+      nango_db_tag:
+        description: "Override nango-db postgres image tag (blank = repo pin)"
+        required: false
+        default: ""
+      verdaccio_tag:
+        description: "Override verdaccio image tag (blank = repo pin)"
+        required: false
+        default: ""
+      python_tag:
+        description: "Override python image tag for the wayflow build, e.g. 3.14-slim (blank = repo pin)"
+        required: false
+        default: ""
+      wayflowcore_version:
+        description: "Override wayflowcore version (blank = repo pin)"
+        required: false
+        default: ""
+      pyagentspec_version:
+        description: "Override pyagentspec version (blank = repo pin)"
+        required: false
+        default: ""
+      prev_image:
+        description: "Last published prod image ref for the postgres prev-release upgrade-proof arm (required to exercise it in gate mode)"
+        required: false
+        default: ""
+      gate_mode:
+        description: "Gate mode: a SKIP becomes a FAIL (set true when this run must actually gate a major — graphiti/prev-release then HARD-FAIL if their key/image is absent)"
+        required: false
+        type: boolean
+        default: false
+      only:
+        description: "Comma-separated subset of arms (redis,postgres,nango,graphiti,wayflow,verdaccio); empty = all"
+        required: false
+        default: ""
+
+# A required check needs deterministic concurrency; cancel superseded PR runs.
+concurrency:
+  group: works-after-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # detect — does this PR touch an upgrade-relevant path? On push/dispatch/
+  # merge_group there is no PR diff, so `run` is forced true (always exercise).
+  detect:
+    name: Detect upgrade-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # run the REAL harness when an upgrade path changed (PR) OR on any
+      # non-PR event (dispatch / merge_group — no diff to filter on).
+      run: ${{ github.event_name != 'pull_request' || steps.filter.outputs.upgrade == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        with:
+          filters: |
+            upgrade:
+              - 'docker-compose.yml'
+              - 'docker-compose.dev.yml'
+              - 'Dockerfile'
+              - 'docker/**'
+              - 'docs/upgrade-track.md'
+              - 'pnpm-workspace.yaml'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'scripts/ci/works-after-proof.sh'
+              - 'scripts/ci/works-after/**'
+              - 'scripts/ci/upgrade-proof.sh'
+              - 'tests/fixtures/works-after-agent/**'
+              - '.github/workflows/works-after-proof.yml'
+
+  # proof — the REQUIRED status context (`works-after proof / proof`). Always
+  # runs so the context always reports; a green stub when no upgrade path changed
+  # keeps it success-not-pending on every PR (the build-image.yml precedent).
+  proof:
+    name: proof
+    needs: detect
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Guard — detect must have succeeded
+        if: ${{ needs.detect.result != 'success' }}
+        run: |
+          echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
+          exit 1
+
+      - name: Green stub (no upgrade-relevant path changed)
+        if: ${{ needs.detect.outputs.run != 'true' }}
+        run: echo "No upgrade-relevant path changed — reporting works-after proof as a green stub (the real six-service harness runs on upgrade/dispatch/merge_group)."
+
+      - name: Checkout
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so the derive step can read the PR BASE ref's
+          # docker-compose.yml (to compute the postgres/nango-db FROM tag = the
+          # pin BEFORE this PR, so a 17→18 bump runs 17→18, not 18→18).
+          fetch-depth: 0
+
+      # Derive each service's CANDIDATE version FROM THE CHECKED-OUT REPO so the
+      # harness tests exactly what this ref pins. On an upgrade PR that bumps a
+      # pin (e.g. redis:7-alpine → redis:8-alpine in docker-compose.yml), the
+      # candidate scraped here is the NEW pin → the harness exercises the major
+      # the PR introduces, closing the "tested the old version, passed anyway"
+      # false-green. For the data-survival services (postgres, nango-db) the
+      # FROM tag is the PR BASE ref's pin (the prior major), so the cross-major
+      # dump/restore + the same-volume refusal negative test actually fire. A
+      # workflow_dispatch input, when non-empty, OVERRIDES the repo value (for
+      # testing a candidate not yet committed). Pins live on a single `image:`
+      # line per service (compose) / ARG default (Dockerfile).
+      - name: Derive candidate pins from the repo
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        env:
+          IN_REDIS: ${{ github.event.inputs.redis_tag }}
+          IN_PG_FROM: ${{ github.event.inputs.pg_from_tag }}
+          IN_PG_TO: ${{ github.event.inputs.pg_to_tag }}
+          IN_NEO4J: ${{ github.event.inputs.neo4j_tag }}
+          IN_GRAPHITI: ${{ github.event.inputs.graphiti_image }}
+          IN_NANGO_IMG: ${{ github.event.inputs.nango_server_image }}
+          IN_NANGO_DB: ${{ github.event.inputs.nango_db_tag }}
+          IN_VERDACCIO: ${{ github.event.inputs.verdaccio_tag }}
+          IN_PYTHON: ${{ github.event.inputs.python_tag }}
+          IN_WAYFLOWCORE: ${{ github.event.inputs.wayflowcore_version }}
+          IN_PYAGENTSPEC: ${{ github.event.inputs.pyagentspec_version }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          COMPOSE=docker-compose.yml
+          DF=docker/wayflow/Dockerfile
+          # Scrape `image: <repo>:<tag-or-digest>` for a compose service block,
+          # reading from a STRING (so we can scrape the base ref via git show too).
+          # Match the FIRST `image:` line at/after the `<svc>:` key, before the
+          # next top-level service. Falls back to empty (then we hard-fail).
+          svc_image_str() { awk -v svc="$1" '
+            $0 ~ "^  "svc":[[:space:]]*$" {found=1; next}
+            found && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {exit}
+            found && $1=="image:" {print $2; exit}'; }
+          svc_image()      { svc_image_str "$1" < "$COMPOSE"; }
+          tag_of()  { printf '%s' "${1##*:}"; }            # redis:7-alpine → 7-alpine
+          dfarg()   { awk -v k="$1" '$0 ~ "^ARG "k"=" {sub("^ARG "k"=",""); print; exit}' "$DF"; }
+
+          REDIS_IMG="$(svc_image redis)";        [ -n "$REDIS_IMG" ]      || { echo "::error::could not scrape redis image from $COMPOSE"; exit 1; }
+          PG_IMG="$(svc_image postgres)";        [ -n "$PG_IMG" ]         || { echo "::error::could not scrape postgres image from $COMPOSE"; exit 1; }
+          NDB_IMG="$(svc_image nango-db)";       [ -n "$NDB_IMG" ]        || { echo "::error::could not scrape nango-db image from $COMPOSE"; exit 1; }
+          NANGO_IMG="$(svc_image nango-server)"; [ -n "$NANGO_IMG" ]      || { echo "::error::could not scrape nango-server image from $COMPOSE"; exit 1; }
+          NEO_IMG="$(svc_image neo4j)";          [ -n "$NEO_IMG" ]        || { echo "::error::could not scrape neo4j image from $COMPOSE"; exit 1; }
+          GR_IMG="$(svc_image graphiti)";        [ -n "$GR_IMG" ]         || { echo "::error::could not scrape graphiti image from $COMPOSE"; exit 1; }
+          VC_IMG="$(svc_image verdaccio)";       [ -n "$VC_IMG" ]         || { echo "::error::could not scrape verdaccio image from $COMPOSE"; exit 1; }
+          PY_ARG="$(dfarg PYTHON_TAG)";          [ -n "$PY_ARG" ]         || { echo "::error::could not scrape PYTHON_TAG from $DF"; exit 1; }
+          WF_ARG="$(dfarg WAYFLOWCORE_VERSION)"; [ -n "$WF_ARG" ]         || { echo "::error::could not scrape WAYFLOWCORE_VERSION from $DF"; exit 1; }
+          PA_ARG="$(dfarg PYAGENTSPEC_VERSION)"; [ -n "$PA_ARG" ]         || { echo "::error::could not scrape PYAGENTSPEC_VERSION from $DF"; exit 1; }
+
+          # CANDIDATE tags (the version a service ACTUALLY RUNS) = the HEAD pin.
+          # NANGO_DB_TAG is the DB nango-server runs against → it must be the
+          # candidate (head) so a nango-db bump tests nango-server↔candidate-DB.
+          PG_TO_DEF="$(tag_of "$PG_IMG")"
+          NDB_HEAD="$(tag_of "$NDB_IMG")"
+          # Data-survival FROM tags = the PR BASE ref's pin (the prior major), so
+          # a pin-bumping PR runs OLD→NEW (cross-major dump/restore + negative
+          # same-volume refusal), not NEW→NEW (which would skip the negative
+          # test). On non-PR events (no base) FROM = the current pin (equal-major
+          # → the data-migration path is a no-op round-trip, correctly green).
+          PG_FROM_DEF="$PG_TO_DEF"
+          NDB_FROM_DEF="$NDB_HEAD"
+          if [ -n "${BASE_SHA:-}" ] && git cat-file -e "${BASE_SHA}:${COMPOSE}" 2>/dev/null; then
+            BASE_COMPOSE="$(git show "${BASE_SHA}:${COMPOSE}")"
+            BPG="$(printf '%s\n' "$BASE_COMPOSE" | svc_image_str postgres)"
+            BNDB="$(printf '%s\n' "$BASE_COMPOSE" | svc_image_str nango-db)"
+            [ -n "$BPG" ]  && PG_FROM_DEF="$(tag_of "$BPG")"
+            [ -n "$BNDB" ] && NDB_FROM_DEF="$(tag_of "$BNDB")"
+          fi
+
+          # Dispatch override (non-empty) wins; else the derived value.
+          # NANGO_DB_FROM_TAG is the base-ref nango-db tag — when it differs in
+          # MAJOR from NANGO_DB_TAG (head), the nango-db postgres got a major
+          # bump and the workflow runs the GENERIC postgres data-survival arm a
+          # second time for those tags (nango-db survival is the same mechanism
+          # as platform-PG survival; the postgres arm is instance-agnostic).
+          {
+            echo "REDIS_TAG=${IN_REDIS:-$(tag_of "$REDIS_IMG")}"
+            echo "PG_FROM_TAG=${IN_PG_FROM:-$PG_FROM_DEF}"
+            echo "PG_TO_TAG=${IN_PG_TO:-$PG_TO_DEF}"
+            echo "NEO4J_TAG=${IN_NEO4J:-$(tag_of "$NEO_IMG")}"
+            echo "GRAPHITI_IMAGE=${IN_GRAPHITI:-$GR_IMG}"
+            echo "NANGO_SERVER_IMAGE=${IN_NANGO_IMG:-$NANGO_IMG}"
+            echo "NANGO_DB_TAG=${IN_NANGO_DB:-$NDB_HEAD}"
+            echo "NANGO_DB_FROM_TAG=${IN_NANGO_DB:-$NDB_FROM_DEF}"
+            echo "VERDACCIO_TAG=${IN_VERDACCIO:-$(tag_of "$VC_IMG")}"
+            echo "PYTHON_TAG=${IN_PYTHON:-$PY_ARG}"
+            echo "WAYFLOWCORE_VERSION=${IN_WAYFLOWCORE:-$WF_ARG}"
+            echo "PYAGENTSPEC_VERSION=${IN_PYAGENTSPEC:-$PA_ARG}"
+          } >> "$GITHUB_ENV"
+          echo "Derived candidate pins (override-aware):"
+          echo "  redis=${IN_REDIS:-$(tag_of "$REDIS_IMG")} pg=${IN_PG_FROM:-$PG_FROM_DEF}->${IN_PG_TO:-$PG_TO_DEF} neo4j=${IN_NEO4J:-$(tag_of "$NEO_IMG")} verdaccio=${IN_VERDACCIO:-$(tag_of "$VC_IMG")} python=${IN_PYTHON:-$PY_ARG}"
+          echo "  graphiti=${IN_GRAPHITI:-$GR_IMG}"
+          echo "  nango-server=${IN_NANGO_IMG:-$NANGO_IMG}  nango-db=${IN_NANGO_DB:-$NDB_FROM_DEF}->${IN_NANGO_DB:-$NDB_HEAD}"
+
+      - name: Set up pnpm
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - name: Set up Node.js
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests (works-after static invariants)
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        run: pnpm run works-after:test
+
+      - name: Run works-after proof harness
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        env:
+          # The candidate pins (REDIS_TAG, PG_*_TAG, NEO4J_TAG, GRAPHITI_IMAGE,
+          # NANGO_SERVER_IMAGE, NANGO_DB_TAG, VERDACCIO_TAG, PYTHON_TAG,
+          # WAYFLOWCORE_VERSION, PYAGENTSPEC_VERSION) come from the `Derive
+          # candidate pins from the repo` step via $GITHUB_ENV — so the harness
+          # tests exactly what THIS ref pins (the PR's candidate), not a
+          # hard-coded current value. Do NOT re-default them here.
+          WORKS_AFTER_ONLY: ${{ github.event.inputs.only || '' }}
+          # Gate mode: a SKIP becomes a FAIL. A workflow_dispatch sets it true
+          # when this run must actually gate a major (then graphiti without a key
+          # and postgres-prev-release without PREV_IMAGE HARD-FAIL rather than
+          # silently skipping into a false green). PR/merge_group runs are NOT
+          # gate-mode (graphiti stays a secret-free SKIP).
+          WORKS_AFTER_GATE_MODE: ${{ github.event.inputs.gate_mode == 'true' && '1' || '0' }}
+          # The prev-release postgres arm (upgrade-proof.sh) runs only when a
+          # last-published image ref is supplied; in gate mode its absence is a
+          # FAIL (a skipped prev-release proof is a false green).
+          PREV_IMAGE: ${{ github.event.inputs.prev_image || '' }}
+          # The graphiti arm needs a real OpenAI key, supplied ONLY on a manual
+          # workflow_dispatch (the gate lane). It is DELIBERATELY withheld on
+          # pull_request / merge_group: those run checked-out PR code + candidate
+          # images, so handing them the key would let untrusted PR code exfiltrate
+          # it. So on a PR the graphiti arm stays a secret-free SKIP; the key
+          # reaches the harness only on the trusted dispatch lane. (Empty unless a
+          # maintainer dispatches → graphiti SKIPs, except gate_mode=true FAILS.)
+          OPENAI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.WORKS_AFTER_OPENAI_API_KEY || '' }}
+        run: pnpm run works-after:proof
+
+      # nango-db data-survival: when the nango-db postgres MAJOR changed
+      # (FROM-major != HEAD-major), run the GENERIC postgres data-survival arm a
+      # SECOND time pinned to the nango-db FROM→HEAD tags — proving the
+      # `nango-postgres` on-disk volume survives the documented dump/restore into
+      # a new volume AND that the bare same-mount tag bump refuses (the same
+      # mechanism the main postgres arm proves for the platform DB; the postgres
+      # arm is database-instance-agnostic). Skipped when the nango-db major is
+      # unchanged (the main run already covers the equal-major no-op).
+      - name: nango-db data-survival (postgres arm, nango-db tags)
+        if: ${{ needs.detect.outputs.run == 'true' }}
+        env:
+          WORKS_AFTER_GATE_MODE: ${{ github.event.inputs.gate_mode == 'true' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          maj() { printf '%s' "${1%%[.-]*}"; }
+          if [ "$(maj "$NANGO_DB_FROM_TAG")" = "$(maj "$NANGO_DB_TAG")" ]; then
+            echo "nango-db major unchanged (${NANGO_DB_FROM_TAG} → ${NANGO_DB_TAG}); the platform postgres arm already covers the equal-major data-survival round-trip. Skipping the extra nango-db survival run."
+            exit 0
+          fi
+          echo "nango-db postgres MAJOR bump detected (${NANGO_DB_FROM_TAG} → ${NANGO_DB_TAG}) — running the generic postgres data-survival arm for the nango-db tags."
+          WORKS_AFTER_ONLY=postgres \
+          PG_FROM_TAG="$NANGO_DB_FROM_TAG" \
+          PG_TO_TAG="$NANGO_DB_TAG" \
+          SUPABASE_SCHEMA=nango \
+          pnpm run works-after:proof
