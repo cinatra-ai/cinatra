@@ -175,7 +175,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     // is inside the signed content; the legacy HMAC is not. So we derive the
     // ledger messageId from AUTHENTICATED material — a digest of the exact
     // signed bytes — which is replay-stable (a true retry of the same event
-    // dedupes) and unforgeable (the body is HMAC-bound). (codex R1)
+    // dedupes) and unforgeable (the body is HMAC-bound).
     const idHeader = request.headers.get(LEGACY_WEBHOOK_ID_HEADER);
     const sigHeader = request.headers.get(LEGACY_SIG_HEADER);
     // binding.legacySecret is guaranteed present for a legacyEnabled binding

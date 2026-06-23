@@ -334,7 +334,7 @@ describe("generic /webhook route — #343 legacy HMAC bridge", () => {
   // The authenticated idempotency key the route derives for a legacy delivery:
   // sha256 of the EXACT signed body bytes, namespaced. The unsigned
   // X-Cinatra-Webhook-Id header is required but NEVER the dedupe key (the legacy
-  // HMAC authenticates only the body, not the headers — codex R1).
+  // HMAC authenticates only the body, not the headers).
   function legacyBodyKey(payload: unknown): string {
     const body = JSON.stringify(payload);
     return "sha256:" + createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
@@ -353,7 +353,7 @@ describe("generic /webhook route — #343 legacy HMAC bridge", () => {
     expect(finalize).toHaveBeenCalledWith(expect.any(String), SITE_ID, key, 1, "done");
   });
 
-  it("a replay of the SAME signed body with a DIFFERENT X-Cinatra-Webhook-Id keys the SAME ledger entry (no header-swap dedupe bypass — codex R1)", async () => {
+  it("a replay of the SAME signed body with a DIFFERENT X-Cinatra-Webhook-Id keys the SAME ledger entry (no header-swap dedupe bypass)", async () => {
     resolveByBindingId.mockResolvedValue(legacyBinding());
     handlerReturning({ outcome: "accepted" });
     const payload = { event: "post_published", postId: 7 };
