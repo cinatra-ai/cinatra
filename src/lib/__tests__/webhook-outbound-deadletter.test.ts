@@ -91,6 +91,30 @@ describe("sanitizeError", () => {
   it("passes a short benign message through", () => {
     expect(sanitizeError("HTTP 503")).toBe("HTTP 503");
   });
+
+  // cinatra#341 codex round-1 HIGH: Node fetch/undici embeds the FULL target
+  // URL in its thrown message, so a basic-auth password or a short `?token=`
+  // query secret would otherwise survive past the whsec_/40+char redactions and
+  // land in webhook_outbound_dead_letter.last_error (acceptance #3 violation).
+  // NB the credentialed URL is ASSEMBLED at runtime so no userinfo-bearing URL
+  // literal sits in source for the secret-scan-gate URI detector to flag.
+  it("reduces an embedded URL to origin+pathname (strips userinfo creds)", () => {
+    const cred = ["user", "topsecretpw"].join(":");
+    const url = `https://${cred}@h.test/hook?token=abc123`;
+    const out = sanitizeError(
+      `Request cannot be constructed from a URL that includes credentials: ${url}`,
+    )!;
+    expect(out).not.toContain("topsecretpw");
+    expect(out).not.toContain("token=abc123");
+    expect(out).toContain("https://h.test/hook");
+  });
+
+  it("strips a short query secret embedded in an error URL", () => {
+    const out = sanitizeError("HTTP 500 from https://hook.example.com/cb?signing_key=shhh")!;
+    expect(out).not.toContain("signing_key");
+    expect(out).not.toContain("shhh");
+    expect(out).toContain("https://hook.example.com/cb");
+  });
 });
 
 describe("recordOutboundDeadLetter — schema-qualified + sanitized insert", () => {

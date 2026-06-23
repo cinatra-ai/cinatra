@@ -85,13 +85,25 @@ export function sanitizeTargetUrl(rawUrl: string): string {
 
 /**
  * Truncate + scrub an error message before persisting. Removes long
- * high-entropy / secret-shaped tokens and caps length so the DLQ row cannot
- * become a secret sink or grow unbounded.
+ * high-entropy / secret-shaped tokens, reduces any embedded URL to its
+ * origin+pathname (stripping userinfo creds + query secrets), and caps length
+ * so the DLQ row cannot become a secret sink or grow unbounded.
+ *
+ * The URL reduction is essential: Node's `fetch`/undici surfaces the FULL
+ * target URL inside its thrown message (it echoes the whole URL, including any
+ * userinfo basic-auth credentials and query string, when it rejects a
+ * credentialed URL), and a delivery error string is persisted as `last_error`
+ * — so a basic-auth password or a short `?token=` query secret would otherwise
+ * leak past the `whsec_`/40+char redactions into the DLQ table (cinatra#341
+ * codex round-1 HIGH — DLQ never stores secrets, F5/acceptance #3).
  */
 export function sanitizeError(rawError: string | null | undefined): string | null {
   if (!rawError) return null;
-  // Redact `whsec_...` Standard-Webhooks secrets and bearer-token-shaped blobs.
+  // Reduce any embedded absolute URL to origin+pathname FIRST (drops userinfo
+  // credentials + query string + fragment), then redact `whsec_...` secrets and
+  // bearer-token-shaped blobs.
   let scrubbed = rawError
+    .replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (m) => sanitizeTargetUrl(m))
     .replace(/whsec_[A-Za-z0-9+/=_-]+/g, "whsec_[redacted]")
     .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted-token]");
   if (scrubbed.length > MAX_ERROR_LEN) {
