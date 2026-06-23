@@ -362,7 +362,13 @@ async function RegistriesTabContent({
   // apply call to cm can only fail (Unauthorized), and the persist-first marker
   // would strand as a false "applied" with no recovery (cinatra#434). Mirror the
   // publish card's unwired handling instead of presenting a doomed apply path.
-  const marketplaceWired = hasConsumerOrVendorMarketplaceToken(identity);
+  // Only resolve credentials when the apply form would actually be shown:
+  // hasConsumerOrVendorMarketplaceToken rethrows non-credential (e.g. crypto)
+  // failures, so calling it for applied/approved states could hard-fail the
+  // whole registries tab over a token we never read here.
+  const marketplaceWired = showBecomeAVendor
+    ? hasConsumerOrVendorMarketplaceToken(identity)
+    : false;
 
   return (
     <div className="flex flex-col gap-6">
