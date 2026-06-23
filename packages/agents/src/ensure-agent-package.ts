@@ -149,19 +149,23 @@ export async function ensureAgentPackageFromGitFile(opts: {
   const content = JSON.parse(raw) as {
     name?: string;
     description?: string;
-    metadata?: { cinatra?: { packageName?: string; packageVersion?: string; agentDependencies?: Record<string, string> } };
+    metadata?: { cinatra?: { packageName?: string; agentDependencies?: Record<string, string> } };
     [key: string]: unknown;
   };
 
   const cinatraPackageName = content.metadata?.cinatra?.packageName;
-  const cinatraPackageVersion = content.metadata?.cinatra?.packageVersion;
 
-  // Fall back to sibling package.json for identity fields
-  // (packageName / packageVersion) and presentation fields (description,
-  // agentDependencies) that live in package.json, not agent.json.
+  // Fall back to sibling package.json for the packageName and presentation
+  // fields (description, agentDependencies) that live in package.json, not
+  // agent.json.
   const sibling = await readSiblingPackageJsonIdentity(opts.agentJsonPath);
   const packageName: string | undefined = cinatraPackageName ?? sibling?.name;
-  const packageVersion: string | undefined = cinatraPackageVersion ?? sibling?.version;
+  // Version resolves SOLELY from the sibling package.json#version — the
+  // canonical source. We intentionally do NOT read metadata.cinatra.packageVersion
+  // from the OAS: that copy is a non-typed passthrough kept (if at all) only for
+  // provenance, and reading it first risked OAS<->package.json drift that could
+  // make the version-skip guard below short-circuit a re-import of bumped code.
+  const packageVersion: string | undefined = sibling?.version;
 
   if (!packageName) {
     console.warn(

@@ -35,9 +35,6 @@ const oasPath = path.resolve(
 );
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
-const pkg = JSON.parse(
-  fs.readFileSync(path.resolve(path.dirname(oasPath), "..", "package.json"), "utf8"),
-) as Record<string, unknown>;
 
 describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNode input scans", () => {
   it("validateOasAgentJson returns [] (no L1 findings)", () => {
@@ -57,11 +54,10 @@ describe("web-research-agent OAS validates against L1, LLM-metadata, and StartNo
     expect(oas.component_type).toBe("Flow");
   });
 
-  it("metadata.cinatra.packageName matches package.json name + packageVersion matches package.json", () => {
+  it("metadata.cinatra.packageName matches package.json name", () => {
     const metadata = oas.metadata as Record<string, unknown>;
     const cinatra = metadata.cinatra as Record<string, unknown>;
     expect(cinatra.packageName).toBe("@cinatra-ai/web-research-agent");
-    expect(cinatra.packageVersion).toBe(pkg.version);
   });
 
   it("declares metadata.cinatra.llm = { preferredProvider: 'openai', preferredModel: 'gpt-5.5' } with no extra keys", () => {
