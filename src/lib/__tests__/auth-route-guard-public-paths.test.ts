@@ -12,9 +12,24 @@
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { guardAppRoute } from "../auth-route-guard";
+import type { NextRequest } from "next/server";
 
 const GUARD_PATH = path.resolve(__dirname, "..", "auth-route-guard.ts");
 const guardSource = fs.readFileSync(GUARD_PATH, "utf-8");
+
+// A minimal NextRequest-shaped object for behavioral guard tests: only the
+// fields guardAppRoute reads (nextUrl.pathname, url, the session cookie). No
+// session cookie is present, so a protected path would 307 → /sign-in; a
+// PUBLIC path returns NextResponse.next() (status 200, no Location).
+function fakeRequest(pathname: string): NextRequest {
+  return {
+    nextUrl: { pathname },
+    url: `http://localhost${pathname}`,
+    cookies: { get: () => undefined },
+    headers: new Headers(),
+  } as unknown as NextRequest;
+}
 
 const WIDGET_PATHS_PATH = path.resolve(
   __dirname,
@@ -57,6 +72,22 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
       .find((l) => l.includes('"/api/connect/token"'));
     expect(line).toBeDefined();
     expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+  });
+
+  it("contains the /webhook generic inbound-webhook namespace (cinatra#340; in-handler Standard-Webhooks signature auth)", () => {
+    expect(guardSource).toMatch(/"\/webhook"/);
+    const line = guardSource.split("\n").find((l) => /"\/webhook",/.test(l));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/standard-webhooks signature/);
+    // It must be ONE static namespace prefix — the guard must never IMPORT the
+    // generated webhook-prefix list (the route owns the declared/undeclared 404
+    // verdict). A comment naming it as the thing NOT to import is fine; the
+    // load-bearing check is that the generated module is never imported.
+    expect(guardSource).not.toMatch(/from\s+["']@\/lib\/generated\/webhook-public-paths["']/);
+  });
+
+  it("keeps /api/webhooks/wordpress as a SEPARATE hand-pin (the #343 boundary), not folded into /webhook", () => {
+    expect(guardSource).toMatch(/"\/api\/webhooks\/wordpress"/);
   });
 
   it("does NOT exempt /connect/authorize (the consent screen stays session-gated)", () => {
@@ -199,5 +230,42 @@ describe("auth-route-guard - CMS widget public surface stays NARROW", () => {
     // The guard consumes BOTH new lists as exact-match (.includes), never a prefix.
     expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_TOKEN_PATHS/);
     expect(guardSource).toMatch(/GENERATED_WIDGET_STREAM_CAPABILITY_PATHS/);
+  });
+});
+
+describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)", () => {
+  // The whole /webhook namespace skips the sign-in redirect (a webhook arrives
+  // from an unauthenticated connected site). Both a DECLARED hook path and an
+  // UNDECLARED one are exempt at the guard — the ROUTE owns the declared→dispatch
+  // / undeclared→404 verdict, so neither is ever 307'd to /sign-in. A sessionless
+  // request to a NON-/webhook protected path still redirects (control).
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    // NextResponse.next() has no Location header and is not a 307 redirect.
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+
+  it("a declared-shaped /webhook/<vendor>/<slug>/<hook>/<bindingId> path is exempt (no 307), even sessionless", async () => {
+    const res = await guardAppRoute(
+      fakeRequest("/webhook/cinatra-ai/wordpress-connector/post-published/abc123"),
+    );
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("an UNDECLARED /webhook/... path is also exempt at the guard (the route 404s, never 307s)", async () => {
+    const res = await guardAppRoute(fakeRequest("/webhook/nobody/nothing/none/xyz"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("the bare /webhook path is exempt (boundary-aware prefix match)", async () => {
+    const res = await guardAppRoute(fakeRequest("/webhook"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("CONTROL: a sessionless request to a protected non-/webhook path is 307'd to /sign-in", async () => {
+    const res = await guardAppRoute(fakeRequest("/dashboards"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
   });
 });

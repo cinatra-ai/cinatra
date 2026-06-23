@@ -10,6 +10,8 @@ import {
   sanitizeLogoDataUri,
   extractFactoryExport,
   validateWidgetStreamDeclaration,
+  validateWebhooksDeclaration,
+  webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
@@ -39,6 +41,12 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Inbound-webhook facility (cinatra#340): the host-owned generated maps
+      // for the generic /webhook route (dispatch registry, declared-prefix
+      // list, registry-UI metadata). Inert until #343.
+      "src/lib/generated/webhook-public-paths.ts",
+      "src/lib/generated/webhook-registry-meta.ts",
+      "src/lib/generated/webhooks.server.ts",
       "src/lib/generated/widget-stream-public-paths.ts",
     ]);
   });
@@ -558,6 +566,89 @@ describe("widget-stream agent map (cinatra.widgetStream)", () => {
         "ctx",
       ),
     ).toThrow(/ambiguous/);
+  });
+});
+
+describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
+  const validHook = {
+    id: "post-published",
+    handler: "./src/webhooks/post-published",
+    factory: "createPostPublishedHandler",
+  };
+
+  it("validateWebhooksDeclaration: valid declaration → no errors", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", {
+        hooks: [validHook, { ...validHook, id: "post-updated", rejectStatus: 422, label: "Updated" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("FAILS CLOSED: non-object, empty hooks, bad id, missing handler/factory", () => {
+    expect(validateWebhooksDeclaration("@x/p", "nope").length).toBeGreaterThan(0);
+    expect(validateWebhooksDeclaration("@x/p", { hooks: [] })).toEqual(
+      expect.arrayContaining([expect.stringContaining("non-empty array")]),
+    );
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, id: "Bad ID!" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".id")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ id: "ok", factory: "createX" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".handler")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ id: "ok", handler: "./h" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".factory")]));
+  });
+
+  it("FAILS CLOSED: duplicate hook id within a package", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [validHook, { ...validHook }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate hook id")]));
+  });
+
+  it("FAILS CLOSED: rejectStatus out of the 4xx range; schemaVersion < 1", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, rejectStatus: 503 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("rejectStatus")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, rejectStatus: 200 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("rejectStatus")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, schemaVersion: 0 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("schemaVersion")]));
+  });
+
+  it("webhookHandlerExportsFactory: detects an exported function/const factory, rejects a missing one", () => {
+    expect(
+      webhookHandlerExportsFactory(
+        "export function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = () => {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export async function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A non-exported or absent factory is rejected (fail-closed at generation).
+    expect(
+      webhookHandlerExportsFactory("function createPostPublishedHandler() {}", "createPostPublishedHandler"),
+    ).toBe(false);
+    expect(webhookHandlerExportsFactory("export const other = 1;", "createPostPublishedHandler")).toBe(
+      false,
+    );
+  });
+
+  it("the real tree emits an EMPTY webhook map (inert until #343 — no extension declares cinatra.webhooks)", async () => {
+    const { webhookHooks } = await buildManifest();
+    expect(webhookHooks).toEqual([]);
   });
 });
 

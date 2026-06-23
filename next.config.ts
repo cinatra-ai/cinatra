@@ -189,6 +189,7 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/extensions",
     "@cinatra-ai/agents",
     "@cinatra-ai/notifications",
+    "@cinatra-ai/webhooks",
     "@cinatra-ai/errors",
     "@cinatra-ai/connectors",
     "@cinatra-ai/connectors-catalog",
