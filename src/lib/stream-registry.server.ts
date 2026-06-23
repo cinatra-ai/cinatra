@@ -52,7 +52,14 @@ export type StreamHandlerFactory = () => StreamHandler;
  * declared metadata (`resume` when present).
  */
 export function resolveStream(streamSlug: string): RegisteredStreamEntry | null {
-  return GENERATED_STREAM_DECLARATIONS[streamSlug] ?? null;
+  // Own-property guard: GENERATED_STREAM_DECLARATIONS is a plain object literal,
+  // so a slug like `__proto__` / `constructor` / `toString` would otherwise
+  // resolve a truthy prototype value and crash `buildStreamHandler` (a 500
+  // instead of the documented clean 404). `Object.hasOwn` keeps the empty /
+  // undeclared path a first-class 404 for EVERY request.
+  return Object.hasOwn(GENERATED_STREAM_DECLARATIONS, streamSlug)
+    ? GENERATED_STREAM_DECLARATIONS[streamSlug]
+    : null;
 }
 
 /**
