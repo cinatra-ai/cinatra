@@ -1055,9 +1055,8 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
         }
 
         const { deliverOutbound } = await import("@cinatra-ai/webhooks");
-        const { recordOutboundDeadLetter, digestPayload } = await import(
-          "@/lib/webhook-outbound-deadletter.server"
-        );
+        const { recordOutboundDeadLetter, digestPayload, sanitizeError } =
+          await import("@/lib/webhook-outbound-deadletter.server");
 
         // eventKind → { url, secret } resolver. Structured so future outbound
         // producers plug in a new arm without touching delivery/DLQ logic. A
@@ -1176,13 +1175,20 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
             // durable record exists even after BullMQ exhausts the job. (A
             // failed write here is still surfaced — we throw regardless, so
             // worker.on("failed") records the exhaustion either way.)
+            // writeDeadLetter → recordOutboundDeadLetter scrubs last_error on
+            // store, so the raw errMsg is safe to hand it here.
             if (attemptsMade >= attemptsConfigured) {
               writeDeadLetter(result.status ?? null, errMsg);
             }
-            // Throw so BullMQ marks the attempt failed and retries (or, on the
-            // last attempt, moves the job to its `failed` set after the DLQ
-            // row is already written).
-            throw new Error(`[webhook-outbound] delivery retryable: ${errMsg}`);
+            // Sanitize BEFORE throwing: this error propagates to
+            // worker.on("failed") → Sentry + failed-job notifications, and undici
+            // fills fetch errors with the FULL target URL (userinfo creds +
+            // ?token= query secrets). The DLQ path scrubs on store, but the
+            // reporting path must scrub too, or a retryable failure leaks a
+            // credentialed URL outside the DLQ.
+            // (cinatra#341 codex round-3 HIGH — DLQ never stores secrets / acceptance #3.)
+            const safeErrMsg = sanitizeError(errMsg) ?? "retryable failure";
+            throw new Error(`[webhook-outbound] delivery retryable: ${safeErrMsg}`);
           }
         }
         return;

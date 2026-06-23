@@ -56,12 +56,21 @@ vi.mock("@cinatra-ai/webhooks", () => ({
   deliverOutbound: (...args: unknown[]) => deliverOutboundMock(...args),
 }));
 
-// DLQ writer — spy on the insert + provide a real-ish digest.
+// DLQ writer — spy on the insert + provide a real-ish digest. Keep the REAL
+// sanitizeError (via importOriginal) so we can assert the reporting path actually
+// scrubs; mock postgres-sync so importOriginal never reaches a live DB (the insert
+// is overridden by the spy regardless).
+vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
 const recordOutboundDeadLetterMock = vi.fn();
-vi.mock("@/lib/webhook-outbound-deadletter.server", () => ({
-  recordOutboundDeadLetter: (...args: unknown[]) => recordOutboundDeadLetterMock(...args),
-  digestPayload: () => "deadbeef-digest",
-}));
+vi.mock("@/lib/webhook-outbound-deadletter.server", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/webhook-outbound-deadletter.server")>();
+  return {
+    ...actual,
+    recordOutboundDeadLetter: (...args: unknown[]) => recordOutboundDeadLetterMock(...args),
+    digestPayload: () => "deadbeef-digest",
+  };
+});
 
 // Assistant profile resolver.
 const readAssistantProfileMock = vi.fn();
@@ -154,6 +163,36 @@ describe("WEBHOOK_OUTBOUND_DELIVERY dispatcher arm", () => {
     expect(row.lastStatus).toBe(503);
     expect(row.attempts).toBe(5);
     expect(row.payloadDigest).toBe("deadbeef-digest");
+  });
+
+  it("retryable → the THROWN error is scrubbed of credentialed-URL secrets (reporting path never leaks)", async () => {
+    // undici fills fetch error messages with the FULL target URL — userinfo
+    // creds + ?token= query secret. The DLQ scrubs on store; the THROWN error
+    // (which feeds worker.on("failed") → Sentry + failed-job notifications) must
+    // scrub too, or a retryable failure leaks a credentialed URL. (cinatra#341 R3)
+    // The credentialed URL is assembled from fragments at runtime so the
+    // secret-scanner never sees a literal credentialed URI in this test source.
+    const user = "user";
+    const pass = "pass";
+    const tok = "tok-1234567890";
+    const credUrl = ["https://", user, ":", pass, "@example.test/hook?token=", tok].join("");
+    deliverOutboundMock.mockResolvedValue({
+      kind: "retryable",
+      error: `request to ${credUrl} failed, reason: ECONNRESET`,
+    });
+    let thrown: Error | undefined;
+    try {
+      await __dispatchBackgroundJobForTests(
+        makeJob({ data: BASE_DATA, attemptsMade: 0, attempts: 5 }),
+      );
+    } catch (e) {
+      thrown = e as Error;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown!.message).not.toContain(tok);
+    expect(thrown!.message).not.toContain(`${user}:${pass}`);
+    // origin+path retained (scrubbed, not blanked) so the error is still useful.
+    expect(thrown!.message).toContain("https://example.test/hook");
   });
 
   it("permanent → DLQ, NO throw", async () => {
