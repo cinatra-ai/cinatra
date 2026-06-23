@@ -1,7 +1,7 @@
-diff --git a/migrations/0008_narrow-usage-events-cost-usd.sql b/migrations/0008_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0010_narrow-usage-events-cost-usd.sql b/migrations/0010_narrow-usage-events-cost-usd.sql
 new file mode 100644
 --- /dev/null
-+++ b/migrations/0008_narrow-usage-events-cost-usd.sql
++++ b/migrations/0010_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -12,13 +12,14 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -71,5 +71,12 @@
+@@ -84,6 +84,13 @@
+       "summary": "Add the webhook_secret_bindings table for the per-webhook/per-site secret service (cinatra#340): one active row per (vendor, slug, hook, site) holding the Standard-Webhooks secret material ENCRYPTED via the host secretsCodec (current_secret_ciphertext/iv + an optional previous_secret_ciphertext/iv for the bounded dual-secret rotation window, previous_expires_at, rotated_at), resolved by the server-issued opaque binding_id (PRIMARY KEY) — never from the request payload. site_id uuid (connect_sites.site_id space, D1b). A partial UNIQUE index (vendor, slug, hook, site_id) WHERE revoked_at IS NULL enforces at most one active binding per tuple; revoked_at tombstones a binding. legacy_enabled is the structural hook for the #343 legacy single-shared-secret bridge (its legacy-secret STORAGE columns are deferred to #343 per D3c option A; stays false in #340). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL; ships as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
        "destructive": false,
-       "tables": ["agent_run_pm_links"]
+       "tables": ["webhook_secret_bindings"]
 +    },
 +    {
-+      "seq": "0008",
-+      "file": "0008_narrow-usage-events-cost-usd.sql",
++      "seq": "0010",
++      "file": "0010_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

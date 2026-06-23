@@ -42,6 +42,14 @@ describe("extension-reference classification taxonomy", () => {
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Inbound-webhook facility (cinatra#340): the host-owned generated maps
+      // for the generic /webhook route — webhook-public-paths.ts (import-free
+      // declared-prefix list), webhook-registry-meta.ts (import-free hook
+      // metadata for #342), webhooks.server.ts (server-only dispatch registry).
+      // Same owner-ruled generated-tree exempt class, same --check byte pin.
+      "src/lib/generated/webhook-public-paths.ts",
+      "src/lib/generated/webhook-registry-meta.ts",
+      "src/lib/generated/webhooks.server.ts",
       "src/lib/generated/widget-stream-public-paths.ts",
     ]);
   });
