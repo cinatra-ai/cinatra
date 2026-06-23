@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createHmac } from "node:crypto";
+import { createHmac, createHash } from "node:crypto";
 import { signOutbound } from "@cinatra-ai/webhooks";
 import type {
   ResolvedBinding,
@@ -331,14 +331,39 @@ describe("generic /webhook route — #343 legacy HMAC bridge", () => {
     expect(res.status).toBe(200);
   });
 
-  it("a legacy binding with a valid HMAC + id → dispatch (200) keyed on the header id", async () => {
+  // The authenticated idempotency key the route derives for a legacy delivery:
+  // sha256 of the EXACT signed body bytes, namespaced. The unsigned
+  // X-Cinatra-Webhook-Id header is required but NEVER the dedupe key (the legacy
+  // HMAC authenticates only the body, not the headers — codex R1).
+  function legacyBodyKey(payload: unknown): string {
+    const body = JSON.stringify(payload);
+    return "sha256:" + createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex");
+  }
+
+  it("a legacy binding with a valid HMAC + id → dispatch (200) keyed on the AUTHENTICATED body digest, not the header", async () => {
     resolveByBindingId.mockResolvedValue(legacyBinding());
     handlerReturning({ outcome: "accepted" });
-    const res = await POST(legacyRequest({ event: "post_published", postId: 7 }), params());
+    const payload = { event: "post_published", postId: 7 };
+    const res = await POST(legacyRequest(payload), params());
     expect(res.status).toBe(200);
-    // The idempotency ledger is keyed on the X-Cinatra-Webhook-Id header value.
-    expect(claim).toHaveBeenCalledWith(expect.any(String), SITE_ID, "wp-msg-1");
-    expect(finalize).toHaveBeenCalledWith(expect.any(String), SITE_ID, "wp-msg-1", 1, "done");
+    // The ledger key is the body digest — NOT the X-Cinatra-Webhook-Id value.
+    const key = legacyBodyKey(payload);
+    expect(key).not.toBe("wp-msg-1");
+    expect(claim).toHaveBeenCalledWith(expect.any(String), SITE_ID, key);
+    expect(finalize).toHaveBeenCalledWith(expect.any(String), SITE_ID, key, 1, "done");
+  });
+
+  it("a replay of the SAME signed body with a DIFFERENT X-Cinatra-Webhook-Id keys the SAME ledger entry (no header-swap dedupe bypass — codex R1)", async () => {
+    resolveByBindingId.mockResolvedValue(legacyBinding());
+    handlerReturning({ outcome: "accepted" });
+    const payload = { event: "post_published", postId: 7 };
+    await POST(legacyRequest(payload, { messageId: "attacker-fresh-id-1" }), params());
+    await POST(legacyRequest(payload, { messageId: "attacker-fresh-id-2" }), params());
+    const key = legacyBodyKey(payload);
+    // Both deliveries claim the SAME key despite distinct header ids — so the
+    // leased ledger (real impl) would dedupe the second; the header cannot be
+    // varied to force re-dispatch of an already-seen authenticated event.
+    expect(claim.mock.calls.every((c) => c[2] === key)).toBe(true);
   });
 
   it("the handler sees the binding siteId + the parsed legacy payload (not Standard-Webhooks)", async () => {
@@ -383,7 +408,7 @@ describe("generic /webhook route — #343 legacy HMAC bridge", () => {
     expect(claim).not.toHaveBeenCalled();
   });
 
-  it("dedupes a replayed legacy delivery (same X-Cinatra-Webhook-Id) → 200 deduped, no dispatch", async () => {
+  it("dedupes a replayed legacy delivery (same body digest) → 200 deduped, no dispatch", async () => {
     resolveByBindingId.mockResolvedValue(legacyBinding());
     claim.mockResolvedValue({ kind: "deduped" });
     const res = await POST(legacyRequest({ a: 1 }), params());

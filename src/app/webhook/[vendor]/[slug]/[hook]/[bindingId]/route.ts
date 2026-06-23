@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 // Host-owned GENERIC inbound-webhook route (cinatra#340).
@@ -162,17 +164,26 @@ export async function POST(request: Request, { params }: RouteParams) {
   let verified: { messageId: string; timestamp: Date; payload: unknown };
   if (binding.legacyEnabled) {
     // Legacy arm. The legacy sender carries no Standard-Webhooks webhook-id, so
-    // an explicit idempotency-key header is REQUIRED to key the ledger — absent
-    // → fail closed (same no-oracle 401 as a bad signature, so a probe cannot
-    // distinguish "no id" from "bad sig").
-    const messageId = request.headers.get(LEGACY_WEBHOOK_ID_HEADER);
+    // an explicit idempotency-key header is REQUIRED — absent → fail closed
+    // (same no-oracle 401 as a bad signature, so a probe cannot distinguish
+    // "no id" from "bad sig"). The header is part of the sender CONTRACT but is
+    // NOT the dedupe key: the legacy HMAC authenticates ONLY the raw body (not
+    // the headers), so trusting the header value to key the ledger would let
+    // anyone who captures one valid signed body replay it with a fresh
+    // X-Cinatra-Webhook-Id and bypass dedupe → repeated dispatch of the same
+    // authenticated event. Standard-Webhooks avoids this because its webhook-id
+    // is inside the signed content; the legacy HMAC is not. So we derive the
+    // ledger messageId from AUTHENTICATED material — a digest of the exact
+    // signed bytes — which is replay-stable (a true retry of the same event
+    // dedupes) and unforgeable (the body is HMAC-bound). (codex R1)
+    const idHeader = request.headers.get(LEGACY_WEBHOOK_ID_HEADER);
     const sigHeader = request.headers.get(LEGACY_SIG_HEADER);
     // binding.legacySecret is guaranteed present for a legacyEnabled binding
     // (the secret service fails closed otherwise) — defensively treat a missing
     // one as an auth failure rather than feeding undefined into the verifier.
     if (
-      typeof messageId !== "string" ||
-      messageId.length === 0 ||
+      typeof idHeader !== "string" ||
+      idHeader.length === 0 ||
       typeof binding.legacySecret !== "string" ||
       !verifyLegacyHmac(rawBody, sigHeader, binding.legacySecret)
     ) {
@@ -197,6 +208,11 @@ export async function POST(request: Request, { params }: RouteParams) {
         { status: 400 },
       );
     }
+    // Authenticated idempotency key: sha256 of the exact signed bytes, prefixed
+    // to namespace it from any Standard-Webhooks messageId. The unsigned header
+    // is required (above) but never trusted as the dedupe key.
+    const messageId =
+      "sha256:" + createHash("sha256").update(rawBody).digest("hex");
     verified = { messageId, timestamp: new Date(), payload };
   } else {
     // Standard-Webhooks arm — verify against the binding's candidate secrets
