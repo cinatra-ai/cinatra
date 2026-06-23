@@ -1,6 +1,10 @@
 // Pure Node.js module — no "use server". Safe to import from instrumentation.node.ts.
-// Reads a system-provided agent ZIP from data/downloads/, injects packageName/packageVersion
-// into agent.json, and upserts the template via importAgentTemplate.
+// Reads a system-provided agent ZIP from data/downloads/, injects the
+// packageName/packageVersion via a synthetic sibling package.json (NOT into
+// agent.json — the compiler reads identity from the sibling package.json), and
+// upserts the template via importAgentTemplate. The git-file loader
+// (ensureAgentPackageFromGitFile) resolves the version solely from the sibling
+// package.json#version.
 
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
