@@ -91,6 +91,23 @@ test.describe("RBAC — nav visibility + access clarity + role gate", () => {
     await expect(sidebar.getByText("Analytics", { exact: true })).toHaveCount(0);
   });
 
+  test("member does not see the admin-only Webhooks nav entry (cinatra#342)", async ({ page }) => {
+    // The Tools → Webhooks registry is admin-tier — hidden for non-admins via
+    // the isAdmin push in layout.tsx, mirroring the Analytics hide above.
+    await page.goto("/desk", { waitUntil: "domcontentloaded" });
+    await waitForHydration(page);
+    const sidebar = page.getByRole("navigation");
+    await expect(sidebar.getByText("Webhooks", { exact: true })).toHaveCount(0);
+  });
+
+  test("non-admin is denied the Webhooks registry page (cinatra#342)", async ({ page }) => {
+    // The page re-enforces with requireAdminSession() — the nav hide is
+    // cosmetic. Mirror the Access Control denial assertion above.
+    const res = await page.goto("/webhooks", { waitUntil: "domcontentloaded" });
+    expect(res?.status() === 403 || res?.status() === 200).toBeTruthy();
+    await expect(page.getByText("No webhooks registered yet")).toHaveCount(0);
+  });
+
   test("project permissions surface shows the ownership/access clarity note", async ({ page }) => {
     await page.goto(`/projects/${SEED.projectId}/permissions`, { waitUntil: "domcontentloaded" });
     await waitForHydration(page);

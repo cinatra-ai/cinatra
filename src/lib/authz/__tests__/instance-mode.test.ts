@@ -20,7 +20,7 @@ function actor(over: Partial<ActorContext> = {}): ActorContext {
 }
 
 const ALL: NavTarget[] = [
-  "agents", "objects", "projects", "skills", "connectors", "dashboards",
+  "agents", "objects", "projects", "skills", "connectors", "webhooks", "dashboards",
   "lists", "entities", "workflows", "triggers", "notifications", "metrics",
   "marketplace", "audit", "organizations", "administration",
 ];
@@ -49,6 +49,16 @@ describe("nav visibility", () => {
   it("audit nav is platform_admin-only (audit.read is a platform-level power)", () => {
     expect(canSeeNavTarget(actor({ orgRole: "org_admin" }), "audit")).toBe(false);
     expect(canSeeNavTarget(actor({ platformRole: "platform_admin" }), "audit")).toBe(true);
+  });
+
+  it("webhooks nav is admin-tier (administration/update → settings.update, cinatra#342)", () => {
+    // The webhooks registry catalog gate maps to settings.update, which is
+    // admin-tier (org_admin / platform_admin) and NOT granted to a plain
+    // member — unlike settings.read. So the registry must NOT leak to members.
+    // (The load-bearing nav hide in layout is stricter still: isPlatformAdmin.)
+    expect(canSeeNavTarget(actor(), "webhooks")).toBe(false);
+    expect(canSeeNavTarget(actor({ orgRole: "org_admin" }), "webhooks")).toBe(true);
+    expect(canSeeNavTarget(actor({ platformRole: "platform_admin" }), "webhooks")).toBe(true);
   });
 
   it("a cross-org member sees nothing org-scoped", () => {

@@ -84,7 +84,7 @@ export default async function RootLayout({
   let userAccentColor: ExtensionAccent | null = null;
   // Server-resolved nav gating.
   let singleOrg = false;
-  let hiddenNavTitles: string[] = [];
+  const hiddenNavTitles: string[] = [];
   // Aggregate of pending workflow approvals + admin-only agent creation
   // requests, resolved server-side and consumed by AppSidebar to drive the
   // Admin → Approvals pill. Defaults to 0 on any resolution error.
@@ -130,6 +130,14 @@ export default async function RootLayout({
       hiddenNavTitles.push("Analytics");
     }
     isAdmin = isPlatformAdmin(session);
+    // The inbound-webhook registry (Tools → Webhooks, cinatra#342) is an
+    // admin-tier surface — hide it for any non-admin actor (covers the
+    // no-session and the non-admin-member cases). The page itself re-enforces
+    // with requireAdminSession(); this hide is cosmetic-but-correct, mirroring
+    // the admin-group gate rather than the member-granted settings.read.
+    if (!isAdmin) {
+      hiddenNavTitles.push("Webhooks");
+    }
     if (session) {
       try {
         const { pendingApprovalsCount } = await import("@/lib/pending-approvals-count");

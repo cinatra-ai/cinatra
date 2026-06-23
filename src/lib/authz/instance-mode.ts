@@ -64,6 +64,7 @@ export type NavTarget =
   | "projects"
   | "skills"
   | "connectors"
+  | "webhooks"
   | "dashboards"
   | "lists"
   | "entities"
@@ -82,6 +83,11 @@ const NAV_TARGET_GATE: Record<NavTarget, { resourceType: ResourceType; action: A
   projects:       { resourceType: "project", action: "list" },
   skills:         { resourceType: "skill", action: "list" },
   connectors:     { resourceType: "connector", action: "read" },
+  // Inbound-webhook registry is a host-admin surface (cinatra#342). Gate on
+  // administration/update → settings.update, which is platform_admin-only
+  // (NOT member-granted, unlike settings.read). This keeps the catalog/coverage
+  // parity admin-only; the load-bearing nav hide is the isAdmin push in layout.
+  webhooks:       { resourceType: "administration", action: "update" },
   dashboards:     { resourceType: "dashboard", action: "list" },
   lists:          { resourceType: "list", action: "list" },
   entities:       { resourceType: "entity_account", action: "list" },

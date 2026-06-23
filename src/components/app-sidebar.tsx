@@ -136,6 +136,7 @@ function buildSidebarData(_opts: SidebarOpts) {
       // direct link.
       { title: "Skills", url: "/skills", icon: domainIcons.skills },
       { title: "Connectors", url: "/connectors", icon: domainIcons.connectors },
+      { title: "Webhooks", url: "/webhooks", icon: domainIcons.webhooks },
     ] as NavItem[],
   });
 
