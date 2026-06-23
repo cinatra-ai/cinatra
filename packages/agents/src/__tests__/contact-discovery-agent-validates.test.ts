@@ -33,9 +33,6 @@ const oasPath = path.resolve(
 );
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
-const pkg = JSON.parse(
-  fs.readFileSync(path.resolve(path.dirname(oasPath), "..", "package.json"), "utf8"),
-) as Record<string, unknown>;
 
 describe("contact-discovery-agent OAS validates against L1, LLM-metadata, and StartNode required-input scans", () => {
   it("validateOasAgentJson returns [] (no L1 findings)", () => {
@@ -68,7 +65,6 @@ describe("contact-discovery-agent OAS validates against L1, LLM-metadata, and St
     const metadata = oas.metadata as Record<string, unknown>;
     const cinatra = metadata.cinatra as Record<string, unknown>;
     expect(cinatra.packageName).toBe("@cinatra-ai/contact-discovery-agent");
-    expect(cinatra.packageVersion).toBe(pkg.version);
   });
 
   it("metadata.cinatra.toolboxes is UNDEFINED — legacy MCP injection path (locked decision)", () => {

@@ -51,7 +51,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(meta.packageName).toBe(pkg.name);
     expect(meta.packageName).toBe("@cinatra-ai/blog-wordpress-publish-agent");
-    expect(meta.packageVersion).toBe(pkg.version);
   });
 
   it("Pin 3: openai/gpt-5.5 LLM pair, no capabilityRequired", () => {

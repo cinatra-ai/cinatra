@@ -136,31 +136,6 @@ describe("agent_source_review — deterministic parity across reference agents",
       expect(findings, JSON.stringify(findings, null, 2)).toEqual([]);
     });
 
-    // When both OAS metadata.cinatra.packageVersion and sibling
-    // package.json#version are present, they must match. Mismatch causes the
-    // startup loader (ensureAgentPackageFromGitFile) to read the stale OAS
-    // value, hit the version-skip guard, and silently skip re-importing.
-    it(`${agent.slug} OAS↔package.json packageVersion sync`, () => {
-      const oasParsed = JSON.parse(fs.readFileSync(agent.oasPath, "utf-8")) as Record<
-        string,
-        unknown
-      >;
-      const pkgParsed = JSON.parse(fs.readFileSync(agent.packageJsonPath, "utf-8")) as Record<
-        string,
-        unknown
-      >;
-      const findings = (
-        ValidateAgentJson as unknown as Record<
-          string,
-          (
-            o: Record<string, unknown>,
-            p: Record<string, unknown>,
-          ) => Array<{ code: string; message: string }>
-        >
-      )["scanOasForPackageVersionSync"](oasParsed, pkgParsed);
-      expect(findings, JSON.stringify(findings, null, 2)).toEqual([]);
-    });
-
     it(`${agent.slug} passes validateOasAgentJson structural validation`, () => {
       if (STRUCTURAL_VALIDATION_SKIPLIST.has(agent.slug)) {
         // Known structural issues — see skip-list comment at top of file.

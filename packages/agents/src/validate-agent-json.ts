@@ -657,22 +657,24 @@ export function scanOasForStartNodeInputsWithoutRequired(
 }
 
 /**
- * Surface OAS↔package.json packageVersion drift.
+ * Surface a REDUNDANT `metadata.cinatra.packageVersion` in an OAS that drifts
+ * from sibling `package.json#version`.
  *
- * `ensureAgentPackageFromGitFile` reads `metadata.cinatra.packageVersion` from
- * the OAS first and falls back to sibling `package.json#version`. The version-
- * skip guard then short-circuits import when the OAS-side value matches the
- * existing DB row. If the OAS field has been left stale (package.json bumped
- * but OAS forgotten), the loader silently skips re-importing the new code.
+ * `metadata.cinatra.packageVersion` is no longer part of the agent OAS
+ * contract: the canonical version is `package.json#version`, and
+ * `ensureAgentPackageFromGitFile` now resolves the version SOLELY from the
+ * sibling `package.json` (it no longer reads the OAS copy). So a present-but-
+ * mismatched OAS value can no longer cause a silent stale import — it is purely
+ * misleading provenance/display metadata left over from the legacy convention.
  *
- * This scanner pins the invariant: when both fields are present, they must
- * match. Either-side absent is allowed (loader fallback handles it).
+ * This scanner is therefore a SUGGESTION (non-blocking): when the field is
+ * present and disagrees with `package.json#version`, it nudges the author to
+ * drop the redundant OAS copy (or re-sync it). Either-side absent is fine — the
+ * canonical source is `package.json` and authoring the field at all is optional
+ * (and discouraged).
  *
  * Pure / parsed-input only — caller owns file IO so this is reusable from
  * MCP handlers, hermetic tests, and future upload flows.
- *
- * Severity is blocker because the bug it catches is silent stale imports, not
- * cosmetic drift.
  */
 export function scanOasForPackageVersionSync(
   oasParsed: Record<string, unknown>,
@@ -689,10 +691,10 @@ export function scanOasForPackageVersionSync(
   return [
     {
       code: "package_version_oas_pkg_drift",
-      severity: "blocker",
+      severity: "suggestion",
       message:
-        `metadata.cinatra.packageVersion "${oasVersion}" must match sibling package.json#version "${pkgVersion}". ` +
-        `Mismatch causes the startup loader (ensureAgentPackageFromGitFile) to read the stale OAS value, hit the version-skip guard, and silently skip re-importing the new code.`,
+        `metadata.cinatra.packageVersion "${oasVersion}" disagrees with sibling package.json#version "${pkgVersion}". ` +
+        `This OAS field is redundant — the canonical version is package.json#version and the loader no longer reads the OAS copy. Drop metadata.cinatra.packageVersion from the OAS (preferred) or re-sync it to avoid misleading provenance.`,
       location: "metadata.cinatra.packageVersion",
       source: "deterministic",
     },
