@@ -116,6 +116,67 @@ describe("generic /webhook route — gates", () => {
     expect(claim).not.toHaveBeenCalled();
   });
 
+  it("404 (NOT 415) for an undeclared hook even with a non-JSON content-type — resolve runs first", async () => {
+    resolveWebhook.mockReturnValue(null);
+    const req = new Request("http://localhost/webhook/x/y/z/b", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "hi",
+    });
+    const res = await POST(req, params());
+    expect(res.status).toBe(404);
+  });
+
+  it("404 (NOT 413) for an undeclared hook even with an oversized body — resolve runs first", async () => {
+    resolveWebhook.mockReturnValue(null);
+    const req = new Request("http://localhost/webhook/x/y/z/b", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": String(10 * 1024 * 1024) },
+      body: JSON.stringify({ a: 1 }),
+    });
+    const res = await POST(req, params());
+    expect(res.status).toBe(404);
+  });
+
+  it("415 when a parameterized content-type only MENTIONS application/json (not the media type)", async () => {
+    const req = new Request("http://localhost/webhook/x/y/z/b", {
+      method: "POST",
+      headers: { "content-type": "text/plain; note=application/json" },
+      body: "hi",
+    });
+    const res = await POST(req, params());
+    expect(res.status).toBe(415);
+  });
+
+  it("415 for a malformed `+json` token with no type/subtype (e.g. \"+json\" or \"foo+json\")", async () => {
+    for (const ct of ["+json", "foo+json", "/json", "application/"]) {
+      const req = new Request("http://localhost/webhook/x/y/z/b", {
+        method: "POST",
+        headers: { "content-type": ct },
+        body: "hi",
+      });
+      const res = await POST(req, params());
+      expect(res.status).toBe(415);
+    }
+  });
+
+  it("accepts a structured +json suffix media type (e.g. application/vnd.acme+json)", async () => {
+    handlerReturning({ outcome: "accepted" });
+    const signed = signOutbound(SECRET, "msg-json", new Date(), { a: 1 });
+    const req = new Request(`http://localhost/webhook/${VENDOR}/${SLUG}/${HOOK}/${BINDING_ID}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/vnd.acme+json; charset=utf-8",
+        "webhook-id": signed.headers["webhook-id"],
+        "webhook-timestamp": signed.headers["webhook-timestamp"],
+        "webhook-signature": signed.headers["webhook-signature"],
+      },
+      body: signed.body,
+    });
+    const res = await POST(req, params());
+    expect(res.status).toBe(200);
+  });
+
   it("401 for an unknown/revoked binding (no oracle)", async () => {
     resolveByBindingId.mockResolvedValue(null);
     const res = await POST(signedRequest({ a: 1 }), params());

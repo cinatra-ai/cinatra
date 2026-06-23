@@ -646,6 +646,154 @@ describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
     );
   });
 
+  it("webhookHandlerExportsFactory: proves CALLABILITY — rejects a non-function const, comments, and strings", () => {
+    // A const bound to a NON-function value is rejected (the old loose regex
+    // accepted any `export const NAME = …`).
+    expect(
+      webhookHandlerExportsFactory("export const createPostPublishedHandler = 5;", "createPostPublishedHandler"),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'export const createPostPublishedHandler = "not a function";',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // Async arrow + typed-param arrow forms are accepted (callable).
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = async () => {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = (deps: Deps) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // `export const NAME: Type = function` is accepted.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler: Factory = function () {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A mention ONLY inside a comment or a string never satisfies the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "// export function createPostPublishedHandler() {}\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "/* export const createPostPublishedHandler = () => {}; */\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'const doc = "export function createPostPublishedHandler() {}";',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A mention inside a TEMPLATE literal (incl. a nested template in `${}`) or
+    // a REGEX literal never satisfies the gate (fail-closed strip).
+    expect(
+      webhookHandlerExportsFactory(
+        "const s = `${`export function createPostPublishedHandler() {}`}`;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "const re = /export function createPostPublishedHandler\\(/;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // An arrow whose params contain a default with NESTED parens is callable.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = (deps = makeDeps()) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A REAL export sitting after a template/regex line is still detected (the
+    // strip does not corrupt the surrounding real code).
+    expect(
+      webhookHandlerExportsFactory(
+        "const re = /a\\/b/g;\nexport function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A bare-identifier arrow head and an extra-parenthesized arrow are callable.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = deps => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = ((deps) => ({}));",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // STATEMENT-ANCHORING: a `return`ed regex / a string whose CONTENT is a fake
+    // `export function NAME(` is mid-expression (not at statement position) and
+    // must NOT satisfy the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "function x(){ return /export function createPostPublishedHandler()/; }\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'const s = "; export function createPostPublishedHandler() {}";\nexport const other = 1;',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A postfix `++` before a `/` is DIVISION — the stripper must not eat the
+    // following real `export` as a regex body (no false rejection).
+    expect(
+      webhookHandlerExportsFactory(
+        "let n = 0; const z = n++ / 2;\nexport function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A regex in KEYWORD context (e.g. after `return`) is stripped, so a fake
+    // `; export function NAME(` inside the regex body must NOT pass the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "function x(){ return /; export function createPostPublishedHandler()/; }\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A NESTED-generic arrow head is callable (not falsely rejected).
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = <T extends Record<string, unknown>>(deps: T) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // Regex literals after `)` / `}` (control-flow heads / block ends) are also
+    // stripped (fail-closed bias), so a fake `; export …` in the regex body is
+    // rejected.
+    expect(
+      webhookHandlerExportsFactory(
+        "if (ok) /; export function createPostPublishedHandler()/.test(x);\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "{} /; export function createPostPublishedHandler()/.test(x);\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+  });
+
   it("the real tree emits an EMPTY webhook map (inert until #343 — no extension declares cinatra.webhooks)", async () => {
     const { webhookHooks } = await buildManifest();
     expect(webhookHooks).toEqual([]);

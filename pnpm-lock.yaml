@@ -338,6 +338,1050 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@24.13.2)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@24.13.2)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
 
+  extensions/cinatra-ai/a2a-server-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/anthropic-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/apify-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/apollo-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^1.7.0
+        version: 1.20.0(react@19.2.6)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/blog-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/blog-content-workflow: {}
+
+  extensions/cinatra-ai/blog-idea-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/blog-image-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/blog-post-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/brand-voice-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/competitive-analysis-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/contract-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/crm-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/default-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/drupal-assistant-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/drupal-mcp-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/email-body-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/email-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/gemini-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/github-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/gmail-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/google-calendar-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/google-oauth-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^1.7.0
+        version: 1.20.0(react@19.2.6)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/linkedin-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/linkedin-oauth-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^1.7.0
+        version: 1.20.0(react@19.2.6)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/major-release-workflow: {}
+
+  extensions/cinatra-ai/marketing-icp-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/marketing-strategy-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/mcp-client-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/media-feeds-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      cheerio:
+        specifier: ^1.2.0
+        version: 1.2.0
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+
+  extensions/cinatra-ai/nango-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      '@nangohq/frontend':
+        specifier: ^0.70.3
+        version: 0.70.7
+      '@nangohq/node':
+        specifier: ^0.70.3
+        version: 0.70.7
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/openai-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      '@openai/agents':
+        specifier: ^0.11.4
+        version: 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      openai:
+        specifier: ^6.38.0
+        version: 6.43.0(ws@8.21.0)(zod@4.4.3)
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/plane-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/product-portfolio-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/resend-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      resend:
+        specifier: ^4.0.1
+        version: 4.8.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+
+  extensions/cinatra-ai/sales-playbook-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/screenshot-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/slide-deck-artifact:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+
+  extensions/cinatra-ai/social-media-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/tailscale-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/twenty-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      server-only:
+        specifier: 0.0.1
+        version: 0.0.1
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
+  extensions/cinatra-ai/wordpress-assistant-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/wordpress-mcp-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      '@nangohq/frontend':
+        specifier: ^0.70.3
+        version: 0.70.7
+      class-variance-authority:
+        specifier: ^0.7.1
+        version: 0.7.1
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      radix-ui:
+        specifier: ^1.4.3
+        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: 19.2.6
+        version: 19.2.6(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.5.0
+        version: 3.6.0
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
+  extensions/cinatra-ai/youtube-connector:
+    dependencies:
+      '@cinatra-ai/sdk-extensions':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../../../packages/sdk-ui
+      react:
+        specifier: 19.2.6
+        version: 19.2.6
+    devDependencies:
+      '@typescript-eslint/parser':
+        specifier: 8.61.0
+        version: 8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)
+      eslint:
+        specifier: 10.4.1
+        version: 10.4.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   packages/a2a:
     dependencies:
       '@a2a-js/sdk':
@@ -2608,6 +3652,29 @@ packages:
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
 
+  '@openai/agents-core@0.11.8':
+    resolution: {integrity: sha512-TrE34RXXPoWYv2PjXf5hq3Eq+uvRJMNiY+Q5WBgEPjAg60yt2hya8cS2I8qkO6i25MjNJl37a25X0vL/gs5Wdg==}
+    peerDependencies:
+      zod: ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@openai/agents-openai@0.11.8':
+    resolution: {integrity: sha512-XjHCnJPGapgZBlh8y5oxU7zV0hrAQTF5im6HpUwaPcH5CeRFLtc06VXLso0vJ5G3g9e/J5gIh3S1iAxiJqEAVQ==}
+    peerDependencies:
+      zod: ^4.0.0
+
+  '@openai/agents-realtime@0.11.8':
+    resolution: {integrity: sha512-i1qEGUE8GTW0neWgAc1aj/3wZFtstz8bVG2BvVbU/BzQbyhZV8j3CvndkMJGFfgeobvVmn2qGTV5Ry6ibfuxeQ==}
+    peerDependencies:
+      zod: ^4.0.0
+
+  '@openai/agents@0.11.8':
+    resolution: {integrity: sha512-D4XHF2g+Ub/L9fRJT/xpuiCqHyxiKzZbi0BqQxnso42t+J049O/OSvVzFBcRskF4uPFAvs0TOOB7KBbanCwaYQ==}
+    peerDependencies:
+      zod: ^4.0.0
+
   '@opentelemetry/api-logs@0.214.0':
     resolution: {integrity: sha512-40lSJeqYO8Uz2Yj7u94/SJWE/wONa7rmMKjI1ZcIjgf3MHNHv1OZUCrCETGuaRF62d5pQD1wKIW+L4lmSMTzZA==}
     engines: {node: '>=8.0.0'}
@@ -3841,6 +4908,13 @@ packages:
     peerDependencies:
       react: 19.2.6
 
+  '@react-email/render@1.1.2':
+    resolution: {integrity: sha512-RnRehYN3v9gVlNMehHPHhyp2RQo7+pSkHDtXPvg3s0GbzM9SQMW4Qrf8GRNvtpLC4gsI+Wt0VatNRUFqjvevbw==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      react: 19.2.6
+      react-dom: 19.2.6
+
   '@react-email/render@2.0.6':
     resolution: {integrity: sha512-xOzaYkH3jLZKqN5MqrTXYnmqBYUnZSVbkxdb5PGGmDcK6sKDVMliaDiSwfXajRC9JtSHTcGc2tmGLHWuCgVpog==}
     engines: {node: '>=20.0.0'}
@@ -4844,11 +5918,21 @@ packages:
   '@types/use-sync-external-store@0.0.6':
     resolution: {integrity: sha512-zFDAD+tlpf2r4asuHEj0XH6pY6i0g5NeAHPn+15wk3BV6JA69eERFXC1gyGThDkVa1zCyKr5jox1+2LbV/AMLg==}
 
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+
   '@typescript-eslint/eslint-plugin@8.61.1':
     resolution: {integrity: sha512-ZPlVl3PB3et/59Ne0fv/sci6ZXz4T4Hp4nTJ56i/Y0gR89ARb+KphojTq6j+56E5PIezmOIOOWyY+aWQFd+IkQ==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       '@typescript-eslint/parser': ^8.61.1
+      eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+      typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/parser@8.61.0':
+    resolution: {integrity: sha512-5B7PfA2e1NQGCnDHd/0lW7W3gvp3d59Ryw54FYO8Uswxo9f6ikw3AZV+Xj/TvpImmpsiYyUqAfhC6kJID1jF6w==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
@@ -4859,15 +5943,31 @@ packages:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
+  '@typescript-eslint/project-service@8.61.0':
+    resolution: {integrity: sha512-DV42F7MLJO6Rax7SK1yg43tcnEfGUrurSpSxKuVX+a3RCTzBlH3fuxprrOJXKCJGAaw82xXocikJ0uQaqwXgGA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
+
   '@typescript-eslint/project-service@8.61.1':
     resolution: {integrity: sha512-PrC4JYGmR241lYnfhmKGTXkFqv8+ymbTFgSAY0fVXpY82/QkMw5TZPl+vGzuDDU2QYJk9fIDOBTntF+yDv9LEA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       typescript: '>=4.8.4 <6.1.0'
 
+  '@typescript-eslint/scope-manager@8.61.0':
+    resolution: {integrity: sha512-IWdXFHFSb6mlC3HPc7QsLDm5zYEbUla6trDEHf32D3/dnuUyXd87plScSNXSbm0/RxMvObpI17sv/EDTGrGZkA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
   '@typescript-eslint/scope-manager@8.61.1':
     resolution: {integrity: sha512-L2bdIeoQS8FlKAvONAr20w6OcLXeB+qiDKbAooS9A0Ben+iSIkBef0FxqwKWYqt5sa0i4KJtxVyVmhMylKzF5w==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/tsconfig-utils@8.61.0':
+    resolution: {integrity: sha512-O5Amvdv9ztMpxpf+vmFULGG78IE6Qwdr3bCGvqwG4nwc9H2qXkOYJJnRbRHyMkQTjv1d03olqwwwzHLMqpFePQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
 
   '@typescript-eslint/tsconfig-utils@8.61.1':
     resolution: {integrity: sha512-UN/H4di+OO7EWx2ovME+8t31YO+KVnK0RRKEHR3kOt21/Ay8BOq3M1OMvWs5vNiqcFCYGYoxK3MXPZzmMUE+yg==}
@@ -4882,9 +5982,19 @@ packages:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
+  '@typescript-eslint/types@8.61.0':
+    resolution: {integrity: sha512-9QTQpZ5Iin4CdIodfbDQFSeiSJKidgYJYug1P9CC2xWgUTvlmixViqDZNciMjwLBZyJnG4tGmPl97rVAFb1AJg==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
   '@typescript-eslint/types@8.61.1':
     resolution: {integrity: sha512-G+CRlPqLv7Bz1IZVs03x5K59F1veqL0EJUROAdGhKsEq8qOiRiZbI+HUojPq5l0fEGOKModD9br6lObhB8zkoA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@typescript-eslint/typescript-estree@8.61.0':
+    resolution: {integrity: sha512-42zatd5qSvvcV1JdDBCLxYRznvP4eIHpPoZXdkPFnAmanA4FuZ5dibSnCBggY8hQnqajPpoGjXFdZ7fIJKQnlA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    peerDependencies:
+      typescript: '>=4.8.4 <6.1.0'
 
   '@typescript-eslint/typescript-estree@8.61.1':
     resolution: {integrity: sha512-u+oQD3BqYWPc8YV9Zab4vaJElJuwOLPRc10Jm1o/qS+6Qwen14HCWwx0Seo4LnSn2wxea2Ik8DxPt2/FHmuhrg==}
@@ -4898,6 +6008,10 @@ packages:
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
+
+  '@typescript-eslint/visitor-keys@8.61.0':
+    resolution: {integrity: sha512-QVLZu3ZPQEE+HICQyAMZ2yLQhxf0meY/wx6Hx14YcTNj13JB3qHlX3lJ02L3fLGHgERRH71kvYDwiXIguT3AjQ==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   '@typescript-eslint/visitor-keys@8.61.1':
     resolution: {integrity: sha512-6fJ9MHWtK14C1DSkiMlHUSOmrVebL7150xZJBlJiL62jjhIA4JmOq6flwBgDxIdBKKdoiZRel+dfPD5MLfny3w==}
@@ -6394,6 +7508,16 @@ packages:
       jiti:
         optional: true
 
+  eslint@10.4.1:
+    resolution: {integrity: sha512-AyIKhnOBuOAdueD7RB3xB+YeAWScb9jHsJBgH2Hcde8InP5JYhqrRR6iTMHyTEwgENK54Cp44e4v8BwNhsuHuw==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+    hasBin: true
+    peerDependencies:
+      jiti: '*'
+    peerDependenciesMeta:
+      jiti:
+        optional: true
+
   espree@11.2.0:
     resolution: {integrity: sha512-7p3DrVEIopW1B1avAGLuCSh1jubc01H2JHc8B4qqGblmg5gI9yumBgACjWo4JlIc04ufug4xJ3SQI8HkS/Rgzw==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
@@ -6466,6 +7590,9 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+
+  fast-deep-equal@2.0.1:
+    resolution: {integrity: sha512-bCK/2Z4zLidyB4ReuIsvALH6w31YfAQDmXMqMx6FyfHqvBxtjC0eRumeSu4Bs3XtXwpyIywtSTrVT99BxY1f9w==}
 
   fast-deep-equal@3.1.3:
     resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
@@ -8041,6 +9168,9 @@ packages:
       '@types/react':
         optional: true
 
+  react-promise-suspense@0.3.4:
+    resolution: {integrity: sha512-I42jl7L3Ze6kZaq+7zXWSunBa3b1on5yfvUW6Eo/3fFOj6dZ5Bqmcd264nJbTK/gn1HjjILAjSwnZbV4RpSaNQ==}
+
   react-qr-code@2.2.0:
     resolution: {integrity: sha512-e5nS0UUN22K3Nf8KBRUzemfdJ6OmnN5w+kbnj1lvJaol9RyVRFeGl05bCkxSN2ZegbLxjjYjX1+mmAoX9+fAhw==}
     peerDependencies:
@@ -8190,6 +9320,10 @@ packages:
 
   reselect@5.1.1:
     resolution: {integrity: sha512-K/BG6eIky/SBpzfHZv/dd+9JBFiS4SWV7FIujVyJRux6e45+73RaUHXLmIR1f7WOMaQ0U1km6qwklRQxpJJY0w==}
+
+  resend@4.8.0:
+    resolution: {integrity: sha512-R8eBOFQDO6dzRTDmaMEdpqrkmgSjPpVXt4nGfWsZdYOet0kqra0xgbvTES6HmCriZEXbmGk3e0DiGIaLFTFSHA==}
+    engines: {node: '>=18'}
 
   resize-observer-polyfill@1.5.1:
     resolution: {integrity: sha512-LwZrotdHOo12nQuZlHEmtuXdqGoOD0OhaxopaNFxWzInpEgaLWoVuAMbTzixuosCx2nEG58ngzW3vxdWoxIgdg==}
@@ -8720,6 +9854,11 @@ packages:
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
+
+  typescript@5.9.3:
+    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
 
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
@@ -9816,6 +10955,11 @@ snapshots:
       eslint: 10.4.0(jiti@2.7.0)
       eslint-visitor-keys: 3.4.3
 
+  '@eslint-community/eslint-utils@4.9.1(eslint@10.4.1(jiti@2.7.0))':
+    dependencies:
+      eslint: 10.4.1(jiti@2.7.0)
+      eslint-visitor-keys: 3.4.3
+
   '@eslint-community/regexpp@4.12.2': {}
 
   '@eslint/config-array@0.23.5':
@@ -10657,6 +11801,57 @@ snapshots:
       '@octokit/openapi-webhooks-types': 12.1.0
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
+
+  '@openai/agents-core@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      debug: 4.4.3
+      openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
+    optionalDependencies:
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+      - ws
+
+  '@openai/agents-openai@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      debug: 4.4.3
+      openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - supports-color
+      - ws
+
+  '@openai/agents-realtime@0.11.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+    dependencies:
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@types/ws': 8.18.1
+      debug: 4.4.3
+      ws: 8.21.0
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+
+  '@openai/agents@0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@openai/agents-core': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-openai': 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-realtime': 0.11.8(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      debug: 4.4.3
+      openai: 6.43.0(ws@8.21.0)(zod@4.4.3)
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
 
   '@opentelemetry/api-logs@0.214.0':
     dependencies:
@@ -11876,6 +13071,14 @@ snapshots:
     dependencies:
       react: 19.2.6
 
+  '@react-email/render@1.1.2(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
+    dependencies:
+      html-to-text: 9.0.5
+      prettier: 3.8.4
+      react: 19.2.6
+      react-dom: 19.2.6(react@19.2.6)
+      react-promise-suspense: 0.3.4
+
   '@react-email/render@2.0.6(react-dom@19.2.6(react@19.2.6))(react@19.2.6)':
     dependencies:
       html-to-text: 9.0.5
@@ -12805,6 +14008,10 @@ snapshots:
 
   '@types/use-sync-external-store@0.0.6': {}
 
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.13.2
+
   '@typescript-eslint/eslint-plugin@8.61.1(@typescript-eslint/parser@8.61.1(eslint@10.4.0(jiti@2.7.0))(typescript@6.0.3))(eslint@10.4.0(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
       '@eslint-community/regexpp': 4.12.2
@@ -12821,6 +14028,18 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@typescript-eslint/parser@8.61.0(eslint@10.4.1(jiti@2.7.0))(typescript@5.9.3)':
+    dependencies:
+      '@typescript-eslint/scope-manager': 8.61.0
+      '@typescript-eslint/types': 8.61.0
+      '@typescript-eslint/typescript-estree': 8.61.0(typescript@5.9.3)
+      '@typescript-eslint/visitor-keys': 8.61.0
+      debug: 4.4.3
+      eslint: 10.4.1(jiti@2.7.0)
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - supports-color
+
   '@typescript-eslint/parser@8.61.1(eslint@10.4.0(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/scope-manager': 8.61.1
@@ -12833,6 +14052,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@typescript-eslint/project-service@8.61.0(typescript@5.9.3)':
+    dependencies:
+      '@typescript-eslint/tsconfig-utils': 8.61.1(typescript@5.9.3)
+      '@typescript-eslint/types': 8.61.1
+      debug: 4.4.3
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - supports-color
+
   '@typescript-eslint/project-service@8.61.1(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/tsconfig-utils': 8.61.1(typescript@6.0.3)
@@ -12842,10 +14070,23 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@typescript-eslint/scope-manager@8.61.0':
+    dependencies:
+      '@typescript-eslint/types': 8.61.0
+      '@typescript-eslint/visitor-keys': 8.61.0
+
   '@typescript-eslint/scope-manager@8.61.1':
     dependencies:
       '@typescript-eslint/types': 8.61.1
       '@typescript-eslint/visitor-keys': 8.61.1
+
+  '@typescript-eslint/tsconfig-utils@8.61.0(typescript@5.9.3)':
+    dependencies:
+      typescript: 5.9.3
+
+  '@typescript-eslint/tsconfig-utils@8.61.1(typescript@5.9.3)':
+    dependencies:
+      typescript: 5.9.3
 
   '@typescript-eslint/tsconfig-utils@8.61.1(typescript@6.0.3)':
     dependencies:
@@ -12863,7 +14104,24 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@typescript-eslint/types@8.61.0': {}
+
   '@typescript-eslint/types@8.61.1': {}
+
+  '@typescript-eslint/typescript-estree@8.61.0(typescript@5.9.3)':
+    dependencies:
+      '@typescript-eslint/project-service': 8.61.0(typescript@5.9.3)
+      '@typescript-eslint/tsconfig-utils': 8.61.0(typescript@5.9.3)
+      '@typescript-eslint/types': 8.61.0
+      '@typescript-eslint/visitor-keys': 8.61.0
+      debug: 4.4.3
+      minimatch: 10.2.5
+      semver: 7.8.0
+      tinyglobby: 0.2.17
+      ts-api-utils: 2.5.0(typescript@5.9.3)
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - supports-color
 
   '@typescript-eslint/typescript-estree@8.61.1(typescript@6.0.3)':
     dependencies:
@@ -12890,6 +14148,11 @@ snapshots:
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@typescript-eslint/visitor-keys@8.61.0':
+    dependencies:
+      '@typescript-eslint/types': 8.61.0
+      eslint-visitor-keys: 5.0.1
 
   '@typescript-eslint/visitor-keys@8.61.1':
     dependencies:
@@ -14483,6 +15746,43 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  eslint@10.4.1(jiti@2.7.0):
+    dependencies:
+      '@eslint-community/eslint-utils': 4.9.1(eslint@10.4.1(jiti@2.7.0))
+      '@eslint-community/regexpp': 4.12.2
+      '@eslint/config-array': 0.23.5
+      '@eslint/config-helpers': 0.6.0
+      '@eslint/core': 1.2.1
+      '@eslint/plugin-kit': 0.7.2
+      '@humanfs/node': 0.16.8
+      '@humanwhocodes/module-importer': 1.0.1
+      '@humanwhocodes/retry': 0.4.3
+      '@types/estree': 1.0.9
+      ajv: 6.15.0
+      cross-spawn: 7.0.6
+      debug: 4.4.3
+      escape-string-regexp: 4.0.0
+      eslint-scope: 9.1.2
+      eslint-visitor-keys: 5.0.1
+      espree: 11.2.0
+      esquery: 1.7.0
+      esutils: 2.0.3
+      fast-deep-equal: 3.1.3
+      file-entry-cache: 8.0.0
+      find-up: 5.0.0
+      glob-parent: 6.0.2
+      ignore: 5.3.2
+      imurmurhash: 0.1.4
+      is-glob: 4.0.3
+      json-stable-stringify-without-jsonify: 1.0.1
+      minimatch: 10.2.5
+      natural-compare: 1.4.0
+      optionator: 0.9.4
+    optionalDependencies:
+      jiti: 2.7.0
+    transitivePeerDependencies:
+      - supports-color
+
   espree@11.2.0:
     dependencies:
       acorn: 8.17.0
@@ -14568,6 +15868,8 @@ snapshots:
       - supports-color
 
   extend@3.0.2: {}
+
+  fast-deep-equal@2.0.1: {}
 
   fast-deep-equal@3.1.3: {}
 
@@ -16319,6 +17621,10 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.17
 
+  react-promise-suspense@0.3.4:
+    dependencies:
+      fast-deep-equal: 2.0.1
+
   react-qr-code@2.2.0(react@19.2.6):
     dependencies:
       prop-types: 15.8.1
@@ -16488,6 +17794,13 @@ snapshots:
       - supports-color
 
   reselect@5.1.1: {}
+
+  resend@4.8.0(react-dom@19.2.6(react@19.2.6))(react@19.2.6):
+    dependencies:
+      '@react-email/render': 1.1.2(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+    transitivePeerDependencies:
+      - react
+      - react-dom
 
   resize-observer-polyfill@1.5.1: {}
 
@@ -17052,6 +18365,10 @@ snapshots:
 
   ts-algebra@2.0.0: {}
 
+  ts-api-utils@2.5.0(typescript@5.9.3):
+    dependencies:
+      typescript: 5.9.3
+
   ts-api-utils@2.5.0(typescript@6.0.3):
     dependencies:
       typescript: 6.0.3
@@ -17146,6 +18463,8 @@ snapshots:
       typescript: 6.0.3
     transitivePeerDependencies:
       - supports-color
+
+  typescript@5.9.3: {}
 
   typescript@6.0.3: {}
 

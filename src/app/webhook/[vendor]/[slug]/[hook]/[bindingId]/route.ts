@@ -72,12 +72,41 @@ interface RouteParams {
   params: Promise<{ vendor: string; slug: string; hook: string; bindingId: string }>;
 }
 
+// Accept ONLY application/json (and a structured `+json` suffix, e.g.
+// application/vnd.acme+json). The media type is parsed from the Content-Type
+// header — the bare type/subtype before any `;` parameter — so a value like
+// `text/plain; note=application/json` is correctly REJECTED (the loose
+// `.includes("application/json")` check would have wrongly accepted it).
+// A well-formed `type/subtype` whose subtype is `json` or ends in the `+json`
+// structured suffix (RFC 6839). Anchored, so a bare `+json` / `foo+json` with
+// no `/` is REJECTED — only a real media type passes.
+const JSON_MEDIA_TYPE_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/(?:json|[a-z0-9!#$&^_.+-]+\+json)$/;
+function isJsonContentType(header: string | null): boolean {
+  if (header === null) return false;
+  const mediaType = header.split(";", 1)[0].trim().toLowerCase();
+  return JSON_MEDIA_TYPE_RE.test(mediaType);
+}
+
 export async function POST(request: Request, { params }: RouteParams) {
   const { vendor, slug, hook, bindingId } = await params;
 
-  // 1. Content-type + body-size gates (before any DB / crypto work).
-  const contentType = request.headers.get("content-type") ?? "";
-  if (!contentType.toLowerCase().includes("application/json")) {
+  // 1. Resolve the declared hook FIRST — an undeclared hook is a clean 404
+  // (NEVER a silent 200), BEFORE any media-type / body-size validation, so an
+  // empty/undeclared registry can never leak a 415/413. This upholds #340's
+  // invariant that every request to an undeclared hook 404s at the resolve
+  // step. This is also the empty-registry path (inert until #343).
+  const entry = resolveWebhook(vendor, slug, hook);
+  if (!entry) {
+    return NextResponse.json(
+      { error: "No such webhook.", code: "webhook-not-found" },
+      { status: 404 },
+    );
+  }
+  const scope = webhookScopeKey(vendor, slug, hook);
+
+  // 2. Content-type + body-size gates (only for a DECLARED hook; before any
+  // DB / crypto work).
+  if (!isJsonContentType(request.headers.get("content-type"))) {
     return NextResponse.json(
       { error: "Webhook payloads must be application/json.", code: "unsupported-media-type" },
       { status: 415 },
@@ -90,17 +119,6 @@ export async function POST(request: Request, { params }: RouteParams) {
       { status: 413 },
     );
   }
-
-  // 2. Resolve the declared hook — an undeclared hook is a clean 404 (NEVER a
-  // silent 200). This is also the empty-registry path (inert until #343).
-  const entry = resolveWebhook(vendor, slug, hook);
-  if (!entry) {
-    return NextResponse.json(
-      { error: "No such webhook.", code: "webhook-not-found" },
-      { status: 404 },
-    );
-  }
-  const scope = webhookScopeKey(vendor, slug, hook);
 
   // 3. Resolve the binding by the OPAQUE bindingId ONLY (never the payload).
   // Unknown/revoked → 401 with no oracle; the binding's tuple must match the
