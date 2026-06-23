@@ -116,6 +116,20 @@ export const BACKGROUND_JOB_NAMES = {
   // skips, never throws (a PM outage must not poison the queue or alter local
   // schedules). See `@cinatra-ai/pm-schedule-reconcile`.
   PM_SCHEDULE_RECONCILE: "pm-schedule-reconcile",
+  // Host-owned OUTBOUND webhook delivery (cinatra#341). ONE shared engine that
+  // signs every outbound webhook via Standard-Webhooks (#340 `signOutbound`,
+  // through the lib's `deliverOutbound` primitive) and retries with
+  // exponential backoff, dead-lettering exhausted/permanent failures into
+  // `webhook_outbound_dead_letter`. One-shot-per-enqueue (NOT self-
+  // rescheduling): BullMQ's `attempts`/`backoff` (set at the enqueue site,
+  // default attempts:5) drive the retries; the dispatcher arm THROWS on a
+  // `retryable` result so BullMQ consumes an attempt, RETURNS on `delivered`,
+  // and on `permanent` (or last-attempt `retryable`) writes the DLQ row.
+  // Producers identify themselves by `eventKind`; identity-bearing material
+  // (url + secret) is NEVER in the job payload — both are resolved INSIDE the
+  // arm at each attempt (e.g. `assistant.mention` → readAssistantProfile) so
+  // the secret never reaches Redis and url/secret can't drift.
+  WEBHOOK_OUTBOUND_DELIVERY: "webhook-outbound-delivery",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -1005,6 +1019,173 @@ async function dispatchBackgroundJobImpl(job: Job, token?: string) {
           return;
         }
         throw new DelayedError();
+      }
+      case BACKGROUND_JOB_NAMES.WEBHOOK_OUTBOUND_DELIVERY: {
+        // Host-owned OUTBOUND webhook delivery (cinatra#341). One-shot per
+        // enqueue (NOT self-rescheduling) — BullMQ `attempts`/`backoff` (set at
+        // the enqueue site) drive retries.
+        //
+        // Identity-bearing material (url + secret) is NEVER in the job payload
+        // (F1: keeps the secret out of Redis and prevents url/secret drift). We
+        // resolve BOTH from the producer-specific identity at EACH attempt via
+        // the eventKind resolver below.
+        //
+        // DLQ ownership is DISPATCHER-ONLY (F4): on `permanent` (incl. missing
+        // url/secret and a non-decodable legacy secret the lib rejects) we
+        // record a DLQ row and RETURN (no throw). On `retryable` we THROW so
+        // BullMQ retries — and on the LAST attempt we record a DLQ row FIRST,
+        // then throw. `worker.on("failed")` keeps ONLY its Sentry+notification;
+        // it does NOT write the DLQ.
+        const p = job.data as {
+          assistantUserId?: string;
+          eventKind?: string;
+          messageId?: string;
+          payload?: unknown;
+        };
+        const eventKind = p.eventKind ?? "";
+        const messageId = p.messageId ?? "";
+        if (!eventKind || !messageId) {
+          // Malformed enqueue — cannot DLQ coherently (no identity) and cannot
+          // deliver. Log + return so it is not a retry storm.
+          console.warn(
+            "[webhook-outbound] malformed WEBHOOK_OUTBOUND_DELIVERY payload — skipping:",
+            { eventKind, hasMessageId: Boolean(messageId) },
+          );
+          return;
+        }
+
+        const { deliverOutbound } = await import("@cinatra-ai/webhooks");
+        const { recordOutboundDeadLetter, digestPayload } = await import(
+          "@/lib/webhook-outbound-deadletter.server"
+        );
+
+        // eventKind → { url, secret } resolver. Structured so future outbound
+        // producers plug in a new arm without touching delivery/DLQ logic. A
+        // null return means the target is gone (profile/url deleted between
+        // enqueue and run) → classified `permanent` (no target).
+        let resolved: { url: string; secret: string } | null = null;
+        if (eventKind === "assistant.mention") {
+          const { assistantUserId } = p;
+          if (assistantUserId) {
+            const { readAssistantProfile } = await import("@/lib/assistant-profiles");
+            const profile = readAssistantProfile(assistantUserId);
+            if (profile?.webhookUrl) {
+              resolved = {
+                url: profile.webhookUrl,
+                // D4a: the legacy plaintext profile secret IS the Standard-
+                // Webhooks secret material. An empty/missing secret or a non-
+                // decodable legacy secret makes `deliverOutbound` classify
+                // `permanent` (fail-closed) — never a crash.
+                secret: profile.webhookSecret ?? "",
+              };
+            }
+          }
+        } else {
+          console.warn(
+            `[webhook-outbound] unknown eventKind "${eventKind}" — no resolver; dead-lettering.`,
+          );
+        }
+
+        // Resolve the actor id for the extra header (assistant.mention carries
+        // its assistant id so receivers keep the assistant identity even though
+        // the SIGNATURE scheme moved to Standard-Webhooks — F2).
+        const extraHeaders =
+          eventKind === "assistant.mention" && p.assistantUserId
+            ? { "X-Cinatra-Assistant-Id": p.assistantUserId }
+            : undefined;
+
+        const attemptsConfigured = job.opts.attempts ?? 1;
+        const attemptsMade = job.attemptsMade + 1; // this attempt (1-based)
+
+        // Returns true if the DLQ row was durably written, false if the insert
+        // threw. A DLQ write failure must NOT crash the worker, but it must not
+        // be silently swallowed either: the caller surfaces a failed permanent
+        // DLQ write by throwing so `worker.on("failed")` (Sentry +
+        // notification) still records the loss (cinatra#341 codex round-1
+        // HIGH — durability OR visibility, never silent).
+        const writeDeadLetter = (
+          lastStatus: number | null,
+          lastError: string | null,
+        ): boolean => {
+          try {
+            recordOutboundDeadLetter({
+              eventKind,
+              messageId,
+              targetUrl: resolved?.url ?? "(unresolved)",
+              payloadDigest: digestPayload(p.payload ?? null),
+              attempts: attemptsMade,
+              lastStatus,
+              lastError,
+            });
+            return true;
+          } catch (dlqErr) {
+            console.error(
+              "[webhook-outbound] dead-letter write failed:",
+              dlqErr instanceof Error ? dlqErr.message : dlqErr,
+            );
+            return false;
+          }
+        };
+
+        if (!resolved) {
+          // No deliverable target (missing/deleted url, or unknown eventKind):
+          // permanent. DLQ + return (no retry storm). If the DLQ write itself
+          // failed, throw so the failure is observable (Sentry+notification).
+          const wrote = writeDeadLetter(
+            null,
+            `no deliverable target for eventKind "${eventKind}"`,
+          );
+          if (!wrote) {
+            throw new Error(
+              `[webhook-outbound] permanent failure (no target) AND dead-letter write failed for ${eventKind}/${messageId}`,
+            );
+          }
+          return;
+        }
+
+        const result = await deliverOutbound({
+          url: resolved.url,
+          secret: resolved.secret,
+          messageId,
+          payload: p.payload ?? null,
+          extraHeaders,
+        });
+
+        switch (result.kind) {
+          case "delivered":
+            return;
+          case "permanent": {
+            // Non-retryable (bad 4xx, reserved-header bug, or a non-decodable
+            // legacy secret the signer rejected). DLQ + return — no retry. If
+            // the DLQ write failed, throw so the loss is observable rather than
+            // silently completing the job.
+            const wrote = writeDeadLetter(result.status ?? null, result.error ?? null);
+            if (!wrote) {
+              throw new Error(
+                `[webhook-outbound] permanent failure AND dead-letter write failed for ${eventKind}/${messageId}` +
+                  (result.status != null ? ` (status ${result.status})` : ""),
+              );
+            }
+            return;
+          }
+          case "retryable": {
+            const errMsg =
+              result.error ??
+              (result.status != null ? `HTTP ${result.status}` : "retryable failure");
+            // On the LAST attempt, record the DLQ row BEFORE throwing so the
+            // durable record exists even after BullMQ exhausts the job. (A
+            // failed write here is still surfaced — we throw regardless, so
+            // worker.on("failed") records the exhaustion either way.)
+            if (attemptsMade >= attemptsConfigured) {
+              writeDeadLetter(result.status ?? null, errMsg);
+            }
+            // Throw so BullMQ marks the attempt failed and retries (or, on the
+            // last attempt, moves the job to its `failed` set after the DLQ
+            // row is already written).
+            throw new Error(`[webhook-outbound] delivery retryable: ${errMsg}`);
+          }
+        }
+        return;
       }
       default:
         throw new Error(`Unsupported background job "${job.name}".`);

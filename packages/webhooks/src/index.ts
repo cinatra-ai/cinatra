@@ -16,6 +16,13 @@ export type { VerifiedInbound } from "./verify";
 export { signOutbound } from "./sign";
 export type { SignedOutbound } from "./sign";
 
+export { deliverOutbound } from "./outbound";
+export type {
+  OutboundDeliveryRequest,
+  OutboundDeliveryOptions,
+  OutboundDeliveryResult,
+} from "./outbound-types";
+
 export {
   createWebhookRegistry,
   webhookScopeKey,

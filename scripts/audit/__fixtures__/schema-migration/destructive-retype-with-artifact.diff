@@ -1,9 +1,9 @@
-diff --git a/migrations/core/core__0010_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0010_narrow-usage-events-cost-usd.mjs
+diff --git a/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs
 new file mode 100644
 --- /dev/null
-+++ b/migrations/core/core__0010_narrow-usage-events-cost-usd.mjs
++++ b/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs
 @@ -0,0 +1,16 @@
-+// core__0010 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
++// core__0011 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +// The extra scale was never populated (ingest rounds to 4 decimal places)
 +// and the narrower type matches the rollup views. Safe to re-run: converting
 +// a column to the type it already has succeeds as a no-op.
@@ -22,14 +22,14 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -84,6 +84,13 @@
-       "summary": "Add the webhook_secret_bindings table for the per-webhook/per-site secret service (cinatra#340): one active row per (vendor, slug, hook, site) holding the Standard-Webhooks secret material ENCRYPTED via the host secretsCodec (current_secret_ciphertext/iv + an optional previous_secret_ciphertext/iv for the bounded dual-secret rotation window, previous_expires_at, rotated_at), resolved by the server-issued opaque binding_id (PRIMARY KEY) — never from the request payload. site_id uuid (connect_sites.site_id space, D1b). A partial UNIQUE index (vendor, slug, hook, site_id) WHERE revoked_at IS NULL enforces at most one active binding per tuple; revoked_at tombstones a binding. legacy_enabled is the structural hook for the #343 legacy single-shared-secret bridge (its legacy-secret STORAGE columns are deferred to #343 per D3c option A; stays false in #340). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL; ships as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
+@@ -91,6 +91,13 @@
+       "summary": "Add the webhook_outbound_dead_letter table for the host-owned OUTBOUND webhook delivery engine (cinatra#341): the durable dead-letter record the pre-#341 fire-and-forget assistant-webhook path lacked. The WEBHOOK_OUTBOUND_DELIVERY BullMQ dispatcher arm writes one row when a delivery is classified `permanent` (non-retryable 4xx, missing url/secret, or a non-decodable legacy secret the standardwebhooks signer rejects) OR when all configured `attempts` are exhausted on a `retryable` result. Columns: event_kind (e.g. 'assistant.mention'), message_id (the Standard-Webhooks webhook-id / receiver idempotency key), target_url (reduced to origin+pathname — query string + userinfo stripped so a URL token can't leak), payload_digest (sha256 hex of the serialized payload — NEVER the raw payload or secret), attempts, last_status (int|null), last_error (truncated+scrubbed text), failed_at, created_at. A UNIQUE index (event_kind, message_id) makes the DLQ insert idempotent (ON CONFLICT DO NOTHING — a permanent row and a later last-attempt-retryable row for the same identity collapse to one) and a failed_at scan index backs the operator view. ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
        "destructive": false,
-       "tables": ["webhook_secret_bindings"]
+       "tables": ["webhook_outbound_dead_letter"]
 +    },
 +    {
-+      "seq": "0010",
-+      "file": "core/core__0010_narrow-usage-events-cost-usd.mjs",
++      "seq": "0011",
++      "file": "core/core__0011_narrow-usage-events-cost-usd.mjs",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]

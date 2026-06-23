@@ -4,6 +4,16 @@ All notable changes to Cinatra are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Outbound webhooks are now delivered through one host-owned engine that signs every request with Standard-Webhooks, retries transient failures with exponential backoff, and records permanently-failed or exhausted deliveries in a durable dead-letter table.
+
+### Changed
+
+- **Breaking (assistant webhook receivers):** the assistant `@mention` webhook is now signed with the Standard-Webhooks headers (`webhook-id` / `webhook-timestamp` / `webhook-signature`) instead of the legacy `X-Cinatra-Signature` HMAC header. The assistant id is still sent as the `X-Cinatra-Assistant-Id` header. Receivers must switch to Standard-Webhooks verification — see `docs/webhooks/outbound-delivery.md`.
+
 ## [0.1.2] - 2026-06-22
 
 Authenticated in-CMS assistant, an installable developer CLI, project-management integration, and unified analytics dashboards.

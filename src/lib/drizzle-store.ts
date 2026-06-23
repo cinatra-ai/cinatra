@@ -4265,6 +4265,29 @@ END $$` },
     )` },
     { text: `CREATE INDEX IF NOT EXISTS webhook_secret_bindings_site_idx ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (site_id)` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_secret_bindings_active_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (vendor, slug, hook, site_id) WHERE revoked_at IS NULL` },
+    // webhook_outbound_dead_letter: the DURABLE dead-letter record for the
+    // host-owned OUTBOUND delivery engine (cinatra#341). The
+    // WEBHOOK_OUTBOUND_DELIVERY dispatcher arm writes one row on a `permanent`
+    // classification OR exhausted `attempts` on a `retryable` result — the
+    // durability the pre-#341 fire-and-forget assistant-webhook path lacked.
+    // payload_digest is a sha256 hex (NEVER the raw payload/secret); target_url
+    // is stored origin+pathname only (query + userinfo stripped). The UNIQUE
+    // (event_kind, message_id) index makes the writer's ON CONFLICT DO NOTHING
+    // insert idempotent. Migration parity: core__0010.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (
+      id             bigserial PRIMARY KEY,
+      event_kind     text NOT NULL,
+      message_id     text NOT NULL,
+      target_url     text NOT NULL,
+      payload_digest text NOT NULL,
+      attempts       integer NOT NULL DEFAULT 1,
+      last_status    integer,
+      last_error     text,
+      failed_at      timestamptz NOT NULL DEFAULT now(),
+      created_at     timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_outbound_dead_letter_key_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (event_kind, message_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS webhook_outbound_dead_letter_failed_at_idx ON "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (failed_at)` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already
