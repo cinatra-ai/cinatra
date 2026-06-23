@@ -1,0 +1,53 @@
+// Public surface for the reusable inbound-webhook facility (cinatra#340).
+//
+// The host owns the generic route, the secret store, and the idempotency
+// ledger; connectors own only the per-hook handlers. This barrel exposes the
+// Standard-Webhooks verify/sign primitives, the import-free registry, the
+// leased idempotency state machine, and the secret-service contract.
+//
+// INERT until #343: no extension declares `cinatra.webhooks` yet, so the
+// generated registry is empty and the route 404s every request safely.
+
+export * from "./types";
+
+export { verifyInbound, WebhookVerifyFailedError } from "./verify";
+export type { VerifiedInbound } from "./verify";
+
+export { signOutbound } from "./sign";
+export type { SignedOutbound } from "./sign";
+
+export {
+  createWebhookRegistry,
+  webhookScopeKey,
+} from "./registry";
+export type {
+  RegisteredWebhook,
+  GeneratedWebhookHandlers,
+  WebhookRegistry,
+} from "./registry";
+
+export { IdempotencyLedger } from "./idempotency";
+export type {
+  IdempotencyLedgerOptions,
+  WebhookLedgerQuery,
+  ClaimDisposition,
+  FinalizeStatus,
+} from "./idempotency";
+
+export {
+  mintWebhookSecret,
+  mintBindingId,
+} from "./secret-service";
+export type {
+  WebhookSecretService,
+  ResolvedBinding,
+  MintBindingInput,
+  MintedBinding,
+} from "./secret-service";
+
+export { createWebhookTables } from "./schema";
+export type {
+  WebhookTables,
+  WebhookIdempotencyRow,
+  WebhookSecretBindingRow,
+} from "./schema";

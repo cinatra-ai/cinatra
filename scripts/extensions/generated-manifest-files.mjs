@@ -38,6 +38,15 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   // scripts/audit/extension-coupling-gates.md).
   "packages/objects/src/generated/artifact-floor.ts",
   "src/lib/generated/widget-stream-public-paths.ts",
+  // Inbound-webhook facility (cinatra#340): the host-owned generated maps for
+  // the generic /webhook route. webhooks.server.ts carries the dispatch
+  // registry (server loaders, server-only); webhook-public-paths.ts is the
+  // import-free declared-prefix list (registry/UI + route dispatch allowlist);
+  // webhook-registry-meta.ts is the import-free hook metadata for the #342 UI.
+  // Inert until #343 (no extension declares cinatra.webhooks yet).
+  "src/lib/generated/webhooks.server.ts",
+  "src/lib/generated/webhook-public-paths.ts",
+  "src/lib/generated/webhook-registry-meta.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

@@ -10,6 +10,8 @@ import {
   sanitizeLogoDataUri,
   extractFactoryExport,
   validateWidgetStreamDeclaration,
+  validateWebhooksDeclaration,
+  webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
 } from "../generate-extension-manifest.mjs";
@@ -39,6 +41,12 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Inbound-webhook facility (cinatra#340): the host-owned generated maps
+      // for the generic /webhook route (dispatch registry, declared-prefix
+      // list, registry-UI metadata). Inert until #343.
+      "src/lib/generated/webhook-public-paths.ts",
+      "src/lib/generated/webhook-registry-meta.ts",
+      "src/lib/generated/webhooks.server.ts",
       "src/lib/generated/widget-stream-public-paths.ts",
     ]);
   });
@@ -558,6 +566,237 @@ describe("widget-stream agent map (cinatra.widgetStream)", () => {
         "ctx",
       ),
     ).toThrow(/ambiguous/);
+  });
+});
+
+describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
+  const validHook = {
+    id: "post-published",
+    handler: "./src/webhooks/post-published",
+    factory: "createPostPublishedHandler",
+  };
+
+  it("validateWebhooksDeclaration: valid declaration → no errors", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", {
+        hooks: [validHook, { ...validHook, id: "post-updated", rejectStatus: 422, label: "Updated" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("FAILS CLOSED: non-object, empty hooks, bad id, missing handler/factory", () => {
+    expect(validateWebhooksDeclaration("@x/p", "nope").length).toBeGreaterThan(0);
+    expect(validateWebhooksDeclaration("@x/p", { hooks: [] })).toEqual(
+      expect.arrayContaining([expect.stringContaining("non-empty array")]),
+    );
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, id: "Bad ID!" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".id")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ id: "ok", factory: "createX" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".handler")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ id: "ok", handler: "./h" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".factory")]));
+  });
+
+  it("FAILS CLOSED: duplicate hook id within a package", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [validHook, { ...validHook }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate hook id")]));
+  });
+
+  it("FAILS CLOSED: rejectStatus out of the 4xx range; schemaVersion < 1", () => {
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, rejectStatus: 503 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("rejectStatus")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, rejectStatus: 200 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("rejectStatus")]));
+    expect(
+      validateWebhooksDeclaration("@x/p", { hooks: [{ ...validHook, schemaVersion: 0 }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("schemaVersion")]));
+  });
+
+  it("webhookHandlerExportsFactory: detects an exported function/const factory, rejects a missing one", () => {
+    expect(
+      webhookHandlerExportsFactory(
+        "export function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = () => {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export async function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A non-exported or absent factory is rejected (fail-closed at generation).
+    expect(
+      webhookHandlerExportsFactory("function createPostPublishedHandler() {}", "createPostPublishedHandler"),
+    ).toBe(false);
+    expect(webhookHandlerExportsFactory("export const other = 1;", "createPostPublishedHandler")).toBe(
+      false,
+    );
+  });
+
+  it("webhookHandlerExportsFactory: proves CALLABILITY — rejects a non-function const, comments, and strings", () => {
+    // A const bound to a NON-function value is rejected (the old loose regex
+    // accepted any `export const NAME = …`).
+    expect(
+      webhookHandlerExportsFactory("export const createPostPublishedHandler = 5;", "createPostPublishedHandler"),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'export const createPostPublishedHandler = "not a function";',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // Async arrow + typed-param arrow forms are accepted (callable).
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = async () => {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = (deps: Deps) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // `export const NAME: Type = function` is accepted.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler: Factory = function () {};",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A mention ONLY inside a comment or a string never satisfies the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "// export function createPostPublishedHandler() {}\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "/* export const createPostPublishedHandler = () => {}; */\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'const doc = "export function createPostPublishedHandler() {}";',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A mention inside a TEMPLATE literal (incl. a nested template in `${}`) or
+    // a REGEX literal never satisfies the gate (fail-closed strip).
+    expect(
+      webhookHandlerExportsFactory(
+        "const s = `${`export function createPostPublishedHandler() {}`}`;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "const re = /export function createPostPublishedHandler\\(/;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // An arrow whose params contain a default with NESTED parens is callable.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = (deps = makeDeps()) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A REAL export sitting after a template/regex line is still detected (the
+    // strip does not corrupt the surrounding real code).
+    expect(
+      webhookHandlerExportsFactory(
+        "const re = /a\\/b/g;\nexport function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A bare-identifier arrow head and an extra-parenthesized arrow are callable.
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = deps => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = ((deps) => ({}));",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // STATEMENT-ANCHORING: a `return`ed regex / a string whose CONTENT is a fake
+    // `export function NAME(` is mid-expression (not at statement position) and
+    // must NOT satisfy the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "function x(){ return /export function createPostPublishedHandler()/; }\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        'const s = "; export function createPostPublishedHandler() {}";\nexport const other = 1;',
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A postfix `++` before a `/` is DIVISION — the stripper must not eat the
+    // following real `export` as a regex body (no false rejection).
+    expect(
+      webhookHandlerExportsFactory(
+        "let n = 0; const z = n++ / 2;\nexport function createPostPublishedHandler() {}",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // A regex in KEYWORD context (e.g. after `return`) is stripped, so a fake
+    // `; export function NAME(` inside the regex body must NOT pass the gate.
+    expect(
+      webhookHandlerExportsFactory(
+        "function x(){ return /; export function createPostPublishedHandler()/; }\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    // A NESTED-generic arrow head is callable (not falsely rejected).
+    expect(
+      webhookHandlerExportsFactory(
+        "export const createPostPublishedHandler = <T extends Record<string, unknown>>(deps: T) => ({});",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(true);
+    // Regex literals after `)` / `}` (control-flow heads / block ends) are also
+    // stripped (fail-closed bias), so a fake `; export …` in the regex body is
+    // rejected.
+    expect(
+      webhookHandlerExportsFactory(
+        "if (ok) /; export function createPostPublishedHandler()/.test(x);\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+    expect(
+      webhookHandlerExportsFactory(
+        "{} /; export function createPostPublishedHandler()/.test(x);\nexport const other = 1;",
+        "createPostPublishedHandler",
+      ),
+    ).toBe(false);
+  });
+
+  it("the real tree emits an EMPTY webhook map (inert until #343 — no extension declares cinatra.webhooks)", async () => {
+    const { webhookHooks } = await buildManifest();
+    expect(webhookHooks).toEqual([]);
   });
 });
 

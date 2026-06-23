@@ -28,6 +28,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/api/widget-auth/token", // cinatra#407 hosted /widget-auth PKCE login — server-to-server code→user-token redeem; auth enforced inside via the per-site `cnx_` credential + PKCE (no session), mirrors /api/connect/token.
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available
   "/api/extensions/purge", // Human-origin `cinatra extensions purge` CLI loopback POST — auth enforced inside the route handler (NODE_ENV!=production + CINATRA_RUNTIME_MODE=development + loopback-only, mirrors /api/skills/reset-repo). Without this exemption guardAppRoute 307s the unauthenticated loopback CLI to /sign-in before the handler's triple-guard runs.
+  "/webhook", // cinatra#340 generic inbound-webhook namespace — a webhook arrives from an unauthenticated connected site; auth is the Standard-Webhooks signature enforced INSIDE the route (verified via the per-binding secret resolved from the server-issued opaque bindingId, never the payload). One static namespace prefix (the route owns the declared→dispatch / undeclared→404 verdict, so an undeclared hook 404s rather than 307s); do NOT import GENERATED_WEBHOOK_PUBLIC_PREFIXES here. NOTE: /api/webhooks/wordpress stays a SEPARATE hand-pin above (#343 supersedes it).
 ];
 
 // Only the CMS content-editor agent stream slugs are widget-public.

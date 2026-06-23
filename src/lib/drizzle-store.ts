@@ -4221,6 +4221,50 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS connect_sites_active_uniq ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id, client, widget_origin) NULLS NOT DISTINCT WHERE revoked_at IS NULL` },
     { text: `CREATE INDEX IF NOT EXISTS connect_sites_org_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id) WHERE revoked_at IS NULL` },
     { text: `CREATE INDEX IF NOT EXISTS connect_sites_active_origin_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (widget_origin) WHERE revoked_at IS NULL` },
+    // webhook_idempotency: leased dedupe ledger for the generic inbound-webhook
+    // route (cinatra#340). One row per (scope, site_id, message_id); the route
+    // CLAIMS (atomic UPSERT) before dispatch and FINALIZES (attempt-fenced)
+    // after. All three key columns NOT NULL (a nullable unique-key column would
+    // admit duplicate NULL rows → broken idempotency). site_id uuid (the
+    // connect_sites.site_id identity space). Migration parity: core__0008.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_idempotency" (
+      id            bigserial PRIMARY KEY,
+      scope         text NOT NULL,
+      site_id       uuid NOT NULL,
+      message_id    text NOT NULL,
+      status        text NOT NULL DEFAULT 'processing',
+      lease_until   timestamptz,
+      attempt_count integer NOT NULL DEFAULT 1,
+      received_at   timestamptz NOT NULL DEFAULT now(),
+      finalized_at  timestamptz
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_idempotency" (scope, site_id, message_id)` },
+    // webhook_secret_bindings: per-(vendor,slug,hook,site) Standard-Webhooks
+    // secret material, ENCRYPTED via the host secretsCodec (ciphertext+iv, NOT a
+    // ref), with the bounded dual-secret rotation window (previous_* until
+    // previous_expires_at). Resolved by the server-issued opaque binding_id
+    // (NEVER the payload). Partial-unique active-row index enforces at most one
+    // active binding per tuple. legacy_enabled is the #343 structural hook
+    // (legacy-secret storage deferred to #343; false in #340). site_id uuid.
+    // Migration parity: core__0009.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (
+      binding_id                 text PRIMARY KEY,
+      vendor                     text NOT NULL,
+      slug                       text NOT NULL,
+      hook                       text NOT NULL,
+      site_id                    uuid NOT NULL,
+      current_secret_ciphertext  text NOT NULL,
+      current_secret_iv          text NOT NULL,
+      previous_secret_ciphertext text,
+      previous_secret_iv         text,
+      previous_expires_at        timestamptz,
+      rotated_at                 timestamptz,
+      legacy_enabled             boolean NOT NULL DEFAULT false,
+      revoked_at                 timestamptz,
+      created_at                 timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS webhook_secret_bindings_site_idx ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (site_id)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_secret_bindings_active_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (vendor, slug, hook, site_id) WHERE revoked_at IS NULL` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already

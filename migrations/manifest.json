@@ -70,6 +70,20 @@
       "summary": "Add the agent_run_pm_links link table for the schedule↔PM-task sync (cinatra#317): one row per schedule-defining trigger mirrored to an external project-management provider (Plane), keyed by run_id (one-to-one with agent_run_triggers) with FK run_id → agent_runs.id ON DELETE CASCADE, plus a (provider) scan index. Columns: provider (PM provider id), external_task_id (provider work-item id; null until first successful push), synced_at (last successful mirror), sync_error (last fail-open error; null=healthy), version (optimistic-concurrency counter for the reconcile loop #318). ADDITIVE (a brand-new table) so no artifact is strictly required — it rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS to keep the fresh-bootstrap and migration paths aligned and give the table a ledgered row (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the index then the table.",
       "destructive": false,
       "tables": ["agent_run_pm_links"]
+    },
+    {
+      "seq": "0008",
+      "file": "core/core__0008_webhook-idempotency-ledger.mjs",
+      "summary": "Add the webhook_idempotency leased dedupe ledger for the generic inbound-webhook route (cinatra#340): one row per (scope, site_id, message_id) where scope is '<vendor>/<slug>/<hook>' and message_id is the Standard-Webhooks webhook-id. Leased state machine (processing | done | failed) with lease_until + attempt_count (the finalize fence) so a crashed holder's lease expires and a later arrival re-claims, and a stale holder cannot overwrite a newer attempt's verdict. All three key columns NOT NULL with a UNIQUE index (scope, site_id, message_id); site_id uuid (connect_sites.site_id identity space, D1b). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the index then the table.",
+      "destructive": false,
+      "tables": ["webhook_idempotency"]
+    },
+    {
+      "seq": "0009",
+      "file": "core/core__0009_webhook-secret-bindings.mjs",
+      "summary": "Add the webhook_secret_bindings table for the per-webhook/per-site secret service (cinatra#340): one active row per (vendor, slug, hook, site) holding the Standard-Webhooks secret material ENCRYPTED via the host secretsCodec (current_secret_ciphertext/iv + an optional previous_secret_ciphertext/iv for the bounded dual-secret rotation window, previous_expires_at, rotated_at), resolved by the server-issued opaque binding_id (PRIMARY KEY) — never from the request payload. site_id uuid (connect_sites.site_id space, D1b). A partial UNIQUE index (vendor, slug, hook, site_id) WHERE revoked_at IS NULL enforces at most one active binding per tuple; revoked_at tombstones a binding. legacy_enabled is the structural hook for the #343 legacy single-shared-secret bridge (its legacy-secret STORAGE columns are deferred to #343 per D3c option A; stays false in #340). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL; ships as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
+      "destructive": false,
+      "tables": ["webhook_secret_bindings"]
     }
   ]
 }

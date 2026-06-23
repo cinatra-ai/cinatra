@@ -27,13 +27,13 @@
       "file": "destructive-retype-with-artifact.diff",
       "expect": "pass",
       "category": "destructive, has artifact",
-      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0005_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
+      "description": "Narrows usage_events.cost_usd numeric(12,8) -> numeric(12,4) and ships the node-pg-migrate runner module migrations/core/core__0010_narrow-usage-events-cost-usd.mjs plus its manifest entry in the same diff (the artifact form adopted in cinatra#116)."
     },
     {
       "file": "destructive-retype-legacy-sql-artifact.diff",
       "expect": "fail",
       "category": "destructive, legacy artifact form (retired)",
-      "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0005_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
+      "description": "Same cost_usd retype but shipping the RETIRED legacy psql artifact (migrations/0010_*.sql + manifest entry). The core runner never executes loose .sql files, so the gate rejects the form and demands a migrations/core/core__NNNN_*.mjs module."
     },
     {
       "file": "destructive-module-no-manifest.diff",
