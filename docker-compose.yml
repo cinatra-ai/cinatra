@@ -16,6 +16,12 @@
 services:
   postgres:
     image: postgres:17-alpine
+    # Upgrade track: cinatra-owned Postgres target is postgres 17-alpine for
+    # this platform DB AND nango-db (reconciles the 17/15 spread). Do NOT
+    # tag-bump in an inventory pass: an existing PGDATA volume needs a
+    # pg_upgrade/restore (a bare tag bump makes Postgres refuse to start), so
+    # the data-migration-bearing image bump is staged separately. See
+    # docs/upgrade-track.md.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5434 on 0.0.0.0.
     # Local dev + self-host install add `-f docker-compose.dev.yml` (loopback).
@@ -62,6 +68,9 @@ services:
 
   nango-db:
     image: postgres:15-alpine
+    # Upgrade track: target is postgres 17-alpine (consolidate with the platform
+    # DB), but do NOT tag-bump here — the existing PGDATA volume needs a
+    # pg_upgrade/restore. Staged separately. See docs/upgrade-track.md.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
@@ -79,7 +88,16 @@ services:
       retries: 10
 
   nango-server:
-    image: nangohq/nango-server:hosted
+    # Pinned to an immutable digest (was the floating `:hosted` tag, which moved
+    # on every pull). This is an amd64-only image (NangoHQ publishes no arm64 /
+    # multi-arch index for `hosted` — the manifest is a single-arch
+    # manifest.v2+json), so a digest pin adds no cross-arch portability cost.
+    # Re-resolve the digest at bump time with:
+    #   docker buildx imagetools inspect nangohq/nango-server:hosted
+    # Renovate owns bumps (it already tracks nangohq/nango-server). The hosted
+    # deployment re-resolves and smokes its own digest independently — do not
+    # hand-sync the two. Resolved 2026-06-23. See docs/upgrade-track.md.
+    image: nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869
     ports:
       - "3003:3003"
       - "3009:3009"
