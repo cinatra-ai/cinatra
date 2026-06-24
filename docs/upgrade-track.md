@@ -49,15 +49,17 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | plane-* (backend/live/frontend/space/admin/proxy) | docker-compose.yml | `makeplane/plane-*:${PLANE_TAG:-stable}` (floating default) | pin `:stable` → a fixed release tag | profile `plane`; Plane-dictated |
 | twenty-server / twenty-worker | docker-compose.yml | image tag `twentycrm/twenty:${TWENTY_TAG:-v2.7.3}` | Twenty v2 currency | profile `twenty`; already release-pinned by default |
 | node (app image) | Dockerfile | `node:24-alpine` | stay node 24 (LTS) | engines require node 24; no major offered |
-| python (wayflow) | docker/wayflow/Dockerfile | `python:3.11-slim` | python 3.14-slim | wayflowcore runtime |
+| python (wayflow) | docker/wayflow/Dockerfile | `python:3.14-slim` (was `3.11-slim`, bumped — cinatra#354) | (at target) | wayflowcore runtime; the Wayflow agent-runtime major-upgrade lane (§6) |
 | php (drupal) | docker/drupal/Dockerfile | `php:8.3-apache` | php 8.5-apache | |
 | composer (drupal) | docker/drupal/Dockerfile | `composer:2` | composer 2.x | |
 | tailscale (wayflow clone) | docker/wayflow/compose.clone.template.yml | `tailscale/tailscale:v1.78.3` | tailscale v1.98.4 | **held on purpose** — in-file TODO cites the upstream containerboot SIGSEGV (tailscale/tailscale#14354); obsoleted-by = that upstream fix lands |
 
 wayflow Python deps (exact `==` pins in `docker/wayflow/Dockerfile`, not docker
-tags): `wayflowcore[a2a]==26.1.1`, `pyagentspec==26.1.0`, `asgi-lifespan==2.1.0`,
-`pytest-asyncio==0.23.5`. Tracked as a unit (the wayflowcore major drives the
-rest).
+tags): `wayflowcore[a2a]==26.1.2`, `pyagentspec==26.1.2`, `asgi-lifespan==2.1.0`,
+`pytest-asyncio==0.23.5`. Tracked as a unit (wayflowcore 26.1.2 floors
+pyagentspec at `>=26.1.2`, so they move together). Bumped from
+`wayflowcore==26.1.1` / `pyagentspec==26.1.0` in the Wayflow major-upgrade lane
+(cinatra#354, §6).
 
 ---
 
@@ -224,3 +226,70 @@ rabbitmq 4. npm / toolchain majors offered: ESLint 10, Next 16.x (the
 
 This pass only **inventories** these; each major is taken on in its own staged
 upgrade lane with a works-after proof.
+
+---
+
+## 6. Wayflow (agent runtime) major upgrade — applied (cinatra#354)
+
+The Wayflow agent-runtime major-upgrade lane on the v0.1.3 major-upgrade track.
+The runtime is the app-coupled image built from `docker/wayflow/` (Python pins,
+not a docker tag). It runs **after** the works-after gate (cinatra#352) exists.
+
+**What changed** (`docker/wayflow/Dockerfile` build-arg defaults):
+
+| Pin | Before | After |
+|---|---|---|
+| `PYTHON_TAG` | `3.11-slim` | `3.14-slim` |
+| `WAYFLOWCORE_VERSION` | `26.1.1` | `26.1.2` |
+| `PYAGENTSPEC_VERSION` | `26.1.0` | `26.1.2` |
+
+**What the "major" is here.** The headline major in this lane is the **Python
+runtime major** (3.11 → 3.14). wayflowcore exposes **no major above 26.1.x**
+upstream (the released line tops out at `26.1.2`), so the wayflow deps move to
+the current upstream patch in lockstep rather than crossing a major: wayflowcore
+`26.1.1 → 26.1.2` floors `pyagentspec>=26.1.2`, so pyagentspec moves `26.1.0 →
+26.1.2` with it. wayflowcore `26.1.2` declares `Requires-Python: >=3.10,<3.15`,
+so the 3.14 base is in-band. No public wayflowcore/pyagentspec API the loader
+imports changed across 26.1.1→26.1.2 (verified by `test_live_class_names.py` +
+the works-after A2A round-trip on the candidate image; see below). The
+diagnostic-only `_patch_pyagentspec_deserialization_error_mask` is retained as a
+fail-open safety net (it is a no-op on the deserialize success path and falls
+back to upstream if the surface drifts) — it is not load-bearing for this bump.
+
+**Works-after proof (the gate, cinatra#352 — the per-service works-after
+harness on the major-upgrade track).** The
+wayflow arm of the per-service works-after harness builds the candidate image at
+the new pins and drives a real agent execution over A2A (no-LLM echo flow:
+`message/send → completed`, the round-tripped nonce surfaced via the EndNode
+output). The CI `works-after proof` workflow **derives the candidate pins from
+the checked-out Dockerfile**, so this PR's bump is exactly what the gate
+exercises — no major lands without it green. Run locally:
+
+```
+PYTHON_TAG=3.14-slim WAYFLOWCORE_VERSION=26.1.2 PYAGENTSPEC_VERSION=26.1.2 \
+  WORKS_AFTER_ONLY=wayflow bash scripts/ci/works-after-proof.sh
+```
+
+(the env is redundant once the Dockerfile defaults are bumped — a bare
+`WORKS_AFTER_ONLY=wayflow bash scripts/ci/works-after-proof.sh` builds the same
+candidate from the Dockerfile defaults).
+
+**Rollback path.** The runtime is a per-build image, not a registry digest, so
+rollback is a revert of the three `docker/wayflow/Dockerfile` build-arg
+defaults (and the mirrored defaults in `scripts/ci/works-after/wayflow.sh`):
+
+| Pin | Roll back to |
+|---|---|
+| `PYTHON_TAG` | `3.11-slim` |
+| `WAYFLOWCORE_VERSION` | `26.1.1` |
+| `PYAGENTSPEC_VERSION` | `26.1.0` |
+
+i.e. `git revert` this PR's commit (or reset those three ARG defaults) and
+rebuild `docker/wayflow` — the previous image is reproduced byte-for-byte from
+the prior pins (no migration state to unwind; the runtime is stateless, session
+values flow through the A2A task input, not env/volumes). To pre-bake and pin a
+known-good rollback image by digest, build the prior pins and capture the digest:
+`docker build --build-arg PYTHON_TAG=3.11-slim --build-arg
+WAYFLOWCORE_VERSION=26.1.1 --build-arg PYAGENTSPEC_VERSION=26.1.0 -t
+wayflow-rollback docker/wayflow && docker image inspect --format '{{index
+.RepoDigests 0}}{{.Id}}' wayflow-rollback`.
