@@ -16,11 +16,17 @@ export const dynamic = "force-dynamic";
 // Drift-proof procedure classification: read the type straight off the live
 // tRPC router. A procedure name not present in the router resolves to
 // `undefined` -> the gate treats it as unknown and denies (fail-closed).
+//
+// Fail-closed on the type itself, too: only an exact `query` / `mutation`
+// classifies. Any other runtime shape (e.g. a future `subscription`, or a
+// drifted/absent `_def.type`) resolves to `undefined` -> the gate denies it,
+// rather than silently defaulting a non-mutation to the cheaper `operations.read`.
 function lookupProcedureType(procedurePath: string): ProcedureType | undefined {
   const proc = (
-    appRouter._def.procedures as Record<string, { _def?: { type?: ProcedureType } }>
+    appRouter._def.procedures as Record<string, { _def?: { type?: string } }>
   )[procedurePath];
-  return proc?._def?.type;
+  const type = proc?._def?.type;
+  return type === "query" || type === "mutation" ? type : undefined;
 }
 
 function jsonError(status: number, error: string): Response {
