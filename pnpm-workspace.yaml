@@ -40,8 +40,8 @@ packages:
 # `pnpm install` runs.
 verifyDepsBeforeRun: false
 overrides:
-  react: 19.2.6 # exact-pinned 19.2.6 in root/chat/mcp-server/skills; pin caret consumers too for react/react-dom lockstep
-  react-dom: 19.2.6 # kept in lockstep with `react`
+  react: 19.2.7 # exact-pinned 19.2.7 in root/chat/mcp-server/skills; pin caret consumers too for react/react-dom lockstep
+  react-dom: 19.2.7 # kept in lockstep with `react`
   # --- Bounded security currency (closeout W1, #71) ---
   # In-range transitive-dep pins for vulnerable copies left after `pnpm update
   # -r`. Each target stays WITHIN the resolved package's existing major; the
