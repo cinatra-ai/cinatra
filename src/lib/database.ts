@@ -408,6 +408,30 @@ export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
 }
 
+// Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
+// Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
+// read-modify-write: capture the snapshot, derive the next value, and swap only
+// if the row is still byte-equal to the snapshot.
+export function readRawMetadataStringFromDatabase(key: string): string | null {
+  return readRawMetadataStringInternal(key);
+}
+
+// Atomically persist `value` ONLY IF the stored row is still byte-equal to
+// `expectedRaw` (the snapshot from `readRawMetadataStringFromDatabase`). Returns
+// true iff the swap landed; a concurrent write that changed the bytes makes it a
+// no-op (false), so the caller's stale value is never persisted.
+export function compareAndSwapMetadataValueFromDatabase(
+  key: string,
+  value: unknown,
+  expectedRaw: string,
+): boolean {
+  return compareAndSwapMetadataValueInternal(
+    key,
+    JSON.stringify(normalizePersistedValue(value)),
+    expectedRaw,
+  );
+}
+
 export function readSkillCatalogFromDatabase() {
   const cached = globalThis.__cinatraSkillCatalogCache;
   if (cached && cached.version === skillCatalogCacheVersion) {
