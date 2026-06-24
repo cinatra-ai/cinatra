@@ -18,6 +18,8 @@
 //      JSON payload. We surface the parsed payload on success and re-throw the
 //      LAST error when every candidate secret fails.
 
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 import { Webhook } from "standardwebhooks";
 
 export interface VerifiedInbound {
@@ -92,4 +94,58 @@ export function verifyInbound(
   // the secret — but we wrap defensively so callers depend on our type.
   const reason = lastError instanceof Error ? lastError.message : "verification failed";
   throw new WebhookVerifyFailedError(reason);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy single-shared-secret HMAC bridge (cinatra#343 D3c option A).
+//
+// The forward default is Standard-Webhooks (`verifyInbound` above). But a
+// connector whose IN-FIELD sender predates Standard-Webhooks (the deployed
+// WordPress plugin) signs each request with a bespoke `sha256=<hmac-hex>`
+// header over the raw body under a single shared secret. Forcing those senders
+// to Standard-Webhooks would require a synchronized plugin rollout to every
+// live site. The legacy bridge keeps that bespoke HMAC for a binding flagged
+// `legacyEnabled` while still routing it through the generic facility (registry
+// → leased idempotency ledger → connector handler). The host pairs this verify
+// with a REQUIRED caller-supplied idempotency-key header (the legacy sender
+// carries no Standard-Webhooks `webhook-id`).
+//
+// This is the SAME constant-time `sha256=<hex>` comparison the host historically
+// performed in src/lib/wordpress-widget-auth.verifyWebhookSignature, lifted into
+// the package so the bespoke crypto lives in ONE owned place.
+// ---------------------------------------------------------------------------
+
+const LEGACY_SIG_PREFIX = "sha256=";
+
+/**
+ * Verify a legacy `sha256=<hex>` HMAC-SHA256 signature over the EXACT raw body
+ * bytes under a single shared secret, in constant time.
+ *
+ * @param rawBody   The exact inbound request bytes (the bytes that were signed).
+ * @param sigHeader The legacy signature header value (`"sha256=<hex>"`), or null
+ *                  when the header is absent (→ false; the caller 401s).
+ * @param secret    The single shared HMAC secret stored for the binding.
+ * @returns true only when the header is well-formed AND its HMAC matches.
+ */
+export function verifyLegacyHmac(
+  rawBody: Buffer,
+  sigHeader: string | null,
+  secret: string,
+): boolean {
+  if (typeof sigHeader !== "string" || !sigHeader.startsWith(LEGACY_SIG_PREFIX)) {
+    return false;
+  }
+  const expected =
+    LEGACY_SIG_PREFIX + createHmac("sha256", secret).update(rawBody).digest("hex");
+  const presentedBuf = Buffer.from(sigHeader);
+  const expectedBuf = Buffer.from(expected);
+  // A length mismatch (e.g. a truncated hex) would throw in timingSafeEqual; an
+  // early length compare is a non-secret-bearing fast reject (the presented and
+  // expected lengths are both derivable from public structure, not the secret).
+  if (presentedBuf.length !== expectedBuf.length) return false;
+  try {
+    return timingSafeEqual(presentedBuf, expectedBuf);
+  } catch {
+    return false;
+  }
 }

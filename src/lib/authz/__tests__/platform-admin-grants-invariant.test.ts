@@ -23,11 +23,15 @@ describe("authz — platform_admin invariant", () => {
     // Allow-list — platform-level powers, not resource CRUD on user data:
     //   - registry.{install,update,uninstall} are platform-level powers
     //   - settings.update is platform-level (not user-resource CRUD)
+    //   - operations.execute is the platform-level destructive-operator power
+    //     (background-job retry/remove/clean/promote/pause). It matches the
+    //     `.execute$` verb but is a platform power, not user-resource CRUD.
     const ALLOW_LIST = new Set<string>([
       "registry.install",
       "registry.update",
       "registry.uninstall",
       "settings.update",
+      "operations.execute",
     ]);
 
     const offenders: string[] = [];
@@ -52,6 +56,7 @@ describe("authz — platform_admin invariant", () => {
       "registry.update",
       "registry.uninstall",
       "settings.update",
+      "operations.execute",
     ];
     for (const perm of required) {
       expect(

@@ -10,7 +10,7 @@
 
 export * from "./types";
 
-export { verifyInbound, WebhookVerifyFailedError } from "./verify";
+export { verifyInbound, verifyLegacyHmac, WebhookVerifyFailedError } from "./verify";
 export type { VerifiedInbound } from "./verify";
 
 export { signOutbound } from "./sign";
@@ -50,6 +50,7 @@ export type {
   ResolvedBinding,
   MintBindingInput,
   MintedBinding,
+  UpsertLegacyBindingInput,
 } from "./secret-service";
 
 export { createWebhookTables } from "./schema";

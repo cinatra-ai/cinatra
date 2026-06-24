@@ -564,6 +564,54 @@ export function validateWebhooksDeclaration(pkgName, w) {
 // exotic literal the stripper still missed) is additionally backstopped at
 // RUNTIME: the generated dynamic import resolves `NAME` to `undefined` and
 // buildWebhookHandler fails loud — so the connector author gains nothing.
+
+// cinatra#344 — `cinatra.streams` declaration. A connector OPTS IN to the
+// host-owned generic stream route by declaring a STREAM with a neutral handler
+// factory (built on @cinatra-ai/streams). STAGED: the relay / run-stream
+// migration is NOT declared here yet — no extension declares cinatra.streams on
+// day one, so the generated map is `{}` and the route is INERT (every request
+// 404s), exactly like cinatra.webhooks was at #340.
+const STREAM_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const STREAM_HANDLER_SUBPATH_RE = /^\.\/[A-Za-z0-9._/-]+$/;
+const STREAM_FACTORY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+export function validateStreamsDeclaration(pkgName, decl) {
+  const errors = [];
+  const at = `${pkgName} cinatra.streams`;
+  if (!isObj(decl)) return [`${at}: must be an object`];
+  if (!Array.isArray(decl.streams) || decl.streams.length === 0) {
+    return [`${at}.streams: must be a non-empty array`];
+  }
+  const seen = new Set();
+  decl.streams.forEach((s, i) => {
+    const sat = `${at}.streams[${i}]`;
+    if (!isObj(s)) {
+      errors.push(`${sat}: must be an object`);
+      return;
+    }
+    if (typeof s.streamSlug !== "string" || !STREAM_SLUG_RE.test(s.streamSlug)) {
+      errors.push(`${sat}.streamSlug: must be a kebab-case slug`);
+    } else if (seen.has(s.streamSlug)) {
+      errors.push(`${sat}.streamSlug: duplicate slug "${s.streamSlug}" within ${pkgName}`);
+    } else {
+      seen.add(s.streamSlug);
+    }
+    if (typeof s.label !== "string" || !s.label.trim()) {
+      errors.push(`${sat}.label: must be a non-empty string`);
+    }
+    if (typeof s.handler !== "string" || !STREAM_HANDLER_SUBPATH_RE.test(s.handler)) {
+      errors.push(`${sat}.handler: must be a package-relative subpath (e.g. "./src/streams/run")`);
+    }
+    if (typeof s.factory !== "string" || !STREAM_FACTORY_RE.test(s.factory)) {
+      errors.push(`${sat}.factory: must be a non-empty identifier`);
+    }
+    if (s.resume !== undefined && typeof s.resume !== "boolean") {
+      errors.push(`${sat}.resume: must be a boolean when present`);
+    }
+  });
+  return errors;
+}
+
 export function webhookHandlerExportsFactory(source, factory) {
   const cleaned = stripCommentsAndStrings(source);
   const name = factory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1336,6 +1384,80 @@ export async function buildManifest() {
     webhookScopeOwners.set(h.scope, h.packageName);
   }
 
+  // cinatra.streams declarations (cinatra#344): the host-owned generic stream
+  // route resolves a stream slug from the generated map; it never names a
+  // connector package. STAGED + INERT until an extension declares — the map is
+  // `{}` on day one. Mirrors the webhookHooks collection: validate fail-closed,
+  // assert the handler subpath resolves (tsconfig alias OR package.json
+  // exports) AND exports the named factory, dedup by slug.
+  const streamDeclarations = records
+    .filter((r) => r.kind === "connector")
+    .flatMap((r) => {
+      const decl = readCinatraManifest(r.sourceDir).streams;
+      if (decl === undefined) return [];
+      const errors = validateStreamsDeclaration(r.packageName, decl);
+      if (errors.length > 0) {
+        throw new Error(
+          `[extension-manifest] invalid streams declaration:\n  - ${errors.join("\n  - ")}`,
+        );
+      }
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      return decl.streams.map((s) => {
+        // The handler subpath must resolve to a real file AND be importable
+        // (tsconfig path alias or a package.json exports entry) so the generated
+        // literal import succeeds at runtime.
+        const handlerRel = s.handler.replace(/^\.\//, "");
+        const handlerPath = join(r.sourceDir, handlerRel);
+        const candidates = [handlerPath, `${handlerPath}.ts`, `${handlerPath}.tsx`];
+        const resolved = candidates.find((p) => fileExists(p));
+        if (!resolved) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}" handler "${s.handler}" ` +
+              `does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+          );
+        }
+        const importSubpath = handlerRel.replace(/\.(ts|tsx)$/, "");
+        const specifier = `${r.packageName}/${importSubpath}`;
+        const exportsKey = `./${importSubpath}`;
+        const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}" subpath "${specifier}" is not ` +
+              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+              `the generated literal import would fail at runtime`,
+          );
+        }
+        const handlerSource = readFileSync(join(REPO_ROOT, resolved), "utf8");
+        if (!webhookHandlerExportsFactory(handlerSource, s.factory)) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}": handler module "${resolved}" ` +
+              `exports no "${s.factory}" function (declared factory must be an exported function)`,
+          );
+        }
+        return {
+          streamSlug: s.streamSlug,
+          packageName: r.packageName,
+          specifier,
+          factory: s.factory,
+          label: s.label.trim(),
+          ...(typeof s.resume === "boolean" ? { resume: s.resume } : {}),
+          resolution: r.resolution,
+        };
+      });
+    })
+    .sort((a, b) => a.streamSlug.localeCompare(b.streamSlug));
+  // Cross-package duplicate gate: at most one owner per stream slug.
+  const streamSlugOwners = new Map();
+  for (const s of streamDeclarations) {
+    const owner = streamSlugOwners.get(s.streamSlug);
+    if (owner) {
+      throw new Error(
+        `[extension-manifest] duplicate stream slug "${s.streamSlug}" (${owner} and ${s.packageName})`,
+      );
+    }
+    streamSlugOwners.set(s.streamSlug, s.packageName);
+  }
+
   // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
   // by shipping src/widgets/index.ts (WidgetDefinition[] + components). It MUST
   // then also ship src/widgets/manifest.ts (the pure-data WidgetManifest, no
@@ -1446,6 +1568,7 @@ export async function buildManifest() {
     externalMcpToolboxes,
     widgetStreamAgents,
     webhookHooks,
+    streamDeclarations,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -1807,6 +1930,88 @@ function emitWebhooksServer(webhookHooks) {
   );
 }
 
+// Neutral stream handler dispatch map (cinatra#344): streamSlug → { resolution,
+// literal dynamic-import loader of the connector's stream handler module, the
+// factory export name, declared metadata }. SEPARATE server-only file (mirrors
+// the other generated server maps) consumed by src/lib/stream-registry.server.ts
+// — the host's generic /api/streams/<slug> route resolves a stream from this map
+// generically; it never names a connector package. INERT until an extension
+// declares cinatra.streams (the map is {} and every request 404s safely). Same
+// literal-specifier rule the other loader maps use (Turbopack only bundles
+// literal dynamic imports), with the same per-entry resolution classification.
+function emitStreamsServer(streamDeclarations) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = streamDeclarations
+    .map((s) => {
+      const meta = {
+        packageName: s.packageName,
+        factory: s.factory,
+        streamSlug: s.streamSlug,
+        label: s.label,
+        ...(typeof s.resume === "boolean" ? { resume: s.resume } : {}),
+      };
+      const metaJson = JSON.stringify(meta).slice(1, -1);
+      const spec = s.specifier;
+      const load =
+        s.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`
+          : `() => import(${JSON.stringify(spec)})`;
+      return `  ${JSON.stringify(s.streamSlug)}: { resolution: ${JSON.stringify(s.resolution)}, load: ${load}, ${metaJson} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// streamSlug → neutral stream handler entry. The host's generic\n` +
+    `// /api/streams/<slug> route resolves the stream generically (it never names\n` +
+    `// a connector package); \`resume\` (when declared) opts the stream into the\n` +
+    `// resumable-SSE primitive's Last-Event-ID resume.\n` +
+    `export type GeneratedStreamEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  packageName: string;\n` +
+    `  factory: string;\n` +
+    `  streamSlug: string;\n` +
+    `  label: string;\n` +
+    `  resume?: boolean;\n` +
+    `};\n\n` +
+    `export const GENERATED_STREAM_DECLARATIONS: Record<string, GeneratedStreamEntry> = {\n` +
+    `${body}\n};\n`
+  );
+}
+
+// Slug-only public-path list for the generic stream route (cinatra#344). SEPARATE
+// generated file with ZERO imports and no package identifiers (proxy-bundle-safe
+// like the widget paths file). This is the auth-exemption SOURCE for the generic
+// /api/streams/<slug> route — one exact path per declared stream.
+//
+// STAGED WIRING: the auth-route-guard consumption of this list ships in the
+// follow-on that actually migrates a stream onto the package (see #344 scope
+// note). It is SAFE to ship this list unconsumed now because the map is EMPTY on
+// day one (no extension declares cinatra.streams), so there is no public stream
+// path and the route requires a session for everything; the guard edit (a
+// configured high-risk path) is deferred to the PR that first declares a stream,
+// which is exactly when an exact-match exemption becomes load-bearing.
+function emitStreamPublicPaths(streamDeclarations) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = streamDeclarations
+    .map((s) => `  ${JSON.stringify(`/api/streams/${s.streamSlug}`)},`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Declared stream public paths (one per cinatra.streams declaration,\n` +
+    `// cinatra#344). Slug-only data — NO imports, NO package identifiers\n` +
+    `// (proxy-bundle safe). This is the auth-exemption SOURCE for the generic\n` +
+    `// /api/streams/<slug> route; the auth-route-guard consumption is STAGED (it\n` +
+    `// ships with the first stream declaration — see #344 scope). Empty + inert\n` +
+    `// on day one (no extension declares cinatra.streams).\n` +
+    `export const GENERATED_STREAM_PUBLIC_PATHS: readonly string[] = [\n` +
+    `${body}\n];\n`
+  );
+}
+
 // Slug-only public-path PREFIX list for the generic webhook route (cinatra#340).
 // SEPARATE generated file with ZERO imports and no package identifiers — it is
 // the registry/UI source of truth for the declared "/webhook/<vendor>/<slug>/
@@ -1933,6 +2138,7 @@ function emitGuardedOptionalLoadersTest({
   externalMcpToolboxes,
   widgetStreamAgents,
   webhookHooks,
+  streamDeclarations,
   chatWidgetModules,
   connectorSetupPages,
   connectorSettingsPages,
@@ -1951,6 +2157,7 @@ function emitGuardedOptionalLoadersTest({
   for (const p of externalMcpToolboxes) expected.push(["GENERATED_EXTERNAL_MCP_TOOLBOXES", p.slug, p.resolution]);
   for (const w of widgetStreamAgents) expected.push(["GENERATED_WIDGET_STREAM_AGENTS", w.agentSlug, w.resolution]);
   for (const h of webhookHooks) expected.push(["GENERATED_WEBHOOK_HANDLERS", h.scope, h.resolution]);
+  for (const s of streamDeclarations) expected.push(["GENERATED_STREAM_DECLARATIONS", s.streamSlug, s.resolution]);
   for (const p of chatWidgetModules) {
     expected.push(["GENERATED_CHAT_WIDGET_MODULES", p.packageName, p.resolution]);
     expected.push(["GENERATED_CHAT_WIDGET_MANIFEST_MODULES", p.packageName, p.resolution]);
@@ -1983,6 +2190,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `} from "../extensions.server";\n` +
     `import { GENERATED_WEBHOOK_HANDLERS } from "../webhooks.server";\n` +
+    `import { GENERATED_STREAM_DECLARATIONS } from "../streams.server";\n` +
     `import {\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
@@ -1996,6 +2204,7 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_EXTERNAL_MCP_TOOLBOXES,\n` +
     `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
     `  GENERATED_WEBHOOK_HANDLERS,\n` +
+    `  GENERATED_STREAM_DECLARATIONS,\n` +
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
@@ -2257,6 +2466,8 @@ const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
 const OUT_WEBHOOKS_SERVER = generatedOutPath("webhooks.server.ts");
 const OUT_WEBHOOK_PATHS = generatedOutPath("webhook-public-paths.ts");
 const OUT_WEBHOOK_META = generatedOutPath("webhook-registry-meta.ts");
+const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
+const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
@@ -2285,6 +2496,7 @@ async function main() {
     externalMcpToolboxes,
     widgetStreamAgents,
     webhookHooks,
+    streamDeclarations,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -2299,6 +2511,8 @@ async function main() {
     [OUT_WEBHOOKS_SERVER, emitWebhooksServer(webhookHooks)],
     [OUT_WEBHOOK_PATHS, emitWebhookPublicPaths(webhookHooks)],
     [OUT_WEBHOOK_META, emitWebhookRegistryMeta(webhookHooks)],
+    [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
+    [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
@@ -2309,6 +2523,7 @@ async function main() {
         externalMcpToolboxes,
         widgetStreamAgents,
         webhookHooks,
+        streamDeclarations,
         chatWidgetModules,
         connectorSetupPages,
         connectorSettingsPages,
@@ -2382,7 +2597,7 @@ async function main() {
     writeFileSync(path, content);
   }
   const parity = await checkParity();
-  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
+  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${streamDeclarations.length} stream declarations, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");
     for (const p of parity) console.log("  - " + p);
   } else {

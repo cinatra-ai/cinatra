@@ -28,6 +28,13 @@ import { baseUse, desktopChrome, REPO_ROOT, repoPath, suitePath } from "./base";
 const PORT = Number(process.env.E2E_WP_DRUPAL_PORT ?? 3000);
 const BASE_URL = process.env.E2E_WP_DRUPAL_BASE_URL ?? `http://localhost:${PORT}`;
 
+// cinatra#410 — the saved Cinatra session for the deterministic dev UAT user
+// (established by global-setup). Both projects load it so the widget's hosted
+// `/widget-auth` login popup inherits the session and lands on consent directly
+// (the cookies are scoped to the cinatra instance origin, where the popup opens,
+// NOT the CMS admin origin the spec navigates to).
+const STORAGE_STATE = suitePath("wp-drupal-uat", ".auth", "state.json");
+
 export default defineConfig({
   testDir: suitePath("wp-drupal-uat"),
   outputDir: repoPath("test-results"),
@@ -69,12 +76,12 @@ export default defineConfig({
     {
       name: "wordpress",
       testMatch: /wordpress\/.*\.spec\.ts/,
-      use: { ...desktopChrome },
+      use: { ...desktopChrome, storageState: STORAGE_STATE },
     },
     {
       name: "drupal",
       testMatch: /drupal\/.*\.spec\.ts/,
-      use: { ...desktopChrome },
+      use: { ...desktopChrome, storageState: STORAGE_STATE },
     },
   ],
 });

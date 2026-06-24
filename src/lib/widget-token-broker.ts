@@ -10,6 +10,7 @@ import { Buffer } from "node:buffer";
 
 import type { GeneratedWidgetStreamAuth } from "@/lib/generated/extensions.server";
 import { readMetadataValueFromDatabase } from "@/lib/database";
+import { getActiveConnectSiteById } from "@/lib/connect-sites-store";
 import { isConfiguredOrigin } from "@/lib/widget-stream-auth";
 import {
   getPostgresConnectionString,
@@ -70,6 +71,24 @@ const TABLE = "widget_stream_tokens";
 const KEY_FINGERPRINT_SALT = "cinatra:widget-stream-token:key-fingerprint:v1";
 const KEY_FINGERPRINT_INFO = "rotation-fingerprint";
 
+// cinatra#410 — connect-site (`cnx_`) cit_ minting.
+//
+// The token-exchange endpoint also accepts a per-site `cnx_` connect-site
+// credential (server-to-server, exactly like the legacy long-lived key — see
+// the token route's `cnx_` branch). A `cit_` minted from a `cnx_` carries the
+// SAME authority as a legacy-minted `cit_`: site/origin/aud/scope transport
+// proof, NO user identity (the per-user `cwu_` on the stream remains the sole
+// user/org authority). Such a token is bound to its connect-site row by storing
+// the RESERVED discriminator `connect_site:<siteId>` in `token_config_key`
+// (write-only today; this introduces its first read) and, in the rotation
+// fingerprint, a marker over `cnx:<siteId>:<credentialVersion>` rather than the
+// legacy machine key. A reconnect bumps `credential_version` (or a revoke drops
+// the active row), so the consume-time live re-read invalidates outstanding
+// `cit_` tokens immediately — mirroring the legacy key-rotation fingerprint
+// re-check. Legacy `tokenConfigKey`s are forbidden from using this reserved
+// prefix (asserted at mint) so the discriminator can never be spoofed.
+const CONNECT_SITE_CONFIG_PREFIX = "connect_site:";
+
 // SHA-256 hex of a HIGH-ENTROPY value. Used for token_hash = SHA-256(rawToken)
 // where rawToken is 32 cryptographically-random bytes, and for the
 // request-token lookup. Not a password hash — the input is never a
@@ -91,6 +110,20 @@ function keyFingerprintHex(apiKey: string): string {
     32,
   );
   return Buffer.from(derived).toString("hex");
+}
+
+// cinatra#410 — connect-site rotation marker for a `cnx_`-minted `cit_`. NOT a
+// secret-derived fingerprint (the connect-site row's plaintext credential is
+// deliberately never read into the token table): a deterministic SHA-256 over
+// the immutable (siteId, credentialVersion) pair. A reconnect bumps
+// credentialVersion → a different marker → outstanding `cit_` tokens fail the
+// consume-time re-check against the live row's credentialVersion, exactly as the
+// legacy key-fingerprint mismatch invalidates legacy tokens on key rotation. The
+// authority granted is identical to a legacy `cit_` (site/origin transport
+// only); the marker is solely the rotate/revoke invalidation lever, so the
+// DB-write-only forgery surface here is no broader than the legacy column.
+function connectSiteFingerprintHex(siteId: string, credentialVersion: number): string {
+  return sha256Hex(`cnx:${siteId}:${credentialVersion}`);
 }
 
 /** `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid. */
@@ -206,14 +239,43 @@ export function mintWidgetStreamToken(input: {
   sub?: string;
   scope?: string;
   issuerBaseUrl: string;
+  /**
+   * cinatra#410 — when present, mint a `cit_` bound to this verified connect-site
+   * (the `cnx_` server-to-server path) instead of the legacy long-lived key. The
+   * caller (token route) MUST have already verified the `cnx_` credential and
+   * that `origin` equals the site's verified origin. Mutually exclusive with the
+   * legacy key path: the connect-site path needs no configured `apiKey`.
+   */
+  connectSite?: { siteId: string; credentialVersion: number };
 }): MintWidgetTokenResult | null {
   ensurePostgresSchema();
 
   const boundOrigin = normalizeOriginStrict(input.origin);
   if (!boundOrigin) return null;
 
-  const apiKey = readLongLivedApiKey(input.auth);
-  if (!apiKey) return null; // no configured key → cannot bind a fingerprint
+  // Discriminate the rotation fingerprint + config-key marker by auth class.
+  // Connect-site (`cnx_`): bind to (siteId, credentialVersion) via the reserved
+  // `connect_site:<siteId>` config-key. Legacy: bind to the configured key's
+  // fingerprint under the agent's real tokenConfigKey.
+  let tokenConfigKeyValue: string;
+  let keyFingerprint: string;
+  if (input.connectSite) {
+    const siteId = String(input.connectSite.siteId ?? "").trim();
+    if (!siteId) return null;
+    tokenConfigKeyValue = `${CONNECT_SITE_CONFIG_PREFIX}${siteId}`;
+    keyFingerprint = connectSiteFingerprintHex(siteId, input.connectSite.credentialVersion);
+  } else {
+    // A legacy tokenConfigKey may NEVER collide with the reserved connect-site
+    // namespace (else a forged `connect_site:` config-key could route consume to
+    // the cnx branch). Fail closed rather than mint an ambiguous token.
+    if (String(input.auth.tokenConfigKey ?? "").startsWith(CONNECT_SITE_CONFIG_PREFIX)) {
+      return null;
+    }
+    const apiKey = readLongLivedApiKey(input.auth);
+    if (!apiKey) return null; // no configured key → cannot bind a fingerprint
+    tokenConfigKeyValue = input.auth.tokenConfigKey;
+    keyFingerprint = keyFingerprintHex(apiKey);
+  }
 
   const rawToken =
     TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
@@ -221,7 +283,6 @@ export function mintWidgetStreamToken(input: {
   const jti = randomUUID();
   const scope = (input.scope ?? `${input.agentSlug}.stream`).slice(0, 128);
   const aud = streamRoutePath(input.agentSlug);
-  const keyFingerprint = keyFingerprintHex(apiKey);
   const sub =
     typeof input.sub === "string" && input.sub.length > 0
       ? input.sub.slice(0, SUB_MAX_LENGTH)
@@ -255,7 +316,7 @@ export function mintWidgetStreamToken(input: {
           boundOrigin,
           scope,
           sub,
-          input.auth.tokenConfigKey,
+          tokenConfigKeyValue,
           keyFingerprint,
           TOKEN_TTL_SECONDS,
         ],
@@ -317,7 +378,7 @@ export function consumeWidgetStreamToken(input: {
       {
         text:
           `SELECT jti, agent_slug, aud, origin, scope, sub, ` +
-          `token_key_fingerprint, ` +
+          `token_config_key, token_key_fingerprint, ` +
           `(expires_at > now()) AS not_expired ` +
           `FROM ${qSchemaTable()} WHERE token_hash = $1 LIMIT 1`,
         values: [tokenHash],
@@ -336,6 +397,7 @@ export function consumeWidgetStreamToken(input: {
         origin?: string;
         scope?: string;
         sub?: string | null;
+        token_config_key?: string;
         token_key_fingerprint?: string;
         not_expired?: boolean;
       }
@@ -381,12 +443,34 @@ export function consumeWidgetStreamToken(input: {
     return { ok: false, reason: "origin_unconfigured" };
   }
 
-  // Rotation: the long-lived key fingerprint at mint MUST equal the current
-  // configured key's fingerprint. Regenerating the long-lived key therefore
-  // invalidates ALL outstanding short-lived tokens immediately.
-  const currentKey = readLongLivedApiKey(input.auth);
-  if (!currentKey || row.token_key_fingerprint !== keyFingerprintHex(currentKey)) {
-    return { ok: false, reason: "key_rotated" };
+  // Rotation re-check, discriminated by the stored config-key marker.
+  const storedConfigKey = String(row.token_config_key ?? "");
+  if (storedConfigKey.startsWith(CONNECT_SITE_CONFIG_PREFIX)) {
+    // cinatra#410 — connect-site (`cnx_`) path. Re-read the LIVE connect-site
+    // row; a revoke (no active row) or a reconnect (credential_version bump)
+    // invalidates the token immediately. We ALSO re-assert the live row's
+    // origin == the stored bound origin and the live client == this agent's
+    // instances-config key, so a token can never survive a site being re-bound
+    // to a different origin/client. The stored fingerprint must equal the marker
+    // recomputed over the LIVE credential_version.
+    const siteId = storedConfigKey.slice(CONNECT_SITE_CONFIG_PREFIX.length);
+    const live = getActiveConnectSiteById(siteId);
+    if (
+      !live ||
+      live.client !== input.auth.instancesConfigKey ||
+      normalizeOriginStrict(live.widgetOrigin) !== normalizeOriginStrict(storedOrigin) ||
+      row.token_key_fingerprint !== connectSiteFingerprintHex(siteId, live.credentialVersion)
+    ) {
+      return { ok: false, reason: "key_rotated" };
+    }
+  } else {
+    // Legacy long-lived-key path: the key fingerprint at mint MUST equal the
+    // current configured key's fingerprint. Regenerating the long-lived key
+    // therefore invalidates ALL outstanding short-lived tokens immediately.
+    const currentKey = readLongLivedApiKey(input.auth);
+    if (!currentKey || row.token_key_fingerprint !== keyFingerprintHex(currentKey)) {
+      return { ok: false, reason: "key_rotated" };
+    }
   }
 
   return {

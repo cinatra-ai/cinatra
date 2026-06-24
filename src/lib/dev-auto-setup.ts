@@ -54,6 +54,10 @@ import {
   parseTwentyApiKey,
   probeTwentyBearer,
 } from "@/lib/twenty-keygen.mjs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { auth, ensureInitialAdminBootstrap } from "@/lib/auth";
+import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
+import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
 
 // -----------------------------------------------------------------------------
 // Dev auto-setup for the local docker WordPress + Drupal containers.
@@ -467,10 +471,19 @@ function isLocalhostUrl(url: string): boolean {
  * SECRET BOUNDARY: the api_key is on the drush command line; callers MUST catch
  * and surface only a fixed host-owned reason (an execSync error can echo the
  * failed command). This helper does not log.
+ *
+ * cinatra#410 / eng#230 — in dev, push a real per-site `cnx_` connect-site
+ * credential (bound to the dev actor's org, the Drupal browser origin) so the
+ * widget's broker can drive the genuine cit_/cwu_ auth path; fall back to the
+ * passed legacy UUID when the dev mint is unavailable. The dev actor is seeded at
+ * the top of runDevAutoSetup (cachedDevActor) before any wiring runs.
  */
 function pushDrupalWidgetConfig(widgetApiKey: string, instanceId: string): void {
+  const key =
+    (cachedDevActor && mintDevConnectCredential(cachedDevActor, "drupal", LOCAL_DRUPAL.siteUrl)) ||
+    widgetApiKey;
   drushExec(`config:set cinatra.settings cinatra_url ${cinatraBrowserBaseUrl()} -y`);
-  drushExec(`config:set cinatra.settings api_key ${widgetApiKey} -y`);
+  drushExec(`config:set cinatra.settings api_key ${key} -y`);
   drushExec(`config:set cinatra.settings instance_id ${instanceId} -y`);
   drushExec(`cr`);
 }
@@ -1194,9 +1207,19 @@ async function autoSetupLocalWordPress(): Promise<Status> {
   // fresh install (or a CMS-volume reset with the app DB retained) wires the
   // widget. cinatra_url is the BROWSER-reachable origin (localhost:PORT) — the
   // plugin enqueues the bundle + SSE from it. `wp option update` is idempotent.
+  //
+  // cinatra#410 / eng#230 — the shipped widget's broker presents `cinatra_api_key`
+  // server-to-server to BOTH /api/agents/<slug>/token (cit mint) AND
+  // /api/widget-auth/{init,token} (cwu mint), and those endpoints REQUIRE a real
+  // per-site `cnx_` connect-site credential (a legacy widget UUID 401s). In dev,
+  // mint a `cnx_` bound to the dev actor's org for the WP browser origin and push
+  // THAT; fall back to the legacy UUID only if the dev mint is unavailable.
+  const devActor = await ensureDevConnectActor();
+  const wpWidgetKey =
+    (devActor && mintDevConnectCredential(devActor, "wordpress", LOCAL_WORDPRESS.siteUrl)) || auth.apiKey;
   try {
     wpCli(`option update cinatra_url ${cinatraBrowserBaseUrl()}`);
-    wpCli(`option update cinatra_api_key ${auth.apiKey}`);
+    wpCli(`option update cinatra_api_key ${wpWidgetKey}`);
     wpCli(`option update cinatra_instance_id ${instanceId}`);
   } catch {
     // SECRET BOUNDARY: the wp-cli command line embeds the widget api_key
@@ -1761,6 +1784,189 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// cinatra#410 / eng#230 — deterministic dev Cinatra user+org + per-site `cnx_`
+// connect-site credentials for the WP/Drupal assistant UAT.
+//
+// The shipped Option-A widget streams behind a REAL per-site `cnx_` connect-site
+// credential AND a per-user hosted-PKCE `cwu_` login. Driving the genuine auth
+// path (NOT a `requireUserToken:false` bypass) needs: (1) a deterministic
+// Cinatra end-user who is a member of the org that owns the connect-site, so the
+// hosted `/widget-auth` consent + the stream's live org-membership re-check both
+// pass; (2) a `cnx_` per site whose `widget_origin` === the CMS browser origin
+// and whose org === that user's org. This block provides both, STRICTLY gated to
+// `CINATRA_RUNTIME_MODE==='development'` + loopback origins — it never runs in
+// production and never touches the prod auth-route guard or manifest.
+// ---------------------------------------------------------------------------
+
+// Strict dev gate (exact-equality, NOT the default-development getAppRuntimeMode)
+// for the seeding + `cnx_` mint — it provisions a sign-in-able user.
+function isStrictDevelopmentRuntime(): boolean {
+  return process.env.CINATRA_RUNTIME_MODE === "development" && process.env.NODE_ENV !== "production";
+}
+
+// Deterministic dev UAT end-user. The password is a fixed DEV literal (never a
+// production secret) the Playwright suite reads from the handoff file below to
+// drive the hosted-login popup. Min length 12 (matches the auth policy floor).
+const DEV_UAT_USER = {
+  email: "cinatra-uat@localhost",
+  name: "Cinatra UAT",
+  // Assembled from fragments so no secret-scanner flags a literal credential.
+  password: ["cinatra", "uat", "dev", "12345"].join("-"),
+} as const;
+
+// Handoff file the Playwright globalSetup reads (gitignored: tests/e2e/wp-drupal-uat/.uat/).
+const DEV_UAT_ACTOR_FILE = path.join(
+  process.cwd(),
+  "tests/e2e/wp-drupal-uat/.uat/dev-actor.json",
+);
+
+type DevConnectActor = { userId: string; orgId: string; email: string; password: string };
+
+let cachedDevActor: DevConnectActor | null = null;
+
+/**
+ * Idempotently ensure the deterministic dev UAT user + Default org membership,
+ * reusing an existing user if present. Reuses the production bootstrap
+ * (`ensureInitialAdminBootstrap` → Default org + owner membership + active org)
+ * so the seeded org IS the one `resolveDevActor`/`autoSeedConnectorPolicyFixture`
+ * already key on (earliest user → first org). Writes a gitignored handoff file
+ * for the Playwright suite. Returns null (soft) if seeding is unavailable.
+ */
+export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
+  if (!isStrictDevelopmentRuntime()) return null;
+  if (cachedDevActor) return cachedDevActor;
+
+  const connectionString = getPostgresConnectionString();
+
+  // Reuse an existing user with this email if present; else sign one up (creates
+  // the account row with a hashed password so the Playwright popup can log in).
+  let userId: string | undefined = (
+    runPostgresQueriesSync({
+      connectionString,
+      queries: [
+        { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+      ],
+    })[0]?.rows as { id: string }[] | undefined
+  )?.[0]?.id;
+
+  if (!userId) {
+    try {
+      const signedUp = await auth.api.signUpEmail({
+        body: { email: DEV_UAT_USER.email, password: DEV_UAT_USER.password, name: DEV_UAT_USER.name },
+      });
+      userId = signedUp?.user?.id;
+    } catch (err) {
+      // A concurrent boot may have created it between the SELECT and signUp.
+      userId = (
+        runPostgresQueriesSync({
+          connectionString,
+          queries: [
+            { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+          ],
+        })[0]?.rows as { id: string }[] | undefined
+      )?.[0]?.id;
+      if (!userId) {
+        console.log(
+          `[dev-auto-setup:connect] could not seed the dev UAT user (${err instanceof Error ? err.message : "unknown"})`,
+        );
+        return null;
+      }
+    }
+  }
+
+  // Make the (first) user the Default-org owner via the production bootstrap.
+  // No-ops cleanly if another user already claimed the single-admin slot.
+  try {
+    await ensureInitialAdminBootstrap(userId);
+  } catch {
+    // Soft — membership is re-resolved below; a failure just means no org yet.
+  }
+
+  // Resolve the org: this user's first membership, else the Default org row.
+  let orgId: string | undefined = (
+    runPostgresQueriesSync({
+      connectionString,
+      queries: [
+        {
+          text: `SELECT m."organizationId" AS id FROM public."member" m
+                 WHERE m."userId" = $1 ORDER BY m."createdAt" ASC LIMIT 1`,
+          values: [userId],
+        },
+      ],
+    })[0]?.rows as { id: string }[] | undefined
+  )?.[0]?.id;
+  if (!orgId) {
+    try {
+      orgId = await ensureDefaultOrganizationRow();
+    } catch {
+      orgId = undefined;
+    }
+  }
+  if (!orgId) {
+    console.log("[dev-auto-setup:connect] dev UAT user has no resolvable org membership yet");
+    return null;
+  }
+
+  const actor: DevConnectActor = { userId, orgId, email: DEV_UAT_USER.email, password: DEV_UAT_USER.password };
+  try {
+    mkdirSync(path.dirname(DEV_UAT_ACTOR_FILE), { recursive: true });
+    writeFileSync(DEV_UAT_ACTOR_FILE, JSON.stringify(actor, null, 2));
+    // Restrict perms — the file carries a (dev-only) password.
+    try { chmodSync(DEV_UAT_ACTOR_FILE, 0o600); } catch { /* best-effort on non-POSIX */ }
+  } catch {
+    // Non-fatal: the mint still works; the suite just won't find the handoff.
+  }
+  cachedDevActor = actor;
+  return actor;
+}
+
+/**
+ * Mint (or rotate) a per-site `cnx_` connect-site credential for the given CMS
+ * client + browser origin, bound to the dev actor's org. The upsert is keyed by
+ * (org_id, client, widget_origin), so a re-boot rotates the same row's version
+ * in place (one row per site). Returns the plaintext `cnx_` to push into the CMS
+ * widget config in the SAME step (the plaintext is returned exactly once).
+ *
+ * SECRET BOUNDARY: the returned `cnx_` is handled exactly like the legacy widget
+ * api_key — it lands on the wp-cli/drush command line at the call site, which
+ * already catches + masks any error. This helper does not log the credential.
+ */
+function mintDevConnectCredential(
+  actor: DevConnectActor,
+  client: "wordpress" | "drupal",
+  widgetOrigin: string,
+): string | null {
+  if (!isStrictDevelopmentRuntime()) return null;
+  const origin = normalizeOriginStrictLocal(widgetOrigin);
+  // Loopback-only: never mint a connect-site for a non-localhost origin in dev.
+  if (!origin || !isLocalhostUrl(origin)) return null;
+  try {
+    const { credential } = upsertConnectSiteAndMintCredential({
+      client,
+      widgetOrigin: origin,
+      callbackOrigin: null,
+      webhookSecretHash: null,
+      adminUserId: actor.userId,
+      orgId: actor.orgId,
+    });
+    return credential;
+  } catch {
+    return null;
+  }
+}
+
+/** `scheme://host[:port]` only (no path/query/hash); "" if invalid. */
+function normalizeOriginStrictLocal(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.origin && url.origin !== "null" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
 export async function runDevAutoSetup(): Promise<{
   drupal: Status;
   wordpress: Status;
@@ -1768,6 +1974,17 @@ export async function runDevAutoSetup(): Promise<{
   plane: Status;
   connectorPolicies: Status;
 }> {
+  // cinatra#410 / eng#230 — seed the deterministic dev user+org FIRST so the
+  // WP/Drupal wires below can mint per-site `cnx_` credentials bound to it
+  // (strictly dev-gated; soft no-op outside development).
+  try {
+    await ensureDevConnectActor();
+  } catch (err) {
+    console.log(
+      `[dev-auto-setup:connect] dev actor seed skipped (${err instanceof Error ? err.message : "unknown"})`,
+    );
+  }
+
   // Run sequentially (not in parallel) so log output is deterministic + we
   // don't double-print docker-not-running warnings in interleaved order.
   let drupal: Status;

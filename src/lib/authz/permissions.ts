@@ -165,4 +165,10 @@ export type Permission =
   // Administration & audit
   | "settings.read"
   | "settings.update"
-  | "audit.read";
+  | "audit.read"
+  // Operator console (background-job ops, destructive operator surfaces).
+  // Platform-level powers, NOT resource CRUD on user data: `operations.read`
+  // gates the read/list/status operator views; `operations.execute` gates the
+  // destructive operator mutations (retry/remove/clean/promote/pause/...).
+  | "operations.read"
+  | "operations.execute";

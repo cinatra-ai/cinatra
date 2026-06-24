@@ -47,6 +47,13 @@ export const GENERATED_MANIFEST_FILES = Object.freeze([
   "src/lib/generated/webhooks.server.ts",
   "src/lib/generated/webhook-public-paths.ts",
   "src/lib/generated/webhook-registry-meta.ts",
+  // Neutral stream primitives capability (cinatra#344): the host-owned generated
+  // maps for the generic /api/streams/<slug> route. streams.server.ts carries the
+  // dispatch map (server loaders, server-only); stream-public-paths.ts is the
+  // import-free slug-only path list (auth-route-guard exemption). Inert until an
+  // extension declares cinatra.streams.
+  "src/lib/generated/streams.server.ts",
+  "src/lib/generated/stream-public-paths.ts",
   // The generated guarded-optional-loaders test (cinatra#7). A test file
   // is ALREADY exempt from the coupling gates by path (__tests__), so listing
   // it here adds no exemption surface — it puts the file under the same

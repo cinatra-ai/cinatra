@@ -26,6 +26,9 @@ export type ResourceType =
   | "administration"
   | "audit"
   | "platform"
+  // Operator console resource (background-job operations surface). Gated by
+  // the platform-level `operations.read` / `operations.execute` powers.
+  | "operations"
   // Expanded resource catalog.
   // Classification entries appear in `src/lib/authz/registry.ts`.
   | "artifact"

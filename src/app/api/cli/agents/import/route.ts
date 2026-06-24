@@ -30,7 +30,10 @@ export const dynamic = "force-dynamic";
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export async function POST(request: Request): Promise<Response> {
-  const guard = await authorizeCliRequest(request, { minTier: "platform-admin" });
+  const guard = await authorizeCliRequest(request, {
+    minTier: "platform-admin",
+    requiredScope: "cli:agent:write",
+  });
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

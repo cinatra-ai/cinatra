@@ -7,9 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSessionMock = vi.fn();
 const resolveOrgRoleMock = vi.fn();
+// The verified-Bearer resolver is unit-tested separately (verified-bearer.test).
+// Here we mock it to drive the guard's wiring: order (session → bearer →
+// bypass → deny), the per-route requiredScope gate, and that the resolved
+// actor still clears the SAME minTier role gate.
+const resolveCliBearerActorMock = vi.fn();
 
 vi.mock("@/lib/auth", () => ({
   auth: { api: { getSession: (...args: unknown[]) => getSessionMock(...args) } },
+}));
+
+vi.mock("@/lib/cli-api/verified-bearer", () => ({
+  resolveCliBearerActor: (...args: unknown[]) =>
+    resolveCliBearerActorMock(...args),
 }));
 
 vi.mock("@/lib/auth-session", async () => {
@@ -44,6 +54,8 @@ describe("authorizeCliRequest", () => {
   beforeEach(() => {
     getSessionMock.mockReset();
     resolveOrgRoleMock.mockReset();
+    resolveCliBearerActorMock.mockReset();
+    resolveCliBearerActorMock.mockResolvedValue(null);
     headersMock.mockReset();
     headersMock.mockResolvedValue(fakeHeaders());
     // Default: no bypass.
@@ -191,9 +203,9 @@ describe("authorizeCliRequest", () => {
   });
 
   it("fails closed on an unresolved Authorization header (no false-accept)", async () => {
-    // A bogus Bearer that getSession does not resolve must NOT authorize.
-    // Remote OAuth Bearer resolution is out of scope for this guard (lands with
-    // `cinatra login`); until then such a token fails closed to 401.
+    // A bogus Bearer the resolver does not resolve must NOT authorize. With no
+    // requiredScope the Bearer arm is skipped entirely; even with one, a null
+    // resolver result fails closed to 401.
     getSessionMock.mockResolvedValue(null);
     headersMock.mockResolvedValue(
       fakeHeaders({ authorization: "Bearer not.a.real.token" }),
@@ -201,5 +213,106 @@ describe("authorizeCliRequest", () => {
     const result = await authorizeCliRequest(req());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.status).toBe(401);
+  });
+
+  // ---- eng#231: verified remote-Bearer arm ------------------------------
+
+  describe("verified remote Bearer", () => {
+    it("does NOT invoke the Bearer arm when the endpoint declares no requiredScope", async () => {
+      getSessionMock.mockResolvedValue(null);
+      const result = await authorizeCliRequest(req()); // no requiredScope
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.status).toBe(401);
+      // The Bearer resolver must never be consulted without a requiredScope.
+      expect(resolveCliBearerActorMock).not.toHaveBeenCalled();
+    });
+
+    it("authorizes a platform-admin Bearer when scope + audience + tier all hold", async () => {
+      getSessionMock.mockResolvedValue(null);
+      resolveCliBearerActorMock.mockResolvedValue({
+        userId: "u-bearer",
+        isPlatformAdmin: true,
+        organizationId: "org1",
+        via: "bearer",
+      });
+      const result = await authorizeCliRequest(req(), {
+        minTier: "platform-admin",
+        requiredScope: "cli:status",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.actor.via).toBe("bearer");
+        expect(result.actor.userId).toBe("u-bearer");
+      }
+      expect(resolveCliBearerActorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "cli:status",
+      );
+    });
+
+    it("403s a Bearer actor that resolves below the platform-admin tier (role gate still applies)", async () => {
+      getSessionMock.mockResolvedValue(null);
+      // e.g. a service-account / org-admin Bearer — resolved but NOT platform-admin.
+      resolveCliBearerActorMock.mockResolvedValue({
+        userId: "u-orgadmin",
+        isPlatformAdmin: false,
+        orgRole: "org_admin",
+        organizationId: "org1",
+        via: "bearer",
+      });
+      const result = await authorizeCliRequest(req(), {
+        minTier: "platform-admin",
+        requiredScope: "cli:agent:read",
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.status).toBe(403);
+    });
+
+    it("a session takes precedence over the Bearer arm (session resolved first)", async () => {
+      getSessionMock.mockResolvedValue({
+        user: { id: "u-session", role: "admin" },
+        session: { activeOrganizationId: null },
+      });
+      const result = await authorizeCliRequest(req(), {
+        minTier: "platform-admin",
+        requiredScope: "cli:status",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.actor.via).toBe("session");
+      // Session won — the Bearer resolver was never consulted.
+      expect(resolveCliBearerActorMock).not.toHaveBeenCalled();
+    });
+
+    it("PRODUCTION + no dev-bypass: a remote Bearer that does not resolve fails closed (401)", async () => {
+      // Distrust-the-insecure-path: assert the production config keeps a remote
+      // Bearer fail-closed unless the resolver proves aud+scope+role.
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("CINATRA_MCP_DEV_ADMIN_BYPASS", "true"); // must NOT fire in prod
+      getSessionMock.mockResolvedValue(null);
+      resolveCliBearerActorMock.mockResolvedValue(null); // unverified
+      const result = await authorizeCliRequest(
+        req("https://public.example.com/api/cli/status"),
+        { minTier: "platform-admin", requiredScope: "cli:status" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.status).toBe(401);
+    });
+
+    it("PRODUCTION: a verified platform-admin Bearer authorizes (the intended remote path)", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      getSessionMock.mockResolvedValue(null);
+      resolveCliBearerActorMock.mockResolvedValue({
+        userId: "u-bearer",
+        isPlatformAdmin: true,
+        organizationId: "org1",
+        via: "bearer",
+      });
+      const result = await authorizeCliRequest(
+        req("https://public.example.com/api/cli/status"),
+        { minTier: "platform-admin", requiredScope: "cli:status" },
+      );
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.actor.via).toBe("bearer");
+    });
   });
 });

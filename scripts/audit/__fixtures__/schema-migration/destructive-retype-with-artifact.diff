@@ -1,9 +1,9 @@
-diff --git a/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs
+diff --git a/migrations/core/core__0012_narrow-usage-events-cost-usd.mjs b/migrations/core/core__0012_narrow-usage-events-cost-usd.mjs
 new file mode 100644
 --- /dev/null
-+++ b/migrations/core/core__0011_narrow-usage-events-cost-usd.mjs
++++ b/migrations/core/core__0012_narrow-usage-events-cost-usd.mjs
 @@ -0,0 +1,16 @@
-+// core__0011 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
++// core__0012 — narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +// The extra scale was never populated (ingest rounds to 4 decimal places)
 +// and the narrower type matches the rollup views. Safe to re-run: converting
 +// a column to the type it already has succeeds as a no-op.
@@ -22,14 +22,16 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -91,6 +91,13 @@
-       "summary": "Add the webhook_outbound_dead_letter table for the host-owned OUTBOUND webhook delivery engine (cinatra#341): the durable dead-letter record the pre-#341 fire-and-forget assistant-webhook path lacked. The WEBHOOK_OUTBOUND_DELIVERY BullMQ dispatcher arm writes one row when a delivery is classified `permanent` (non-retryable 4xx, missing url/secret, or a non-decodable legacy secret the standardwebhooks signer rejects) OR when all configured `attempts` are exhausted on a `retryable` result. Columns: event_kind (e.g. 'assistant.mention'), message_id (the Standard-Webhooks webhook-id / receiver idempotency key), target_url (reduced to origin+pathname — query string + userinfo stripped so a URL token can't leak), payload_digest (sha256 hex of the serialized payload — NEVER the raw payload or secret), attempts, last_status (int|null), last_error (truncated+scrubbed text), failed_at, created_at. A UNIQUE index (event_kind, message_id) makes the DLQ insert idempotent (ON CONFLICT DO NOTHING — a permanent row and a later last-attempt-retryable row for the same identity collapse to one) and a failed_at scan index backs the operator view. ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
+@@ -96,6 +96,13 @@
+       "seq": "0011",
+       "file": "core/core__0011_webhook-legacy-secret.mjs",
+       "summary": "Add the legacy single-shared-secret STORAGE columns (legacy_secret_ciphertext/iv) to webhook_secret_bindings for the #343 legacy webhook bridge (D3c option A) deferred by core__0009. A binding flagged legacy_enabled keeps its in-field sender's bespoke `sha256=<hex>` HMAC (the deployed WordPress plugin) while still routing through the generic /webhook facility; the shared HMAC secret is stored ENCRYPTED via the host secretsCodec (ciphertext+iv blob, NOT a ref) under a field-scoped AAD (webhook-binding.<binding_id>.legacy) so a legacy blob can never decrypt in the current/previous columns. Both columns nullable — a Standard-Webhooks binding (the forward default) leaves them null. ADDITIVE + idempotent (ADD COLUMN IF NOT EXISTS) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same columns); no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the two columns.",
        "destructive": false,
-       "tables": ["webhook_outbound_dead_letter"]
+       "tables": ["webhook_secret_bindings"]
 +    },
 +    {
-+      "seq": "0011",
-+      "file": "core/core__0011_narrow-usage-events-cost-usd.mjs",
++      "seq": "0012",
++      "file": "core/core__0012_narrow-usage-events-cost-usd.mjs",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
@@ -48,12 +50,3 @@ diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
        idempotency_key text NOT NULL
      )` },
      { text: `CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_key_idx ON "${schemaName.replaceAll('"', '""')}"."usage_events" (idempotency_key)` },
-@@ -912,7 +912,7 @@ END $$` },
-       ADD COLUMN IF NOT EXISTS cached_input_tokens integer NOT NULL DEFAULT 0,
-       ADD COLUMN IF NOT EXISTS reasoning_output_tokens integer NOT NULL DEFAULT 0,
-       ADD COLUMN IF NOT EXISTS credits_consumed integer NOT NULL DEFAULT 0,
--      ADD COLUMN IF NOT EXISTS cost_usd numeric(12,8);
-+      ADD COLUMN IF NOT EXISTS cost_usd numeric(12,4);
-     IF EXISTS (
-       SELECT 1 FROM information_schema.columns
-       WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'usage_events' AND column_name = 'payload'
