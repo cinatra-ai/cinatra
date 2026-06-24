@@ -28,6 +28,7 @@ const PERMISSION_SET = new Set<string>([
   "connector.delete",
   "registry.read", "registry.install", "registry.update", "registry.uninstall",
   "settings.read", "settings.update", "audit.read",
+  "operations.read", "operations.execute",
 ]);
 
 export function parseTokenScopes(scopeString: string | undefined): Permission[] {

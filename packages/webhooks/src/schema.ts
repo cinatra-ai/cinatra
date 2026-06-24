@@ -82,10 +82,13 @@ export function createWebhookTables(schemaName: string) {
       previousSecretIv: text("previous_secret_iv"),
       previousExpiresAt: timestamp("previous_expires_at", { withTimezone: true }),
       rotatedAt: timestamp("rotated_at", { withTimezone: true }),
-      // Structural hook for the #343 legacy single-shared-secret bridge; the
-      // legacy-secret STORAGE columns are deferred to #343 (this stays false in
-      // #340, where no binding sets it).
+      // The #343 legacy single-shared-secret bridge: when legacy_enabled, the
+      // in-field sender keeps its bespoke `sha256=<hex>` HMAC and the shared
+      // secret is stored ENCRYPTED here (host secretsCodec blob, AAD field
+      // "legacy") — null for a Standard-Webhooks binding.
       legacyEnabled: boolean("legacy_enabled").notNull().default(false),
+      legacySecretCiphertext: text("legacy_secret_ciphertext"),
+      legacySecretIv: text("legacy_secret_iv"),
       revokedAt: timestamp("revoked_at", { withTimezone: true }),
       createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     },

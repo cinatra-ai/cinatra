@@ -5,6 +5,7 @@ import {
 import {
   buildDeleteAllRowsQuery,
   buildDeleteJsonRowQuery,
+  buildCompareAndSwapMetadataQuery,
   buildDeleteMetadataByPrefixQuery,
   buildDeleteMetadataQuery,
   buildDeleteRowsNotInQuery,
@@ -30,6 +31,12 @@ import type {
 import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import {
+  canonicalizeSealedFields,
+  hasSecretFields,
+  prepareSealedWrite,
+  unsealSecretFields,
+} from "@/lib/connector-config-secret-fields";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
 // (cinatra#104): under Turbopack dev this module is an ASYNC module (its
@@ -166,6 +173,36 @@ function writeMetadataValueInternal(key: string, value: unknown) {
     connectionString: getPostgresConnectionString(),
     queries: [buildWriteMetadataQuery(postgresSchema, key, JSON.stringify(normalizePersistedValue(value)))],
   });
+}
+
+// Read the RAW stored `value` string for a metadata key (no parse/normalize),
+// or null when the row is absent. Used to capture a byte-accurate snapshot for
+// the connector-config seal-on-read compare-and-swap.
+function readRawMetadataStringInternal(key: string): string | null {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [buildReadMetadataQuery(postgresSchema, key)],
+  });
+  const row = result?.rows?.[0] as { value?: string } | undefined;
+  return row?.value ?? null;
+}
+
+// Atomically update a metadata row's value to `newValue` ONLY when the stored
+// value is byte-equal to `expectedRaw`. Returns true when the swap landed (a
+// row was affected). A concurrent write that changed the stored value makes the
+// swap a no-op (returns false) so the caller's stale value is never persisted.
+function compareAndSwapMetadataValueInternal(
+  key: string,
+  newValue: string,
+  expectedRaw: string,
+): boolean {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [buildCompareAndSwapMetadataQuery(postgresSchema, key, newValue, expectedRaw)],
+  });
+  return (result?.rows?.length ?? 0) > 0;
 }
 
 function deleteMetadataValueInternal(key: string) {
@@ -771,20 +808,108 @@ export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback
   const cache = getConnectorConfigCache();
   const cached = cache.get(cacheKey);
 
+  // The cache holds the SEALED value (MF#1): we never cache plaintext
+  // secret fields. Decrypt (unseal) on every return so a cache HIT yields the
+  // same plaintext-field clone a cache MISS does.
   if (cached && cached.expiresAt > Date.now()) {
-    return clonePersistedValue(cached.value as T);
+    return unsealConnectorConfigForReturn(connectorId, clonePersistedValue(cached.value as T));
   }
 
-  const value = readMetadataValueInternal(cacheKey, fallback);
-  cache.set(cacheKey, { value: clonePersistedValue(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
-  return clonePersistedValue(value);
+  if (!hasSecretFields(connectorId)) {
+    // Non-secret keys: cache the value verbatim (existing behavior).
+    const value = readMetadataValueInternal(cacheKey, fallback);
+    cache.set(cacheKey, { value: clonePersistedValue(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+    return clonePersistedValue(value);
+  }
+
+  // Capture the RAW stored string once so the seal-on-read migration's
+  // compare-and-swap can be byte-accurate. `value` is parsed from that exact
+  // snapshot.
+  const observedRaw = readRawMetadataStringInternal(cacheKey);
+  const value =
+    observedRaw === null
+      ? (normalizePersistedValue(fallback) as T)
+      : (safeParseJson(observedRaw, fallback) as T);
+
+  const { value: unsealed, sawLegacyPlaintext } = unsealSecretFields(
+    connectorId,
+    clonePersistedValue(value),
+  );
+
+  // MF#1: the at-rest `value` may contain a LEGACY PLAINTEXT secret. Caching it
+  // verbatim before migration would leave plaintext in-cache for the TTL if the
+  // migration then fails. So defer caching for the legacy case: only cache the
+  // already-sealed at-rest value now (no legacy plaintext present); the legacy
+  // case caches the SEALED row via the migration CAS, or evicts on failure.
+  if (!sawLegacyPlaintext) {
+    // Canonicalize the designated sealed fields before caching so a
+    // sealed-shaped at-rest row carrying sidecar (potentially plaintext)
+    // properties can never seed plaintext into the cache for the TTL (MF#1).
+    const cacheable = canonicalizeSealedFields(connectorId, clonePersistedValue(value));
+    cache.set(cacheKey, { value: cacheable, expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+    return unsealed as T;
+  }
+
+  // Seal-on-read migration (best-effort, non-throwing — MF#5): re-write the row
+  // sealed so the legacy plaintext stops living at rest. Made ATOMIC via a
+  // single conditional UPDATE (MF#3 / concurrency): the sealed value is written
+  // ONLY if the stored row is still byte-equal to `observedRaw`, so a concurrent
+  // newer write (e.g. a rotation) landing between this read and the migration
+  // write is NEVER clobbered by the stale re-sealed snapshot.
+  try {
+    // Seal the legacy plaintext ourselves (no preserve-merge: this is the exact
+    // value we observed). Throws fail-closed if the key is missing/invalid.
+    const sealed = prepareSealedWrite(connectorId, unsealed, value);
+    const sealedRaw = JSON.stringify(normalizePersistedValue(sealed));
+    if (observedRaw !== null && compareAndSwapMetadataValueInternal(cacheKey, sealedRaw, observedRaw)) {
+      // Swap landed — cache the SEALED value (never plaintext — MF#1).
+      cache.set(cacheKey, {
+        value: clonePersistedValue(normalizePersistedValue(sealed)),
+        expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS,
+      });
+    } else {
+      // Row changed under us (CAS no-op) — abandon migration and do NOT cache
+      // plaintext.
+      cache.delete(cacheKey);
+    }
+  } catch (error) {
+    // Migration could not seal (missing/invalid key, DB error). Return the
+    // legacy plaintext for compat, but evict any cache entry so plaintext is
+    // NEVER served from cache (MF#1).
+    cache.delete(cacheKey);
+    console.warn(
+      `[connector-config-secret] seal-on-read migration skipped for ` +
+        `key=connector_config:${connectorId} — ` +
+        `error=${error instanceof Error ? error.name : "unknown"}`,
+    );
+  }
+
+  return unsealed as T;
+}
+
+/** Unseal a cache-HIT clone for return without re-running the migration path. */
+function unsealConnectorConfigForReturn<T>(connectorId: string, value: T): T {
+  if (!hasSecretFields(connectorId)) return value;
+  return unsealSecretFields(connectorId, value).value as T;
 }
 
 export function writeConnectorConfigToDatabase(connectorId: string, value: unknown) {
   const cacheKey = `connector_config:${connectorId}`;
-  const normalizedValue = normalizePersistedValue(value);
-  writeMetadataValueInternal(cacheKey, normalizedValue);
-  getConnectorConfigCache().set(cacheKey, { value: clonePersistedValue(normalizedValue), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+  let toPersist = normalizePersistedValue(value);
+
+  if (hasSecretFields(connectorId)) {
+    // Read the RAW at-rest row so prepareSealedWrite can fall back to an
+    // existing sealed secret when this write omits it (preserve-on-blank-save,
+    // MF#3), then seal the plaintext secret fields (encrypt-on-write, MF#1).
+    // Throws fail-closed if the key is missing/invalid — write does NOT persist
+    // plaintext (MF#5).
+    const currentRaw = readMetadataValueInternal<unknown>(cacheKey, null);
+    toPersist = prepareSealedWrite(connectorId, toPersist, currentRaw) as typeof toPersist;
+  }
+
+  writeMetadataValueInternal(cacheKey, toPersist);
+  // Cache the SEALED value (never plaintext — MF#1).
+  getConnectorConfigCache().set(cacheKey, { value: clonePersistedValue(toPersist), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
 }
 
 // Physically delete a single connector-config key (true row removal, NOT a

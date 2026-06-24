@@ -6,7 +6,7 @@ import {
   type CinatraBetterAuthPlugins,
 } from "./better-auth-plugins";
 import { and, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
-import { createMcpServerAuthPlugins } from "@cinatra-ai/mcp-server";
+import { createMcpServerAuthPlugins, CLI_SCOPES } from "@cinatra-ai/mcp-server";
 import { getTrustedOriginHostnames } from "@cinatra-ai/mcp-server/credentials";
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import {
@@ -80,12 +80,32 @@ async function readBootGoogleOAuthSettings() {
 }
 
 const googleOAuthSettings = await readBootGoogleOAuthSettings();
+// Base advertised scopes (OIDC + the MCP / A2A admission scopes). The CLI
+// control-plane scopes (eng#231) are appended so the AS can ISSUE them; they
+// are bound to the dedicated `/api/cli` audience (extraAudienceBasePaths) and
+// kept OUT of the DCR default set (clientRegistrationDefaultScopes) so a
+// client that does not explicitly request them never silently receives one.
+// They ARE in clientRegistrationAllowedScopes so the first-party `cinatra
+// login` DCR client can register with them — the real authority boundary is
+// the verified-subject platform-admin gate in `authorizeCliRequest`, not the
+// scope itself ("scope admits, role authorizes").
+const baseAuthServerScopes = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "mcp:connect",
+  "a2a:connect",
+];
 const mcpServerAuthPlugins = createMcpServerAuthPlugins({
   authBasePath: "/api/auth",
   mcpBasePath: "/api/mcp",
   adminBasePath: "/configuration/mcp",
   handshakeBasePath: "/api/mcp",
-  scopes: ["openid", "profile", "email", "offline_access", "mcp:connect", "a2a:connect"],
+  scopes: [...baseAuthServerScopes, ...CLI_SCOPES],
+  extraAudienceBasePaths: ["/api/cli"],
+  clientRegistrationDefaultScopes: baseAuthServerScopes,
+  clientRegistrationAllowedScopes: [...baseAuthServerScopes, ...CLI_SCOPES],
 });
 
 if (!authSecret) {
