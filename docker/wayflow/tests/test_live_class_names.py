@@ -22,7 +22,7 @@ import agent_loader
 
 def test_validate_live_class_names_passes_against_pinned_wayflowcore() -> None:
     """Smoke: every binding in `_LIVE_CLASS_BINDINGS` resolves on the pinned
-    wayflowcore (==26.1.1, pyagentspec==26.1.0). Future bumps that drop or
+    wayflowcore (==26.1.2, pyagentspec==26.1.2). Future bumps that drop or
     rename a symbol will fail this test, surfacing the breakage in CI before
     the container is shipped."""
     # Must not raise.
