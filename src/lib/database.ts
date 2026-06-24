@@ -32,6 +32,7 @@ import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import {
+  canonicalizeSealedFields,
   hasSecretFields,
   prepareSealedWrite,
   unsealSecretFields,
@@ -841,7 +842,11 @@ export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback
   // already-sealed at-rest value now (no legacy plaintext present); the legacy
   // case caches the SEALED row via the migration CAS, or evicts on failure.
   if (!sawLegacyPlaintext) {
-    cache.set(cacheKey, { value: clonePersistedValue(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+    // Canonicalize the designated sealed fields before caching so a
+    // sealed-shaped at-rest row carrying sidecar (potentially plaintext)
+    // properties can never seed plaintext into the cache for the TTL (MF#1).
+    const cacheable = canonicalizeSealedFields(connectorId, clonePersistedValue(value));
+    cache.set(cacheKey, { value: cacheable, expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
     return unsealed as T;
   }
 

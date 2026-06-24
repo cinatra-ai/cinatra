@@ -89,6 +89,21 @@ export function isSealed(value: unknown): value is SealedSecretField {
   );
 }
 
+/**
+ * Reduce a sealed-shaped object to EXACTLY the three canonical keys
+ * (`__enc`, `ciphertext`, `iv`). A sealed-shaped value may carry extra
+ * enumerable properties (e.g. an externally-crafted
+ * `{ __enc:1, ciphertext, iv, plaintext: "<secret>" }`); preserving such an
+ * object verbatim on seal/preserve would persist + cache that plaintext. We
+ * therefore canonicalize at every point a sealed value is preserved at rest so
+ * only the ciphertext object survives — the cryptographic value is unchanged
+ * and any sidecar plaintext is stripped. Callers MUST have verified
+ * {@link isSealed} first.
+ */
+function canonicalSealed(value: SealedSecretField): SealedSecretField {
+  return { __enc: 1, ciphertext: value.ciphertext, iv: value.iv };
+}
+
 // -----------------------------------------------------------------------------
 // Internal: a connector-config value is a plain object record. Anything that is
 // not a (non-array) object has no fields to seal/unseal — passed through as-is.
@@ -99,6 +114,49 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+/**
+ * Return a clone of `value` reduced to the CACHE-SAFE at-rest form: every
+ * designated secret field is either a CANONICAL sealed object
+ * (`{__enc,ciphertext,iv}` — extras, incl. any sidecar plaintext, stripped) or
+ * is DROPPED entirely. A designated secret field that is not sealed-shaped (a
+ * legacy plaintext string, a malformed non-sealed object, a number, …) is
+ * removed so the connector-config CACHE can never hold plaintext or a raw
+ * malformed value for the TTL (MF#1).
+ *
+ * This is the guard applied to the at-rest VALUE before it is written into the
+ * cache in the NON-legacy read branch. It is fail-closed-consistent with what
+ * {@link unsealSecretFields} returns to the caller (which likewise drops a
+ * non-decryptable secret field). The legacy-plaintext case is handled UPSTREAM
+ * by a deferred-caching + seal-on-read migration and never reaches this helper,
+ * so dropping a non-sealed designated field here is correct for the cache.
+ *
+ * It does NOT decrypt and is safe to run on a raw at-rest value. Non-secret
+ * connectors and non-record values pass through unchanged.
+ */
+export function canonicalizeSealedFields(connectorId: string, value: unknown): unknown {
+  const fields = SECRET_CONFIG_FIELDS[connectorId];
+  if (!fields || fields.length === 0) return value;
+  const record = asRecord(value);
+  if (!record) return value;
+
+  let mutated = false;
+  const out: Record<string, unknown> = { ...record };
+  for (const field of fields) {
+    if (!(field in out)) continue;
+    const fieldValue = out[field];
+    if (isSealed(fieldValue)) {
+      out[field] = canonicalSealed(fieldValue);
+      mutated = true;
+    } else if (fieldValue !== undefined) {
+      // Not sealed-shaped (plaintext string, malformed object, number, …):
+      // DROP it so neither plaintext nor a raw malformed value is ever cached.
+      delete out[field];
+      mutated = true;
+    }
+  }
+  return mutated ? out : value;
 }
 
 // -----------------------------------------------------------------------------
@@ -135,13 +193,18 @@ export function sealSecretFields(connectorId: string, value: unknown): unknown {
     const fieldValue = out[field];
 
     if (isSealed(fieldValue)) {
-      // Idempotent: already sealed at rest, leave untouched. NOTE: `isSealed`
-      // is a SYNTACTIC guard (shape only) — the CRYPTO validity of a sealed
-      // blob is authenticated at READ time by `decryptSecret` (GCM auth tag +
-      // AAD). A syntactically-sealed-but-cryptographically-bogus blob therefore
-      // round-trips through write untouched and fails CLOSED on read (field
+      // Idempotent: already sealed at rest. CANONICALIZE to exactly
+      // {__enc,ciphertext,iv} so a sealed-shaped value carrying extra
+      // enumerable properties (e.g. an externally-crafted sidecar `plaintext`)
+      // can never be persisted/cached verbatim. NOTE: `isSealed` is a SYNTACTIC
+      // guard (shape only) — the CRYPTO validity of a sealed blob is
+      // authenticated at READ time by `decryptSecret` (GCM auth tag + AAD). A
+      // syntactically-sealed-but-cryptographically-bogus blob therefore
+      // round-trips through write canonicalized and fails CLOSED on read (field
       // dropped). Any sealed blob this write path itself produced is always
-      // crypto-valid, so this is only reachable for an externally-crafted value.
+      // crypto-valid, so the extra-property case is only reachable for an
+      // externally-crafted value.
+      out[field] = canonicalSealed(fieldValue);
       continue;
     }
 
@@ -225,8 +288,11 @@ function mergePreservedSecretFields(
     const hasIncomingSealed = isSealed(incomingField);
     // Only fall back to the existing sealed secret when the incoming write does
     // not itself provide a new plaintext or an explicit sealed value.
-    if (!hasIncomingPlaintext && !hasIncomingSealed && isSealed(currentRecord[field])) {
-      out[field] = currentRecord[field];
+    const currentField = currentRecord[field];
+    if (!hasIncomingPlaintext && !hasIncomingSealed && isSealed(currentField)) {
+      // Canonicalize the preserved blob so a sealed-shaped at-rest row carrying
+      // extra (potentially plaintext) properties is reduced to the ciphertext.
+      out[field] = canonicalSealed(currentField);
     }
   }
   return out;

@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  canonicalizeSealedFields,
   hasSecretFields,
   isSealed,
   prepareSealedWrite,
@@ -127,6 +128,49 @@ describe("connector-config-secret-fields — transform primitives", () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it("sealed-shaped value with a sidecar plaintext property is canonicalized (extras stripped, no plaintext at rest)", () => {
+    // An externally-crafted value that passes the syntactic sealed-shape guard
+    // but smuggles a plaintext sidecar must NOT be persisted/cached verbatim.
+    const real = sealSecretFields("nango", { secretKey: "canon_secret" }) as Record<string, unknown>;
+    const realSealed = real.secretKey as Record<string, unknown>;
+    const smuggled = {
+      secretKey: { ...realSealed, plaintext: "nango_sk_smuggled_value", extra: 42 },
+    };
+    const out = sealSecretFields("nango", smuggled) as Record<string, unknown>;
+    expect(Object.keys(out.secretKey as Record<string, unknown>).sort()).toEqual([
+      "__enc",
+      "ciphertext",
+      "iv",
+    ]);
+    expect(JSON.stringify(out)).not.toContain("nango_sk_smuggled_value");
+    // Still a valid sealed blob that round-trips.
+    expect((unsealSecretFields("nango", out).value as Record<string, unknown>).secretKey).toBe(
+      "canon_secret",
+    );
+  });
+
+  it("preserve-on-blank canonicalizes the preserved at-rest secret (no sidecar plaintext survives)", () => {
+    const real = sealSecretFields("nango", { secretKey: "preserved_secret" }) as Record<string, unknown>;
+    const currentRaw = {
+      secretKey: { ...(real.secretKey as Record<string, unknown>), plaintext: "leak_via_preserve" },
+      serverUrl: "https://nango.example.com",
+    };
+    // Incoming write omits the secret → preserve the existing sealed value.
+    const out = prepareSealedWrite("nango", { serverUrl: "https://nango.example.com" }, currentRaw) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(out.secretKey as Record<string, unknown>).sort()).toEqual([
+      "__enc",
+      "ciphertext",
+      "iv",
+    ]);
+    expect(JSON.stringify(out)).not.toContain("leak_via_preserve");
+    expect((unsealSecretFields("nango", out).value as Record<string, unknown>).secretKey).toBe(
+      "preserved_secret",
+    );
+  });
+
   it("empty/undefined secret fields are left as-is (no seal)", () => {
     const emptyStr = sealSecretFields("nango", { secretKey: "" }) as Record<string, unknown>;
     expect(emptyStr.secretKey).toBe("");
@@ -219,7 +263,10 @@ function makeFakeDb() {
     // in cache if the migration fails. Only cache the already-sealed at-rest
     // value now.
     if (!sawLegacyPlaintext) {
-      cache.set(connectorId, structuredClone(value));
+      // MF#1: canonicalize the designated sealed fields before caching so a
+      // sealed-shaped row with sidecar properties never seeds plaintext into
+      // the cache (mirrors database.ts).
+      cache.set(connectorId, structuredClone(canonicalizeSealedFields(connectorId, value)));
       return unsealed as T;
     }
     // Atomic seal-on-read migration (MF#3 race): seal then CAS on the byte
@@ -269,6 +316,40 @@ describe("connector-config at-rest orchestration — nango secretKey", () => {
     const read = db.read<Record<string, unknown>>("nango", {}); // cache HIT
     expect(read.secretKey).toBe("cache_secret");
     expect(isSealed((db.cache.get("nango") as Record<string, unknown>).secretKey)).toBe(true);
+  });
+
+  it("(h2) read of a sealed-shaped at-rest row with a sidecar plaintext never seeds that plaintext into the cache", () => {
+    const db = makeFakeDb();
+    const real = sealSecretFields("nango", { secretKey: "real_secret" }) as Record<string, unknown>;
+    const contaminated = {
+      secretKey: { ...(real.secretKey as Record<string, unknown>), plaintext: "sidecar_leak_value" },
+      serverUrl: "u",
+    };
+    // Simulate a contaminated row arriving via a lower-level metadata write.
+    db.kv.set("connector_config:nango", JSON.stringify(contaminated));
+    const read = db.read<Record<string, unknown>>("nango", {}); // cache MISS → populates cache
+    expect(read.secretKey).toBe("real_secret");
+    const cached = db.cache.get("nango") as Record<string, unknown>;
+    expect(Object.keys(cached.secretKey as Record<string, unknown>).sort()).toEqual([
+      "__enc",
+      "ciphertext",
+      "iv",
+    ]);
+    expect(JSON.stringify(cached)).not.toContain("sidecar_leak_value");
+  });
+
+  it("(h3) read of a malformed non-sealed secretKey object never caches the raw value (dropped fail-closed)", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const db = makeFakeDb();
+    // A non-sealed object that smuggles plaintext but is NOT a legacy plaintext
+    // string and NOT sealed-shaped (no __enc/ciphertext/iv).
+    const malformed = { secretKey: { not_sealed: true, plaintext: "malformed_leak" }, serverUrl: "u" };
+    db.kv.set("connector_config:nango", JSON.stringify(malformed));
+    const read = db.read<Record<string, unknown>>("nango", {}); // cache MISS
+    expect("secretKey" in read).toBe(false); // fail-closed for the caller
+    const cached = db.cache.get("nango") as Record<string, unknown>;
+    expect("secretKey" in cached).toBe(false); // and dropped from cache
+    expect(JSON.stringify(cached)).not.toContain("malformed_leak");
   });
 
   it("(c) AAD scoping at the DB layer: a tampered sealed blob fails closed on read", () => {
