@@ -161,6 +161,23 @@ describe("operations gate — authorizeOperatorRequest", () => {
     expect(strictSpy).not.toHaveBeenCalled();
   });
 
+  it("a non-query/mutation procedure type fails closed (the lookup must yield undefined, never a default-to-read)", async () => {
+    // route.ts's lookupProcedureType returns `undefined` for any runtime type
+    // that is not exactly "query" | "mutation" (e.g. a future "subscription"),
+    // so such a procedure is treated as unknown and DENIED — it must never
+    // silently default to the cheaper `operations.read`. Here we mirror that
+    // contract: a lookup that yields `undefined` for an unexpected type denies.
+    const subscriptionLookup = (p: string): ProcedureType | undefined =>
+      p === "job.tail" ? undefined : PROCEDURE_TYPES[p];
+    const d = await authorizeOperatorRequest({
+      req: makeReq("job.tail"),
+      actor: platformAdmin(),
+      lookupProcedureType: subscriptionLookup,
+    });
+    expect(d).toMatchObject({ kind: "deny", status: 403 });
+    expect(strictSpy).not.toHaveBeenCalled();
+  });
+
   it("an unknown proc anywhere in a batch denies the WHOLE batch before any audit", async () => {
     const d = await authorizeOperatorRequest({
       req: makeReq("job.retry,job.nuke"),
