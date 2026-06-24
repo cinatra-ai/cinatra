@@ -14,6 +14,8 @@ import { requireAdminSession } from "@/lib/auth-session";
 import {
   readInstanceIdentity,
   writeInstanceIdentity,
+  readRawInstanceIdentitySnapshot,
+  compareAndSwapInstanceIdentity,
   decryptInstanceAttachSecret,
   CONSUMER_MARKETPLACE_TOKEN_AAD,
   CONSUMER_VERDACCIO_TOKEN_AAD,
@@ -28,6 +30,7 @@ import {
 } from "@/lib/marketplace-credentials";
 import { getMarketplaceTermsAcceptance } from "@/lib/marketplace-terms";
 import { isTerminalAuthFailure } from "./vendor-application-cm-errors";
+import { attemptPersistFirstRollback } from "./vendor-application-rollback";
 
 /**
  * Server actions for the "Become a vendor" UI on
@@ -176,52 +179,42 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
   const priorVendorState: NonNullable<typeof identity.vendorState> =
     identity.vendorState ?? "none";
   const priorVendorApplicationId = identity.vendorApplicationId ?? null;
-  // Captured for the rollback's success-detection: every cm-success write sets
-  // `vendorScope` to the cm-confirmed `response.scope`, whereas the persist-first
-  // stamp leaves it untouched. A change here therefore proves a concurrent
-  // success committed (a real cm row exists) and must block the rollback.
-  const priorVendorScope = identity.vendorScope ?? null;
+  // Per-invocation ownership nonce for the persist-first marker (#468). Stamped
+  // onto the FRESH marker below and cleared by every committing path
+  // (cm-success and cancel). The rollback fires only while this exact nonce
+  // still owns the row, which uniquely identifies our un-advanced stamp and
+  // closes the equal-scope ABA hole the prior `vendorScope` success-guard had.
+  const persistFirstNonce = randomUUID();
 
   // Roll back the persist-first marker to the prior (concrete) state. Only the
   // FRESH case ever stamps the marker, so reuse-existing applications are left
   // untouched (their marker pre-dates this submit and must survive for retry).
   //
-  // COMPARE-AND-CLEAR against the EXACT transient shape this invocation wrote.
-  // We re-read inside the boundary and only clear when the row is still our own
-  // un-advanced persist-first stamp on ALL of:
-  //   - vendorApplicationId === our applicationId   (still our id)
-  //   - vendorState === "applied"                   (not flipped to approved)
-  //   - vendorApplicationRepairStuckAt == null       (no reconcile worker write)
-  //   - vendorScope === priorVendorScope             (NO cm-success write landed)
-  //
-  // The last clause is the success guard. The cm-success branch is the ONLY
-  // writer of `vendorScope = response.scope`; the persist-first stamp never
-  // touches it. So if a CONCURRENT invocation (e.g. one that reused our id with
-  // valid terms) successfully created the cm row, it will have advanced
-  // `vendorScope`, and this rollback is blocked — we never erase a marker that
-  // backs a real cm row. This closes the structured-terms + terminal-auth
-  // rollback races regardless of why this invocation failed (no-row terms
-  // rejection, terminal auth, etc.): a committed concurrent success always
-  // moves at least one of these fields off the transient stamp shape.
+  // The clear is an ATOMIC compare-and-swap (see attemptPersistFirstRollback):
+  // we snapshot the raw row, confirm it is still our own un-advanced stamp (our
+  // nonce + id, vendorState "applied", no reconcile-worker write), and swap the
+  // revert against that EXACT snapshot. A concurrent cm-success — which clears
+  // the nonce, even when it writes a `vendorScope` coinciding with the prior
+  // one — flips the guard or the bytes, so the swap no-ops and we NEVER erase a
+  // marker backing a real cm row. A CAS conflict from an UNRELATED write is
+  // retried (re-snapshot + re-guard) so a legitimate rollback is not skipped.
   const rollbackPersistFirstMarker = (): void => {
     if (reuseExisting) {
       return;
     }
-    const reverted = readInstanceIdentity();
-    if (
-      reverted &&
-      reverted.vendorApplicationId === applicationId &&
-      reverted.vendorState === "applied" &&
-      (reverted.vendorApplicationRepairStuckAt ?? null) === null &&
-      (reverted.vendorScope ?? null) === priorVendorScope
-    ) {
-      writeInstanceIdentity({
-        ...reverted,
-        vendorState: priorVendorState,
-        vendorApplicationId: priorVendorApplicationId,
-      });
-      invalidateInstanceIdentityCache();
-    }
+    attemptPersistFirstRollback(
+      {
+        readRawSnapshot: readRawInstanceIdentitySnapshot,
+        compareAndSwap: compareAndSwapInstanceIdentity,
+        onSwapped: invalidateInstanceIdentityCache,
+      },
+      {
+        applicationId,
+        persistNonce: persistFirstNonce,
+        priorVendorState,
+        priorVendorApplicationId,
+      },
+    );
   };
 
   if (!reuseExisting) {
@@ -242,6 +235,10 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
       // subsequently-thrown cm call (which keeps this marker) doesn't make the
       // reconcile worker skip the fresh application forever.
       vendorApplicationRepairStuckAt: null,
+      // Ownership nonce for the atomic rollback guard (#468). A committing path
+      // (cm-success / cancel) clears it; the rollback fires only while it
+      // still matches.
+      vendorApplicationPersistNonce: persistFirstNonce,
     });
     invalidateInstanceIdentityCache();
   }
@@ -315,6 +312,10 @@ export async function applyVendorApplicationAction(formData: FormData): Promise<
     // from a prior application must not carry over onto this id. The reconcile
     // worker / status refresh will re-set it if cm reports this one stuck.
     vendorApplicationRepairStuckAt: null,
+    // This is a committed cm row: clear the persist-first ownership nonce so a
+    // concurrently-failing sibling invocation's rollback guard sees the marker
+    // as advanced and cannot erase it (#468).
+    vendorApplicationPersistNonce: null,
   } as typeof fresh;
 
   // Free-tier inline auto-approve: encrypt + persist the Verdaccio publish
@@ -421,6 +422,9 @@ export async function cancelVendorApplicationAction(formData: FormData): Promise
     vendorApplicationId: null,
     // The application is gone; any stuck-recovery flag tied to it is moot.
     vendorApplicationRepairStuckAt: null,
+    // Cancellation ends ownership: clear the persist-first nonce so no stale
+    // stamp lingers (#468).
+    vendorApplicationPersistNonce: null,
   });
   invalidateInstanceIdentityCache();
   revalidatePath("/configuration/environment");

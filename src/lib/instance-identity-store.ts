@@ -29,6 +29,8 @@ import {
   postgresSchema,
   readMetadataValueFromDatabase,
   writeMetadataValueToDatabase,
+  readRawMetadataStringFromDatabase,
+  compareAndSwapMetadataValueFromDatabase,
 } from "@/lib/database";
 // Cache lives in a SEPARATE module so vi.mock can spy on the call without
 // same-module mocking unreliability.
@@ -132,6 +134,7 @@ const DURABLE_FIELD_NAMES = [
   "vendorScope",
   "vendorApplicationId",
   "vendorApplicationRepairStuckAt",
+  "vendorApplicationPersistNonce",
 ] as const;
 
 // -----------------------------------------------------------------------------
@@ -200,6 +203,19 @@ export type InstanceIdentity = {
    * cancelled / reset application has no in-flight recovery to be stuck on).
    */
   vendorApplicationRepairStuckAt?: string | null;
+  /**
+   * Per-invocation ownership nonce for the PERSIST-FIRST vendor-application
+   * marker (cinatra#468). `applyVendorApplicationAction` writes a fresh UUID
+   * here when it stamps the transient "applied" marker before the cm call, and
+   * every committing path (cm-success, cancel) clears it to a concrete value.
+   * The rollback only reverts the marker while this nonce still equals the one
+   * it stamped — and performs the clear as an atomic compare-and-swap — so a
+   * concurrent cm-success can never have its real reservation marker erased,
+   * regardless of whether `vendorScope` coincidentally matched. Null/absent on
+   * any row not mid-stamp; unrelated writers preserve it (it is overwritten by
+   * the next fresh application's stamp).
+   */
+  vendorApplicationPersistNonce?: string | null;
   tokenCiphertext?: string;
   tokenIv?: string;
   tokenAlgo?: "aes-256-gcm";
@@ -381,6 +397,10 @@ export function readInstanceIdentity(): InstanceIdentity | null {
       raw.vendorApplicationRepairStuckAt === undefined
         ? undefined
         : (raw.vendorApplicationRepairStuckAt as string | null),
+    vendorApplicationPersistNonce:
+      raw.vendorApplicationPersistNonce === undefined
+        ? undefined
+        : (raw.vendorApplicationPersistNonce as string | null),
     tokenCiphertext: raw.tokenCiphertext as string,
     tokenIv: raw.tokenIv as string,
     tokenAlgo: "aes-256-gcm",
@@ -582,6 +602,36 @@ export function writeInstanceIdentity(
 
   writeMetadataValueToDatabase(METADATA_KEY, merged);
   invalidateInstanceIdentityCache();
+}
+
+// -----------------------------------------------------------------------------
+// Atomic persist-first rollback support (cinatra#468)
+// -----------------------------------------------------------------------------
+
+/**
+ * Byte-accurate raw snapshot of the persisted instance-identity row's JSON
+ * value, or null when no row exists. Pair with
+ * {@link compareAndSwapInstanceIdentity} for an atomic read-modify-write.
+ */
+export function readRawInstanceIdentitySnapshot(): string | null {
+  return readRawMetadataStringFromDatabase(METADATA_KEY);
+}
+
+/**
+ * Atomically persist `next` ONLY IF the stored identity row is still byte-equal
+ * to `expectedRaw` (a snapshot from {@link readRawInstanceIdentitySnapshot});
+ * returns true iff the swap landed, false when a concurrent write changed the
+ * bytes. Unlike {@link writeInstanceIdentity} this does NOT run the
+ * durable-field merge — the caller passes the full row parsed from the same
+ * snapshot, and the byte-equal guard guarantees no concurrent write is
+ * clobbered. Used by the vendor-application persist-first rollback to clear
+ * ONLY a marker that has not been advanced by a concurrent cm-success (#468).
+ */
+export function compareAndSwapInstanceIdentity(
+  next: Record<string, unknown>,
+  expectedRaw: string,
+): boolean {
+  return compareAndSwapMetadataValueFromDatabase(METADATA_KEY, next, expectedRaw);
 }
 
 /**
