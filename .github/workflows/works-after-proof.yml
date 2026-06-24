@@ -202,6 +202,9 @@ jobs:
           # last colon. Without the @-strip, `${1##*:}` would return the digest
           # hex for a digest-pinned image and `neo4j:<hex>` is not a valid tag.
           tag_of()  { local _r="${1%@*}"; printf '%s' "${_r##*:}"; }  # neo4j:2026.05-community@sha256:… → 2026.05-community ; redis:7-alpine → 7-alpine
+          # repo_of: the repo[:registry] component, i.e. everything before the
+          # last tag colon (digest-aware). neo4j:2026.05-community@sha256:… → neo4j.
+          repo_of() { local _r="${1%@*}"; printf '%s' "${_r%:*}"; }
           dfarg()   { awk -v k="$1" '$0 ~ "^ARG "k"=" {sub("^ARG "k"=",""); print; exit}' "$DF"; }
 
           REDIS_IMG="$(svc_image redis)";        [ -n "$REDIS_IMG" ]      || { echo "::error::could not scrape redis image from $COMPOSE"; exit 1; }
@@ -246,6 +249,13 @@ jobs:
             echo "PG_FROM_TAG=${IN_PG_FROM:-$PG_FROM_DEF}"
             echo "PG_TO_TAG=${IN_PG_TO:-$PG_TO_DEF}"
             echo "NEO4J_TAG=${IN_NEO4J:-$(tag_of "$NEO_IMG")}"
+            # NEO4J_IMAGE is the FULL ref the harness actually runs, so CI proves
+            # the PINNED tag@sha256:… digest (not just the tag — graphiti.sh would
+            # otherwise reconstruct `neo4j:<tag>` and pull whatever that tag floats
+            # to). No override → the repo's full digest-pinned ref (NEO_IMG). A
+            # dispatch tag override (a bare tag, no digest) → repo:tag (an
+            # intentionally unpinned manual run). Mirrors GRAPHITI_IMAGE.
+            echo "NEO4J_IMAGE=${IN_NEO4J:+$(repo_of "$NEO_IMG"):}${IN_NEO4J:-$NEO_IMG}"
             echo "GRAPHITI_IMAGE=${IN_GRAPHITI:-$GR_IMG}"
             echo "NANGO_SERVER_IMAGE=${IN_NANGO_IMG:-$NANGO_IMG}"
             echo "NANGO_DB_TAG=${IN_NANGO_DB:-$NDB_HEAD}"
@@ -256,7 +266,7 @@ jobs:
             echo "PYAGENTSPEC_VERSION=${IN_PYAGENTSPEC:-$PA_ARG}"
           } >> "$GITHUB_ENV"
           echo "Derived candidate pins (override-aware):"
-          echo "  redis=${IN_REDIS:-$(tag_of "$REDIS_IMG")} pg=${IN_PG_FROM:-$PG_FROM_DEF}->${IN_PG_TO:-$PG_TO_DEF} neo4j=${IN_NEO4J:-$(tag_of "$NEO_IMG")} verdaccio=${IN_VERDACCIO:-$(tag_of "$VC_IMG")} python=${IN_PYTHON:-$PY_ARG}"
+          echo "  redis=${IN_REDIS:-$(tag_of "$REDIS_IMG")} pg=${IN_PG_FROM:-$PG_FROM_DEF}->${IN_PG_TO:-$PG_TO_DEF} neo4j=${IN_NEO4J:+$(repo_of "$NEO_IMG"):}${IN_NEO4J:-$NEO_IMG} verdaccio=${IN_VERDACCIO:-$(tag_of "$VC_IMG")} python=${IN_PYTHON:-$PY_ARG}"
           echo "  graphiti=${IN_GRAPHITI:-$GR_IMG}"
           echo "  nango-server=${IN_NANGO_IMG:-$NANGO_IMG}  nango-db=${IN_NANGO_DB:-$NDB_FROM_DEF}->${IN_NANGO_DB:-$NDB_HEAD}"
 

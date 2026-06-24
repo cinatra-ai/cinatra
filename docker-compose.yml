@@ -364,6 +364,18 @@ services:
     image: neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cinatra-local}
+      # The healthcheck below expands its password var INSIDE the container, so the
+      # container must actually receive the password — otherwise a prod
+      # NEO4J_PASSWORD override changes NEO4J_AUTH but the in-container healthcheck
+      # still authenticates with `cinatra-local` and fails forever, so graphiti
+      # (depends_on: service_healthy) never starts. We pass it under a NON-`NEO4J_`
+      # name on purpose: Neo4j's entrypoint maps every `NEO4J_*` env var to a
+      # neo4j.conf setting under strict_validation, so a `NEO4J_PASSWORD` var is
+      # rejected as an unknown setting ("No declared setting with name: PASSWORD")
+      # and the server refuses to boot. `CINATRA_HC_NEO4J_PW` is ignored by the
+      # config loader but still available to the healthcheck shell, and tracks the
+      # same default so the healthcheck password always matches NEO4J_AUTH.
+      CINATRA_HC_NEO4J_PW: ${NEO4J_PASSWORD:-cinatra-local}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_apoc_export_file_enabled: "true"
       NEO4J_apoc_import_file_enabled: "true"
@@ -374,7 +386,7 @@ services:
     volumes:
       - cinatra-neo4j-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_PASSWORD:-cinatra-local} 'RETURN 1' || exit 1"]
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${CINATRA_HC_NEO4J_PW:-cinatra-local}\" 'RETURN 1' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

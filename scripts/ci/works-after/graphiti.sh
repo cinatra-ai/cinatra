@@ -19,7 +19,11 @@ set -euo pipefail
 # (WORKS_AFTER_GATE_MODE=1) a missing key is a FAIL (a skipped proof is a false
 # green) — the lane MUST supply the key when it gates a neo4j/graphiti major.
 #
-# Env: NEO4J_TAG (default 2026.05-community — the CalVer major; was 5.26-community),
+# Env: NEO4J_IMAGE (the FULL pinned ref `neo4j:<tag>@sha256:…` the harness runs —
+#        so CI proves the DIGEST, not just the floating tag; the workflow derives
+#        it from the compose pin. Default below = the current digest-pinned ref),
+#      NEO4J_TAG (the tag component only — kept for log/diagnostic lines and back-
+#        compat; NEO4J_IMAGE is authoritative for what actually gets pulled),
 #      GRAPHITI_IMAGE (default zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2),
 #      OPENAI_API_KEY (required to RUN; see above), WORKS_AFTER_GATE_MODE.
 #
@@ -34,6 +38,9 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 NEO4J_TAG="${NEO4J_TAG:-2026.05-community}"
+# Full pinned ref (tag@sha256) — authoritative for the pull, so the proof binds
+# the DIGEST. Defaults to the compose pin so a standalone run still proves it.
+NEO4J_IMAGE="${NEO4J_IMAGE:-neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604}"
 GRAPHITI_IMAGE="${GRAPHITI_IMAGE:-zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2}"
 GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 RUN_ID="wa-graphiti-$$"
@@ -70,7 +77,7 @@ trap 'on_err $LINENO' ERR
 trap cleanup EXIT
 fail() { echo "${_WA_RED}ERROR: $*${_WA_RST}" >&2; dump_diag; exit 1; }
 
-wa_log "works-after graphiti: candidate neo4j:${NEO4J_TAG} + ${GRAPHITI_IMAGE}"
+wa_log "works-after graphiti: candidate ${NEO4J_IMAGE} + ${GRAPHITI_IMAGE}"
 
 docker network create "$NET" >/dev/null
 docker run -d --name "$NEO" --network "$NET" \
@@ -79,7 +86,7 @@ docker run -d --name "$NEO" --network "$NET" \
   -e NEO4J_apoc_export_file_enabled=true \
   -e NEO4J_apoc_import_file_enabled=true \
   -e NEO4J_db_query_default__language=CYPHER_5 \
-  "neo4j:${NEO4J_TAG}" >/dev/null
+  "$NEO4J_IMAGE" >/dev/null
 
 wa_info "waiting for neo4j readiness"
 NEO_READY=0
