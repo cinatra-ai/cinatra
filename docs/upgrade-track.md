@@ -224,8 +224,19 @@ rabbitmq 4. npm / toolchain majors offered: ESLint 10, Next 16.x (the
 (deferred per the overrides note), `cron-parser` 5, `pdfjs-dist` 6,
 `react-day-picker` 10, `github/codeql-action` 4, pnpm 11.6.
 
-This pass only **inventories** these; each major is taken on in its own staged
+This pass only **inventories** these; each is taken on in its own staged
 upgrade lane with a works-after proof.
+
+**The bar is the LATEST STABLE version of each candidate — not merely the latest
+stable major.** The staged upgrade lane lands each at its **latest stable
+release**: the latest stable major AND the latest stable minor/patch within it
+(prerelease channels — beta/rc/canary/alpha/dev/`-next` — excluded). The
+major-hop is still run through its own lane (the "major" in a lane's name is the
+risky hop it owns), but in-range minor/patch currency counts toward "done" too:
+a candidate already on the latest stable major still needs its newest in-major
+minor/patch to be considered current, and a candidate whose stable line tops out
+below the offered "major" (e.g. Verdaccio 6.x, wayflowcore 26.1.x) lands at the
+latest stable patch rather than chasing a prerelease major.
 
 ---
 
