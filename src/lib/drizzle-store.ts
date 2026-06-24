@@ -4347,6 +4347,27 @@ export function buildDeleteMetadataQuery(schemaName: string, key: string): Query
   return { text: `DELETE FROM ${table} WHERE key = $1`, values: [key] };
 }
 
+// Atomic compare-and-swap on a metadata row's value. Updates `key`'s value to
+// `newValue` ONLY when the currently-stored value is BYTE-EQUAL to
+// `expectedValue`, returning the key of the affected row (empty result when the
+// row changed under us). Used by the connector-config seal-on-read migration so
+// a concurrent rotation between the read snapshot and the migration write cannot
+// be clobbered by the stale re-sealed snapshot (no row-lock / read-modify-write
+// race). The comparison is against the exact stored `value` string for byte
+// accuracy.
+export function buildCompareAndSwapMetadataQuery(
+  schemaName: string,
+  key: string,
+  newValue: string,
+  expectedValue: string,
+): QueryInput {
+  const table = `"${schemaName.replaceAll('"', '""')}"."metadata"`;
+  return {
+    text: `UPDATE ${table} SET value = $1 WHERE key = $2 AND value = $3 RETURNING key`,
+    values: [newValue, key, expectedValue],
+  };
+}
+
 // Physically REMOVE every metadata row whose key starts with `prefix`. LIKE
 // wildcards (`%`, `_`, `\`) in the caller-supplied prefix are escaped so a
 // literal prefix (e.g. `connector_config:ext:<pkg>:`) can never be widened into
