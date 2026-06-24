@@ -196,7 +196,7 @@ jobs:
             found && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {exit}
             found && $1=="image:" {print $2; exit}'; }
           svc_image()      { svc_image_str "$1" < "$COMPOSE"; }
-          tag_of()  { printf '%s' "${1##*:}"; }            # redis:7-alpine → 7-alpine
+          tag_of()  { local t="${1%@*}"; printf '%s' "${t##*:}"; }  # redis:7-alpine[@sha256:…] → 7-alpine (digest-aware)
           dfarg()   { awk -v k="$1" '$0 ~ "^ARG "k"=" {sub("^ARG "k"=",""); print; exit}' "$DF"; }
 
           REDIS_IMG="$(svc_image redis)";        [ -n "$REDIS_IMG" ]      || { echo "::error::could not scrape redis image from $COMPOSE"; exit 1; }
