@@ -25,6 +25,11 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
+import {
+  buildBreadcrumbTrail,
+  humanizePathSegment,
+  type BreadcrumbCrumb,
+} from "@/lib/breadcrumb-trail";
 import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Workflow, Wrench } from "lucide-react";
 import {
   DropdownMenu,
@@ -62,50 +67,6 @@ function EmbedMessageListener() {
 
 // Notifications flyout state lives in `src/components/notifications-flyout.tsx`.
 // The Provider owns state; the BellTrigger renders the bell + popover.
-
-function humanizePathSegment(segment: string) {
-  return decodeURIComponent(segment)
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-// Configuration grouping segments that exist only as routing containers — no
-// `page.tsx` at `/configuration/<seg>`, so a breadcrumb link there 404s.
-const PAGELESS_CONFIG_GROUPS = new Set([
-  "agents",
-  "a2a",
-  "instance",
-  "network",
-  "operations",
-]);
-
-// Whether the breadcrumb crumb for `segments[i]` points at a pageless routing
-// container that would 404 if linked — in which case it must render as a plain
-// label, not a link. The auto-breadcrumb otherwise turns every ancestor segment
-// into `/seg0/.../segi`, but App-Router container segments (dynamic params with
-// no own page, grouping folders) have no page to land on.
-//
-// Keep this in sync with the route tree — a segment belongs here when its
-// directory under `src/app` has no `page.tsx`. Known cases:
-//   • /connectors/[vendor] and /connectors/[vendor]/[slug] — connectors resolve
-//     only at /connectors/[vendor]/[slug]/[subroute]; the vendor and connector
-//     levels have no index page. (Making the connector level a real link to its
-//     canonical subroute is a tracked follow-up.)
-//   • /configuration/<group> for the grouping segments above.
-function isPagelessContainerCrumb(segments: string[], i: number): boolean {
-  const depth = i + 1; // number of path segments up to and including this crumb
-  if (segments[0] === "connectors" && (depth === 2 || depth === 3)) return true;
-  if (
-    segments[0] === "configuration" &&
-    depth === 2 &&
-    PAGELESS_CONFIG_GROUPS.has(segments[1])
-  ) {
-    return true;
-  }
-  return false;
-}
 
 function deriveDocumentTitle(pathname: string, explicitTitle?: string) {
   if (explicitTitle) {
@@ -316,63 +277,15 @@ export function AppShell({
     return () => controller.abort();
   }, [pathname]);
 
-  const breadcrumbSegments = useMemo<
-    { label: string; href: string; ellipsis?: boolean; nonNavigable?: boolean }[]
-  >(() => {
-    const segments = pathname.split("/").filter(Boolean);
-    if (segments.length === 0) return [{ label: "Personal", href: "/personal" }];
-
-    // Chat thread: collapse to "Chat > <thread title>".
-    if (segments[0] === "chat" && segments.length >= 2 && /^[a-f0-9-]{36}$/.test(segments[1])) {
-      return [
-        { label: "Chat", href: "/chat" },
-        { label: chatThreadTitle ?? "Thread", href: pathname },
-      ];
-    }
-
-    // Agent instance: collapse the opaque vendor/package/instance path to
-    // "Agents > <instance name> [> <sub-route>]" so the trail stays readable.
-    if (segments[0] === "agents" && segments.length >= 4) {
-      const crumbs = [
-        { label: "Agents", href: "/agents" },
-        {
-          label: agentInstanceName ?? humanizePathSegment(segments[3]),
-          href: "/" + segments.slice(0, 4).join("/"),
-        },
-      ];
-      if (segments.length >= 5) {
-        crumbs.push({ label: humanizePathSegment(segments[4]), href: pathname });
-      }
-      return crumbs;
-    }
-
-    // General: full trail; the leaf crumb prefers the live page title (the
-    // exact <PageHeader> title, e.g. "Upload Extension") over the humanized
-    // path segment ("Upload").
-    const crumbs = segments.map((seg, i) => {
-      const isLast = i === segments.length - 1;
-      const label =
-        isLast && pageTitle && pageTitle.pathname === pathname
-          ? pageTitle.title
-          : humanizePathSegment(seg);
-      return {
-        label,
-        href: "/" + segments.slice(0, i + 1).join("/"),
-        // Intermediate segments whose path is a pageless routing container
-        // (e.g. /connectors/[vendor]) would 404 if linked — render as a label.
-        nonNavigable: !isLast && isPagelessContainerCrumb(segments, i),
-      };
-    });
-
-    // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
-    if (crumbs.length <= 4) return crumbs;
-    return [
-      crumbs[0],
-      { label: "…", href: crumbs[1].href, ellipsis: true },
-      crumbs[crumbs.length - 2],
-      crumbs[crumbs.length - 1],
-    ];
-  }, [pathname, chatThreadTitle, agentInstanceName, pageTitle]);
+  const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
+    () =>
+      buildBreadcrumbTrail(pathname, {
+        pageTitle,
+        chatThreadTitle,
+        agentInstanceName,
+      }),
+    [pathname, chatThreadTitle, agentInstanceName, pageTitle],
+  );
 
   useEffect(() => {
     if (requiresSetupRedirect) {
