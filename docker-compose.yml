@@ -349,12 +349,28 @@ services:
   # already `!reset []` neo4j regardless.
   # ---------------------------------------------------------------------------
   neo4j:
-    image: neo4j:5.26-community
+    # MAJOR: 5.26-community -> the CalVer line (the successor to the 5.x semver
+    # line; Neo4j retired semver after 5.26). 2026.05-community = kernel 2026.05.0,
+    # the latest community release (verified empirically against the registry —
+    # `docker buildx imagetools inspect neo4j:community` resolves to the same
+    # digest). Digest-pinned (immutable): the tag is human-readable, the @sha256
+    # is the binding pin. Re-resolve at bump time with
+    # `docker buildx imagetools inspect neo4j:2026.05-community`.
+    # See docs/upgrade-track.md §7 for the major's two behavior changes:
+    #  (1) the default Cypher language is now CYPHER_25 (was 5) — pinned back to
+    #      CYPHER_5 below so graphiti's Cypher-5-shaped MCP queries keep parsing;
+    #  (2) a NEO4J_AUTH password now has an 8-char minimum (the default
+    #      `cinatra-local` is 13 chars; a prod override must be >=8).
+    image: neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cinatra-local}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_apoc_export_file_enabled: "true"
       NEO4J_apoc_import_file_enabled: "true"
+      # CalVer default is CYPHER_25; graphiti (knowledge-graph-mcp) emits
+      # Cypher-5-shaped queries, so pin the server default back to CYPHER_5.
+      # (db.query.default_language, __ -> _ env mapping.)
+      NEO4J_db_query_default__language: CYPHER_5
     volumes:
       - cinatra-neo4j-data:/data
     healthcheck:
@@ -364,7 +380,15 @@ services:
       retries: 10
 
   graphiti:
-    image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2
+    # NO major bump available. The zepai/knowledge-graph-mcp repo tops out at
+    # 1.0.2-graphiti-0.28.2 (verified empirically: the registry's newest tag, ==
+    # `:latest` == `:1.0.2`, same digest; the ladder is v0.4.0 -> 1.0.0-g0.22.0
+    # -> 1.0.1-g0.23.1 -> 1.0.2-g0.28.2, with no 1.1.x / 2.x / newer graphiti
+    # line published). So this stays on its current release; the only change is
+    # an immutable digest pin (the tag floated `:latest`-style before — same
+    # hardening the Nango row got). Re-resolve at bump time with
+    # `docker buildx imagetools inspect zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2`.
+    image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6
     ports:
       - "8000:8000"
     environment:

@@ -2,7 +2,7 @@
 set -euo pipefail
 # works-after :: Neo4j / Graphiti arm (cinatra#352).
 #
-# Brings up candidate neo4j (NEO4J_TAG, default 5.26-community) + candidate
+# Brings up candidate neo4j (NEO4J_TAG, default 2026.05-community) + candidate
 # graphiti (GRAPHITI_IMAGE, default the current pin) on an ISOLATED network with
 # the real depends_on/auth env wiring (load-bearing config; design §2.2), then
 # runs the project→store→retrieve round-trip (rt/graphiti-roundtrip.ts) through
@@ -19,15 +19,21 @@ set -euo pipefail
 # (WORKS_AFTER_GATE_MODE=1) a missing key is a FAIL (a skipped proof is a false
 # green) — the lane MUST supply the key when it gates a neo4j/graphiti major.
 #
-# Env: NEO4J_TAG (default 5.26-community),
+# Env: NEO4J_TAG (default 2026.05-community — the CalVer major; was 5.26-community),
 #      GRAPHITI_IMAGE (default zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2),
 #      OPENAI_API_KEY (required to RUN; see above), WORKS_AFTER_GATE_MODE.
+#
+# The neo4j bring-up below mirrors the compose config for the CalVer major: it
+# pins db.query.default_language back to CYPHER_5 (the CalVer default is
+# CYPHER_25; graphiti emits Cypher-5-shaped queries). The
+# NEO4J_PASSWORD generated below ("wa-" + 24 hex chars = 27) clears the major's
+# new 8-char minimum-password floor.
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
-NEO4J_TAG="${NEO4J_TAG:-5.26-community}"
+NEO4J_TAG="${NEO4J_TAG:-2026.05-community}"
 GRAPHITI_IMAGE="${GRAPHITI_IMAGE:-zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2}"
 GATE_MODE="${WORKS_AFTER_GATE_MODE:-0}"
 RUN_ID="wa-graphiti-$$"
@@ -72,6 +78,7 @@ docker run -d --name "$NEO" --network "$NET" \
   -e NEO4J_PLUGINS='["apoc"]' \
   -e NEO4J_apoc_export_file_enabled=true \
   -e NEO4J_apoc_import_file_enabled=true \
+  -e NEO4J_db_query_default__language=CYPHER_5 \
   "neo4j:${NEO4J_TAG}" >/dev/null
 
 wa_info "waiting for neo4j readiness"

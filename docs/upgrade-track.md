@@ -37,8 +37,8 @@ targets). `profile` = the service only starts under an opt-in compose profile.
 | redis (platform) | docker-compose.yml | `redis:7-alpine` | redis 8-alpine | major deferred to its own lane |
 | twenty-redis | docker-compose.yml | `redis:7` | redis 8 | profile `twenty` |
 | plane-redis | docker-compose.yml | `valkey/valkey:7.2.11-alpine` | valkey 8 | profile `plane`; Plane-dictated |
-| neo4j | docker-compose.yml | `neo4j:5.26-community` | neo4j 6 (no Renovate update offered) | graphiti-coupled; hold |
-| graphiti | docker-compose.yml | `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2` | (no update offered) | neo4j-coupled; hold |
+| neo4j | docker-compose.yml | `neo4j:2026.05-community@sha256:b91a…9604` (was `5.26-community`, **major applied** — §7) | at target (CalVer latest) | graphiti-coupled; CalVer line is the 5.x semver successor |
+| graphiti | docker-compose.yml | `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0…c4d6` (digest-pinned this pass — §7) | **no next major published** (repo tops out at this tag) | neo4j-coupled; held at current release (only change is the immutable pin) |
 | verdaccio | docker-compose.yml | `verdaccio/verdaccio:6` | verdaccio 6.x (no major offered) | dev registry; ephemeral storage |
 | nango-server | docker-compose.yml | digest-pinned `nangohq/nango-server:hosted@sha256:…` (was floating, pinned this pass — §2) | Renovate-tracked | the headline drift this pass closes |
 | wordpress-db (mariadb) | docker-compose.yml | `mariadb:11.4` | mariadb 11.8 then mariadb 12.3 | profile `wordpress` |
@@ -293,3 +293,120 @@ known-good rollback image by digest, build the prior pins and capture the digest
 WAYFLOWCORE_VERSION=26.1.1 --build-arg PYAGENTSPEC_VERSION=26.1.0 -t
 wayflow-rollback docker/wayflow && docker image inspect --format '{{index
 .RepoDigests 0}}{{.Id}}' wayflow-rollback`.
+
+---
+
+## 7. Neo4j + Graphiti image majors — applied (Refs ops#359)
+
+The Neo4j + Graphiti image-major lane (paired cinatra-repo change to ops#359 —
+the pins live in **this** repo's `docker-compose.yml`, not ops). The two are a
+**coupled pair** (graphiti / knowledge-graph-mcp fronts Neo4j over MCP), so they
+are decided together. Targets were determined **empirically** against the actual
+registry (`docker buildx imagetools inspect` + the Docker Hub tag list), not
+from real-world version assumptions.
+
+### 7.1 Neo4j — major applied (`5.26-community` → `2026.05-community`)
+
+Neo4j retired the `5.x` **semver** line at `5.26` (its last semver release) and
+moved to a **CalVer** scheme; the CalVer line is the major successor. The
+registry's newest community release is `2026.05-community` (kernel `2026.05.0`)
+— verified by the tag list (`…2026.03 → 2026.04 → 2026.05-community`; no
+`2026.06+`) and by the rolling `neo4j:community` / `neo4j:2026-community` tags
+both resolving to the **same digest** as `2026.05-community`. There is **no**
+`6.x-community` / `7.x-community` tag (those do not exist in this registry).
+
+**Pin (immutable digest):**
+
+```
+image: neo4j:2026.05-community@sha256:b91a6fa7b1d88eb0702847f53eaa4d07781a6d480b0c5a5bba413af5856e9604
+```
+
+The `2026.05-community` tag component is kept for human readability; the
+`@sha256:` is the binding pin (same convention as the Nango row, §2). It is a
+multi-arch OCI index (amd64 + arm64), so the digest pin carries no portability
+cost. Re-resolve at bump time with
+`docker buildx imagetools inspect neo4j:2026.05-community`.
+
+**Two behavior changes the major introduces** (both handled mechanically in this
+PR — no application code change needed):
+
+1. **Default Cypher language is now `CYPHER_25`** (was Cypher 5). `dbms.components()`
+   on the candidate reports `Cypher ["5", "25"]` and `db.query.default_language`
+   defaults to `CYPHER_25`. The graphiti image (knowledge-graph-mcp) emits
+   **Cypher-5-shaped** queries, so the compose `neo4j` service now pins the
+   server default back with `NEO4J_db_query_default__language: CYPHER_5`
+   (env→config mapping of `db.query.default_language`). The same env is added to
+   the works-after graphiti arm's neo4j bring-up so the gate exercises the
+   identical config. Cypher 5 is still fully supported in the CalVer line, so
+   this is a forward-compatible compatibility pin, not a freeze.
+2. **`NEO4J_AUTH` password now has an 8-char minimum.** A shorter password makes
+   the container exit at boot with *"The minimum password length is 8
+   characters."* The dev default `cinatra-local` (13 chars) and the works-after
+   arm's generated password (`wa-` + 24 hex = 27 chars) both clear it; a
+   **production `NEO4J_PASSWORD` override must be ≥8 chars** (it already should
+   be a strong secret — see the §1/compose prod notes). Override the floor only
+   if unavoidable via `NEO4J_dbms_security_auth__minimum__password__length`.
+
+APOC is unaffected: `NEO4J_PLUGINS: '["apoc"]'` + the `NEO4J_apoc_*` settings
+still load (`apoc.version()` → `2026.05.0` on the candidate).
+
+**Data / RPO note (this is the stateful arm).** Neo4j holds the knowledge graph
+on the `cinatra-neo4j-data` volume. Unlike a Postgres major, a CalVer Neo4j
+bump against an existing `5.26` store is an **in-place store-format upgrade**
+handled by the server on first start (not a `pg_upgrade`-style dump/restore) —
+but it is still a one-way on-disk migration, so the **monthly dump backup is the
+RPO floor**: take a fresh `neo4j-admin database dump` (or the operator's
+scheduled monthly dump) **before** rolling the pin in an environment with a
+populated store, so a rollback can restore the pre-upgrade graph. Dev/CI starts
+from an empty volume, so the works-after arm has no migration to perform.
+
+**Works-after proof.** The neo4j+graphiti arm
+(`scripts/ci/works-after/graphiti.sh`, derived candidate `NEO4J_TAG` now
+`2026.05-community`) brings up the candidate Neo4j with the real compose wiring
+(APOC + the CYPHER_5 pin) and runs graphiti's object projection→store→search
+round-trip through the repo's own `graphiti-client.ts`. That full round-trip
+**requires a real `OPENAI_API_KEY`** (graphiti does LLM entity extraction before
+the Neo4j write; a fake cannot stand in — see the arm header), so it runs in the
+major **lane / `workflow_dispatch`** with a supplied key; in `WORKS_AFTER_GATE_MODE=1`
+a missing key is a hard FAIL (a skipped proof is a false green). Run it:
+
+```
+OPENAI_API_KEY=<real> WORKS_AFTER_GATE_MODE=1 \
+  WORKS_AFTER_ONLY=graphiti bash scripts/ci/works-after-proof.sh
+```
+
+(the candidate `NEO4J_TAG`/`GRAPHITI_IMAGE` come from the arm defaults, now the
+bumped pins — no env needed). The candidate Neo4j boot, readiness/healthcheck,
+APOC load, and the CYPHER_5 compat pin were additionally **proven directly** by
+bringing up `neo4j:2026.05-community` with the exact compose env during this lane.
+
+**Rollback.** Revert this PR's `docker-compose.yml` neo4j stanza (pin back to
+`neo4j:5.26-community@sha256:937fbd163e302a5751dd329b719c1b05e2a4293af223d61b1aa17e3dea087709`,
+drop the `NEO4J_db_query_default__language` line) and, in any environment whose
+store was already format-upgraded, restore from the pre-upgrade monthly dump
+(the format upgrade is one-way; an old binary will not open a new-format store).
+
+### 7.2 Graphiti — no major available (digest-pin only)
+
+**There is no next major to bump to.** The `zepai/knowledge-graph-mcp`
+repository's newest published tag is `1.0.2-graphiti-0.28.2` — which is the
+**current pin**. Verified against the full Docker Hub tag list (the ladder is
+`v0.2.0 → v0.2.1 → v0.3.0 → v0.4.0`, then `1.0.0-graphiti-0.22.0 →
+1.0.1-graphiti-0.23.1 → 1.0.2-graphiti-0.28.2`); `:latest` and `:1.0.2` resolve
+to the **same digest** as the current pin, and no `1.1.x` / `2.x` / newer
+`graphiti-0.29+` tag exists. Probing candidate next-major tags (`2.0.0`,
+`1.1.0-graphiti-0.29.0`, `1.0.2-graphiti-0.28.3`, …) all return *not found*.
+
+So graphiti **stays on its current release**. The only change applied is an
+**immutable digest pin** (the same hardening the Nango row got, §2) so the pin
+no longer rides `:latest`-style movement:
+
+```
+image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6
+```
+
+Graphiti is **derived state** (rebuildable): it owns no durable store of its own
+— the graph lives in Neo4j and graphiti re-projects/extracts into it. So there
+is no graphiti backup/RPO concern; a graphiti rollback is just reverting the
+digest pin. When a knowledge-graph-mcp major **is** published, it re-enters this
+lane (re-pair with the Neo4j pin, re-run the works-after round-trip).
