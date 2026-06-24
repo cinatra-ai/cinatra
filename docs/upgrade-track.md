@@ -386,16 +386,19 @@ drop the `NEO4J_db_query_default__language` line) and, in any environment whose
 store was already format-upgraded, restore from the pre-upgrade monthly dump
 (the format upgrade is one-way; an old binary will not open a new-format store).
 
-### 7.2 Graphiti — no major available (digest-pin only)
+### 7.2 Graphiti — already at the newest stable (digest-pin only)
 
-**There is no next major to bump to.** The `zepai/knowledge-graph-mcp`
-repository's newest published tag is `1.0.2-graphiti-0.28.2` — which is the
-**current pin**. Verified against the full Docker Hub tag list (the ladder is
-`v0.2.0 → v0.2.1 → v0.3.0 → v0.4.0`, then `1.0.0-graphiti-0.22.0 →
+**Already at the newest stable — there is no newer tag to bump to** (ops#359
+reframe: latest stable, not only a major hop — a newer minor/patch would count,
+but none is published). The `zepai/knowledge-graph-mcp` repository's newest
+published tag is `1.0.2-graphiti-0.28.2` — which is the **current pin**. Verified
+against the full Docker Hub tag list (the ladder is
+`0.2.0 → 0.2.1 → 0.3.0 → 0.4.0`, then `1.0.0-graphiti-0.22.0 →
 1.0.1-graphiti-0.23.1 → 1.0.2-graphiti-0.28.2`); `:latest` and `:1.0.2` resolve
-to the **same digest** as the current pin, and no `1.1.x` / `2.x` / newer
-`graphiti-0.29+` tag exists. Probing candidate next-major tags (`2.0.0`,
-`1.1.0-graphiti-0.29.0`, `1.0.2-graphiti-0.28.3`, …) all return *not found*.
+to the **same digest** as the current pin, and no `1.0.3` / `1.1.x` / `2.x` /
+newer `graphiti-0.29+` tag exists. Probing newer candidate tags (`2.0.0`,
+`1.1.0-graphiti-0.29.0`, `1.0.3-graphiti-0.28.2`, `1.0.2-graphiti-0.28.3`, …) all
+return *not found*.
 
 So graphiti **stays on its current release**. The only change applied is an
 **immutable digest pin** (the same hardening the Nango row got, §2) so the pin

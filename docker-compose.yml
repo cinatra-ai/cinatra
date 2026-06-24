@@ -380,13 +380,15 @@ services:
       retries: 10
 
   graphiti:
-    # NO major bump available. The zepai/knowledge-graph-mcp repo tops out at
-    # 1.0.2-graphiti-0.28.2 (verified empirically: the registry's newest tag, ==
-    # `:latest` == `:1.0.2`, same digest; the ladder is v0.4.0 -> 1.0.0-g0.22.0
-    # -> 1.0.1-g0.23.1 -> 1.0.2-g0.28.2, with no 1.1.x / 2.x / newer graphiti
-    # line published). So this stays on its current release; the only change is
-    # an immutable digest pin (the tag floated `:latest`-style before — same
-    # hardening the Nango row got). Re-resolve at bump time with
+    # ALREADY at the newest STABLE — no newer tag to bump to (ops#359 reframe:
+    # latest stable, not only a major hop). The zepai/knowledge-graph-mcp repo
+    # tops out at 1.0.2-graphiti-0.28.2 (verified empirically: the registry's
+    # newest tag, == `:latest` == `:1.0.2`, same digest; the ladder is
+    # 0.4.0 -> 1.0.0-g0.22.0 -> 1.0.1-g0.23.1 -> 1.0.2-g0.28.2, with no
+    # 1.0.3 / 1.1.x / 2.x / newer graphiti line published). So this stays on its
+    # current release; the only change is an immutable digest pin (the tag
+    # floated `:latest`-style before — same hardening the Nango row got).
+    # Re-resolve at bump time with
     # `docker buildx imagetools inspect zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2`.
     image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6
     ports:
