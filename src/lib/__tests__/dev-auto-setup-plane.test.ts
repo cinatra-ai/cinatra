@@ -28,7 +28,10 @@ vi.mock("node:child_process", () => ({
 
 // Force the Drupal clone-presence check (existsSync) true so unrelated boot
 // branches never touch the real fs; Plane never reads fs anyway.
-vi.mock("node:fs", () => ({ existsSync: vi.fn(() => true) }));
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  existsSync: vi.fn(() => true),
+}));
 
 const getByIdMock = vi.fn();
 const upsertMock = vi.fn();
