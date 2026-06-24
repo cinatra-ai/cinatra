@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildDeleteMetadataQuery,
   buildDeleteMetadataByPrefixQuery,
+  buildCompareAndSwapMetadataQuery,
 } from "@/lib/drizzle-store";
 
 describe("buildDeleteMetadataQuery", () => {
@@ -48,5 +49,32 @@ describe("buildDeleteMetadataByPrefixQuery", () => {
     // No UNescaped `%`/`_` survives inside the literal portion.
     const literal = (q.values?.[0] as string).slice(0, -1); // drop trailing wildcard
     expect(/(?<!\\)[%_]/.test(literal)).toBe(false);
+  });
+});
+
+describe("buildCompareAndSwapMetadataQuery", () => {
+  it("emits a parameterized conditional UPDATE gated on key AND byte-equal value, RETURNING key", () => {
+    const q = buildCompareAndSwapMetadataQuery(
+      "cinatra",
+      "connector_config:nango",
+      '{"secretKey":{"__enc":1}}',
+      '{"secretKey":"legacy"}',
+    );
+    expect(q.text).toBe(
+      `UPDATE "cinatra"."metadata" SET value = $1 WHERE key = $2 AND value = $3 RETURNING key`,
+    );
+    // $1 = new (sealed) value, $2 = key, $3 = expected (observed) raw value.
+    expect(q.values).toEqual([
+      '{"secretKey":{"__enc":1}}',
+      "connector_config:nango",
+      '{"secretKey":"legacy"}',
+    ]);
+  });
+
+  it("escapes a double-quote in the schema name (identifier-injection guard)", () => {
+    const q = buildCompareAndSwapMetadataQuery(`ev"il`, "k", "new", "old");
+    expect(q.text).toBe(
+      `UPDATE "ev""il"."metadata" SET value = $1 WHERE key = $2 AND value = $3 RETURNING key`,
+    );
   });
 });

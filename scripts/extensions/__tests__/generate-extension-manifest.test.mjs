@@ -11,6 +11,7 @@ import {
   extractFactoryExport,
   validateWidgetStreamDeclaration,
   validateWebhooksDeclaration,
+  validateStreamsDeclaration,
   webhookHandlerExportsFactory,
   assertManifestWidgetIdsCovered,
   MAX_LOGO_BYTES,
@@ -41,6 +42,12 @@ describe("the zero-tolerance flip (#36) fail-closed --check + the shared generat
       "src/lib/generated/connector-setup-pages.ts",
       "src/lib/generated/extensions.client.tsx",
       "src/lib/generated/extensions.server.ts",
+      // Neutral stream primitives capability (cinatra#344): the host-owned
+      // generated maps for the generic /api/streams/<slug> route (dispatch map +
+      // slug-only public-path list). Inert until an extension declares
+      // cinatra.streams.
+      "src/lib/generated/stream-public-paths.ts",
+      "src/lib/generated/streams.server.ts",
       // Inbound-webhook facility (cinatra#340): the host-owned generated maps
       // for the generic /webhook route (dispatch registry, declared-prefix
       // list, registry-UI metadata). Inert until #343.
@@ -797,6 +804,66 @@ describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
   it("the real tree emits an EMPTY webhook map (inert until #343 — no extension declares cinatra.webhooks)", async () => {
     const { webhookHooks } = await buildManifest();
     expect(webhookHooks).toEqual([]);
+  });
+});
+
+describe("stream declarations (cinatra.streams, cinatra#344)", () => {
+  const validStream = {
+    streamSlug: "x-content-editor",
+    label: "X Content Editor",
+    handler: "./src/streams/run",
+    factory: "createRunStream",
+  };
+
+  it("validateStreamsDeclaration: valid declaration → no errors", () => {
+    expect(
+      validateStreamsDeclaration("@x/p", {
+        streams: [validStream, { ...validStream, streamSlug: "x-other", resume: true }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("FAILS CLOSED: non-object, empty streams, bad slug, missing label/handler/factory", () => {
+    expect(validateStreamsDeclaration("@x/p", "nope").length).toBeGreaterThan(0);
+    expect(validateStreamsDeclaration("@x/p", { streams: [] })).toEqual(
+      expect.arrayContaining([expect.stringContaining("non-empty array")]),
+    );
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [{ ...validStream, streamSlug: "Bad Slug!" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".streamSlug")]));
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [{ streamSlug: "ok", handler: "./h", factory: "createX" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".label")]));
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [{ streamSlug: "ok", label: "L", factory: "createX" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".handler")]));
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [{ streamSlug: "ok", label: "L", handler: "./h" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".factory")]));
+  });
+
+  it("FAILS CLOSED: duplicate slug within a package; non-boolean resume", () => {
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [validStream, { ...validStream }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining("duplicate slug")]));
+    expect(
+      validateStreamsDeclaration("@x/p", { streams: [{ ...validStream, resume: "yes" }] }),
+    ).toEqual(expect.arrayContaining([expect.stringContaining(".resume")]));
+  });
+
+  it("handler factory resolvability reuses the fail-closed structural check (callable export required)", () => {
+    // The collection path asserts the declared factory is an exported function
+    // via webhookHandlerExportsFactory (shared structural gate); prove the
+    // contract holds for a stream-style factory name.
+    expect(
+      webhookHandlerExportsFactory("export function createRunStream() {}", "createRunStream"),
+    ).toBe(true);
+    expect(webhookHandlerExportsFactory("export const createRunStream = 5;", "createRunStream")).toBe(false);
+  });
+
+  it("the real tree emits an EMPTY stream map (inert — no extension declares cinatra.streams)", async () => {
+    const { streamDeclarations } = await buildManifest();
+    expect(streamDeclarations).toEqual([]);
   });
 });
 

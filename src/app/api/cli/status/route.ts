@@ -5,8 +5,11 @@
 // when it reads the DB directly, so the published `cinatra` bin can show a
 // remote instance's status as an authenticated client (no DB credentials).
 //
-// AUTH: platform-admin / org-admin via `authorizeCliRequest` (cookie OR
-// verified Bearer JWT, or the dev-admin loopback bypass). READ-ONLY.
+// AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest` (cookie session, a
+// verified remote Bearer carrying `cli:status`, or the dev-admin loopback
+// bypass). Platform-admin because the payload is INSTANCE-GLOBAL (userCount,
+// JWKS health, MCP public URL) with no org predicate — an org-admin must not
+// see instance-wide posture (eng#231 D6). READ-ONLY.
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
@@ -18,7 +21,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const guard = await authorizeCliRequest(request);
+  const guard = await authorizeCliRequest(request, {
+    minTier: "platform-admin",
+    requiredScope: "cli:status",
+  });
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }

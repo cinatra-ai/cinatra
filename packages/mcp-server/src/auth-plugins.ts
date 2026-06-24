@@ -35,6 +35,21 @@ export const DEFAULT_MCP_SCOPES = [
   "mcp:connect",
 ] as const;
 
+/**
+ * The CLI control-plane scopes (eng#231). ADMISSION scopes for the
+ * `/api/cli/*` surface, bound to the dedicated `<origin>/api/cli` audience.
+ * The authorization server advertises them and a DCR client MAY request them,
+ * but they are EXCLUDED from the DCR default set (a client that does not
+ * explicitly ask never silently receives one). They are NOT kernel
+ * permissions: the real authority boundary is the verified-subject
+ * platform-admin role gate in `authorizeCliRequest`, never the scope itself.
+ */
+export const CLI_SCOPES = [
+  "cli:status",
+  "cli:agent:read",
+  "cli:agent:write",
+] as const;
+
 export type McpAuthPluginsOptions = {
   /**
    * Audience URLs accepted by oauth-provider when validating issued JWTs.

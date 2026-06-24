@@ -7,6 +7,7 @@ import {
   openWidget,
   readSeed,
   sendPrompt,
+  trackAuthPath,
 } from "../helpers";
 
 // WordPress: 5 launch scenarios + auth-failure.
@@ -46,12 +47,17 @@ test.describe("WordPress assistant UAT", () => {
     await expect(page.locator(SEL.textarea)).toBeVisible();
   });
 
-  test("4. a prompt streams an SSE assistant reply (scripted sentinel)", async ({ page }) => {
+  test("4. a prompt streams an SSE assistant reply (scripted sentinel) over the real dual-token auth path", async ({ page }) => {
     const seed = readSeed();
+    // Assert the REAL #410 auth path (cnx_ init + cwu_ mint + user-token-bearing
+    // non-401 stream) is exercised, not just the DOM — a genuine auth regression
+    // fails loud instead of timing out on "Thinking…".
+    const auth = trackAuthPath(page);
     await page.goto(`${WP_BASE}${seed.wordpress.editUrl}`);
     await openWidget(page);
     await sendPrompt(page, "Hello, what can you do here?");
     await expect(page.locator(SEL.assistant).last()).toContainText("CINATRA_UAT_OK", { timeout: 30_000 });
+    auth.verify();
   });
 
   test("5. an edit prompt round-trips a content-change diff against the seeded page", async ({ page }) => {

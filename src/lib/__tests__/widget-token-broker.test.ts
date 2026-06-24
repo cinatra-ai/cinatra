@@ -13,11 +13,13 @@ const {
   readConnectorConfigMock,
   readMetadataValueMock,
   ensureSchemaMock,
+  getActiveConnectSiteByIdMock,
 } = vi.hoisted(() => ({
   runPostgresQueriesSyncMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
   readMetadataValueMock: vi.fn(),
   ensureSchemaMock: vi.fn(),
+  getActiveConnectSiteByIdMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -34,6 +36,9 @@ vi.mock("@/lib/postgres-sync", () => ({
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: readConnectorConfigMock,
   readMetadataValueFromDatabase: readMetadataValueMock,
+}));
+vi.mock("@/lib/connect-sites-store", () => ({
+  getActiveConnectSiteById: getActiveConnectSiteByIdMock,
 }));
 
 import {
@@ -140,6 +145,7 @@ function runQueries(input: {
             origin: row.origin,
             scope: row.scope,
             sub: row.sub,
+            token_config_key: row.token_config_key,
             token_key_fingerprint: row.token_key_fingerprint,
             not_expired: row.expires_at_ms > nowMs,
           },
@@ -179,6 +185,7 @@ beforeEach(() => {
   ensureSchemaMock.mockReset();
   runPostgresQueriesSyncMock.mockReset();
   runPostgresQueriesSyncMock.mockImplementation(runQueries);
+  getActiveConnectSiteByIdMock.mockReset();
 });
 
 function mint(overrides: Partial<Parameters<typeof mintWidgetStreamToken>[0]> = {}) {
@@ -342,5 +349,90 @@ describe("widget-token-broker — long-lived key auth + flag", () => {
     expect(isLongLivedTokenPathEnabled(WP_AUTH)).toBe(false);
     CONFIG.wordpress_widget_auth = { apiKey: "x", widgetLongLivedTokenEnabled: true };
     expect(isLongLivedTokenPathEnabled(WP_AUTH)).toBe(true);
+  });
+});
+
+// cinatra#410 — connect-site (`cnx_`) cit_ minting + consume.
+describe("widget-token-broker — connect-site (cnx_) cit_ path", () => {
+  const SITE_ID = "11111111-1111-4111-8111-111111111111";
+
+  function mintCnx(version = 1, overrides: Partial<Parameters<typeof mintWidgetStreamToken>[0]> = {}) {
+    return mintWidgetStreamToken({
+      agentSlug: "wordpress-content-editor",
+      auth: WP_AUTH,
+      origin: ORIGIN,
+      issuerBaseUrl: ISS,
+      connectSite: { siteId: SITE_ID, credentialVersion: version },
+      ...overrides,
+    });
+  }
+
+  function liveSite(version: number, over: Partial<{ client: string; widgetOrigin: string }> = {}) {
+    return {
+      siteId: SITE_ID,
+      client: over.client ?? "wordpress",
+      widgetOrigin: over.widgetOrigin ?? ORIGIN,
+      callbackOrigin: null,
+      credentialVersion: version,
+      webhookSecretHash: null,
+      adminUserId: "u-1",
+      orgId: "org-1",
+      revokedAt: null,
+    };
+  }
+
+  it("mints a cnx_-bound cit_ (stores connect_site:<id> config key) and consumes it against the live site", () => {
+    const minted = mintCnx(3);
+    expect(minted).not.toBeNull();
+    expect(minted!.token).toMatch(/^cit_[A-Za-z0-9_-]{43}$/);
+    const stored = [...store.values()][0]!;
+    expect(stored.token_config_key).toBe(`connect_site:${SITE_ID}`);
+
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(3));
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.origin).toBe(ORIGIN);
+  });
+
+  it("mints WITHOUT a configured legacy apiKey (the cnx_ path needs no apiKey)", () => {
+    delete (CONFIG as Record<string, unknown>).wordpress_widget_auth;
+    expect(mintCnx(1)).not.toBeNull();
+  });
+
+  it("invalidates on credential_version bump (reconnect) — key_rotated", () => {
+    const minted = mintCnx(2);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(3)); // bumped
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("invalidates when the connect-site is revoked / missing (no active row) — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(null);
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("invalidates when the live site re-binds to a different client — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(1, { client: "drupal" }));
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("invalidates when the live site re-binds to a different origin — key_rotated", () => {
+    const minted = mintCnx(1);
+    getActiveConnectSiteByIdMock.mockReturnValue(liveSite(1, { widgetOrigin: "https://evil.test" }));
+    const res = consume(minted!.token);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe("key_rotated");
+  });
+
+  it("a legacy tokenConfigKey may NOT use the reserved connect_site: prefix (fail-closed mint → null)", () => {
+    const forged: GeneratedWidgetStreamAuth = { ...WP_AUTH, tokenConfigKey: "connect_site:forged" };
+    expect(mint({ auth: forged })).toBeNull();
   });
 });

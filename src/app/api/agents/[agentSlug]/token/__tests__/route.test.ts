@@ -10,11 +10,13 @@ const {
   readConnectorConfigMock,
   readMetadataValueMock,
   ensureSchemaMock,
+  resolveVerifiedSiteMock,
 } = vi.hoisted(() => ({
   runPostgresQueriesSyncMock: vi.fn(),
   readConnectorConfigMock: vi.fn(),
   readMetadataValueMock: vi.fn(),
   ensureSchemaMock: vi.fn(),
+  resolveVerifiedSiteMock: vi.fn(),
 }));
 
 vi.mock("@/lib/postgres-config", () => ({
@@ -31,6 +33,11 @@ vi.mock("@/lib/postgres-sync", () => ({
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: readConnectorConfigMock,
   readMetadataValueFromDatabase: readMetadataValueMock,
+}));
+// cinatra#410 — the `cnx_` credential validator is mocked as data; the route's
+// branch logic (origin pinning + mint binding) runs REAL.
+vi.mock("@/lib/widget-user-auth", () => ({
+  resolveVerifiedSiteFromCredential: resolveVerifiedSiteMock,
 }));
 
 const WP_ORIGIN = "https://wp.test";
@@ -95,6 +102,7 @@ beforeEach(() => {
     return id in CONNECTOR_CONFIG ? CONNECTOR_CONFIG[id] : fallback;
   });
   ensureSchemaMock.mockReset();
+  resolveVerifiedSiteMock.mockReset();
   runPostgresQueriesSyncMock.mockReset();
   // mint runs a transactional [sweep, insert]; return empty results.
   runPostgresQueriesSyncMock.mockImplementation((input: { queries: unknown[] }) =>
@@ -199,5 +207,69 @@ describe("token-exchange route", () => {
     const res = await POST(tokenRequest(validBody), wpParams);
     const text = await res.text();
     expect(text).not.toContain("long-lived-key-value");
+  });
+});
+
+// cinatra#410 — the broker also accepts a per-site `cnx_` connect-site credential.
+describe("token-exchange route — cnx_ connect-site credential", () => {
+  const cnxCred = "cnx_site_secret"; // shape-only; the validator is mocked.
+  function cnxRequest(body: unknown, headers: Record<string, string> = {}): Request {
+    return new Request("https://instance.cinatra.ai/api/agents/wordpress-content-editor/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${cnxCred}`,
+        "Content-Type": "application/json",
+        Origin: WP_ORIGIN,
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+  const verifiedSite = {
+    siteId: "site-1",
+    client: "wordpress",
+    orgId: "org-1",
+    siteOrigin: WP_ORIGIN,
+    credentialVersion: 2,
+  };
+
+  it("401s a cnx_ that does not resolve to a verified site", async () => {
+    resolveVerifiedSiteMock.mockReturnValue(null);
+    const res = await POST(cnxRequest(validBody), wpParams);
+    expect(res.status).toBe(401);
+  });
+
+  it("200s a valid cnx_ + mints a cit_ bound to the connect-site (connect_site:<id>)", async () => {
+    resolveVerifiedSiteMock.mockReturnValue(verifiedSite);
+    const res = await POST(cnxRequest(validBody), wpParams);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { token: string };
+    expect(json.token).toMatch(/^cit_[A-Za-z0-9_-]{43}$/);
+    // The INSERT bound token_config_key to connect_site:<siteId>.
+    const insert = runPostgresQueriesSyncMock.mock.calls
+      .flatMap((c) => (c[0] as { queries: Array<{ text: string; values?: unknown[] }> }).queries)
+      .find((q) => q.text.startsWith("INSERT INTO"));
+    expect(insert).toBeDefined();
+    expect(insert!.values).toContain(`connect_site:${verifiedSite.siteId}`);
+  });
+
+  it("403s when the body origin does not equal the connect-site's verified origin", async () => {
+    // The site resolves for a DIFFERENT origin than the configured wp-1 row's;
+    // pick an origin that IS configured but differs from the site's siteOrigin.
+    readConnectorConfigMock.mockImplementation((key: string, fallback: unknown) => {
+      if (key === "wordpress") {
+        return {
+          instances: [
+            { id: "wp-1", name: "WP", siteUrl: WP_ORIGIN, username: "admin", applicationPassword: "secret" },
+            { id: "wp-2", name: "WP2", siteUrl: "https://wp2.test", username: "admin", applicationPassword: "secret" },
+          ],
+        };
+      }
+      return key in CONNECTOR_CONFIG ? CONNECTOR_CONFIG[key] : fallback;
+    });
+    resolveVerifiedSiteMock.mockReturnValue({ ...verifiedSite, siteOrigin: WP_ORIGIN });
+    // Request a configured-but-foreign origin (wp2) — the cnx_ is bound to wp.
+    const res = await POST(cnxRequest({ ...validBody, origin: "https://wp2.test" }), wpParams);
+    expect(res.status).toBe(403);
   });
 });
