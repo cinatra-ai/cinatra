@@ -244,6 +244,7 @@
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
+    "@cinatra-ai/streams": "workspace:*",
     "@cinatra-ai/webhooks": "workspace:*",
     "@daveyplate/better-auth-ui": "^3.4.0",
     "@hookform/resolvers": "^5.4.0",

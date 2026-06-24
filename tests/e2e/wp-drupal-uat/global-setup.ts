@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
+
+import { request as playwrightRequest } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
 // Idempotent seed for the WordPress + Drupal assistant UATs.
@@ -13,6 +15,12 @@ import path from "node:path";
 // Containers: cinatra-wordpress-1 (wp-cli) + cinatra-drupal-1 (drush). If a
 // container is unreachable the setup throws with a clear message — the UAT
 // suite must NOT silently pass against an unseeded stack.
+//
+// cinatra#410 / eng#230 — the shipped widget streams behind a REAL per-site
+// `cnx_` connect-site credential + a per-user hosted-PKCE `cwu_` login. This
+// setup ALSO (1) asserts dev-auto-setup pushed a real `cnx_` (not a legacy UUID)
+// into the CMS widget config, and (2) signs the deterministic dev UAT user in
+// and saves a storageState so the hosted-login popup lands directly on consent.
 // ---------------------------------------------------------------------------
 
 export const WP_CONTAINER = process.env.UAT_WP_CONTAINER ?? "cinatra-wordpress-1";
@@ -20,6 +28,12 @@ export const DRUPAL_CONTAINER = process.env.UAT_DRUPAL_CONTAINER ?? "cinatra-dru
 export const WP_TITLE = "Cinatra UAT Page";
 export const DRUPAL_TITLE = "Cinatra UAT Article";
 export const SEED_FILE = path.join(__dirname, ".uat", "seed.json");
+// dev-auto-setup writes the deterministic dev UAT user creds here (gitignored).
+export const DEV_ACTOR_FILE = path.join(__dirname, ".uat", "dev-actor.json");
+// Saved Cinatra session for the dev UAT user (used by the hosted-login popup).
+export const STORAGE_STATE_FILE = path.join(__dirname, ".auth", "state.json");
+
+const CINATRA_BASE = process.env.E2E_WP_DRUPAL_BASE_URL ?? `http://localhost:${process.env.E2E_WP_DRUPAL_PORT ?? "3000"}`;
 
 export type UatSeed = {
   wordpress: { pageId: string; title: string; editUrl: string; adminConfigUrl: string };
@@ -139,24 +153,82 @@ function assertWidgetWired(): void {
     const drUrl = readDrupalSetting("cinatra_url");
     const drKey = readDrupalSetting("api_key");
     const drInstance = readDrupalSetting("instance_id");
+    // cinatra#410 — the pushed key MUST be a real `cnx_` connect-site credential
+    // (the legacy widget UUID 401s the shipped broker). Fail loud on a UUID so a
+    // regression in dev-auto-setup's `cnx_` mint surfaces here, not as a silent
+    // "Thinking…"/401 timeout deep in a spec.
+    const wpKeyIsCnx = wpKey.startsWith("cnx_");
+    const drKeyIsCnx = drKey.startsWith("cnx_");
     if (
-      wpUrl === expectedUrl && wpKey !== "" && wpInstance !== "" &&
-      drUrl === expectedUrl && drKey !== "" && drInstance !== ""
+      wpUrl === expectedUrl && wpKeyIsCnx && wpInstance !== "" &&
+      drUrl === expectedUrl && drKeyIsCnx && drInstance !== ""
     ) {
-      // eslint-disable-next-line no-console
-      console.log(`[wp-drupal-uat] widget config wired (cinatra_url=${expectedUrl}; keys+instance present on WP+Drupal)`);
+      console.log(`[wp-drupal-uat] widget config wired (cinatra_url=${expectedUrl}; cnx_ keys+instance present on WP+Drupal)`);
       return;
     }
     last =
-      `expected cinatra_url=${expectedUrl}\n` +
-      `  WP:     url=${JSON.stringify(wpUrl)} key=${wpKey ? "set" : "EMPTY"} instance=${wpInstance ? "set" : "EMPTY"}\n` +
-      `  Drupal: url=${JSON.stringify(drUrl)} key=${drKey ? "set" : "EMPTY"} instance=${drInstance ? "set" : "EMPTY"}`;
+      `expected cinatra_url=${expectedUrl}; api_key must be a cnx_ connect-site credential\n` +
+      `  WP:     url=${JSON.stringify(wpUrl)} key=${wpKey ? (wpKeyIsCnx ? "cnx_" : "set-NOT-cnx_") : "EMPTY"} instance=${wpInstance ? "set" : "EMPTY"}\n` +
+      `  Drupal: url=${JSON.stringify(drUrl)} key=${drKey ? (drKeyIsCnx ? "cnx_" : "set-NOT-cnx_") : "EMPTY"} instance=${drInstance ? "set" : "EMPTY"}`;
     if (attempt < maxAttempts) sleepSeconds(3);
   }
   throw new Error(
     `[wp-drupal-uat] widget config not wired after ${maxAttempts} attempts.\n  ${last}\n` +
-      `  dev-auto-setup (src/lib/dev-auto-setup.ts) pushes cinatra_url/api_key/instance_id on each dev-server boot.`,
+      `  dev-auto-setup (src/lib/dev-auto-setup.ts) pushes cinatra_url/api_key/instance_id on each dev-server boot; ` +
+      `the api_key MUST be a cnx_ connect-site credential (cinatra#410 dev mint).`,
   );
+}
+
+export type DevActor = { userId: string; orgId: string; email: string; password: string };
+
+function readDevActor(): DevActor {
+  let raw: string;
+  try {
+    raw = readFileSync(DEV_ACTOR_FILE, "utf8");
+  } catch {
+    throw new Error(
+      `[wp-drupal-uat] dev UAT actor not found at ${DEV_ACTOR_FILE}. ` +
+        `dev-auto-setup (ensureDevConnectActor) seeds it on the dev-server boot — ` +
+        `ensure CINATRA_RUNTIME_MODE=development and the dev server booted before global-setup.`,
+    );
+  }
+  return JSON.parse(raw) as DevActor;
+}
+
+/**
+ * Sign the deterministic dev UAT user IN against the cinatra dev server and save
+ * a storageState. Both Playwright projects load this state, so the widget's
+ * hosted `/widget-auth` login popup inherits the Cinatra session and lands
+ * directly on the consent step (no manual credentials in the popup) — exercising
+ * the REAL #410 login gate deterministically. The user + org are seeded
+ * server-side by dev-auto-setup; here we only sign in (never sign up).
+ */
+async function establishCinatraSession(actor: DevActor): Promise<void> {
+  const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
+  try {
+    const signIn = await ctx.post("/api/auth/sign-in/email", {
+      data: { email: actor.email, password: actor.password },
+      headers: { Origin: CINATRA_BASE },
+      failOnStatusCode: false,
+    });
+    if (!signIn.ok()) {
+      throw new Error(
+        `[wp-drupal-uat] dev UAT user sign-in failed (HTTP ${signIn.status()}). ` +
+          `The user is seeded by dev-auto-setup (ensureDevConnectActor) — verify the dev server is on CINATRA_RUNTIME_MODE=development.`,
+      );
+    }
+    // Pin the active org so the hosted page resolves membership against it.
+    await ctx.post("/api/auth/organization/set-active", {
+      data: { organizationId: actor.orgId },
+      headers: { Origin: CINATRA_BASE },
+      failOnStatusCode: false,
+    });
+    mkdirSync(path.dirname(STORAGE_STATE_FILE), { recursive: true });
+    await ctx.storageState({ path: STORAGE_STATE_FILE });
+    console.log(`[wp-drupal-uat] Cinatra session established for ${actor.email} (org ${actor.orgId}); storageState saved`);
+  } finally {
+    await ctx.dispose();
+  }
 }
 
 export default async function globalSetup(): Promise<void> {
@@ -166,7 +238,9 @@ export default async function globalSetup(): Promise<void> {
   };
   mkdirSync(path.dirname(SEED_FILE), { recursive: true });
   writeFileSync(SEED_FILE, JSON.stringify(seed, null, 2));
-  // eslint-disable-next-line no-console
   console.log(`[wp-drupal-uat] seeded WP page #${seed.wordpress.pageId} + Drupal node #${seed.drupal.nodeId}`);
   assertWidgetWired();
+  // The hosted-login popup needs a logged-in Cinatra session (member of the
+  // connect-site's org). Sign the dev UAT user in + save the storageState.
+  await establishCinatraSession(readDevActor());
 }

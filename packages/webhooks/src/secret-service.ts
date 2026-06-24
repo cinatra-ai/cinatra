@@ -28,10 +28,22 @@ export interface ResolvedBinding {
   /**
    * Candidate secrets in priority order: the current secret, then a non-expired
    * previous secret during a rotation window. Already filtered for expiry.
+   * EMPTY for a `legacyEnabled` binding (a legacy binding carries no Standard-
+   * Webhooks secret — the route verifies it via {@link legacySecret} instead).
    */
   readonly secrets: string[];
-  /** The #343 legacy-bridge flag — always false in #340. */
+  /**
+   * The #343 legacy-bridge flag. When true the in-field sender signs with the
+   * bespoke `sha256=<hex>` HMAC over {@link legacySecret} (NOT Standard-Webhooks),
+   * and the route requires a caller-supplied idempotency-key header.
+   */
   readonly legacyEnabled: boolean;
+  /**
+   * The single shared HMAC secret for a legacy-bridge binding — populated ONLY
+   * when `legacyEnabled` (undefined for a Standard-Webhooks binding). The route
+   * passes this to `verifyLegacyHmac`.
+   */
+  readonly legacySecret?: string;
 }
 
 export interface MintBindingInput {
@@ -39,6 +51,36 @@ export interface MintBindingInput {
   readonly slug: string;
   readonly hook: string;
   readonly siteId: string;
+  /**
+   * Mint a #343 legacy-bridge binding (the in-field sender keeps its bespoke
+   * `sha256=<hex>` HMAC). When true, {@link legacySecret} MUST be supplied; the
+   * binding stores the encrypted legacy secret + `legacy_enabled=true` and the
+   * route verifies via `verifyLegacyHmac` rather than Standard-Webhooks. The
+   * returned `MintedBinding.secret` is the same legacy secret (no new Standard-
+   * Webhooks secret is generated for a legacy binding).
+   */
+  readonly legacyEnabled?: boolean;
+  /** The shared HMAC secret to bridge (required when `legacyEnabled`). */
+  readonly legacySecret?: string;
+}
+
+/**
+ * The narrow tuple-scoped legacy-binding upsert used at PROVISIONING time.
+ *
+ * Provisioning has only the (vendor, slug, hook, site) tuple — never an existing
+ * `bindingId` — so a reconnect / credential-rotation cannot address an existing
+ * binding by id to `rotate` it. `upsertLegacy` is idempotent over the active
+ * tuple: it INSERTs a fresh legacy binding when none is active, or UPDATEs the
+ * active one's legacy secret in place (preserving its `bindingId` so the plugin's
+ * stored inbound URL stays valid across reconnects).
+ */
+export interface UpsertLegacyBindingInput {
+  readonly vendor: string;
+  readonly slug: string;
+  readonly hook: string;
+  readonly siteId: string;
+  /** The shared HMAC secret to (re)store for the active binding. */
+  readonly legacySecret: string;
 }
 
 export interface MintedBinding {
@@ -63,6 +105,14 @@ export interface WebhookSecretService {
   resolveByBindingId(bindingId: string): Promise<ResolvedBinding | null>;
   rotate(bindingId: string): Promise<MintedBinding>;
   revoke(bindingId: string): Promise<void>;
+  /**
+   * Tuple-scoped idempotent upsert of a LEGACY-bridge binding (cinatra#343).
+   * INSERTs a fresh legacy binding for the active tuple, or UPDATEs the active
+   * one's legacy secret in place (stable `bindingId`). Provisioning calls THIS
+   * (it has only the tuple, never an existing binding id). Returns the
+   * (stable-or-new) `bindingId` + the stored legacy secret.
+   */
+  upsertLegacy(input: UpsertLegacyBindingInput): Promise<MintedBinding>;
 }
 
 // Standard-Webhooks secrets are base64; the `whsec_` prefix is the convention

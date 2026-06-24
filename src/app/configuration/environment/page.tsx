@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { requireAdminSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
-import { getEffectiveViewerScope } from "@/lib/marketplace-credentials";
+import { getEffectiveViewerScope, hasConsumerOrVendorMarketplaceToken } from "@/lib/marketplace-credentials";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
 import { buildTabs, resolveEnvTab } from "./environment-tabs";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
@@ -358,18 +358,42 @@ async function RegistriesTabContent({
   const vendorState = identity.vendorState;
   const showBecomeAVendor =
     vendorState === undefined || vendorState === "none" || vendorState === "rejected";
+  // Gate the apply form on an unwired instance: with no marketplace bearer the
+  // apply call to cm can only fail (Unauthorized), and the persist-first marker
+  // would strand as a false "applied" with no recovery (cinatra#434). Mirror the
+  // publish card's unwired handling instead of presenting a doomed apply path.
+  // Only resolve credentials when the apply form would actually be shown:
+  // hasConsumerOrVendorMarketplaceToken rethrows non-credential (e.g. crypto)
+  // failures, so calling it for applied/approved states could hard-fail the
+  // whole registries tab over a token we never read here.
+  const marketplaceWired = showBecomeAVendor
+    ? hasConsumerOrVendorMarketplaceToken(identity)
+    : false;
 
   return (
     <div className="flex flex-col gap-6">
       <MarketplaceConnectionCard identity={identity} catalogCount={catalogCount} />
       {showBecomeAVendor ? (
-        <BecomeAVendorCard
-          identity={identity}
-          termsVersion={termsAcceptance.termsVersion}
-          termsDigest={termsAcceptance.termsDigest}
-          termsUrl={termsAcceptance.termsUrl}
-          priorRejectionReason={null}
-        />
+        marketplaceWired ? (
+          <BecomeAVendorCard
+            identity={identity}
+            termsVersion={termsAcceptance.termsVersion}
+            termsDigest={termsAcceptance.termsDigest}
+            termsUrl={termsAcceptance.termsUrl}
+            priorRejectionReason={null}
+          />
+        ) : (
+          <Card className="border-line bg-surface backdrop-blur-none">
+            <CardHeader>
+              <CardTitle>Become a vendor</CardTitle>
+              <CardDescription>
+                The marketplace is not yet wired on this instance. An operator must set{" "}
+                <code className="font-mono">MARKETPLACE_INSTANCE_TOKEN</code> (the bearer issued for
+                this instance&rsquo;s marketplace account) before you can apply as a vendor.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )
       ) : null}
       {vendorState === "applied" ? <VendorApplicationStatusCard identity={identity} /> : null}
       {vendorState === "approved" ? <MarketplacePublishCard /> : null}

@@ -7,6 +7,7 @@ import {
   mintWidgetStreamToken,
   normalizeOriginStrict,
 } from "@/lib/widget-token-broker";
+import { resolveVerifiedSiteFromCredential } from "@/lib/widget-user-auth";
 import { validateTokenExchangeRequest } from "@/lib/wp-drupal-contract";
 
 export const runtime = "nodejs";
@@ -27,6 +28,17 @@ export const dynamic = "force-dynamic";
 // Authorization derives from the long-lived key + the configured-instance
 // check — NOT from any CORS Origin header. This is a server-to-server endpoint;
 // no CORS headers are emitted (the browser never calls it directly).
+//
+// cinatra#410 — the broker ALSO accepts a per-site `cnx_` connect-site
+// credential here (the credential the real connect handshake stores in the
+// plugin/module, presented server-to-server exactly like the legacy key). A
+// `cit_` minted from a `cnx_` carries the SAME authority as a legacy `cit_`
+// (site/origin/aud/scope transport proof, NO user identity): the per-user `cwu_`
+// on the stream remains the sole user/org authority. The `cnx_` is validated
+// against its connect-site row (paired Origin === the site's verified origin,
+// expected client === the agent's instances-config key), and the minted token is
+// bound to that site (siteId + credential_version) so a reconnect/revoke
+// invalidates it immediately.
 // ---------------------------------------------------------------------------
 
 type TokenExchangeBody = {
@@ -48,15 +60,41 @@ export async function POST(
     return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
   }
 
-  // 2. Long-lived key auth FIRST — before parsing/validating any body — so an
+  // 2. Bearer auth FIRST — before parsing/validating any body — so an
   // unauthenticated caller cannot drive JSON-parse / schema-validator work
   // (adversarial finding: auth-before-body-parse on a publicly reachable
-  // endpoint). Constant-time compare; 401 on missing/mismatch.
+  // endpoint). Two accepted credential classes:
+  //   (a) the legacy long-lived integration key (constant-time compare), OR
+  //   (b) a `cnx_` connect-site credential (cinatra#410) — validated against its
+  //       connect-site row with the paired request Origin + expected client.
+  // 401 on missing / neither.
   const authHeader = request.headers.get("Authorization");
   const presented = authHeader?.startsWith("Bearer ")
     ? authHeader.slice(7).trim()
     : "";
-  if (!presented || !isAuthorizedLongLivedKey(presented, entry.auth)) {
+  if (!presented) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // A `cnx_`-minted token is bound to its connect-site; legacy mints to the
+  // configured key. Resolve the connect-site here so the body `origin` can be
+  // pinned to the site's verified origin below.
+  let connectSite: { siteId: string; credentialVersion: number; siteOrigin: string } | null = null;
+  if (presented.startsWith("cnx_")) {
+    const verified = resolveVerifiedSiteFromCredential({
+      credential: presented,
+      requestOrigin: request.headers.get("Origin"),
+      expectedClient: entry.auth.instancesConfigKey,
+    });
+    if (!verified) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    connectSite = {
+      siteId: verified.siteId,
+      credentialVersion: verified.credentialVersion,
+      siteOrigin: verified.siteOrigin,
+    };
+  } else if (!isAuthorizedLongLivedKey(presented, entry.auth)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -95,8 +133,20 @@ export async function POST(
       { status: 403 },
     );
   }
+  // cinatra#410 — on the `cnx_` path the requested origin must ALSO equal the
+  // connect-site's own verified origin: a site may only mint a transport token
+  // for ITS bound origin, never another configured integration's origin.
+  if (connectSite && requestedOrigin !== normalizeOriginStrict(connectSite.siteOrigin)) {
+    return NextResponse.json(
+      { error: "`origin` is not a configured site for this integration" },
+      { status: 403 },
+    );
+  }
 
-  // 5. Mint. The issuer base URL is this instance's request origin.
+  // 5. Mint. The issuer base URL is this instance's request origin. On the
+  // `cnx_` path the token is bound to the connect-site (siteId + version) so a
+  // reconnect/revoke invalidates it at consume time; the legacy path binds to
+  // the configured key fingerprint.
   const issuerBaseUrl = new URL(request.url).origin;
   const minted = mintWidgetStreamToken({
     agentSlug,
@@ -105,6 +155,9 @@ export async function POST(
     sub: typeof body.sub === "string" ? body.sub : undefined,
     scope: typeof body.scope === "string" ? body.scope : undefined,
     issuerBaseUrl,
+    connectSite: connectSite
+      ? { siteId: connectSite.siteId, credentialVersion: connectSite.credentialVersion }
+      : undefined,
   });
   if (!minted) {
     // The configured key vanished between the auth check and mint, or the

@@ -21,7 +21,8 @@ import {
   getLlmProviderSurface,
   requireLlmProviderSurface,
 } from "@/lib/llm-provider-surfaces";
-import { requireAuthSession, requireAdminSession } from "@/lib/auth-session";
+import { requireAuthSession, requireAdminSession, getActorContext } from "@/lib/auth-session";
+import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
 import {
   upsertExternalMcpServer,
   deleteExternalMcpServer,
@@ -48,7 +49,6 @@ import {
   saveWordPressInstance,
 } from "@/lib/wordpress-api";
 import {
-  writeDefaultLlmProviderToDatabase,
   writeDefaultImageProviderToDatabase,
   writeObjectsClassificationModelToDatabase,
   writeConnectorConfigToDatabase,
@@ -184,8 +184,13 @@ export async function setAnthropicMcpModeAction(_formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function setDefaultLlmProviderAction(formData: FormData) {
-  const provider = z.string().min(1).parse(formData.get("provider"));
-  writeDefaultLlmProviderToDatabase(provider);
+  // Global default LLM provider is platform-level. Route through the shared
+  // chokepoint: platform-admin authority + strict-before-mutation audit + the
+  // authoritative {openai,gemini} sink. (Previously this action wrote with no
+  // authority check and no audit — eng#229 closes that gap.)
+  const provider = z.enum(["openai", "gemini"]).parse(formData.get("provider"));
+  const actor = await getActorContext();
+  await updateDefaultLlmProvider({ actor, provider });
   redirect("/configuration/llm");
 }
 
@@ -227,9 +232,12 @@ export async function setDefaultProvidersAction(formData: FormData) {
 
   if (llmProvider) {
     // Chokepoint refuses anything outside {openai,gemini}; explicit guard kept
-    // for reader clarity (the sink is still authoritative).
+    // for reader clarity (the sink is still authoritative). The shared
+    // `updateDefaultLlmProvider` adds the strict-before-mutation audit and a
+    // defense-in-depth platform-admin re-check on top of `requireAdminSession`.
     if (llmProvider === "openai" || llmProvider === "gemini") {
-      writeDefaultLlmProviderToDatabase(llmProvider);
+      const actor = await getActorContext();
+      await updateDefaultLlmProvider({ actor, provider: llmProvider });
     }
   }
   if (imageProvider) {

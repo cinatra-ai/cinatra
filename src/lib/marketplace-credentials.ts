@@ -129,6 +129,27 @@ export function resolveConsumerOrVendorMarketplaceToken(identity: InstanceIdenti
 }
 
 /**
+ * Presence check for {@link resolveConsumerOrVendorMarketplaceToken}: `true`
+ * when a consumer/vendor marketplace bearer can be resolved (env override,
+ * consumer attachment, or legacy vendor token), `false` when none is available
+ * or the attachment is corrupted (`VendorCredentialsMissingError`). Used to
+ * GATE marketplace-dependent UI (e.g. the become-a-vendor form) on an unwired
+ * instance so it doesn't present an apply path that can only fail. Crypto and
+ * other unexpected errors propagate uncaught, matching the resolver.
+ */
+export function hasConsumerOrVendorMarketplaceToken(identity: InstanceIdentity | null): boolean {
+  try {
+    resolveConsumerOrVendorMarketplaceToken(identity);
+    return true;
+  } catch (err) {
+    if (err instanceof VendorCredentialsMissingError) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
  * Resolve the marketplace MCP bearer used EXCLUSIVELY by admin/moderator
  * call sites (the vendor-application moderation queue, vendor-application
  * approve/reject/reset abilities, and any other PRINCIPAL_ADMIN-bound MCP

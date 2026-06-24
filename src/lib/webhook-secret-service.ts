@@ -14,9 +14,13 @@ import "server-only";
 // stamped (a concurrency guard). resolveByBindingId returns the candidate
 // secrets the route verifies against (current, then a non-expired previous).
 //
-// #340 SCOPE: legacyEnabled is returned (always false in #340) but no
-// legacySecret — the legacy single-shared-secret bridge + its storage are #343
-// (D3c option A).
+// #343: the legacy single-shared-secret bridge (D3c option A). A binding minted
+// with legacyEnabled stores the bridged shared HMAC secret ENCRYPTED in the
+// legacy_secret_ciphertext/iv columns under a field-scoped AAD ("legacy");
+// resolveByBindingId returns it as `legacySecret` (with empty `secrets`) so the
+// route verifies the in-field plugin's bespoke `sha256=<hex>` HMAC instead of
+// Standard-Webhooks. `upsertLegacy` is the tuple-scoped idempotent provisioning
+// entry point (reconnect/rotation-safe; preserves the bindingId).
 
 import { Pool } from "pg";
 import {
@@ -31,6 +35,7 @@ import {
   type ResolvedBinding,
   type MintBindingInput,
   type MintedBinding,
+  type UpsertLegacyBindingInput,
 } from "@cinatra-ai/webhooks";
 
 // Bounded dual-secret rotation window: the previous secret stays valid this
@@ -69,9 +74,10 @@ function table(): string {
   return `"${s}"."webhook_secret_bindings"`;
 }
 
-// Field-scoped AAD so a current blob can never decrypt in the previous column
-// (and vice versa). The binding_id keys the row; the field name keys the column.
-function aad(bindingId: string, field: "current" | "previous"): string {
+// Field-scoped AAD so a current blob can never decrypt in another column. The
+// binding_id keys the row; the field name keys the column ("legacy" is the #343
+// single-shared-secret bridge blob — it can never decrypt as current/previous).
+function aad(bindingId: string, field: "current" | "previous" | "legacy"): string {
   return `webhook-binding.${bindingId}.${field}`;
 }
 
@@ -91,15 +97,31 @@ interface BindingRow {
   // expiry or reject early).
   previous_active: boolean;
   legacy_enabled: boolean;
+  legacy_secret_ciphertext: string | null;
+  legacy_secret_iv: string | null;
   revoked_at: Date | null;
 }
 
 export const webhookSecretService: WebhookSecretService = {
   async mint(input: MintBindingInput): Promise<MintedBinding> {
     const pool = getPool();
-    const secret = mintWebhookSecret();
     const bindingId = mintBindingId();
-    const enc = encryptSecret(secret, aad(bindingId, "current"));
+    const legacy = input.legacyEnabled === true;
+    if (legacy && (typeof input.legacySecret !== "string" || input.legacySecret.length === 0)) {
+      throw new Error(
+        "[webhook-secret-service] legacyEnabled mint requires a non-empty legacySecret",
+      );
+    }
+    // The current_secret_ciphertext column is NOT NULL. A legacy binding (#343)
+    // verifies via the bespoke `sha256=<hex>` HMAC over its legacy secret, NOT a
+    // Standard-Webhooks secret, so its current column is an UNUSED placeholder —
+    // we mint a throwaway to satisfy the constraint and the route never reads
+    // `binding.secrets` for a legacy binding (resolveByBindingId returns []).
+    const currentSecret = mintWebhookSecret();
+    const enc = encryptSecret(currentSecret, aad(bindingId, "current"));
+    const legacyEnc = legacy
+      ? encryptSecret(input.legacySecret as string, aad(bindingId, "legacy"))
+      : null;
     // The partial-unique active index (vendor,slug,hook,site WHERE revoked_at IS
     // NULL) enforces at most one active binding per tuple — a second active mint
     // for the same tuple raises a unique violation. We translate that to a
@@ -108,8 +130,9 @@ export const webhookSecretService: WebhookSecretService = {
       await pool.query(
         `INSERT INTO ${table()}
            (binding_id, vendor, slug, hook, site_id,
-            current_secret_ciphertext, current_secret_iv, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+            current_secret_ciphertext, current_secret_iv,
+            legacy_enabled, legacy_secret_ciphertext, legacy_secret_iv, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())`,
         [
           bindingId,
           input.vendor,
@@ -118,6 +141,9 @@ export const webhookSecretService: WebhookSecretService = {
           input.siteId,
           enc.ciphertext,
           enc.iv,
+          legacy,
+          legacyEnc?.ciphertext ?? null,
+          legacyEnc?.iv ?? null,
         ],
       );
     } catch (err) {
@@ -128,7 +154,82 @@ export const webhookSecretService: WebhookSecretService = {
       }
       throw err;
     }
-    return { bindingId, secret };
+    // A legacy binding's "secret" is the bridged shared HMAC secret (what the
+    // caller stored), not the unused Standard-Webhooks placeholder.
+    return { bindingId, secret: legacy ? (input.legacySecret as string) : currentSecret };
+  },
+
+  // Tuple-scoped idempotent legacy-binding upsert (cinatra#343). Provisioning
+  // has only the (vendor, slug, hook, site) tuple — never an existing bindingId
+  // — so a reconnect/credential-rotation cannot address an existing binding by
+  // id. This INSERTs a fresh active legacy binding when none exists, or UPDATEs
+  // the active one's legacy secret IN PLACE (preserving its bindingId so the
+  // plugin's stored inbound URL stays valid). The partial-unique active index
+  // makes "exactly one active row per tuple" the upsert target.
+  async upsertLegacy(input: UpsertLegacyBindingInput): Promise<MintedBinding> {
+    if (typeof input.legacySecret !== "string" || input.legacySecret.length === 0) {
+      throw new Error("[webhook-secret-service] upsertLegacy requires a non-empty legacySecret");
+    }
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Lock the existing active row for this tuple (if any). The partial-unique
+      // active index guarantees at most one.
+      const { rows } = await client.query<{ binding_id: string }>(
+        `SELECT binding_id FROM ${table()}
+          WHERE vendor = $1 AND slug = $2 AND hook = $3 AND site_id = $4
+            AND revoked_at IS NULL
+          FOR UPDATE`,
+        [input.vendor, input.slug, input.hook, input.siteId],
+      );
+      const existing = rows[0];
+      if (existing) {
+        // Re-encrypt the (possibly rotated) shared secret under THIS binding's
+        // legacy AAD and store it in place. Keep legacy_enabled true.
+        const enc = encryptSecret(input.legacySecret, aad(existing.binding_id, "legacy"));
+        await client.query(
+          `UPDATE ${table()}
+              SET legacy_enabled = true,
+                  legacy_secret_ciphertext = $2,
+                  legacy_secret_iv = $3
+            WHERE binding_id = $1`,
+          [existing.binding_id, enc.ciphertext, enc.iv],
+        );
+        await client.query("COMMIT");
+        return { bindingId: existing.binding_id, secret: input.legacySecret };
+      }
+      // No active binding — INSERT a fresh legacy binding.
+      const bindingId = mintBindingId();
+      const currentSecret = mintWebhookSecret();
+      const enc = encryptSecret(currentSecret, aad(bindingId, "current"));
+      const legacyEnc = encryptSecret(input.legacySecret, aad(bindingId, "legacy"));
+      await client.query(
+        `INSERT INTO ${table()}
+           (binding_id, vendor, slug, hook, site_id,
+            current_secret_ciphertext, current_secret_iv,
+            legacy_enabled, legacy_secret_ciphertext, legacy_secret_iv, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, now())`,
+        [
+          bindingId,
+          input.vendor,
+          input.slug,
+          input.hook,
+          input.siteId,
+          enc.ciphertext,
+          enc.iv,
+          legacyEnc.ciphertext,
+          legacyEnc.iv,
+        ],
+      );
+      await client.query("COMMIT");
+      return { bindingId, secret: input.legacySecret };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 
   async resolveByBindingId(bindingId: string): Promise<ResolvedBinding | null> {
@@ -138,7 +239,7 @@ export const webhookSecretService: WebhookSecretService = {
               current_secret_ciphertext, current_secret_iv,
               previous_secret_ciphertext, previous_secret_iv,
               (previous_expires_at IS NOT NULL AND previous_expires_at > now()) AS previous_active,
-              legacy_enabled, revoked_at
+              legacy_enabled, legacy_secret_ciphertext, legacy_secret_iv, revoked_at
          FROM ${table()}
         WHERE binding_id = $1`,
       [bindingId],
@@ -147,6 +248,32 @@ export const webhookSecretService: WebhookSecretService = {
     // Unknown OR revoked → null (no oracle: the route returns the same 401 for
     // both so it cannot be used to probe which binding ids exist).
     if (!row || row.revoked_at !== null) return null;
+
+    // A LEGACY binding (#343 bridge) carries NO Standard-Webhooks secret — the
+    // route verifies it via the bespoke `sha256=<hex>` HMAC over the decrypted
+    // legacy secret. We return EMPTY `secrets` (the route never feeds a legacy
+    // binding through verifyInbound) and the decrypted legacySecret. The current
+    // column holds an unused placeholder we never decrypt for a legacy binding.
+    if (row.legacy_enabled) {
+      if (!row.legacy_secret_ciphertext || !row.legacy_secret_iv) {
+        // A legacy_enabled binding with no stored legacy secret is a
+        // misprovisioned row — fail closed (null → the route 401s, no oracle).
+        return null;
+      }
+      return {
+        bindingId: row.binding_id,
+        vendor: row.vendor,
+        slug: row.slug,
+        hook: row.hook,
+        siteId: row.site_id,
+        secrets: [],
+        legacyEnabled: true,
+        legacySecret: decryptSecret(
+          { ciphertext: row.legacy_secret_ciphertext, iv: row.legacy_secret_iv },
+          aad(bindingId, "legacy"),
+        ),
+      };
+    }
 
     const secrets: string[] = [
       decryptSecret(

@@ -16,6 +16,7 @@ import { createAuthClient as createServerAuthClient } from "better-auth/client";
 import {
   buildMcpAuthPlugins,
   DEFAULT_MCP_SCOPES,
+  CLI_SCOPES,
   type McpAuthPlugins,
   type McpAuthPluginsOptions,
 } from "./auth-plugins";
@@ -93,6 +94,28 @@ export type CreateMcpServerAuthPluginsOptions = {
   /** OAuth machine-flow pages (auth / account / consent) advertised to external MCP clients. */
   handshakeBasePath?: string;
   scopes?: readonly string[];
+  /**
+   * Additional base path(s) whose `<origin>/<path>` URLs (local + public)
+   * become valid token audiences alongside the MCP base path. eng#231 adds
+   * `/api/cli` so an authorize with `resource=<origin>/api/cli` mints a JWT
+   * bound to `aud=<origin>/api/cli` — a DEDICATED audience the CLI verifier
+   * pins (reciprocal isolation from the `/api/mcp` audience).
+   */
+  extraAudienceBasePaths?: readonly string[];
+  /**
+   * Scopes EXCLUDED from the DCR default-scope set. A client that does not
+   * EXPLICITLY request these never silently receives them (eng#231 keeps the
+   * `cli:*` scopes out of DCR defaults). When omitted, the DCR default is the
+   * full `scopes` list (today's behaviour).
+   */
+  clientRegistrationDefaultScopes?: readonly string[];
+  /**
+   * Scopes a DCR client MAY request at registration. eng#231 keeps `cli:*`
+   * here (so the first-party CLI can register with them) — the real authority
+   * boundary is the verified-subject platform-admin gate, not this list.
+   * When omitted, defaults to the full `scopes` list (today's behaviour).
+   */
+  clientRegistrationAllowedScopes?: readonly string[];
 };
 
 export type CreateMcpServerMountOptions = {
@@ -1136,6 +1159,7 @@ function OverviewLink(props: {
 export {
   buildMcpAuthPlugins,
   DEFAULT_MCP_SCOPES,
+  CLI_SCOPES,
   type McpAuthPlugins,
   type McpAuthPluginsOptions,
 };
@@ -1163,6 +1187,36 @@ export function createMcpServerAuthPlugins(
   const publicMcpUrl = getPublicMcpServerUrl();
   const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
 
+  // eng#231: extend validAudiences with `<origin><extraBasePath>` for each
+  // configured extra base path (e.g. /api/cli), on BOTH the local and public
+  // origins, so an authorize with `resource=<origin>/api/cli` mints a JWT
+  // bound to that dedicated audience. The MCP audiences are unchanged — each
+  // verifier still pins its OWN audience (reciprocal isolation).
+  const extraBasePaths = (options.extraAudienceBasePaths ?? []).map((p) =>
+    normalizePath(p, p),
+  );
+  if (extraBasePaths.length > 0) {
+    const origins: string[] = [];
+    try {
+      origins.push(new URL(localMcpUrl).origin);
+    } catch {
+      /* malformed local URL — skip */
+    }
+    if (publicMcpUrl) {
+      try {
+        origins.push(new URL(publicMcpUrl).origin);
+      } catch {
+        /* malformed public URL — skip */
+      }
+    }
+    for (const origin of origins) {
+      for (const basePath of extraBasePaths) {
+        const audience = `${origin}${basePath}`;
+        if (!validAudiences.includes(audience)) validAudiences.push(audience);
+      }
+    }
+  }
+
   const urls = buildMcpHandshakeUrls(handshakeBasePath);
   return buildMcpAuthPlugins({
     validAudiences,
@@ -1170,6 +1224,12 @@ export function createMcpServerAuthPlugins(
     loginPage: urls.loginPage,
     consentPage: urls.consentPage,
     signupPage: urls.signupPage,
+    ...(options.clientRegistrationDefaultScopes
+      ? { clientRegistrationDefaultScopes: options.clientRegistrationDefaultScopes }
+      : {}),
+    ...(options.clientRegistrationAllowedScopes
+      ? { clientRegistrationAllowedScopes: options.clientRegistrationAllowedScopes }
+      : {}),
   });
 }
 

@@ -134,6 +134,10 @@ export const CLASSIFICATION_ENTRIES: readonly ClassificationEntry[] = [
   { resourceType: "audit_log",      action: "read",   effect: "read",  requiredAccess: { requiredPermission: "audit.read" } },
   { resourceType: "audit_log",      action: "list",   effect: "read",  requiredAccess: { requiredPermission: "audit.read" } },
   { resourceType: "platform",       action: "read",   effect: "read",  requiredAccess: { requiredPermission: "settings.read" } },
+  // ----- operations (operator console / background-job ops) -----
+  { resourceType: "operations",     action: "read",    effect: "read",    requiredAccess: { requiredPermission: "operations.read" } },
+  { resourceType: "operations",     action: "list",    effect: "read",    requiredAccess: { requiredPermission: "operations.read" } },
+  { resourceType: "operations",     action: "execute", effect: "execute", requiredAccess: { requiredPermission: "operations.execute" } },
   // ----- artifact -----
   { resourceType: "artifact", action: "read",   effect: "read",  requiredAccess: { requiredPermission: "artifact.read" } },
   { resourceType: "artifact", action: "list",   effect: "read",  requiredAccess: { requiredPermission: "artifact.list" } },

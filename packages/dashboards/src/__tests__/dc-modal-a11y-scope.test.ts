@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 
-import { inertSiblingsAlongAncestorChain } from "../components/dc-modal-a11y-helpers";
+import {
+  inertSiblingsAlongAncestorChain,
+  resolveDcModalEscapeClose,
+  type DcModalEscapeState,
+} from "../components/dc-modal-a11y-helpers";
 
 /**
  * Hermetic tests for the inert-siblings-along-active-dialog-ancestor-
@@ -152,5 +156,72 @@ describe("inertSiblingsAlongAncestorChain modal isolation", () => {
     expect(() => inertSiblingsAlongAncestorChain(body, dialog)).not.toThrow();
     // And actual HTMLElements still get inerted.
     expect(document.getElementById("app-shell")!.hasAttribute("inert")).toBe(true);
+  });
+});
+
+/**
+ * Resolver behind the uniform ESC-to-close behaviour (cinatra#438).
+ *
+ * The point of the resolver is that ESC must close WHICHEVER dashboard
+ * modal is open — including the hand-rolled `TextPortletModal` ("Add
+ * text") that ships no ESC handler of its own. These tests pin the
+ * mapping from each open flag to its close action, the no-modal no-op,
+ * and the deterministic precedence under the (DC-impossible but
+ * defensive) double-open case.
+ */
+describe("resolveDcModalEscapeClose", () => {
+  function makeState(
+    overrides: Partial<DcModalEscapeState> = {},
+  ): DcModalEscapeState {
+    return {
+      isPortletModalOpen: false,
+      isTextModalOpen: false,
+      isFilterConfigModalOpen: false,
+      deleteConfirmPortletId: null,
+      closePortletModal: vi.fn(),
+      closeTextModal: vi.fn(),
+      closeFilterConfigModal: vi.fn(),
+      closeDeleteConfirm: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  it("returns null when no modal is open", () => {
+    expect(resolveDcModalEscapeClose(makeState())).toBeNull();
+  });
+
+  it("routes ESC to closePortletModal when the portlet modal is open", () => {
+    const state = makeState({ isPortletModalOpen: true });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closePortletModal);
+  });
+
+  it("routes ESC to closeTextModal when the text modal is open (the gap in #438)", () => {
+    const state = makeState({ isTextModalOpen: true });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closeTextModal);
+  });
+
+  it("routes ESC to closeFilterConfigModal when the filter config modal is open", () => {
+    const state = makeState({ isFilterConfigModalOpen: true });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closeFilterConfigModal);
+  });
+
+  it("routes ESC to closeDeleteConfirm when a delete confirmation is pending", () => {
+    const state = makeState({ deleteConfirmPortletId: "p1" });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closeDeleteConfirm);
+  });
+
+  it("treats an empty-string delete id as an open confirmation (only null means closed)", () => {
+    const state = makeState({ deleteConfirmPortletId: "" });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closeDeleteConfirm);
+  });
+
+  it("prefers portlet → text → filter → delete on a (defensive) double-open", () => {
+    const state = makeState({
+      isPortletModalOpen: true,
+      isTextModalOpen: true,
+      isFilterConfigModalOpen: true,
+      deleteConfirmPortletId: "p1",
+    });
+    expect(resolveDcModalEscapeClose(state)).toBe(state.closePortletModal);
   });
 });

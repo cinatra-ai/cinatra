@@ -365,6 +365,8 @@ const PERMISSION_ICONS: Record<Permission, React.ComponentType<{ className?: str
   "settings.read": Eye,
   "settings.update": Settings,
   "audit.read": History,
+  "operations.read": Eye,
+  "operations.execute": Play,
 };
 
 function PermissionChips({

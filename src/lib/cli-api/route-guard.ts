@@ -19,14 +19,18 @@
 //     OWN dev box work without an OAuth dance, exactly as the MCP path already
 //     does.
 //
-// SCOPE BOUNDARY (cinatra#255 G2 PR split) — remote OAuth Bearer access tokens
-// are NOT resolved here yet. The MCP server verifies those through a SEPARATE
-// machinery (`verifyMcpAccessToken` → per-origin aud/iss/jwks → service-account
-// → userId), which is wired in the SAME unit as `cinatra login` (the flow that
-// MINTS those tokens). Until that lands, a remote Bearer token FAILS CLOSED
-// (401) here — by design, never a false-accept. So today this guard authorizes
-// exactly two paths: an established Better-Auth session, or the dev-admin
-// loopback bypass.
+// REMOTE BEARER (eng#231 — CLI Class-A) — a remote OAuth Bearer is resolved
+// by `resolveCliBearerActor` (src/lib/cli-api/verified-bearer.ts) ONLY when the
+// endpoint declares a `requiredScope`. The resolver JWKS-verifies the token
+// against the DEDICATED `/api/cli` audience (reciprocal isolation from the
+// `/api/mcp` audience), enforces the EXACT endpoint scope, and resolves the
+// actor's role LIVE from the verified subject (never from a token claim). The
+// route's `minTier` gate below then authorizes — so an arbitrary client that
+// obtains the scope+audience still resolves to its OWN user and fails the
+// platform-admin gate. An endpoint that omits `requiredScope` does NOT invoke
+// the Bearer arm: a remote Bearer FAILS CLOSED (401) there, exactly as before.
+// Destructive/operator commands stay gated on eng#229 and are never reachable
+// through this guard (status + agent export/import are read / authoring only).
 //
 // AUTHORIZATION — scope admits, ROLE authorizes (codex G2 decision):
 //   The OAuth `mcp:connect` scope is the admission ticket, but it must NEVER
@@ -60,6 +64,10 @@ import {
   isTrustedDevHost,
   shouldGrantDevAdminBypass,
 } from "@cinatra-ai/mcp-server/dev-admin-bypass";
+import {
+  resolveCliBearerActor,
+  type CliScope,
+} from "@/lib/cli-api/verified-bearer";
 
 /** The role tiers permitted to drive the CLI control plane. */
 const AUTHORIZED_ORG_ROLES: ReadonlySet<AuthzOrgRole> = new Set<AuthzOrgRole>([
@@ -78,9 +86,10 @@ export type CliActor = {
   organizationId: string | null;
   /**
    * How the caller was authorized. `dev-admin-bypass` marks the loopback path
-   * (no real session); `session` marks a cookie/Bearer session.
+   * (no real session); `session` marks a cookie session; `bearer` marks a
+   * verified remote OAuth Bearer (eng#231).
    */
-  via: "session" | "dev-admin-bypass";
+  via: "session" | "dev-admin-bypass" | "bearer";
 };
 
 export type CliGuardSuccess = { ok: true; actor: CliActor };
@@ -93,16 +102,25 @@ export type CliAuthTier = "org-admin" | "platform-admin";
 export type AuthorizeCliOptions = {
   /** Minimum tier required. `platform-admin` excludes org owners/admins. */
   minTier?: CliAuthTier;
+  /**
+   * The EXACT CLI scope a remote Bearer must carry to authorize this endpoint
+   * (eng#231). REQUIRED to enable remote-Bearer auth: an endpoint that omits
+   * it never invokes the Bearer arm, so a remote Bearer fails closed there.
+   */
+  requiredScope?: CliScope;
 };
 
 /**
  * Resolve and authorize the caller of a `/api/cli/*` route.
  *
  * Order:
- *   1. Try the authenticated session (cookie OR verified Bearer JWT). When
- *      present, authorize on platform-admin / org-admin role.
- *   2. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
- *   3. Otherwise deny (401 if unauthenticated, 403 if authenticated but
+ *   1. Try the authenticated cookie session. When present, authorize on
+ *      platform-admin / org-admin role.
+ *   2. (eng#231) When the endpoint declares `requiredScope`, try a verified
+ *      remote OAuth Bearer via `resolveCliBearerActor`. Audience-pinned,
+ *      scope-gated, role resolved live from the verified subject.
+ *   3. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
+ *   4. Otherwise deny (401 if unauthenticated, 403 if authenticated but
  *      under-privileged).
  *
  * Never throws on auth failure — returns a typed failure the route turns into
@@ -131,22 +149,8 @@ export async function authorizeCliRequest(
       ? await resolveOrgRoleForUser(organizationId, session.user.id)
       : undefined;
 
-    const orgAdminTier =
-      orgRole !== undefined && AUTHORIZED_ORG_ROLES.has(orgRole);
-    const authorized =
-      minTier === "platform-admin"
-        ? platformAdmin
-        : platformAdmin || orgAdminTier;
-
-    if (!authorized) {
-      return {
-        ok: false,
-        status: 403,
-        error:
-          minTier === "platform-admin"
-            ? "Forbidden: this CLI endpoint requires platform admin."
-            : "Forbidden: the CLI control plane requires platform admin or an organization owner/admin role.",
-      };
+    if (!isTierAuthorized(minTier, platformAdmin, orgRole)) {
+      return tierForbidden(minTier);
     }
 
     return {
@@ -161,7 +165,29 @@ export async function authorizeCliRequest(
     };
   }
 
-  // ---- 2. Dev-admin loopback bypass (local CLI → local instance). ---------
+  // ---- 2. Verified remote OAuth Bearer (eng#231). -------------------------
+  // ONLY when the endpoint declares a `requiredScope`. The resolver is
+  // fail-closed: wrong/missing audience, opaque/expired token, missing scope,
+  // or an unresolvable subject all return null (→ falls through to the bypass
+  // / 401 below). The role tier is then applied to the LIVE-resolved actor,
+  // exactly as for a session — so a remote Bearer must clear the SAME
+  // platform-admin / org-admin gate, never a token-claimed role.
+  if (options?.requiredScope) {
+    const bearerActor = await resolveCliBearerActor(
+      request,
+      options.requiredScope,
+    );
+    if (bearerActor) {
+      if (
+        !isTierAuthorized(minTier, bearerActor.isPlatformAdmin, bearerActor.orgRole)
+      ) {
+        return tierForbidden(minTier);
+      }
+      return { ok: true, actor: bearerActor };
+    }
+  }
+
+  // ---- 3. Dev-admin loopback bypass (local CLI → local instance). ---------
   // SAME guards the MCP transport uses; never fires in production.
   const url = request.url;
   const trustedDevHost = isTrustedDevHost({
@@ -190,16 +216,44 @@ export async function authorizeCliRequest(
     };
   }
 
-  // ---- 3. Deny (fail closed). ---------------------------------------------
-  // Reached when there is no established session AND the loopback bypass did
-  // not apply — including the remote OAuth Bearer case, which this guard does
-  // not yet resolve (see the SCOPE BOUNDARY note). Failing closed here is
-  // intentional; a remote Bearer is never silently accepted.
+  // ---- 4. Deny (fail closed). ---------------------------------------------
+  // Reached when there is no established session, no verified CLI Bearer (or
+  // the endpoint declares no `requiredScope`), AND the loopback bypass did not
+  // apply. Failing closed here is intentional; a remote Bearer is never
+  // silently accepted — it must clear audience + scope + the role tier above.
   return {
     ok: false,
     status: 401,
     error:
       "Unauthorized: sign in to this instance (or run against a trusted dev host with the admin bypass enabled).",
+  };
+}
+
+/**
+ * Apply the `minTier` role gate to a resolved actor's role facts. Shared by
+ * the session and verified-Bearer arms so both enforce the SAME authority
+ * boundary (platform-admin for the platform-admin tier; platform-admin OR an
+ * active-org owner/admin for the org-admin tier).
+ */
+function isTierAuthorized(
+  minTier: CliAuthTier,
+  isPlatformAdmin: boolean,
+  orgRole: AuthzOrgRole | undefined,
+): boolean {
+  if (minTier === "platform-admin") return isPlatformAdmin;
+  const orgAdminTier = orgRole !== undefined && AUTHORIZED_ORG_ROLES.has(orgRole);
+  return isPlatformAdmin || orgAdminTier;
+}
+
+/** The 403 a route returns when an authenticated actor is under the tier. */
+function tierForbidden(minTier: CliAuthTier): CliGuardFailure {
+  return {
+    ok: false,
+    status: 403,
+    error:
+      minTier === "platform-admin"
+        ? "Forbidden: this CLI endpoint requires platform admin."
+        : "Forbidden: the CLI control plane requires platform admin or an organization owner/admin role.",
   };
 }
 

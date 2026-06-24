@@ -257,6 +257,33 @@ body[data-cinatra-dashboard-modal-open="true"]
   left: var(--cinatra-dashboard-modal-left, 0px);
 }
 
+/* Single backdrop token across all dashboard modals (cinatra#438).
+ *
+ * Three of the four DC modals render through DC's shared `<Modal>`, whose
+ * overlay paints `background-color: var(--dc-overlay)` inline on the
+ * `.dc:fixed.dc:inset-0.dc:z-50` root. The fourth — the hand-rolled
+ * `TextPortletModal` ("Add text") — instead paints a SEPARATE backdrop
+ * child, `.dc:absolute.dc:inset-0` carrying the Tailwind utility class
+ * `dc:bg-black/50`, so "Add text" dims with a different (bluer/blacker)
+ * tone than every other modal. We can't reach DC's private modal chunk,
+ * so re-point that one backdrop child at the shared `--dc-overlay` token
+ * here. Scoped under the modal-open body so it never touches the cube's
+ * in-place filter/date popovers (which are not full-screen overlays).
+ *
+ * No `!important` needed: DC's `.dc:bg-black/50` is a NORMAL declaration
+ * inside `@layer utilities` (drizzle-cube/client/styles.css), and this
+ * file is imported UNLAYERED right after it (dashboards-client-shell.tsx),
+ * so this normal declaration wins on the cascade-layer rule (unlayered
+ * beats layered) regardless of specificity. (Contrast the filter-bar
+ * rules above, which DO need `!important` — those override colors the
+ * cube sets via inline `style={{}}`, which no unlayered selector can beat
+ * without it.) */
+body[data-cinatra-dashboard-modal-open="true"]
+  .dc\:fixed.dc\:inset-0.dc\:z-50
+  > .dc\:absolute.dc\:inset-0.dc\:bg-black\/50 {
+  background-color: var(--dc-overlay);
+}
+
 @media (min-width: 768px) {
   body[data-cinatra-dashboard-modal-open="true"]
     .dc\:fixed.dc\:inset-0.dc\:z-50
