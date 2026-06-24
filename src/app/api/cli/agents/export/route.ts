@@ -21,7 +21,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const guard = await authorizeCliRequest(request, { minTier: "platform-admin" });
+  const guard = await authorizeCliRequest(request, {
+    minTier: "platform-admin",
+    requiredScope: "cli:agent:read",
+  });
   if (!guard.ok) {
     return NextResponse.json({ error: guard.error }, { status: guard.status });
   }
