@@ -19,16 +19,18 @@ set -euo pipefail
 # .cinatra-published.json marker whose oasSha256 matches cinatra/oas.json, so the
 # fixture ships that committed marker (kept in sync by works-after:test).
 #
-# Env: PYTHON_TAG (default 3.11-slim), WAYFLOWCORE_VERSION (default 26.1.1),
-#      PYAGENTSPEC_VERSION (default 26.1.0).
+# Env: PYTHON_TAG (default 3.14-slim), WAYFLOWCORE_VERSION (default 26.1.2),
+#      PYAGENTSPEC_VERSION (default 26.1.2). Defaults mirror the Dockerfile ARG
+#      pins; CI derives the candidate from the Dockerfile so a bare local run
+#      and the gate test the same image.
 
 WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
-PYTHON_TAG="${PYTHON_TAG:-3.11-slim}"
-WAYFLOWCORE_VERSION="${WAYFLOWCORE_VERSION:-26.1.1}"
-PYAGENTSPEC_VERSION="${PYAGENTSPEC_VERSION:-26.1.0}"
+PYTHON_TAG="${PYTHON_TAG:-3.14-slim}"
+WAYFLOWCORE_VERSION="${WAYFLOWCORE_VERSION:-26.1.2}"
+PYAGENTSPEC_VERSION="${PYAGENTSPEC_VERSION:-26.1.2}"
 RUN_ID="wa-wayflow-$$"
 NET="${RUN_ID}-net"
 APP="${RUN_ID}-runtime"

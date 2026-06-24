@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
@@ -200,11 +200,47 @@ function ConnectorBadge({ connected, label }: { connected: boolean; label?: stri
 // Main client component
 // ---------------------------------------------------------------------------
 
+// localStorage key for the persisted Connected/Available filter selection.
+const FILTER_STORAGE_KEY = "cinatra:connectors:filter";
+
 export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<FilterType>("connected");
   const [sort, setSort] = useState<SortOrder>("asc");
+  const [hydrated, setHydrated] = useState(false);
+
+  // Persist the Connected/Available filter across visits. Read AFTER mount
+  // (not in the useState initializer) so the server-rendered default and the
+  // first client render match — avoids a hydration mismatch — mirroring the
+  // localStorage-after-mount pattern used elsewhere (orchestrator-stepper-panel,
+  // prompt-field). `hydrated` flips only once the stored value has been read.
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
+      if (stored === "connected" || stored === "available") {
+        setFilterType(stored);
+      }
+    } catch {
+      // Ignore storage access failures and keep the default selection.
+    }
+    setHydrated(true);
+  }, []);
+
+  // The write effect is gated on `hydrated` (a state flag, not a ref) so the
+  // mount-time commit — where `filterType` still holds the SSR default and
+  // `hydrated` is false — cannot clobber a previously stored selection before
+  // the read effect restores it. The state flag closes over the render value,
+  // so even React Strict Mode's double-invoked mount effects both skip the
+  // write. Persistence begins once hydration has committed.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(FILTER_STORAGE_KEY, filterType);
+    } catch {
+      // Ignore storage write failures (e.g. restricted/full storage).
+    }
+  }, [hydrated, filterType]);
 
   const filteredConnectors = [...cards]
     .sort((a, b) => sort === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name))

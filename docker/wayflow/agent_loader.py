@@ -2980,7 +2980,7 @@ def build_parent_app(agents_dir: Path) -> Starlette:
 
     if A2AServer is None or AgentSpecLoader is None:
         raise RuntimeError(
-            "wayflowcore is not available; install wayflowcore[a2a]==26.1.1"
+            "wayflowcore is not available; install wayflowcore[a2a]==26.1.2"
         )
 
     base_url = os.environ.get(

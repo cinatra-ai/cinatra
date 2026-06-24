@@ -66,7 +66,7 @@ done
 echo "== works-after proof harness (cinatra#352) =="
 echo "repo: ${REPO_ROOT}"
 echo "arms: ${SELECTED}$([ "$GATE_MODE" = "1" ] && echo '  [GATE MODE: a SKIP is a FAIL]')"
-echo "candidates: REDIS_TAG=${REDIS_TAG:-7-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-17-alpine} NEO4J_TAG=${NEO4J_TAG:-5.26-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.11-slim}"
+echo "candidates: REDIS_TAG=${REDIS_TAG:-7-alpine} PG_FROM_TAG=${PG_FROM_TAG:-17-alpine} PG_TO_TAG=${PG_TO_TAG:-17-alpine} NEO4J_TAG=${NEO4J_TAG:-5.26-community} VERDACCIO_TAG=${VERDACCIO_TAG:-6} PYTHON_TAG=${PYTHON_TAG:-3.14-slim}"
 echo ""
 
 # Results accumulators (parallel arrays, bash-3.2 compatible).

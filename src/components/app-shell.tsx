@@ -25,6 +25,11 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
+import {
+  buildBreadcrumbTrail,
+  humanizePathSegment,
+  type BreadcrumbCrumb,
+} from "@/lib/breadcrumb-trail";
 import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Workflow, Wrench } from "lucide-react";
 import {
   DropdownMenu,
@@ -62,14 +67,6 @@ function EmbedMessageListener() {
 
 // Notifications flyout state lives in `src/components/notifications-flyout.tsx`.
 // The Provider owns state; the BellTrigger renders the bell + popover.
-
-function humanizePathSegment(segment: string) {
-  return decodeURIComponent(segment)
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
 
 function deriveDocumentTitle(pathname: string, explicitTitle?: string) {
   if (explicitTitle) {
@@ -280,57 +277,15 @@ export function AppShell({
     return () => controller.abort();
   }, [pathname]);
 
-  const breadcrumbSegments = useMemo<
-    { label: string; href: string; ellipsis?: boolean }[]
-  >(() => {
-    const segments = pathname.split("/").filter(Boolean);
-    if (segments.length === 0) return [{ label: "Personal", href: "/personal" }];
-
-    // Chat thread: collapse to "Chat > <thread title>".
-    if (segments[0] === "chat" && segments.length >= 2 && /^[a-f0-9-]{36}$/.test(segments[1])) {
-      return [
-        { label: "Chat", href: "/chat" },
-        { label: chatThreadTitle ?? "Thread", href: pathname },
-      ];
-    }
-
-    // Agent instance: collapse the opaque vendor/package/instance path to
-    // "Agents > <instance name> [> <sub-route>]" so the trail stays readable.
-    if (segments[0] === "agents" && segments.length >= 4) {
-      const crumbs = [
-        { label: "Agents", href: "/agents" },
-        {
-          label: agentInstanceName ?? humanizePathSegment(segments[3]),
-          href: "/" + segments.slice(0, 4).join("/"),
-        },
-      ];
-      if (segments.length >= 5) {
-        crumbs.push({ label: humanizePathSegment(segments[4]), href: pathname });
-      }
-      return crumbs;
-    }
-
-    // General: full trail; the leaf crumb prefers the live page title (the
-    // exact <PageHeader> title, e.g. "Upload Extension") over the humanized
-    // path segment ("Upload").
-    const crumbs = segments.map((seg, i) => {
-      const isLast = i === segments.length - 1;
-      const label =
-        isLast && pageTitle && pageTitle.pathname === pathname
-          ? pageTitle.title
-          : humanizePathSegment(seg);
-      return { label, href: "/" + segments.slice(0, i + 1).join("/") };
-    });
-
-    // Breadcrumb: 3-4 crumbs max; truncate the middle with an ellipsis.
-    if (crumbs.length <= 4) return crumbs;
-    return [
-      crumbs[0],
-      { label: "…", href: crumbs[1].href, ellipsis: true },
-      crumbs[crumbs.length - 2],
-      crumbs[crumbs.length - 1],
-    ];
-  }, [pathname, chatThreadTitle, agentInstanceName, pageTitle]);
+  const breadcrumbSegments = useMemo<BreadcrumbCrumb[]>(
+    () =>
+      buildBreadcrumbTrail(pathname, {
+        pageTitle,
+        chatThreadTitle,
+        agentInstanceName,
+      }),
+    [pathname, chatThreadTitle, agentInstanceName, pageTitle],
+  );
 
   useEffect(() => {
     if (requiresSetupRedirect) {
@@ -510,6 +465,10 @@ export function AppShell({
                         <BreadcrumbEllipsis />
                       ) : i === breadcrumbSegments.length - 1 ? (
                         <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+                      ) : crumb.nonNavigable ? (
+                        <span className="font-normal text-muted-foreground">
+                          {crumb.label}
+                        </span>
                       ) : (
                         <BreadcrumbLink asChild>
                           <Link href={crumb.href}>{crumb.label}</Link>
