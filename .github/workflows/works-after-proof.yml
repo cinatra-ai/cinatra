@@ -201,7 +201,7 @@ jobs:
           # e.g. neo4j:2026.05-community@sha256:…), THEN take the part after the
           # last colon. Without the @-strip, `${1##*:}` would return the digest
           # hex for a digest-pinned image and `neo4j:<hex>` is not a valid tag.
-          tag_of()  { local _r="${1%@*}"; printf '%s' "${_r##*:}"; }  # neo4j:2026.05-community@sha256:… → 2026.05-community ; redis:7-alpine → 7-alpine
+          tag_of()  { local t="${1%@*}"; printf '%s' "${t##*:}"; }  # redis:7-alpine[@sha256:…] → 7-alpine (digest-aware) ; neo4j:2026.05-community@sha256:… → 2026.05-community
           # repo_of: the repo[:registry] component, i.e. everything before the
           # last tag colon (digest-aware). neo4j:2026.05-community@sha256:… → neo4j.
           repo_of() { local _r="${1%@*}"; printf '%s' "${_r%:*}"; }

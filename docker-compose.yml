@@ -67,10 +67,14 @@ services:
       retries: 20
 
   nango-db:
-    image: postgres:15-alpine
-    # Upgrade track: target is postgres 17-alpine (consolidate with the platform
-    # DB), but do NOT tag-bump here — the existing PGDATA volume needs a
-    # pg_upgrade/restore. Staged separately. See docs/upgrade-track.md.
+    image: postgres:17-alpine@sha256:979c4379dd698aba0b890599a6104e082035f98ef31d9b9291ec22f2b13059ca
+    # Upgrade track: consolidated onto postgres 17-alpine (matches the platform
+    # DB). Digest-pinned to a CONFIRMED multi-arch (amd64/arm64) manifest so ARM
+    # dev hosts are safe AND the pg-major-cutover tool's digest read-back is
+    # satisfied. The prod PGDATA volume is migrated by the logical-dump ->
+    # fresh-volume restore in ops scripts/pg-major-cutover.sh (hub-nango profile),
+    # which rebinds nango-db to the external restored volume via the ops prod
+    # override. See docs/upgrade-track.md and cinatra-ai/ops#376.
     # Host port publication moved to docker-compose.dev.yml (base-safe-by-default):
     # a bare `docker compose up` no longer exposes 5435 on 0.0.0.0
     # (this is a Postgres with default nango/nango creds). Only the host-side CLI
