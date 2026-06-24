@@ -1,0 +1,180 @@
+# Public-distribution mirror: copy the already-built, boot-gated GHCR image to
+# Docker Hub (docker.io/cinatra/cinatra). This is a DECOUPLED mirror — it never
+# builds. build-image.yml owns the build/boot-gate/push to GHCR; this workflow
+# only re-points the existing multi-arch manifest list at Docker Hub, so the two
+# publish paths cannot drift and a Docker Hub outage can never block a release.
+#
+# Two ways to run:
+#   - Automatically on every `v*` release tag (mirrors the GHCR push that the
+#     same tag triggers in build-image.yml).
+#   - Manually via workflow_dispatch with a `version` input (e.g. the current
+#     GHCR tag) for a one-time backfill or re-mirror.
+name: dockerhub-publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'GHCR tag to mirror to Docker Hub (e.g. the published release tag like vMAJOR.MINOR.PATCH).'
+        required: true
+        type: string
+      move_latest:
+        description: 'Also move the Docker Hub `latest` tag to this version. Leave OFF for a backfill of an OLDER version (moving latest backward is almost never wanted).'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: read
+
+# Serialize ALL runs of this workflow. `latest` is a single shared tag, so two
+# final-release mirrors (or a release + a manual backfill) must never race to
+# move it. A repo-wide group (not per-version) is the safe choice for a mirror
+# that mutates a shared `latest`.
+concurrency:
+  group: dockerhub-publish
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror GHCR image to Docker Hub
+    runs-on: ubuntu-latest
+    # Only the canonical repo mirrors. A fork or non-canonical clone must never
+    # push to the shared Docker Hub org even if a v* tag lands there.
+    if: github.repository == 'cinatra-ai/cinatra'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Source registry: read the GHCR manifest list with the workflow's own
+      # GITHUB_TOKEN (packages: read). The source image is private; the read
+      # auth is required for `imagetools create` to resolve it.
+      - name: Login to GHCR (source)
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Destination registry: Docker Hub, push only, via the synced repo secrets.
+      - name: Login to Docker Hub (destination)
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve VERSION
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_MOVE_LATEST: ${{ github.event.inputs.move_latest }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            VERSION="${INPUT_VERSION}"
+          else
+            # push event: the ref name IS the tag (the on.push.tags filter
+            # guarantees it starts with 'v').
+            VERSION="${REF_NAME}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "::error::Could not resolve a VERSION to mirror." >&2
+            exit 1
+          fi
+          # Mirror only proper semver release tags (vMAJOR.MINOR(.PATCH) with an
+          # optional pre-release suffix). A non-semver checkpoint/marker tag
+          # (e.g. a 'v-pre-*' marker) still BUILT a GHCR checkpoint image, but
+          # must never be mirrored to the public Docker Hub repo. Build metadata
+          # ('+...') is rejected: '+' is not a legal Docker tag character, and
+          # the GHCR build path never emits it.
+          if ! [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::VERSION '${VERSION}' is not a mirrorable semver release tag (vMAJOR.MINOR[.PATCH][-prerelease], no build metadata) — refusing to mirror to Docker Hub." >&2
+            exit 1
+          fi
+          # Is this a FINAL release (no pre-release suffix — exactly
+          # vMAJOR.MINOR[.PATCH])? Only a final release may EVER move `latest`.
+          if [[ "${VERSION}" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            IS_FINAL=true
+          else
+            IS_FINAL=false
+          fi
+          # `latest` policy:
+          #  - push (release tag): auto-move `latest` for a final release, mirror-
+          #    only for a pre-release. Mirrors the GHCR policy (build-image.yml
+          #    sets `latest` only on the default branch / final release flow).
+          #  - workflow_dispatch (backfill / re-mirror): move `latest` ONLY when the
+          #    operator explicitly opts in AND the version is final — so a routine
+          #    backfill of an OLDER version can never silently move `latest`
+          #    backward.
+          MOVE_LATEST=false
+          if [ "${IS_FINAL}" = "true" ]; then
+            if [ "${EVENT_NAME}" = "push" ]; then
+              MOVE_LATEST=true
+            elif [ "${INPUT_MOVE_LATEST}" = "true" ]; then
+              MOVE_LATEST=true
+            fi
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "move_latest=${MOVE_LATEST}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::Mirroring GHCR tag '${VERSION}' to Docker Hub (final=${IS_FINAL}, move latest=${MOVE_LATEST})."
+
+      # Copy the GHCR manifest LIST (all architectures) to Docker Hub without a
+      # full pull/re-push: `imagetools create` re-references the source manifest
+      # at the destination, preserving the multi-arch index byte-for-byte.
+      - name: Mirror manifest list to Docker Hub
+        env:
+          SRC: ghcr.io/${{ github.repository }}
+          DST: docker.io/cinatra/cinatra
+          VERSION: ${{ steps.resolve.outputs.version }}
+          MOVE_LATEST: ${{ steps.resolve.outputs.move_latest }}
+        run: |
+          set -euo pipefail
+          # Wait for the source tag to resolve in GHCR before mirroring. On a
+          # `v*` tag push, THIS workflow and build-image.yml start concurrently,
+          # so the source manifest may not be pushed yet — poll with backoff
+          # instead of failing the race. (On a manual backfill the image already
+          # exists, so the first probe succeeds.)
+          resolved=false
+          for attempt in $(seq 1 30); do
+            if docker buildx imagetools inspect "${SRC}:${VERSION}" >/dev/null 2>&1; then
+              resolved=true
+              break
+            fi
+            echo "::notice::Source ${SRC}:${VERSION} not resolvable yet (attempt ${attempt}/30) — waiting for build-image.yml to push it…"
+            sleep 30
+          done
+          if [ "${resolved}" != "true" ]; then
+            echo "::error::Source ${SRC}:${VERSION} never resolved in GHCR after waiting — nothing to mirror." >&2
+            exit 1
+          fi
+
+          if [ "${MOVE_LATEST}" = "true" ]; then
+            docker buildx imagetools create \
+              --tag "${DST}:${VERSION}" \
+              --tag "${DST}:latest" \
+              "${SRC}:${VERSION}"
+          else
+            docker buildx imagetools create \
+              --tag "${DST}:${VERSION}" \
+              "${SRC}:${VERSION}"
+          fi
+
+          # Prove the destination resolves AND that the mirror preserved the
+          # multi-arch index (more than one platform manifest), not just a single
+          # flattened image.
+          platforms="$(docker buildx imagetools inspect "${DST}:${VERSION}" --raw \
+            | { grep -o '"architecture"' || true; } | wc -l | tr -d ' ')"
+          if [ "${platforms}" -lt 1 ]; then
+            echo "::error::Destination ${DST}:${VERSION} did not resolve after mirror." >&2
+            exit 1
+          fi
+          if [ "${platforms}" -lt 2 ]; then
+            echo "::warning::Destination ${DST}:${VERSION} resolved with only ${platforms} platform manifest — the source may not be multi-arch."
+          fi
+          echo "::notice::Mirrored ${SRC}:${VERSION} -> ${DST}:${VERSION} (${platforms} platform manifest(s))$([ "${MOVE_LATEST}" = "true" ] && echo ' + :latest')."
