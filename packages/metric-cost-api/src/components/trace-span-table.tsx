@@ -9,6 +9,7 @@ import {
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import { Badge } from "@/components/ui/badge";
 import type { TraceSpanRow } from "../store";
+import { spanStatusDisplay } from "../span-status-display";
 
 // ---------------------------------------------------------------------------
 // TraceSpanTable.
@@ -65,12 +66,20 @@ function flattenTree(roots: TreeNode[]): TreeNode[] {
   return out;
 }
 
-function statusBadgeVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "ok") return "default";
-  if (status === "error") return "destructive";
-  return "secondary";
+// Status cell: ok/error render as badges; "unset" (the OTel default, carrying no
+// signal) renders as a muted "—" with an explanatory tooltip instead of a
+// meaningless "unset" badge (#414). Decision logic lives in the pure
+// `spanStatusDisplay` helper so it is unit-testable without a DOM render.
+function StatusCell({ status }: { status: string }) {
+  const display = spanStatusDisplay(status);
+  if (display.kind === "badge") {
+    return <Badge variant={display.variant}>{display.label}</Badge>;
+  }
+  return (
+    <span className="text-muted-foreground" title={display.title}>
+      {display.label}
+    </span>
+  );
 }
 
 export function TraceSpanTable({ spans, mode }: TraceSpanTableProps) {
@@ -106,7 +115,7 @@ export function TraceSpanTable({ spans, mode }: TraceSpanTableProps) {
               </TableCell>
               <TableCell className="text-xs text-muted-foreground">{row.service}</TableCell>
               <TableCell>
-                <Badge variant={statusBadgeVariant(row.status)}>{row.status}</Badge>
+                <StatusCell status={row.status} />
               </TableCell>
               <TableCell className="text-right font-mono text-xs text-foreground">
                 {row.durationMs !== null ? `${row.durationMs} ms` : "—"}
