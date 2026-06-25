@@ -6,13 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-25
+
+A reusable webhooks and streams facility, an authenticated control plane for the CLI, security hardening, and a platform-dependency refresh.
+
 ### Added
 
+- **Webhooks facility.** Cinatra now has a first-class webhooks layer. Extensions can register inbound webhooks that are served at a single, predictable URL — `/webhook/<vendor>/<slug>/<hook>` — with built-in signature verification (Standard-Webhooks) and duplicate-delivery protection, so the same event is never processed twice. Each connected site is issued its own webhook secret automatically at connect time, instead of one secret shared across a connector.
+- **Webhooks page.** A new **Tools → Webhooks** screen lists every registered webhook — its vendor, package, hook, URL, and status — so operators can see what is wired up at a glance.
 - Outbound webhooks are now delivered through one host-owned engine that signs every request with Standard-Webhooks, retries transient failures with exponential backoff, and records permanently-failed or exhausted deliveries in a durable dead-letter table.
+- **`cinatra login` and an authenticated control plane.** The server now exposes an authenticated control-plane API (`/api/cli`) so the Cinatra CLI can manage a running instance — local or remote — after `cinatra login`. Operators can sign in with a browser flow (with a secure local token cache) or use machine credentials in CI, then run control-plane commands such as installing and removing extensions, importing and exporting agents, checking status, and managing model access against the instance they are signed in to.
+- **Reusable stream primitives.** A new `@cinatra-ai/streams` package provides durable, resumable event-stream building blocks (and a `cinatra.streams` extension declaration). This is foundational groundwork for extension authors; existing streaming behavior in the app is unchanged.
+- **Docker Hub images.** Cinatra release images are now published to the public `cinatra/cinatra` Docker Hub repository on every tagged release, multi-architecture (amd64/arm64) and identical to the GitHub Container Registry images — so you can pull Cinatra from Docker Hub, not just GHCR.
 
 ### Changed
 
 - **Breaking (assistant webhook receivers):** the assistant `@mention` webhook is now signed with the Standard-Webhooks headers (`webhook-id` / `webhook-timestamp` / `webhook-signature`) instead of the legacy `X-Cinatra-Signature` HMAC header. The assistant id is still sent as the `X-Cinatra-Assistant-Id` header. Receivers must switch to Standard-Webhooks verification — see `docs/webhooks/outbound-delivery.md`.
+- The WordPress "post published" webhook now runs on the new shared webhooks facility, with per-site authentication and duplicate-delivery protection in place of a single shared connector secret. Existing connected WordPress sites continue to work without any change — the previous signed path is kept live during the transition.
+- **Platform dependencies upgraded.** The underlying framework and library stack (React/Next.js, TypeScript, the build and database tooling, and the agent runtime) has been brought up to current stable releases. These updates are transparent to your data and your workspace — no action is required on upgrade.
+- **Platform databases move to PostgreSQL 17.** The platform now targets PostgreSQL 17. For self-hosting operators this is **not** an automatic, in-place upgrade: the live data move from PostgreSQL 15 to 17 is a deliberate, scheduled maintenance operation (back up, migrate, verify per database, with a clean rollback to 15 if needed). Follow the PostgreSQL major-upgrade runbook, and do not redeploy an un-migrated PostgreSQL 15 database onto a 17 image — the database will refuse to start. During the short migration windows, the app and existing connections keep working; only starting brand-new connector connections (and, separately, triggering new deploys) is briefly paused.
+- Connectors page: your **Connected / Available** filter selection is now remembered across reloads and navigation instead of resetting each visit. Connect buttons and cards can be disabled until their prerequisites are met.
+
+### Fixed
+
+- Breadcrumbs no longer lead to dead ends: intermediate path segments that have no page of their own now render as plain labels instead of links that 404, while the connector breadcrumb links to its actual setup page.
+- The "Become a vendor" flow is more robust: on an instance where the marketplace isn't configured, the form now explains that and points to the setup step instead of silently submitting a doomed application; a rejected application no longer gets stuck in a false "pending review" state and can always be cancelled, even when the marketplace is offline.
+- The personal dashboard dialogs (add text, add portlet, configure filter, confirm delete) all close consistently with the Escape key and share a consistent backdrop, and an empty dashboard now explains in plain language what it is and how to add your first card.
+
+### Security
+
+- The Nango connector-configuration secret, when stored in the database rather than supplied through the environment, is now encrypted at rest instead of being saved in plain text; existing values are re-encrypted automatically. No operator action is required.
+- Administrative and operator actions are hardened with a dedicated, separately-scoped OAuth permission (kept out of default client registration), audit logging of destructive admin operations, and tightened cross-origin and bearer-token acceptance — the safeguards that gate privileged, remote control-plane operations.
 
 ## [0.1.2] - 2026-06-22
 
@@ -80,6 +104,7 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
+[0.1.3]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.1
 [0.1.0]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.0
