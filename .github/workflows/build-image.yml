@@ -1013,6 +1013,26 @@ jobs:
       - name: Workspace dependency-cycle gate tests
         run: node --test scripts/audit/__tests__/workspace-dep-cycles.test.mjs
 
+      # File-size ratchet gate (no-new-rot ratchet, eng#308). Pins the current
+      # line count of each tracked architecture-bottleneck file (handlers,
+      # drizzle-store, agents store, chat page, skills store, mcp-server entry,
+      # background-jobs, database, extension-install pipeline, boot
+      # instrumentation) as a per-file ceiling and fails CI when a tracked file
+      # grows BEYOND its ceiling. It forces NO refactor (baselines are the
+      # current sizes); it only prevents the listed hubs from growing further.
+      # The baseline ratchets DOWN as extractions land (thin facades + vertical
+      # slices). File-level sibling of the package-level dependency-cycle ratchet.
+      - name: File-size ratchet gate
+        env:
+          # Also fail if the committed baseline RAISED any ceiling vs the base
+          # branch (blocks the regenerate-to-pass bypass). Same base ref the
+          # other no-new-rot gates use.
+          WORKSPACE_FILE_SIZE_RATCHET_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/file-size-ratchet.mjs
+
+      - name: File-size ratchet gate tests
+        run: node --test scripts/audit/__tests__/file-size-ratchet.test.mjs
+
       # Pinned-test existence gate. `vitest run a b c` treats positionals as
       # FILTERS — a positional that matches zero files is SILENTLY ignored as
       # long as the others match, so a renamed/lost test leaves its pin behind
