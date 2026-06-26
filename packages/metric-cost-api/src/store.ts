@@ -1,5 +1,5 @@
 import "server-only";
-import { sql, eq, desc, and, gte, lte } from "drizzle-orm";
+import { sql, eq, desc, and, gte, lte, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db, metadataTable } from "./db";
 import { usageEvents, legacyCosts, modelPricing, traces } from "./schema";
@@ -620,7 +620,7 @@ export async function readRecentTraces(
   // Server-side filters (#491). Range on startedAt — it is the indexed
   // (traces_started_at_idx DESC) and displayed column; `service` filters the
   // per-span column. Conditions are ANDed; absent filters are omitted.
-  const conditions = [];
+  const conditions: SQL[] = [];
   if (opts.from) conditions.push(gte(traces.startedAt, opts.from));
   if (opts.to) conditions.push(lte(traces.startedAt, opts.to));
   if (opts.service) conditions.push(eq(traces.service, opts.service));
