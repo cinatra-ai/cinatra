@@ -214,6 +214,13 @@ export async function register() {
       const { loadStaticBundleExtensions } = await import("@/lib/static-bundle-loader");
       const results = await loadStaticBundleExtensions();
       bootActivationResults.push(...results);
+      // Control-plane generation (#310): mark the static-bundle boot pass as a
+      // transition AFTER it has mutated the registries, so the first request sees
+      // the final boot generation and the generation-keyed self-MCP cache builds
+      // against the fully-activated boot surface (the cache is lazy, so an early
+      // bump is harmless + desirable — never bump before the loader runs).
+      const { bumpActivationGeneration } = await import("@/lib/extension-activation-generation");
+      bumpActivationGeneration("boot-static");
       if (results.length) {
         console.info(
           `[boot] StaticBundleLoader: ${results.length} result(s) — ` +
@@ -266,6 +273,10 @@ export async function register() {
       const resolveInstallAnchor = await makeDefaultInstallAnchorResolver();
       const results = await loadRuntimePackageExtensions(undefined, { resolveInstallAnchor });
       bootActivationResults.push(...results);
+      // Control-plane generation (#310): mark the runtime-package boot pass after
+      // it mutated the registries (one bump per loader; see the static-bundle bump).
+      const { bumpActivationGeneration } = await import("@/lib/extension-activation-generation");
+      bumpActivationGeneration("boot-runtime");
       if (results.length) {
         console.info(
           `[boot] RuntimePackageLoader: ${results.length} result(s) — ` +

@@ -18,6 +18,7 @@ import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
+import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import { readAgentRunById, readRunCoOwners } from "@cinatra-ai/agents";
 import { auditEvents } from "@cinatra-ai/agents/schema";
 import { db } from "@cinatra-ai/agents/db";
@@ -85,9 +86,22 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // Run-ownership guard. Skipped for the trusted WayFlow bridge (same model as
-  // run-skills): the bridge only calls back for runs Cinatra dispatched; the run
-  // must still exist. Session callers keep the full check.
+  // Bind the body-selected agent_run_id to the run actually executing this
+  // bridge callback (proven by the auth-injected
+  // X-Cinatra-A2A-Context-Id header) before deriving authority from it. The
+  // acceptedIds replay-validation below bounds WHICH suggestions can be applied,
+  // but NOT which run supplies authority — the binding closes that gap. Session
+  // callers keep the full owner / admin / co-owner check below.
+  if (isBridge) {
+    const binding = await bindBridgeRunId(request, parsed.agent_run_id);
+    if (!binding.ok) {
+      return Response.json({ error: binding.error }, { status: binding.status });
+    }
+  }
+
+  // Run-ownership guard. For the trusted WayFlow bridge the run-binding check
+  // above has bound agent_run_id to the executing run; the run must still
+  // exist. Session callers keep the full check.
   const run = await readAgentRunById(parsed.agent_run_id);
   if (!run) return new Response("Not Found", { status: 404 });
   if (

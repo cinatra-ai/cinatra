@@ -15,41 +15,23 @@
  * registries / orchestration; only the static types from ./types.
  */
 
+import { readMatchWhenRaw } from "../frontmatter";
 import type { AgentForMatching, SkillForMatching } from "./types";
 
 /**
  * Extract the raw `match_when:` block (or inline value) from a SKILL.md body.
- * Mirrors the lightweight scanner in `packages/skills/src/matching.ts` so the
- * shared evaluator core sees the same text as the declarative rule path.
+ * Delegates to the shared, YAML-aware reader in `../frontmatter`, which reads
+ * `metadata.match_when` PREFERRED and falls back to the legacy top-level
+ * `match_when:` (Skills cluster Wave-0 dual-read). The shared reader returns the
+ * raw YAML text the downstream `match-when-parser.ts` re-parses, so the shared
+ * evaluator core sees the same declaration as the declarative rule path in
+ * `packages/skills/src/matching.ts`.
  *
- * Returns `undefined` when no `match_when:` key is present — `evaluatePair`
- * treats this as "no rules, route to LLM".
+ * Returns `undefined` when no `match_when` is declared in either location —
+ * `evaluatePair` treats this as "no rules, route to LLM".
  */
 export function extractMatchWhenRaw(skillContent: string): string | undefined {
-  const fmMatch = skillContent.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return undefined;
-  const lines = fmMatch[1].split("\n");
-  const startIdx = lines.findIndex((l) => l.trim().startsWith("match_when:"));
-  if (startIdx < 0) return undefined;
-
-  // Inline form: `match_when: always` or `match_when: "always"`.
-  const inline = lines[startIdx].match(/match_when:\s*(.+)/);
-  if (inline && inline[1].trim().length > 0) {
-    // Multi-line block when inline value is empty; otherwise inline.
-    const value = inline[1].trim().replace(/^["']|["']$/g, "");
-    // If the next line is indented beneath match_when, treat as block.
-    const next = lines[startIdx + 1];
-    if (!next || !/^\s/.test(next)) return value;
-  }
-
-  // Block form: gather indented continuation lines.
-  const blockLines: string[] = [];
-  for (let i = startIdx + 1; i < lines.length; i += 1) {
-    const ln = lines[i];
-    if (!/^\s/.test(ln) && ln.trim().length > 0) break;
-    blockLines.push(ln);
-  }
-  return blockLines.join("\n");
+  return readMatchWhenRaw(skillContent);
 }
 
 /**

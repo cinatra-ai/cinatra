@@ -421,6 +421,129 @@ export function createInstanceWriteAuthority(
 }
 
 /**
+ * The minimal instance shape the actor-scoped LIST filter needs: every row
+ * carries an `id` (the per-instance authority is keyed on it). Callers thread
+ * their own richer row type through the generic so the FULL row is returned
+ * unchanged for the authorized subset.
+ */
+type InstanceWithId = { id: string };
+
+/**
+ * An actor-scoped instance LIST filter. Given the GLOBAL, unscoped instance
+ * rows, returns ONLY the subset the CURRENT TRUSTED actor is authorized to
+ * `use` — the read-boundary twin of `requireWrite`, reusing the IDENTICAL
+ * authority machinery (same trusted-actor resolution, same universal
+ * live-membership reverify, same sanitized decisionActor, same per-instance
+ * org-binding gate, same connector-package `requireConnectorAuthority` check).
+ * It NEVER throws to the caller — a deny at any layer DROPS the instance (or,
+ * for actor/membership failures, returns `[]`), so the external-MCP
+ * toolbox-injection path fails CLOSED (injects no tools) rather than leaking
+ * another tenant's credentialed MCP server.
+ */
+export type FilterAuthorizedInstances = <T extends InstanceWithId>(
+  instances: T[],
+) => Promise<T[]>;
+
+/**
+ * Mint a per-connector-kind, actor-scoped instance LIST filter. `kind` is the
+ * CLOSED enum the connector names for ITSELF; the host maps it to the package id
+ * + instance reader (never caller-supplied). The returned filter:
+ *   (a)+(b) resolves the TRUSTED actor host-side and returns `[]` fail-closed
+ *           when none resolves (synthetic/anonymous/legacy frame);
+ *   (c)     RE-VERIFIES LIVE ORG MEMBERSHIP for the actor and returns `[]` when
+ *           there is no membership row OR the lookup errors (a revoked/stale
+ *           same-org member, or a platform-admin without a live membership row,
+ *           gets nothing — no admin bypass);
+ *   (d)     keeps ONLY instances whose persisted org binding matches the trusted
+ *           actor's org (unknown/unbound/different-org rows are dropped) AND
+ *   (e)     for which `requireConnectorAuthority(<host-bound pkg>, decisionActor,
+ *           { mode:"use", instanceId })` ALLOWS — using a decisionActor built
+ *           FROM SCRATCH (platformRole stripped, orgRole pinned to the LIVE
+ *           role, scoped tiers dropped), exactly like `requireWrite`.
+ * Identity is HOST-DERIVED ONLY — never from connector / tool input.
+ */
+export function createInstanceListAuthority(
+  kind: InstanceWriteConnectorKind,
+): FilterAuthorizedInstances {
+  const packageId = resolvePackageIdForKind(kind);
+  const resolveInstanceOrg = CONNECTOR_KIND_TO_INSTANCE_ORG_RESOLVER[kind];
+
+  return async function filterAuthorizedInstances<T extends InstanceWithId>(
+    instances: T[],
+  ): Promise<T[]> {
+    if (!instances || instances.length === 0) return [];
+
+    // (a)+(b) Resolve the trusted user actor; DENY-ALL fail-closed if absent.
+    // The synthetic/anonymous/legacy frame yields NO instances (never the
+    // global list) — the exact fail-closed posture the connector toolbox needs.
+    const resolved = await resolveTrustedWriteActor();
+    if (!resolved) return [];
+    const { actor, userId, orgId } = resolved;
+
+    // (c) LIVE ORG-MEMBERSHIP RE-VERIFICATION (cinatra#406 + the 4th-gap fix),
+    // run ONCE before the per-instance loop. A membership row is a MANDATORY
+    // precondition: no row (revoked/stale member, or platform-admin without a
+    // live membership) OR a lookup error → DENY-ALL (return []). Standing
+    // (member OR platform-admin) is NOT a live org grant.
+    let realOrgRole: ActorContext["orgRole"] | undefined;
+    try {
+      realOrgRole = await resolveOrgRoleForUser(orgId, userId);
+    } catch {
+      return [];
+    }
+    if (!realOrgRole) return [];
+
+    // Build the delegated decision actor FROM SCRATCH as a sanitized human
+    // SUBJECT — IDENTICAL construction to `requireWrite` (platformRole stripped,
+    // orgRole pinned to the LIVE role, every carried authorization scope
+    // dropped) so admin standing / stale team|project scope can never decide a
+    // listed instance, and a non-human transport carrier (model/A2A) still
+    // resolves the real human installer/co-owner.
+    const decisionActor: ActorContext = {
+      principalType: "HumanUser",
+      principalId: userId,
+      organizationId: orgId,
+      orgRole: realOrgRole,
+      platformRole: undefined,
+      authSource: actor.authSource,
+      policyVersion: actor.policyVersion,
+    };
+
+    const authorized: T[] = [];
+    for (const instance of instances) {
+      // (d) PER-INSTANCE org-binding gate. Resolve the row HOST-SIDE and keep it
+      // ONLY when its persisted org binding == the trusted actor's org. Unknown
+      // / unbound (no orgId) / different-org rows are DROPPED (never injected).
+      // A reader fault drops the single instance (fail-closed, never the list).
+      let binding: InstanceOrgBinding | null;
+      try {
+        binding = resolveInstanceOrg(instance.id);
+      } catch {
+        continue;
+      }
+      if (!binding) continue;
+      const instanceOrgId = binding.orgId;
+      if (!instanceOrgId || instanceOrgId !== orgId) continue;
+
+      // (e) CONNECTOR-PACKAGE entitlement — the host-bound package policy, keyed
+      // on the sanitized decisionActor's org. Keep the instance ONLY on allow.
+      // A policy-evaluation fault drops the single instance (fail-closed).
+      try {
+        const decision = await requireConnectorAuthority(packageId, decisionActor, {
+          mode: "use",
+          instanceId: instance.id,
+        });
+        if (!decision.allowed) continue;
+      } catch {
+        continue;
+      }
+      authorized.push(instance);
+    }
+    return authorized;
+  };
+}
+
+/**
  * Build the host `instance-write-authority` service object the host publishes
  * into the capability registry. `selectForConnector` accepts the CLOSED
  * connector-kind enum (`"wordpress" | "drupal"`) — the connector's OWN static

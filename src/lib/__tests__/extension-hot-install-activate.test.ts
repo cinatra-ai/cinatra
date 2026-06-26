@@ -328,6 +328,7 @@ import {
   fireExtensionCapabilityTeardown,
 } from "@cinatra-ai/extensions";
 import { activateInstalledPackageInProcess, hotUpdateWithDurableRollback } from "@/lib/extension-runtime-activate";
+import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 // The fixture's register(ctx) wires one of each dedup-relevant capability so a
 // re-activate exercises: MCP replace-by-name, capabilities replace-in-place,
@@ -424,10 +425,21 @@ async function materialize(storeRoot: string, marker: string, digestSuffix: stri
   );
 }
 
+// These suites use an UNSIGNED fixture package purely as a vehicle to exercise
+// activation MECHANICS (hot-update, GC, durable rollback, teardown ordering) —
+// NOT the in-process trust gate. The hardened default fails-closed on unsigned
+// in-process activation, so opt in the way a dev/transition deployment would
+// (CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true). The trust gate itself is
+// covered by extension-trust-config.test.ts; restore the secure default after.
+let priorAllowUnsignedBootstrap: string | undefined;
 beforeAll(async () => {
+  priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
   workDir = await mkdtemp(path.join(tmpdir(), "cinatra-hot-"));
 });
 afterAll(async () => {
+  if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
   await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
@@ -1141,10 +1153,19 @@ export function destroy(ctx) { globalThis.__hotFixtureEvents.push("destroy:v2");
     let restoreRan = false;
     const restoreDurableAnchor = async () => { restoreRan = true; return { complete: true }; };
 
+    // #310: the no-supersede fallback is a plain in-process activation that mutates
+    // the live registries, so it MUST bump the control-plane generation (else the
+    // generation-keyed self-MCP cache stays stale and the newly-registered
+    // primitives are invisible until an unrelated lifecycle bump).
+    const genBefore = getActivationGeneration();
     const res = await hotUpdateWithDurableRollback(PKG, null, mat.storeDir, { restoreDurableAnchor }, { storeRoot });
     expect(res.activated).toBe(true);
     expect(res.rolledBack).toBeUndefined();
     expect(restoreRan, "no rollback on a fresh activate").toBe(false);
+    expect(
+      getActivationGeneration(),
+      "no-supersede fresh activate bumps the control-plane generation",
+    ).toBeGreaterThan(genBefore);
     // No quarantine dir created.
     expect(await findQuarantineDirs(storeRoot)).toEqual([]);
     // Single live store dir, package registered.

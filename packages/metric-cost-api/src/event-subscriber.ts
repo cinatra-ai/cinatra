@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { onUsageEvent } from "@cinatra-ai/metric-usage-api";
-import type { UsageEvent } from "@cinatra-ai/metric-usage-api";
+import { onUsageEvent } from "@cinatra-ai/metric-contracts";
+import type { UsageEvent } from "@cinatra-ai/metric-contracts";
 import { insertUsageEvent } from "./store";
 import { computeLlmCostUsd, computeApolloCostUsd } from "./pricing";
 

@@ -145,6 +145,13 @@ describe("hot-activate wiring", () => {
 
   it("targeted onlyPackage activation registers exactly the requested package and ignores others in the store", async () => {
     const workDir = await mkdtemp(path.join(tmpdir(), "cinatra-hot-activate-"));
+    // The fixtures are UNSIGNED — this test exercises the real loader's targeted
+    // onlyPackage activation MECHANIC, not the trust gate. The hardened default
+    // fails-closed on unsigned in-process activation, so opt in the way a
+    // dev/transition deployment would. The trust gate itself is covered by
+    // extension-trust-config.test.ts; restore the secure default in `finally`.
+    const priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
     try {
       const a = await packFixture(workDir, PKG);
       const b = await packFixture(workDir, OTHER);
@@ -182,6 +189,8 @@ describe("hot-activate wiring", () => {
       expect(activations.some((r) => r.packageName === PKG && r.status === "registered")).toBe(true);
       expect(activations.some((r) => r.packageName === OTHER)).toBe(false);
     } finally {
+      if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+      else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
       await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
