@@ -21,7 +21,7 @@ import {
   getLlmProviderSurface,
   requireLlmProviderSurface,
 } from "@/lib/llm-provider-surfaces";
-import { requireAuthSession, requireAdminSession, getActorContext } from "@/lib/auth-session";
+import { requireAuthSession, requireAdminSession, isPlatformAdmin, getActorContext } from "@/lib/auth-session";
 import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
 import {
   upsertExternalMcpServer,
@@ -467,15 +467,53 @@ export async function createExternalMcpServerAction(formData: FormData) {
     scope: (formData.get("scope") as string | null) ?? "global",
   });
   const scope: ExternalMcpServerScope = parsed.scope === "user" ? "user" : "global";
-  const session = scope === "user" ? await requireAuthSession() : null;
+
+  // Authorization boundary. Global external MCP rows are injected into every LLM call's
+  // MCP toolbox with `requireApproval: "never"` — a global write is a
+  // platform-wide trust mutation and MUST require platform admin. The default
+  // scope is "global", so the unauthenticated/non-admin default path is
+  // admin-gated. User-scoped rows only require an authenticated actor, and are
+  // bound to that actor's own userId.
+  const session =
+    scope === "user" ? await requireAuthSession() : await requireAdminSession();
+
+  // ID-overwrite guard. `upsertExternalMcpServer` is `ON CONFLICT (id) DO
+  // UPDATE`, so an attacker-supplied existing `id` would otherwise let a
+  // user-scoped write overwrite a global row (or another user's row). Re-derive
+  // the authority required from the EXISTING row's scope/owner, not just the
+  // requested scope, and deny cross-actor / cross-scope id reuse.
+  const requestedId = parsed.id?.trim() || undefined;
+  if (requestedId) {
+    const existing = getExternalMcpServerById(requestedId);
+    if (existing) {
+      if (existing.scope === "global") {
+        // Touching an existing global row always requires platform admin,
+        // regardless of the scope the caller requested.
+        await requireAdminSession();
+      } else {
+        // Non-global existing row: owner (same userId) or platform admin only.
+        const actorIsAdmin = isPlatformAdmin(session);
+        const actorOwnsRow =
+          existing.userId !== null && existing.userId === session.user.id;
+        if (!actorIsAdmin && !actorOwnsRow) {
+          redirect("/not-authorized");
+        }
+        // A non-admin must not re-scope an existing user row to global.
+        if (scope === "global" && !actorIsAdmin) {
+          redirect("/not-authorized");
+        }
+      }
+    }
+  }
+
   upsertExternalMcpServer({
-    id: parsed.id?.trim() || randomUUID(),
+    id: requestedId || randomUUID(),
     label: parsed.label,
     serverUrl: parsed.serverUrl,
     scope,
     nangoConnectionId: null,
     orgId: null,
-    userId: session?.user.id ?? null,
+    userId: scope === "user" ? session.user.id : null,
     enabled: true,
   });
   redirect("/configuration/llm");
@@ -483,9 +521,22 @@ export async function createExternalMcpServerAction(formData: FormData) {
 
 export async function deleteExternalMcpServerAction(formData: FormData) {
   const id = z.string().min(1).parse(formData.get("id"));
+  // Authorization boundary. The delete path had NO authz guard at all. Require platform admin to delete
+  // a global row, and owner-or-admin for a user-scoped row. Fail closed.
+  const session = await requireAuthSession();
   const server = getExternalMcpServerById(id);
   if (!server) {
     redirect("/configuration/llm");
+  }
+  if (server.scope === "global") {
+    await requireAdminSession();
+  } else {
+    const actorIsAdmin = isPlatformAdmin(session);
+    const actorOwnsRow =
+      server.userId !== null && server.userId === session.user.id;
+    if (!actorIsAdmin && !actorOwnsRow) {
+      redirect("/not-authorized");
+    }
   }
   deleteExternalMcpServer(id);
   redirect("/configuration/llm");
