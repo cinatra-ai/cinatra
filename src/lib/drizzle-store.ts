@@ -3540,19 +3540,9 @@ END $$` },
         FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_project_slug_move()`,
     },
 
-    // 2.5 agent_templates.(owner_level, owner_id) →
-    //     <owner-prefix>/~agents/<vendor>/<package>
-
-    // Authoritative full path is written at enqueue time. The path segment is
-    // derived from agent_templates.package_name, which stores the npm package
-    // name (e.g. "@cinatra-ai/auditor-agent"). The skill-store disk layout is
-    // UNSCOPED — "~agents/cinatra-ai/auditor-agent/..." with NO leading "@"
-    // scope marker — so the leading "@<scope>/" is stripped before composing
-    // the path (mirrors agentPackageNameToPath() in packages/skills/src/
-    // skill-paths.ts; see cinatra#550). Non-scoped legacy names (e.g.
-    // "cinatra/blog-agent") pass through unchanged. The worker physically
-    // moves the entire ~agents/<vendor>/<package>/ subtree (containing all
-    // bundled + user-authored skills).
+    // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
+    // Path derived at enqueue from package_name (npm name, e.g. "@cinatra-ai/auditor-agent");
+    // on-disk store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550).
     {
       text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $body$
         DECLARE
@@ -3572,9 +3562,7 @@ END $$` },
             IF NEW.package_name IS NULL OR NEW.package_name = '' THEN
               RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name', NEW.id;
             END IF;
-            -- Strip the leading npm "@<scope>/" marker so the path matches the
-            -- unscoped on-disk skill-store layout (cinatra#550). Non-scoped
-            -- names are left unchanged by regexp_replace.
+            -- Strip leading npm "@<scope>/" to match the unscoped on-disk layout (cinatra#550).
             pkg_path := regexp_replace(NEW.package_name, '^@([^/]+)/(.+)$', '\\1/\\2');
             new_id := 'reloc_' || gen_random_uuid()::text;
             old_p := old_prefix || '/~agents/' || pkg_path;
