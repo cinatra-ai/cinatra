@@ -914,6 +914,16 @@ jobs:
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
 
+      # Build-config consistency check. config/build-config.manifest.json
+      # is the single source of truth for the tsconfig.json @cinatra-ai/* path
+      # aliases AND the next.config.ts serverExternalPackages + transpilePackages
+      # lists. This fails CI when those generated regions no longer match the
+      # manifest (a hand-edit, a stale regeneration, or a manifest change that
+      # was not re-rendered). Manifest-only inputs — does NOT need the cloned-back
+      # extension tree. Regenerate with `node scripts/config/generate-build-config.mjs`.
+      - name: Build-config consistency check (tsconfig + next.config vs manifest, fail-closed)
+        run: node scripts/config/generate-build-config.mjs --check
+
       # Required-extensions coverage gate. The prod base image acquires the
       # bootable set from cinatra-required-extensions.lock.json; this fails CI
       # when a host-imported extension package is missing from
@@ -945,6 +955,22 @@ jobs:
 
       - name: Skill-store canonicality gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/skill-canonicality-gate.test.mjs
+
+      # SKILL.md frontmatter validation (cinatra#494) + committed-mirror ban
+      # (cinatra#495). Every host-committed SKILL.md under packages/ + src/ must
+      # pass upstream-standard frontmatter validation (allowed top-level keys:
+      # name, description, license, allowed-tools, metadata, compatibility —
+      # Cinatra-specific keys like match_when live under metadata.*, read by the
+      # Wave-0 dual-read in packages/skills/src/frontmatter.ts). It also fails if
+      # any SKILL.md is committed under data/skill-store/ or extensions/ (both
+      # gitignored, hydrated from canonical source) so a drift-prone runtime
+      # mirror cannot be reintroduced. Dependency-free pure-node so it does not
+      # need the package install.
+      - name: Skill frontmatter + mirror-ban gate
+        run: node scripts/audit/skill-frontmatter-gate.mjs
+
+      - name: Skill frontmatter + mirror-ban gate tests
+        run: node --test scripts/audit/__tests__/skill-frontmatter-gate.test.mjs
 
       # Extension dev-fixtures: every extension declaring `cinatra.devFixtures`
       # must ship a well-formed, declarative fixture file. The dev seeder is
@@ -984,6 +1010,44 @@ jobs:
 
       - name: Workspace phantom-dependency gate tests
         run: node --test scripts/audit/__tests__/workspace-phantom-deps.test.mjs
+
+      # Workspace dependency-cycle gate (no-new-rot ratchet). Builds the directed
+      # first-party dependency graph from each workspace member's package.json
+      # deps, finds every strongly-connected component (Tarjan), and fails on any
+      # cycle whose member-set is not in the committed baseline. The known cycles
+      # are baselined (WARN/ratchet toward zero via one-directional `*-contracts`
+      # extraction); a genuinely NEW cycle fails closed. Cycles force lazy
+      # imports and block clean one-directional build/test ownership.
+      - name: Workspace dependency-cycle gate
+        env:
+          # Also fail if the committed baseline GREW vs the base branch (blocks
+          # the regenerate-to-pass bypass). Same base ref the other no-new-rot
+          # gates use.
+          WORKSPACE_DEP_CYCLES_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/workspace-dep-cycles.mjs
+
+      - name: Workspace dependency-cycle gate tests
+        run: node --test scripts/audit/__tests__/workspace-dep-cycles.test.mjs
+
+      # File-size ratchet gate (no-new-rot ratchet, eng#308). Pins the current
+      # line count of each tracked architecture-bottleneck file (handlers,
+      # drizzle-store, agents store, chat page, skills store, mcp-server entry,
+      # background-jobs, database, extension-install pipeline, boot
+      # instrumentation) as a per-file ceiling and fails CI when a tracked file
+      # grows BEYOND its ceiling. It forces NO refactor (baselines are the
+      # current sizes); it only prevents the listed hubs from growing further.
+      # The baseline ratchets DOWN as extractions land (thin facades + vertical
+      # slices). File-level sibling of the package-level dependency-cycle ratchet.
+      - name: File-size ratchet gate
+        env:
+          # Also fail if the committed baseline RAISED any ceiling vs the base
+          # branch (blocks the regenerate-to-pass bypass). Same base ref the
+          # other no-new-rot gates use.
+          WORKSPACE_FILE_SIZE_RATCHET_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/file-size-ratchet.mjs
+
+      - name: File-size ratchet gate tests
+        run: node --test scripts/audit/__tests__/file-size-ratchet.test.mjs
 
       # Pinned-test existence gate. `vitest run a b c` treats positionals as
       # FILTERS — a positional that matches zero files is SILENTLY ignored as
@@ -1028,6 +1092,7 @@ jobs:
           packages/sdk-extensions/src
           scripts/extensions/__tests__/inventory.test.mjs
           scripts/extensions/__tests__/generate-extension-manifest.test.mjs
+          scripts/config/__tests__/generate-build-config.test.mjs
           scripts/extensions/__tests__/build-server-entry.test.ts
           scripts/extensions/__tests__/update-dev-extension-lock.test.mjs
           scripts/ci/__tests__/extension-pin-divergence-report.test.mjs

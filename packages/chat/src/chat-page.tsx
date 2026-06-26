@@ -1037,8 +1037,13 @@ function OpenAIChatIcon({ size = 12 }: { size?: number }) {
 }
 
 function CinatraAvatarIcon() {
+  // The Cinatra mark is wide (fullViewBox 512×320, ~1.6:1). Forcing it into a
+  // square (h-3 w-3) made preserveAspectRatio shrink it to ~7.5px tall, so it
+  // looked shrunken next to the square 12px provider glyphs (#502). Keep the
+  // 12px height and let width follow the aspect ratio (matching the same logo's
+  // other render at the response-header), so it reads at the sibling icons' size.
   return (
-    <svg viewBox={CINATRA_LOGO.fullViewBox} xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="Cinatra" className="h-3 w-3">
+    <svg viewBox={CINATRA_LOGO.fullViewBox} xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="Cinatra" className="h-3 w-auto">
       <path d={CINATRA_LOGO.brim} fill="currentColor" />
       <path d={CINATRA_LOGO.crown} fill="currentColor" />
     </svg>

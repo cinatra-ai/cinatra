@@ -13,23 +13,17 @@ import "server-only";
 
 import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
 
+import { getPooledDb, failOpenLocalhost } from "@/lib/db/pooled";
 import { roleGrant, type RoleGrantInsert, type RoleGrantRow } from "./role-grant-schema";
 
-// Lazy pool init mirrors the rest of the codebase — avoids DB connect at
-// module load when running typecheck / fresh-schema validation.
-let _pool: Pool | null = null;
-function pool(): Pool {
-  if (!_pool) {
-    _pool = new Pool({
-      connectionString: process.env.SUPABASE_DB_URL ?? "postgres://localhost",
-    });
-  }
-  return _pool;
-}
+// Lazy pool over the shared pool (@/lib/db/pooled, #303). This authz resolver
+// historically fails OPEN to a local placeholder DSN so import-time evaluation
+// never throws even outside a configured environment; `failOpenLocalhost`
+// preserves that exact behavior (the connection is still lazy and never opened
+// until the first query).
 function db() {
-  return drizzle(pool());
+  return drizzle(getPooledDb({ name: "role-grant-store", connectionString: failOpenLocalhost }));
 }
 
 export type RoleGrantScope =
