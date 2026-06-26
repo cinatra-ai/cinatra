@@ -1293,7 +1293,7 @@ function UserMessageBubble({
             }
           }}
           style={{ boxShadow: "none" }}
-          className="min-h-0 w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground shadow-none outline-none focus-visible:ring-0"
+          className="min-h-0 w-full resize-none border-0 bg-transparent px-3 py-2 text-sm text-foreground shadow-none outline-none focus-visible:ring-0"
           rows={1}
         />
         <div className="mt-3 flex justify-end gap-2">
@@ -3074,7 +3074,10 @@ const skipNextThreadLoadRef = useRef(false);
             userScrolledUpRef.current = distanceFromBottom > 5;
           }}
         >
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4">
+          {/* gap-8 between turns (was gap-5) so a message's hover action row
+              clears the following turn's header/avatar even when two turns land
+              on the same side, e.g. two user messages after a failed run (#504). */}
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
             {messages.map((message) => {
               const isUser = message.role === "user";
               if (isSlackMode) {
