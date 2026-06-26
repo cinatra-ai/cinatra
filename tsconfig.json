@@ -165,6 +165,7 @@
       "@cinatra-ai/drupal-assistant-connector/settings-page": ["./extensions/cinatra-ai/drupal-assistant-connector/src/settings-page.tsx"],
       "@cinatra-ai/drupal-assistant-connector/setup-page": ["./extensions/cinatra-ai/drupal-assistant-connector/src/setup-page.tsx"],
       "@cinatra-ai/youtube-connector": ["./extensions/cinatra-ai/youtube-connector/src/index.ts"],
+      "@cinatra-ai/youtube-connector/register": ["./extensions/cinatra-ai/youtube-connector/src/register.ts"],
       "@cinatra-ai/youtube-connector/settings-page": ["./extensions/cinatra-ai/youtube-connector/src/settings-page.tsx"],
       "@cinatra-ai/youtube-connector/setup-page": ["./extensions/cinatra-ai/youtube-connector/src/setup-page.tsx"],
       "@cinatra-ai/sdk-extensions": ["./packages/sdk-extensions/src/index.ts"],
