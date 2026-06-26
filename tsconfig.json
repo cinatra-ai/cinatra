@@ -242,6 +242,7 @@
       "@cinatra-ai/mcp-server/delegated-chat-tool-policy": ["./packages/mcp-server/src/delegated-chat-tool-policy.ts"],
       "@modelcontextprotocol/server": ["./packages/mcp-server/vendor/modelcontextprotocol-server"],
       "@cinatra-ai/mcp-client": ["./packages/mcp-client/src/index.ts"],
+      "@cinatra-ai/metric-contracts": ["./packages/metric-contracts/src/index.ts"],
       "@cinatra-ai/metric-usage-api": ["./packages/metric-usage-api/src/index.ts"],
       "@cinatra-ai/metric-usage-api/screens": ["./packages/metric-usage-api/src/screens.tsx"],
       "@cinatra-ai/extension-types": ["./packages/extension-types/src/index.ts"],

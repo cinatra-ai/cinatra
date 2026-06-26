@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { LlmUsageEvent } from "@cinatra-ai/metric-usage-api";
+import type { LlmUsageEvent } from "@cinatra-ai/metric-contracts";
 
 // ---------------------------------------------------------------------------
 // Telemetry: subscriber writes requested_provider + effective_provider into
@@ -23,7 +23,7 @@ vi.mock("../src/pricing", () => ({
   computeLlmCostUsd: mockComputeLlmCostUsd,
   computeApolloCostUsd: vi.fn().mockReturnValue(0),
 }));
-vi.mock("@cinatra-ai/metric-usage-api", () => ({
+vi.mock("@cinatra-ai/metric-contracts", () => ({
   onUsageEvent: mockOnUsageEvent,
 }));
 

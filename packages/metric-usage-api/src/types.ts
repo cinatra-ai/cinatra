@@ -1,31 +1,4 @@
-export type LlmUsageEvent = {
-  source: "llm";
-  provider: "openai" | "anthropic" | "gemini";
-  model: string;
-  operation: "generate" | "stream";
-  agentLabel: string | null;
-  skillLabel: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  reasoningOutputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheCreationInputTokens?: number;
-  idempotencyKey: string;
-  occurredAt: string;
-  requestedProvider?: string | null;
-  effectiveProvider?: string | null;
-};
-
-export type ApolloUsageEvent = {
-  source: "apollo";
-  operation: string;
-  agentLabel: string | null;
-  requestCount: number;
-  resultCount: number;
-  creditsConsumed: number;
-  idempotencyKey: string;
-  occurredAt: string;
-};
-
-export type UsageEvent = LlmUsageEvent | ApolloUsageEvent;
+// The usage-event types are defined ONCE in @cinatra-ai/metric-contracts and
+// re-exported here so this module path stays a stable alias for existing
+// consumers. There is no duplicate definition.
+export type { UsageEvent, LlmUsageEvent, ApolloUsageEvent } from "@cinatra-ai/metric-contracts";

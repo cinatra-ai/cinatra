@@ -985,6 +985,24 @@ jobs:
       - name: Workspace phantom-dependency gate tests
         run: node --test scripts/audit/__tests__/workspace-phantom-deps.test.mjs
 
+      # Workspace dependency-cycle gate (no-new-rot ratchet). Builds the directed
+      # first-party dependency graph from each workspace member's package.json
+      # deps, finds every strongly-connected component (Tarjan), and fails on any
+      # cycle whose member-set is not in the committed baseline. The known cycles
+      # are baselined (WARN/ratchet toward zero via one-directional `*-contracts`
+      # extraction); a genuinely NEW cycle fails closed. Cycles force lazy
+      # imports and block clean one-directional build/test ownership.
+      - name: Workspace dependency-cycle gate
+        env:
+          # Also fail if the committed baseline GREW vs the base branch (blocks
+          # the regenerate-to-pass bypass). Same base ref the other no-new-rot
+          # gates use.
+          WORKSPACE_DEP_CYCLES_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/workspace-dep-cycles.mjs
+
+      - name: Workspace dependency-cycle gate tests
+        run: node --test scripts/audit/__tests__/workspace-dep-cycles.test.mjs
+
       # Pinned-test existence gate. `vitest run a b c` treats positionals as
       # FILTERS — a positional that matches zero files is SILENTLY ignored as
       # long as the others match, so a renamed/lost test leaves its pin behind
