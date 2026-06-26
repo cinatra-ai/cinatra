@@ -12,27 +12,40 @@
  * Each was migrated to the graphiti canonical pattern. This gate exists so a
  * fifth recurrence fails CI rather than landing.
  *
+ * STRUCTURE (cinatra#304): the background-job handler table is now a name-keyed
+ * REGISTRY in `src/lib/background-jobs-registry.ts`; the recurring
+ * dup-guard → moveToDelayed → DelayedError sequence is factored into ONE shared
+ * `runRecurringLoop` helper there; and the NAME constants + `*_LOOP_JOB_ID`
+ * literals live in the leaf module `src/lib/background-jobs-names.ts`. The gate
+ * reads all three files (instrumentation still owns the boot seeds).
+ *
  * Invariants per boot-seeded loop (every `enqueueBackgroundJob(BACKGROUND_JOB_NAMES.X, ...)`
  * call in `src/instrumentation.node.ts`):
- *   - exported `<KEY>_LOOP_JOB_ID` constant in `src/lib/background-jobs.ts`;
+ *   - exported `<KEY>_LOOP_JOB_ID` constant in `background-jobs-names.ts`;
  *   - boot seed jobId references the constant (not a raw string literal);
  *   - boot seed sets overwriteIfStale: true, skipWorker: true,
  *     inheritActorContext: false;
  *   - the job-name string is in SYSTEM_JOBS in
  *     `packages/notifications/src/recipient-policy.ts`;
- *   - handler case contains the dup-guard
- *     `String(job.id ?? "") !== <CONSTANT>`, calls `job.moveToDelayed(`, and
- *     throws `new DelayedError()`;
- *   - handler case does NOT call `enqueueBackgroundJob(BACKGROUND_JOB_NAMES.<SAME>, ...)`
- *     (same-name enqueue ban — catches BOTH the anonymous and the stable-jobId
- *     antipatterns in one rule).
+ *   - a registry entry `[BACKGROUND_JOB_NAMES.X]: { ... }` exists whose handler
+ *     body WIRES the loop to its canonical id (references `<KEY>_LOOP_JOB_ID`,
+ *     e.g. `loopJobId: <KEY>_LOOP_JOB_ID`);
+ *   - the registry entry does NOT call
+ *     `enqueueBackgroundJob(BACKGROUND_JOB_NAMES.<SAME>, ...)` (same-name
+ *     enqueue ban — catches BOTH the anonymous and the stable-jobId
+ *     antipatterns in one rule);
+ *   - the shared `runRecurringLoop` helper (checked ONCE, globally) still
+ *     contains the canonical sequence: the dup-guard
+ *     `String(job.id ?? "") !== <loopJobId>`, a `job.moveToDelayed(` call, and
+ *     `throw new DelayedError()`.
  *
  * Importable as a module (vitest tests live in `scripts/audit/__tests__/`); also
  * runnable as a CLI when invoked directly. Exit 0 on full pass; exit 1 with a
  * per-violation report otherwise; exit 2 on parse FATAL (file unreadable / shape
  * unexpected). Source paths overridable via env vars
  * `PERPETUAL_LOOPS_GATE_INSTRUMENTATION_FILE`,
- * `PERPETUAL_LOOPS_GATE_BACKGROUNDJOBS_FILE`,
+ * `PERPETUAL_LOOPS_GATE_BACKGROUNDJOBS_FILE` (the names module),
+ * `PERPETUAL_LOOPS_GATE_REGISTRY_FILE`,
  * `PERPETUAL_LOOPS_GATE_RECIPIENTPOLICY_FILE`.
  */
 import { readFileSync } from "node:fs";
@@ -46,9 +59,16 @@ export function defaultFilePaths() {
     instrumentation:
       process.env.PERPETUAL_LOOPS_GATE_INSTRUMENTATION_FILE ||
       join(ROOT, "src/instrumentation.node.ts"),
+    // The NAME constants + `*_LOOP_JOB_ID` literals live here (cinatra#304).
+    // Kept under the historical `backgroundJobs` key so the env override and
+    // the existing call sites stay stable.
     backgroundJobs:
       process.env.PERPETUAL_LOOPS_GATE_BACKGROUNDJOBS_FILE ||
-      join(ROOT, "src/lib/background-jobs.ts"),
+      join(ROOT, "src/lib/background-jobs-names.ts"),
+    // The name-keyed handler registry + the shared `runRecurringLoop` helper.
+    registry:
+      process.env.PERPETUAL_LOOPS_GATE_REGISTRY_FILE ||
+      join(ROOT, "src/lib/background-jobs-registry.ts"),
     recipientPolicy:
       process.env.PERPETUAL_LOOPS_GATE_RECIPIENTPOLICY_FILE ||
       join(ROOT, "packages/notifications/src/recipient-policy.ts"),
@@ -145,10 +165,19 @@ export function parseBootSeeds(src) {
   return seeds;
 }
 
+/**
+ * Find a name-keyed registry ENTRY `[BACKGROUND_JOB_NAMES.<KEY>]: {` and
+ * brace-walk to its closing `}`. Replaces the old `case BACKGROUND_JOB_NAMES.X:`
+ * switch-arm locator (cinatra#304 moved handlers from a switch into a registry
+ * map). Kept under the name `parseHandlerCase` for call-site/test stability —
+ * the *concept* (one handler body per job name) is unchanged.
+ */
 export function parseHandlerCase(src, jobNameKey) {
-  // Find `case BACKGROUND_JOB_NAMES.<KEY>: {` and brace-walk to closing `}`.
+  // Match `[BACKGROUND_JOB_NAMES.<KEY>]: {` (registry entry) OR the legacy
+  // `case BACKGROUND_JOB_NAMES.<KEY>: {` (switch arm) so the parser tolerates
+  // either shape. The registry form is the current structure.
   const startRe = new RegExp(
-    `case\\s+BACKGROUND_JOB_NAMES\\.${jobNameKey}\\s*:\\s*\\{`,
+    `(?:case\\s+)?\\[?\\s*BACKGROUND_JOB_NAMES\\.${jobNameKey}\\s*\\]?\\s*:\\s*\\{`,
   );
   const sm = startRe.exec(src);
   if (!sm) return null;
@@ -165,20 +194,54 @@ export function parseHandlerCase(src, jobNameKey) {
   return { body, line };
 }
 
+/**
+ * Locate the shared `runRecurringLoop` helper in the registry source and
+ * return its body (brace-walked). Returns null if the helper is absent. The
+ * canonical dup-guard + moveToDelayed + DelayedError sequence is asserted ONCE
+ * against this body in runGate (cinatra#304 factored the 7 hand-rolled copies
+ * into this single helper).
+ */
+export function parseSharedLoopHelper(src) {
+  const startRe = /function\s+runRecurringLoop\s*\([\s\S]*?\)\s*(?::[^\{]*)?\{/;
+  const sm = startRe.exec(src);
+  if (!sm) return null;
+  let i = sm.index + sm[0].length;
+  let depth = 1;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") depth--;
+    i++;
+  }
+  return { body: src.slice(sm.index + sm[0].length, i - 1) };
+}
+
 // ---------------------------------------------------------------------------
 // gate
 // ---------------------------------------------------------------------------
 
 /**
  * Run the gate against in-memory source strings.
+ *
+ * `sources` shape: { instrumentation, backgroundJobs (names module), registry,
+ * recipientPolicy }. The legacy 3-key shape (no `registry`) is tolerated by
+ * falling back to reading the registry-shaped invariants from `backgroundJobs`
+ * — this lets a single combined fixture string exercise every rule.
+ *
  * Returns { violations: string[], bootSeedNames: string[] }.
  * Throws on parse-fatal (missing SYSTEM_JOBS or BACKGROUND_JOB_NAMES blocks).
  */
 export function runGate(sources) {
+  const namesSrc = sources.backgroundJobs;
+  // Tolerate a combined fixture: when no separate `registry` source is given,
+  // the registry-shaped invariants are read from the same string.
+  const registrySrc = sources.registry ?? sources.backgroundJobs;
+
   const systemJobs = parseSystemJobs(sources.recipientPolicy);
-  const jobNames = parseBackgroundJobNames(sources.backgroundJobs);
-  const loopConsts = parseLoopIdConstants(sources.backgroundJobs);
+  const jobNames = parseBackgroundJobNames(namesSrc);
+  const loopConsts = parseLoopIdConstants(namesSrc);
   const bootSeeds = parseBootSeeds(sources.instrumentation);
+  const sharedHelper = parseSharedLoopHelper(registrySrc);
 
   if (!systemJobs) {
     throw new Error(
@@ -187,17 +250,48 @@ export function runGate(sources) {
   }
   if (!jobNames) {
     throw new Error(
-      "could not parse BACKGROUND_JOB_NAMES in background-jobs.ts (expected `BACKGROUND_JOB_NAMES = { ... } [as const];`)",
+      "could not parse BACKGROUND_JOB_NAMES in background-jobs-names.ts (expected `BACKGROUND_JOB_NAMES = { ... } [as const];`)",
     );
   }
 
   const violations = [];
 
+  // The shared recurring-loop helper carries the canonical sequence ONCE for
+  // every loop. Assert it exists and is on-pattern before the per-loop checks
+  // (a broken helper would silently break every loop at runtime).
+  if (bootSeeds.length > 0) {
+    if (!sharedHelper) {
+      violations.push(
+        "shared `runRecurringLoop` helper not found in background-jobs-registry.ts — the canonical dup-guard/moveToDelayed/DelayedError sequence must live in one shared helper",
+      );
+    } else {
+      const hb = sharedHelper.body;
+      const helperHasDupGuard = /String\(\s*job\.id\s*\?\?\s*""\s*\)\s*!==/.test(hb);
+      const helperHasMoveToDelayed = /\bjob\.moveToDelayed\s*\(/.test(hb);
+      const helperHasDelayedError = /throw\s+new\s+DelayedError\s*\(/.test(hb);
+      if (!helperHasDupGuard) {
+        violations.push(
+          'shared `runRecurringLoop` helper missing the dup-guard `String(job.id ?? "") !== <loopJobId>`',
+        );
+      }
+      if (!helperHasMoveToDelayed) {
+        violations.push(
+          "shared `runRecurringLoop` helper missing the `job.moveToDelayed(...)` call",
+        );
+      }
+      if (!helperHasDelayedError) {
+        violations.push(
+          "shared `runRecurringLoop` helper missing `throw new DelayedError()`",
+        );
+      }
+    }
+  }
+
   for (const seed of bootSeeds) {
     const jobNameStr = jobNames.get(seed.name);
     if (!jobNameStr) {
       violations.push(
-        `${seed.name} (instrumentation.node.ts:${seed.line}) — BACKGROUND_JOB_NAMES.${seed.name} not found in background-jobs.ts`,
+        `${seed.name} (instrumentation.node.ts:${seed.line}) — BACKGROUND_JOB_NAMES.${seed.name} not found in background-jobs-names.ts`,
       );
       continue;
     }
@@ -221,7 +315,7 @@ export function runGate(sources) {
 
     if (!constLiteral) {
       violations.push(
-        `${seed.name} — missing exported \`${constName}\` in background-jobs.ts`,
+        `${seed.name} — missing exported \`${constName}\` in background-jobs-names.ts`,
       );
     }
     if (!usesConstant) {
@@ -250,43 +344,34 @@ export function runGate(sources) {
       );
     }
 
-    const handler = parseHandlerCase(sources.backgroundJobs, seed.name);
+    const handler = parseHandlerCase(registrySrc, seed.name);
     if (!handler) {
       violations.push(
-        `${seed.name} — no \`case BACKGROUND_JOB_NAMES.${seed.name}:\` block found in background-jobs.ts`,
+        `${seed.name} — no \`[BACKGROUND_JOB_NAMES.${seed.name}]:\` registry entry found in background-jobs-registry.ts`,
       );
       continue;
     }
     const body = handler.body;
-    const dupGuardRe = new RegExp(
-      `String\\(\\s*job\\.id\\s*\\?\\?\\s*""\\s*\\)\\s*!==\\s*${constName}\\b`,
-    );
-    const hasDupGuard = dupGuardRe.test(body);
-    const hasMoveToDelayed = /\bjob\.moveToDelayed\s*\(/.test(body);
-    const hasDelayedError = /throw\s+new\s+DelayedError\s*\(/.test(body);
+    // The registry entry must WIRE the loop to its canonical id by referencing
+    // the `<KEY>_LOOP_JOB_ID` constant (typically `loopJobId: <KEY>_LOOP_JOB_ID`
+    // passed to the shared helper). This is the per-loop binding the dup-guard
+    // depends on; the dup-guard/moveToDelayed/DelayedError sequence itself is
+    // asserted once on the shared helper above.
+    const wiresLoopIdRe = new RegExp(`\\b${constName}\\b`);
+    const hasLoopIdWiring = wiresLoopIdRe.test(body);
     const sameNameEnqueueRe = new RegExp(
       `enqueueBackgroundJob\\s*\\(\\s*BACKGROUND_JOB_NAMES\\.${seed.name}\\b`,
     );
     const hasSameNameEnqueue = sameNameEnqueueRe.test(body);
 
-    if (!hasDupGuard) {
+    if (!hasLoopIdWiring) {
       violations.push(
-        `${seed.name} (background-jobs.ts:${handler.line}) — handler missing dup-guard \`if (String(job.id ?? "") !== ${constName}) return;\``,
-      );
-    }
-    if (!hasMoveToDelayed) {
-      violations.push(
-        `${seed.name} (background-jobs.ts:${handler.line}) — handler missing \`job.moveToDelayed(...)\` call`,
-      );
-    }
-    if (!hasDelayedError) {
-      violations.push(
-        `${seed.name} (background-jobs.ts:${handler.line}) — handler missing \`throw new DelayedError()\``,
+        `${seed.name} (background-jobs-registry.ts:${handler.line}) — registry entry must wire the loop to its canonical id by referencing \`${constName}\` (e.g. \`loopJobId: ${constName}\`)`,
       );
     }
     if (hasSameNameEnqueue) {
       violations.push(
-        `${seed.name} (background-jobs.ts:${handler.line}) — handler calls \`enqueueBackgroundJob(BACKGROUND_JOB_NAMES.${seed.name}, ...)\` (forbidden self-reschedule shape — use job.moveToDelayed + DelayedError instead)`,
+        `${seed.name} (background-jobs-registry.ts:${handler.line}) — registry entry calls \`enqueueBackgroundJob(BACKGROUND_JOB_NAMES.${seed.name}, ...)\` (forbidden self-reschedule shape — use the shared runRecurringLoop helper instead)`,
       );
     }
   }
@@ -316,6 +401,7 @@ if (isMain) {
     sources = {
       instrumentation: readFileSync(paths.instrumentation, "utf8"),
       backgroundJobs: readFileSync(paths.backgroundJobs, "utf8"),
+      registry: readFileSync(paths.registry, "utf8"),
       recipientPolicy: readFileSync(paths.recipientPolicy, "utf8"),
     };
   } catch (err) {
