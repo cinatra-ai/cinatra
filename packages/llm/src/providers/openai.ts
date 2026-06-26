@@ -34,6 +34,11 @@ import {
   openaiUserContent,
   resolvedAttachmentsPerMessage,
 } from "../attachments/provider-parts";
+import {
+  isHostedMcpToolListError,
+  extractMcpServerUrl,
+  buildMcpUnreachableMessage,
+} from "../openai-mcp-error";
 
 /**
  * Structural mirror of the openai-connector's `OpenAIConnectionConfig`
@@ -312,34 +317,43 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
             stream: false,
           } as Parameters<typeof client.responses.create>[0]);
         } catch (apiError) {
-          // 424 means OpenAI could not enumerate the MCP server's tool list. In development the
-          // configured public MCP URL may be briefly unreachable (operator restarting a tunnel,
-          // local server cycle, etc.). Per injection rule skip #3 (MCP unavailable → graceful
-          // no-op), retry without the MCP tool in dev ONLY if other tools remain. If MCP is
-          // the sole tool, or if we are in production (stable URL), always re-throw so the
-          // error surfaces correctly.
-          const isDevMode = process.env.CINATRA_RUNTIME_MODE === "development";
-          if (
-            isDevMode &&
-            apiError instanceof Error &&
-            apiError.message.includes("424") &&
-            apiError.message.toLowerCase().includes("mcp") &&
-            requestBody.tools
-          ) {
+          // 424 means OpenAI could not enumerate the cinatra MCP server's hosted
+          // tool list — the instance's public MCP URL was unreachable from the
+          // provider (#500). In development that URL is often briefly down
+          // (operator restarting a tunnel, local server cycle, etc.); per
+          // injection rule skip #3 (MCP unavailable → graceful no-op) we retry
+          // WITHOUT the MCP tool, but ONLY when other tools remain. Otherwise (a
+          // production/stable URL, or MCP-only) we FAIL LOUD — but with a clear,
+          // actionable error naming the unreachable URL instead of the opaque raw
+          // 424. We do NOT silently drop the toolbox in production: a run meant to
+          // use the cinatra tools would otherwise answer without them.
+          if (isHostedMcpToolListError(apiError) && requestBody.tools) {
+            const isDevMode = process.env.CINATRA_RUNTIME_MODE === "development";
             const toolsWithoutMcp = (requestBody.tools as Array<{ type?: string }>).filter(
               (t) => t.type !== "mcp",
             );
-            if (toolsWithoutMcp.length === 0) {
-              // MCP was the only tool — retrying without it would be a silent no-op; re-throw.
-              throw apiError;
+            if (isDevMode && toolsWithoutMcp.length > 0) {
+              console.warn("[openai] MCP tool enumeration failed (424) — retrying without MCP tool (dev)");
+              const retryBody: Record<string, unknown> = { ...requestBody, tools: toolsWithoutMcp };
+              response = await client.responses.create({
+                ...retryBody,
+                model: resolvedModel,
+                stream: false,
+              } as Parameters<typeof client.responses.create>[0]);
+            } else {
+              const mcpUnreachable = buildMcpUnreachableMessage(
+                extractMcpServerUrl(requestBody.tools),
+              );
+              await writeOpenAILogFile({
+                label: `${logLabel}-step-${step + 1}`,
+                kind: "response",
+                body: { error: String(apiError), message: mcpUnreachable },
+              }).catch(() => {});
+              // ES2017 lib lacks the ErrorOptions.cause type; attach it manually.
+              const wrapped = new Error(mcpUnreachable);
+              (wrapped as { cause?: unknown }).cause = apiError;
+              throw wrapped;
             }
-            console.warn("[openai] MCP tool enumeration failed (424) — retrying without MCP tool");
-            const retryBody: Record<string, unknown> = { ...requestBody, tools: toolsWithoutMcp };
-            response = await client.responses.create({
-              ...retryBody,
-              model: resolvedModel,
-              stream: false,
-            } as Parameters<typeof client.responses.create>[0]);
           } else {
             await writeOpenAILogFile({
               label: `${logLabel}-step-${step + 1}`,
