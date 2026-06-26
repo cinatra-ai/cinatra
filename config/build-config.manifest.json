@@ -153,6 +153,7 @@
     { "alias": "@cinatra-ai/drupal-assistant-connector/settings-page", "target": "./extensions/cinatra-ai/drupal-assistant-connector/src/settings-page.tsx" },
     { "alias": "@cinatra-ai/drupal-assistant-connector/setup-page", "target": "./extensions/cinatra-ai/drupal-assistant-connector/src/setup-page.tsx" },
     { "alias": "@cinatra-ai/youtube-connector", "target": "./extensions/cinatra-ai/youtube-connector/src/index.ts" },
+    { "alias": "@cinatra-ai/youtube-connector/register", "target": "./extensions/cinatra-ai/youtube-connector/src/register.ts" },
     { "alias": "@cinatra-ai/youtube-connector/settings-page", "target": "./extensions/cinatra-ai/youtube-connector/src/settings-page.tsx" },
     { "alias": "@cinatra-ai/youtube-connector/setup-page", "target": "./extensions/cinatra-ai/youtube-connector/src/setup-page.tsx" },
     { "alias": "@cinatra-ai/sdk-extensions", "target": "./packages/sdk-extensions/src/index.ts" },
