@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Allowlist for the governance-drift-gate (cinatra-ai/engineering#315): top-level",
+    "fields whose LIVE value is deliberately allowed to differ from the committed",
+    "manifest, so the gate does not fail on an intentional live-only value.",
+    "",
+    "Shape: { \"allow\": { \"<scope>\": [\"<field>\", ...] } } where <scope> is one of",
+    "branchProtection / tagRuleset / baselineRuleset and <field> is a TOP-LEVEL key",
+    "of that object (allowlisting a top-level key also suppresses any nested drift",
+    "under it). Every entry MUST carry a rationale comment — a silent allowlist",
+    "defeats the gate.",
+    "",
+    "Empty by design: the committed manifests are expected to match live exactly.",
+    "Add an entry only for a documented, deliberate live-only difference."
+  ],
+  "allow": {}
+}

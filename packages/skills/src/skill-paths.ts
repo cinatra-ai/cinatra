@@ -128,6 +128,24 @@ export const RESERVED_SUBBUCKETS: ReadonlySet<string> = new Set([
 /** Vendor name format: lowercase alphanum + dot/dash, must NOT start with `~`. */
 const VENDOR_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
+/** npm-scoped package name: `@vendor/package`. */
+const SCOPED_PACKAGE_NAME_RE = /^@([^/]+)\/(.+)$/;
+
+/**
+ * Map an agent template's `package_name` to its on-disk `<vendor>/<package>`
+ * segment. `agent_templates.package_name` stores the npm package name
+ * (e.g. `@cinatra-ai/auditor-agent`), but the skill-store disk layout uses
+ * `<vendor>/<package>` WITHOUT npm's leading `@` scope marker
+ * (e.g. `~agents/cinatra-ai/auditor-agent/...`). Strip the `@` so the resolver
+ * matches what the materializer/skill-store actually wrote. Non-scoped names
+ * (legacy `vendor/package`) pass through unchanged.
+ */
+function agentPackageNameToPath(packageName: string): string {
+  const trimmed = packageName.trim();
+  const scoped = SCOPED_PACKAGE_NAME_RE.exec(trimmed);
+  return scoped ? `${scoped[1]}/${scoped[2]}` : trimmed;
+}
+
 export function assertValidVendor(name: string): void {
   if (typeof name !== "string" || name.length === 0) {
     throw new Error(`vendor name must be a non-empty string (got ${typeof name})`);
@@ -253,10 +271,12 @@ export function resolveSkillDir(id: SkillIdentity, slugs: SlugMap, root: string)
           `for skill ${id.skill_slug}`,
       );
     }
-    // packageName already encodes <vendor>/<package> as a single string
-    // (e.g. "cinatra/email-test-delivery-agent"). Use it directly so the
-    // resolver mirrors the SQL trigger output verbatim.
-    bindingPath = `~agents/${template.packageName}/${id.skill_slug}`;
+    // packageName is the npm package name (e.g. "@cinatra-ai/auditor-agent").
+    // The disk layout uses <vendor>/<package> without the leading "@" scope
+    // marker, so normalize before composing the path. (The SQL relocation
+    // trigger still composes the raw value — see cinatra#550; fixing it
+    // requires a migration and is tracked separately.)
+    bindingPath = `~agents/${agentPackageNameToPath(template.packageName)}/${id.skill_slug}`;
   }
 
   // path.posix.join — paths in DB and outbox are POSIX (cross-platform-safe).
@@ -426,7 +446,7 @@ export async function loadSlugMap(
       map.agentTemplates.set(r.id, {
         ownerLevel: r.owner_level,
         ownerId: r.owner_id,
-        packageName: r.package_name,
+        packageName: r.package_name ? agentPackageNameToPath(r.package_name) : r.package_name,
       });
     }
   }

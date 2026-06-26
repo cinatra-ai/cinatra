@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 import { getAuthSession, requireActorContext, isPlatformAdmin } from "@/lib/auth-session";
 import { hasConfiguredLlmRuntime, runChatTurn, type ChatRequestMessage } from "./runner";
+import { createGuardedSseSink } from "./sse-sink";
 
 // ---------------------------------------------------------------------------
 // POST /api/chat — browser entry point. Cookie-authenticated. SSE response.
@@ -76,12 +77,17 @@ export async function POST(request: Request) {
       ?.activeOrganizationId ?? null;
 
   const encoder = new TextEncoder();
+  // Aborted when the client disconnects (stream cancel) so the in-flight run
+  // stops consuming LLM/MCP rather than running to completion unheard (#503).
+  const runAbort = new AbortController();
 
   const stream = new ReadableStream({
     async start(controller) {
-      function send(event: string, data: unknown) {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      }
+      // Guarded sink: once the stream is torn down, enqueue() throws
+      // ERR_INVALID_STATE; the guard makes post-teardown sends a no-op so the
+      // terminal error/done event can't be swallowed (#503).
+      const sink = createGuardedSseSink(controller, encoder);
+      const send = sink.send;
       try {
         await runChatTurn({
           messages: body.messages,
@@ -90,22 +96,30 @@ export async function POST(request: Request) {
           platformRole,
           sessionOrgId,
           send,
+          signal: runAbort.signal,
         });
       } catch (err) {
         // Any throw from runChatTurn (e.g. fail-loud `buildSkillTools` guard,
         // preflight failures) must reach the client as a structured SSE error,
-        // not a silent stream close.
+        // not a silent stream close — and never re-throw out of start().
         const message =
           err instanceof Error ? err.message : "Chat request failed.";
-        try {
-          send("error", { message });
-        } catch {
-          // Controller may already be torn down; swallow.
-        }
+        send("error", { message });
         console.error("[chat] runChatTurn threw:", err);
       } finally {
-        controller.close();
+        // Stop further writes, then close once.
+        sink.markClosed();
+        try {
+          controller.close();
+        } catch {
+          // Already closed (e.g. client cancelled mid-run); ignore.
+        }
       }
+    },
+    cancel(reason) {
+      // Client went away (page refresh / navigation). Abort the run so it stops
+      // promptly instead of burning metered LLM/MCP work with nobody listening.
+      runAbort.abort(reason instanceof Error ? reason : new Error("chat stream cancelled"));
     },
   });
 
