@@ -90,6 +90,12 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // Workspace / build wire-up that declares the package by name.
   "next.config.ts",
   "tsconfig.json",
+  // Manifest that is the generated source of truth for the tsconfig path
+  // aliases + next.config package lists above — it carries the same
+  // `@cinatra-ai/marketplace-mcp-client` path-alias declarations (NOT imports)
+  // that tsconfig.json/next.config.ts do. Same swap-PR migration story: when the
+  // vendored package is deleted, those alias entries leave the manifest too.
+  "config/build-config.manifest.json",
   // Vendor-application lifecycle consumers. Same swap-PR migration story:
   // the vendored package is the only typed surface for the new
   // vendor_application_* wrapper methods + instance_attach_self until the

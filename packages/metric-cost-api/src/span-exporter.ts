@@ -5,6 +5,7 @@ import { ExportResultCode } from "@opentelemetry/core";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { db } from "./db";
 import { traces } from "./schema";
+import { refineStatusFromHttp } from "./span-status";
 
 // ---------------------------------------------------------------------------
 // Postgres SpanExporter.
@@ -60,7 +61,13 @@ export class PostgresSpanExporter implements SpanExporter {
     const startedAt = hrTimeToDate(span.startTime);
     const endedAt = hrTimeToDate(span.endTime);
     const durationMs = hrTimeToMs(span.duration);
-    const status = mapStatus(span.status.code);
+    // OTel almost never marks success (UNSET default); derive ok/error from the
+    // HTTP response code when the span left status unset, so the row is useful
+    // (#492). An explicit ok/error from instrumentation is preserved.
+    const status = refineStatusFromHttp(
+      mapStatus(span.status.code),
+      span.attributes as Record<string, unknown>,
+    );
     const service =
       (span.resource.attributes["service.name"] as string | undefined) ??
       "cinatra-app";
