@@ -75,6 +75,7 @@ export { db } from "./db";
 
 // --- OTel span exporter ---
 export { PostgresSpanExporter } from "./span-exporter";
+export { refineStatusFromHttp, type SpanStatus } from "./span-status";
 
 // --- Trace store queries ---
 export {
