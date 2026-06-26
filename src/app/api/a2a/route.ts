@@ -1,7 +1,11 @@
 import "server-only";
 
 import { toSseResponse, toMuxSseResponse, type JSONRPCResponse } from "@cinatra-ai/a2a";
-import { readAgentRunByTaskId, resolveDefaultOrgId } from "@cinatra-ai/agents";
+import {
+  readAgentRunByTaskId,
+  resolveDefaultOrgId,
+  enforceRunAccess,
+} from "@cinatra-ai/agents";
 import { subscribeToAgUiEvents } from "@cinatra-ai/agent-ui-protocol/server";
 
 import { getA2AMount } from "@/lib/a2a-server";
@@ -10,6 +14,7 @@ import { corsHeaders } from "@/lib/a2a-cors";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import { resolveA2AActorContext } from "./actor-context-resolver";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
+import { primitiveActorFromVerifiedA2A } from "@/lib/authz/build-actor-context";
 
 // ---------------------------------------------------------------------------
 // POST /api/a2a handles non-streaming JSON-RPC and streaming A2A calls.
@@ -192,6 +197,20 @@ export async function POST(req: Request): Promise<Response> {
         try {
           const run = await readAgentRunByTaskId(taskId);
           if (run) {
+            // Gate run.read for the verified actor
+            // BEFORE subscribing to this run's AG-UI event stream — otherwise a
+            // caller who guessed a foreign task id could tap another tenant's
+            // live execution events. enforceRunAccess throws AuthzError on deny;
+            // any failure falls through to the plain A2A stream (the catch
+            // below), so the A2A contract is never broken by AG-UI authz.
+            await enforceRunAccess(
+              { id: run.id, runBy: run.runBy, orgId: run.orgId },
+              primitiveActorFromVerifiedA2A(resolvedActorContext),
+              "read",
+              resolvedActorContext.organizationId !== undefined
+                ? { actorOrganizationId: resolvedActorContext.organizationId }
+                : undefined,
+            );
             agUiGen = subscribeToAgUiEvents(run.id, { signal: req.signal });
           }
         } catch (err) {

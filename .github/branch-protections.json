@@ -3,10 +3,19 @@
     "Target `main` branch-protection policy for this repository. Apply with:",
     "  gh api -X PUT repos/cinatra-ai/cinatra/branches/main/protection \\",
     "    --input .github/branch-protections.json",
-    "Requires PR review + Code Owner review + the listed status checks, and",
-    "forbids force-pushes and branch deletion. Root CODEOWNERS maps",
-    "`* @cinatra-ai/maintainers`, so the Code Owner requirement binds. Review and",
-    "adjust the required-check contexts if those workflows are renamed.",
+    "Requires Code Owner review + the listed status checks, and forbids",
+    "force-pushes and branch deletion. Root CODEOWNERS maps",
+    "`* @groganz @megajustice`, so the Code Owner requirement binds (there is no",
+    "`@cinatra-ai/maintainers` team yet; if one is created, repoint CODEOWNERS and",
+    "this note together). Review and adjust the required-check contexts if those",
+    "workflows are renamed.",
+    "required_approving_review_count is 0 (NOT 1): the merge model is owner",
+    "--admin self-merge + the machine verification-record arm + a bot PR for any",
+    "high-risk change the owner approves (the owner cannot self-approve their own",
+    "PR, so a count of 1 would block routine owner merges). The org",
+    "`baseline-protection` ruleset also sets count 0; require_code_owner_reviews",
+    "stays true so the CODEOWNERS gate still binds. The `proof` context is the",
+    "works-after-proof.yml upgrade gate (job `proof`).",
     "NOTE: a `v*` tag triggers a production deploy (build-image.yml -> ops), so",
     "tag/release creation must be restricted to maintainers SEPARATELY (Settings ->",
     "Tags, or a `v*` tag protection rule) \u2014 branch protection does not cover tags."
@@ -26,12 +35,13 @@
       "build",
       "ui-design-system-gate / ui-design-system-gate",
       "skills-drift-gate / skills-drift-gate",
-      "truthful-attribution-gate / truthful-attribution-gate"
+      "truthful-attribution-gate / truthful-attribution-gate",
+      "proof"
     ]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
+    "required_approving_review_count": 0,
     "require_code_owner_reviews": true,
     "dismiss_stale_reviews": true
   },

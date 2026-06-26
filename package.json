@@ -1,6 +1,6 @@
 {
   "name": "cinatra",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "license": "Apache-2.0",
   "cinatra": {
@@ -186,6 +186,8 @@
     "authz:inventory": "node scripts/build-authz-inventory.mjs",
     "authz:retention": "node --env-file=.env.local --import tsx scripts/enforce-audit-retention.mjs",
     "authz:inventory:check": "node scripts/build-authz-inventory.mjs --check",
+    "config:build": "node scripts/config/generate-build-config.mjs",
+    "config:build:check": "node scripts/config/generate-build-config.mjs --check",
     "closeout:suite": "node scripts/ci/closeout-suite.mjs",
     "works-after:proof": "bash scripts/ci/works-after-proof.sh",
     "works-after:test": "node --test scripts/ci/works-after/__tests__/*.test.mjs",
@@ -314,7 +316,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",
-    "@cinatra-ai/cinatra": "0.1.2",
+    "@cinatra-ai/cinatra": "0.1.3",
     "@playwright/test": "^1.61.0",
     "@tailwindcss/postcss": "^4.3.1",
     "@types/node": "^24.13.2",

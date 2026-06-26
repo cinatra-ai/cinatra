@@ -293,6 +293,10 @@ export default defineConfig({
       "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
+      // Manifest-driven build-config generator: renders the tsconfig path
+      // aliases + next.config package lists from one manifest and gates
+      // byte-exact drift. Pure renderers + CLI --check (no DB/network).
+      "scripts/config/__tests__/**/*.test.{ts,mjs}",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
@@ -305,11 +309,12 @@ export default defineConfig({
       // node:test runner files (vitest reports "No test suite found"); each is
       // run via `node --test` by its own dedicated workflow or step
       // (gatekept-install-no-direct-registry, actions-pin-gate,
-      // workspace-phantom-deps, crm-pointer-gate, schema-migration-gate,
-      // sdk-abi-readme-gate), NOT as vitest tests.
+      // workspace-phantom-deps, workspace-dep-cycles, crm-pointer-gate,
+      // schema-migration-gate, sdk-abi-readme-gate), NOT as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
+      "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
       "scripts/audit/__tests__/manifest-resolve.test.mjs",
       "scripts/audit/__tests__/crm-pointer-gate.test.mjs",
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",

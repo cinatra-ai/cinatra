@@ -122,6 +122,30 @@ The full documentation set is published at **[docs.cinatra.ai](https://docs.cina
 
 Release history and notable changes are tracked in **[CHANGELOG.md](CHANGELOG.md)**; each tagged release also has auto-generated notes on the [GitHub Releases](https://github.com/cinatra-ai/cinatra/releases) page.
 
+## Troubleshooting
+
+**`make setup` fails.** The setup script (`scripts/setup.sh`) checks prerequisites — Node.js 24.x, pnpm, Docker — before starting services. Read the error output to identify which prerequisite is missing. Use `corepack pnpm` to get the pnpm version the repo pins. After services are running, `make check` (which runs `scripts/check-services.mjs`) validates that each supporting service (Postgres, Redis, Nango, and others) is reachable.
+
+**App boots but LLM calls fail or the assistant doesn't respond.** An LLM provider must be connected through the in-app setup wizard at `/setup/ai` (OpenAI is the minimum). Provider configuration lives in-app under Administration → LLM, not in `.env`. The environment variable for Graphiti object embeddings is separate from the assistant — see the setup wizard and the [Hosting Guide](https://docs.cinatra.ai/guides/hosting/) for details.
+
+**Schema or database errors after pulling new code.** Run `git pull && make refresh` to bring dependencies and the dev database schema in sync with the checked-out code, then restart with `make dev`. For production deployments, schema migrations apply automatically at boot; see [`migrations/README.md`](migrations/README.md) for details.
+
+**Port 3000 already in use.** Another process is listening on that port. Stop it first, then run `make dev`. If you need to run on a different port, update all localhost URLs in your `.env.local` consistently (the app, auth, and any callback URLs must agree).
+
+For additional troubleshooting guidance, see the [Hosting Guide](https://docs.cinatra.ai/guides/hosting/) and the [Developer Guide](https://docs.cinatra.ai/guides/developer/) at docs.cinatra.ai.
+
+---
+
+## What belongs in this repo vs elsewhere
+
+This repository is the core Cinatra platform — the Next.js application, schema migrations, WayFlow agent-runtime integration, first-party extension packages, and supporting tooling. It is the right place for bugs, feature proposals, and contributions that affect the platform itself.
+
+- **Marketplace extensions and connectors** are developed in separate repositories and installed onto a running workspace. The [Developer Guide](https://docs.cinatra.ai/guides/developer/) covers authoring extensions.
+- **Hosting documentation** (deployment, upgrades, configuration) lives at [docs.cinatra.ai/guides/hosting/](https://docs.cinatra.ai/guides/hosting/).
+- **Security vulnerabilities** go to [SECURITY.md](SECURITY.md), not public issues.
+
+---
+
 ## Contributing
 
 Issues and pull requests are welcome — start with **[CONTRIBUTING.md](CONTRIBUTING.md)** and the **[Code of Conduct](CODE_OF_CONDUCT.md)**. To report a security vulnerability, see **[SECURITY.md](SECURITY.md)**.

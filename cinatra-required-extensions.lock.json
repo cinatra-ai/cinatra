@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "af48b569615eccd909b308fc007046284c38ff0d",
+      "resolvedSha": "98554903b5bbdeaa1f785fb2e7357ee4eda69364",
       "packageVersion": "0.1.1",
-      "treeSha256": "25cf78a2849e52265df4e9d1ea62d532759e5ec094017fc6f3c3edab186aa63c"
+      "treeSha256": "a723de73eac1c12c66366bc6873cef924f884381db1fb7216aa416bca542bc0e"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",

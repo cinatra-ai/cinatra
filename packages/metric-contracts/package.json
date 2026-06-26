@@ -1,0 +1,14 @@
+{
+  "name": "@cinatra-ai/metric-contracts",
+  "description": "One-directional shared contracts for the metric packages: the usage-event type union and the in-process usage-event bus. Both metric-usage-api and metric-cost-api depend on this; it depends on neither, so the metric graph stays acyclic.",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
+  }
+}

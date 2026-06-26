@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildBreadcrumbTrail,
+  breadcrumbCrumbKey,
   connectorCanonicalCrumbHref,
   CANONICAL_CONNECTOR_SUBROUTE,
 } from "../breadcrumb-trail";
@@ -85,6 +86,36 @@ describe("buildBreadcrumbTrail — connector trail", () => {
     expect(crumbs).toHaveLength(1);
     expect(crumbs[0]).toMatchObject({ label: "Connectors", href: "/connectors" });
     expect(crumbs[0].nonNavigable).toBeFalsy();
+  });
+});
+
+describe("breadcrumbCrumbKey — unique React keys (#499)", () => {
+  it("gives distinct keys to two crumbs that legitimately share an href", () => {
+    // On a valid connector page the [slug] crumb canonical-links to its subroute
+    // (#422), which is the leaf page itself — so crumbs[2] and crumbs[3] share an
+    // href. Keying by href alone collided ("two children with the same key").
+    const crumbs = buildBreadcrumbTrail(
+      "/connectors/cinatra-ai/openai-connector/setup",
+    );
+    expect(crumbs).toHaveLength(4);
+    // Confirm the collision the warning came from is real and intentional.
+    expect(crumbs[2].href).toBe(crumbs[3].href);
+
+    const keys = crumbs.map((c, i) => breadcrumbCrumbKey(c, i));
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("keys an ellipsis crumb by index, others by index + href", () => {
+    const ellipsis = { label: "…", href: "/x", ellipsis: true };
+    expect(breadcrumbCrumbKey(ellipsis, 1)).toBe("ellipsis-1");
+    const leaf = { label: "Setup", href: "/a/b" };
+    expect(breadcrumbCrumbKey(leaf, 3)).toBe("3-/a/b");
+  });
+
+  it("produces all-unique keys for a truncated (ellipsis) trail too", () => {
+    const crumbs = buildBreadcrumbTrail("/a/b/c/d/e");
+    const keys = crumbs.map((c, i) => breadcrumbCrumbKey(c, i));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 
