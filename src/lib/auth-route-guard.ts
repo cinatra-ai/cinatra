@@ -10,7 +10,7 @@ import {
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
   "/api/auth",
-  "/api/nango/webhook",
+  "/api/nango/webhook", // Nango auth-event webhook receiver — auth enforced inside the nango-connector route handler (HMAC-SHA256 over the raw body keyed by the Nango environment API secret key NANGO_SECRET_KEY, matching how self-hosted nango-server signs the X-Nango-Hmac-Sha256 header); an unsigned/invalid/unconfigured signature fails closed. The sender is an unauthenticated third party (Nango), so there is no session.
   "/api/mcp",      // MCP transport — auth is enforced by the transport handler itself
   "/api/a2a",      // A2A transport — auth enforced inside route handlers (Bearer JWT)
   "/api/llm-bridge", // WayFlow ApiNode bridge — bridge-token auth enforced inside via isAuthorizedBridgeRequest

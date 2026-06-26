@@ -48,6 +48,13 @@ export function SkillMarkdownEditor({ name, defaultValue, label = "Skill markdow
           onChange={(event) => setValue(event.target.value)}
           rows={rows}
           spellCheck={false}
+          // The overlay must stay transparent so the highlighted <pre> backdrop
+          // shows through. The global `.cinatra textarea:not(...)` rule
+          // (globals.css) forces an opaque var(--surface-strong) background and
+          // out-specifies Tailwind's `bg-transparent`, blanking the field (#497).
+          // An inline background-color beats any stylesheet selector — smallest
+          // blast radius — so keep the overlay see-through.
+          style={{ backgroundColor: "transparent" }}
           className="absolute inset-0 min-h-[32rem] w-full resize-y bg-transparent px-5 py-4 font-mono text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-accent-soft"
         />
       </div>
