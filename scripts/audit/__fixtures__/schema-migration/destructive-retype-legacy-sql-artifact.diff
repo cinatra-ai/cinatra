@@ -1,7 +1,7 @@
-diff --git a/migrations/0012_narrow-usage-events-cost-usd.sql b/migrations/0012_narrow-usage-events-cost-usd.sql
+diff --git a/migrations/0013_narrow-usage-events-cost-usd.sql b/migrations/0013_narrow-usage-events-cost-usd.sql
 new file mode 100644
 --- /dev/null
-+++ b/migrations/0012_narrow-usage-events-cost-usd.sql
++++ b/migrations/0013_narrow-usage-events-cost-usd.sql
 @@ -0,0 +1,6 @@
 +-- Narrow usage_events.cost_usd from numeric(12,8) to numeric(12,4).
 +-- The extra scale was never populated (ingest rounds to 4 decimal places)
@@ -12,22 +12,21 @@ new file mode 100644
 diff --git a/migrations/manifest.json b/migrations/manifest.json
 --- a/migrations/manifest.json
 +++ b/migrations/manifest.json
-@@ -96,6 +96,13 @@
-       "seq": "0011",
-       "file": "core/core__0011_webhook-legacy-secret.mjs",
-       "summary": "Add the legacy single-shared-secret STORAGE columns (legacy_secret_ciphertext/iv) to webhook_secret_bindings for the #343 legacy webhook bridge (D3c option A) deferred by core__0009. A binding flagged legacy_enabled keeps its in-field sender's bespoke `sha256=<hex>` HMAC (the deployed WordPress plugin) while still routing through the generic /webhook facility; the shared HMAC secret is stored ENCRYPTED via the host secretsCodec (ciphertext+iv blob, NOT a ref) under a field-scoped AAD (webhook-binding.<binding_id>.legacy) so a legacy blob can never decrypt in the current/previous columns. Both columns nullable — a Standard-Webhooks binding (the forward default) leaves them null. ADDITIVE + idempotent (ADD COLUMN IF NOT EXISTS) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same columns); no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the two columns.",
-       "destructive": false,
-       "tables": ["webhook_secret_bindings"]
+@@ -105,6 +105,13 @@
+       "summary": "One-time rewrite of legacy GTM-era persisted tokens to their Cinatra names, retiring the runtime normalization in the hot core-store path (cinatra-ai/engineering#309). The removed src/lib/database.ts normalizePersistedString/normalizePersistedValue pass rewrote pre-rebrand persisted values on EVERY core-store parse and write (@gtm-central/… scopes, GTM Central/GTM Center display names, gtm_central_… snake_case keys, the …/openai-local-shell:latest skill-shell image ref, the gtmcentral.app/gtm.center hosts); that read-time self-healing is now removed, so this migration rewrites the remaining at-rest tokens ONCE. up() discovers — inside the migration transaction, from information_schema in current_schema() — the metadata.value JSON column plus every other table with a textual payload column (the (id, payload) JSON-row stores the normalization wrote through: startups, startup_overrides, skill_packages, skills, notifications, campaigns, chat_threads, and any sibling store) and applies the EXACT in-order replace() chain the runtime normalization used (the order is load-bearing; a companion unit test pins the SQL token map against a JS reimplementation of the original chain and proves byte-equivalence + idempotency). Each UPDATE is gated on the column actually CONTAINING a GTM token (position(token in col) > 0 OR … — an EXACT substring test, not LIKE, because several tokens carry the LIKE wildcard _), so it is minimal-touch and idempotent (a re-run is a no-op once the tokens are gone) and JSON validity is preserved (substring rewrite of self-contained tokens). DATA REWRITE of existing user-land JSON, so an artifact is shipped (this module); the change is NOT a drizzle-store.ts schema change (no DDL), so it rides no bootstrap DDL — on a fresh install it ledger-fakes (no rows to rewrite) and on an existing deployment db migrate executes it. down() is a NO-OP: the rewrite is a lossy canonicalization of a retired vocabulary (e.g. all three …/openai-local-shell:latest variants collapse to cinatra/skill-shell:latest) and must not be re-introduced.",
+       "destructive": true,
+       "tables": ["metadata", "startups", "startup_overrides", "skill_packages", "skills", "notifications", "campaigns", "chat_threads"]
 +    },
 +    {
-+      "seq": "0012",
-+      "file": "0012_narrow-usage-events-cost-usd.sql",
++      "seq": "0013",
++      "file": "0013_narrow-usage-events-cost-usd.sql",
 +      "summary": "Narrow usage_events.cost_usd numeric(12,8) -> numeric(12,4); scale beyond 4 was never populated.",
 +      "destructive": true,
 +      "tables": ["usage_events"]
      }
    ]
  }
+
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts

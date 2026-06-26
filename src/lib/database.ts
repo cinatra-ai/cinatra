@@ -82,42 +82,15 @@ function getDefaultOpenAIServiceTier() {
 
 
 
-function normalizePersistedString(value: string) {
-  return value
-    .replaceAll("@gtm-central/", "@cinatra/")
-    .replaceAll("@gtm/", "@cinatra/")
-    .replaceAll("GTM Central", "Cinatra")
-    .replaceAll("GTM Center", "Cinatra")
-    .replaceAll("gtm-central/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("gtm/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("cinatra/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("gtm_central_", "cinatra_")
-    .replaceAll("gtm_center_", "cinatra_")
-    .replaceAll("gtm_central", "cinatra")
-    .replaceAll("gtmcentral.app", "cinatra.app")
-    .replaceAll("gtm.center", "cinatra.app");
-}
-
-function normalizePersistedValue<T>(value: T): T {
-  if (typeof value === "string") {
-    return normalizePersistedString(value) as T;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizePersistedValue(entry)) as T;
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        normalizePersistedString(key),
-        normalizePersistedValue(entry),
-      ]),
-    ) as T;
-  }
-
-  return value;
-}
+// Legacy GTM-era rebrand normalization (`normalizePersistedString` /
+// `normalizePersistedValue`) was removed from the hot core-store read/write
+// path (cinatra-ai/engineering#309). It rewrote pre-rebrand persisted values
+// (`@gtm-central/…`, `GTM Central`, `gtm_central_…`, `gtmcentral.app`, …) to
+// their Cinatra names on every parse and every write — useful during the
+// migration, now dead transitional logic in the generic persistence path. The
+// remaining at-rest tokens are rewritten ONCE by the idempotent data migration
+// `migrations/core/core__0012_drop-gtm-normalization.mjs`; new live writers no
+// longer emit GTM-era values, so the runtime rewrite is no longer needed.
 
 function clonePersistedValue<T>(value: T): T {
   if (value === null || value === undefined) {
@@ -145,9 +118,9 @@ function getConnectorConfigCache() {
 
 function safeParseJson<T>(raw: string, fallback: T): T {
   try {
-    return normalizePersistedValue(JSON.parse(raw) as T);
+    return JSON.parse(raw) as T;
   } catch {
-    return normalizePersistedValue(fallback);
+    return fallback;
   }
 }
 
@@ -164,14 +137,14 @@ function readMetadataValueInternal<T>(key: string, fallback: T): T {
     return fallback;
   }
 
-  return normalizePersistedValue(safeParseJson(row.value, fallback));
+  return safeParseJson(row.value, fallback);
 }
 
 function writeMetadataValueInternal(key: string, value: unknown) {
   ensurePostgresSchema();
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
-    queries: [buildWriteMetadataQuery(postgresSchema, key, JSON.stringify(normalizePersistedValue(value)))],
+    queries: [buildWriteMetadataQuery(postgresSchema, key, JSON.stringify(value))],
   });
 }
 
@@ -243,7 +216,7 @@ function replaceJsonRows<T extends { id: string }>(tableName: string, rows: T[])
         tableName as never,
         {
           id: row.id,
-          payload: JSON.stringify(normalizePersistedValue(row)),
+          payload: JSON.stringify(row),
         },
       )),
     ],
@@ -276,18 +249,16 @@ function replaceStartupDatasetInDatabase(dataset: StartupDataset) {
     buildWriteMetadataQuery(
       postgresSchema,
       "startup_dataset_meta",
-      JSON.stringify(
-        normalizePersistedValue({
-          generatedAt: dataset.generatedAt,
-          source: dataset.source,
-          startupCount: dataset.startups.length,
-        }),
-      ),
+      JSON.stringify({
+        generatedAt: dataset.generatedAt,
+        source: dataset.source,
+        startupCount: dataset.startups.length,
+      }),
     ),
     buildDeleteAllRowsQuery(postgresSchema, "startups"),
     ...dataset.startups.map((startup) => buildInsertJsonRowQuery(postgresSchema, "startups", {
       id: startup.id,
-      payload: JSON.stringify(normalizePersistedValue(startup)),
+      payload: JSON.stringify(startup),
     })),
   ]);
 
@@ -427,7 +398,7 @@ export function compareAndSwapMetadataValueFromDatabase(
 ): boolean {
   return compareAndSwapMetadataValueInternal(
     key,
-    JSON.stringify(normalizePersistedValue(value)),
+    JSON.stringify(value),
     expectedRaw,
   );
 }
@@ -658,7 +629,7 @@ export function replaceSkillCatalogInDatabase(input: {
       postgresSchema,
       {
         id: row.id,
-        payload: JSON.stringify(normalizePersistedValue(row)),
+        payload: JSON.stringify(row),
       },
       deriveSkillPackageIdentity(row),
     )),
@@ -668,7 +639,7 @@ export function replaceSkillCatalogInDatabase(input: {
     buildDeleteRowsNotInQuery(postgresSchema, "skill_packages", keptPackageIds),
     ...input.skills.map((row) => buildUpsertJsonRowQuery(postgresSchema, "skills", {
       id: row.id,
-      payload: JSON.stringify(normalizePersistedValue(row)),
+      payload: JSON.stringify(row),
     })),
     buildDeleteRowsNotInQuery(postgresSchema, "skills", keptSkillIds),
   ]);
@@ -712,7 +683,7 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
     queries: [
       buildUpsertJsonRowQuery(postgresSchema, "skills", {
         id: trimmedSkillId,
-        payload: JSON.stringify(normalizePersistedValue(updatedSkill)),
+        payload: JSON.stringify(updatedSkill),
       }),
     ],
   });
@@ -852,7 +823,7 @@ export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback
   const observedRaw = readRawMetadataStringInternal(cacheKey);
   const value =
     observedRaw === null
-      ? (normalizePersistedValue(fallback) as T)
+      ? (fallback as T)
       : (safeParseJson(observedRaw, fallback) as T);
 
   const { value: unsealed, sawLegacyPlaintext } = unsealSecretFields(
@@ -884,11 +855,11 @@ export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback
     // Seal the legacy plaintext ourselves (no preserve-merge: this is the exact
     // value we observed). Throws fail-closed if the key is missing/invalid.
     const sealed = prepareSealedWrite(connectorId, unsealed, value);
-    const sealedRaw = JSON.stringify(normalizePersistedValue(sealed));
+    const sealedRaw = JSON.stringify(sealed);
     if (observedRaw !== null && compareAndSwapMetadataValueInternal(cacheKey, sealedRaw, observedRaw)) {
       // Swap landed — cache the SEALED value (never plaintext — MF#1).
       cache.set(cacheKey, {
-        value: clonePersistedValue(normalizePersistedValue(sealed)),
+        value: clonePersistedValue(sealed),
         expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS,
       });
     } else {
@@ -919,7 +890,7 @@ function unsealConnectorConfigForReturn<T>(connectorId: string, value: T): T {
 
 export function writeConnectorConfigToDatabase(connectorId: string, value: unknown) {
   const cacheKey = `connector_config:${connectorId}`;
-  let toPersist = normalizePersistedValue(value);
+  let toPersist = value;
 
   if (hasSecretFields(connectorId)) {
     // Read the RAW at-rest row so prepareSealedWrite can fall back to an
@@ -1318,7 +1289,7 @@ export function upsertChatThreadInDatabase(
   const threadUpsertQuery = inheritance.buildChatThreadUpsertQuery({
     schemaName: postgresSchema,
     threadId: thread.id,
-    payloadJson: JSON.stringify(normalizePersistedValue(thread)),
+    payloadJson: JSON.stringify(thread),
     projectId: projectIdFromPayload,
     createdAt: createdAtFromPayload,
     updatedAt: updatedAtFromPayload,
@@ -1501,7 +1472,7 @@ export function upsertCampaignInDatabase(campaign: Campaign): void {
     connectionString: getPostgresConnectionString(),
     queries: [buildUpsertJsonRowQuery(postgresSchema, "campaigns", {
       id: campaign.id,
-      payload: JSON.stringify(normalizePersistedValue(campaign)),
+      payload: JSON.stringify(campaign),
     })],
   });
 }
