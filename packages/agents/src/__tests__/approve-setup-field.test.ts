@@ -400,6 +400,104 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
       { jobId: "resume-setup-run-s6" },
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // #554 regression: a plain "Approve" click submits ONLY the approval
+  // envelope — { approved: true, approvedAt }. The grouped-form path used to
+  // validate every submitted key against template.inputSchema.properties,
+  // which never declares those reserved envelope keys, so it threw
+  // "values contain keys not declared in inputSchema: approved, approvedAt"
+  // and the HITL approve action 500'd. The fix strips the reserved envelope
+  // keys (approved/approvedAt/stepNumber/approvalNote) BEFORE the allowlist
+  // check and the merge: an envelope-only approval falls through to the plain
+  // status->queued CAS, and a mixed payload merges only the real fields.
+  // ---------------------------------------------------------------------------
+  it("REGRESSION (#554): envelope-only approval does not 500 — strips reserved keys, takes plain-approve path", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-554a",
+      templateId: "tpl-554a",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    // Template declares a real input field — the envelope keys are NOT in it.
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-554a",
+      inputSchema: { properties: { website: {} } },
+    });
+
+    // The exact shape the approval UI sends on a plain "Approve":
+    await expect(
+      approveReviewTaskInternal("setup-run-554a", "actor-1", {
+        approved: true,
+        approvedAt: "2026-06-26T00:00:00.000Z",
+      }),
+    ).resolves.toBeUndefined();
+
+    // Envelope-only ⇒ nothing to merge ⇒ no inputParams write...
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeUndefined();
+    // ...but the status flip + resume enqueue still happen (the run proceeds).
+    const statusWrite = dbWrites.find((w) => w.set?.status === "queued");
+    expect(statusWrite).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
+      "agent-builder-execution",
+      { runId: "run-554a" },
+      { jobId: "resume-setup-run-554a" },
+    );
+  });
+
+  it("REGRESSION (#554): mixed payload merges only the declared field, never the envelope metadata", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-554b",
+      templateId: "tpl-554b",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-554b",
+      inputSchema: { properties: { website: {} } },
+    });
+
+    await approveReviewTaskInternal("setup-run-554b", "actor-1", {
+      website: "https://ex.com",
+      approved: true,
+      approvedAt: "2026-06-26T00:00:00.000Z",
+    });
+
+    const inputParamsWrite = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(inputParamsWrite).toBeDefined();
+    // The serialized merge JSON must contain the real field but NOT the
+    // stripped envelope metadata.
+    const chunks = (inputParamsWrite!.set.inputParams as { queryChunks?: unknown[] }).queryChunks;
+    const stringChunks = (chunks as unknown[]).filter(
+      (c): c is string => typeof c === "string",
+    );
+    expect(stringChunks).toContain('{"website":"https://ex.com"}');
+    expect(stringChunks.join("")).not.toContain("approvedAt");
+  });
+
+  it("REGRESSION (#554): an UNDECLARED non-envelope key is still rejected after stripping", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-554c",
+      templateId: "tpl-554c",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-554c",
+      inputSchema: { properties: { website: {} } },
+    });
+
+    // `bogus` is neither an envelope key nor a declared field — the allowlist
+    // guard must still fire (stripping must not become a blanket bypass).
+    await expect(
+      approveReviewTaskInternal("setup-run-554c", "actor-1", {
+        approved: true,
+        bogus: "x",
+      }),
+    ).rejects.toThrow(/values contain keys not declared in inputSchema: bogus/);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
