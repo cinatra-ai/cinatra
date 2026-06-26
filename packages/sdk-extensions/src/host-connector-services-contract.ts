@@ -166,6 +166,30 @@ export type HostDrupalMcpService = {
     createdAt?: string;
     updatedAt?: string;
   }>;
+  /**
+   * ACTOR-SCOPED instance lister for the external-MCP toolbox-injection path.
+   * Returns ONLY the Drupal instances the CURRENT TRUSTED actor is authorized
+   * to `use` — the host resolves the trusted actor from the active MCP/llm
+   * request frame (NEVER connector/tool input), RE-VERIFIES live org membership
+   * (deny-no-row), and keeps only rows whose persisted org binding matches the
+   * actor's org AND for which the connector-package `use` policy allows. Returns
+   * `[]` FAIL-CLOSED when no trusted actor / membership resolves (it NEVER
+   * returns the global unscoped `listInstances` set). OPTIONAL on the shape so a
+   * connector compiled against an older contract still type-checks; the connector
+   * toolbox treats this member's absence as deny (injects no tools) —
+   * pure-additive, fail-closed on both skew directions. */
+  listAuthorizedInstances?(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      siteUrl: string;
+      nangoConnectionId: string;
+      providerConfigKey: string;
+      lastValidatedAt?: string;
+      createdAt?: string;
+      updatedAt?: string;
+    }>
+  >;
   probe(
     siteUrl: string,
     authHeader: string,
@@ -260,6 +284,22 @@ export type WordPressInstanceRowShape = {
  * cutover. */
 export type HostWordPressMcpService = {
   listInstances(): Array<WordPressInstanceRowShape>;
+  /**
+   * ACTOR-SCOPED instance lister. Returns ONLY the WordPress instances the
+   * CURRENT TRUSTED actor is authorized to `use`, resolved host-side from the
+   * active MCP/llm request frame (NEVER connector/tool input), with the SAME
+   * live-membership reverify (deny-no-row) + per-instance org-binding +
+   * connector-package gate as the `instance-write-authority` service. Returns
+   * `[]` FAIL-CLOSED when no trusted actor / membership resolves (NEVER the
+   * global unscoped `listInstances`).
+   *
+   * OPTIONAL + pure-additive. The WordPress connector toolbox gates injection
+   * per-instance through the `instance-write-authority` `requireWrite` gate (so
+   * it is already fail-closed WITHOUT this member); this method is published
+   * symmetrically with the Drupal service so a future WP toolbox revision can
+   * adopt the single-call actor-scoped lister, and an older connector that
+   * ignores it is unaffected. */
+  listAuthorizedInstances?(): Promise<Array<WordPressInstanceRowShape>>;
   probeAdapter(instance: {
     id: string;
     name: string;
