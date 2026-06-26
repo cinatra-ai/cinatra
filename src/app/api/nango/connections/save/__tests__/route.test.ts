@@ -6,8 +6,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+// The route now also gates app-scope on manage authority.
+// Mock the caller as a platform admin so the post-save-hook behaviour under
+// test (app + user scope) is reached regardless of scope.
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(async () => ({ user: { id: "user-1" } })),
+  isPlatformAdmin: () => true,
+  resolveOrgRoleForSession: async () => "org_admin",
 }));
 
 import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
