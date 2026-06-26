@@ -176,3 +176,16 @@ export function buildBreadcrumbTrail(
     crumbs[crumbs.length - 1],
   ];
 }
+
+// Stable React key for a crumb at position `i`. Keying by `href` alone collides
+// (#499): two distinct crumbs can legitimately share an href — on a valid
+// connector page the [slug] crumb canonical-links to its subroute (#422), which
+// is the very page the leaf crumb represents, so e.g.
+// `/connectors/cinatra-ai/openai-connector/setup` yields crumbs[2] and crumbs[3]
+// with the same href. The crumbs are still semantically distinct ("Openai
+// Connector" vs "Setup"), so the right fix is a positionally-unique key, not
+// dropping a crumb. Index-prefixing also keeps siblings unique for any future
+// same-href case (ellipsis already keyed by index).
+export function breadcrumbCrumbKey(crumb: BreadcrumbCrumb, i: number): string {
+  return crumb.ellipsis ? `ellipsis-${i}` : `${i}-${crumb.href}`;
+}

@@ -80,6 +80,10 @@ type ActorEnvelope = {
   source: string;
   userId?: string;
   platformRole?: string;
+  /** True only for delegated-CHAT MCP traffic (set in buildActorFromMcpContext
+   *  from the request context). Used to withhold admin instant-publish from the
+   *  chat-authoring surface — see the propose handler (cinatra#538). */
+  delegatedRestricted?: boolean;
 };
 type PrimitiveReq<T = Record<string, unknown>> = {
   primitiveName: string;
@@ -222,7 +226,17 @@ export async function handleAgentCreationRequestPropose(
   // proposal, which is a different concern from an admin publishing the agent
   // they authored. A NON-admin actor falls through and returns the `proposed`
   // row unchanged (the proposal still queues for admin review).
-  if (isPlatformAdminActor(req.actor)) {
+  //
+  // EXCEPTION (cinatra#538): the instant grant is withheld for delegated-CHAT
+  // callers. The chat model can call `agent_creation_request_propose`
+  // repeatedly in a single turn; with instant-publish ON that produced N
+  // auto-published versions per "create" confirmation. From chat we always
+  // return a `proposed` row; the admin then publishes deliberately via the
+  // Approvals UI (agent_creation_request_decide — which permits single-admin
+  // self-approval when there is no other reviewer, so this does NOT reintroduce
+  // the #382/#392 deadlock). Non-delegated admin authoring (UI) keeps the
+  // instant grant.
+  if (isPlatformAdminActor(req.actor) && req.actor.delegatedRestricted !== true) {
     const grant = (await approveAndPublishCreationRequest({
       current: row,
       adminActor: req.actor,

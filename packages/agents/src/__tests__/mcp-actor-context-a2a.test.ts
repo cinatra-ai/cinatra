@@ -210,6 +210,25 @@ describe("a2aActorContext → actor bridging (registry.ts)", () => {
     expect((actor as Record<string, unknown>).actorType).toBe("model");
   });
 
+  it("Test 2b: delegatedRestricted in the request ctx → forwarded onto the model actor (#538)", async () => {
+    const actor = await runInContext({
+      userId: "u-mcp",
+      delegatedRestricted: true,
+    });
+
+    expect(actor).toMatchObject({
+      actorType: "model",
+      source: "agent",
+      userId: "u-mcp",
+      delegatedRestricted: true,
+    });
+  });
+
+  it("Test 2c: no delegatedRestricted → field omitted from the model actor", async () => {
+    const actor = await runInContext({ userId: "u-mcp" });
+    expect((actor as Record<string, unknown>).delegatedRestricted).toBeUndefined();
+  });
+
   it("Test 3: no store at all → actor carries actorType:model with no userId", async () => {
     // Pass undefined as store — mcpRequestContextStorage.getStore() returns undefined
     // inside the run callback when the store value has no userId and no a2aActorContext.

@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   buildBreadcrumbTrail,
+  breadcrumbCrumbKey,
   humanizePathSegment,
   type BreadcrumbCrumb,
 } from "@/lib/breadcrumb-trail";
@@ -458,7 +459,7 @@ export function AppShell({
             <Breadcrumb className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
-                  <Fragment key={crumb.ellipsis ? `ellipsis-${i}` : crumb.href}>
+                  <Fragment key={breadcrumbCrumbKey(crumb, i)}>
                     {i > 0 && <BreadcrumbSeparator />}
                     <BreadcrumbItem>
                       {crumb.ellipsis ? (

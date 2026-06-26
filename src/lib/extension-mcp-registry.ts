@@ -87,6 +87,15 @@ export function listExtensionMcpTools(): readonly RegisteredExtensionMcpTool[] {
 }
 
 /**
+ * A REDACTED diagnostic snapshot of the registered extension MCP tools — tool name
+ * + owning packageName ONLY, never the handler. For the operator control-plane
+ * endpoint, so the aggregator never has to carry handler-bearing registry entries.
+ */
+export function snapshotExtensionMcpTools(): { name: string; packageName: string }[] {
+  return extensionMcpRegistry.listAll().map((t) => ({ name: t.name, packageName: t.packageName }));
+}
+
+/**
  * Teardown an uninstalled extension's MCP tools: drop them from the registry AND
  * from the authz effective-set, so the tool is no longer listable, invocable, or
  * shadow-allowed the moment the extension is gone (no restart needed). Returns

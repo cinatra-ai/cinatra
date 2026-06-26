@@ -83,9 +83,46 @@ export function resolveExtensionUiAction(
   return registry.get(packageName)?.actions.get(actionId) ?? null;
 }
 
+/** Whether a package has ANY registered ctx.ui surfaces or actions. Used by the
+ *  capability-teardown hook to know if a teardown actually removed live ctx.ui
+ *  registrations (the invalidate is a void delete with no count of its own). */
+export function hasExtensionUiForPackage(packageName: string): boolean {
+  const entry = registry.get(packageName);
+  if (!entry) return false;
+  return entry.setupSurfaces.size > 0 || entry.settingsSurfaces.size > 0 || entry.actions.size > 0;
+}
+
 /** Lifecycle: drop everything a package registered (uninstall/archive). */
 export function invalidateExtensionUiForPackage(packageName: string): void {
   registry.delete(packageName);
+}
+
+/**
+ * A read-only diagnostic snapshot of the registered ctx.ui surfaces/actions —
+ * per-package COUNTS + action ids only, never the opaque surface payloads or the
+ * action handlers. For the operator control-plane endpoint.
+ */
+export function snapshotExtensionUi(): {
+  packageName: string;
+  setupSurfaces: number;
+  settingsSurfaces: number;
+  actionIds: string[];
+}[] {
+  const out: {
+    packageName: string;
+    setupSurfaces: number;
+    settingsSurfaces: number;
+    actionIds: string[];
+  }[] = [];
+  for (const [packageName, entry] of registry) {
+    out.push({
+      packageName,
+      setupSurfaces: entry.setupSurfaces.size,
+      settingsSurfaces: entry.settingsSurfaces.size,
+      actionIds: [...entry.actions.keys()],
+    });
+  }
+  return out;
 }
 
 /** Test/teardown helper. */

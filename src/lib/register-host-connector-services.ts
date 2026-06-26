@@ -98,7 +98,10 @@ import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
 // delegates to the existing per-instance connector-authority policy. The
 // package whose policy is evaluated is host-bound (allowlist-validated in
 // `selectForPackage`) — never caller-supplied.
-import { createInstanceWriteAuthorityService } from "./connector-instance-write-authority";
+import {
+  createInstanceListAuthority,
+  createInstanceWriteAuthorityService,
+} from "./connector-instance-write-authority";
 // WordPress instance settings + hard-delete + LinkedIn account
 // materialization for the nango connection-save flow — published as the
 // BLOCKING `nango-connection-materializer` capability and the
@@ -339,8 +342,25 @@ export function registerHostConnectorServices(): void {
     dispatch: dispatchContentEditorViaA2A,
   } satisfies HostContentEditorDispatchService);
 
+  // Actor-scoped instance LIST filters — the read-boundary twin of the
+  // instance-write-authority `requireWrite` gate, reusing the IDENTICAL
+  // machinery (trusted-actor resolution from the MCP/llm frame,
+  // live-membership reverify with deny-no-row, sanitized decisionActor,
+  // per-instance org-binding + connector-package `use` gate).
+  // Returns ONLY the trusted actor's authorized instances, [] fail-closed when
+  // no actor/membership resolves. Bound host-side to the connector KIND (never
+  // caller input) so the package policy + instance reader are host-controlled.
+  const filterAuthorizedDrupalInstances = createInstanceListAuthority("drupal");
+  const filterAuthorizedWordPressInstances = createInstanceListAuthority("wordpress");
+
   register(svc.drupalMcp, {
     listInstances: () => getDrupalAPISettings().instances,
+    // ACTOR-SCOPED lister for the external-MCP toolbox-injection path. The host
+    // resolves the trusted actor from the MCP request frame and returns ONLY
+    // that actor's org-entitled instances; [] fail-closed when no actor resolves.
+    // The connector toolbox uses THIS, never the global unscoped `listInstances`.
+    listAuthorizedInstances: () =>
+      filterAuthorizedDrupalInstances(getDrupalAPISettings().instances),
     probe: probeDrupalMcp,
     resolveServerUrl: resolveDrupalMcpServerUrl,
     isPrivateUrl,
@@ -364,6 +384,13 @@ export function registerHostConnectorServices(): void {
 
   register(svc.wordpressMcp, {
     listInstances: () => getWordPressAPISettings().instances,
+    // ACTOR-SCOPED lister, published symmetrically with the Drupal service (the
+    // WordPress connector toolbox is already fail-closed via the per-instance
+    // `instance-write-authority` gate; this is the additive single-call lister
+    // a future toolbox revision can adopt). Same trusted-actor +
+    // membership-reverify + per-instance gate.
+    listAuthorizedInstances: () =>
+      filterAuthorizedWordPressInstances(getWordPressAPISettings().instances),
     probeAdapter: probeWordPressInstanceMcpAdapter,
     resolveServerUrl: resolveWordPressMcpFallbackEndpoint,
     isPrivateUrl,

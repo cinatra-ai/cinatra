@@ -1,3 +1,4 @@
+import { readMatchWhen } from "./frontmatter";
 import type { PersistedSkill } from "./skills-store";
 
 export type MatchContext = {
@@ -16,8 +17,17 @@ function parseMatchWhenRules(frontmatterMatchWhen: unknown): MatchWhenRule[] {
 
   const raw = frontmatterMatchWhen;
 
-  // Support both single string and array of strings/objects
-  const entries: unknown[] = Array.isArray(raw) ? raw : [raw];
+  // Support a single string (`match_when: always`) or an array of strings/objects
+  // (the YAML block-sequence form). A bare mapping value (`match_when: { agent_id:
+  // foo }`) is intentionally NOT treated as a rule list — it yields no rules and
+  // falls through to the permissive match-all default (Pitfall 5). This preserves
+  // the historical behavior of the previous hand-rolled scanner, which only ever
+  // produced a string or an array.
+  const entries: unknown[] = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? [raw]
+      : [];
 
   const rules: MatchWhenRule[] = [];
   for (const entry of entries) {
@@ -38,47 +48,20 @@ function parseMatchWhenRules(frontmatterMatchWhen: unknown): MatchWhenRule[] {
   return rules;
 }
 
+/**
+ * Resolve the `match_when` declaration from a SKILL.md body, preferring
+ * `metadata.match_when` and falling back to the legacy top-level `match_when`
+ * (Skills cluster Wave-0 dual-read).
+ *
+ * Delegates to the shared, YAML-aware reader in `./frontmatter`. The shared
+ * reader returns an already-parsed value (a `"always"` scalar or an array of
+ * strings/objects); `parseMatchWhenRules` consumes that shape directly. Because
+ * `yaml.parse` already unquotes scalars, the previous hand-rolled quote-stripping
+ * is no longer needed — `agent_id: "@cinatra-ai/email-outreach-agent"` resolves
+ * to the unquoted string at runtime.
+ */
 function parseFrontmatterMatchWhen(content: string): unknown {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) return undefined;
-
-  const lines = match[1].split("\n");
-  const matchWhenStart = lines.findIndex((l) => l.trim().startsWith("match_when:"));
-  if (matchWhenStart < 0) return undefined;
-
-  // Collect subsequent lines that are list items (start with "  -")
-  const items: string[] = [];
-  for (let i = matchWhenStart + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line || !line.match(/^\s+-\s+/)) break;
-    // Parse "key: value" style list items
-    const itemMatch = line.match(/^\s+-\s+(.+)$/);
-    if (itemMatch) items.push(itemMatch[1].trim());
-  }
-
-  if (items.length > 0) {
-    // Parse each item as a key:value object or plain string. Strip
-    // surrounding single or double quotes from the value so quoted YAML
-    // (`agent_id: "@cinatra-ai/email-outreach-agent"`) compares unquoted at
-    // runtime against context.agentId. Without this, downstream rule
-    // evaluation in evaluateSkillMatchRules silently fails for any skill
-    // author who quoted their YAML values.
-    const stripQuotes = (raw: string): string =>
-      raw.replace(/^(["'])(.*)\1$/, "$2");
-    return items.map((item) => {
-      const colonIdx = item.indexOf(":");
-      if (colonIdx < 0) return stripQuotes(item);
-      const key = item.slice(0, colonIdx).trim();
-      const value = stripQuotes(item.slice(colonIdx + 1).trim());
-      return { [key]: value };
-    });
-  }
-
-  // Inline value: "match_when: always" — strip quotes for parity with block path.
-  const inlineMatch = lines[matchWhenStart].match(/match_when:\s*(.+)/);
-  if (!inlineMatch) return undefined;
-  const stripQuotes = (raw: string): string => raw.replace(/^(["'])(.*)\1$/, "$2");
-  return stripQuotes(inlineMatch[1].trim());
+  return readMatchWhen(content);
 }
 
 /**
