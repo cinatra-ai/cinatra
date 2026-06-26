@@ -4,7 +4,7 @@
  *
  * Statically scans every direct `runPostgresQueriesSync(` call site across
  * `src/` and `packages/` and emits a machine-readable JSON inventory consumed
- * by the drift-gate test at:
+ * by the inventory ratchet test at:
  *   src/lib/__tests__/postgres-sync-inventory.test.ts
  *
  * The per-file CLASSIFICATION (sync-required / migratable-request-path /
@@ -12,7 +12,7 @@
  * augmentation:
  *   src/lib/postgres-sync-inventory.ts
  *
- * The inventory records the CALL COUNT per file, not just presence. The drift
+ * The inventory records the CALL COUNT per file, not just presence. The ratchet
  * gate fails when:
  *   - a file appears in the scan but is not classified, OR
  *   - a classified file no longer appears in the scan (stale), OR
@@ -114,9 +114,16 @@ function serialize(obj) {
 }
 
 const isCheck = process.argv.includes("--check");
-const next = serialize(build());
+const isPrint = process.argv.includes("--print");
+const built = build();
+const next = serialize(built);
 
-if (isCheck) {
+if (isPrint) {
+  // Emit the LIVE scan to stdout without touching the committed file. The ratchet
+  // gate uses this to compare the live tree against the committed baseline (so
+  // the ratchet can never degrade into a committed-vs-committed no-op).
+  process.stdout.write(next);
+} else if (isCheck) {
   let current = "";
   try {
     current = readFileSync(OUT, "utf8");

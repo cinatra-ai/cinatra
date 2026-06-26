@@ -1,5 +1,5 @@
 /**
- * Postgres sync-bridge inventory drift gate (#303).
+ * Postgres sync-bridge inventory ratchet guard (#303).
  *
  * The synchronous Postgres bridge (`runPostgresQueriesSync`) is an exceptional
  * sync-leaf escape hatch, not the default request-time store path. This gate
@@ -68,29 +68,40 @@ describe("postgres sync-bridge inventory", () => {
     expect(empty).toEqual([]);
   });
 
-  it("does NOT add new direct sync call sites in request-time stores (count never grows)", () => {
-    // The committed JSON is the baseline. The live source tree must not ADD a
-    // direct `runPostgresQueriesSync(` call beyond the committed per-file count.
-    // Adding one (to an existing file, or a brand-new file) requires re-running
-    // `pnpm sync:inventory` AND a reviewed classification update — which is the
-    // intended friction for keeping the bridge an exceptional escape hatch.
+  it("does NOT add new direct sync call sites in request-time stores (count never grows vs the committed baseline)", () => {
+    // The COMMITTED JSON is the baseline. We scan the LIVE source tree fresh
+    // (via `--print`, which never reads or writes the committed file) and assert
+    // no file's direct-call count EXCEEDS its committed baseline, and no NEW
+    // caller file appears. A new call site (in an existing OR brand-new file)
+    // therefore fails this test until the committed baseline is consciously
+    // re-generated AND the classification is updated — the intended friction for
+    // keeping the bridge an exceptional escape hatch.
+    //
+    // NOTE: this compares LIVE-vs-COMMITTED, not committed-vs-itself, so the
+    // ratchet has real teeth even when someone regenerates the JSON locally
+    // (the committed baseline only moves with a reviewed commit).
     const committed = loadInventory();
-    const committedByFile = new Map(committed.callers.map((c) => [c.file, c.calls]));
+    const baselineByFile = new Map(committed.callers.map((c) => [c.file, c.calls]));
 
-    const liveJson = execFileSync(
-      process.execPath,
-      [BUILDER, "--check"],
-      { cwd: REPO_ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
-    // `--check` exits non-zero (throws) if the committed file is stale, which
-    // already covers count growth. The assertion below is a belt-and-suspenders
-    // restatement against the parsed committed baseline.
-    expect(liveJson).toContain("up to date");
-
-    const grew = committed.callers.filter((c) => {
-      const baseline = committedByFile.get(c.file) ?? 0;
-      return c.calls > baseline;
+    const liveJson = execFileSync(process.execPath, [BUILDER, "--print"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    const live = JSON.parse(liveJson) as Inventory;
+
+    const grew = live.callers
+      .filter((c) => c.calls > (baselineByFile.get(c.file) ?? 0))
+      .map((c) => `${c.file}: ${baselineByFile.get(c.file) ?? 0} -> ${c.calls}`);
+    if (grew.length > 0) {
+      throw new Error(
+        "New direct runPostgresQueriesSync call site(s) beyond the committed baseline " +
+          "(docs/architecture/postgres-sync-inventory.json):\n" +
+          grew.map((g) => `  - ${g}`).join("\n") +
+          "\nIf intentional, run `pnpm sync:inventory`, update the classification in " +
+          "src/lib/postgres-sync-inventory.ts, and commit both.",
+      );
+    }
     expect(grew).toEqual([]);
   });
 

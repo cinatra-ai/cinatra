@@ -101,6 +101,22 @@ describe("getPooledDb", () => {
     expect(() => getPooledDb({ name: "" })).toThrow(/non-empty string/);
   });
 
+  it("throws on a name collision with different options (no silent reuse)", () => {
+    getPooledDb({ name: "shared", connectionString: () => "postgres://a/db" });
+    expect(() =>
+      getPooledDb({ name: "shared", connectionString: () => "postgres://b/db" }),
+    ).toThrow(/already registered with different options/);
+    // Only the first pool was ever constructed.
+    expect(constructed).toHaveLength(1);
+  });
+
+  it("reuses the pool when the SAME name resolves the SAME options", () => {
+    const a = getPooledDb({ name: "shared", connectionString: () => "postgres://a/db" });
+    const b = getPooledDb({ name: "shared", connectionString: () => "postgres://a/db" });
+    expect(a).toBe(b);
+    expect(constructed).toHaveLength(1);
+  });
+
   it("merges extra poolConfig onto the connection string", () => {
     getPooledDb({ name: "tuned", poolConfig: { max: 7 } });
     expect((constructed[0].config as { max: number }).max).toBe(7);

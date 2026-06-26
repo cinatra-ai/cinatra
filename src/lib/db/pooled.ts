@@ -93,6 +93,32 @@ function devCache(): Map<string, Pool> {
 
 const localInstances = new Map<string, Pool>();
 
+// A stable fingerprint of the options a `name` was FIRST created with. A second
+// caller reusing the same `name` with a DIFFERENT resolved connection string or
+// pool config is a programming error (it would silently get the first caller's
+// pool and ignore its own config) — we throw instead of papering over it.
+const ownerFingerprints = new Map<string, string>();
+
+function fingerprint(connectionString: string, poolConfig: unknown): string {
+  // The connection string can carry credentials; hash-free is fine here because
+  // this map never leaves the process and is only string-compared, but keep the
+  // value short and non-logged. We compare the resolved DSN + a stable config
+  // shape so two genuinely-identical call sites match.
+  return `${connectionString}::${poolConfig ? JSON.stringify(poolConfig) : ""}`;
+}
+
+function assertSameOwner(name: string, fp: string): void {
+  const prior = ownerFingerprints.get(name);
+  if (prior !== undefined && prior !== fp) {
+    throw new Error(
+      `getPooledDb: pool name "${name}" is already registered with different options. ` +
+        "Each logical pool must use a unique `name`; a name collision would silently " +
+        "reuse the first pool and ignore the second caller's connection string / config.",
+    );
+  }
+  ownerFingerprints.set(name, fp);
+}
+
 /**
  * Get the shared, lazily-created `pg.Pool` for `name`, creating it on first use.
  *
@@ -111,21 +137,31 @@ export function getPooledDb(options: GetPooledDbOptions): Pool {
     throw new Error("getPooledDb requires a non-empty string `name`");
   }
 
+  // Resolve the DSN up front (lazy — never opens a connection) so a cache hit
+  // can verify the caller is the same logical owner, not a name collision.
+  const resolvedConnectionString = connectionString(name);
+  const fp = fingerprint(resolvedConnectionString, poolConfig);
+
   const existing = localInstances.get(name);
-  if (existing) return existing;
+  if (existing) {
+    assertSameOwner(name, fp);
+    return existing;
+  }
 
   if (process.env.NODE_ENV !== "production") {
     const cached = devCache().get(name);
     if (cached) {
+      assertSameOwner(name, fp);
       localInstances.set(name, cached);
       return cached;
     }
   }
 
+  assertSameOwner(name, fp);
   // `new Pool()` never opens a connection until the first query, so creating it
   // here (on first use) keeps import-time evaluation connection-free even though
   // `Pool` is imported statically — mirroring every existing pool site.
-  const pool: Pool = new Pool({ connectionString: connectionString(name), ...poolConfig });
+  const pool: Pool = new Pool({ connectionString: resolvedConnectionString, ...poolConfig });
   if (!pool.listenerCount("error")) {
     pool.on("error", (err: Error) => {
       console.error(`[${name}] pg pool idle client error:`, err.message);
@@ -148,9 +184,11 @@ export function getPooledDb(options: GetPooledDbOptions): Pool {
 export function __resetPooledDbForTests(name?: string): void {
   if (name) {
     localInstances.delete(name);
+    ownerFingerprints.delete(name);
     globalThis.__cinatraPooledDb?.delete(name);
     return;
   }
   localInstances.clear();
+  ownerFingerprints.clear();
   globalThis.__cinatraPooledDb?.clear();
 }

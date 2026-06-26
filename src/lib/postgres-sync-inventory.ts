@@ -3,14 +3,14 @@
  *
  * The synchronous Postgres bridge (`runPostgresQueriesSync` — a worker thread
  * driven by `Atomics.wait`, 30s prod timeout) was the historical default for
- * ALL request-time persistence. The architecture track (engineering#303) makes
+ * ALL request-time persistence. The architecture track (#303) makes
  * it the *exceptional sync-leaf escape hatch*: request-time stores move to the
  * async pooled-DB layer (`@/lib/db/pooled`), and every remaining direct sync
  * caller must be justified here.
  *
  * This is the HAND-AUTHORED side. The machine-generated scan (call sites + call
  * counts per file) lives in `docs/architecture/postgres-sync-inventory.json`
- * (built by `scripts/build-postgres-sync-inventory.mjs`). The drift-gate test
+ * (built by `scripts/build-postgres-sync-inventory.mjs`). The inventory ratchet test
  * (`src/lib/__tests__/postgres-sync-inventory.test.ts`) asserts the two stay in
  * lockstep AND that the per-file call count never GROWS — i.e. no NEW direct
  * sync call site is added to any path (existing or brand-new) without an
@@ -43,7 +43,7 @@ export type SyncCallerClassification = {
 /**
  * Per-file classification keyed by repo-relative path. Every file emitted into
  * `docs/architecture/postgres-sync-inventory.json` MUST have an entry here, and
- * vice-versa (the drift gate asserts both directions).
+ * vice-versa (the ratchet guard asserts both directions).
  */
 export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassification> = {
   // --- sync-required: security-critical instant-decision / synchronous-context ---
