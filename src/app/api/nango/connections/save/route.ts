@@ -3,7 +3,7 @@ import { getNangoSystem } from "@/lib/nango-system";
 import type { NangoConnectionSavedHook } from "@cinatra-ai/sdk-extensions";
 import { NANGO_CONNECTION_SAVED_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +25,35 @@ export async function POST(request: Request) {
       { status: 503 },
     );
   }
-  const session = await getAuthSession();
+  // Normalize scope BEFORE authz (missing scope === privileged *app* default).
   const body = (await request.clone().json().catch(() => null)) as
     | { connectorKey?: string; scope?: string }
     | null;
+  const scope = body?.scope ?? "app";
+
+  // Require a VALIDATED session for ALL scopes; a null session must not fall
+  // through to the connector via optional chaining.
+  const session = await getAuthSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  if (scope === "user") {
+    if (!session.user.id) {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    }
+  } else {
+    // app / missing scope mutates shared, instance-global connector state.
+    const orgRole = await resolveOrgRoleForSession(session);
+    const isManager =
+      isPlatformAdmin(session) || orgRole === "org_owner" || orgRole === "org_admin";
+    if (!isManager) {
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+    }
+  }
+
   const result = await nango.handleNangoConnectionSaveRequest(request, {
-    userId: session?.user.id,
+    userId: session.user.id,
   });
 
   // Registration-driven post-save hooks: a connector that needs to react to a

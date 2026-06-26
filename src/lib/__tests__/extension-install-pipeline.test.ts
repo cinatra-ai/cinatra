@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolveInstallAnchor, pickSingleActiveRow, type ResolveInstallAnchorDeps } from "@/lib/extension-install-anchor";
 import { installExtensionFromRegistry, makeTestInstallPipelineDeps, type InstallPipelineDeps } from "@/lib/extension-install-pipeline";
 import { generateExtensionSigningKeyPair, signExtension } from "@/lib/extension-signature";
@@ -589,9 +589,15 @@ describe("installExtensionFromRegistry — hot-UPDATE probe == activation's EFFE
     return { deps, probeApprovedPorts };
   }
 
+  // The unsigned bootstrap path is opt-IN now; these tests exercise the
+  // bootstrap UPDATE probe, so opt in explicitly.
+  beforeEach(() => {
+    process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+  });
   afterEach(() => {
     delete process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS;
     delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
+    delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
   });
 
   it("(b) BOOTSTRAP update, exact-org grant APPROVED + SAME requested hash → probes those approved ports (== activation)", async () => {

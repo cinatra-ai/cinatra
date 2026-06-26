@@ -424,10 +424,21 @@ async function materialize(storeRoot: string, marker: string, digestSuffix: stri
   );
 }
 
+// These suites use an UNSIGNED fixture package purely as a vehicle to exercise
+// activation MECHANICS (hot-update, GC, durable rollback, teardown ordering) —
+// NOT the in-process trust gate. The hardened default fails-closed on unsigned
+// in-process activation, so opt in the way a dev/transition deployment would
+// (CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true). The trust gate itself is
+// covered by extension-trust-config.test.ts; restore the secure default after.
+let priorAllowUnsignedBootstrap: string | undefined;
 beforeAll(async () => {
+  priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
   workDir = await mkdtemp(path.join(tmpdir(), "cinatra-hot-"));
 });
 afterAll(async () => {
+  if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
   await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
