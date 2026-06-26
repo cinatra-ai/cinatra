@@ -1,8 +1,13 @@
 // Unit tests for the skill-paths resolver.
 //
-// Each case asserts that
-// resolveSkillDir produces the exact path that the SQL trigger would write
-// to path_relocations.old_path / new_path.
+// Each case asserts that resolveSkillDir produces the exact on-disk skill
+// directory the skill-store writes/reads.
+//
+// NOTE: for agent-bound skills the resolver normalizes the npm-scoped
+// `agent_templates.package_name` (e.g. "@cinatra-ai/auditor-agent") to the
+// unscoped on-disk segment ("cinatra-ai/auditor-agent"). The SQL relocation
+// trigger still composes the raw scoped value and so currently diverges for
+// scoped names — fixing it requires a migration (tracked in cinatra#550).
 
 import { describe, expect, it } from "vitest";
 
@@ -45,11 +50,11 @@ const slugs: SlugMap = {
   agentTemplates: new Map([
     [
       "tmpl-auditor",
-      { ownerLevel: "team", ownerId: "t-growth", packageName: "cinatra/auditor-agent" },
+      { ownerLevel: "team", ownerId: "t-growth", packageName: "@cinatra-ai/auditor-agent" },
     ],
     [
       "tmpl-blog",
-      { ownerLevel: "team", ownerId: "t-growth", packageName: "cinatra/blog-draft-writer-agent" },
+      { ownerLevel: "team", ownerId: "t-growth", packageName: "@cinatra-ai/blog-draft-writer-agent" },
     ],
   ]),
 };
@@ -145,7 +150,7 @@ describe("resolveSkillDir — representative ownership examples", () => {
       skill_slug: "hot-fix-subject",
     };
     expect(resolveSkillDir(id, slugs, ROOT)).toBe(
-      "/test/data/skills/personal/user-one/~extensions/cinatra-ai/auditor-agent/hot-fix-subject",
+      "/test/data/skills/personal/user-one/~agents/cinatra-ai/auditor-agent/hot-fix-subject",
     );
   });
 
@@ -175,7 +180,7 @@ describe("resolveSkillDir — representative ownership examples", () => {
       skill_slug: "pii-check",
     };
     expect(resolveSkillDir(id, slugs, ROOT)).toBe(
-      "/test/data/skills/organization/acme/~extensions/cinatra-ai/auditor-agent/pii-check",
+      "/test/data/skills/organization/acme/~agents/cinatra-ai/auditor-agent/pii-check",
     );
   });
 
@@ -190,7 +195,7 @@ describe("resolveSkillDir — representative ownership examples", () => {
       skill_slug: "pillar-piece",
     };
     expect(resolveSkillDir(id, slugs, ROOT)).toBe(
-      "/test/data/skills/organization/acme/~teams/growth/~projects/q1-campaign/~extensions/cinatra-ai/blog-draft-writer-agent/pillar-piece",
+      "/test/data/skills/organization/acme/~teams/growth/~projects/q1-campaign/~agents/cinatra-ai/blog-draft-writer-agent/pillar-piece",
     );
   });
 

@@ -1,0 +1,215 @@
+{
+  "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
+  "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
+  "totalCallSites": 236,
+  "callers": [
+    {
+      "file": "packages/extensions/src/permissions-store.ts",
+      "calls": 10
+    },
+    {
+      "file": "packages/notifications/src/recipient-policy.ts",
+      "calls": 4
+    },
+    {
+      "file": "packages/notifications/src/service.ts",
+      "calls": 6
+    },
+    {
+      "file": "packages/objects/src/graphiti-projector.ts",
+      "calls": 9
+    },
+    {
+      "file": "packages/objects/src/mcp/handlers.ts",
+      "calls": 1
+    },
+    {
+      "file": "packages/skills/src/llm-matching/batch-runs-store.ts",
+      "calls": 5
+    },
+    {
+      "file": "packages/skills/src/llm-matching/schedule-store.ts",
+      "calls": 2
+    },
+    {
+      "file": "packages/skills/src/llm-matching/skill-matches-store.ts",
+      "calls": 8
+    },
+    {
+      "file": "packages/skills/src/skills-store.ts",
+      "calls": 9
+    },
+    {
+      "file": "src/lib/agent-creation-requests-store.ts",
+      "calls": 8
+    },
+    {
+      "file": "src/lib/agent-run-skills-used.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/artifacts/artifact-creation.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/artifacts/artifact-read.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/artifacts/artifact-refs-store.ts",
+      "calls": 5
+    },
+    {
+      "file": "src/lib/artifacts/artifact-retention.ts",
+      "calls": 4
+    },
+    {
+      "file": "src/lib/artifacts/authoring-recursion-ledger.ts",
+      "calls": 7
+    },
+    {
+      "file": "src/lib/artifacts/context-mcp.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/artifacts/context-resolver.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/artifacts/matcher-runtime.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/artifacts/producer-assertions.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/artifacts/provider-file-cache.ts",
+      "calls": 6
+    },
+    {
+      "file": "src/lib/artifacts/representation-store.ts",
+      "calls": 4
+    },
+    {
+      "file": "src/lib/artifacts/resource-store.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/artifacts/run-context-selections-store.ts",
+      "calls": 8
+    },
+    {
+      "file": "src/lib/artifacts/semantic-assertion-store.ts",
+      "calls": 6
+    },
+    {
+      "file": "src/lib/assistant-profiles.ts",
+      "calls": 4
+    },
+    {
+      "file": "src/lib/connect-sites-store.ts",
+      "calls": 9
+    },
+    {
+      "file": "src/lib/connector-access-resolver.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/connector-policy-store.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/database-metadata.ts",
+      "calls": 6
+    },
+    {
+      "file": "src/lib/database.ts",
+      "calls": 16
+    },
+    {
+      "file": "src/lib/dev-auto-setup.ts",
+      "calls": 7
+    },
+    {
+      "file": "src/lib/dev-fixture-seeder.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/drizzle-store.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/email-system-persistence.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/external-mcp-registry.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/instance-identity-store.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/object-history/canonical-writer.ts",
+      "calls": 5
+    },
+    {
+      "file": "src/lib/object-history/change-set.ts",
+      "calls": 5
+    },
+    {
+      "file": "src/lib/object-history/cms-state-machine.ts",
+      "calls": 6
+    },
+    {
+      "file": "src/lib/object-history/eligibility.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/object-history/merge-proposals.ts",
+      "calls": 7
+    },
+    {
+      "file": "src/lib/object-history/restore-engine.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/object-history/server-views.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/objects-store.ts",
+      "calls": 12
+    },
+    {
+      "file": "src/lib/postgres-schema-init.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/project-writable.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/resource-project-move.ts",
+      "calls": 3
+    },
+    {
+      "file": "src/lib/trigger-email-send-use-cases.ts",
+      "calls": 1
+    },
+    {
+      "file": "src/lib/webhook-outbound-deadletter.server.ts",
+      "calls": 2
+    },
+    {
+      "file": "src/lib/widget-token-broker.ts",
+      "calls": 4
+    },
+    {
+      "file": "src/lib/widget-user-auth.ts",
+      "calls": 9
+    }
+  ]
+}

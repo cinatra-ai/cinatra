@@ -115,6 +115,19 @@ const ADMIN = {
   organizationId: "org-1",
   platformRole: "platform_admin",
 };
+// A platform_admin authoring via the DELEGATED-CHAT surface (the chat model
+// acting on the user's behalf). `delegatedRestricted` is stamped by
+// buildActorFromMcpContext for chat delegation. cinatra#538: the admin
+// instant-grant must be withheld here so the chat model can't auto-publish
+// N versions per turn.
+const DELEGATED_CHAT_ADMIN = {
+  actorType: "model" as const,
+  source: "agent",
+  userId: "user-admin",
+  organizationId: "org-1",
+  platformRole: "platform_admin",
+  delegatedRestricted: true,
+};
 
 const SAMPLE_INPUT = {
   packageSlug: "test-agent",
@@ -162,6 +175,48 @@ describe("agent_creation_request handlers", () => {
         req("agent_creation_request_propose", SAMPLE_INPUT, NON_ADMIN),
       )) as { structuredContent: { collisionWarning?: string } };
       expect(out.structuredContent.collisionWarning).toMatch(/already exists/i);
+    });
+
+    it("withholds the admin instant-grant for delegated-chat callers — proposal-only, no publish (#538)", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue({
+        id: "req-1", status: "proposed", authorId: "user-admin", packageName: "@test/test-agent",
+        packageSlug: "test-agent", packageVersion: "0.1.0", snapshotHash: "fakehash",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, DELEGATED_CHAT_ADMIN),
+      )) as { instantGrant?: boolean };
+      // No auto-approve, no materialize/publish pipeline — the chat proposal
+      // queues for a deliberate decision via the Approvals UI.
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(innerHandlersMock.createAgentBuilderPrimitiveHandlers).not.toHaveBeenCalled();
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+      expect(out.instantGrant).not.toBe(true);
+    });
+
+    it("keeps the admin instant-grant for non-delegated (UI) authoring (#382)", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue({
+        id: "req-1", status: "proposed", authorId: "user-admin", packageName: "@test/test-agent",
+        packageSlug: "test-agent", packageVersion: "0.1.0", snapshotHash: "fakehash",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const handlerMap = {
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        agent_source_publish: vi.fn(async () => ({ published: true, packageName: "@test/test-agent" })),
+      };
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue(handlerMap);
+
+      await handleAgentCreationRequestPropose(req("agent_creation_request_propose", SAMPLE_INPUT, ADMIN));
+      // Non-delegated admin authoring still publishes directly (the #382 design).
+      expect(storeMock.decideAgentCreationRequestCas).toHaveBeenCalled();
+      expect(handlerMap.agent_source_publish).toHaveBeenCalled();
     });
   });
 

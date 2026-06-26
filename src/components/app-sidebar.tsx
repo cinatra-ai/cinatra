@@ -38,6 +38,7 @@ import {
 import { NavGroup } from "@/components/nav-group";
 import { NavUser } from "@/components/nav-user";
 import { type NavItem } from "@/components/layout-types";
+import { ANALYTICS_NAV } from "@/lib/section-nav";
 
 // ---------- sidebar data (mirrors shadcn-admin's sidebar-data.ts pattern) ----------
 
@@ -120,10 +121,9 @@ function buildSidebarData(_opts: SidebarOpts) {
       {
         title: "Analytics",
         icon: domainIcons.metrics,
-        items: [
-          { title: "LLM", url: "/analytics/llm" },
-          { title: "API", url: "/analytics/api" },
-        ],
+        // Sourced from the shared ANALYTICS_NAV config (#493) — same list as the
+        // content tabs, so "Usage" is no longer orphaned and labels stay aligned.
+        items: ANALYTICS_NAV.map((item) => ({ title: item.label, url: item.href })),
       },
     ] as NavItem[],
   });

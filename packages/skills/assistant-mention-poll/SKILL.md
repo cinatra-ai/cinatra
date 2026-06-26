@@ -1,3 +1,8 @@
+---
+name: assistant-mention-poll
+description: Use when a local Claude Code instance runs as the @claude-code assistant identity and should continuously poll Cinatra's chat_mentions_poll MCP tool for pending @mentions, perform the requested work, and reply via chat_thread_send in a loop.
+---
+
 # assistant-mention-poll
 
 ## Purpose

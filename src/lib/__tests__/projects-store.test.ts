@@ -44,9 +44,12 @@ describe("projects-store typed Drizzle declaration", () => {
     expect(SOURCE).not.toMatch(/\bpgTable\(/);
   });
 
-  it("caches Pool on globalThis and attaches an idempotent error listener", () => {
-    expect(SOURCE).toContain("__cinatraProjectsPool");
-    expect(SOURCE).toContain("listenerCount(\"error\")");
-    expect(SOURCE).toContain("on(\"error\"");
+  it("delegates pooling to the shared pooled-DB scaffold (#303)", () => {
+    // The lazy-pool + idempotent idle-error listener + dev globalThis cache now
+    // live in @/lib/db/pooled (covered by src/lib/db/__tests__/pooled.test.ts).
+    // This store must delegate to it rather than hand-roll the boilerplate.
+    expect(SOURCE).toContain('from "@/lib/db/pooled"');
+    expect(SOURCE).toContain('getPooledDb({ name: "projects-store" })');
+    expect(SOURCE).not.toContain("new Pool(");
   });
 });

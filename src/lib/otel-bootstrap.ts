@@ -9,6 +9,12 @@ import "server-only";
 
 let initialized = false;
 
+// The registered NodeTracerProvider, captured at init so a fatal-error flush
+// (src/lib/boot/fatal-error-policy.ts) can force-export buffered spans before the
+// process exits. `unknown` to avoid importing the heavy OTel types eagerly; the
+// flush narrows to the `forceFlush()` shape defensively.
+let registeredProvider: { forceFlush?: () => Promise<void> } | undefined;
+
 export async function initializeOtelTracing(): Promise<void> {
   if (initialized) return;
 
@@ -90,19 +96,48 @@ export async function initializeOtelTracing(): Promise<void> {
   if (sentryProcessor) {
     provider.addSpanProcessor(sentryProcessor);
   }
-  provider.register(
-    sentryPropagator || sentryContextManager
-      ? {
-          ...(sentryPropagator ? { propagator: sentryPropagator } : {}),
-          ...(sentryContextManager
-            ? { contextManager: sentryContextManager }
-            : {}),
-        }
-      : undefined,
-  );
+  // Propagator: ALWAYS pass an explicit value. When Sentry is unavailable we
+  // pass `null`, NOT undefined. With `undefined`, BasicTracerProvider.register()
+  // falls back to OTEL_PROPAGATORS (default `tracecontext,baggage`) and installs
+  // a W3CBaggagePropagator as the global propagator. cinatra never extracts or
+  // propagates W3C baggage, and @opentelemetry/core's baggage parse path carries
+  // an unbounded-allocation advisory (GHSA-8988-4f7v-96qf, patched only in the
+  // 2.x SDK we don't yet ship). Passing `null` suppresses the default global
+  // propagator entirely, so the vulnerable parser is never wired to inbound
+  // headers — the no-exposure stance is enforced by code, not incidental.
+  //
+  // Tradeoff: with Sentry off this also drops the (safe, non-vulnerable) default
+  // W3C `tracecontext` global propagator. That is acceptable here: cinatra does
+  // no cross-service context propagation in app code (no propagation.extract/
+  // inject anywhere), spans are exported locally to Postgres regardless, and
+  // production always runs with Sentry, whose propagator already carries
+  // tracecontext. We deliberately do NOT add a direct @opentelemetry/core import
+  // for W3CTraceContextPropagator — that would make the vulnerable core@1.30.1 a
+  // direct dependency. Restore tracecontext via the SDK-2.x lift when it lands.
+  provider.register({
+    propagator: sentryPropagator ?? null,
+    ...(sentryContextManager ? { contextManager: sentryContextManager } : {}),
+  });
 
+  registeredProvider = provider as { forceFlush?: () => Promise<void> };
   initialized = true;
   console.info(
     `[otel-bootstrap] NodeTracerProvider registered (service=${serviceName}${sentryEnabled ? ", sentry=on" : ""})`,
   );
+}
+
+/**
+ * Best-effort force-flush of the BatchSpanProcessor so the spans buffered around a
+ * fatal crash are exported BEFORE the process exits. No-op when tracing was never
+ * initialised (e.g. Edge runtime, tests). Never throws — the fatal-exit path must
+ * not be wedged by a flush failure (engineering #302).
+ */
+export async function flushOtelTracing(): Promise<void> {
+  const provider = registeredProvider;
+  if (!provider || typeof provider.forceFlush !== "function") return;
+  try {
+    await provider.forceFlush();
+  } catch {
+    /* best-effort — never block the fatal-exit path */
+  }
 }

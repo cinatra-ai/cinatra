@@ -6,36 +6,24 @@ import "server-only";
 // IdempotencyLedger (the state machine + attempt-fence live in the package;
 // the host owns the connection). Same lazy-pool posture as the secret service.
 
-import { Pool } from "pg";
+import type { Pool } from "pg";
 import { IdempotencyLedger } from "@cinatra-ai/webhooks";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
+import { getPooledDb } from "@/lib/db/pooled";
 
 // How long a holder owns an in-flight claim before its lease expires and a
 // retry may re-claim. Generously above a handler's expected runtime; a crashed
 // holder's row becomes reclaimable after this.
 const LEASE_SECONDS = 60;
 
-declare global {
-  var __cinatraWebhookIdemPool: Pool | undefined;
-}
-
-let poolInstance: Pool | undefined;
+// Lazy pool over the shared pool (@/lib/db/pooled, #303). Resolves the
+// connection string via the host helper (which honors the `.env.local`
+// fallback), same lazy-pool posture as the secret service.
 function getPool(): Pool {
-  if (poolInstance) return poolInstance;
-  if (globalThis.__cinatraWebhookIdemPool) {
-    return (poolInstance = globalThis.__cinatraWebhookIdemPool);
-  }
-  const pool = new Pool({ connectionString: getPostgresConnectionString() });
-  if (!pool.listenerCount("error")) {
-    pool.on("error", (err) => {
-      console.error("[webhook-idempotency] pg pool idle client error:", err.message);
-    });
-  }
-  poolInstance = pool;
-  if (process.env.NODE_ENV !== "production") {
-    globalThis.__cinatraWebhookIdemPool = pool;
-  }
-  return pool;
+  return getPooledDb({
+    name: "webhook-idempotency",
+    connectionString: () => getPostgresConnectionString(),
+  });
 }
 
 function table(): string {
