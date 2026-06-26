@@ -646,13 +646,14 @@ export type HostLinkedInConnectionService = {
  * boundary — the identical posture the static `@/lib/youtube-api` import
  * carried before the cutover. */
 export type HostYouTubeConnectionService = {
-  /** Nango-backed OAuth2 access-token mint. Returns null when Nango is
-   * unconfigured or the resolved credentials are not a usable OAUTH2 bearer;
-   * with no SAVED connection it still attempts the legacy fixed Nango
-   * connection id before giving up, and a failing Nango credential resolution
-   * REJECTS (it is not folded to null) — identical semantics to the static
-   * `getConfiguredYouTubeAccessToken` import this replaces (callers keep
-   * their existing null/throw handling). */
+  /** Nango-backed OAuth2 access-token mint. This is a GLOBAL, actor-less
+   * reader, so it resolves ONLY an app-scoped saved connection (a per-user
+   * credential is never visible here). Returns null when Nango is
+   * unconfigured, no app-scoped SAVED connection exists (it FAILS CLOSED — it
+   * does NOT fall back to a legacy fixed Nango connection id), or the resolved
+   * credentials are not a usable OAUTH2 bearer; a failing Nango credential
+   * resolution REJECTS (it is not folded to null). Callers keep their existing
+   * null/throw handling. */
   getConfiguredAccessToken(): Promise<string | null>;
 };
 
