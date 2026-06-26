@@ -5,13 +5,9 @@ import {
 import {
   buildDeleteAllRowsQuery,
   buildDeleteJsonRowQuery,
-  buildCompareAndSwapMetadataQuery,
-  buildDeleteMetadataByPrefixQuery,
-  buildDeleteMetadataQuery,
   buildDeleteRowsNotInQuery,
   buildInsertJsonRowQuery,
   buildInsertExtensionLifecycleAuditQuery,
-  buildReadMetadataQuery,
   buildSelectJsonRowsQuery,
   buildUpsertJsonRowQuery,
   buildUpsertSkillPackageQuery,
@@ -37,6 +33,15 @@ import {
   prepareSealedWrite,
   unsealSecretFields,
 } from "@/lib/connector-config-secret-fields";
+import {
+  compareAndSwapMetadataValueInternal,
+  deleteMetadataByPrefixInternal,
+  deleteMetadataValueInternal,
+  readMetadataValueInternal,
+  readRawMetadataStringInternal,
+  safeParseJson,
+  writeMetadataValueInternal,
+} from "@/lib/database-metadata";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
 // (cinatra#104): under Turbopack dev this module is an ASYNC module (its
@@ -114,84 +119,6 @@ function getConnectorConfigCache() {
   }
 
   return globalThis.__cinatraConnectorConfigCache;
-}
-
-function safeParseJson<T>(raw: string, fallback: T): T {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-
-function readMetadataValueInternal<T>(key: string, fallback: T): T {
-  ensurePostgresSchema();
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildReadMetadataQuery(postgresSchema, key)],
-  });
-
-  const row = result?.rows?.[0] as { value?: string } | undefined;
-  if (!row?.value) {
-    return fallback;
-  }
-
-  return safeParseJson(row.value, fallback);
-}
-
-function writeMetadataValueInternal(key: string, value: unknown) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildWriteMetadataQuery(postgresSchema, key, JSON.stringify(value))],
-  });
-}
-
-// Read the RAW stored `value` string for a metadata key (no parse/normalize),
-// or null when the row is absent. Used to capture a byte-accurate snapshot for
-// the connector-config seal-on-read compare-and-swap.
-function readRawMetadataStringInternal(key: string): string | null {
-  ensurePostgresSchema();
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildReadMetadataQuery(postgresSchema, key)],
-  });
-  const row = result?.rows?.[0] as { value?: string } | undefined;
-  return row?.value ?? null;
-}
-
-// Atomically update a metadata row's value to `newValue` ONLY when the stored
-// value is byte-equal to `expectedRaw`. Returns true when the swap landed (a
-// row was affected). A concurrent write that changed the stored value makes the
-// swap a no-op (returns false) so the caller's stale value is never persisted.
-function compareAndSwapMetadataValueInternal(
-  key: string,
-  newValue: string,
-  expectedRaw: string,
-): boolean {
-  ensurePostgresSchema();
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildCompareAndSwapMetadataQuery(postgresSchema, key, newValue, expectedRaw)],
-  });
-  return (result?.rows?.length ?? 0) > 0;
-}
-
-function deleteMetadataValueInternal(key: string) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildDeleteMetadataQuery(postgresSchema, key)],
-  });
-}
-
-function deleteMetadataByPrefixInternal(prefix: string) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildDeleteMetadataByPrefixQuery(postgresSchema, prefix)],
-  });
 }
 
 function readJsonRows(tableName: string) {

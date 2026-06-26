@@ -187,6 +187,12 @@ describe("Media route purge gate", () => {
       // the write path; excluded so the path-substring grep arm above does
       // not false-positive on the inventory entry.
       "surface-inventory.ts",
+      // NOT an importer: the #303 postgres-sync-bridge caller inventory lists
+      // the writer file as a string-literal classification KEY
+      // ("src/lib/artifacts/artifact-creation.ts" -> migratable-request-path).
+      // It is a pure read-only data/types module with NO imports at all;
+      // excluded for the same reason as surface-inventory.ts above.
+      "postgres-sync-inventory.ts",
     ];
     const root = path.join(__dirname, "../../../..");
     const grepFilter = ALLOW_LIST.map((f) => `grep -v "${f}"`).join(" | ");
