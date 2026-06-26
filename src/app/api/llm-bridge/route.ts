@@ -41,6 +41,7 @@ import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
 import { setRunContext, clearRunContext } from "@/lib/agent-run-context-registry";
 import { issueAgentRunMcpActorToken } from "@/lib/agent-run-mcp-actor-token";
 import { resolveAgentRunMcpActor } from "@/lib/agent-run-actor-resolve";
+import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import {
@@ -103,6 +104,13 @@ const RequestSchema = z.object({
   system: z.string().optional(),
   max_steps: z.number().int().positive().optional(),
   agent_run_id: z.string().optional(),
+  // Dispatcher-signed run binding. The worker mints this
+  // at dispatch over the run's authoritative {runId, orgId, runBy} keyed by
+  // BETTER_AUTH_SECRET and threads it alongside `cinatra_run_id` so the OAS
+  // author cannot forge a cross-tenant run selection. Verified BEFORE any
+  // run is selected for MCP OBO minting. `agent_run_id` alone is NEVER
+  // authoritative for run selection.
+  cinatra_run_binding: z.string().optional(),
   agent_id: z.string().optional(),
   package_version: z.string().optional(),
   agent_spec_version: z.string().optional(),
@@ -733,73 +741,81 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     // non-fatal — fall through to body.agent_run_id fallback below
   }
-  // Fallback: when context-id lookup misses (this happens on the FIRST
-  // bridge call of a run because `updateAgentRunA2AContextId` only runs
+  // Fallback for the FIRST bridge call of a run. The context-id lookup
+  // misses on the first call because `updateAgentRunA2AContextId` only runs
   // AFTER WayFlow returns its first task event — by then the LLM step is
-  // already past the boundary check), look up by the body's agent_run_id.
+  // already past the boundary check. To still mint a scoped MCP OBO token
+  // for that step we must select the run from request data.
   //
-  // TRUST MODEL — gated on `isBridgeAuthorized` (the WayFlow shared-secret
-  // header `X-Cinatra-Bridge-Token`). The bridge-token gate proves the
-  // request originated from the WayFlow runtime; only the worker-dispatched
-  // run's `cinatra_run_id` gets propagated through the OAS DataFlowEdge into
-  // `body.agent_run_id` for that runtime. A JWT-authed (non-bridge-token)
-  // request CANNOT use this fallback because the JWT path is for
-  // third-party A2A peers that don't have the worker-injected
-  // `cinatra_run_id` provenance.
+  // SECURITY. `body.agent_run_id` is NEVER trusted as a
+  // run-selection source: it is threaded from `cinatra_run_id` through the
+  // OAS DataFlowEdge, which a malicious/compromised OAS author can rewrite
+  // to another tenant's run id (confused-deputy → cross-tenant OBO mint).
+  // The downstream live membership check validates the SELECTED run's
+  // identity, not the caller's entitlement to select it, so it does not
+  // stop this alone.
   //
-  // A malicious OAS could rewrite `cinatra_run_id` through DataFlowEdge
-  // into another tenant's run id, which would let the bridge mint an OBO
-  // token for that tenant's `{runBy, orgId}`. The mitigations layered
-  // against this:
-  //   1. The bridge-token gate restricts the fallback to internal WayFlow
-  //      traffic only (no external A2A peer can hit this branch).
-  //   2. `resolveAgentRunMcpActor` does a LIVE membership check at mint
-  //      time — a stale or cross-org `runBy` would fail there.
-  //   3. The dispatcher always injects `cinatra_run_id: run.id` into the
-  //      A2A initial message at `execution.ts:1271`, so well-formed
-  //      agents propagate the correct run id end-to-end.
-  // TODO(hardening): for production with un-vetted extension agents,
-  // replace this fallback with a signed `X-Cinatra-Run-Binding` header
-  // minted by the worker at dispatch (binding `{runId, orgId, runBy}` to
-  // BETTER_AUTH_SECRET) so the OAS author can't rewrite the run id.
+  // Instead we require a DISPATCHER-SIGNED run binding (`cinatra_run_binding`)
+  // minted by the worker at dispatch over the run's authoritative
+  // {runId, orgId, runBy} keyed by BETTER_AUTH_SECRET (a key never exposed
+  // to OAS). The binding is verified BEFORE any run is selected; the run is
+  // then read by the VERIFIED runId and the freshly-read row must match the
+  // binding's orgId/runBy. A malicious OAS can drop/corrupt the binding —
+  // degrading to the anonymous machine-token MCP path (the same
+  // `not_org_member` outcome as no run, never an elevation) — but cannot
+  // forge a binding for a run it does not own.
   //
-  // Without this fallback, every first LLM step of every agent run gets
-  // the anonymous machine-token MCP path, so `apollo_administration_get`
-  // (and every other MCP call) fails at `enforceMcpBoundary` with
-  // `not_org_member` — the regression that surfaced as Apollo agents
-  // looping "not_connected" forever.
+  // The fallback stays gated on `isBridgeAuthorized` (the WayFlow
+  // shared-secret `X-Cinatra-Bridge-Token`) as the first gate: a JWT-authed
+  // third-party A2A peer cannot reach it. The signed binding is the second,
+  // forgery-proof gate that closes the confused-deputy path the bridge-token
+  // gate alone left open.
+  let bindingVerifiedRunId: string | undefined;
   if (
     !runFromContext &&
     isBridgeAuthorized &&
-    typeof rawBody === "object" &&
-    rawBody !== null &&
-    "agent_run_id" in rawBody &&
-    typeof (rawBody as { agent_run_id?: unknown }).agent_run_id === "string"
+    typeof body.cinatra_run_binding === "string" &&
+    body.cinatra_run_binding.length > 0
   ) {
-    const bodyRunId = (rawBody as { agent_run_id: string }).agent_run_id;
-    if (bodyRunId) {
+    const verified = verifyAgentRunBinding(body.cinatra_run_binding);
+    if (verified.ok) {
       try {
-        const runById = await readAgentRunById(bodyRunId);
-        if (runById) {
+        // Read the run by the SIGNED runId (never a raw body id) and confirm
+        // the freshly-read row matches the binding's identity tuple. A
+        // mismatch (e.g. the run's owner/org changed, or the binding was
+        // crafted for a non-existent run) refuses selection.
+        const runById = await readAgentRunById(verified.payload.runId);
+        if (
+          runById &&
+          runById.id === verified.payload.runId &&
+          runById.orgId === verified.payload.orgId &&
+          runById.runBy === verified.payload.runBy
+        ) {
           runFromContext = runById;
+          bindingVerifiedRunId = runById.id;
         }
       } catch {
-        // non-fatal
+        // non-fatal — degrade to anonymous machine-token path
       }
     }
   }
-  let effectiveRunId = body.agent_run_id || undefined;
-  if (!effectiveRunId && runFromContext?.id) {
-    effectiveRunId = runFromContext.id;
-  }
-  // Run usable for building the artifact resolver ports — ONLY when bound
-  // by the auth-injected context-id, and if body.agent_run_id is also
-  // supplied it must match (otherwise refuse).
+  // `effectiveRunId` drives the best-effort run-context registry wiring used
+  // for objects_save run tagging. It may use the caller-supplied
+  // body.agent_run_id (no token minting depends on it) but prefers the
+  // binding-verified / context-resolved run id when available.
+  const effectiveRunId =
+    bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
+  // Run usable for building the artifact resolver ports AND for minting the
+  // MCP OBO actor token — ONLY a run resolved via the auth-injected
+  // context-id OR a verified dispatcher-signed binding. `body.agent_run_id`
+  // can NEVER promote a run into `runForPorts`. If a context-id resolved a
+  // run AND body.agent_run_id disagrees, refuse (defense in depth).
   let runForPorts: typeof runFromContext = runFromContext;
   if (
     body.agent_run_id &&
     runFromContext?.id &&
-    body.agent_run_id !== runFromContext.id
+    body.agent_run_id !== runFromContext.id &&
+    bindingVerifiedRunId !== runFromContext.id
   ) {
     runForPorts = null;
   }

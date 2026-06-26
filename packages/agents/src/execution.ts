@@ -95,6 +95,7 @@ import { getOrAddWayflowGateIndex } from "@cinatra-ai/a2a";
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
+import { issueAgentRunBinding } from "@/lib/agent-run-binding";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
 function enrichmentContextFor(userId: string | null) {
@@ -1324,12 +1325,34 @@ async function runAgentBuilderExecutionJobInner(
       // cinatra_run_id as a flow input and threads it via
       // DataFlowEdge to each leaf ApiNode. Run identity is owned by the
       // dispatcher; the WayFlow flow inherits it.
+      //
+      // Also mint a DISPATCHER-SIGNED run binding
+      // (`cinatra_run_binding`) over the run's authoritative
+      // {runId, orgId, runBy}, keyed by BETTER_AUTH_SECRET (a key OAS never
+      // sees). The LLM bridge REFUSES to mint an MCP OBO token from
+      // `cinatra_run_id` alone (forgeable via DataFlowEdge); it requires
+      // this binding (or an auth-injected context-id). Only emitted when the
+      // run carries both org + owner identity; otherwise the bridge degrades
+      // to the anonymous machine-token path (never an elevation).
+      const runBinding =
+        run.orgId && run.runBy
+          ? issueAgentRunBinding({
+              runId: run.id,
+              orgId: run.orgId,
+              runBy: run.runBy,
+            })
+          : undefined;
+      const initialMessagePayload: Record<string, unknown> = {
+        ...(run.inputParams ?? {}),
+        cinatra_run_id: run.id,
+        ...(runBinding ? { cinatra_run_binding: runBinding } : {}),
+      };
       const task = await client.sendTask({
         message: {
           role: "user",
           kind: "message",
           messageId: randomUUID(),
-          parts: [{ kind: "text", text: JSON.stringify({ ...(run.inputParams ?? {}), cinatra_run_id: run.id } as Record<string, unknown>) }],
+          parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
         },
         configuration: { acceptedOutputModes: ["text"] },
       });
