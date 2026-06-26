@@ -6,6 +6,7 @@ import { DefaultRequestHandler, ServerCallContext, A2AError } from "@a2a-js/sdk/
 
 import { TERMINAL_A2A_STATES } from "./types";
 import { readRunEvents } from "./event-log";
+import { requireA2AActor, resolveAuthorizedRunForA2AId } from "./actor-adapter";
 
 // ---------------------------------------------------------------------------
 // CinatraResubscribeHandler
@@ -95,7 +96,24 @@ export class CinatraResubscribeHandler extends DefaultRequestHandler {
       );
     }
 
-    // 2. Load the current task snapshot.
+    // Bind the replay to the verified actor BEFORE reading any events. The
+    // durable Redis replay (readRunEvents below) has no authz of its own, so a
+    // caller who guessed a foreign id could replay another tenant's event
+    // stream. Resolve the verified actor fail-closed (explicit
+    // context.a2aActorContext preferred — survives lazy SSE iteration where the
+    // ALS frame is no longer active — else the ALS frame). params.id may be an
+    // A2A task id OR a run id; resolveAuthorizedRunForA2AId tries both and
+    // enforces run.read. Replay only from the AUTHORIZED canonical run.id.
+    const actor = requireA2AActor(context);
+    const authorizedRun = await resolveAuthorizedRunForA2AId(params.id, actor);
+    if (!authorizedRun) {
+      throw A2AError.taskNotFound(params.id);
+    }
+    const authorizedRunId = authorizedRun.id;
+
+    // 2. Load the current task snapshot. (taskStore.load is itself actor-gated
+    //    by createA2ATaskStoreWithDbFallback, but the run.read enforcement above
+    //    is the authoritative gate for the Redis replay below.)
     const task = await (this as unknown as { taskStore: TaskStore }).taskStore.load(
       params.id,
       context,
@@ -127,8 +145,9 @@ export class CinatraResubscribeHandler extends DefaultRequestHandler {
       ? (cinatraCtx as unknown as { signal?: AbortSignal }).signal
       : undefined;
 
-    // 7. Replay from the durable event log.
-    for await (const { id: eventId, event } of readRunEvents(params.id, {
+    // 7. Replay from the durable event log — keyed by the AUTHORIZED run id
+    //    never the raw caller-supplied params.id.
+    for await (const { id: eventId, event } of readRunEvents(authorizedRunId, {
       fromId,
       signal,
     })) {

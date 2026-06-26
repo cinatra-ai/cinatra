@@ -413,6 +413,15 @@ def _patch_api_call_step_bridge_token() -> None:
             "llm-bridge" in _ctx_url
             or "context-resolve" in _ctx_url
             or "context-finalize" in _ctx_url
+            # The bridge callbacks below derive actor authority
+            # from a body-selected agent_run_id. Inject the auth-path context id
+            # so the server can bind that id to the run actually executing this
+            # callback (it fails closed when the header is absent). The header is
+            # set from a per-task ContextVar and is NOT writable by the OAS
+            # author, so it is a trustworthy "which run is running" statement.
+            or "/agents/passthrough" in _ctx_url
+            or "/auditor/run-skills" in _ctx_url
+            or "/auditor/apply" in _ctx_url
         ):
             request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
         # ApiNode timeout policy — aligned for batch LLM workloads.

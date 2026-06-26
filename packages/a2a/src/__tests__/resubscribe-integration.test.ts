@@ -17,17 +17,36 @@
  * Guards on Redis availability (same pattern as event-log.test.ts).
  * Skipped automatically when Redis is unreachable.
  */
-import { afterAll, beforeAll, describe, it, expect } from "vitest";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Redis } from "ioredis";
 import type { Task, TaskState } from "@a2a-js/sdk";
 import type { TaskStore } from "@a2a-js/sdk/server";
+
+// The handler enforces run.read (via the actor-aware
+// readAgentRunById / readAgentRunByTaskId resolver) before the real Redis
+// replay. Mock both to authorize (resolve to the requested run id by PK).
+vi.mock("@cinatra/agent-builder", () => ({
+  readAgentRunByTaskId: vi.fn(async () => null),
+  readAgentRunById: vi.fn(async (id: string) => ({ id })),
+}));
 
 import {
   xaddRunEvent,
   __disconnectSharedEventLogPublisher,
 } from "../event-log";
 import { CinatraResubscribeHandler } from "../resubscribe-handler";
+
+// The verified actor is delivered on the SDK call context (iteration-safe).
+const CTX = {
+  a2aActorContext: {
+    principalType: "HumanUser",
+    principalId: "owner-1",
+    organizationId: "org-1",
+    authSource: "a2a",
+    policyVersion: "v2",
+  },
+} as never;
 
 // ---------------------------------------------------------------------------
 // Infrastructure probes
@@ -100,9 +119,16 @@ function buildHandler(task: Task): CinatraResubscribeHandler {
   );
 }
 
-async function collectGen<T>(gen: AsyncGenerator<T>): Promise<T[]> {
-  const results: T[] = [];
-  for await (const val of gen) results.push(val);
+// Collect a resubscribe generator. The verified actor is delivered on the SDK
+// call context (the iteration-safe path — survives the lazy SSE generator
+// boundary where the ALS frame is no longer active).
+async function collectGen(
+  handler: CinatraResubscribeHandler,
+  params: { id: string },
+  ctx: never = CTX,
+): Promise<unknown[]> {
+  const results: unknown[] = [];
+  for await (const val of handler.resubscribe(params, ctx)) results.push(val);
   return results;
 }
 
@@ -148,8 +174,11 @@ describe("CinatraResubscribeHandler — real Redis cursor replay", () => {
 
     // Call resubscribe with lastEventId = id0 (the first event).
     // Expected: only id1 and id2 are replayed (exclusive cursor).
-    const ctx = { lastEventId: id0 } as never;
-    const yielded = await collectGen(handler.resubscribe({ id: runId }, ctx));
+    const ctx = {
+      lastEventId: id0,
+      a2aActorContext: (CTX as unknown as { a2aActorContext: unknown }).a2aActorContext,
+    } as never;
+    const yielded = await collectGen(handler, { id: runId }, ctx);
 
     // First yield is always the Task snapshot.
     expect(yielded[0]).toMatchObject({ id: runId, kind: "task" });
@@ -206,7 +235,7 @@ describe("CinatraResubscribeHandler — real Redis cursor replay", () => {
     const handler = buildHandler(task);
 
     // No lastEventId — replay from beginning.
-    const yielded = await collectGen(handler.resubscribe({ id: runId }));
+    const yielded = await collectGen(handler, { id: runId });
 
     // Task snapshot + both events.
     expect(yielded).toHaveLength(3);
