@@ -57,6 +57,12 @@ vi.mock("@better-auth/oauth-provider/resource-client", () => ({
   oauthProviderResourceClient: () => ({}),
 }));
 
+// betterAuthDb.execute backs the opaque-token fallback.
+const betterAuthDbMock = vi.hoisted(() => ({
+  execute: vi.fn(async () => ({ rows: [] as Array<{ clientId: string; scopes: unknown }> })),
+}));
+vi.mock("@/lib/better-auth-db", () => ({ betterAuthDb: betterAuthDbMock }));
+
 import { verifyA2AAccessToken } from "@/lib/a2a-auth";
 
 function makeJwt(payload: Record<string, unknown>): string {
@@ -80,6 +86,8 @@ describe("verifyA2AAccessToken", () => {
     // Reset the mock account back to active state after every test
     mockServiceAccount.revokedAt = null;
     readServiceAccountByClientIdMock.mockResolvedValue({ ...mockServiceAccount });
+    betterAuthDbMock.execute.mockReset();
+    betterAuthDbMock.execute.mockResolvedValue({ rows: [] });
   });
 
   it("returns ok:true with ActorContext for valid signed token + active service account", async () => {
@@ -155,12 +163,16 @@ describe("verifyA2AAccessToken", () => {
     if (!result.ok) expect(result.response.status).toBe(401);
   });
 
-  it("normalizes empty/missing scope claim to undefined tokenScopes", async () => {
+  // An empty / missing scope claim must collapse to an EMPTY ARRAY (deny-all in
+  // enforceRunAccess), NEVER undefined (which enforceRunAccess treats as
+  // "no token-scope ceiling" and would let the token bypass its scope limit).
+  it("empty/missing scope claim -> [] tokenScopes (deny-all, not undefined skip)", async () => {
     const jwt = makeJwt({ azp: "client-test", org_id: "org-test" });
     const result = await verifyA2AAccessToken(makeRequest(jwt));
     expect(result.ok).toBe(true);
     if (result.ok && result.actorContext) {
-      expect(result.actorContext.tokenScopes).toBeUndefined();
+      expect(result.actorContext.tokenScopes).toEqual([]);
+      expect(result.actorContext.tokenScopes).not.toBeUndefined();
     } else {
       throw new Error("expected actorContext on success result");
     }
@@ -214,5 +226,90 @@ describe("verifyA2AAccessToken", () => {
     } else {
       throw new Error("expected actorContext on success result");
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Opaque-token fallback must (a) require a2a:connect in the row's STORED
+  // scopes (audience/resource binding), (b) enforce the scope ceiling via real
+  // stored scopes (empty => deny-all), (c) only promote a genuine non-revoked
+  // service-account row. The opaque path is reached only when the JWT
+  // verification attempts all fail — make verifyAccessToken reject.
+  // -------------------------------------------------------------------------
+  describe("opaque-token fallback", () => {
+    // An opaque (non-JWT) bearer string — the JWT decode path yields nothing,
+    // and we force verifyAccessToken to reject so we land in the opaque branch.
+    const OPAQUE = "opaque-token-value";
+    function opaqueRequest(): Request {
+      return new Request("https://example.com/api/a2a", {
+        headers: { Authorization: `Bearer ${OPAQUE}` },
+      });
+    }
+
+    beforeEach(() => {
+      verifyAccessTokenMock.mockReset();
+      verifyAccessTokenMock.mockRejectedValue(new Error("not a JWT"));
+    });
+
+    it("REJECTS (401) an opaque token whose stored scopes lack a2a:connect (no resource binding)", async () => {
+      betterAuthDbMock.execute.mockResolvedValue({
+        rows: [{ clientId: "client-test", scopes: "run.read agent.execute" }],
+      });
+      const result = await verifyA2AAccessToken(opaqueRequest());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.response.status).toBe(401);
+    });
+
+    it("AUTHORIZES an opaque token with a2a:connect — tokenScopes = stored ∩ account ceiling", async () => {
+      // Stored "a2a:connect run.read run.list"; ceiling "run.read agent.execute"
+      // => effective tokenScopes = ["run.read"] (a2a:connect is a connect scope,
+      // not a Permission, so it is not in tokenScopes).
+      betterAuthDbMock.execute.mockResolvedValue({
+        rows: [{ clientId: "client-test", scopes: "a2a:connect run.read run.list" }],
+      });
+      const result = await verifyA2AAccessToken(opaqueRequest());
+      expect(result.ok).toBe(true);
+      if (result.ok && result.actorContext) {
+        expect(result.actorContext.tokenScopes).toEqual(["run.read"]);
+      } else {
+        throw new Error("expected actorContext on success result");
+      }
+    });
+
+    it("DENIES (empty tokenScopes, not undefined) when a2a:connect present but no Permission scopes intersect the ceiling", async () => {
+      // Stored "a2a:connect run.list" — run.list is NOT in the account ceiling
+      // (run.read agent.execute) => effective tokenScopes = [] (deny-all), never
+      // undefined (fail-closed behavior on the opaque path).
+      betterAuthDbMock.execute.mockResolvedValue({
+        rows: [{ clientId: "client-test", scopes: "a2a:connect run.list" }],
+      });
+      const result = await verifyA2AAccessToken(opaqueRequest());
+      expect(result.ok).toBe(true);
+      if (result.ok && result.actorContext) {
+        expect(result.actorContext.tokenScopes).toEqual([]);
+        expect(result.actorContext.tokenScopes).not.toBeUndefined();
+      } else {
+        throw new Error("expected actorContext on success result");
+      }
+    });
+
+    it("REJECTS (401) an opaque token whose clientId maps to a REVOKED service account", async () => {
+      betterAuthDbMock.execute.mockResolvedValue({
+        rows: [{ clientId: "client-test", scopes: "a2a:connect run.read" }],
+      });
+      readServiceAccountByClientIdMock.mockResolvedValue({
+        ...mockServiceAccount,
+        revokedAt: new Date(),
+      });
+      const result = await verifyA2AAccessToken(opaqueRequest());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.response.status).toBe(401);
+    });
+
+    it("REJECTS (401) an opaque token with no matching oauthAccessToken row", async () => {
+      betterAuthDbMock.execute.mockResolvedValue({ rows: [] });
+      const result = await verifyA2AAccessToken(opaqueRequest());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.response.status).toBe(401);
+    });
   });
 });

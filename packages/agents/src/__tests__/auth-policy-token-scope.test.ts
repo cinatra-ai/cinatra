@@ -135,8 +135,8 @@ describe("enforceRunAccess — tokenScopes intersection", () => {
 
   it("intersection runs AFTER can() — when can() returns false, role-deny wins (existing 'Run access denied.' message)", async () => {
     vi.spyOn(authz, "can").mockReturnValue(false);
-    // tokenScopes is permissive but role denies — caller should see role-deny error,
-    // NOT token-scope error. Both throw 403 forbidden but the message differs.
+    // tokenScopes is permissive (contains run.resume) so the token ceiling
+    // passes; can() denies → role-deny error, NOT token-scope error.
     try {
       await enforceRunAccess(baseRun, modelActor(["run.resume"]), "execute");
       throw new Error("expected throw");
@@ -144,5 +144,74 @@ describe("enforceRunAccess — tokenScopes intersection", () => {
       const msg = (err as Error).message.toLowerCase();
       expect(msg).not.toContain("token scope"); // role-deny ran first
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The token-scope ceiling is enforced BEFORE the owner / co-owner
+// short-circuits, so even a token-bearing OWNER or CO-OWNER cannot exceed its
+// granted scopes.
+// ---------------------------------------------------------------------------
+describe("enforceRunAccess — token ceiling precedes owner/co-owner short-circuits", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  // The actor IS the run owner (userId === run.runBy).
+  const ownedRun = { id: "r-own", runBy: "svc-owner", orgId: "o1" };
+  const ownerTokenActor = (tokenScopes?: string[]): PrimitiveActorContext => ({
+    actorType: "a2a",
+    userId: "svc-owner",
+    source: "a2a",
+    ...(tokenScopes !== undefined ? { tokenScopes } : {}),
+  });
+
+  it("a token-bearing OWNER is DENIED an op its token does not grant (owner short-circuit no longer bypasses the ceiling)", async () => {
+    vi.spyOn(authz, "can").mockReturnValue(true);
+    // Owner, but the A2A token only carries run.read — must NOT be able to
+    // execute/resume its own run.
+    await expect(
+      enforceRunAccess(ownedRun, ownerTokenActor(["run.read"]), "execute"),
+    ).rejects.toMatchObject({ statusCode: 403, reason: "forbidden" });
+  });
+
+  it("a token-bearing OWNER with an EMPTY scope array is DENIED (deny-all)", async () => {
+    vi.spyOn(authz, "can").mockReturnValue(true);
+    await expect(
+      enforceRunAccess(ownedRun, ownerTokenActor([]), "read"),
+    ).rejects.toMatchObject({ statusCode: 403, reason: "forbidden" });
+  });
+
+  it("a token-bearing OWNER whose token DOES grant the op still succeeds via the owner short-circuit", async () => {
+    vi.spyOn(authz, "can").mockReturnValue(true);
+    await expect(
+      enforceRunAccess(ownedRun, ownerTokenActor(["run.approveHitl"]), "approveHitl"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("a NON-token owner (tokenScopes undefined) still bypasses the ceiling (UI owner unaffected)", async () => {
+    vi.spyOn(authz, "can").mockReturnValue(true);
+    await expect(
+      enforceRunAccess(
+        ownedRun,
+        { actorType: "human", userId: "svc-owner", source: "ui" },
+        "execute",
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("a token-bearing CO-OWNER is DENIED an op its token does not grant", async () => {
+    vi.spyOn(authz, "can").mockReturnValue(true);
+    const runWithCoOwner = {
+      id: "r-co",
+      runBy: "someone-else",
+      orgId: "o1",
+      coOwnerUserIds: ["svc-coowner"],
+    };
+    await expect(
+      enforceRunAccess(
+        runWithCoOwner,
+        { actorType: "a2a", userId: "svc-coowner", source: "a2a", tokenScopes: ["run.read"] },
+        "approveHitl",
+      ),
+    ).rejects.toMatchObject({ statusCode: 403, reason: "forbidden" });
   });
 });
