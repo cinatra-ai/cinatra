@@ -3541,19 +3541,25 @@ END $$` },
     },
 
     // 2.5 agent_templates.(owner_level, owner_id) →
-    //     <owner-prefix>/~agents/<package_name>
+    //     <owner-prefix>/~agents/<vendor>/<package>
 
-    // Authoritative full path is written at enqueue time:
-    // includes vendor/package via agent_templates.package_name (which holds
-    // the full vendor-namespaced name, e.g. "cinatra/email-test-delivery-agent").
-    // The worker physically moves the entire ~agents/<package_name>/ subtree
-    // (containing all bundled + user-authored skills).
+    // Authoritative full path is written at enqueue time. The path segment is
+    // derived from agent_templates.package_name, which stores the npm package
+    // name (e.g. "@cinatra-ai/auditor-agent"). The skill-store disk layout is
+    // UNSCOPED — "~agents/cinatra-ai/auditor-agent/..." with NO leading "@"
+    // scope marker — so the leading "@<scope>/" is stripped before composing
+    // the path (mirrors agentPackageNameToPath() in packages/skills/src/
+    // skill-paths.ts; see cinatra#550). Non-scoped legacy names (e.g.
+    // "cinatra/blog-agent") pass through unchanged. The worker physically
+    // moves the entire ~agents/<vendor>/<package>/ subtree (containing all
+    // bundled + user-authored skills).
     {
       text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $body$
         DECLARE
           new_id text;
           old_prefix text;
           new_prefix text;
+          pkg_path text;
           old_p text;
           new_p text;
         BEGIN
@@ -3566,9 +3572,13 @@ END $$` },
             IF NEW.package_name IS NULL OR NEW.package_name = '' THEN
               RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name', NEW.id;
             END IF;
+            -- Strip the leading npm "@<scope>/" marker so the path matches the
+            -- unscoped on-disk skill-store layout (cinatra#550). Non-scoped
+            -- names are left unchanged by regexp_replace.
+            pkg_path := regexp_replace(NEW.package_name, '^@([^/]+)/(.+)$', '\\1/\\2');
             new_id := 'reloc_' || gen_random_uuid()::text;
-            old_p := old_prefix || '/~agents/' || NEW.package_name;
-            new_p := new_prefix || '/~agents/' || NEW.package_name;
+            old_p := old_prefix || '/~agents/' || pkg_path;
+            new_p := new_prefix || '/~agents/' || pkg_path;
             INSERT INTO "${schemaName.replaceAll('"', '""')}"."path_relocations"
               (id, subject_kind, subject_id, old_slug, new_slug, old_path, new_path, status)
             VALUES (new_id, 'agent_template', NEW.id,
