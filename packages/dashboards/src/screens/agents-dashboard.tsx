@@ -21,7 +21,8 @@
 import "server-only";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
+import { agentTemplates } from "@cinatra-ai/agents/schema";
 import { Play, Plus } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
@@ -85,6 +86,26 @@ async function loadAgentsConfig(
   return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG);
 }
 
+// Installed agent templates for this org. The dashboard portlets only chart
+// agent_runs, so a fresh instance (0 runs) rendered blank even with templates
+// installed (#307). This lists the installed agents so the page is meaningful
+// before any run. Org-scoped (the same primary filter readAgentTemplates uses).
+async function loadInstalledAgents(organizationId: string) {
+  const db = getDashboardsDb();
+  return db
+    .select({
+      id: agentTemplates.id,
+      name: agentTemplates.name,
+      description: agentTemplates.description,
+      type: agentTemplates.type,
+      status: agentTemplates.status,
+    })
+    .from(agentTemplates)
+    .where(eq(agentTemplates.orgId, organizationId))
+    .orderBy(desc(agentTemplates.createdAt))
+    .limit(60);
+}
+
 export async function AgentsDashboardPage() {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
@@ -92,11 +113,10 @@ export async function AgentsDashboardPage() {
     redirect("/sign-in");
   }
   const dashboardId = buildAgentsDashboardId(ctx.organizationId, ctx.userId);
-  const initialConfig = await loadAgentsConfig(
-    dashboardId,
-    ctx.organizationId,
-    ctx.userId,
-  );
+  const [initialConfig, installedAgents] = await Promise.all([
+    loadAgentsConfig(dashboardId, ctx.organizationId, ctx.userId),
+    loadInstalledAgents(ctx.organizationId),
+  ]);
 
   return (
     <Main className="min-h-screen">
@@ -131,6 +151,33 @@ export async function AgentsDashboardPage() {
         }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold text-foreground">
+            Installed agents ({installedAgents.length})
+          </h2>
+          {installedAgents.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No agents installed yet — create one above or install from the marketplace.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {installedAgents.map((a) => (
+                <div key={a.id} className="rounded-panel border border-line bg-surface p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium text-foreground">{a.name}</span>
+                    <span className="shrink-0 rounded-control border border-line bg-surface-muted px-2 py-0.5 text-xs text-muted-foreground">
+                      {a.type}
+                    </span>
+                  </div>
+                  {a.description ? (
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{a.description}</p>
+                  ) : null}
+                  <div className="mt-2 text-xs text-muted-foreground">Status: {a.status}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
         <AnalyticsPortletView
           dashboard={initialConfig}
           editable
