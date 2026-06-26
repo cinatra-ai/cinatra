@@ -1776,11 +1776,17 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/metric-contracts:
+    devDependencies:
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.3(@emnapi/core@1.10.0)(@emnapi/runtime@1.11.1)(@types/node@25.9.3)(esbuild@0.25.12)(jiti@2.7.0)(terser@5.48.0)(tsx@4.22.4)(yaml@2.9.0))
+
   packages/metric-cost-api:
     dependencies:
-      '@cinatra-ai/metric-usage-api':
+      '@cinatra-ai/metric-contracts':
         specifier: workspace:*
-        version: link:../metric-usage-api
+        version: link:../metric-contracts
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
@@ -1802,6 +1808,9 @@ importers:
 
   packages/metric-usage-api:
     dependencies:
+      '@cinatra-ai/metric-contracts':
+        specifier: workspace:*
+        version: link:../metric-contracts
       '@cinatra-ai/metric-cost-api':
         specifier: workspace:*
         version: link:../metric-cost-api

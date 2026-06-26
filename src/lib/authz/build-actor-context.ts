@@ -218,6 +218,41 @@ export function buildActorContextFromPrimitive(
   }
 }
 
+/**
+ * Narrow adapter: verified A2A/MCP `ActorContext` (from `verifyA2AAccessToken`)
+ * -> `PrimitiveActorContext`, PRESERVING the verified principal classification
+ * (codex seed-caution #3).
+ *
+ * `buildActorContextFromPrimitive` maps `actorType:"a2a" -> ExternalA2AAgent`
+ * and `actorType:"model" -> ServiceAccount`. A verified service-account JWT is a
+ * `ServiceAccount`; flattening it through a bare `actorType:"a2a"` primitive
+ * would silently reclassify it to `ExternalA2AAgent`. Today both roles carry the
+ * identical least-privilege grant set ({agent.execute, run.read}), so the
+ * reclassification is benign — but to prevent future grant divergence we map the
+ * verified `principalType` to the `actorType` that round-trips back to the SAME
+ * kernel principal:
+ *   ServiceAccount    -> "model"  (round-trips to ServiceAccount)
+ *   ExternalA2AAgent  -> "a2a"    (round-trips to ExternalA2AAgent)
+ * `userId` is set from the verified `principalId` (the service_accounts row PK
+ * for a ServiceAccount — an id space disjoint from human `runBy`, so it cannot
+ * collide with / impersonate a run owner). `tokenScopes` and `orgId` are
+ * carried so the enforceRunAccess scope-ceiling + cross-org guard stay
+ * load-bearing.
+ */
+export function primitiveActorFromVerifiedA2A(
+  verified: ActorContext,
+): PrimitiveActorContext {
+  const actorType: PrimitiveActorContext["actorType"] =
+    verified.principalType === "ServiceAccount" ? "model" : "a2a";
+  return {
+    actorType,
+    source: "a2a",
+    userId: verified.principalId,
+    orgId: verified.organizationId ?? null,
+    tokenScopes: verified.tokenScopes,
+  };
+}
+
 function mapAuthSource(actor: PrimitiveActorContext): ActorContext["authSource"] {
   if (actor.actorType === "a2a") return "a2a";
   if (actor.actorType === "model") return "mcp";

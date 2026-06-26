@@ -3,12 +3,15 @@
 //
 // Bans the dual pattern (`BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION` and
 // raw string `"AGENT_BUILDER_EXECUTION"`) in any `.ts/.tsx/.mjs` file under
-// `src/` or `packages/` outside the explicit 5-file allowlist:
+// `src/` or `packages/` outside the explicit 6-file allowlist:
 //   1. src/lib/agent-run-enqueue.ts           — the chokepoint itself
-//   2. src/lib/background-jobs.ts             — BullMQ worker dispatcher (consumer)
-//   3. packages/agents/src/orchestrator-execution.ts — cancel-only callback
-//   4. packages/agents/src/review-task-actions.ts    — same-run re-enqueue
-//   5. packages/agents/src/execution.ts       — setup-loop same-run re-enqueue
+//   2. src/lib/background-jobs.ts             — BullMQ worker runtime (consumer)
+//   3. src/lib/background-jobs-registry.ts    — BullMQ worker dispatcher/registry
+//                                               (consumer; cinatra#304 moved the
+//                                               handler table here)
+//   4. packages/agents/src/orchestrator-execution.ts — cancel-only callback
+//   5. packages/agents/src/review-task-actions.ts    — same-run re-enqueue
+//   6. packages/agents/src/execution.ts       — setup-loop same-run re-enqueue
 //
 // Exit non-zero on first violation. Intended to run from CI + as a pre-merge
 // gate. Single-line comment lines (`// ...`) are skipped to avoid false
@@ -29,6 +32,7 @@ const REPO_ROOT = execSync("git rev-parse --show-toplevel", {
 const ALLOWLIST = new Set([
   "src/lib/agent-run-enqueue.ts",
   "src/lib/background-jobs.ts",
+  "src/lib/background-jobs-registry.ts",
   "packages/agents/src/orchestrator-execution.ts",
   "packages/agents/src/review-task-actions.ts",
   "packages/agents/src/execution.ts",

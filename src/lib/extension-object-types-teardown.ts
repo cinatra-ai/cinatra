@@ -22,3 +22,16 @@ import { objectTypeRegistry } from "@cinatra-ai/objects";
 export function invalidateObjectTypesForPackage(packageName: string): string[] {
   return objectTypeRegistry.removeByPackage(packageName);
 }
+
+/**
+ * A read-only diagnostic snapshot of the registered object types — type id +
+ * category only (never the descriptor / ioSpec). For the operator control-plane
+ * endpoint. Lists ALL registered types (host built-ins + extension types); the ids
+ * are namespaced so a reader can tell extension types from host ones.
+ */
+export function snapshotObjectTypes(): { type: string; category?: string }[] {
+  return objectTypeRegistry.list().map((def) => ({
+    type: def.type,
+    ...(def.category !== undefined ? { category: def.category as string } : {}),
+  }));
+}

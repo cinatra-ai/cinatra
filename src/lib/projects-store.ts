@@ -1,7 +1,8 @@
 import "server-only";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { pgSchema, text, timestamp, index, primaryKey } from "drizzle-orm/pg-core";
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getPooledDb } from "@/lib/db/pooled";
 
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
@@ -65,39 +66,13 @@ export const projectCoOwners = cinatraSchema.table(
 
 export type ProjectCoOwnerRecord = typeof projectCoOwners.$inferSelect;
 
-declare global {
-  var __cinatraProjectsPool: Pool | undefined;
-}
-
-// Lazy pool + drizzle bootstrap. The pool is created on first use (not at
-// module import) so `next build` page-data collection — and any other
-// import-time evaluation without SUPABASE_DB_URL — does not throw. `new Pool()`
-// never opens a connection until the first query, so deferring creation is free.
-//
-// The idle-error listener (registered at pool creation) keeps the process alive
-// when Supabase drops idle connections: pg.Pool emits 'error' on an unexpected
-// backend disconnect, which Node.js otherwise treats as an uncaught exception.
-let projectsPoolInstance: Pool | undefined;
+// Lazy pool + drizzle bootstrap over the shared pool (@/lib/db/pooled, #303).
+// The pool is created on first use (not at module import) so `next build`
+// page-data collection — and any other import-time evaluation without
+// SUPABASE_DB_URL — does not throw, and an idle-error listener keeps the process
+// alive when Supabase drops idle connections.
 function getProjectsPool(): Pool {
-  if (projectsPoolInstance) return projectsPoolInstance;
-  if (globalThis.__cinatraProjectsPool) {
-    return (projectsPoolInstance = globalThis.__cinatraProjectsPool);
-  }
-  const connectionString = process.env.SUPABASE_DB_URL;
-  if (!connectionString) {
-    throw new Error("SUPABASE_DB_URL is required for @/lib/projects-store");
-  }
-  const pool = new Pool({ connectionString });
-  if (!pool.listenerCount("error")) {
-    pool.on("error", (err) => {
-      console.error("[projects-store] pg pool idle client error:", err.message);
-    });
-  }
-  projectsPoolInstance = pool;
-  if (process.env.NODE_ENV !== "production") {
-    globalThis.__cinatraProjectsPool = pool;
-  }
-  return pool;
+  return getPooledDb({ name: "projects-store" });
 }
 
 function createProjectsDb() {

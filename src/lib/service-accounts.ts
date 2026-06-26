@@ -3,51 +3,22 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
-import { Pool } from "pg";
+import type { Pool } from "pg";
+import { getPooledDb } from "@/lib/db/pooled";
 import {
   deleteOAuthClientByClientId as deleteOAuthClientRow,
   insertOAuthClient as insertOAuthClientRow,
 } from "@/lib/better-auth-oauth-client";
 
 // ---------------------------------------------------------------------------
-// Module-local Drizzle pool — mirrors src/lib/projects-store.ts pattern.
-// Each cinatra-schema store owns its own connection pool — there is no
-// shared global database handle in @/lib/database.
+// Drizzle handle over the shared lazy pool (@/lib/db/pooled, #303). The pool is
+// created on first use (not at module import) so `next build` page-data
+// collection — and any other import-time evaluation without SUPABASE_DB_URL —
+// does not throw, and an idle-error listener keeps the process alive when
+// Supabase drops idle connections.
 // ---------------------------------------------------------------------------
-declare global {
-  // eslint-disable-next-line no-var
-  var __cinatraServiceAccountsPool: Pool | undefined;
-}
-
-// Lazy pool + drizzle bootstrap. The pool is created on first use (not at
-// module import) so `next build` page-data collection — and any other
-// import-time evaluation without SUPABASE_DB_URL — does not throw. `new Pool()`
-// never opens a connection until the first query, so deferring creation is free.
-//
-// The idle-error listener (registered at pool creation) keeps the process alive
-// when Supabase drops idle connections: pg.Pool emits 'error' on an unexpected
-// backend disconnect, which Node.js otherwise treats as an uncaught exception.
-let serviceAccountsPoolInstance: Pool | undefined;
 function getServiceAccountsPool(): Pool {
-  if (serviceAccountsPoolInstance) return serviceAccountsPoolInstance;
-  if (globalThis.__cinatraServiceAccountsPool) {
-    return (serviceAccountsPoolInstance = globalThis.__cinatraServiceAccountsPool);
-  }
-  const connectionString = process.env.SUPABASE_DB_URL;
-  if (!connectionString) {
-    throw new Error("SUPABASE_DB_URL is required for @/lib/service-accounts");
-  }
-  const pool = new Pool({ connectionString });
-  if (!pool.listenerCount("error")) {
-    pool.on("error", (err) => {
-      console.error("[service-accounts] pg pool idle client error:", err.message);
-    });
-  }
-  serviceAccountsPoolInstance = pool;
-  if (process.env.NODE_ENV !== "production") {
-    globalThis.__cinatraServiceAccountsPool = pool;
-  }
-  return pool;
+  return getPooledDb({ name: "service-accounts" });
 }
 
 function createServiceAccountsDb() {
