@@ -91,3 +91,25 @@ export type ActorContext = Principal & {
   tokenScopes?: string[];
   policyVersion: string;
 };
+
+/**
+ * Scoped-A2A-token actor invariant (fail-closed scope enforcement).
+ *
+ * The ONLY producer of an `authSource:"a2a"` `ServiceAccount` is
+ * `buildActorContextFromServiceAccountJwt`. That actor MUST carry a concrete
+ * `tokenScopes: string[]` (empty ⇒ deny-all in `enforceRunAccess`) — never
+ * `undefined`, which `enforceRunAccess` treats as "no token-scope ceiling" and
+ * would let an A2A token with an absent / non-intersecting scope claim escape
+ * its ceiling. This regression-guard type forbids the `undefined` shape at
+ * compile time; the canonical producer's return is asserted against it.
+ *
+ * NOTE: this is intentionally NARROW — it does NOT constrain the internal
+ * `model→ServiceAccount` MCP/agent path (authSource "mcp"/"agent"), which is an
+ * internal trusted invocation with no token-scope ceiling and legitimately
+ * carries `tokenScopes: undefined`.
+ */
+export type ScopedA2AServiceAccountContext = ActorContext & {
+  principalType: "ServiceAccount";
+  authSource: "a2a";
+  tokenScopes: string[];
+};

@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import {
+  linkifyErrorText,
+  isOpenAiKeyError,
+  LLM_PROVIDER_SETTINGS_HREF,
+} from "./agent-error-display";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
@@ -1030,11 +1036,37 @@ export function AgenticRunPanel({
       ) : null}
 
       {error && status === "failed" && (
-        <div className="rounded-control border border-line bg-surface-muted px-4 py-3">
+        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
           <div className="text-xs font-medium text-muted-foreground mb-1">Error</div>
+          {/* Long unbreakable tokens (e.g. masked sk-proj-… keys) overflowed the
+              panel; constrain the container (max-w-full overflow-hidden) and keep
+              break-all wrapping. Linkify provider URLs in the message so they are
+              actionable, and link to the in-app key settings. (#498) */}
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all">
-            {error}
+            {linkifyErrorText(error).map((seg, i) =>
+              seg.kind === "link" ? (
+                <a
+                  key={i}
+                  href={seg.href}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="underline underline-offset-2"
+                >
+                  {seg.value}
+                </a>
+              ) : (
+                <span key={i}>{seg.value}</span>
+              ),
+            )}
           </pre>
+          {isOpenAiKeyError(error) && (
+            <Link
+              href={LLM_PROVIDER_SETTINGS_HREF}
+              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+            >
+              Update your OpenAI API key →
+            </Link>
+          )}
         </div>
       )}
 

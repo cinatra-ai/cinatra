@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -59,6 +59,18 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+});
+
+// The unsigned bootstrap path is opt-IN now. These dev E2E
+// tests install UNSIGNED packages as the vehicle, so they opt in explicitly.
+let prevAllowUnsignedE2e: string | undefined;
+beforeEach(() => {
+  prevAllowUnsignedE2e = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+});
+afterEach(() => {
+  if (prevAllowUnsignedE2e === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prevAllowUnsignedE2e;
 });
 
 function makePipelineDeps(state: InstallState): InstallPipelineDeps {
