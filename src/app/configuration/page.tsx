@@ -36,11 +36,15 @@ const administrationSections = [
     ],
   },
   {
-    title: "LLM",
-    description: "Model defaults and LLM integration settings.",
+    // Titled "AI Providers" (not "LLM") so a first-time user looking for where
+    // to set their OpenAI API key finds it without knowing it's modeled as a
+    // connector (#501). The OpenAI key form is linked directly.
+    title: "AI Providers",
+    description: "Set your OpenAI (or other AI provider) API key and model defaults.",
     href: "/configuration/llm",
     icon: domainIcons.llm,
     links: [
+      { label: "OpenAI API key", href: "/configuration/llm?modal=openai" },
       { label: "Model defaults", href: "/configuration/llm" },
       { label: "OpenAI API skills", href: "/configuration/llm/openai-skills" },
     ],
