@@ -14,6 +14,7 @@ export * from "./personal-skills";
 export * from "./skill-markdown-editor";
 export * from "./actions";
 export * from "./github";
+export * from "./frontmatter";
 export * from "./matching";
 export * from "./storage/git-commit";
 export * from "./prefill-generation";
