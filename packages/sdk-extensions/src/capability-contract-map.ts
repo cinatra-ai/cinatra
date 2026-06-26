@@ -6,9 +6,14 @@
 // SURFACE/PROVIDER TYPE a provider registered under that id is expected to
 // expose. It covers the ids whose resolvers resolve a single provider SURFACE
 // and benefit from a typed `impl`; it is NOT exhaustive over every fenced
-// capability id (e.g. the hook/single-literal-resolver ids like
-// `nango-connection-saved`, `nango-connection-materializer`, `social-post`,
-// `crm-provider` are deliberately omitted — adding one here is purely additive).
+// capability id (e.g. the hook/multi-step-resolver ids like
+// `nango-connection-saved`, `nango-connection-materializer` are deliberately
+// omitted — adding one here is purely additive). The `social-post` and
+// `crm-provider` provider-registry ids ARE mapped: each resolves to one typed
+// provider surface (`SocialMediaConnector` / `CrmConnector`), so the host's
+// external-resolver bridges (`register-crm-providers.ts`, the social facade)
+// get the typed `impl` for free instead of hand-casting before the structural
+// `isXConnector` guard.
 // It is the type-level companion to the host-owned capability registry
 // (`ctx.capabilities` / the host's `resolveCapabilityProviders`): the registry
 // stores `impl: unknown`; this map says what that `unknown` is SUPPOSED to be
@@ -42,6 +47,8 @@ import type {
   OBJECT_TYPE_REGISTRAR_CAPABILITY,
   CRM_SYNC_BOOTSTRAP_CAPABILITY,
   CRM_POINTER_WRITER_CAPABILITY,
+  CRM_PROVIDER_CAPABILITY,
+  SOCIAL_POST_CAPABILITY,
   DEV_TUNNEL_STATUS_CAPABILITY,
   BLOG_SYSTEM_CAPABILITY,
   SOCIAL_MEDIA_SYSTEM_CAPABILITY,
@@ -66,6 +73,8 @@ import type {
   EmailSystemProvider,
 } from "./host-connector-services-contract";
 import type { EmailConnector } from "./email-connector-contract";
+import type { CrmConnector } from "./crm-connector-contract";
+import type { SocialMediaConnector } from "./social-media-connector-contract";
 import type { CrmListReader } from "./crm-list-reader-contract";
 import type { NangoSystemSurface } from "./nango-system-contract";
 import type { ChatUserContextContributor } from "./chat-user-context-contract";
@@ -91,8 +100,10 @@ export type CapabilityContractMap = {
   [LLM_PROVIDER_SURFACE_CAPABILITY]: LlmProviderSurface;
   [BLOG_SYSTEM_CAPABILITY]: BlogSystemProvider;
   [SOCIAL_MEDIA_SYSTEM_CAPABILITY]: SocialMediaSystemProvider;
+  [SOCIAL_POST_CAPABILITY]: SocialMediaConnector;
   [CRM_SYNC_BOOTSTRAP_CAPABILITY]: CrmSyncBootstrapProvider;
   [CRM_POINTER_WRITER_CAPABILITY]: CrmPointerWriterProvider;
+  [CRM_PROVIDER_CAPABILITY]: CrmConnector;
   [CRM_LIST_READER_CAPABILITY_ID]: CrmListReader;
   [OBJECT_TYPE_REGISTRAR_CAPABILITY]: ObjectTypeRegistrarProvider;
   [DEV_TUNNEL_STATUS_CAPABILITY]: DevTunnelStatusProvider;

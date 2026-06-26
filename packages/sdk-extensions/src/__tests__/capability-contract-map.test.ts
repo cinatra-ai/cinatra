@@ -7,6 +7,8 @@ import type {
   ResolvedCapabilityProvider,
   NangoSystemSurface,
   EmailConnector,
+  CrmConnector,
+  SocialMediaConnector,
 } from "../index";
 
 // P11b — the typed capability-id -> contract-surface map.
@@ -21,12 +23,17 @@ describe("CapabilityContractMap (typed capability-id -> contract surface)", () =
   it("maps known capability ids to their contract surface types", () => {
     expectTypeOf<CapabilityContractMap["nango-system"]>().toEqualTypeOf<NangoSystemSurface>();
     expectTypeOf<CapabilityContractMap["email-send"]>().toEqualTypeOf<EmailConnector>();
+    // The additive provider-registry ids — each resolves to one typed surface.
+    expectTypeOf<CapabilityContractMap["crm-provider"]>().toEqualTypeOf<CrmConnector>();
+    expectTypeOf<CapabilityContractMap["social-post"]>().toEqualTypeOf<SocialMediaConnector>();
   });
 
   it("KnownCapabilityId is the union of the mapped first-party ids (open string is NOT collapsed into it)", () => {
     // The literal ids are members…
     expectTypeOf<"nango-system">().toMatchTypeOf<KnownCapabilityId>();
     expectTypeOf<"email-send">().toMatchTypeOf<KnownCapabilityId>();
+    expectTypeOf<"crm-provider">().toMatchTypeOf<KnownCapabilityId>();
+    expectTypeOf<"social-post">().toMatchTypeOf<KnownCapabilityId>();
     // …but an arbitrary third-party id is NOT a KnownCapabilityId (stays open).
     expectTypeOf<"some-third-party-cap">().not.toMatchTypeOf<KnownCapabilityId>();
   });
@@ -50,6 +57,11 @@ describe("CapabilityContractMap (typed capability-id -> contract surface)", () =
         ResolvedCapabilityProvider<"nango-system">[]
       >();
       expectTypeOf(port.resolveProviders("nango-system")[0].impl).toEqualTypeOf<NangoSystemSurface>();
+
+      // The additive provider-registry ids narrow each element's `impl` to the
+      // mapped provider surface (the host bridge no longer hand-casts).
+      expectTypeOf(port.resolveProviders("crm-provider")[0].impl).toEqualTypeOf<CrmConnector>();
+      expectTypeOf(port.resolveProviders("social-post")[0].impl).toEqualTypeOf<SocialMediaConnector>();
 
       // Open path: a non-mapped id falls to the open `string` overload -> unknown.
       expectTypeOf(port.resolveProviders("totally-custom-cap")).toEqualTypeOf<
