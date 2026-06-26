@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   installWorkflowExtensionSaga,
   compensateOrphanInstallOp,
@@ -17,6 +17,21 @@ import { listUnfinalizedInstallOps, type InstallOpsDeps } from "@/lib/extension-
 // ---------------------------------------------------------------------------
 
 const TRUSTED_PKG = "@cinatra-ai/wf-ext"; // from the marketplace host; UNSIGNED → trusted-bootstrap (imports; ports stay pending under the capability split)
+
+// The unsigned bootstrap-trust path is FAIL-CLOSED by default and opt-IN only.
+// These saga tests exercise OTHER behavior (journal phases, compensation, edges,
+// capability split) using an UNSIGNED bootstrap package as the vehicle, so they
+// explicitly opt in. The dedicated REQUIRE_SIGNATURES=true refusal test below
+// overrides this within its own scope.
+let prevAllowUnsigned: string | undefined;
+beforeEach(() => {
+  prevAllowUnsigned = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+});
+afterEach(() => {
+  if (prevAllowUnsigned === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prevAllowUnsigned;
+});
 
 type JournalRow = { installOpId: string; phase: string; packageName: string; orgId: string | null };
 type Harness = {

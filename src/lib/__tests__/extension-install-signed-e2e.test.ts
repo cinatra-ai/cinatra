@@ -114,9 +114,31 @@ describe("signed install E2E (real loader)", () => {
     expect(acts).toHaveLength(0);
   });
 
-  it("no signing configured (no keys, not required): unsigned still activates (additive — today's behavior)", async () => {
-    const acts = await materializeAndLoad({ signature: null, requireSignatures: false });
-    expect(acts.some((a) => a.packageName === PKG && a.status === "registered")).toBe(true);
+  it("no signing configured (no keys, not required) — unsigned does NOT activate by DEFAULT (fail-closed)", async () => {
+    // Regression: previously an unsigned package from a trusted host activated
+    // in-process whenever REQUIRE_SIGNATURES was merely unset. That was the
+    // in-process RCE default. It must now stay inert.
+    const prev = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    try {
+      const acts = await materializeAndLoad({ signature: null, requireSignatures: false });
+      expect(acts).toHaveLength(0);
+    } finally {
+      if (prev === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+      else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prev;
+    }
+  });
+
+  it("DEV opt-in: with CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true, unsigned activates (transition window)", async () => {
+    const prev = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+    try {
+      const acts = await materializeAndLoad({ signature: null, requireSignatures: false });
+      expect(acts.some((a) => a.packageName === PKG && a.status === "registered")).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+      else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prev;
+    }
   });
 });
 
