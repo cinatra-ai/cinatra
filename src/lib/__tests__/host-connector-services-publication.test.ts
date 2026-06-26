@@ -503,6 +503,11 @@ describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", 
     expect(typeof drupal.resolveServerUrl).toBe("function");
     expect(typeof drupal.isPrivateUrl).toBe("function");
 
+    // Actor-scoped lister is bound; with the mocked-empty instance settings it
+    // resolves to [] (fail-closed short-circuit before any actor/authority resolution).
+    expect(typeof drupal.listAuthorizedInstances).toBe("function");
+    await expect(drupal.listAuthorizedInstances!()).resolves.toEqual([]);
+
     // getAPIStatus — the connector's drupal_status primitive read.
     await expect(drupal.getAPIStatus()).resolves.toEqual({ instanceCount: 0, instances: [] });
 
@@ -551,6 +556,11 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     expect(typeof wordpress.resolveServerUrl).toBe("function");
     expect(typeof wordpress.isPrivateUrl).toBe("function");
     expect(typeof wordpress.deleteInstance).toBe("function");
+
+    // Actor-scoped lister is bound; with the mocked-empty instance settings it
+    // resolves to [] (fail-closed short-circuit before any actor/authority resolution).
+    expect(typeof wordpress.listAuthorizedInstances).toBe("function");
+    await expect(wordpress.listAuthorizedInstances!()).resolves.toEqual([]);
 
     // getAPIStatus — the connector's wordpress_status primitive read (SYNC).
     expect(wordpress.getAPIStatus()).toEqual({
