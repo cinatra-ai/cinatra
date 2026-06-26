@@ -120,6 +120,33 @@ export function invalidateProvidersForPackage(packageName: string): void {
   }
 }
 
+/** Whether a package has ANY registered capability provider (across all
+ *  capabilities). Used by the capability-teardown hook to include a provider-only
+ *  package in the control-plane generation bump guard — capability providers are
+ *  in the operator snapshot, so their removal IS an observable control-plane change
+ *  (the invalidate is a void delete with no count of its own). */
+export function hasCapabilityProvidersForPackage(packageName: string): boolean {
+  for (const byPackage of registry.values()) {
+    if (byPackage.has(packageName)) return true;
+  }
+  return false;
+}
+
+/**
+ * A read-only diagnostic snapshot of the registered providers (capability id +
+ * owning packageName only — never the opaque `impl`). For the operator
+ * control-plane endpoint; exposes WHAT is live, not the implementations.
+ */
+export function snapshotCapabilityProviders(): { capability: string; packageName: string }[] {
+  const out: { capability: string; packageName: string }[] = [];
+  for (const [capability, byPackage] of registry) {
+    for (const packageName of byPackage.keys()) {
+      out.push({ capability, packageName });
+    }
+  }
+  return out;
+}
+
 /** Test/teardown helper — clears all providers. */
 export function __resetCapabilityRegistry(): void {
   registry.clear();

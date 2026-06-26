@@ -45,6 +45,7 @@ import {
   type PackageStoreRecord,
 } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionActivateResult } from "@cinatra-ai/extensions";
+import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 
 /**
  * Targeted in-process activation for a SINGLE package, after its trusted anchor
@@ -130,16 +131,16 @@ export async function activateInstalledPackageInProcess(
     resolveInstallAnchor,
   });
 
-  // Self-MCP: the host's self-primitive handler map is memoised per process and
-  // was captured BEFORE this package registered its primitives. Drop it AFTER the
-  // activation pass so the next `ctx.mcp.callPrimitive` rebuild picks up the
-  // newly-registered primitives. Non-fatal if the module is unavailable.
-  try {
-    const { __resetHostSelfPrimitiveHandlers } = await import("@/lib/extension-self-mcp");
-    __resetHostSelfPrimitiveHandlers();
-  } catch {
-    /* self-mcp module unavailable (e.g. a worker) — non-fatal. */
-  }
+  // Self-MCP invalidation via the CONTROL-PLANE GENERATION (#310): the host's
+  // self-primitive handler map is memoised per process and was built BEFORE this
+  // package registered its primitives. Bump the generation AFTER the activation
+  // pass so the generation-keyed cache rebuilds on the next
+  // `ctx.mcp.callPrimitive` and picks up the newly-registered primitives. The bump
+  // is the first-class invalidation key (replacing the prior ad-hoc
+  // `__resetHostSelfPrimitiveHandlers()`); it is synchronous + also records the
+  // transition for operator observability. `activate` covers both a fresh install
+  // and a re-activate / restore (targeted activation is not always a fresh install).
+  bumpActivationGeneration("activate", packageName);
 
   return results;
 }
@@ -349,7 +350,19 @@ export async function hotUpdateWithDurableRollback(
     // digest (no quarantine/rollback path).
     const resolver = await makeDefaultInstallAnchorResolver(orgId);
     const results = await loadOnlyPackage(storeRoot, packageName, resolver);
-    return summarizeActivation(results, packageName);
+    const verdict = summarizeActivation(results, packageName);
+    // Control-plane generation (#310): this fallback is a plain in-process
+    // activation that mutated the live registries, so bump just like the main
+    // `activateInstalledPackageInProcess` path so the generation-keyed self-MCP
+    // cache rebuilds and the newly-registered primitives become visible on the next
+    // call. Guarded on the SUCCESS verdict — a non-activated verdict (anchor-refused,
+    // failed-only, or a register-then-bootstrap-throw that summarizeActivation()
+    // treats as not-activated) does NOT leave a clean live surface, so a bump there
+    // would be spurious / would point the cache at a half-state.
+    if (verdict.activated) {
+      bumpActivationGeneration("activate", packageName);
+    }
+    return verdict;
   }
 
   // Resolve the package's APPROVED ports once so the OLD module's destroy(ctx) and
@@ -405,9 +418,13 @@ export async function hotUpdateWithDurableRollback(
   const activated = hasRegistered && !hasFailed;
 
   if (activated) {
-    // (c) SUCCESS — GC the quarantined OLD dir(s); the new digest is live.
+    // (c) SUCCESS — the NEW digest already mutated the live registries above, so
+    // bump the control-plane generation NOW (before the GC await) to close the
+    // staleness window: a concurrent self-MCP call during GC must observe the new
+    // generation and rebuild against the NEW digest's primitives (replaces the
+    // prior ad-hoc reset). GC of the quarantined OLD dir(s) then follows.
+    bumpActivationGeneration("hot-update", packageName);
     await gcQuarantined(quarantined);
-    resetHostSelfPrimitives();
     return { activated: true };
   }
 
@@ -476,7 +493,11 @@ export async function hotUpdateWithDurableRollback(
       err instanceof Error ? err.message : err,
     );
   }
-  resetHostSelfPrimitives();
+  // Bump the control-plane generation so the generation-keyed self-MCP cache
+  // rebuilds against the RESTORED OLD digest's primitives (the live registry set
+  // changed twice — partial-new teardown then old re-activation). Replaces the
+  // prior ad-hoc reset.
+  bumpActivationGeneration("rollback", packageName);
   // Report the rollback's durable completeness truthfully: a clean rollback ONLY
   // when EVERY durable restore step succeeded. A partial restore appends the
   // failed-step reason so the caller can surface the manual-recovery signal.
@@ -579,17 +600,6 @@ async function gcStoreDirBestEffort(storeDir: string): Promise<void> {
       err instanceof Error ? err.message : err,
     );
   }
-}
-
-function resetHostSelfPrimitives(): void {
-  void (async () => {
-    try {
-      const { __resetHostSelfPrimitiveHandlers } = await import("@/lib/extension-self-mcp");
-      __resetHostSelfPrimitiveHandlers();
-    } catch {
-      /* self-mcp module unavailable (e.g. a worker) — non-fatal. */
-    }
-  })();
 }
 
 // ---------------------------------------------------------------------------
