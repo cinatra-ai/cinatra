@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -83,6 +83,21 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+});
+
+// The unsigned bootstrap path is opt-IN now. This parity suite uses an UNSIGNED
+// fixture package to exercise the loader contract / capability split, so it opts
+// in by default. Signed cases set their own keys (opt-in does not downgrade a
+// verified signature); REQUIRE_SIGNATURES=true cases still refuse unsigned
+// packages (the two flags are independent — both must permit).
+let prevAllowUnsignedParity: string | undefined;
+beforeEach(() => {
+  prevAllowUnsignedParity = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+});
+afterEach(() => {
+  if (prevAllowUnsignedParity === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prevAllowUnsignedParity;
 });
 
 describe("RuntimePackageLoader materialize → discover → verify (the loader contract)", () => {

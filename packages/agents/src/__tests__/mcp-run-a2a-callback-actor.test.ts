@@ -1,12 +1,24 @@
 /**
- * Tests for WayFlow callback actor resolution in handleAgentBuilderRunResume.
+ * Regression coverage: WayFlow callback actor resolution in handleAgentBuilderRunResume.
  *
- * When a WayFlow worker callback arrives with actorType:"a2a" and a
- * service-identity userId (no human user row), the handler substitutes
- * run.runBy as the effective policy subject before calling enforceRunAccess.
+ * BEFORE the fix the handler rewrote any A2A service identity's actor to
+ * `{ ...actor, userId: run.runBy }` before enforceRunAccess, which forced the
+ * owner short-circuit to fire for ANY class-authenticated A2A bearer that could
+ * merely READ a pending owner-run — upgrading read-only A2A into the owner's
+ * full resume/approve authority.
+ *
+ * AFTER the fix the substitution is removed: the ORIGINAL verified actor flows
+ * into enforceRunAccess unchanged. These tests pin:
+ *   - the actor passed to enforceRunAccess is NEVER rewritten to run.runBy
+ *     (a foreign A2A service identity is evaluated as ITSELF and, with a real
+ *     enforceRunAccess, would be denied);
+ *   - the readUserById service-identity probe is gone (no longer imported/called);
+ *   - a legitimate A2A self-resume (actor.userId === run.runBy) still passes
+ *     through naturally via the owner short-circuit;
+ *   - when enforceRunAccess denies, the handler surfaces an error and never
+ *     reaches the WayFlow dispatch.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { AuthzError } from "@/lib/authz";
 
 // ---------------------------------------------------------------------------
 // Auth-session mock
@@ -40,13 +52,14 @@ const authSessionMock = vi.hoisted(() => ({
 vi.mock("@/lib/auth-session", () => authSessionMock);
 
 // ---------------------------------------------------------------------------
-// better-auth-db mock — readUserById is the service-identity probe
+// better-auth-db mock — readUserById must NO LONGER be called (the
+// service-identity probe was removed with the owner-substitution).
 // ---------------------------------------------------------------------------
 const betterAuthDbMock = vi.hoisted(() => ({
   readTeamsForUser: vi.fn(async () => []),
+  readProjectGrantsForUser: vi.fn(async () => []),
   readProjectsForUser: vi.fn(async () => []),
-  // Default: userId is NOT a human user row → service identity
-  readUserById: vi.fn(async (_userId: string): Promise<{ id: string } | null> => null),
+  readUserById: vi.fn(async (): Promise<{ id: string } | null> => null),
 }));
 vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);
 
@@ -199,7 +212,7 @@ vi.mock("@/lib/mcp-pagination", () => ({
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-describe("WayFlow callback actor resolution in handleAgentBuilderRunResume", () => {
+describe("handleAgentBuilderRunResume no longer substitutes the run owner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authPolicyMock.enforceRunAccess.mockImplementation(async () => undefined);
@@ -208,17 +221,14 @@ describe("WayFlow callback actor resolution in handleAgentBuilderRunResume", () 
     storeMock.readAgentRunById.mockResolvedValue({ ...FAKE_RUN });
     storeMock.readRunCoOwners.mockResolvedValue([]);
     storeMock.transitionRunStatus.mockResolvedValue(undefined);
-    // Default: service identity (no user row)
     betterAuthDbMock.readUserById.mockResolvedValue(null);
   });
 
   // -------------------------------------------------------------------------
-  // Test 1 — A2A service-identity callback resolves to run.runBy
+  // A FOREIGN A2A service identity is evaluated as ITSELF (NOT rewritten to
+  // run.runBy), so a real enforceRunAccess denies.
   // -------------------------------------------------------------------------
-  it("Test 1: a2a service-identity actor — enforceRunAccess called with run.runBy as userId", async () => {
-    // Actor is service identity: actorType=a2a, userId has no user row
-    betterAuthDbMock.readUserById.mockResolvedValue(null);
-
+  it("a foreign A2A service identity is passed UNCHANGED to enforceRunAccess (no owner substitution)", async () => {
     const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
     const handlers = createAgentBuilderPrimitiveHandlers();
 
@@ -229,46 +239,77 @@ describe("WayFlow callback actor resolution in handleAgentBuilderRunResume", () 
       mode: "deterministic",
     });
 
-    // enforceRunAccess must have been called with effectiveActor.userId = run.runBy = "owner-1"
-    expect(authPolicyMock.enforceRunAccess).toHaveBeenCalledWith(
-      expect.objectContaining({ runBy: "owner-1" }),
+    // The original actor userId is preserved; it must NEVER be rewritten to the
+    // run owner ("owner-1").
+    const executeCall = authPolicyMock.enforceRunAccess.mock.calls.find(
+      (c: unknown[]) => c[2] === "execute",
+    );
+    expect(executeCall).toBeDefined();
+    expect((executeCall![1] as { userId: string }).userId).toBe("svc-clientid-abc");
+    // Explicitly assert the owner-substituted shape is NEVER produced.
+    expect(authPolicyMock.enforceRunAccess).not.toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({ userId: "owner-1" }),
       "execute",
-      undefined,
+      expect.anything(),
     );
   });
 
-  // -------------------------------------------------------------------------
-  // Test 2 — A2A human-actor callback is NOT substituted
-  // -------------------------------------------------------------------------
-  it("Test 2: a2a human-actor — enforceRunAccess called with original actor userId", async () => {
-    // userId "human-user-1" IS a real user row
-    betterAuthDbMock.readUserById.mockImplementation(async (id: string) =>
-      id === "human-user-1" ? { id: "human-user-1" } : null,
-    );
-
+  it("the readUserById service-identity probe is gone (never called)", async () => {
     const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
     const handlers = createAgentBuilderPrimitiveHandlers();
 
     await handlers.agent_run_resume({
       primitiveName: "agent_run_resume",
       input: { runId: "run-1", userResponse: "approved" },
-      actor: { actorType: "a2a", source: "a2a", userId: "human-user-1" },
+      actor: { actorType: "a2a", source: "a2a", userId: "svc-clientid-abc" },
       mode: "deterministic",
     });
 
-    // enforceRunAccess must have been called with the original userId (not substituted)
+    expect(betterAuthDbMock.readUserById).not.toHaveBeenCalled();
+  });
+
+  it("a denied actor (enforceRunAccess throws) surfaces an error and does NOT reach WayFlow dispatch", async () => {
+    authPolicyMock.enforceRunAccess.mockRejectedValue(
+      new authzMock.AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),
+    );
+
+    const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+    const handlers = createAgentBuilderPrimitiveHandlers();
+
+    const result = (await handlers.agent_run_resume({
+      primitiveName: "agent_run_resume",
+      input: { runId: "run-1", userResponse: "approved" },
+      actor: { actorType: "a2a", source: "a2a", userId: "svc-foreign" },
+      mode: "deterministic",
+    })) as Record<string, unknown>;
+
+    expect(result).toHaveProperty("error");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a legitimate A2A self-resume (actor.userId === run.runBy) passes the ORIGINAL actor (owner short-circuit handles it)", async () => {
+    const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+    const handlers = createAgentBuilderPrimitiveHandlers();
+
+    await handlers.agent_run_resume({
+      primitiveName: "agent_run_resume",
+      input: { runId: "run-1", userResponse: "approved" },
+      // The service genuinely dispatched this run: its userId IS run.runBy.
+      actor: { actorType: "a2a", source: "a2a", userId: "owner-1" },
+      mode: "deterministic",
+    });
+
     const executeCall = authPolicyMock.enforceRunAccess.mock.calls.find(
       (c: unknown[]) => c[2] === "execute",
     );
     expect(executeCall).toBeDefined();
-    expect((executeCall![1] as { userId: string }).userId).toBe("human-user-1");
+    // userId equals run.runBy by virtue of being the genuine owner — NOT by
+    // the removed substitution.
+    expect((executeCall![1] as { userId: string }).userId).toBe("owner-1");
   });
 
-  // -------------------------------------------------------------------------
-  // Test 3 — Non-A2A actor — no substitution, standard enforceRunAccess
-  // -------------------------------------------------------------------------
-  it("Test 3: non-a2a model actor — no substitution, enforceRunAccess sees original actor", async () => {
+  it("non-a2a model actor is passed unchanged (no probe, no substitution)", async () => {
     const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
     const handlers = createAgentBuilderPrimitiveHandlers();
 
@@ -279,41 +320,11 @@ describe("WayFlow callback actor resolution in handleAgentBuilderRunResume", () 
       mode: "deterministic",
     });
 
-    // isA2aServiceIdentity short-circuits at actorType !== "a2a"
-    // → readUserById should NOT be called
     expect(betterAuthDbMock.readUserById).not.toHaveBeenCalled();
-
     const executeCall = authPolicyMock.enforceRunAccess.mock.calls.find(
       (c: unknown[]) => c[2] === "execute",
     );
     expect(executeCall).toBeDefined();
     expect((executeCall![1] as { userId: string }).userId).toBe("user-2");
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 4 — A2A service-identity but run not found → error, no substitution
-  // -------------------------------------------------------------------------
-  it("Test 4: a2a service-identity with missing run — returns { error: 'Run not found' }", async () => {
-    storeMock.readAgentRunById.mockResolvedValue(null);
-
-    const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
-    const handlers = createAgentBuilderPrimitiveHandlers();
-
-    const result = await handlers.agent_run_resume({
-      primitiveName: "agent_run_resume",
-      input: { runId: "nonexistent-run" },
-      actor: { actorType: "a2a", source: "a2a", userId: "svc-clientid-abc" },
-      mode: "deterministic",
-    }) as Record<string, unknown>;
-
-    expect(result).toHaveProperty("error");
-    expect((result.error as string).toLowerCase()).toContain("not found");
-    // No substitution attempted because no run.runBy to resolve
-    expect(authPolicyMock.enforceRunAccess).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ userId: "owner-1" }),
-      "execute",
-      expect.anything(),
-    );
   });
 });

@@ -11,9 +11,9 @@ import { authClient } from "@/lib/auth-client";
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
 import { cn } from "@/lib/utils";
-import { Marked, type Tokens } from "marked";
 import { useTheme } from "next-themes";
-import { highlightCodeAsync, getHighlightedSync, type ThemeName } from "./syntax-highlight";
+import { highlightCodeAsync, type ThemeName } from "./syntax-highlight";
+import { renderMarkdown, detectCharts } from "./markdown-render";
 import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefinition, type WidgetManifest, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
 // The widget set is NOT imported from extension packages here. It arrives as
 // props from the server chat mount, which resolves it from the generated
@@ -76,8 +76,6 @@ import { CINATRA_LOGO } from "@/lib/cinatra-brand";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { MermaidBlock } from "./mermaid-block";
 import { ChartEmbed, ChartError } from "./chart-embed";
-import { validateChart, type ChartSpec } from "./chart-schema";
-import { preprocessMath, restoreMath } from "./math-render";
 import { DancingRobot } from "./dancing-robot";
 
 type ToolCall = {
@@ -298,244 +296,9 @@ async function fetchThreadById(threadId: string): Promise<Thread | null> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Markdown renderer
-// ---------------------------------------------------------------------------
-
-const APP_ROUTES = "campaigns|content|sources|accounts|contacts|transcript-generators";
-const APP_ROUTE_RE = new RegExp(`^\\/?(?:${APP_ROUTES})\\/`);
-const LINK_CLASSES = "text-muted-foreground underline underline-offset-4 hover:text-foreground";
-
-function createMarkedInstance(theme: ThemeName = "github-light") {
-  let tableIndex = 0;
-  const appLinks: { html: string; label: string }[] = [];
-
-  function appLinkPlaceholder(href: string, label: string): string {
-    const idx = appLinks.length;
-    appLinks.push({
-      html: `<a href="${href}" class="${LINK_CLASSES}">${label}</a>`,
-      label,
-    });
-    return `%%APPLINK_${idx}%%`;
-  }
-
-  // Resolve applink placeholders to plain text (for CSV data attributes).
-  function resolveAppLinksAsText(text: string): string {
-    return text.replace(/%%APPLINK_(\d+)%%/g, (_, idx) => appLinks[parseInt(idx)]?.label ?? "");
-  }
-
-  const md = new Marked({
-    gfm: true,
-    breaks: false,
-    renderer: {
-      heading({ tokens, depth }: Tokens.Heading) {
-        const text = this.parser.parseInline(tokens);
-        if (depth <= 2) return `<h2 class="text-lg font-semibold text-foreground mt-5 mb-2">${text}</h2>`;
-        return `<h3 class="text-base font-semibold text-foreground mt-4 mb-1">${text}</h3>`;
-      },
-      paragraph({ tokens }: Tokens.Paragraph) {
-        return `<p class="my-2 leading-relaxed text-foreground">${this.parser.parseInline(tokens)}</p>`;
-      },
-      strong({ tokens }: Tokens.Strong) {
-        return `<strong class="font-semibold text-foreground">${this.parser.parseInline(tokens)}</strong>`;
-      },
-      em({ tokens }: Tokens.Em) {
-        return `<em class="italic text-foreground">${this.parser.parseInline(tokens)}</em>`;
-      },
-      blockquote({ tokens }: Tokens.Blockquote) {
-        const inner = this.parser.parse(tokens).replace(/^<p[^>]*>([\s\S]*)<\/p>$/, "$1");
-        return `<blockquote class="my-3 border-l-2 border-line pl-4 text-muted-foreground italic">${inner}</blockquote>`;
-      },
-      del({ tokens }: Tokens.Del) {
-        return `<del class="line-through text-muted-foreground">${this.parser.parseInline(tokens)}</del>`;
-      },
-      codespan({ text }: Tokens.Codespan) {
-        return `<code class="rounded bg-surface-muted px-1.5 py-0.5 text-xs font-mono text-foreground">${text}</code>`;
-      },
-      code({ text, lang }: Tokens.Code) {
-        // Escape HTML to prevent XSS — text from LLM is untrusted.
-        const escaped = text
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#39;");
-        const safeLang = lang ? lang.replace(/[^a-zA-Z0-9-]/g, "") : "";
-
-        // Copy button SVG — reused on both sync-hit and placeholder paths.
-        // audit-allow: markdown-content
-        const copyBtn = `<button type="button" data-action="copy-code" class="chat-code-copy absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-muted-foreground hover:text-foreground hover:bg-surface-muted" title="Copy code"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button>`;
-
-        // Sync cache hit — inject highlighted HTML directly.
-        const cachedHtml = getHighlightedSync(text, safeLang || "text", theme);
-        if (cachedHtml) {
-          return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line">${cachedHtml}${copyBtn}</div>`;
-        }
-
-        // Cache miss — emit fallback pre+code block and mark for async hydration.
-        // URL-encode the raw source as the data attribute value (UTF-safe, no btoa needed).
-        const encodedCode = encodeURIComponent(text);
-        return `<div class="chat-code-block relative group my-3 rounded-lg overflow-hidden border border-line" data-shiki-code="${encodedCode}" data-shiki-lang="${safeLang}" data-shiki-theme="${theme}"><pre class="overflow-x-auto whitespace-pre bg-surface-muted p-4 text-[0.8rem] leading-relaxed font-mono text-foreground"><code>${escaped}</code></pre>${copyBtn}</div>`;
-      },
-      link({ href, tokens }: Tokens.Link) {
-        const text = this.parser.parseInline(tokens);
-        if (/^https?:\/\//.test(href)) {
-          return `<a href="${href}" target="_blank" rel="noreferrer" class="${LINK_CLASSES}">${text}</a>`;
-        }
-        if (/^mailto:/.test(href)) {
-          return `<a href="${href}" class="${LINK_CLASSES}">${text}</a>`;
-        }
-        // Internal app link.
-        return `<a href="${href}" class="${LINK_CLASSES}">${text}</a>`;
-      },
-      hr() {
-        return '<hr class="my-4 border-line" />';
-      },
-      list(token: Tokens.List) {
-        const items = token.items.map((item, i) => {
-          const content = this.parser.parse(item.tokens);
-          // Strip the first <p> wrapper (loose-list items wrap content in <p class="my-2">,
-          // whose top margin detaches the number/bullet from its text).
-          const inner = content.replace(/^<p[^>]*>([\s\S]*?)<\/p>/, "$1");
-          if (token.ordered) {
-            const num = (typeof token.start === "number" ? token.start : 1) + i;
-            return `<div class="flex gap-2 my-0.5"><span class="text-muted-foreground shrink-0">${num}.</span><span>${inner}</span></div>`;
-          }
-          return `<div class="flex gap-2 my-0.5"><span class="text-muted-foreground shrink-0">&bull;</span><span>${inner}</span></div>`;
-        });
-        return items.join("");
-      },
-      table(token: Tokens.Table) {
-        const tableId = `chat-table-${tableIndex++}`;
-        const headerCells = token.header.map((cell) => this.parser.parseInline(cell.tokens));
-        const bodyRows = token.rows.map((row) => row.map((cell) => this.parser.parseInline(cell.tokens)));
-
-        // audit-allow: markdown-content
-        const ths = headerCells
-          .map((c) => `<th class="border-b border-line bg-surface px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">${c}</th>`)
-          .join("");
-        const pageSize = 25;
-        const pageCount = Math.ceil(bodyRows.length / pageSize);
-        const shouldPaginate = bodyRows.length > pageSize;
-        const trs = bodyRows
-          .map((cells, rowIndex) => {
-            // audit-allow: markdown-content
-            const tds = cells
-              .map((c) => `<td class="border-b border-line px-4 py-3 text-sm text-foreground">${c.replace(/([^\n]) • /g, "$1<br>• ")}</td>`)
-              .join("");
-            // audit-allow: markdown-content
-            return `<tr data-chat-table-row="${rowIndex}" class="${rowIndex >= pageSize ? "hidden" : ""}">${tds}</tr>`;
-          })
-          .join("");
-
-        // CSV for download — use raw text from tokens, resolve applinks to plain text.
-        const csvHeaderCells = token.header.map((cell) => cell.text);
-        const csvBodyRows = token.rows.map((row) => row.map((cell) => cell.text));
-        const csvRows = [
-          csvHeaderCells.map((c) => `"${resolveAppLinksAsText(c).replace(/"/g, '""')}"`).join(","),
-          ...csvBodyRows.map((cells) => cells.map((c) => `"${resolveAppLinksAsText(c).replace(/"/g, '""')}"`).join(",")),
-        ];
-        const csvData = csvRows.join("\\n");
-
-        // audit-allow: markdown-content
-        return `<div class="my-3 overflow-hidden rounded-lg border border-line bg-card" data-chat-table-frame><div class="flex items-center justify-end gap-1 border-b border-line px-2 py-1"><button type="button" data-table-id="${tableId}" data-action="copy" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Copy table"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/><path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5"/></svg></button><button type="button" data-table-id="${tableId}" data-action="download" data-csv="${csvData.replace(/"/g, "&quot;")}" class="chat-table-action inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground" title="Download CSV"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="h-3.5 w-3.5"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div><div class="overflow-x-auto"><table id="${tableId}" class="min-w-full caption-bottom text-sm"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>${shouldPaginate ? `<div class="flex flex-col gap-2 border-t border-line bg-card px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between" data-chat-table-pagination data-page="0" data-page-size="${pageSize}" data-row-count="${bodyRows.length}"><span data-chat-table-range-label>1-${Math.min(pageSize, bodyRows.length)} of ${bodyRows.length}</span><div class="flex items-center gap-2"><span data-chat-table-page-label>Page 1 of ${pageCount}</span><div class="flex items-center gap-1"><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="previous" disabled>Previous</button><button type="button" class="chat-table-pagination-action inline-flex h-7 items-center justify-center rounded-md border border-line bg-background px-2 text-xs font-medium text-foreground transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50" data-action="next" ${pageCount <= 1 ? "disabled" : ""}>Next</button></div></div></div>` : ""}</div>`;
-      },
-      // Suppress default table sub-renderers (we handle everything in table()).
-      tablerow() { return ""; },
-      tablecell() { return ""; },
-    },
-  });
-
-  return { md, appLinks, appLinkPlaceholder };
-}
-
-// `detectWidgets` is REQUIRED (no default): every caller must pass the live
-// runtime's detector so a missing widget catalog is a compile error here, not
-// a silently-dead widget surface.
-function renderMarkdown(
-  text: string,
-  theme: ThemeName,
-  detectWidgets: (content: string) => DetectedWidget[],
-) {
-  const { md, appLinks, appLinkPlaceholder } = createMarkedInstance(theme);
-
-  // Strip mermaid fenced blocks so marked never sees them — they are rendered
-  // separately as MermaidBlock React components beside the markdown HTML.
-  // Also strip [chart:{...}] embeds and ```chart``` fenced blocks — rendered
-  // separately as ChartEmbed components.
-  const stripped = stripChartEmbeds(
-    text
-      .replace(/```mermaid\n[\s\S]*?```/g, "")
-      .replace(/```chart\n[\s\S]*?```/g, ""),
-  );
-
-  // Pre-process: strip widget/confirm markers and extract app link placeholders.
-  let cleaned = stripped
-    .replace(/\[widget:[a-z0-9.-]+:[a-f0-9-]{36}\]/gi, "")
-    .replace(/\[confirm-[a-z_-]+:[a-f0-9-]{36}\]/gi, "")
-    // Strip bare URL lines only if they match a widget detector (rendered as embed).
-    // Also handles lines inside blockquotes ("> /campaigns/...").
-    .replace(new RegExp(`^(?:>\\s*)*[#"']*\\/?(?:${APP_ROUTES})\\/[^\\s"']*["']?$`, "gm"), (line) => {
-      const trimmed = line.replace(/^[>\s#"']+|["']+$/g, "").trim();
-      const hasWidget = detectWidgets(trimmed).length > 0;
-      if (hasWidget) return "";
-      const path = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-      return appLinkPlaceholder(path, path);
-    })
-    // Convert markdown links to app routes into placeholders.
-    .replace(new RegExp(`\\[([^\\]]*)\\]\\([#/]*(?:${APP_ROUTES})\\/[^)]+\\)`, "g"), (match, label) => {
-      const hrefMatch = match.match(/\(([^)]+)\)/);
-      if (!hrefMatch) return match;
-      const href = hrefMatch[1].replace(/^#/, "");
-      return appLinkPlaceholder(href, label);
-    });
-
-  // Pre-process math: replace $$...$$ and $...$ with placeholders before marked
-  // parses, so marked does not interfere with $ or \ escaping inside LaTeX.
-  const { text: mathProcessed, placeholders: mathPlaceholders } = preprocessMath(cleaned);
-  cleaned = mathProcessed;
-
-  // Convert simplified pipe tables (no separator line) to standard markdown format
-  // so that marked's GFM parser can handle them.
-  cleaned = cleaned.replace(
-    /(?:^|\n)([^\n|]+\|[^\n]+)\n((?:[^\n|]+\|[^\n]+\n?){1,})/g,
-    (match, headerRow: string, bodyRows: string) => {
-      const headerCells = headerRow.split("|").map((c: string) => c.trim()).filter(Boolean);
-      if (headerCells.length < 2) return match;
-      const bodyRowsArr = bodyRows.trim().split("\n").map((row: string) => row.split("|").map((c: string) => c.trim()).filter(Boolean));
-      if (bodyRowsArr.length === 0 || bodyRowsArr.some((r: string[]) => r.length < 2)) return match;
-      // Insert a separator line to make it a standard markdown table.
-      const sep = "| " + headerCells.map(() => "---").join(" | ") + " |";
-      const header = "| " + headerCells.join(" | ") + " |";
-      const rows = bodyRowsArr.map((cells: string[]) => "| " + cells.join(" | ") + " |").join("\n");
-      return `\n${header}\n${sep}\n${rows}`;
-    },
-  );
-
-  // Split inline "• " separated content onto separate lines so list parsing handles each item.
-  cleaned = cleaned.replace(/([^\n]) • /g, "$1\n• ");
-  // Normalize "• " bullet lines to "- " for marked's list parser.
-  cleaned = cleaned.replace(/^• /gm, "- ");
-  // Fix standalone "•" alone on a line followed by content on the next line (no trailing space).
-  cleaned = cleaned.replace(/^•\n(?=[^\n])/gm, "- ");
-  // Fix numbered list marker alone on its own line: "1.\nContent" → "1. Content".
-  cleaned = cleaned.replace(/^(\d+\.)\n(?=[^\n])/gm, "$1 ");
-
-  let html = md.parse(cleaned, { async: false }) as string;
-
-  // Restore app link placeholders.
-  for (let i = 0; i < appLinks.length; i++) {
-    html = html.replaceAll(`%%APPLINK_${i}%%`, appLinks[i].html);
-  }
-
-  // Restore math placeholders (KaTeX HTML) after marked processing.
-  html = restoreMath(html, mathPlaceholders);
-
-  // Remove empty paragraphs.
-  html = html.replace(/<p[^>]*>\s*<\/p>/g, "");
-
-  return html;
-}
+// The markdown renderer (renderMarkdown) and chart-embed detection
+// (detectCharts) live in ./markdown-render so they can be unit-tested in
+// isolation; they are imported at the top of this file.
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -959,101 +722,9 @@ function detectMermaidBlocks(text: string): MermaidSource[] {
 }
 
 // ---------------------------------------------------------------------------
-// Chart embed detection
+// Streaming embed trimming
+// (chart/widget detection itself lives in ./markdown-render)
 // ---------------------------------------------------------------------------
-
-// Maximum payload size (bytes) accepted from a single [chart:...] embed.
-// Prevents the UI from freezing on a maliciously large JSON blob from the LLM.
-const CHART_PAYLOAD_MAX_BYTES = 20_000;
-
-type DetectedChart = { spec: ChartSpec | null; raw: string };
-
-/**
- * Balanced-bracket scan for [chart:{...}] embeds.
- *
- * Rationale: a simple regex like /\[chart:(.*?)\]/g would fail whenever the
- * JSON value itself contains a `]` character (e.g. arrays). Instead we walk
- * character-by-character, tracking the depth of `{` / `}` pairs so we know
- * exactly where the JSON object ends and can then expect the closing `]`.
- *
- * Security: untrusted LLM output — validateChart() is called on every result;
- * results are never passed to dangerouslySetInnerHTML.
- */
-function detectCharts(text: string): DetectedChart[] {
-  const results: DetectedChart[] = [];
-
-  // Also detect ```chart\n{...}\n``` fenced code blocks emitted by LLMs.
-  const codeBlockRegex = /```chart\n([\s\S]*?)\n```/g;
-  let codeMatch: RegExpExecArray | null;
-  while ((codeMatch = codeBlockRegex.exec(text)) !== null) {
-    const raw = codeMatch[0];
-    const jsonPayload = codeMatch[1].trim();
-    if (jsonPayload.length > CHART_PAYLOAD_MAX_BYTES) {
-      results.push({ spec: null, raw });
-    } else {
-      let parsed: unknown = null;
-      try { parsed = JSON.parse(jsonPayload); } catch { /* invalid json */ }
-      results.push({ spec: parsed !== null ? validateChart(parsed) : null, raw });
-    }
-  }
-
-  const PREFIX = "[chart:";
-  let searchFrom = 0;
-
-  while (searchFrom < text.length) {
-    const start = text.indexOf(PREFIX, searchFrom);
-    if (start === -1) break;
-
-    const jsonStart = start + PREFIX.length;
-    if (text[jsonStart] !== "{") {
-      searchFrom = start + 1;
-      continue;
-    }
-
-    // Walk forward tracking brace depth.
-    let depth = 0;
-    let i = jsonStart;
-    let jsonEnd = -1;
-    while (i < text.length) {
-      const ch = text[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          jsonEnd = i;
-          break;
-        }
-      }
-      i++;
-    }
-
-    if (jsonEnd === -1) {
-      searchFrom = start + 1;
-      continue;
-    }
-
-    // Expect ']' immediately after the closing '}'.
-    if (text[jsonEnd + 1] !== "]") {
-      searchFrom = jsonEnd + 1;
-      continue;
-    }
-
-    const raw = text.slice(start, jsonEnd + 2); // includes "[chart:" ... "}]"
-    const jsonPayload = text.slice(jsonStart, jsonEnd + 1);
-
-    if (jsonPayload.length > CHART_PAYLOAD_MAX_BYTES) {
-      results.push({ spec: null, raw });
-    } else {
-      let parsed: unknown = null;
-      try { parsed = JSON.parse(jsonPayload); } catch { /* invalid json */ }
-      results.push({ spec: parsed !== null ? validateChart(parsed) : null, raw });
-    }
-
-    searchFrom = jsonEnd + 2;
-  }
-
-  return results;
-}
 
 /**
  * While an assistant message is streaming, the tail of the content may contain
@@ -1099,20 +770,6 @@ function trimIncompleteEmbeds(text: string): string {
   return result;
 }
 
-/**
- * Strips all [chart:{...}] embeds from a string using the same balanced-bracket
- * walker as detectCharts(). Used inside renderMarkdown() so the raw JSON never
- * appears in the HTML output.
- */
-function stripChartEmbeds(text: string): string {
-  const charts = detectCharts(text);
-  let result = text;
-  // Replace in reverse order so indices stay valid.
-  for (let i = charts.length - 1; i >= 0; i--) {
-    result = result.replace(charts[i].raw, "");
-  }
-  return result;
-}
 
 function ChatWidget({
   widget,

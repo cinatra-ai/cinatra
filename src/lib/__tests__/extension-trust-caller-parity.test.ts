@@ -77,16 +77,20 @@ function activeInstallRow() {
 // ---------------------------------------------------------------------------
 // Env management — the signature factor flows through the REAL
 // `resolveSignatureVerdict` (reads CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS) and the
-// bootstrap lever through the REAL `allowMarketplaceBootstrapTrust`
-// (`!CINATRA_EXTENSION_REQUIRE_SIGNATURES`). Snapshot + restore both.
+// bootstrap lever through the REAL `allowMarketplaceBootstrapTrust`. Post
+// The unsigned bootstrap path is FAIL-CLOSED by default and opt-IN only via
+// CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true. Snapshot + restore all three.
 // ---------------------------------------------------------------------------
 let prevKeys: string | undefined;
 let prevRequire: string | undefined;
+let prevAllowUnsigned: string | undefined;
 beforeEach(() => {
   prevKeys = process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS;
   prevRequire = process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
+  prevAllowUnsigned = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
   delete process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS;
   delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
+  delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
   readRowsMock.mockReset();
 });
 afterEach(() => {
@@ -94,6 +98,8 @@ afterEach(() => {
   else process.env.CINATRA_EXTENSION_SIGNING_PUBLIC_KEYS = prevKeys;
   if (prevRequire === undefined) delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
   else process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = prevRequire;
+  if (prevAllowUnsigned === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = prevAllowUnsigned;
 });
 
 /** Mint a valid signature for the fixture and trust its key via env. */
@@ -203,11 +209,13 @@ describe("caller-parity — four callers reach the SAME verdict for a finalized 
   // — the case where install-time (pipeline/saga) and activation-time
   // (loader/connector-UI) classify the identical package. Vary signature × host ×
   // bootstrap; assert all four caller constructions yield the SAME tier.
-  type Scenario = { name: string; sign: boolean; requireSigs: boolean; registryUrl: string; expectedTier: ExtensionTrustTier };
+  type Scenario = { name: string; sign: boolean; requireSigs: boolean; allowUnsigned?: boolean; registryUrl: string; expectedTier: ExtensionTrustTier };
   const scenarios: Scenario[] = [
     { name: "signed + trusted host → trusted-signed", sign: true, requireSigs: false, registryUrl: TRUSTED_REGISTRY, expectedTier: "trusted-signed" },
     { name: "signed + require-signatures on → trusted-signed", sign: true, requireSigs: true, registryUrl: TRUSTED_REGISTRY, expectedTier: "trusted-signed" },
-    { name: "unsigned + bootstrap on → trusted-bootstrap", sign: false, requireSigs: false, registryUrl: TRUSTED_REGISTRY, expectedTier: "trusted-bootstrap" },
+    // Unsigned is UNTRUSTED by default (no opt-in) for ALL callers.
+    { name: "unsigned + DEFAULT (no opt-in) → untrusted (fail-closed)", sign: false, requireSigs: false, registryUrl: TRUSTED_REGISTRY, expectedTier: "untrusted" },
+    { name: "unsigned + explicit ALLOW_UNSIGNED_BOOTSTRAP opt-in → trusted-bootstrap", sign: false, requireSigs: false, allowUnsigned: true, registryUrl: TRUSTED_REGISTRY, expectedTier: "trusted-bootstrap" },
     { name: "unsigned + require-signatures on → untrusted", sign: false, requireSigs: true, registryUrl: TRUSTED_REGISTRY, expectedTier: "untrusted" },
     { name: "signed but NON-trusted host → untrusted (host precedes signature)", sign: true, requireSigs: false, registryUrl: "https://evil.example.com", expectedTier: "untrusted" },
   ];
@@ -215,6 +223,7 @@ describe("caller-parity — four callers reach the SAME verdict for a finalized 
   for (const s of scenarios) {
     it(s.name, () => {
       if (s.requireSigs) process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = "true";
+      if (s.allowUnsigned) process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
       const signature = s.sign ? signFixture() : null;
       const facts: Facts = { anchorIntegrityVerified: true, anchorTrustDecision: true, registryUrl: s.registryUrl, signature };
 
@@ -237,10 +246,12 @@ describe("caller-parity — connector-UI never renders one the loader refuses (R
   // matrix (incl. the post-install re-checks the install-time callers never see)
   // and assert it renders (non-null) IFF the boot loader's REAL verdict — built
   // from the SAME anchor with the loader's exact construction — is trusted.
-  type Case = { name: string; sign: boolean; requireSigs: boolean; anchorOver: Partial<InstallTrustAnchor>; integrityVerified: boolean };
+  type Case = { name: string; sign: boolean; requireSigs: boolean; allowUnsigned?: boolean; anchorOver: Partial<InstallTrustAnchor>; integrityVerified: boolean };
   const cases: Case[] = [
     { name: "signed + trusted host → renders (signed)", sign: true, requireSigs: false, anchorOver: {}, integrityVerified: true },
-    { name: "unsigned + bootstrap on → renders (bootstrap)", sign: false, requireSigs: false, anchorOver: {}, integrityVerified: true },
+    // Unsigned does NOT render by default; only with the explicit opt-in.
+    { name: "unsigned + DEFAULT (no opt-in) → refused (fail-closed)", sign: false, requireSigs: false, anchorOver: {}, integrityVerified: true },
+    { name: "unsigned + ALLOW_UNSIGNED_BOOTSTRAP opt-in → renders (bootstrap)", sign: false, requireSigs: false, allowUnsigned: true, anchorOver: {}, integrityVerified: true },
     { name: "unsigned + require-signatures on → refused", sign: false, requireSigs: true, anchorOver: {}, integrityVerified: true },
     { name: "revoked decision → refused", sign: true, requireSigs: false, anchorOver: { trustDecision: false }, integrityVerified: true },
     { name: "pending (undefined) decision → refused", sign: true, requireSigs: false, anchorOver: { trustDecision: undefined }, integrityVerified: true },
@@ -251,6 +262,7 @@ describe("caller-parity — connector-UI never renders one the loader refuses (R
   for (const c of cases) {
     it(c.name, async () => {
       if (c.requireSigs) process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES = "true";
+      if (c.allowUnsigned) process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
       const signature = c.sign ? signFixture() : null;
       const anchor: InstallTrustAnchor = {
         integrity: INTEGRITY,

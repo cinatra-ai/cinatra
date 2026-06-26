@@ -259,7 +259,6 @@ import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import {
   readTeamsForUser,
   readProjectGrantsForUser,
-  readUserById,
 } from "@/lib/better-auth-db";
 // The local PrimitiveRequest type below uses
 // `actor.actorType: string` (a loose shape shared across every handler in
@@ -332,20 +331,11 @@ function emitReadDenialAudit(actor: PrimitiveActorContext, resourceId: string | 
 // in the Better Auth users table (it is a service-principal / clientId-derived
 // id with no matching row). Used to substitute run.runBy as effective subject.
 // ---------------------------------------------------------------------------
-/**
- * Always await this function — it returns
- * Promise<boolean>. A forgotten await yields a truthy Promise object and
- * silently substitutes run.runBy as the effective actor for every caller.
- *
- * DB hit is guarded by the actorType !== "a2a" early return so human and
- * model actors incur no DB lookup.
- */
-async function isA2aServiceIdentity(actor: PrimitiveActorContext): Promise<boolean> {
-  if (actor.actorType !== "a2a") return false;
-  if (!actor.userId) return true; // no userId = service identity
-  const userRow = await readUserById(actor.userId);
-  return userRow == null;
-}
+// `isA2aServiceIdentity` (and its readUserById probe) was removed with the
+// owner-substitution block it guarded. The A2A resume path no
+// longer rewrites the actor to the run owner; the ORIGINAL verified actor is
+// evaluated by enforceRunAccess, so the "is this a service identity with no
+// user row?" probe is no longer needed.
 
 // ---------------------------------------------------------------------------
 async function resolveRoleHintsFromSession(): Promise<ActorRoleHints | undefined> {
@@ -1906,19 +1896,24 @@ async function handleAgentBuilderRunResume(
     const resumeEffectivePolicy = run.authPolicy ?? resumeTemplate?.agentAuthPolicy ?? null;
     const runWithCoOwners = { ...run, effectivePolicy: resumeEffectivePolicy, coOwnerUserIds };
 
-    // WayFlow callback actor resolution.
-    // client_credentials callbacks arrive as actorType:"a2a" with a service-identity userId (no human user
-    // row). Trust the bearer (already validated as internal-A2A upstream) and
-    // substitute run.runBy as the effective policy subject so enforceRunAccess
-    // sees the run's true owner.
-    let effectiveActor = actor;
-    if (run.runBy && await isA2aServiceIdentity(actor)) {
-      effectiveActor = { ...actor, userId: run.runBy };
-    }
+    // The previous code rewrote any A2A service identity's actor to
+    // `{ ...actor, userId: run.runBy }` before the execute / approveHitl checks.
+    // That forced the owner short-circuit in enforceRunAccess to fire for ANY
+    // class-authenticated A2A bearer that could merely READ a pending owner-run,
+    // upgrading read-only A2A (external_agent grants are only agent.execute +
+    // run.read) into the run owner's full resume / approve authority with zero
+    // scope / policy / tenant evaluation, then sending attacker-controlled
+    // resumeText into the owner's run with the owner's connector authority. The
+    // substitution is REMOVED: the ORIGINAL verified A2A `actor` is evaluated.
+    // A legitimate A2A self-resume still works because actor.userId already
+    // equals run.runBy for a run the service genuinely dispatched (the owner
+    // short-circuit fires naturally). Every other case must satisfy
+    // co-owner / kernel / token-scope / policy gates — i.e. fails closed for a
+    // foreign run.
 
     // explicit "execute" check. Read access alone is insufficient
     // for resume, even when the state machine would otherwise allow it.
-    await enforceRunAccess(runWithCoOwners, effectiveActor, "execute", roles);
+    await enforceRunAccess(runWithCoOwners, actor, "execute", roles);
 
     if (run.status !== "pending_approval") {
       return { error: `Run is not pending approval (status: ${run.status}). Only pending_approval runs can be resumed.` };
@@ -1928,7 +1923,7 @@ async function handleAgentBuilderRunResume(
     // CONTEXT decision item 4 enumerates the four HITL permissions; this is
     // the call site for approveHitl. respondToHitl applies when the input
     // includes an explicit response payload.
-    await enforceRunAccess(runWithCoOwners, effectiveActor, "approveHitl", roles);
+    await enforceRunAccess(runWithCoOwners, actor, "approveHitl", roles);
 
     // Detect explicit hitl response payload in the input. If a typed field
     // (e.g. hitlResponse) is added, branch on its presence here.
@@ -1937,7 +1932,7 @@ async function handleAgentBuilderRunResume(
     const hasHitlResponsePayload = Object.keys(request.input ?? {})
       .some((k) => /^hitl(Response|Reply|Answer)/i.test(k) && (request.input as Record<string, unknown>)[k] !== undefined);
     if (hasHitlResponsePayload) {
-      await enforceRunAccess(runWithCoOwners, effectiveActor, "respondToHitl", roles);
+      await enforceRunAccess(runWithCoOwners, actor, "respondToHitl", roles);
     }
 
     // Deferral: editOutput is mapped in OPERATION_PERMISSION but its
@@ -2107,9 +2102,13 @@ async function handleAgentBuilderRunResume(
             "Setup approval requires at least one input field in userResponse; an empty object would re-park the run at the same setup gate.",
         };
       }
+      // The MCP agent_run_resume path already enforced run access above
+      // (enforceRunAccess execute + approveHitl on the ORIGINAL actor), so this
+      // helper call is pre-authorized — no actorContext is threaded (the helper
+      // gate is intentionally a no-op for already-gated callers).
       await approveReviewTaskInternal(
         `setup-${runId}`,
-        effectiveActor.userId ?? run.runBy ?? "mcp-caller",
+        actor.userId ?? run.runBy ?? "mcp-caller",
         setupValues,
       );
       return {

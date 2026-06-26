@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
+import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
@@ -220,6 +221,18 @@ export async function POST(req: Request): Promise<Response> {
       { status: 400 },
     );
   }
+
+  // The bridge token authenticates the caller CLASS only. Bind the body-selected
+  // agent_run_id to the run actually executing this callback
+  // (proven by the auth-injected X-Cinatra-A2A-Context-Id header) BEFORE we
+  // derive ANY actor authority from it. Fail closed on absent / unresolvable
+  // header or mismatch — otherwise a bridge-token holder could select another
+  // run's id and borrow its authority for the allowlisted primitive.
+  const binding = await bindBridgeRunId(req, agentRunId);
+  if (!binding.ok) {
+    return NextResponse.json({ error: binding.error }, { status: binding.status });
+  }
+
   const shaper = TOOL_INPUT_SHAPERS[tool];
   const input = shaper ? shaper(rawInput, agentRunId) : rawInput;
 

@@ -3,12 +3,16 @@ import "server-only";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { db } from "./db";
 import { agentRuns } from "./schema";
+import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
+import type { AgentAuthPolicy } from "./auth-policy-types";
 import {
   readAgentRunById,
   readAgentRunByTaskId,
   readAgentTemplateById,
+  readRunCoOwners,
   writeHitlPrompt,
 } from "./store";
 import {
@@ -29,7 +33,17 @@ import {
 //     `verifyA2AAccessToken` before calling here).
 //
 // The caller is ALWAYS responsible for verifying that the actor is authorized
-// to approve the task before invoking this function.
+// to approve the task before invoking this function — EXCEPT that callers which
+// only authenticate the caller CLASS and cannot pre-resolve reviewTaskId -> run
+// themselves (the /api/a2a/resume route, authenticated by an A2A Bearer token)
+// MUST pass their verified `actorContext`. When `actorContext` is supplied this
+// helper resolves the run for the reviewTaskId and enforces `run.approveHitl`
+// access BEFORE any state-changing write, on BOTH the setup-* and wayflow-*
+// branches: a caller-class-authenticated principal must not borrow another
+// run's authority by selecting its task id.
+// Callers that already gated the run (the admin-session `approveReviewTask`
+// server action; the MCP agent_run_resume handler, both behind
+// enforceRunAccess) omit `actorContext` and the gate is a no-op.
 //
 // On the setup-* path, the inputParams merge and the status transition back
 // to "queued" are combined into a SINGLE compare-and-swap UPDATE on the
@@ -56,6 +70,15 @@ import {
  *                       agent_runs.inputParams atomically with the approval.
  * @param fieldName    - Optional. When set, single-field path: only the named
  *                       key from `values` is merged into inputParams.
+ * @param schemaSnapshot - Optional snapshot persisted on the wayflow- path.
+ * @param actorContext - Optional VERIFIED actor. When supplied, the helper
+ *                       enforces `run.approveHitl` against the resolved run
+ *                       BEFORE mutating; pass it ONLY from caller-class-only
+ *                       authenticated entry points (the A2A resume route) that
+ *                       have NOT already authorized the run. Omit it when the
+ *                       caller already enforced run access itself.
+ * @param roleHints    - Optional role hints forwarded to enforceRunAccess so
+ *                       the actor's org is taken from the token (not run.orgId).
  */
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
@@ -63,7 +86,45 @@ export async function approveReviewTaskInternal(
   values?: unknown,
   fieldName?: string,
   schemaSnapshot?: Record<string, unknown> | null,
+  actorContext?: PrimitiveActorContext,
+  roleHints?: ActorRoleHints,
 ): Promise<void> {
+  // When an `actorContext` is supplied the helper
+  // is reached from a caller-class-only authenticated entry point (the A2A
+  // resume route), so it OWNS the run-access gate. Resolve the run's co-owners +
+  // effective policy and enforce `approveHitl`, denying cross-actor / no-row
+  // BEFORE any state-changing write. A null run becomes a 404-shaped AuthzError
+  // so a caller cannot probe foreign run/task ids via the error text. No-op when
+  // `actorContext` is undefined (the caller already authorized).
+  const enforceApproveAccess = async (run: {
+    id: string;
+    runBy: string | null;
+    orgId: string | null;
+    authPolicy: AgentAuthPolicy | null;
+    templateId: string;
+  } | null): Promise<void> => {
+    if (!actorContext) return;
+    const coOwnerRows = run ? await readRunCoOwners(run.id) : [];
+    const template = run?.templateId
+      ? await readAgentTemplateById(run.templateId)
+      : null;
+    const effectivePolicy = run?.authPolicy ?? template?.agentAuthPolicy ?? null;
+    await enforceRunAccess(
+      run
+        ? {
+            id: run.id,
+            runBy: run.runBy,
+            orgId: run.orgId,
+            effectivePolicy,
+            coOwnerUserIds: coOwnerRows.map((r) => r.userId),
+          }
+        : null,
+      actorContext,
+      "approveHitl",
+      roleHints,
+    );
+  };
+
   // ---------------------------------------------------------------------------
   // Synthetic setup-{runId} path for setup interrupt loop approvals.
   //
@@ -82,6 +143,11 @@ export async function approveReviewTaskInternal(
     // writeHitlPrompt is not called on this path (schema replay is a WayFlow-gate-only feature).
     const runId = reviewTaskId.slice("setup-".length);
     const run = await readAgentRunById(runId);
+    // Gate the resolved run BEFORE any existence-revealing error or the
+    // inputParams CAS / status->queued /
+    // enqueue. A null run throws a 404-shaped AuthzError so a caller-class
+    // principal cannot probe foreign setup-<runId> ids via the error text.
+    await enforceApproveAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] run ${runId} not found (setup path)`);
     }
@@ -238,6 +304,12 @@ export async function approveReviewTaskInternal(
         }
       }
     }
+    // Gate the resolved run BEFORE the existence error and BEFORE
+    // writeHitlPrompt / sendTask / status transition, so a
+    // caller-class principal cannot borrow another run's authority by selecting
+    // its wayflow-<taskId>. A null run throws a 404-shaped AuthzError (no
+    // existence leak).
+    await enforceApproveAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] no agent_run found for a2aTaskId=${taskId}`);
     }

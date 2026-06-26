@@ -52,8 +52,16 @@ let workDir: string;
 let version: string;
 let tarballBytes: Buffer;
 let integrity: string;
+// The first-party connector is installed UNSIGNED (the comment at the grant
+// assertion notes "unsigned bootstrap → ports stay pending"); the hardened
+// default refuses unsigned in-process activation, so this e2e opts in the way a
+// dev/transition deployment would (CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true).
+// The trust gate itself is covered by extension-trust-config.test.ts.
+let priorAllowUnsignedBootstrap: string | undefined;
 
 beforeAll(async () => {
+  priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
   // The connector tree is materialized from its companion repo (the
   // clone-back lock). A missing dir means the workspace is not synced — fail
   // LOUD (never skip-vacuous): run `node scripts/ci/sync-dev-extensions.mjs
@@ -93,6 +101,8 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+  else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
   __resetCapabilityRegistry(); // the REAL register() wrote into the shared host registry
   await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
 });

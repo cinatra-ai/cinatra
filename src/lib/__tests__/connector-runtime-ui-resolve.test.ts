@@ -95,18 +95,31 @@ describe("pickRuntimeConnectorUiRecord (pure)", () => {
 
 describe("resolveRuntimeConnectorUiRecord (trusted runtime install)", () => {
   it("resolves a trusted runtime schema-config record → route renders the schema-config form", async () => {
-    readRowsMock.mockResolvedValue([activeInstallRow()]);
-    const runtimeRecord = await resolveRuntimeConnectorUiRecord(PKG, actor, {
-      resolveTrustAnchor: async () => trustedAnchor,
-      discoverRecords: async () => [storeRecord()],
-      verifyIntegrity: async () => true, // on-disk files match the anchor
-    });
-    expect(runtimeRecord).toEqual({ uiSurface: "schema-config", configSchema: SCHEMA });
+    // The anchor is trusted (approved decision, allowlisted registry, integrity
+    // verified) but UNSIGNED. The hardened in-process trust default fails-closed
+    // on unsigned packages, so this trusted-bootstrap resolution opts in the way
+    // a dev/transition deployment would (CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP
+    // =true). The fail-closed default is covered by extension-trust-config.test.ts
+    // and the FAIL-CLOSED cases below (which never set this flag).
+    const priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+    try {
+      readRowsMock.mockResolvedValue([activeInstallRow()]);
+      const runtimeRecord = await resolveRuntimeConnectorUiRecord(PKG, actor, {
+        resolveTrustAnchor: async () => trustedAnchor,
+        discoverRecords: async () => [storeRecord()],
+        verifyIntegrity: async () => true, // on-disk files match the anchor
+      });
+      expect(runtimeRecord).toEqual({ uiSurface: "schema-config", configSchema: SCHEMA });
 
-    // The route feeds the runtime record (preferred over the static manifest)
-    // into the pure decision → schema-config branch (no React import).
-    const decision = chooseConnectorUiRender(runtimeRecord);
-    expect(decision.kind).toBe("schema-config");
+      // The route feeds the runtime record (preferred over the static manifest)
+      // into the pure decision → schema-config branch (no React import).
+      const decision = chooseConnectorUiRender(runtimeRecord);
+      expect(decision.kind).toBe("schema-config");
+    } finally {
+      if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+      else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
+    }
   });
 
   it("FAIL-CLOSED: an active install with NO trusted anchor → null (route falls back to static)", async () => {

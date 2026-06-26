@@ -7,7 +7,11 @@ import { oauthProviderResourceClient } from "@better-auth/oauth-provider/resourc
 import { createAuthClient as createServerAuthClient } from "better-auth/client";
 import { betterAuthDb } from "@/lib/better-auth-db";
 import { sql } from "drizzle-orm";
-import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
+import {
+  POLICY_VERSION,
+  type ActorContext,
+  type ScopedA2AServiceAccountContext,
+} from "@/lib/authz/actor-context";
 import { parseTokenScopes } from "@/lib/authz/scope-map";
 import {
   readServiceAccountByClientId,
@@ -146,19 +150,55 @@ export async function verifyA2AAccessToken(req: Request): Promise<A2AAuthResult>
   // opaque tokens (stored as SHA-256 base64url in oauthAccessToken). The
   // JWT path above only handles signed JWTs; this path handles the opaque
   // case by hashing the raw token and looking it up directly in the DB.
+  //
+  // The previous opaque-token fallback SELECTed only "clientId" and built the
+  // actor with an
+  // EMPTY payload, so tokenScopes collapsed to undefined and enforceRunAccess
+  // SKIPPED the scope ceiling — AND it never bound audience, so a token minted
+  // for a DIFFERENT resource replayed into A2A. Hardened here:
+  //   (1) SELECT the row's real stored scopes and feed them through the same
+  //       account-ceiling intersection as the JWT path (empty => [] deny-all,
+  //       never undefined — fail-closed scope behavior).
+  //   (2) AUDIENCE/RESOURCE BINDING: the oauthAccessToken row has no audience
+  //       column, so we bind by the A2A-specific `a2a:connect` scope. A token
+  //       lacking `a2a:connect` in its STORED scopes is rejected — an opaque
+  //       token minted for another resource cannot replay into A2A by token
+  //       value alone. (a2a:connect is resource-specific, so this is a true
+  //       resource gate, not merely a scope gate.)
+  //   (3) confirm the matched clientId maps to a genuine, non-revoked
+  //       service_accounts row (a real client_credentials principal) before
+  //       promoting it to a ServiceAccount actor.
   try {
     const tokenHash = createHash("sha256").update(accessToken).digest("base64url");
-    const rows = await betterAuthDb.execute<{ clientId: string }>(sql`
-      SELECT "clientId" FROM public."oauthAccessToken"
+    const rows = await betterAuthDb.execute<{ clientId: string; scopes: unknown }>(sql`
+      SELECT "clientId", "scopes" FROM public."oauthAccessToken"
       WHERE token = ${tokenHash}
         AND "expiresAt" > now()
       LIMIT 1
     `);
-    const row = (rows as { rows?: Array<{ clientId: string }> }).rows?.[0];
+    const row = (rows as { rows?: Array<{ clientId: string; scopes: unknown }> }).rows?.[0];
     if (row?.clientId) {
       const account = await readServiceAccountByClientId(row.clientId);
       if (account && account.revokedAt === null) {
-        const actorContext = buildActorContextFromServiceAccountJwt({}, account);
+        // Normalize the stored scopes to a space-separated string (Better Auth
+        // stores OAuth scopes as a string; tolerate a JSON-array shape too).
+        const storedScopeString = normalizeStoredScopes(row.scopes);
+        // (2) AUDIENCE BINDING via the A2A-specific connect scope. `a2a:connect`
+        // is a CONNECT scope (not in PERMISSION_SET, so parseTokenScopes would
+        // drop it) — check the RAW stored scope tokens. Reject opaque tokens
+        // not granted a2a:connect: they were not minted for the A2A resource and
+        // must not replay into it by token value alone.
+        const rawStoredScopeTokens = storedScopeString.trim().split(/\s+/);
+        if (!rawStoredScopeTokens.includes("a2a:connect")) {
+          return { ok: false, response: unauthorized(req) };
+        }
+        // (1) Feed the real stored scopes through the account-ceiling
+        // intersection (same path as JWTs). tokenScopes becomes a concrete
+        // array; an empty intersection deny-alls in enforceRunAccess.
+        const actorContext = buildActorContextFromServiceAccountJwt(
+          { scope: storedScopeString },
+          account,
+        );
         return { ok: true, subject: account.id, actorContext };
       }
     }
@@ -167,6 +207,20 @@ export async function verifyA2AAccessToken(req: Request): Promise<A2AAuthResult>
   }
 
   return { ok: false, response: unauthorized(req) };
+}
+
+/**
+ * Normalize a stored OAuth `scopes` column value into a space-separated string
+ * for `parseTokenScopes`. Better Auth stores OAuth scopes as a space-separated
+ * string; this also tolerates a JSON-array shape defensively. Any other shape
+ * yields an empty string (=> deny-all after intersection).
+ */
+function normalizeStoredScopes(scopes: unknown): string {
+  if (typeof scopes === "string") return scopes;
+  if (Array.isArray(scopes)) {
+    return scopes.filter((s): s is string => typeof s === "string").join(" ");
+  }
+  return "";
 }
 
 /**
@@ -354,7 +408,7 @@ export function extractA2AJwtPayload(token: string): A2AJwtPayload | null {
 export function buildActorContextFromServiceAccountJwt(
   payload: A2AJwtPayload,
   account: ServiceAccountRecord,
-): ActorContext {
+): ScopedA2AServiceAccountContext {
   const jwtScopes = parseTokenScopes(payload.scope);
   const accountScopes = parseTokenScopes(account.scopes);
   // A token must not exceed its account's scope ceiling.
@@ -365,7 +419,13 @@ export function buildActorContextFromServiceAccountJwt(
     principalId: account.id,
     organizationId: account.orgId ?? undefined,
     authSource: "a2a",
-    tokenScopes: effectiveScopes.length > 0 ? effectiveScopes : undefined,
+    // ALWAYS emit a concrete array for ServiceAccount/a2a actors — never
+    // `undefined`. enforceRunAccess SKIPS the token-scope ceiling when
+    // tokenScopes is undefined (the "non-A2A actor, no restriction" path), so
+    // collapsing an empty intersection to undefined let an A2A token with an
+    // absent / non-intersecting scope claim bypass its scope ceiling. An empty
+    // array deny-alls in enforceRunAccess (the intended fail-closed behavior).
+    tokenScopes: effectiveScopes,
     delegatedBy: payload.delegated_by ?? undefined,
     policyVersion: POLICY_VERSION,
   };

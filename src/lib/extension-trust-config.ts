@@ -11,12 +11,14 @@
 //      that registry, so trusting it would in-process-trust unsigned local code).
 //      Fail-closed: a malformed/empty config yields `[]` (everything untrusted).
 //
-//   2. `allowMarketplaceBootstrapTrust()` — the single transition lever. During the
-//      pre-signature window an integrity-verified, persisted-decision package from a
-//      trusted activation host with NO signature may still import in-process
-//      (`trusted-bootstrap`). Flipping `CINATRA_EXTENSION_REQUIRE_SIGNATURES=true`
-//      turns this off, making a verified signature the sole vendor-agnostic in-process
-//      trust root (Window-3).
+//   2. `allowMarketplaceBootstrapTrust()` — the single transition lever. It is
+//      FAIL-CLOSED by default: an unsigned, integrity-verified, persisted-decision
+//      package from a trusted activation host is NOT imported in-process. The
+//      `trusted-bootstrap` (unsigned in-process) path is opt-IN only — enabled
+//      solely by the explicit, loud transition flag
+//      `CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true` (dev/transition use only).
+//      With the flag unset, a verified signature is the sole vendor-agnostic
+//      in-process trust root, so unsigned marketplace code stays inert by default.
 //
 // BOOT-SAFE CONTRACT: both helpers are safe to call from the boot
 // path (`instrumentation.node.ts` → `runtime-package-loader.ts`). They perform NO
@@ -29,7 +31,6 @@
 import "server-only";
 
 import { loadDeploymentRegistryConfig } from "@/lib/deployment-registry-config";
-import { signaturesRequired } from "@/lib/extension-signature";
 
 /**
  * The set of registry HOSTS (lowercased) whose packages may be imported
@@ -53,16 +54,25 @@ export function trustedActivationHosts(): string[] {
   return host ? [host] : [];
 }
 
+/** The explicit, loud opt-in env that re-enables the unsigned bootstrap-trust
+ *  path (dev/transition only). ONLY the exact string "true" enables it. */
+export const ALLOW_UNSIGNED_BOOTSTRAP_ENV = "CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP";
+
 /**
  * Whether a configured-marketplace-host package with NO signature may bootstrap
- * into `trusted-bootstrap` during the transition. The single transition lever:
- * `true` while `CINATRA_EXTENSION_REQUIRE_SIGNATURES` is unset (Windows 1–2),
- * `false` once it is set (Window-3 — a verified signature becomes mandatory).
+ * into `trusted-bootstrap`. FAIL-CLOSED by default: unsigned marketplace code
+ * is NOT imported
+ * in-process unless the operator explicitly opts in with the loud transition
+ * flag `CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true`. With the flag unset
+ * (the default for every non-dev deployment) a verified signature is mandatory
+ * for in-process activation, so an unsigned package from a trusted activation
+ * host stays inert. This is opt-IN, never opt-OUT — the absence of the
+ * (separate) require-signatures flag never re-opens the unsigned path.
  */
 export function allowMarketplaceBootstrapTrust(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
-  return !signaturesRequired(env);
+  return env[ALLOW_UNSIGNED_BOOTSTRAP_ENV] === "true";
 }
 
 function registryHostOf(registryUrl: string | null | undefined): string | null {
