@@ -8,8 +8,12 @@ export type ErrorSegment =
   | { kind: "link"; value: string; href: string };
 
 // Trailing sentence punctuation must stay out of the href so "…api-keys."
-// doesn't linkify the period.
-const TRAILING_PUNCT = /[.,;:!?'")\]]+$/;
+// doesn't linkify the period. A backward char-walk (not a `/[…]+$/` regex) keeps
+// this linear — an anchored-quantifier regex scanned from each start position is
+// polynomial (ReDoS) on inputs like "https://!!!!!!!".
+const TRAILING_PUNCT_CHARS = new Set([
+  ".", ",", ";", ":", "!", "?", "'", '"', ")", "]",
+]);
 
 export function linkifyErrorText(text: string): ErrorSegment[] {
   const segments: ErrorSegment[] = [];
@@ -18,8 +22,10 @@ export function linkifyErrorText(text: string): ErrorSegment[] {
   for (const match of text.matchAll(re)) {
     const raw = match[0];
     const start = match.index ?? 0;
-    const trail = raw.match(TRAILING_PUNCT)?.[0] ?? "";
-    const url = trail ? raw.slice(0, raw.length - trail.length) : raw;
+    let end = raw.length;
+    while (end > 0 && TRAILING_PUNCT_CHARS.has(raw[end - 1])) end--;
+    const url = raw.slice(0, end);
+    const trail = raw.slice(end);
     if (start > last) {
       segments.push({ kind: "text", value: text.slice(last, start) });
     }
