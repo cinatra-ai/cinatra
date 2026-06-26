@@ -614,6 +614,43 @@ export async function enforceRunAccess(
     });
   }
 
+  const permission = OPERATION_PERMISSION[op];
+
+  // ---------------------------------------------------------------------------
+  // Token-scope ceiling — enforced FIRST, BEFORE the owner / co-owner
+  // short-circuits (codex Q1 "two invariants").
+  //
+  // A token's scope claim is a HARD upper bound that no role grant — not even
+  // run ownership or co-ownership — can exceed. Previously this check ran only
+  // AFTER the owner / co-owner short-circuits returned, so a token-bearing
+  // owner or co-owner could perform an op its token did not grant (e.g. a
+  // read-scoped A2A token resuming its own run). Moving it ahead of the
+  // short-circuits closes that gap while preserving the original semantics for
+  // non-token actors:
+  //   - tokenScopes === undefined  -> non-token actor (HumanUser via UI,
+  //     InternalWorker via BullMQ, internal model/agent): NO ceiling, skip.
+  //   - tokenScopes === []         -> token issued with no / no-intersecting
+  //     scopes: DENY ALL (fail-closed behavior; the
+  //     producer must emit [] not undefined for A2A — see a2a-auth.ts).
+  //   - tokenScopes missing `permission` -> DENY this op.
+  // The post-delegation block below is now redundant for the ceiling but is
+  // kept as defense-in-depth (it re-derives the same actorContext).
+  const ceilingScopes = buildActorContextFromPrimitive(
+    actor,
+    run.orgId ?? null,
+    roles,
+  ).tokenScopes;
+  if (
+    ceilingScopes !== undefined &&
+    (ceilingScopes.length === 0 || !ceilingScopes.includes(permission))
+  ) {
+    throw new AuthzError({
+      statusCode: 403,
+      reason: "forbidden",
+      message: `Run access denied: token scope insufficient (required ${permission}).`,
+    });
+  }
+
   // Co-owner short-circuit MUST run BEFORE delegating
   // to enforceResourceAccess because runs carry a wider co-owner op set
   // (list / read / execute / approveHitl / respondToHitl / editOutput /
@@ -704,7 +741,7 @@ export async function enforceRunAccess(
   // cleared on the delegated probe: runs use a wider co-owner op set
   // than the helper's RESOURCE_COOWNER_OPS, so the run-specific branch
   // above is the single source of truth for run co-ownership.
-  const permission = OPERATION_PERMISSION[op];
+  // `permission` was resolved at the top for the token-scope ceiling.
   const probe: ResourceForAccessCheck = {
     resourceType: "run",
     resourceId: run.id,

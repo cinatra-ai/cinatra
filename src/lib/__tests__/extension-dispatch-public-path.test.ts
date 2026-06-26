@@ -519,6 +519,14 @@ describe("public dispatch — UPDATE re-runs the pipeline; a failing new digest 
   });
 
   it("an UPDATE whose NEW digest fails the PRE-FINALIZE activation gate throws BEFORE provenance/finalize — the old v1 provenance + store dir survive, and the bad new digest is GC'd", async () => {
+    // The pre-finalize activation gate only runs for a TRUSTED in-process verdict.
+    // The fixture is an UNSIGNED bootstrap package and the hardened default
+    // fails-closed (no gate → no throw), so opt in the way a dev/transition
+    // deployment would to exercise the gate MECHANIC under test. The fail-closed
+    // default is covered by extension-trust-config.test.ts.
+    const priorAllowUnsignedBootstrap = process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+    process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = "true";
+    try {
     rows = [
       { id: "iext_v1", packageName: "@v/upd-prefinalize-connector", status: "active", organizationId: "org-1", source: { type: "verdaccio", integrity: "sha512-v1", contentHash: "ch-v1", version: "1.0.0" } },
     ];
@@ -569,6 +577,10 @@ describe("public dispatch — UPDATE re-runs the pipeline; a failing new digest 
     const r = rows.find((x) => x.id === "iext_v1");
     expect(r?.source?.integrity, "old v1 provenance preserved (durably intact)").toBe("sha512-v1");
     expect(r?.source?.contentHash).toBe("ch-v1");
+    } finally {
+      if (priorAllowUnsignedBootstrap === undefined) delete process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP;
+      else process.env.CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP = priorAllowUnsignedBootstrap;
+    }
   });
 
   it("a FRESH install (no superseding digest) is unaffected by the pre-finalize gate — it finalizes + activates", async () => {
