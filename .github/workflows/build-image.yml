@@ -914,6 +914,16 @@ jobs:
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
 
+      # Build-config consistency check. config/build-config.manifest.json
+      # is the single source of truth for the tsconfig.json @cinatra-ai/* path
+      # aliases AND the next.config.ts serverExternalPackages + transpilePackages
+      # lists. This fails CI when those generated regions no longer match the
+      # manifest (a hand-edit, a stale regeneration, or a manifest change that
+      # was not re-rendered). Manifest-only inputs — does NOT need the cloned-back
+      # extension tree. Regenerate with `node scripts/config/generate-build-config.mjs`.
+      - name: Build-config consistency check (tsconfig + next.config vs manifest, fail-closed)
+        run: node scripts/config/generate-build-config.mjs --check
+
       # Required-extensions coverage gate. The prod base image acquires the
       # bootable set from cinatra-required-extensions.lock.json; this fails CI
       # when a host-imported extension package is missing from
@@ -1046,6 +1056,7 @@ jobs:
           packages/sdk-extensions/src
           scripts/extensions/__tests__/inventory.test.mjs
           scripts/extensions/__tests__/generate-extension-manifest.test.mjs
+          scripts/config/__tests__/generate-build-config.test.mjs
           scripts/extensions/__tests__/build-server-entry.test.ts
           scripts/extensions/__tests__/update-dev-extension-lock.test.mjs
           scripts/ci/__tests__/extension-pin-divergence-report.test.mjs

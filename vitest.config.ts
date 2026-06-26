@@ -293,6 +293,10 @@ export default defineConfig({
       "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
+      // Manifest-driven build-config generator: renders the tsconfig path
+      // aliases + next.config package lists from one manifest and gates
+      // byte-exact drift. Pure renderers + CLI --check (no DB/network).
+      "scripts/config/__tests__/**/*.test.{ts,mjs}",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
