@@ -9,6 +9,12 @@ import "server-only";
 
 let initialized = false;
 
+// The registered NodeTracerProvider, captured at init so a fatal-error flush
+// (src/lib/boot/fatal-error-policy.ts) can force-export buffered spans before the
+// process exits. `unknown` to avoid importing the heavy OTel types eagerly; the
+// flush narrows to the `forceFlush()` shape defensively.
+let registeredProvider: { forceFlush?: () => Promise<void> } | undefined;
+
 export async function initializeOtelTracing(): Promise<void> {
   if (initialized) return;
 
@@ -113,8 +119,25 @@ export async function initializeOtelTracing(): Promise<void> {
     ...(sentryContextManager ? { contextManager: sentryContextManager } : {}),
   });
 
+  registeredProvider = provider as { forceFlush?: () => Promise<void> };
   initialized = true;
   console.info(
     `[otel-bootstrap] NodeTracerProvider registered (service=${serviceName}${sentryEnabled ? ", sentry=on" : ""})`,
   );
+}
+
+/**
+ * Best-effort force-flush of the BatchSpanProcessor so the spans buffered around a
+ * fatal crash are exported BEFORE the process exits. No-op when tracing was never
+ * initialised (e.g. Edge runtime, tests). Never throws — the fatal-exit path must
+ * not be wedged by a flush failure (engineering #302).
+ */
+export async function flushOtelTracing(): Promise<void> {
+  const provider = registeredProvider;
+  if (!provider || typeof provider.forceFlush !== "function") return;
+  try {
+    await provider.forceFlush();
+  } catch {
+    /* best-effort — never block the fatal-exit path */
+  }
 }
