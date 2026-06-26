@@ -186,6 +186,8 @@
     "authz:inventory": "node scripts/build-authz-inventory.mjs",
     "authz:retention": "node --env-file=.env.local --import tsx scripts/enforce-audit-retention.mjs",
     "authz:inventory:check": "node scripts/build-authz-inventory.mjs --check",
+    "config:build": "node scripts/config/generate-build-config.mjs",
+    "config:build:check": "node scripts/config/generate-build-config.mjs --check",
     "closeout:suite": "node scripts/ci/closeout-suite.mjs",
     "works-after:proof": "bash scripts/ci/works-after-proof.sh",
     "works-after:test": "node --test scripts/ci/works-after/__tests__/*.test.mjs",
