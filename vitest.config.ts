@@ -320,6 +320,7 @@ export default defineConfig({
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",
       "scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs",
       "scripts/audit/__tests__/sdk-public-surface-ban.test.mjs",
+      "scripts/audit/__tests__/skill-frontmatter-gate.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
       // Mirrors the `*.integration.test.ts` exclusion above. Lifted when

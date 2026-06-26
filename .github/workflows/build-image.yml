@@ -956,6 +956,22 @@ jobs:
       - name: Skill-store canonicality gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/skill-canonicality-gate.test.mjs
 
+      # SKILL.md frontmatter validation (cinatra#494) + committed-mirror ban
+      # (cinatra#495). Every host-committed SKILL.md under packages/ + src/ must
+      # pass upstream-standard frontmatter validation (allowed top-level keys:
+      # name, description, license, allowed-tools, metadata, compatibility —
+      # Cinatra-specific keys like match_when live under metadata.*, read by the
+      # Wave-0 dual-read in packages/skills/src/frontmatter.ts). It also fails if
+      # any SKILL.md is committed under data/skill-store/ or extensions/ (both
+      # gitignored, hydrated from canonical source) so a drift-prone runtime
+      # mirror cannot be reintroduced. Dependency-free pure-node so it does not
+      # need the package install.
+      - name: Skill frontmatter + mirror-ban gate
+        run: node scripts/audit/skill-frontmatter-gate.mjs
+
+      - name: Skill frontmatter + mirror-ban gate tests
+        run: node --test scripts/audit/__tests__/skill-frontmatter-gate.test.mjs
+
       # Extension dev-fixtures: every extension declaring `cinatra.devFixtures`
       # must ship a well-formed, declarative fixture file. The dev seeder is
       # fire-and-forget, so this static gate is the hard fail on a malformed file.
