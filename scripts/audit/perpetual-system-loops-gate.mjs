@@ -16,11 +16,17 @@
  * REGISTRY in `src/lib/background-jobs-registry.ts`; the recurring
  * dup-guard → moveToDelayed → DelayedError sequence is factored into ONE shared
  * `runRecurringLoop` helper there; and the NAME constants + `*_LOOP_JOB_ID`
- * literals live in the leaf module `src/lib/background-jobs-names.ts`. The gate
- * reads all three files (instrumentation still owns the boot seeds).
+ * literals live in the leaf module `src/lib/background-jobs-names.ts`.
+ *
+ * STRUCTURE (engineering#302): `src/instrumentation.node.ts` was refactored into
+ * named boot-orchestration phases — the boot LOOP SEEDS (the
+ * `enqueueBackgroundJob(...)` calls) moved verbatim into the system-loops phase
+ * module `src/lib/boot/phases/system-loops.ts`. The gate now reads the boot seeds
+ * from THAT file (the env override key + the historical `instrumentation` source
+ * name stay stable so call sites/tests are unchanged).
  *
  * Invariants per boot-seeded loop (every `enqueueBackgroundJob(BACKGROUND_JOB_NAMES.X, ...)`
- * call in `src/instrumentation.node.ts`):
+ * call in `src/lib/boot/phases/system-loops.ts`):
  *   - exported `<KEY>_LOOP_JOB_ID` constant in `background-jobs-names.ts`;
  *   - boot seed jobId references the constant (not a raw string literal);
  *   - boot seed sets overwriteIfStale: true, skipWorker: true,
@@ -56,9 +62,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 export function defaultFilePaths() {
   return {
+    // The boot LOOP SEEDS (`enqueueBackgroundJob(...)` calls). Historically these
+    // lived in `src/instrumentation.node.ts`; engineering#302 moved them verbatim
+    // into the system-loops boot-orchestration phase module. The `instrumentation`
+    // source name + env-override key are kept stable for call-site/test stability.
     instrumentation:
       process.env.PERPETUAL_LOOPS_GATE_INSTRUMENTATION_FILE ||
-      join(ROOT, "src/instrumentation.node.ts"),
+      join(ROOT, "src/lib/boot/phases/system-loops.ts"),
     // The NAME constants + `*_LOOP_JOB_ID` literals live here (cinatra#304).
     // Kept under the historical `backgroundJobs` key so the env override and
     // the existing call sites stay stable.
