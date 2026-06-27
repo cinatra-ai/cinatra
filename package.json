@@ -107,6 +107,7 @@
     },
     "systemExtensions": [
       "@cinatra-ai/nango-connector",
+      "@cinatra-ai/openai-connector",
       "@cinatra-ai/code-reviewer-agent",
       "@cinatra-ai/planner-agent",
       "@cinatra-ai/author-agent",
@@ -117,6 +118,7 @@
     ],
     "extensions": [
       "@cinatra-ai/nango-connector@^0.1.0",
+      "@cinatra-ai/openai-connector@^0.1.0",
       "@cinatra-ai/code-reviewer-agent@^0.1.0",
       "@cinatra-ai/planner-agent@^0.1.0",
       "@cinatra-ai/author-agent@^0.1.0",
