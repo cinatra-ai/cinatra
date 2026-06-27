@@ -1,7 +1,7 @@
-# Attribution-record correction — #437 v0.1.2 release-prep (cinatra-engineering#119 §5)
+# Attribution-record correction — #437 v0.1.2 release-prep (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #437 (`chore(release): bump version to 0.1.2 + bake CLI
 @0.1.2`, squash commit
 `4940ee35f966cb473ac23f08545c6592478fe417`).

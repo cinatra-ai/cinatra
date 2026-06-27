@@ -103,8 +103,8 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   artifact_representation_get:      { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_representation_latest:   { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_representation_list:     { resourceType: "artifact", action: "list",   status: "enforced" },
-  // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5,
-  // eng#167). DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
+  // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5).
+  // DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
   // artifact::create). There is no dedicated artifact_extension resourceType (cf.
   // workflow_extension, which pre-existed), so — like the agent path — these map
   // onto the base `artifact` resource: validate = read; write + compile = update
@@ -331,8 +331,8 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   workflow_draft_update:       { resourceType: "workflow_draft",    action: "update",  status: "enforced" },
   workflow_preview:            { resourceType: "workflow_draft",    action: "read",    status: "enforced" },
   workflow_save_as_template:   { resourceType: "workflow_template", action: "create",  status: "enforced" },
-  // workflow_source_* — admin-only WORKFLOW EXTENSION PACKAGE authoring (SDK-P5,
-  // eng#167). Mirror of agent_source_* but classified against the dedicated
+  // workflow_source_* — admin-only WORKFLOW EXTENSION PACKAGE authoring (SDK-P5).
+  // Mirror of agent_source_* but classified against the dedicated
   // workflow_extension resourceType where one exists: validate = a read of the
   // package's BPMN sidecar; publish = the registered workflow_extension.publish
   // capability (admin / release_manager). write + compile are privileged on-disk
@@ -352,8 +352,8 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   workflow_validate:           { resourceType: "workflow_draft",    action: "read",    status: "enforced" },
 
   // ───── skill ─────
-  // skill_source_* — admin-only SKILL EXTENSION PACKAGE authoring (SDK-P5,
-  // eng#167). DISTINCT from the skills_* mutations below: skills_personal_upsert /
+  // skill_source_* — admin-only SKILL EXTENSION PACKAGE authoring (SDK-P5).
+  // DISTINCT from the skills_* mutations below: skills_personal_upsert /
   // skills_installed_upsert mutate a skill ROW (skill::update), and
   // skills_packages_install* INSTALLS a published package (skill::install). These
   // author/publish a reusable skill TYPE PACKAGE. No dedicated skill_extension

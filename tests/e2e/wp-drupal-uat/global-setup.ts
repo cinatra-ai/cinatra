@@ -16,7 +16,7 @@ import { request as playwrightRequest } from "@playwright/test";
 // container is unreachable the setup throws with a clear message — the UAT
 // suite must NOT silently pass against an unseeded stack.
 //
-// cinatra#410 / eng#230 — the shipped widget streams behind a REAL per-site
+// cinatra#410 — the shipped widget streams behind a REAL per-site
 // `cnx_` connect-site credential + a per-user hosted-PKCE `cwu_` login. This
 // setup ALSO (1) asserts dev-auto-setup pushed a real `cnx_` (not a legacy UUID)
 // into the CMS widget config, and (2) signs the deterministic dev UAT user in

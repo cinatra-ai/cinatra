@@ -41,7 +41,7 @@ function registerPlaceholderCapabilities(server: InstanceType<typeof McpServer>)
 /**
  * Build a fresh per-request MCP runtime server.
  *
- * NOTE (future S5 — compiled capability cache, DEFERRED — eng#305): per-request
+ * NOTE (future S5 — compiled capability cache, DEFERRED): per-request
  * registration is intentionally PRESERVED here. A future compiled-cache layer
  * MUST key + invalidate by the FULL capability surface — tools, resources,
  * prompts, AND screens — together with DB-derived published-agent surface

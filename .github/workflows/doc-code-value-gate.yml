@@ -1,7 +1,7 @@
 name: doc-code-value-gate
 
-# Thin caller for the reusable cinatra-ai/ci doc-code-value-gate
-# (cinatra-engineering#152). Dogfoods the org "doc asserts a code value" template
+# Thin caller for the reusable cinatra-ai/ci doc-code-value-gate.
+# Dogfoods the org "doc asserts a code value" template
 # against the SDK ABI version: it asserts the @cinatra-ai/sdk-extensions README's
 # canonical "The SDK ABI is **`X`**" statement equals both the
 # SDK_EXTENSIONS_ABI_VERSION const in register.ts and cinatra.sdkAbiVersion in
@@ -29,7 +29,7 @@ jobs:
   # KEEP this job name stable as `doc-code-value-gate` — it is the required-check
   # context prefix.
   doc-code-value-gate:
-    # Double-pin per the eng#61 convention: the workflow ref (@<sha>) and the
+    # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit, so the gate
     # engine is never pulled from mutable main.
     uses: cinatra-ai/ci/.github/workflows/doc-code-value-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0

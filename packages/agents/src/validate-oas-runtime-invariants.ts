@@ -63,7 +63,7 @@ const ENV_VAR_PLACEHOLDER = /^[A-Z_][A-Z0-9_]*$/;
 // unbounded `[^}]*` groups and is polynomial (O(n^2)) on adversarial input such
 // as `"{{".repeat(n)` or `"{{" + "a?".repeat(n)`. This scanner runs over
 // untrusted, author-submitted agent OAS string values (via `walkStrings`), so
-// that blowup is a reachable ReDoS (js/polynomial-redos, eng#196).
+// that blowup is a reachable ReDoS (js/polynomial-redos).
 //
 // `findJsTernaryPlaceholder` is behaviorally identical to the old regex
 // (verified by an 800k-case fuzz, including the exact matched substring): it

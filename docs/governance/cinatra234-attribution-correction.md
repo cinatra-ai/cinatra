@@ -1,7 +1,7 @@
-# Attribution-record correction — #234 re-land of approved #231 + #232 (cinatra-engineering#119 §5)
+# Attribution-record correction — #234 re-land of approved #231 + #232 (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #234 (`Re-land approved #231 + #232 onto current main
 (combined, supersedes both)`, squash commit
 `fba137120d15f18511fa928959a6bf6cbb7c1d45`).
@@ -62,9 +62,9 @@ The #234 record states that the combined branch was **byte-identical** to the
 two owner-approved change-sets it re-landed (independent blob/tree evidence,
 not a claim verified by this correction's gate arm):
 
-- #234 combines the owner-approved cinatra#231 (cinatra-engineering#159 —
-  `createHostDepsSlot` extraction / host-deps-slot SDK helper) and cinatra#232
-  (cinatra-engineering#157 — collapse of the duplicate agent-tree-installer
+- #234 combines the owner-approved cinatra#231 (the `createHostDepsSlot`
+  extraction / host-deps-slot SDK helper) and cinatra#232
+  (the collapse of the duplicate agent-tree-installer
   dependency resolver), rebuilt on current `main` after #233 (docs-only) had
   advanced the base and re-staled both approved PRs.
 - For every touched path, the combined branch's blob SHA equals the approved
@@ -119,7 +119,7 @@ high-risk change's honest human review is documented above.
 | Field | Value |
 |---|---|
 | Corrected-for squash commit | `fba137120d15f18511fa928959a6bf6cbb7c1d45` (PR #234) |
-| Re-landed change-sets | #231 (cinatra-engineering#159) + #232 (cinatra-engineering#157) |
+| Re-landed change-sets | #231 (host-deps-slot extraction) + #232 (duplicate-installer collapse) |
 | Reviewed / landed head of #234 | `b72576a344c19ff5f9c26146e41e29423f0aeec9` |
 | Real maintainer approval | @groganz APPROVED @ `b72576a` at `2026-06-14T10:17:33Z` (review `4492765742`) |
 | Defect | squash body omitted the `Reviewed-by` human-arm trailer → `no-record` + `high-risk-without-maintainer` |

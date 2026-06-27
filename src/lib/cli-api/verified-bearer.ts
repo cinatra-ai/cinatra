@@ -14,7 +14,7 @@ import { readServiceAccountByClientId } from "@/lib/service-accounts";
 // ---------------------------------------------------------------------------
 // Verified remote-Bearer actor resolver for the `/api/cli/*` control plane.
 //
-// eng#231 (CLI Class-A). `authorizeCliRequest` historically resolved ONLY a
+// CLI Class-A remote Bearer. `authorizeCliRequest` historically resolved ONLY a
 // Better-Auth session or the dev-admin loopback bypass; a remote OAuth Bearer
 // fell through to 401. This resolver makes an INTERACTIVE `cinatra login`
 // token JWKS-verifiable as a remote Bearer for the READ/AUTHORING control

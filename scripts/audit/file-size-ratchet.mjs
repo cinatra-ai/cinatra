@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * File-size ratchet gate (no-new-rot ratchet) — eng#308.
+ * File-size ratchet gate (no-new-rot ratchet).
  *
  * Several files have become architecture bottlenecks by size AND responsibility
  * (`packages/agents/src/mcp/handlers.ts`, `src/lib/drizzle-store.ts`,
@@ -60,7 +60,7 @@ const REPO_ROOT = process.cwd();
 const BASELINE_FILE = join(REPO_ROOT, "scripts/audit/file-size-ratchet.baseline.json");
 
 /**
- * The tracked bottleneck files (eng#308). Repo-root-relative POSIX paths. This
+ * The tracked bottleneck files. Repo-root-relative POSIX paths. This
  * is the source-of-truth SET; the baseline records the per-file ceiling. To add
  * a file to the ratchet, add it here AND regenerate the baseline. To stop
  * tracking a file (e.g. it was split out of existence), remove it from here AND
@@ -192,7 +192,7 @@ function main() {
       files[rel] = size;
     }
     const baseline = {
-      note: "File-size ratchet baseline (no-new-rot ratchet, eng#308). Each entry is the CURRENT line-count ceiling for a tracked architecture-bottleneck file. The gate fails when a tracked file grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch. Regenerate with `node scripts/audit/file-size-ratchet.mjs --write-baseline` — a ceiling should only ever be LOWERED as extractions land (thin facades + vertical slices), never raised. Add/remove a tracked file via TRACKED_FILES in the gate, then regenerate.",
+      note: "File-size ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT line-count ceiling for a tracked architecture-bottleneck file. The gate fails when a tracked file grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch. Regenerate with `node scripts/audit/file-size-ratchet.mjs --write-baseline` — a ceiling should only ever be LOWERED as extractions land (thin facades + vertical slices), never raised. Add/remove a tracked file via TRACKED_FILES in the gate, then regenerate.",
       files,
     };
     writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2) + "\n");
@@ -266,7 +266,7 @@ function main() {
     console.error(`[file-size-ratchet] FAIL — ${missing.length} tracked file${missing.length === 1 ? "" : "s"} cannot be checked:`);
     for (const m of missing) console.error(`  ${m.path}: ${m.reason}`);
   }
-  console.error(`\nThese are baselined architecture bottlenecks (eng#308); the ratchet only prevents them from growing. Extract via a thin facade + vertical slices, then LOWER the baseline with --write-baseline (a ceiling may only ever shrink). A rename must update the baseline so the ceiling moves with the file.`);
+  console.error(`\nThese are baselined architecture bottlenecks; the ratchet only prevents them from growing. Extract via a thin facade + vertical slices, then LOWER the baseline with --write-baseline (a ceiling may only ever shrink). A rename must update the baseline so the ceiling moves with the file.`);
   process.exit(1);
 }
 

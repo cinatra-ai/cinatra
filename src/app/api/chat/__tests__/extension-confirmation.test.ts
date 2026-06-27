@@ -22,7 +22,7 @@ describe("chat extension implementation confirmation", () => {
   });
 
   it("requires confirmation for workflow PACKAGE authoring (workflow_source_*), NOT workflow draft/instance tools", () => {
-    // SDK-P5 (eng#167): the workflow_source_* package mutators gate exactly
+    // SDK-P5: the workflow_source_* package mutators gate exactly
     // like the agent_source_* tools.
     expect(requiresExtensionImplementationConfirmation("workflow_source_write")).toBe(true);
     expect(requiresExtensionImplementationConfirmation("workflow_source_compile")).toBe(true);
@@ -39,7 +39,7 @@ describe("chat extension implementation confirmation", () => {
   });
 
   it("requires confirmation for artifact PACKAGE authoring (artifact_source_*), NOT the artifact INSTANCE emit", () => {
-    // SDK-P5 (eng#167) vertical 2: artifact_source_* package mutators gate
+    // SDK-P5 vertical 2: artifact_source_* package mutators gate
     // exactly like agent_source_*/workflow_source_*.
     expect(requiresExtensionImplementationConfirmation("artifact_source_write")).toBe(true);
     expect(requiresExtensionImplementationConfirmation("artifact_source_compile")).toBe(true);
@@ -53,7 +53,7 @@ describe("chat extension implementation confirmation", () => {
   });
 
   it("requires confirmation for skill PACKAGE authoring (skill_source_*), distinct from skills_* row/install gating", () => {
-    // SDK-P5 (eng#167) vertical 2: the SINGULAR skill_source_* package mutators
+    // SDK-P5 vertical 2: the SINGULAR skill_source_* package mutators
     // gate like agent_source_*. (The PLURAL skills_* row/install mutations have
     // their own gating, asserted in the skills_* test below.)
     expect(requiresExtensionImplementationConfirmation("skill_source_write")).toBe(true);

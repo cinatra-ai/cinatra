@@ -1,8 +1,8 @@
 # The `required == system == lock == 8` invariant (current state, not law)
 
-- Status: DOCUMENTED (cinatra-engineering#168 ruling (d), 2026-06-13)
-- Source: eng#122 Tier-4 must-do #20 (cinatra-engineering#122); unblocked by the
-  owner ruling on cinatra-engineering#168 (d)
+- Status: DOCUMENTED (owner ruling on extension trust posture, item (d), 2026-06-13)
+- Source: the no-sandbox third-party-trust posture review (item #20); unblocked by
+  the owner ruling on extension trust posture (d)
 
 ## The fact
 
@@ -21,7 +21,7 @@ All three are length **8** and name the same 8 packages
 
 ## The ruling: this equality is a CURRENT INVARIANT, not a permanent law
 
-Per cinatra-engineering#168 (d): the three-way equality holding at **8** is a
+Per the owner ruling on extension trust posture (d): the three-way equality holding at **8** is a
 **current-state invariant** — true today and worth asserting as a drift guard —
 but it is **not a permanent law of the system.** The number 8, and the
 coincidence that the required set and the system set are *identical* rather than
@@ -52,7 +52,7 @@ What is the law, and what is incidental:
 A **required-but-not-system** extension is one that prod boot must find
 installed (it is in `extensions`) but that is *not* in
 `systemExtensions`. It is legal under the subset law and is the expected shape
-of the first divergence. The conceptual split eng#122 #20 asked for: *required*
+of the first divergence. The conceptual split the trust-posture review asked for: *required*
 answers "must this be installed for prod?"; *system* answers "is this protected
 from destructive operator actions?". They are different questions that happen to
 have the same answer for all 8 of today's packages.
@@ -92,7 +92,7 @@ decoupling, rather than by accident.
 
 ## On collapsing the three declarations (deferred — doc-only here)
 
-eng#122 #20 also asked whether the three declarations should physically
+The trust-posture review also asked whether the three declarations should physically
 **collapse** to one declaration + the SHA lock. Per ruling (d) the collapse is
 low-risk either way, and this change does **not** perform it: the physical
 collapse would touch the host extension wiring and the generated-manifest

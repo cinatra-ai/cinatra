@@ -401,7 +401,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // WORKFLOW declarative package-authoring (SDK-P5, eng#167).
+  // WORKFLOW declarative package-authoring (SDK-P5).
   //
   // These author a workflow EXTENSION PACKAGE (a `cinatra.kind: "workflow"`
   // package with a `cinatra/workflow.bpmn` definition), published to the
@@ -467,7 +467,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // ARTIFACT declarative package-authoring (SDK-P5, eng#167).
+  // ARTIFACT declarative package-authoring (SDK-P5).
   //
   // These author an artifact EXTENSION PACKAGE (a `cinatra.kind: "artifact"`
   // package whose `cinatra.artifact` block is a SEMANTIC artifact manifest —
@@ -530,7 +530,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // SKILL declarative package-authoring (SDK-P5, eng#167).
+  // SKILL declarative package-authoring (SDK-P5).
   //
   // These author a skill EXTENSION PACKAGE (a `cinatra.kind: "skill"` package
   // whose `cinatra.capabilities` map binds stable capability keys to co-located

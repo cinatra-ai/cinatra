@@ -1,5 +1,5 @@
 /**
- * SDK-P5 (eng#167) — declarative ARTIFACT + SKILL package source-authoring.
+ * SDK-P5 — declarative ARTIFACT + SKILL package source-authoring.
  *
  * Mirrors workflow-source-write-and-kind-decoercion.test.ts for the second
  * vertical (artifact + skill kinds). Three cohesive concerns per kind:

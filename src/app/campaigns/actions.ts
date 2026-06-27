@@ -187,7 +187,7 @@ export async function setDefaultLlmProviderAction(formData: FormData) {
   // Global default LLM provider is platform-level. Route through the shared
   // chokepoint: platform-admin authority + strict-before-mutation audit + the
   // authoritative {openai,gemini} sink. (Previously this action wrote with no
-  // authority check and no audit — eng#229 closes that gap.)
+  // authority check and no audit — the operator-mutation chokepoint closes that gap.)
   const provider = z.enum(["openai", "gemini"]).parse(formData.get("provider"));
   const actor = await getActorContext();
   await updateDefaultLlmProvider({ actor, provider });

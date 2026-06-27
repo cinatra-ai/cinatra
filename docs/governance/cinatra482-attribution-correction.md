@@ -1,6 +1,6 @@
-# Attribution-record correction — #482 nango required-extension lock refresh (cinatra-engineering#119 §5)
+# Attribution-record correction — #482 nango required-extension lock refresh (the Truthful Attribution protocol §5)
 
-This note is the forward correction (truthful verification-record spec cinatra-engineering#119 §5) for the attribution record that landed with the squash merge of PR #482 (`Closeout(eng#286): refresh nango-connector required-extension lock`, squash commit `b03ec8dfc043edb65fd27538f2eb5ed044e59b24`).
+This note is the forward correction (the Truthful Attribution protocol §5) for the attribution record that landed with the squash merge of PR #482 (`Closeout(#286): refresh nango-connector required-extension lock`, squash commit `b03ec8dfc043edb65fd27538f2eb5ed044e59b24`).
 
 ## What landed
 
@@ -46,7 +46,7 @@ During this correction's preparation, an automation run programmatically submitt
 | Field | Value |
 |---|---|
 | Corrected-for squash commit | `b03ec8dfc043edb65fd27538f2eb5ed044e59b24` (PR #482) |
-| PR title | `Closeout(eng#286): refresh nango-connector required-extension lock` |
+| PR title | `Closeout(#286): refresh nango-connector required-extension lock` |
 | Defect | squash carried no verification arm → `no-record` |
 | #482 risk class | non-high-risk (`cinatra-required-extensions.lock.json` matches no high-risk glob) |
 | #482 review | @groganz `APPROVED` on PR #482 at head `77c49654`; author `groganz-bot[bot]` (author ≠ approver) |

@@ -19,7 +19,7 @@
 //     OWN dev box work without an OAuth dance, exactly as the MCP path already
 //     does.
 //
-// REMOTE BEARER (eng#231 — CLI Class-A) — a remote OAuth Bearer is resolved
+// REMOTE BEARER (CLI Class-A) — a remote OAuth Bearer is resolved
 // by `resolveCliBearerActor` (src/lib/cli-api/verified-bearer.ts) ONLY when the
 // endpoint declares a `requiredScope`. The resolver JWKS-verifies the token
 // against the DEDICATED `/api/cli` audience (reciprocal isolation from the
@@ -29,7 +29,7 @@
 // obtains the scope+audience still resolves to its OWN user and fails the
 // platform-admin gate. An endpoint that omits `requiredScope` does NOT invoke
 // the Bearer arm: a remote Bearer FAILS CLOSED (401) there, exactly as before.
-// Destructive/operator commands stay gated on eng#229 and are never reachable
+// Destructive/operator commands stay gated on the operator-mutation chokepoint and are never reachable
 // through this guard (status + agent export/import are read / authoring only).
 //
 // AUTHORIZATION — scope admits, ROLE authorizes (codex G2 decision):
@@ -87,7 +87,7 @@ export type CliActor = {
   /**
    * How the caller was authorized. `dev-admin-bypass` marks the loopback path
    * (no real session); `session` marks a cookie session; `bearer` marks a
-   * verified remote OAuth Bearer (eng#231).
+   * verified remote OAuth Bearer.
    */
   via: "session" | "dev-admin-bypass" | "bearer";
 };
@@ -104,7 +104,7 @@ export type AuthorizeCliOptions = {
   minTier?: CliAuthTier;
   /**
    * The EXACT CLI scope a remote Bearer must carry to authorize this endpoint
-   * (eng#231). REQUIRED to enable remote-Bearer auth: an endpoint that omits
+   * (CLI Class-A remote Bearer). REQUIRED to enable remote-Bearer auth: an endpoint that omits
    * it never invokes the Bearer arm, so a remote Bearer fails closed there.
    */
   requiredScope?: CliScope;
@@ -116,7 +116,7 @@ export type AuthorizeCliOptions = {
  * Order:
  *   1. Try the authenticated cookie session. When present, authorize on
  *      platform-admin / org-admin role.
- *   2. (eng#231) When the endpoint declares `requiredScope`, try a verified
+ *   2. (CLI Class-A) When the endpoint declares `requiredScope`, try a verified
  *      remote OAuth Bearer via `resolveCliBearerActor`. Audience-pinned,
  *      scope-gated, role resolved live from the verified subject.
  *   3. Otherwise, try the dev-admin loopback bypass (local CLI → local box).
@@ -165,7 +165,7 @@ export async function authorizeCliRequest(
     };
   }
 
-  // ---- 2. Verified remote OAuth Bearer (eng#231). -------------------------
+  // ---- 2. Verified remote OAuth Bearer (CLI Class-A). --------------------
   // ONLY when the endpoint declares a `requiredScope`. The resolver is
   // fail-closed: wrong/missing audience, opaque/expired token, missing scope,
   // or an unresolvable subject all return null (→ falls through to the bypass

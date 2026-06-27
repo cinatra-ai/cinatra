@@ -1,6 +1,6 @@
 /**
  * Real-Postgres integration proof for the cinatra#327 core__0006 data migration
- * AFTER the robust-B rewrite (owner decision eng#206: a ONE-SHOT TOTAL
+ * AFTER the robust-B rewrite (owner decision: a ONE-SHOT TOTAL
  * normalizer; NO backward compat; the strict validator stays strict). Drives the
  * REPO's ACTUAL migration runner (`packages/migrations/src/core-migrations.mjs` →
  * `runCoreMigrations`, the same node-pg-migrate runner production boot uses)

@@ -1,7 +1,7 @@
-# Attribution-record correction — #227 install/update durability merge (cinatra-engineering#119 §5)
+# Attribution-record correction — #227 install/update durability merge (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #227 (`fix(cinatra#158): install/update durability —
 append-only journal, EXDEV fix, required deps, durable-restore events`,
 merge commit `8cc1d72375722e293af9e73524e97c9fe46e429e`).

@@ -24,8 +24,8 @@
 export const NANGO_SYSTEM_CAPABILITY = "nango-system";
 
 // ---------------------------------------------------------------------------
-// Vendor identity is OPEN (#12 connector vendor-identity end-state, eng#159 /
-// owner ruling eng#183 decision 2). The SDK no longer enumerates an
+// Vendor identity is OPEN (#12 connector vendor-identity end-state; owner
+// ruling on the nango-system-contract: vendor identity is self-declared). The SDK no longer enumerates an
 // authoritative vendor ROSTER — Cinatra is an open connector marketplace, so a
 // connector declares its OWN vendor key in its manifest (`cinatra.vendor`,
 // see `./manifest`) and that identity is verified at the marketplace publish

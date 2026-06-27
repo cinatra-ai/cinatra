@@ -11,7 +11,7 @@
 // package at `extensions/cinatra-ai/<slug>/`. The setup-pages-parity host test fails
 // fast if any descriptor lacks a corresponding setup-page loader.
 //
-// IDENTITY SURFACE (cinatra-engineering#155, eng#168(c) "accept the normal"):
+// IDENTITY SURFACE (identity-surface ruling, "accept the normal"):
 // this file IS the single SANCTIONED hand-maintained slug -> packageId catalog.
 // It is classified `mechanical` in
 // scripts/audit/lib/extension-reference-classification.mjs (a hand catalog, NOT
@@ -33,7 +33,7 @@
  */
 
 // The single org-scope lexeme for first-party connector packages. Named in ONE
-// place (cinatra-engineering#155 identity-surface decoupling) so the `@cinatra-ai`
+// place (identity-surface decoupling) so the `@cinatra-ai`
 // org name is not re-spelled across every derivation; a scope rename touches this
 // constant only.
 export const CONNECTOR_PACKAGE_SCOPE = "@cinatra-ai";

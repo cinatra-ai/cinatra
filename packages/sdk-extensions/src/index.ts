@@ -20,7 +20,7 @@ export { HOST_PORT_NAMES } from "./host-context";
 // addressing constants, so they belong on the public root (and do not trip the
 // public-surface ban, which targets `*_CAPABILITY` / `*_CAPABILITY_ID` only).
 export { HOST_PORT_TIERS, HOST_PORT_TIER, RESERVED_HOST_PORTS } from "./host-context";
-// ABI-evolution policy (eng#159 #13): minimum-minor ABI semantics + a
+// ABI-evolution policy: minimum-minor ABI semantics + a
 // least-privilege grant-typed ctx. Both are TYPE-LEVEL + ADDITIVE (no ABI bump):
 // `AbiScopedNangoPort<Range>` makes the 2.2-added nango getters required at a
 // `>= 2.2` declared floor; `GrantedHostContext<Ports, Range>` exposes only the
@@ -57,7 +57,7 @@ export type {
   AmbientHostPort,
 } from "./host-context";
 
-// Author-facing local test harness (cinatra-engineering#163, SDK-P1). The
+// Author-facing local test harness (SDK-P1). The
 // runtime impl is the dependency-free ./test-host-context.mjs (shared with the
 // release-tooling validator / canary). Also reachable via the
 // `@cinatra-ai/sdk-extensions/test-host-context` subpath.

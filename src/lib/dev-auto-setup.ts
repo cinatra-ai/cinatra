@@ -472,7 +472,7 @@ function isLocalhostUrl(url: string): boolean {
  * and surface only a fixed host-owned reason (an execSync error can echo the
  * failed command). This helper does not log.
  *
- * cinatra#410 / eng#230 — in dev, push a real per-site `cnx_` connect-site
+ * cinatra#410 — in dev, push a real per-site `cnx_` connect-site
  * credential (bound to the dev actor's org, the Drupal browser origin) so the
  * widget's broker can drive the genuine cit_/cwu_ auth path; fall back to the
  * passed legacy UUID when the dev mint is unavailable. The dev actor is seeded at
@@ -1208,7 +1208,7 @@ async function autoSetupLocalWordPress(): Promise<Status> {
   // widget. cinatra_url is the BROWSER-reachable origin (localhost:PORT) — the
   // plugin enqueues the bundle + SSE from it. `wp option update` is idempotent.
   //
-  // cinatra#410 / eng#230 — the shipped widget's broker presents `cinatra_api_key`
+  // cinatra#410 — the shipped widget's broker presents `cinatra_api_key`
   // server-to-server to BOTH /api/agents/<slug>/token (cit mint) AND
   // /api/widget-auth/{init,token} (cwu mint), and those endpoints REQUIRE a real
   // per-site `cnx_` connect-site credential (a legacy widget UUID 401s). In dev,
@@ -1785,7 +1785,7 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
 }
 
 // ---------------------------------------------------------------------------
-// cinatra#410 / eng#230 — deterministic dev Cinatra user+org + per-site `cnx_`
+// cinatra#410 — deterministic dev Cinatra user+org + per-site `cnx_`
 // connect-site credentials for the WP/Drupal assistant UAT.
 //
 // The shipped Option-A widget streams behind a REAL per-site `cnx_` connect-site
@@ -1974,7 +1974,7 @@ export async function runDevAutoSetup(): Promise<{
   plane: Status;
   connectorPolicies: Status;
 }> {
-  // cinatra#410 / eng#230 — seed the deterministic dev user+org FIRST so the
+  // cinatra#410 — seed the deterministic dev user+org FIRST so the
   // WP/Drupal wires below can mint per-site `cnx_` credentials bound to it
   // (strictly dev-gated; soft no-op outside development).
   try {
