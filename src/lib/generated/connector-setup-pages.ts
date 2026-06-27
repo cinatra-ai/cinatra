@@ -37,7 +37,7 @@ export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry>
   "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/setup-page", () => import("@cinatra-ai/linkedin-connector/setup-page")) },
   "linkedin-oauth-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-oauth-connector/setup-page", () => import("@cinatra-ai/linkedin-oauth-connector/setup-page")) },
   "mcp-client-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/mcp-client-connector/setup-page", () => import("@cinatra-ai/mcp-client-connector/setup-page")) },
-  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/setup-page", () => import("@cinatra-ai/openai-connector/setup-page")) },
+  "openai-connector": { resolution: "required", load: () => import("@cinatra-ai/openai-connector/setup-page") },
   "plane-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/plane-connector/setup-page", () => import("@cinatra-ai/plane-connector/setup-page")) },
   "tailscale-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/tailscale-connector/setup-page", () => import("@cinatra-ai/tailscale-connector/setup-page")) },
   "twenty-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/twenty-connector/setup-page", () => import("@cinatra-ai/twenty-connector/setup-page")) },
@@ -53,7 +53,7 @@ export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEnt
   "drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/settings-page", () => import("@cinatra-ai/drupal-mcp-connector/settings-page")) },
   "github-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/github-connector/settings-page", () => import("@cinatra-ai/github-connector/settings-page")) },
   "linkedin-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/linkedin-connector/settings-page", () => import("@cinatra-ai/linkedin-connector/settings-page")) },
-  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/settings-page", () => import("@cinatra-ai/openai-connector/settings-page")) },
+  "openai-connector": { resolution: "required", load: () => import("@cinatra-ai/openai-connector/settings-page") },
   "wordpress-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-assistant-connector/settings-page", () => import("@cinatra-ai/wordpress-assistant-connector/settings-page")) },
   "wordpress-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/settings-page", () => import("@cinatra-ai/wordpress-mcp-connector/settings-page")) },
   "youtube-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/youtube-connector/settings-page", () => import("@cinatra-ai/youtube-connector/settings-page")) },
@@ -64,5 +64,5 @@ export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEnt
 // SkillsSettingsTabContent). Consumed generically by the host skills page;
 // an absent/degraded entry renders its "extension unavailable" note.
 export const GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS: Record<string, GeneratedPageEntry> = {
-  "openai-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/openai-connector/skills-settings-page", () => import("@cinatra-ai/openai-connector/skills-settings-page")) },
+  "openai-connector": { resolution: "required", load: () => import("@cinatra-ai/openai-connector/skills-settings-page") },
 };

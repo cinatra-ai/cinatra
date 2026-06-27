@@ -268,11 +268,6 @@
       "resolvedSha": "09bbc57f112d91590690f3bccd22dfc3ad69ebde"
     },
     {
-      "packageName": "@cinatra-ai/openai-connector",
-      "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "42416cef2175dbfaa234e5308a3716ea8239c6a5"
-    },
-    {
       "packageName": "@cinatra-ai/plane-connector",
       "repo": "cinatra-ai/plane-connector",
       "resolvedSha": "56b21dd115e04216118dcc692b14090ba5066ac0"
