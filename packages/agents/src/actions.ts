@@ -24,7 +24,8 @@ import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-c
 import type { ResourceForAccessCheck } from "@/lib/authz/enforce-resource-access";
 import { readProjectById } from "@/lib/projects-store-dao";
 import { readProjectCoOwners } from "@/lib/project-co-owners-store";
-import { readTeamForOrg } from "@/lib/better-auth-db";
+import { readTeamForOrg, countOtherPlatformAdmins } from "@/lib/better-auth-db";
+import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { approveReviewTaskInternal } from "./review-task-actions";
@@ -34,6 +35,7 @@ import {
   readAgentTemplateById,
   readAgentTemplateByPackageName,
   readAgentRunById,
+  readAgentRunByTaskId,
   readAgentVersionsByTemplate,
   readAgentVersionById,
   createAgentTemplate,
@@ -133,6 +135,86 @@ function getActiveOrganizationId(session: SessionWithActiveOrganization): string
   return session.session?.activeOrganizationId ?? undefined;
 }
 
+// Run self-approval config (admin-overridable). Run-side analog of the
+// agent-creation `agent_creation.allowSelfApproval` override (see
+// mcp/agent-creation-request-handlers.ts). Stored under its OWN connector_config
+// key — runs and agent-creation are distinct concerns, so they must not share
+// one toggle. When true, the reviewer self-approval guard in approveReviewTask
+// is disabled instance-wide even on multi-admin instances.
+const RUN_SELF_APPROVAL_CONFIG_KEY = "agent_run";
+type AgentRunConfig = { allowSelfApproval?: boolean };
+function readAllowRunSelfApproval(): boolean {
+  try {
+    const cfg = readConnectorConfigFromDatabase<AgentRunConfig>(RUN_SELF_APPROVAL_CONFIG_KEY, {});
+    return cfg.allowSelfApproval === true;
+  } catch {
+    return false;
+  }
+}
+
+// Resolve the agent_run backing a synthetic approval task id so the
+// self-approval guard can read run.runBy. Mirrors the run-resolution the
+// approveReviewTaskInternal branches do for the two supported synthetic
+// prefixes:
+//   - "setup-{runId}"    -> readAgentRunById(runId)
+//   - "wayflow-{taskId}" -> readAgentRunByTaskId(taskId), with the SAME
+//                           Redis reverse-map fallback the resume path uses
+//                           when agent_runs.a2a_task_id is stale.
+// The wayflow- fallback MUST stay identical to the resolution in
+// approveReviewTaskInternal (review-task-actions.ts) — otherwise the SoD guard
+// resolves null on the stale-column race while the downstream helper still
+// recovers and resumes the self-owned run, bypassing the multi-admin
+// separation-of-duties block (#563).
+//
+// The result is a DISCRIMINATED outcome, not a bare run-or-null, because the two
+// prefixes have different fail-safety contracts (this closes the TOCTOU the
+// helper's independent re-resolution creates):
+//   - kind: "resolved"  -> run found; the guard evaluates SoD against run.runBy.
+//   - kind: "not-found" -> the SINGLE-source prefix (setup-) found no row. There
+//       is exactly one resolution (readAgentRunById) shared with the helper, so
+//       the guard and helper cannot disagree; the guard falls through and the
+//       helper raises the canonical not-found error.
+//   - kind: "unresolved-resumable" -> the DUAL-source wayflow- prefix could not
+//       resolve a run from EITHER the a2a_task_id column or the Redis reverse-map
+//       AT CHECK TIME, but the helper re-resolves both sources independently at
+//       USE time and may then recover + resume the run. The guard therefore
+//       cannot prove the resume is SoD-safe, so the caller MUST fail CLOSED.
+type ApprovalRunResolution =
+  | { kind: "resolved"; runBy: string | null }
+  | { kind: "not-found" }
+  | { kind: "unresolved-resumable" };
+
+async function resolveRunForApprovalTask(
+  taskId: string,
+): Promise<ApprovalRunResolution> {
+  if (taskId.startsWith("setup-")) {
+    const run = await readAgentRunById(taskId.slice("setup-".length));
+    return run ? { kind: "resolved", runBy: run.runBy } : { kind: "not-found" };
+  }
+  if (taskId.startsWith("wayflow-")) {
+    const wayflowTaskId = taskId.slice("wayflow-".length);
+    const run = await readAgentRunByTaskId(wayflowTaskId);
+    if (run) return { kind: "resolved", runBy: run.runBy };
+
+    // a2a_task_id column lost the per-gate update race (see
+    // review-task-actions.ts wayflow- branch). Fall back to the authoritative
+    // Redis task->run reverse-map so the SoD guard sees the same run the resume
+    // path would recover. Dynamic import mirrors the resume path's
+    // circular-dep avoidance (review-task-actions <- actions <- index <-
+    // @cinatra-ai/a2a).
+    const { resolveRunIdByWayflowTaskId } = await import("@cinatra-ai/a2a");
+    const fallbackRunId = await resolveRunIdByWayflowTaskId(wayflowTaskId);
+    if (fallbackRunId) {
+      const fallbackRun = await readAgentRunById(fallbackRunId);
+      if (fallbackRun) return { kind: "resolved", runBy: fallbackRun.runBy };
+    }
+    // Both wayflow- sources missed here, but the helper will re-resolve them
+    // independently and could still resume. Fail closed.
+    return { kind: "unresolved-resumable" };
+  }
+  return { kind: "not-found" };
+}
+
 // approveReviewTask
 
 export async function approveReviewTask(
@@ -154,7 +236,61 @@ export async function approveReviewTask(
   // `fieldName` is forwarded so setup paths can bypass the provenance read.
   // Default undefined preserves back-compat for all current callers.
   const session = await requireAdminSession();
-  await approveReviewTaskInternal(taskId, session.user.id, values, fieldName, schemaSnapshot);
+  const userId = session.user.id;
+
+  // Run-side self-approval guard (issue #563) — the run analog of the
+  // agent-creation decide self-approval guard
+  // (mcp/agent-creation-request-handlers.ts). This is the UI admin approval
+  // path (the operator clicking Continue/Approve on a pending_approval run),
+  // mirroring how the agent-creation guard lives in the admin decide handler —
+  // NOT in the auth-neutral approveReviewTaskInternal helper (the A2A
+  // service-account self-resume path stays unaffected, exactly as the creation
+  // guard leaves the admin-authoring instant-grant path unaffected).
+  //
+  // Separation of duties: an admin who initiated a run must not rubber-stamp
+  // their own run's HITL gate when ANOTHER platform_admin exists who could
+  // review it instead.
+  //
+  // Single-admin exception (issue #563, run-side analog of #382/#392 /
+  // PR #557): on an instance where the approving admin is the ONLY
+  // platform_admin, there is no second reviewer who could ever clear the gate,
+  // so an unconditional guard would be a permanent deadlock — the run sits in
+  // pending_approval forever. When no OTHER platform_admin exists, SoD is
+  // impossible and the sole admin is allowed to approve their own run. The
+  // agent_run.allowSelfApproval connector_config override remains a global
+  // escape hatch for instances that want self-approval even with multiple
+  // admins. countOtherPlatformAdmins fails CLOSED (returns >=1 on a read
+  // error), so an error keeps the guard on.
+  if (!readAllowRunSelfApproval()) {
+    const resolution = await resolveRunForApprovalTask(taskId);
+    if (resolution.kind === "unresolved-resumable") {
+      // Dual-source wayflow- resolution missed at check time, but
+      // approveReviewTaskInternal re-resolves the column AND the Redis
+      // reverse-map independently at use time and could still recover + resume
+      // the run. The guard cannot prove that resume is SoD-safe (it never saw
+      // run.runBy), so allowing it would reopen the multi-admin self-approval
+      // bypass via a TOCTOU window. Fail CLOSED. (#563)
+      throw new Error(
+        "approval rejected: the run for this WayFlow task could not be resolved for the " +
+          "separation-of-duties check; retry once the run's task mapping is consistent.",
+      );
+    }
+    if (resolution.kind === "resolved" && resolution.runBy != null && resolution.runBy === userId) {
+      const otherAdmins = await countOtherPlatformAdmins(userId);
+      if (otherAdmins > 0) {
+        throw new Error(
+          "self-approval is disallowed: another platform admin must approve a run you initiated " +
+            "(set connector_config.agent_run.allowSelfApproval=true to override).",
+        );
+      }
+      // No other admin can review → fall through and allow the self-approval.
+    }
+    // kind === "not-found": single-source (setup-) prefix or unknown prefix
+    // resolved no row. There is no dual-resolution TOCTOU here, so fall through;
+    // approveReviewTaskInternal raises the canonical not-found error.
+  }
+
+  await approveReviewTaskInternal(taskId, userId, values, fieldName, schemaSnapshot);
 }
 
 // rejectReviewTask
