@@ -20,29 +20,34 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // sandbox; provide the real-shaped parsePackageId + safe-segment guard
 // (cinatra#537) so the agent vendor/name split + path-safety under test
 // exercise real behavior (first-`/`-only, single-segment, never split on `-`).
-const isSafeSeg = (s: unknown): boolean =>
-  typeof s === "string" && s.length > 0 && s !== "." && s !== ".." &&
-  !s.includes("/") && !s.includes("\\") &&
-  // eslint-disable-next-line no-control-regex
-  !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s);
-vi.mock("@cinatra-ai/registries", () => ({
-  parsePackageId: (name: string) => {
-    if (typeof name !== "string") return null;
-    const t = name.trim();
-    if (!t) return null;
-    if (!t.startsWith("@")) return isSafeSeg(t) ? { vendor: null, name: t } : null;
-    const i = t.indexOf("/");
-    if (i <= 1) return null;
-    const v = t.slice(1, i);
-    const n = t.slice(i + 1);
-    if (n.length === 0) return null;
-    return isSafeSeg(v) && isSafeSeg(n) ? { vendor: v, name: n } : null;
-  },
-  isSafePathSegment: isSafeSeg,
-  assertSafePathSegment: (s: unknown, label = "path segment"): void => {
-    if (!isSafeSeg(s)) throw new Error(`unsafe ${label}: ${JSON.stringify(s)}`);
-  },
-}));
+// NOTE: vitest HOISTS this `vi.mock` call above all top-level statements, so
+// the factory MUST be self-contained — it defines `isSafeSeg` inside its own
+// scope (a top-level helper would be referenced before initialization).
+vi.mock("@cinatra-ai/registries", () => {
+  const isSafeSeg = (s: unknown): boolean =>
+    typeof s === "string" && s.length > 0 && s !== "." && s !== ".." &&
+    !s.includes("/") && !s.includes("\\") &&
+    // eslint-disable-next-line no-control-regex
+    !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s);
+  return {
+    parsePackageId: (name: string) => {
+      if (typeof name !== "string") return null;
+      const t = name.trim();
+      if (!t) return null;
+      if (!t.startsWith("@")) return isSafeSeg(t) ? { vendor: null, name: t } : null;
+      const i = t.indexOf("/");
+      if (i <= 1) return null;
+      const v = t.slice(1, i);
+      const n = t.slice(i + 1);
+      if (n.length === 0) return null;
+      return isSafeSeg(v) && isSafeSeg(n) ? { vendor: v, name: n } : null;
+    },
+    isSafePathSegment: isSafeSeg,
+    assertSafePathSegment: (s: unknown, label = "path segment"): void => {
+      if (!isSafeSeg(s)) throw new Error(`unsafe ${label}: ${JSON.stringify(s)}`);
+    },
+  };
+});
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: vi.fn(() => ({ dataPath: "/tmp/x", storePath: "/tmp/y" })),
   writeConnectorConfigToDatabase: vi.fn(),
