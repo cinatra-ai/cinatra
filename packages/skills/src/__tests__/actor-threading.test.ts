@@ -131,12 +131,32 @@ describe("actor.principalId threading", () => {
       );
     expect(schemas.length).toBeGreaterThan(0);
 
+    // Select the canonical optional-ownerUserId schema (`customSkillOwnerSchema`)
+    // by BEHAVIOR rather than position. A module-namespace object enumerates its
+    // keys in sorted (code-unit) order, not declaration order, so `schemas[0]`
+    // is not guaranteed to be `customSkillOwnerSchema` — it can be a sibling
+    // schema with required fields (e.g. `createOrUpdateCustomSkillSchema`),
+    // whose `parse({})` throws. We require BOTH invariants the test asserts:
+    // an empty parse succeeds with `ownerUserId === undefined` (optional, no
+    // LOCAL_USER_ID default) AND an `ownerUserId` override survives (so a
+    // sibling schema that merely lacks the field and strips it is not picked).
+    const ownerSchema = schemas.find((s) => {
+      try {
+        const empty = s.parse({}) as { ownerUserId?: unknown };
+        const overridden = s.parse({ ownerUserId: "x" }) as { ownerUserId?: unknown };
+        return empty.ownerUserId === undefined && overridden.ownerUserId === "x";
+      } catch {
+        return false;
+      }
+    });
+    expect(ownerSchema).toBeDefined();
+
     // Empty input must succeed and ownerUserId comes back undefined (no LOCAL_USER_ID default).
-    const parsed = schemas[0].parse({}) as { ownerUserId?: unknown };
+    const parsed = ownerSchema!.parse({}) as { ownerUserId?: unknown };
     expect(parsed.ownerUserId).toBeUndefined();
 
     // Override still accepted.
-    const parsed2 = schemas[0].parse({ ownerUserId: "x" }) as { ownerUserId?: unknown };
+    const parsed2 = ownerSchema!.parse({ ownerUserId: "x" }) as { ownerUserId?: unknown };
     expect(parsed2.ownerUserId).toBe("x");
   });
 });
