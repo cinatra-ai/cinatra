@@ -63,7 +63,7 @@ export async function PermissionsAuthPage({
               <p className="text-xs font-semibold uppercase tracking-[0.28em] text-muted-foreground">Setup</p>
               <h1 className="mt-3 text-2xl font-semibold tracking-tight text-foreground">Create the first account</h1>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                This workspace has no Better Auth users yet. The first account registered here becomes the initial full-access admin automatically.
+                This workspace has no users yet. The first account registered here becomes the initial full-access admin automatically.
               </p>
             </div>
             {/* cinatra#484: keep the better-auth-ui password show/hide toggle out
