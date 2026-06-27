@@ -51,13 +51,13 @@ export function getYouTubeAPIStatus() {
   if (savedConnection) {
     return {
       status: "connected" as const,
-      detail: `Connected through Nango${savedConnection.displayName ? ` as ${savedConnection.displayName}` : ""}.`,
+      detail: `Connected${savedConnection.displayName ? ` as ${savedConnection.displayName}` : ""}.`,
     };
   }
 
   return {
     status: "not_connected" as const,
-    detail: "Connect YouTube through Nango to enable YouTube episode discovery.",
+    detail: "Connect your YouTube account to enable YouTube episode discovery.",
   };
 }
 

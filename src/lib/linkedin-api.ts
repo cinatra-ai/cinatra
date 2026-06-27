@@ -500,8 +500,8 @@ export async function getLinkedInAPIStatus() {
       status: "connected" as const,
       detail:
         nangoConnections.length === 1
-          ? "1 LinkedIn connection is available through Nango."
-          : `${nangoConnections.length} LinkedIn connections are available through Nango.`,
+          ? "1 LinkedIn connection is available."
+          : `${nangoConnections.length} LinkedIn connections are available.`,
     };
   }
   if (settings.accounts.length > 0) {
