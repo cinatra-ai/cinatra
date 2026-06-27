@@ -2,13 +2,17 @@
 //
 // Two layers:
 //   1. Live smoke — run the gate against the actual repo files; expect 0
-//      violations and all four canonicalized loops detected. This is the
-//      regression guard that fails the moment one of the four boot-seeded
-//      loops drifts off-pattern OR a fifth loop is added without doctrine
-//      compliance.
+//      violations and all four original canonicalized loops detected. This is
+//      the regression guard that fails the moment one of the boot-seeded loops
+//      drifts off-pattern OR a new loop is added without doctrine compliance.
 //   2. Synthetic fixtures — well-formed inputs that satisfy every invariant
 //      as a baseline; per-invariant tamperings then assert the matching
 //      violation surfaces.
+//
+// STRUCTURE (cinatra#304): the handler table is a name-keyed REGISTRY in
+// `background-jobs-registry.ts`; the recurring sequence is a shared
+// `runRecurringLoop` helper there; NAME constants + `*_LOOP_JOB_ID` literals
+// live in `background-jobs-names.ts`. The fixture below mirrors that split.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -20,6 +24,7 @@ import {
   parseLoopIdConstants,
   parseBootSeeds,
   parseHandlerCase,
+  parseSharedLoopHelper,
   runGate,
 } from "../perpetual-system-loops-gate.mjs";
 
@@ -28,12 +33,15 @@ function readReal() {
   return {
     instrumentation: readFileSync(paths.instrumentation, "utf8"),
     backgroundJobs: readFileSync(paths.backgroundJobs, "utf8"),
+    registry: readFileSync(paths.registry, "utf8"),
     recipientPolicy: readFileSync(paths.recipientPolicy, "utf8"),
   };
 }
 
 // A minimal, well-formed fixture that should pass every invariant. Per-test
-// tamperings derive failures from this baseline.
+// tamperings derive failures from this baseline. The NAME constants live in the
+// `backgroundJobs` (names module) string; the registry entry + shared helper
+// live in the `registry` string.
 function buildFixture() {
   const instrumentation = `
 const fn = async () => {
@@ -51,42 +59,53 @@ const fn = async () => {
 };
 `;
   const backgroundJobs = `
-import { Queue, DelayedError } from "bullmq";
-
-const BACKGROUND_JOB_NAMES = {
+export const BACKGROUND_JOB_NAMES = {
   FOO_LOOP: "foo-loop",
 } as const;
 
 export const FOO_LOOP_LOOP_JOB_ID = "foo-loop-id";
+`;
+  const registry = `
+import { DelayedError } from "bullmq";
 
-async function dispatch(job) {
-  switch (job.name) {
-    case BACKGROUND_JOB_NAMES.FOO_LOOP: {
-      try {
-        // cycle work
-      } catch (err) {
-        console.error("[foo] cycle failed:", err);
-      }
-      if (String(job.id ?? "") !== FOO_LOOP_LOOP_JOB_ID) {
-        return;
-      }
-      try {
-        await job.moveToDelayed(Date.now() + 1000, job.token);
-      } catch (e) {
-        console.warn("[foo] re-delay failed", e);
-        return;
-      }
-      throw new DelayedError();
-    }
+export async function runRecurringLoop(args) {
+  const { job, loopJobId, delayMs, run } = args;
+  await run();
+  if (String(job.id ?? "") !== loopJobId) {
+    return;
   }
+  try {
+    await job.moveToDelayed(Date.now() + delayMs, job.token);
+  } catch (e) {
+    console.warn("[loop] re-delay failed", e);
+    return;
+  }
+  throw new DelayedError();
 }
+
+export const BACKGROUND_JOB_REGISTRY = {
+  [BACKGROUND_JOB_NAMES.FOO_LOOP]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      await runRecurringLoop({
+        job,
+        loopJobId: FOO_LOOP_LOOP_JOB_ID,
+        delayMs: 1000,
+        label: "foo",
+        run: async () => {
+          // cycle work
+        },
+      });
+    },
+  },
+};
 `;
   const recipientPolicy = `
 const SYSTEM_JOBS = new Set<string>([
   "foo-loop",
 ]);
 `;
-  return { instrumentation, backgroundJobs, recipientPolicy };
+  return { instrumentation, backgroundJobs, registry, recipientPolicy };
 }
 
 describe("perpetual-system-loops-gate — parser primitives", () => {
@@ -118,16 +137,30 @@ describe("perpetual-system-loops-gate — parser primitives", () => {
     expect(seeds[0].options).toContain("overwriteIfStale: true");
   });
 
-  it("parseHandlerCase returns the body of the matching switch case", () => {
+  it("parseHandlerCase returns the body of the matching registry entry", () => {
+    const src = `[BACKGROUND_JOB_NAMES.X]: {\n  // marker body\n  handle() {}\n}`;
+    const h = parseHandlerCase(src, "X");
+    expect(h).not.toBeNull();
+    expect(h.body).toContain("// marker body");
+  });
+
+  it("parseHandlerCase still tolerates the legacy switch-case shape", () => {
     const src = `case BACKGROUND_JOB_NAMES.X: {\n  // marker body\n  return;\n}`;
     const h = parseHandlerCase(src, "X");
     expect(h).not.toBeNull();
     expect(h.body).toContain("// marker body");
   });
+
+  it("parseSharedLoopHelper returns the runRecurringLoop body", () => {
+    const src = `export async function runRecurringLoop(args) {\n  // helper body\n  throw new DelayedError();\n}`;
+    const h = parseSharedLoopHelper(src);
+    expect(h).not.toBeNull();
+    expect(h.body).toContain("// helper body");
+  });
 });
 
 describe("perpetual-system-loops-gate — runGate against the real repo (live smoke)", () => {
-  it("passes with 0 violations and detects all 4 canonicalized loops", () => {
+  it("passes with 0 violations and detects all 4 original canonicalized loops", () => {
     const sources = readReal();
     const result = runGate(sources);
     expect(result.violations).toEqual([]);
@@ -194,52 +227,80 @@ describe("perpetual-system-loops-gate — runGate against synthetic fixtures", (
     );
   });
 
-  it("fails when the handler is missing the dup-guard", () => {
+  it("fails when the registry entry does not wire its canonical loop id", () => {
     const fx = buildFixture();
-    fx.backgroundJobs = fx.backgroundJobs.replace(
-      `if (String(job.id ?? "") !== FOO_LOOP_LOOP_JOB_ID) {\n        return;\n      }\n`,
+    // Drop the `loopJobId: FOO_LOOP_LOOP_JOB_ID` wiring from the handler body.
+    fx.registry = fx.registry.replace(
+      `loopJobId: FOO_LOOP_LOOP_JOB_ID,`,
+      `loopJobId: "foo-loop-id",`,
+    );
+    const result = runGate(fx);
+    expect(result.violations.join("\n")).toMatch(
+      /registry entry must wire the loop to its canonical id by referencing `FOO_LOOP_LOOP_JOB_ID`/,
+    );
+  });
+
+  it("fails when the shared helper is missing the dup-guard", () => {
+    const fx = buildFixture();
+    fx.registry = fx.registry.replace(
+      `if (String(job.id ?? "") !== loopJobId) {\n    return;\n  }\n`,
       ``,
     );
     const result = runGate(fx);
-    expect(result.violations.join("\n")).toMatch(/handler missing dup-guard/);
+    expect(result.violations.join("\n")).toMatch(
+      /shared `runRecurringLoop` helper missing the dup-guard/,
+    );
   });
 
-  it("fails when the handler is missing `moveToDelayed`", () => {
+  it("fails when the shared helper is missing `moveToDelayed`", () => {
     const fx = buildFixture();
-    fx.backgroundJobs = fx.backgroundJobs.replace(
-      `await job.moveToDelayed(Date.now() + 1000, job.token);`,
+    fx.registry = fx.registry.replace(
+      `await job.moveToDelayed(Date.now() + delayMs, job.token);`,
       `// removed`,
     );
     const result = runGate(fx);
     expect(result.violations.join("\n")).toMatch(
-      /handler missing `job\.moveToDelayed/,
+      /shared `runRecurringLoop` helper missing the `job\.moveToDelayed/,
     );
   });
 
-  it("fails when the handler is missing `throw new DelayedError()`", () => {
+  it("fails when the shared helper is missing `throw new DelayedError()`", () => {
     const fx = buildFixture();
-    fx.backgroundJobs = fx.backgroundJobs.replace(
+    fx.registry = fx.registry.replace(
       `throw new DelayedError();`,
       `// removed`,
     );
     const result = runGate(fx);
     expect(result.violations.join("\n")).toMatch(
-      /handler missing `throw new DelayedError\(\)`/,
+      /shared `runRecurringLoop` helper missing `throw new DelayedError\(\)`/,
+    );
+  });
+
+  it("fails when the shared `runRecurringLoop` helper is absent entirely", () => {
+    const fx = buildFixture();
+    // Rename the helper so parseSharedLoopHelper finds nothing.
+    fx.registry = fx.registry.replace(
+      `export async function runRecurringLoop(args) {`,
+      `export async function notTheHelper(args) {`,
+    );
+    const result = runGate(fx);
+    expect(result.violations.join("\n")).toMatch(
+      /shared `runRecurringLoop` helper not found/,
     );
   });
 
   it("fails on the same-name `enqueueBackgroundJob` antipattern (storm or HSETNX-drop)", () => {
     const fx = buildFixture();
-    // Inject the forbidden self-reschedule shape into the handler. Catches BOTH
-    // the anonymous-successor (storm) and stable-jobId (silent-drop) variants
-    // because the rule is a same-name ban, not just an anonymous ban.
-    fx.backgroundJobs = fx.backgroundJobs.replace(
-      `throw new DelayedError();`,
-      `await enqueueBackgroundJob(BACKGROUND_JOB_NAMES.FOO_LOOP, {}, { delay: 1000 });\n      throw new DelayedError();`,
+    // Inject the forbidden self-reschedule shape into the registry entry.
+    // Catches BOTH the anonymous-successor (storm) and stable-jobId
+    // (silent-drop) variants because the rule is a same-name ban.
+    fx.registry = fx.registry.replace(
+      `// cycle work`,
+      `await enqueueBackgroundJob(BACKGROUND_JOB_NAMES.FOO_LOOP, {}, { delay: 1000 });`,
     );
     const result = runGate(fx);
     expect(result.violations.join("\n")).toMatch(
-      /handler calls `enqueueBackgroundJob\(BACKGROUND_JOB_NAMES\.FOO_LOOP/,
+      /registry entry calls `enqueueBackgroundJob\(BACKGROUND_JOB_NAMES\.FOO_LOOP/,
     );
   });
 

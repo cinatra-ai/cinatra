@@ -42,6 +42,12 @@ function buildActorFromMcpContext(): Record<string, unknown> {
   // while the a2a branch's identity comes from a2aActorContext — potentially
   // a different user/org — so stamping it there would cross identities.
   const orgRole = requestCtx?.orgRole;
+  // True only for the CHAT delegation type (index.tsx sets it from
+  // `delegation === "chat"`). Forwarded so handlers can treat delegated-chat
+  // callers differently — e.g. the agent-creation propose handler must NOT
+  // admin-instant-publish a chat proposal (cinatra#538), since the chat model
+  // can call propose repeatedly.
+  const delegatedRestricted = requestCtx?.delegatedRestricted;
 
   if (a2a) {
     return {
@@ -72,6 +78,7 @@ function buildActorFromMcpContext(): Record<string, unknown> {
     // Coherent with the orgId spread above by construction — both come from
     // the same transport-written store frame.
     ...(orgRole ? { orgRole } : {}),
+    ...(delegatedRestricted ? { delegatedRestricted: true } : {}),
   };
 }
 

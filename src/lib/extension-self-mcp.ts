@@ -32,24 +32,50 @@ import "server-only";
 // the request-context store instead).
 
 import type { ActorContext } from "@/lib/authz/actor-context";
+import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 
-// Built at most once per process (the host primitive surface is stable for the
-// process lifetime; register(ctx) extension tools register at boot before the
-// first call). A Promise so concurrent first-callers share one build.
-let handlersPromise: Promise<Map<string, CapturedMcpToolHandler>> | null = null;
+// GENERATION-KEYED CACHE (#310): the host's `name → handler` map is memoised, but
+// the cache is now keyed by the extension CONTROL-PLANE generation instead of an
+// ad-hoc `null`-on-transition reset. A lifecycle transition (activate / hot-update
+// / rollback / teardown) bumps the generation; this cache compares the generation
+// it was built at against the current one and REBUILDS iff they differ — so a
+// newly-activated extension's primitives appear (and a torn-down extension's
+// disappear) on the next call without a per-site `__reset`. A Promise so concurrent
+// first-callers share one build; the `{ generation, promise }` pairing lets a
+// concurrent caller that started a build for an OLD generation be superseded.
+let cached: { generation: number; promise: Promise<Map<string, CapturedMcpToolHandler>> } | null =
+  null;
 
 async function getHandlers(): Promise<Map<string, CapturedMcpToolHandler>> {
-  if (!handlersPromise) {
-    handlersPromise = import("@/lib/mcp-server").then((m) => m.buildHostSelfPrimitiveHandlers());
+  const generation = getActivationGeneration();
+  if (!cached || cached.generation !== generation) {
+    cached = {
+      generation,
+      promise: import("@/lib/mcp-server").then((m) => m.buildHostSelfPrimitiveHandlers()),
+    };
   }
-  return handlersPromise;
+  const startedAt = cached.generation;
+  const handlers = await cached.promise;
+  // Re-check after the await: a transition during the build may have bumped the
+  // generation, so the resolved map is stale. Rebuild against the current
+  // generation rather than returning the stale map (closes the in-flight window).
+  if (getActivationGeneration() !== startedAt) {
+    return getHandlers();
+  }
+  return handlers;
 }
 
-/** Test/teardown — drop the memoised map so the next call rebuilds it. */
+/**
+ * Test/back-compat helper — drop the memoised map so the next call rebuilds it.
+ * Production invalidation now flows through the control-plane generation (a
+ * lifecycle transition bumps it; this cache compares + rebuilds), so production
+ * call sites bump the generation instead of calling this. Kept for tests and for
+ * any path that wants an explicit local clear.
+ */
 export function __resetHostSelfPrimitiveHandlers(): void {
-  handlersPromise = null;
+  cached = null;
 }
 
 export type CallHostPrimitiveOptions = {

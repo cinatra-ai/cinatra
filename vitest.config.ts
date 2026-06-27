@@ -309,17 +309,20 @@ export default defineConfig({
       // node:test runner files (vitest reports "No test suite found"); each is
       // run via `node --test` by its own dedicated workflow or step
       // (gatekept-install-no-direct-registry, actions-pin-gate,
-      // workspace-phantom-deps, workspace-dep-cycles, crm-pointer-gate,
-      // schema-migration-gate, sdk-abi-readme-gate), NOT as vitest tests.
+      // workspace-phantom-deps, workspace-dep-cycles, file-size-ratchet,
+      // crm-pointer-gate, schema-migration-gate, sdk-abi-readme-gate), NOT as
+      // vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
+      "scripts/audit/__tests__/file-size-ratchet.test.mjs",
       "scripts/audit/__tests__/manifest-resolve.test.mjs",
       "scripts/audit/__tests__/crm-pointer-gate.test.mjs",
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",
       "scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs",
       "scripts/audit/__tests__/sdk-public-surface-ban.test.mjs",
+      "scripts/audit/__tests__/skill-frontmatter-gate.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
       // Mirrors the `*.integration.test.ts` exclusion above. Lifted when

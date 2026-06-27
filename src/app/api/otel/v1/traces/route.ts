@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { db, traces } from "@cinatra-ai/metric-cost-api";
+import { db, traces, refineStatusFromHttp } from "@cinatra-ai/metric-cost-api";
 
 // ---------------------------------------------------------------------------
 // OTLP/HTTP traces receiver.
@@ -112,7 +112,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           startedAt,
           endedAt,
           durationMs,
-          status:       mapStatus(span.status?.code),
+          // Derive ok/error from the HTTP response code when OTel left status
+          // unset, so externally-ingested spans carry signal too (#492).
+          status:       refineStatusFromHttp(mapStatus(span.status?.code), attrs),
           attributes:   attrs,
           events:       (span.events ?? []) as unknown[],
           agentRunId:   typeof attrs["agent.run_id"] === "string"

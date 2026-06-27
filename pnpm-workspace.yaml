@@ -49,6 +49,30 @@ overrides:
   # next, vitest) so a global override is the only in-range fix. Majors-only
   # advisories (e.g. @opentelemetry/core 1.x -> 2.8.0) are NOT overridden here;
   # they are deferred to the discretionary-majors milestone.
+  #
+  # @opentelemetry/core (GHSA-8988-4f7v-96qf moderate, "unbounded memory
+  # allocation in W3C Baggage propagation", patched >=2.8.0) NOT overridden:
+  # triaged as NOT REACHABLE here, and the patch is a major (1.x -> 2.x) bump,
+  # not an in-range pin. (a) Exposure: the advisory is in the W3CBaggagePropagator
+  # parse path; cinatra never extracts/propagates baggage (no propagation.extract,
+  # no W3CBaggagePropagator anywhere). src/lib/otel-bootstrap.ts registers the
+  # NodeTracerProvider with `propagator: null` whenever Sentry's propagator is
+  # absent, which SUPPRESSES the SDK's default global propagator (OTEL_PROPAGATORS
+  # defaults to `tracecontext,baggage`, i.e. it would otherwise install a
+  # W3CBaggagePropagator) — so the vulnerable parser is never wired to inbound
+  # headers by code, not by accident. The remaining @opentelemetry/core import
+  # (packages/metric-cost-api) is only ExportResult / ExportResultCode, unrelated
+  # to baggage. (b) Why not an
+  # override: the vulnerable copy is @opentelemetry/core@1.30.1, hard-pinned by
+  # the 1.x SDK (@opentelemetry/sdk-trace-base@1.30.1 / -resources / -sdk-trace-
+  # node depend on "@opentelemetry/core":"1.30.1" exact). Forcing core to 2.8.0
+  # would feed 2.x internals into the 1.x SDK (unsupported mix); the clean fix is
+  # to lift the whole SDK suite to 2.x, which is API-breaking (Resource class ->
+  # resourceFromAttributes; provider.addSpanProcessor -> spanProcessors ctor arg)
+  # and touches otel-bootstrap.ts + metric-cost-api. @sentry/opentelemetry@10.x
+  # already accepts core/sdk-trace-base "^1.30.1 || ^2.1.0", so the SDK-2.x lift
+  # is feasible but is discretionary-majors milestone work, not a Medium triage.
+  # Bounded-currency rule: no reachable prod exposure -> defer the major.
   dompurify@<3.4.11: ">=3.4.11 <4" # lifts all sub-3.4.11 copies (monaco-editor 0.55.1 via @queuedash/ui pins 3.2.7; mermaid 11.15.0 resolves 3.4.10) to the patched 3.4.11 (GHSA-gvmj/-vxr8/-76mc + GHSA-cmwh-pvxp-8882 ALLOWED_ATTR pollution)
   # vite (GHSA-fx2h-pf6j-xcff high + GHSA-v2wj-q39q-566r / -p9ff-h696-f583) NOT
   # overridden: vite is dev/test-only here (sole consumer is vitest/@vitest/
