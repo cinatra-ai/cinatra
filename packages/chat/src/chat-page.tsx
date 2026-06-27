@@ -36,6 +36,7 @@ import {
 } from "./actions";
 // Chat prompt-window HITL drive.
 import { classifyPromptForGate } from "./inline-hitl-classify";
+import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
@@ -660,14 +661,13 @@ function ErrorCard({ error, errorRaw }: { error: string; errorRaw?: string }) {
   }
 
   return (
-    <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+    <div className="max-w-full overflow-hidden rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
       <div className="flex items-start gap-2.5">
         <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-destructive">
           <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
         </svg>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-destructive">Something went wrong</p>
-          <p className="mt-0.5 text-sm text-destructive/80">{error}</p>
+        <div className="min-w-0 flex-1">
+          <FriendlyErrorBody error={error} />
         </div>
       </div>
       <div className="mt-2 flex items-center justify-end">
