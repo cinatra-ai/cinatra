@@ -231,6 +231,17 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     return [
+      // The native /workflows browse/list/overview page was removed
+      // (cinatra#609) — workflow overview/tracking now lives in Plane. Old
+      // index bookmarks land on the projects surface (the neutral, always-
+      // available PM destination) instead of a dead 404. EXACT match only: the
+      // per-workflow detail/run + approvals route (`/workflows/:workflowId`)
+      // is KEPT and must stay reachable, so it is intentionally NOT matched.
+      {
+        source: "/workflows",
+        destination: "/projects",
+        permanent: false,
+      },
       {
         source: "/campaign-types",
         destination: "/agents/run",

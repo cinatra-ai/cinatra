@@ -121,7 +121,9 @@ const administrationSections = [
     icon: domainIcons.workflows,
     links: [
       { label: "Approvals", href: "/configuration/approvals" },
-      { label: "All workflows", href: "/workflows" },
+      // The "All workflows" browse link was removed (cinatra#609) — workflow
+      // overview/tracking lives in Plane now. Workflow execution + approvals
+      // remain native (Approvals above; per-workflow detail via deep-links).
     ],
   },
   {
