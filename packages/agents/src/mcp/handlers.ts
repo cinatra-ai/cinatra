@@ -3227,9 +3227,9 @@ async function handleAgentBuilderGitWriteFiles(
     packageSlug,
 );
 
-  // new canonical layout: <installDir>/cinatra/<slug>/
+  // canonical layout <installDir>/<vendor>/<slug>/ — reuse derived `vendorName` so dir, package.json#name, and published scope can't drift (cinatra#537).
   const installRoot = resolveAgentInstallDir();
-  const agentRoot = join(installRoot, "cinatra-ai", packageSlug);
+  const agentRoot = join(installRoot, vendorName, packageSlug);
   const packageJsonPath = join(agentRoot, "package.json");
   const skillMdPath = join(agentRoot, "skills", packageSlug, "SKILL.md");
 
