@@ -3,6 +3,8 @@ import {
   linkifyErrorText,
   isOpenAiKeyError,
   LLM_PROVIDER_SETTINGS_HREF,
+  isMcpUnreachableError,
+  MCP_CONFIG_HREF,
 } from "../agent-error-display";
 
 describe("linkifyErrorText (#498)", () => {
@@ -62,5 +64,42 @@ describe("isOpenAiKeyError (#498)", () => {
     expect(isOpenAiKeyError("authentication_error: invalid x-api-key")).toBe(false);
     expect(isOpenAiKeyError("Tool 'search' failed: timeout after 30s")).toBe(false);
     expect(isOpenAiKeyError("424 Failed Dependency")).toBe(false);
+  });
+});
+
+describe("isMcpUnreachableError (#500)", () => {
+  it("flags the raw hosted-MCP 424 (provider could not reach the public MCP URL)", () => {
+    expect(
+      isMcpUnreachableError(
+        "Error retrieving tool list from MCP server: 'cinatra'. Http status code: 424 (Failed Dependency)",
+      ),
+    ).toBe(true);
+  });
+
+  it("flags the typed 'public MCP server … 424' replacement message", () => {
+    expect(
+      isMcpUnreachableError(
+        "The AI provider could not reach this instance's public MCP server at https://inst.example.com/api/mcp to load the cinatra toolbox (HTTP 424 Failed Dependency), so the agent run was stopped.",
+      ),
+    ).toBe(true);
+  });
+
+  it("does NOT fire on an unrelated 424 with no MCP marker", () => {
+    expect(isMcpUnreachableError("424 Failed Dependency")).toBe(false);
+  });
+
+  it("does NOT fire on an MCP error that is not a 424", () => {
+    expect(isMcpUnreachableError("MCP server returned 500 Internal Server Error")).toBe(false);
+  });
+
+  it("does NOT confuse an OpenAI key error for an MCP-unreachable one", () => {
+    const keyErr =
+      "401 Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.";
+    expect(isMcpUnreachableError(keyErr)).toBe(false);
+    expect(isOpenAiKeyError(keyErr)).toBe(true);
+  });
+
+  it("exposes the in-app MCP config route", () => {
+    expect(MCP_CONFIG_HREF).toBe("/configuration/mcp");
   });
 });
