@@ -62,6 +62,26 @@ export type ConnectorRegistryEntry = ConnectorDescriptor & {
 };
 
 /**
+ * Whether a connector is actually INSTALLED / BUNDLED in the running image
+ * (cinatra#607). The generated `STATIC_EXTENSION_MANIFEST` is regenerated at
+ * every consuming surface against the extension tree ACTUALLY PRESENT (`make
+ * setup`, the prod image build stage), so an extension absent from the running
+ * image is OMITTED from the manifest. Membership is therefore the authoritative
+ * installed/bundled predicate: a catalog descriptor whose package is not in the
+ * manifest exists only as catalog data — it is not installed here.
+ *
+ * Use this to gate the /connectors visible card set: a card must only render for
+ * an installed connector, never for the full static catalog (which would imply a
+ * connector is available when it is not bundled, dead-ending at the
+ * "requires a rebuild" setup state).
+ */
+export function isConnectorInstalled(packageId: string): boolean {
+  // Own-key membership only — never an inherited prototype key (e.g.
+  // "constructor") that `in` would falsely report as an installed connector.
+  return Object.hasOwn(STATIC_EXTENSION_MANIFEST, packageId);
+}
+
+/**
  * Whether a connector ships a React setup page (and therefore needs a loader).
  * A `schema-config` connector (its static manifest declares
  * `uiSurface: "schema-config"`) does NOT — it is listable/registerable with no

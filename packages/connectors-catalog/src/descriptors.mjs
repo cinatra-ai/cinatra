@@ -73,7 +73,7 @@ const RAW_DESCRIPTORS = [
     // Inbound MCP-client connector for Claude Desktop, Claude.ai, ChatGPT,
     // and any MCP-compatible client that connects to Cinatra via OAuth.
     slug: "mcp-client-connector",
-    displayName: "MCP Client",
+    displayName: "MCP Clients",
     defaultVisibility: "workspace",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
