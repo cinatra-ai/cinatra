@@ -68,6 +68,9 @@ export type RunChatTurnArgs = {
   platformRole: "platform_admin" | "member";
   sessionOrgId: string | null;
   send: ChatStreamSink;
+  /** Aborted when the client disconnects (#503) so the run stops LLM/MCP work
+   *  promptly instead of running to completion with nobody listening. */
+  signal?: AbortSignal;
 };
 
 export { hasConfiguredLlmRuntime };
@@ -384,7 +387,7 @@ function buildInstanceContext(): string {
 // ---------------------------------------------------------------------------
 
 export async function runChatTurn(args: RunChatTurnArgs): Promise<void> {
-  const { messages, actorContext, userId, platformRole, sessionOrgId, send } = args;
+  const { messages, actorContext, userId, platformRole, sessionOrgId, send, signal } = args;
 
   // Chat-owned native MCP injection with a delegated human actor token.
   //
@@ -589,7 +592,11 @@ export async function runChatTurn(args: RunChatTurnArgs): Promise<void> {
       // and breaks run-ownership authz.
       skipMcpInjection: true,
       maxSteps: MAX_TOOL_ROUNDS,
-      signal: AbortSignal.timeout(120_000),
+      // Abort on the 120s ceiling OR the caller's signal (client disconnect,
+      // #503) so a torn-down stream stops LLM/MCP work promptly.
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(120_000)])
+        : AbortSignal.timeout(120_000),
       logLabel: "chat",
       onTextDelta: (delta) => {
         send("text", { content: delta });

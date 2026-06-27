@@ -1,5 +1,5 @@
 import "server-only";
-import { sql, eq, desc } from "drizzle-orm";
+import { sql, eq, desc, and, gte, lte, type SQL } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db, metadataTable } from "./db";
 import { usageEvents, legacyCosts, modelPricing, traces } from "./schema";
@@ -614,15 +614,32 @@ export type TraceSpanRow = {
 };
 
 export async function readRecentTraces(
-  opts: { limit?: number } = {},
+  opts: { limit?: number; from?: Date; to?: Date; service?: string } = {},
 ): Promise<TraceSpanRow[]> {
   const limit = Math.max(1, Math.min(500, opts.limit ?? 200));
+  // Server-side filters (#491). Range on startedAt — it is the indexed
+  // (traces_started_at_idx DESC) and displayed column; `service` filters the
+  // per-span column. Conditions are ANDed; absent filters are omitted.
+  const conditions: SQL[] = [];
+  if (opts.from) conditions.push(gte(traces.startedAt, opts.from));
+  if (opts.to) conditions.push(lte(traces.startedAt, opts.to));
+  if (opts.service) conditions.push(eq(traces.service, opts.service));
   const rows = await db
     .select()
     .from(traces)
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(traces.startedAt))
     .limit(limit);
   return rows.map(deserializeTraceRow);
+}
+
+// Distinct span services, for the /analytics/api service filter dropdown (#491).
+export async function readTraceServices(): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ service: traces.service })
+    .from(traces)
+    .orderBy(traces.service);
+  return rows.map((r) => r.service).filter(Boolean);
 }
 
 export async function readTracesByRunId(runId: string): Promise<TraceSpanRow[]> {

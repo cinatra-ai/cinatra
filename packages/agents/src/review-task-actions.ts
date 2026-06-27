@@ -21,6 +21,19 @@ import {
   resolveWayflowUrl,
 } from "./wayflow-url";
 
+// Reserved approval-ENVELOPE keys the approval UI stamps on top of the user's
+// actual setup-field values when "Approve" is clicked (orchestrator-stepper-
+// panel.tsx:1125 / agentic-run-panel.tsx). They are approval bookkeeping —
+// never agent inputs — so they are NOT declared in any template inputSchema and
+// must be stripped before the grouped-form allowlist check and the inputParams
+// merge. Mirrors the INTERNAL_KEYS set those renderers use. (#554)
+const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
+  "approved",
+  "approvedAt",
+  "stepNumber",
+  "approvalNote",
+]);
+
 // ---------------------------------------------------------------------------
 // Auth-neutral review task approval helper.
 //
@@ -188,27 +201,43 @@ export async function approveReviewTaskInternal(
         }
         inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedValue}::jsonb)`;
       } else if (values !== null && typeof values === "object" && !Array.isArray(values)) {
-        // Grouped-form path: merge all keys from values object.
-        // Validate submitted keys against inputSchema.properties allowlist.
-        const serialized = JSON.stringify(values);
-        if (serialized.length > 65_536) {
-          throw new Error(
-            `[approveReviewTaskInternal] values payload too large (${serialized.length} bytes)`,
-          );
-        }
-        const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
-        const allowedKeys = template?.inputSchema?.properties
-          ? Object.keys(template.inputSchema.properties as Record<string, unknown>)
-          : null;
-        if (allowedKeys !== null) {
-          const unknownKeys = Object.keys(values as object).filter((k) => !allowedKeys.includes(k));
-          if (unknownKeys.length > 0) {
+        // Grouped-form path: merge the submitted setup-field values into
+        // inputParams. The approval UI wraps those fields in an approval
+        // envelope, adding reserved metadata keys (approved/approvedAt/…) that
+        // are NOT declared in the template inputSchema. Strip them BEFORE the
+        // allowlist check and the merge so (a) a plain "Approve" with no setup
+        // fields (envelope-only) does not 500 with "values contain keys not
+        // declared in inputSchema" (#554), and (b) the envelope metadata never
+        // leaks into agent_runs.inputParams.
+        const fieldValues = Object.fromEntries(
+          Object.entries(values as Record<string, unknown>).filter(
+            ([k]) => !RESERVED_APPROVAL_ENVELOPE_KEYS.has(k),
+          ),
+        );
+
+        // Envelope-only approval: nothing left to merge after stripping — fall
+        // through to the plain status->queued CAS, same as values === undefined.
+        if (Object.keys(fieldValues).length > 0) {
+          const serialized = JSON.stringify(fieldValues);
+          if (serialized.length > 65_536) {
             throw new Error(
-              `Setup approval rejected: values contain keys not declared in inputSchema: ${unknownKeys.join(", ")}`,
+              `[approveReviewTaskInternal] values payload too large (${serialized.length} bytes)`,
             );
           }
+          const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+          const allowedKeys = template?.inputSchema?.properties
+            ? Object.keys(template.inputSchema.properties as Record<string, unknown>)
+            : null;
+          if (allowedKeys !== null) {
+            const unknownKeys = Object.keys(fieldValues).filter((k) => !allowedKeys.includes(k));
+            if (unknownKeys.length > 0) {
+              throw new Error(
+                `Setup approval rejected: values contain keys not declared in inputSchema: ${unknownKeys.join(", ")}`,
+              );
+            }
+          }
+          inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }
-        inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
       }
     }
 
