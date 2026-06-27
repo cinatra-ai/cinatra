@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MetricsTracesScreen } from "@cinatra-ai/metric-cost-api";
 import { MetricApiNav } from "@/components/metric-api-nav";
+import { analyticsTabDescription } from "@/lib/section-nav";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "API Requests | Cinatra" };
@@ -27,11 +28,11 @@ export default async function MetricsTracesPage({
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="API Requests"
+        title="LLM"
         description={
           runId
             ? `API request trace for agent run ${runId}`
-            : "API request traces and span-level execution visibility for agents"
+            : analyticsTabDescription("traces")
         }
         divider={false}
       />

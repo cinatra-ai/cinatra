@@ -13,10 +13,18 @@ type BaseNavItem = {
 export type NavLink = BaseNavItem & {
   url: string;
   items?: never;
+  /**
+   * Extra routes that should mark this link active, beyond `url` and its
+   * nested sub-paths. Lets one sidebar entry (e.g. the Analytics → LLM
+   * category) stay lit across sibling routes it owns that don't share its
+   * url prefix (e.g. /analytics/llm-usage, /analytics/api). Each entry is
+   * matched as a path-boundary prefix, so nested sub-routes count too.
+   */
+  activePaths?: string[];
 };
 
 export type NavCollapsible = BaseNavItem & {
-  items: (BaseNavItem & { url: string })[];
+  items: (BaseNavItem & { url: string; activePaths?: string[] })[];
   url?: never;
 };
 

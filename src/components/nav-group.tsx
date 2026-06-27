@@ -67,9 +67,17 @@ export function checkIsActive(
 
   if (href === item.url || path === item.url) return true;
 
-  // Group/collapsible: active when any of its children own the route.
+  // Group/collapsible: active when any of its children own the route — by url
+  // prefix OR by an extra owned route a child claims via activePaths (#617), so
+  // a collapsible parent (e.g. Analytics) opens + highlights on a child's
+  // sibling tab routes too (e.g. /analytics/llm-usage, /analytics/api).
   if (
-    item?.items?.some((i) => i.url === path || path.startsWith(i.url + "/"))
+    item?.items?.some(
+      (i) =>
+        i.url === path ||
+        path.startsWith(i.url + "/") ||
+        i.activePaths?.some((p) => isPrefixMatch(path, p)),
+    )
   ) {
     return true;
   }
@@ -81,6 +89,17 @@ export function checkIsActive(
       (sib) => sib.length > url.length && isPrefixMatch(path, sib),
     );
     if (!hasMoreSpecificSibling) return true;
+  }
+
+  // Extra owned routes (cinatra#617): an entry can claim sibling routes it owns
+  // but that don't share its url prefix — e.g. the Analytics → LLM category
+  // stays active on /analytics/llm-usage and /analytics/api. Matched at a path
+  // boundary so nested sub-routes count too.
+  if (
+    "activePaths" in item &&
+    item.activePaths?.some((p) => isPrefixMatch(path, p))
+  ) {
+    return true;
   }
 
   return (
