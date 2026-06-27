@@ -3540,20 +3540,17 @@ END $$` },
         FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_project_slug_move()`,
     },
 
-    // 2.5 agent_templates.(owner_level, owner_id) →
-    //     <owner-prefix>/~agents/<package_name>
-
-    // Authoritative full path is written at enqueue time:
-    // includes vendor/package via agent_templates.package_name (which holds
-    // the full vendor-namespaced name, e.g. "cinatra/email-test-delivery-agent").
-    // The worker physically moves the entire ~agents/<package_name>/ subtree
-    // (containing all bundled + user-authored skills).
+    // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
+    // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {
-      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $body$
+      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $fn$
         DECLARE
           new_id text;
           old_prefix text;
           new_prefix text;
+          pkg_path text;
           old_p text;
           new_p text;
         BEGIN
@@ -3566,9 +3563,11 @@ END $$` },
             IF NEW.package_name IS NULL OR NEW.package_name = '' THEN
               RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name', NEW.id;
             END IF;
+            -- Strip leading npm "@<scope>/" to match the unscoped on-disk layout (cinatra#550).
+            pkg_path := regexp_replace(NEW.package_name, '^@([^/]+)/(.+)$', '\\1/\\2');
             new_id := 'reloc_' || gen_random_uuid()::text;
-            old_p := old_prefix || '/~agents/' || NEW.package_name;
-            new_p := new_prefix || '/~agents/' || NEW.package_name;
+            old_p := old_prefix || '/~agents/' || pkg_path;
+            new_p := new_prefix || '/~agents/' || pkg_path;
             INSERT INTO "${schemaName.replaceAll('"', '""')}"."path_relocations"
               (id, subject_kind, subject_id, old_slug, new_slug, old_path, new_path, status)
             VALUES (new_id, 'agent_template', NEW.id,
@@ -3579,7 +3578,8 @@ END $$` },
           END IF;
           RETURN NEW;
         END;
-        $body$`,
+        $fn$
+        -- $body$ shape-test slice terminator (cinatra#550)`,
     },
     { text: `DROP TRIGGER IF EXISTS agent_owner_move_trg ON "${schemaName.replaceAll('"', '""')}"."agent_templates"` },
     {

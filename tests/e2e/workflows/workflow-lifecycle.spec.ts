@@ -2,17 +2,18 @@
  * Release Workflows browser e2e — hermetic management-surface smoke.
  *
  * Asserts the minimum bar that a real browser hitting a real Postgres would
- * catch and the unit/integration gate cannot: that the RSC pages render, the
- * workflows index list + the detail task list render the seeded tasks, and a
+ * catch and the unit/integration gate cannot: that the per-workflow detail
+ * RSC page renders, the detail task list renders the seeded tasks, and a
  * PAUSED, attempt-bearing workflow exposes the surviving editable surface
  * (Target-date control + lifecycle controls) — the "paused-edit with attempts"
  * UI. No LLM/connector keys required.
  *
  * The SVAR Gantt visualization/edit surface was removed in cinatra#321; the
  * management UI is now a plain task list + the Target-date control. The
- * per-task drag/resize/dependency editing the Gantt offered is gone (workflow
- * target dates stay editable), so this suite asserts the list + Sheet + the
- * controls, not chart bars.
+ * native /workflows browse/list/index page was removed in cinatra#609 —
+ * overview/tracking lives in Plane now — so this suite no longer asserts the
+ * index list. The per-workflow detail/run + approvals route is KEPT and reached
+ * via deep-links, so the suite asserts the detail page + Sheet + the controls.
  */
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -20,22 +21,12 @@ import AxeBuilder from "@axe-core/playwright";
 import { WORKFLOW_ID } from "./seed-data";
 
 test.describe("release workflows surface", () => {
-  test("lists the seeded paused workflow with status + ownership", async ({ page }) => {
+  // The browse/index page was removed (cinatra#609); old /workflows index links
+  // now redirect to the projects surface (overview/tracking lives in Plane).
+  // The per-workflow detail/run + approvals route below is the kept surface.
+  test("old /workflows index redirects to the projects surface (no 404)", async ({ page }) => {
     await page.goto("/workflows");
-    await expect(page).toHaveURL(/\/workflows$/);
-
-    // Page chrome.
-    await expect(page.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible();
-    await expect(page.getByText("AI-assisted, calendar-driven workflows.")).toBeVisible();
-
-    // The index is a table — one row per workflow with columns Workflow /
-    // Status / Ownership / Schedule. The seeded workflow row carries the name
-    // link + the "On hold" StatusPill, plus a Schedule column header.
-    await expect(page.getByRole("columnheader", { name: "Workflow" })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Schedule" })).toBeVisible();
-    const link = page.getByRole("link", { name: "E2E Paused Editable" }).first();
-    await expect(link).toBeVisible();
-    await expect(page.getByText("On hold").first()).toBeVisible();
+    await expect(page).toHaveURL(/\/projects$/);
   });
 
   test("renders the paused workflow's editable management surface", async ({ page }) => {
