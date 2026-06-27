@@ -1,5 +1,5 @@
-// Centralized agent-builder identity table (cinatra-engineering#155,
-// eng#168(c) "centralize the id table").
+// Centralized agent-builder identity table (the identity-surface ruling:
+// "centralize the id table").
 //
 // WHY: the agent-builder domain matches producers to consumers by a string
 // identity of the shape `@cinatra-ai/agent-builder:<id>` — an x-renderer id, a

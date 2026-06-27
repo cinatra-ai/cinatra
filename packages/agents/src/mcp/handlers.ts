@@ -168,7 +168,7 @@ async function resolveVerdaccioConfigForHandler(): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Declarative package `cinatra.kind` normalization (SDK-P5, eng#167).
+// Declarative package `cinatra.kind` normalization (SDK-P5).
 //
 // The five canonical declarative kinds. Source-authoring is declarative-first:
 // /chat authors WORKFLOW/ARTIFACT/SKILL packages in v1; code-bearing CONNECTOR
@@ -3042,7 +3042,7 @@ async function handleAgentBuilderGitWriteFiles(
     packageJson?: string;
     skillMd?: string;
     progressContext?: { runId: string };
-    // SDK-P5 (eng#167): the declarative kind this write materializes. The agent
+    // SDK-P5: the declarative kind this write materializes. The agent
     // chat-authoring path omits it (defaults to "agent" — unchanged behavior);
     // the workflow/artifact/skill source tools pass their own canonical kind so
     // the package.json `cinatra.kind` is no longer force-coerced to "agent".
@@ -3188,7 +3188,7 @@ async function handleAgentBuilderGitWriteFiles(
   // which makes the marketplace `?tab=<kind>` filter exclude the package
   // (marketplace card meta.kind is null without cinatra.kind, so the kind
   // filter hides the card). Normalize kind + apiVersion regardless of what the
-  // LLM emitted, but PARAMETRIC over `expectedKind` (SDK-P5, eng#167): the
+  // LLM emitted, but PARAMETRIC over `expectedKind` (SDK-P5): the
   // agent chat-authoring path passes "agent" (so this is byte-for-byte the
   // historical behavior — a stale/missing kind still coerces to "agent"),
   // while the workflow/artifact/skill source tools pass their own kind. Same
@@ -4544,7 +4544,7 @@ export async function handleAgentRunTriggerDelete(
 }
 
 // ===========================================================================
-// WORKFLOW source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+// WORKFLOW source-authoring (declarative extension PACKAGE) — SDK-P5.
 //
 // These tools author a WORKFLOW EXTENSION PACKAGE on disk (a `cinatra.kind:
 // "workflow"` package with a `cinatra/workflow.bpmn` declarative definition),
@@ -4993,7 +4993,7 @@ async function handleWorkflowSourcePublish(
 }
 
 // ===========================================================================
-// ARTIFACT source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+// ARTIFACT source-authoring (declarative extension PACKAGE) — SDK-P5.
 //
 // These tools author an ARTIFACT EXTENSION PACKAGE on disk (a `cinatra.kind:
 // "artifact"` package whose `cinatra.artifact` block is a SEMANTIC artifact
@@ -5314,7 +5314,7 @@ async function handleArtifactSourcePublish(
 }
 
 // ===========================================================================
-// SKILL source-authoring (declarative extension PACKAGE) — SDK-P5, eng#167.
+// SKILL source-authoring (declarative extension PACKAGE) — SDK-P5.
 //
 // These tools author a SKILL EXTENSION PACKAGE on disk (a `cinatra.kind:
 // "skill"` package whose `cinatra.capabilities` map binds stable capability
@@ -5647,8 +5647,8 @@ async function handleSkillSourcePublish(
 }
 
 // ---------------------------------------------------------------------------
-// Shared declarative-publish path for the artifact + skill kinds (SDK-P5,
-// eng#167). Mirrors handleWorkflowSourcePublish exactly (admin gate → on-disk
+// Shared declarative-publish path for the artifact + skill kinds (SDK-P5).
+// Mirrors handleWorkflowSourcePublish exactly (admin gate → on-disk
 // validation gate → SPDX license gate → public strict-semver guard → publish-
 // destination resolution → publishExtensionPackageFromDir({kind})), parametric
 // over the kind + its on-disk validator + its path resolver. The workflow path
@@ -5892,7 +5892,7 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     // helper dispatch in one MCP primitive. Blockers gate compile/publish.
     agent_source_review: (req) =>
       handleAgentSourceReview(req as Parameters<typeof handleAgentSourceReview>[0]),
-    // WORKFLOW declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // WORKFLOW declarative package-authoring (SDK-P5). DISTINCT from
     // the workflow_draft_*/workflow_template_* runtime tools (packages/workflows)
     // which author DRAFTS/INSTANCES — these author/publish a workflow PACKAGE.
     // Hold the global extension-lifecycle lock across write/compile/publish so
@@ -5914,7 +5914,7 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     },
     workflow_source_publish: (req) =>
       handleWorkflowSourcePublish(req as Parameters<typeof handleWorkflowSourcePublish>[0]),
-    // ARTIFACT declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // ARTIFACT declarative package-authoring (SDK-P5). DISTINCT from
     // artifact_authoring_emit (an artifact INSTANCE emit) — these author/publish
     // a reusable artifact TYPE PACKAGE (cinatra.kind:"artifact" + a semantic
     // cinatra.artifact manifest). Same lifecycle-lock discipline as the agent/
@@ -5935,7 +5935,7 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
     },
     artifact_source_publish: (req) =>
       handleArtifactSourcePublish(req as Parameters<typeof handleArtifactSourcePublish>[0]),
-    // SKILL declarative package-authoring (SDK-P5, eng#167). DISTINCT from
+    // SKILL declarative package-authoring (SDK-P5). DISTINCT from
     // skills_personal_upsert / skills_installed_upsert (personal/installed skill
     // ROW mutations) and skills_packages_install (INSTALL of a published package)
     // — these author/publish a reusable skill TYPE PACKAGE (cinatra.kind:"skill"

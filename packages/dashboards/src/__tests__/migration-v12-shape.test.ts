@@ -1,5 +1,5 @@
 // cinatra#327 (PR #336) — shape guards for the core__0006 migration AFTER the
-// robust-B rewrite (owner decision eng#206: a ONE-SHOT total normalizer, no
+// robust-B rewrite (owner decision: a ONE-SHOT total normalizer, no
 // backward compat). The migration's transform is the JS-side normalizer BUNDLED
 // in `migrations/core/core__0006_dashboards-v12.mjs`; its TOTAL/fuzz/equivalence
 // behavior is covered exhaustively in `migration-v12-bundled-normalizer.test.ts`

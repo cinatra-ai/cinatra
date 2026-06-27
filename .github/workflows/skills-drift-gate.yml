@@ -39,14 +39,14 @@ jobs:
   # KEEP this job name stable as `skills-drift-gate` — it is the required-check
   # context prefix.
   skills-drift-gate:
-    # Double-pin per the eng#61 convention: the workflow ref (@<sha>) and the
+    # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the v2 gate),
     # so the gate code is never pulled from mutable main.
     uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
     with:
       # assistant-skills pin: points at the commit that carries the skills'
       # `cinatra-watches` declarations. As of the closeout W5 skills-drift
-      # reconciliation (cinatra-ai/engineering#244) this is back in STRICT
+      # reconciliation (closeout W5 skills-drift) this is back in STRICT
       # LOCKSTEP with the @cinatra-ai/assistant-skills resolvedSha in
       # cinatra-required-extensions.lock.json (both 538a817). The prior
       # watches-PR lead (skills_ref@2b65ef8 ahead of lock@2b65ef8, then

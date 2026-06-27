@@ -1,4 +1,4 @@
-// #12 connector vendor-identity end-state (eng#159 / owner ruling eng#183 dec. 2):
+// #12 connector vendor-identity end-state (vendor identity is self-declared):
 // a connector declares its OWN vendor identity in its manifest (`cinatra.vendor`).
 // This test locks that the host connectors-registry — the trust boundary that
 // ACCEPTS the manifest-declared identity — reads that declared vendor through and

@@ -89,7 +89,7 @@ function getDefaultOpenAIServiceTier() {
 
 // Legacy GTM-era rebrand normalization (`normalizePersistedString` /
 // `normalizePersistedValue`) was removed from the hot core-store read/write
-// path (cinatra-ai/engineering#309). It rewrote pre-rebrand persisted values
+// path (GTM-normalization removal cleanup). It rewrote pre-rebrand persisted values
 // (`@gtm-central/…`, `GTM Central`, `gtm_central_…`, `gtmcentral.app`, …) to
 // their Cinatra names on every parse and every write — useful during the
 // migration, now dead transitional logic in the generic persistence path. The

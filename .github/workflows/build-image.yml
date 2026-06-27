@@ -890,7 +890,7 @@ jobs:
       - name: Core -> extension instance-coupling gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
 
-      # Identity-surface coupling gate (cinatra-engineering#155, eng#168(c)).
+      # Identity-surface coupling gate (identity-surface ruling).
       # The pinned-empty coupling gates pin a LEXEME (package name / path), not
       # extension IDENTITY. This stateless gate blocks the two DANGEROUS
       # identity-coupling subsets the owner ruling singled out to FIX so they
@@ -1029,7 +1029,7 @@ jobs:
       - name: Workspace dependency-cycle gate tests
         run: node --test scripts/audit/__tests__/workspace-dep-cycles.test.mjs
 
-      # File-size ratchet gate (no-new-rot ratchet, eng#308). Pins the current
+      # File-size ratchet gate (no-new-rot ratchet). Pins the current
       # line count of each tracked architecture-bottleneck file (handlers,
       # drizzle-store, agents store, chat page, skills store, mcp-server entry,
       # background-jobs, database, extension-install pipeline, boot
@@ -1185,7 +1185,7 @@ jobs:
       # pinned to sync-and-readback.test.ts only, which silently left newer
       # apollo tests (e.g. the save-apollo-form toast suite from
       # apollo-connector#7) un-enforced by host CI (flagged on
-      # cinatra-engineering#67). Covers the verified write-then-read-back
+      # apollo-connector#7). Covers the verified write-then-read-back
       # security behavior (import WITHOUT connectorKey → forceRefresh readback →
       # compare to the submitted key → saveConnectionRecord only after verify)
       # plus everything added since.

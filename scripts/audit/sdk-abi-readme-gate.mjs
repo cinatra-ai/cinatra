@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SDK ABI README gate — pins the @cinatra-ai/sdk-extensions author-facing ABI
-// version so the docs can never drift from the code (cinatra-engineering#152).
+// version so the docs can never drift from the code.
 //
 // The ABI version lives in THREE places that must agree:
 //   1. packages/sdk-extensions/src/register.ts  — `SDK_EXTENSIONS_ABI_VERSION`

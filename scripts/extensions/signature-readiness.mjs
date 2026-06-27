@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Require-signatures readiness preflight (eng#162 — the SDK-P0 trust-gate floor).
+ * Require-signatures readiness preflight (the SDK-P0 trust-gate floor).
  *
  * The GO/NO-GO gate an operator runs BEFORE the owner arms
  * `CINATRA_EXTENSION_REQUIRE_SIGNATURES=true` in production. It SIMULATES the
@@ -56,7 +56,7 @@ if (asJson) {
   console.log(JSON.stringify(result, null, 2));
 } else {
   console.log("");
-  console.log("Require-signatures readiness preflight (eng#162)");
+  console.log("Require-signatures readiness preflight (SDK-P0)");
   console.log("------------------------------------------------");
   console.log(`trusted signing keys configured : ${result.trustedKeyCount}`);
   console.log(`live (active|locked) rows scanned: ${result.scanned}`);

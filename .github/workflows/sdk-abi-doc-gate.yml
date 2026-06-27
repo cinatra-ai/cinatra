@@ -1,7 +1,7 @@
 name: SDK ABI Doc Gate
 
 # Pins the @cinatra-ai/sdk-extensions author-facing ABI version so the docs can
-# never drift from the code (cinatra-engineering#152). Asserts the ABI version
+# never drift from the code. Asserts the ABI version
 # is byte-equal across the three places it lives:
 #   - packages/sdk-extensions/src/register.ts  (SDK_EXTENSIONS_ABI_VERSION)
 #   - packages/sdk-extensions/package.json      (cinatra.sdkAbiVersion)

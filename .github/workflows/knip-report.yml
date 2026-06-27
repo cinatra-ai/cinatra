@@ -1,6 +1,6 @@
 name: knip-report
 
-# REPORT-ONLY dead-code / unused-dependency reporter (closeout W2, eng#73).
+# REPORT-ONLY dead-code / unused-dependency reporter (closeout W2).
 #
 # Runs `knip` (config: knip.json) and surfaces unused files / exports /
 # dependencies as a job summary. It is DELIBERATELY NON-BLOCKING: the knip step
