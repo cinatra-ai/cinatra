@@ -86,3 +86,89 @@ export async function authorizeCodexBridgeRequest(args: {
 
   return { kind: "allow" };
 }
+
+// ---------------------------------------------------------------------------
+// In-process chat bridge gate (engineering#339)
+//
+// The `@chatgpt` / `@gemini` chat-mention path in
+// packages/chat/src/mcp/handlers.ts spawns the SAME host Codex / Gemini CLI
+// child as the /api/chat/chatgpt route, on the host's provider credentials,
+// but is reachable by an ordinary authenticated org member via direct MCP
+// (chat_thread_send is classified `object.create`, NOT operator-only). That is
+// a privilege mismatch: the route treats host CLI invocation as platform
+// OPERATOR power; the chat path admitted org members — an authenticated
+// credit-drain / host-context disclosure vector.
+//
+// This helper applies the IDENTICAL gate (operator authz + strict pre-spawn
+// audit) plus the equivalent prompt-byte bound to that in-process call site,
+// BEFORE the child is spawned. Bounds alone are insufficient (the primary gap
+// is privilege), so authz runs first and a denial never spawns anything.
+// ---------------------------------------------------------------------------
+
+export type ChatBridgeGateDecision =
+  | { kind: "allow" }
+  | { kind: "deny"; reason: string };
+
+/**
+ * Authorize an in-process chat-mention bridge invocation (`@chatgpt` /
+ * `@gemini`). Enforces the same platform-operator power and strict pre-spawn
+ * audit as {@link authorizeCodexBridgeRequest}, plus a prompt-byte bound
+ * equivalent to {@link MAX_CHAT_BODY_BYTES}, before any host CLI child is
+ * spawned. Returns allow/deny; any failure denies and nothing is spawned.
+ *
+ * @param bridge   Bridge label (e.g. "chatgpt" / "gemini") — audit metadata
+ *                 + reason text only; the authority required is identical.
+ * @param actor    Caller's resolved ActorContext (undefined => unauthenticated).
+ * @param prompt   The raw user message that would be handed to the child.
+ */
+export async function authorizeChatBridgeMention(args: {
+  bridge: string;
+  actor: ActorContext | undefined;
+  prompt: string;
+  requestId?: string;
+}): Promise<ChatBridgeGateDecision> {
+  const { bridge, actor, prompt, requestId } = args;
+
+  // 1. Authenticate.
+  if (!actor) {
+    return { kind: "deny", reason: `@${bridge} failed: authentication required.` };
+  }
+
+  // 2. Authorize — platform operator power only. An ordinary org member fails
+  //    closed here (this is the core fix for engineering#339).
+  if (!can(actor, "operations.execute", OPERATIONS_RESOURCE)) {
+    return {
+      kind: "deny",
+      reason: `@${bridge} failed: operator authorization required.`,
+    };
+  }
+
+  // 3. Prompt-byte bound — equivalent to the route's raw-body cap so a single
+  //    mention cannot hand an unbounded prompt to the spawned child.
+  if (Buffer.byteLength(prompt, "utf8") > MAX_CHAT_BODY_BYTES) {
+    return { kind: "deny", reason: `@${bridge} failed: prompt too large.` };
+  }
+
+  // 4. Strict pre-spawn audit. A write failure aborts before any spawn.
+  try {
+    await logAuditEventStrict({
+      actorPrincipalId: actor.principalId,
+      actorPrincipalType: "human",
+      authSource: "mcp",
+      organizationId: actor.organizationId,
+      resourceType: "operations",
+      resourceId: "chat:codex-bridge",
+      operation: "chat.codex.invoke",
+      decision: "allowed",
+      policyVersion: actor.policyVersion,
+      metadata: {
+        bridge,
+        ...(requestId ? { requestId } : {}),
+      },
+    });
+  } catch {
+    return { kind: "deny", reason: `@${bridge} failed: audit write failed.` };
+  }
+
+  return { kind: "allow" };
+}
