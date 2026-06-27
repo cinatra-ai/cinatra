@@ -5,6 +5,7 @@ import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
+import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 
 export function generatePermissionsAuthStaticParams() {
   return Object.values(authViewPaths).map((path) => ({ path }));
@@ -47,10 +48,16 @@ export async function PermissionsAuthPage({
                 This workspace has no Better Auth users yet. The first account registered here becomes the initial full-access admin automatically.
               </p>
             </div>
-            <SignUpForm localization={{}} />
+            {/* cinatra#484: keep the better-auth-ui password show/hide toggle out
+                of the Tab flow and give it an accessible name. */}
+            <PasswordToggleA11y>
+              <SignUpForm localization={{}} />
+            </PasswordToggleA11y>
           </div>
         ) : (
-          <AuthView path={path} />
+          <PasswordToggleA11y>
+            <AuthView path={path} />
+          </PasswordToggleA11y>
         )}
       </div>
     </Main>
