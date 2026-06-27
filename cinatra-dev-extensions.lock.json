@@ -250,7 +250,7 @@
     {
       "packageName": "@cinatra-ai/mcp-client-connector",
       "repo": "cinatra-ai/mcp-client-registry-connector",
-      "resolvedSha": "685433e372ea501d0470b41285f28b9e95a8f197"
+      "resolvedSha": "18d10f7002108d7986a143700d95b77801cd8556"
     },
     {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
