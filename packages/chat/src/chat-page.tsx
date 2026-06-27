@@ -2736,10 +2736,7 @@ const skipNextThreadLoadRef = useRef(false);
             userScrolledUpRef.current = distanceFromBottom > 5;
           }}
         >
-          {/* gap-8 between turns (was gap-5) so a message's hover action row
-              clears the following turn's header/avatar even when two turns land
-              on the same side, e.g. two user messages after a failed run (#504). */}
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
+          {/* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */}<div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
             {messages.map((message) => {
               const isUser = message.role === "user";
               if (isSlackMode) {
