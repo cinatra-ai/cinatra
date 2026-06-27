@@ -34,7 +34,7 @@ const navGroups = [
   {
     heading: "Configuration",
     items: [
-      { title: "LLM", href: "/configuration/llm" },
+      { title: "AI Providers (LLM / API keys)", href: "/configuration/llm" },
       { title: "MCP Server", href: "/configuration/mcp" },
       { title: "Permissions", href: "/configuration/permissions" },
       { title: "Skills administration", href: "/configuration/skills" },

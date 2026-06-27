@@ -35,6 +35,7 @@
       "build",
       "ui-design-system-gate / ui-design-system-gate",
       "skills-drift-gate / skills-drift-gate",
+      "secrets-required-gate / secrets-required-gate",
       "truthful-attribution-gate / truthful-attribution-gate",
       "proof"
     ]
