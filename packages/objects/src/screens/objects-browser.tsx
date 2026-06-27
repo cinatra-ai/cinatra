@@ -127,7 +127,6 @@ export async function ObjectsBrowserScreen({ searchParams }: { searchParams: Sea
   return (
     <Main className="min-h-screen">
       <PageHeader
-        label="Administration"
         title={familyFilter === "assets" ? "Assets" : familyFilter === "entities" ? "Entities" : "Data"}
         description="All data saved by agents — filter by type, category, or source."
       />

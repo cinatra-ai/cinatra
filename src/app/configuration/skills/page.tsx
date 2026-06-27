@@ -71,7 +71,6 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        label="Administration"
         title="Skills"
         description="Configure local storage, GitHub sync, autosave, and the sandboxed shell runtime for skill execution."
         divider={false}
