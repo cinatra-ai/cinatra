@@ -215,7 +215,7 @@ describe("authorizeCliRequest", () => {
     if (!result.ok) expect(result.status).toBe(401);
   });
 
-  // ---- eng#231: verified remote-Bearer arm ------------------------------
+  // ---- CLI Class-A: verified remote-Bearer arm -------------------------
 
   describe("verified remote Bearer", () => {
     it("does NOT invoke the Bearer arm when the endpoint declares no requiredScope", async () => {

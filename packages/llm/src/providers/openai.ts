@@ -34,6 +34,7 @@ import {
   openaiUserContent,
   resolvedAttachmentsPerMessage,
 } from "../attachments/provider-parts";
+import { planMcpToolListErrorRecovery } from "../openai-mcp-error";
 
 /**
  * Structural mirror of the openai-connector's `OpenAIConnectionConfig`
@@ -312,34 +313,39 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
             stream: false,
           } as Parameters<typeof client.responses.create>[0]);
         } catch (apiError) {
-          // 424 means OpenAI could not enumerate the MCP server's tool list. In development the
-          // configured public MCP URL may be briefly unreachable (operator restarting a tunnel,
-          // local server cycle, etc.). Per injection rule skip #3 (MCP unavailable → graceful
-          // no-op), retry without the MCP tool in dev ONLY if other tools remain. If MCP is
-          // the sole tool, or if we are in production (stable URL), always re-throw so the
-          // error surfaces correctly.
-          const isDevMode = process.env.CINATRA_RUNTIME_MODE === "development";
-          if (
-            isDevMode &&
-            apiError instanceof Error &&
-            apiError.message.includes("424") &&
-            apiError.message.toLowerCase().includes("mcp") &&
-            requestBody.tools
-          ) {
-            const toolsWithoutMcp = (requestBody.tools as Array<{ type?: string }>).filter(
-              (t) => t.type !== "mcp",
-            );
-            if (toolsWithoutMcp.length === 0) {
-              // MCP was the only tool — retrying without it would be a silent no-op; re-throw.
-              throw apiError;
-            }
-            console.warn("[openai] MCP tool enumeration failed (424) — retrying without MCP tool");
-            const retryBody: Record<string, unknown> = { ...requestBody, tools: toolsWithoutMcp };
+          // 424 means OpenAI could not enumerate the cinatra MCP server's hosted
+          // tool list — the instance's public MCP URL was unreachable from the
+          // provider (#500). In development that URL is often briefly down
+          // (operator restarting a tunnel, local server cycle, etc.); per
+          // injection rule skip #3 (MCP unavailable → graceful no-op) we retry
+          // WITHOUT the MCP tool, but ONLY when other tools remain. Otherwise (a
+          // production/stable URL, or MCP-only) we FAIL LOUD — but with a clear,
+          // actionable error naming the unreachable URL instead of the opaque raw
+          // 424. We do NOT silently drop the toolbox in production: a run meant to
+          // use the cinatra tools would otherwise answer without them.
+          const recovery = planMcpToolListErrorRecovery(
+            apiError,
+            requestBody.tools,
+            process.env.CINATRA_RUNTIME_MODE === "development",
+          );
+          if (recovery.kind === "retry") {
+            console.warn("[openai] MCP tool enumeration failed (424) — retrying without MCP tool (dev)");
+            const retryBody: Record<string, unknown> = { ...requestBody, tools: recovery.toolsWithoutMcp };
             response = await client.responses.create({
               ...retryBody,
               model: resolvedModel,
               stream: false,
             } as Parameters<typeof client.responses.create>[0]);
+          } else if (recovery.kind === "fail") {
+            await writeOpenAILogFile({
+              label: `${logLabel}-step-${step + 1}`,
+              kind: "response",
+              body: { error: String(apiError), message: recovery.message },
+            }).catch(() => {});
+            // ES2017 lib lacks the ErrorOptions.cause type; attach it manually.
+            const wrapped = new Error(recovery.message);
+            (wrapped as { cause?: unknown }).cause = apiError;
+            throw wrapped;
           } else {
             await writeOpenAILogFile({
               label: `${logLabel}-step-${step + 1}`,
@@ -485,12 +491,9 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
 
         await writeOpenAILogFile({ label: `${logLabel}-step-${step + 1}`, kind: "request", body: requestBody });
 
-        const stream = client.responses.stream({
-          ...requestBody,
-          model: resolvedModel,
-        } as Parameters<typeof client.responses.stream>[0]);
-
-        // Track pending tool calls during this step
+        // Track pending tool calls during this step. Declared at STEP scope (used
+        // after the attempt loop below) but RESET at the start of every attempt so
+        // a retry-without-MCP (see the recovery block) starts from a clean slate.
         const pendingFunctionCalls: Array<{
           callId: string;
           name: string;
@@ -502,105 +505,180 @@ export function createOpenAIProviderAdapter(connection: OpenAIConnectionConfig):
           timeoutMs: number | null;
           maxOutputLength: number | null;
         }> = [];
-        let currentFunctionCallIndex = -1;
         let stepTextEmitted = false;
-        // Track the parent output_item type so `response.output_text.delta`
-        // events only emit to `onTextDelta` when the parent is a final
-        // `message` — never when parent is `reasoning` or
-        // `reasoning_summary`. Without this guard, gpt-5.5 reasoning summary
-        // text leaks into the chat's user-visible reply. Set to
-        // `"message"` by default so providers that don't emit
-        // `response.output_item.added` (legacy streams, older Responses API
-        // shapes) still produce text on `output_text.delta` as before.
-        let currentOutputItemType: string = "message";
+        let finalResponse: unknown;
 
-        let streamIterationError: Error | null = null;
-        try {
-          for await (const event of stream as AsyncIterable<ResponseStreamEvent>) {
-            switch (event.type) {
-              case "response.output_text.delta": {
-                // Only emit when the active output_item is a real
-                // user-visible message. Reasoning/reasoning_summary items
-                // also fire `output_text.delta` for their inner text — dropping
-                // those here is the leak fix.
-                if (currentOutputItemType === "message") {
-                  stepTextEmitted = true;
-                  input.onTextDelta((event as { delta?: string }).delta ?? "");
+        // Mirror the non-streaming 424 handling (#530 CodeRabbit follow-up):
+        // `stream()` sends the SAME MCP-injected `tools` payload through
+        // `client.responses.stream()`, so a hosted-MCP tool-list 424 (#500) must
+        // be classified and either retried-WITHOUT-MCP (dev, other tools remain)
+        // or rewritten to the typed `mcpUnreachable` error here too — otherwise a
+        // streamed run leaks the raw 424 and misses the MCP remediation CTA. The
+        // tool-enumeration 424 fails BEFORE any user-visible delta is emitted, so
+        // re-issuing the stream with the MCP tool stripped and re-consuming from a
+        // clean slate is safe (no double-emission). `attemptTools` is the payload
+        // for the current attempt; a single dev retry sets it to the stripped set.
+        let attemptTools = requestBody.tools;
+        let recovered = false;
+        attempt: for (let attempt = 0; ; attempt++) {
+          // Reset per-attempt accumulators (a retry re-runs the whole step).
+          pendingFunctionCalls.length = 0;
+          pendingShellCalls.length = 0;
+          stepTextEmitted = false;
+
+          const attemptBody: Record<string, unknown> = attemptTools
+            ? { ...requestBody, tools: attemptTools }
+            : requestBody;
+          const stream = client.responses.stream({
+            ...attemptBody,
+            model: resolvedModel,
+          } as Parameters<typeof client.responses.stream>[0]);
+
+          let currentFunctionCallIndex = -1;
+          // Track the parent output_item type so `response.output_text.delta`
+          // events only emit to `onTextDelta` when the parent is a final
+          // `message` — never when parent is `reasoning` or
+          // `reasoning_summary`. Without this guard, gpt-5.5 reasoning summary
+          // text leaks into the chat's user-visible reply. Set to
+          // `"message"` by default so providers that don't emit
+          // `response.output_item.added` (legacy streams, older Responses API
+          // shapes) still produce text on `output_text.delta` as before.
+          let currentOutputItemType: string = "message";
+
+          let streamIterationError: Error | null = null;
+          try {
+            for await (const event of stream as AsyncIterable<ResponseStreamEvent>) {
+              switch (event.type) {
+                case "response.output_text.delta": {
+                  // Only emit when the active output_item is a real
+                  // user-visible message. Reasoning/reasoning_summary items
+                  // also fire `output_text.delta` for their inner text — dropping
+                  // those here is the leak fix.
+                  if (currentOutputItemType === "message") {
+                    stepTextEmitted = true;
+                    input.onTextDelta((event as { delta?: string }).delta ?? "");
+                  }
+                  break;
                 }
-                break;
-              }
 
-              case "response.output_item.added": {
-                const addedItem = (event as { item?: { type?: string; call_id?: string; name?: string; action?: { commands?: string[]; timeout_ms?: number | null; max_output_length?: number | null } } }).item;
-                currentOutputItemType = addedItem?.type ?? "message";
-                if (addedItem?.type === "function_call" && addedItem.call_id) {
-                  currentFunctionCallIndex = pendingFunctionCalls.length;
-                  pendingFunctionCalls.push({
-                    callId: addedItem.call_id,
-                    name: addedItem.name ?? "",
-                    arguments: "",
-                  });
+                case "response.output_item.added": {
+                  const addedItem = (event as { item?: { type?: string; call_id?: string; name?: string; action?: { commands?: string[]; timeout_ms?: number | null; max_output_length?: number | null } } }).item;
+                  currentOutputItemType = addedItem?.type ?? "message";
+                  if (addedItem?.type === "function_call" && addedItem.call_id) {
+                    currentFunctionCallIndex = pendingFunctionCalls.length;
+                    pendingFunctionCalls.push({
+                      callId: addedItem.call_id,
+                      name: addedItem.name ?? "",
+                      arguments: "",
+                    });
+                  }
+                  if (addedItem?.type === "shell_call" && addedItem.call_id) {
+                    pendingShellCalls.push({
+                      callId: addedItem.call_id,
+                      commands: addedItem.action?.commands ?? [],
+                      timeoutMs: addedItem.action?.timeout_ms ?? null,
+                      maxOutputLength: addedItem.action?.max_output_length ?? null,
+                    });
+                  }
+                  break;
                 }
-                if (addedItem?.type === "shell_call" && addedItem.call_id) {
-                  pendingShellCalls.push({
-                    callId: addedItem.call_id,
-                    commands: addedItem.action?.commands ?? [],
-                    timeoutMs: addedItem.action?.timeout_ms ?? null,
-                    maxOutputLength: addedItem.action?.max_output_length ?? null,
-                  });
+
+                case "response.output_item.done": {
+                  // Reset to default so a `response.output_text.delta` event
+                  // that arrives BEFORE the next `output_item.added` (e.g. in
+                  // legacy stream shapes that omit the added event for plain
+                  // message items) is still treated as visible message text.
+                  currentOutputItemType = "message";
+                  break;
                 }
-                break;
-              }
 
-              case "response.output_item.done": {
-                // Reset to default so a `response.output_text.delta` event
-                // that arrives BEFORE the next `output_item.added` (e.g. in
-                // legacy stream shapes that omit the added event for plain
-                // message items) is still treated as visible message text.
-                currentOutputItemType = "message";
-                break;
-              }
-
-              case "response.function_call_arguments.delta": {
-                const delta = (event as { delta?: string }).delta ?? "";
-                if (currentFunctionCallIndex >= 0 && pendingFunctionCalls[currentFunctionCallIndex]) {
-                  pendingFunctionCalls[currentFunctionCallIndex].arguments += delta;
+                case "response.function_call_arguments.delta": {
+                  const delta = (event as { delta?: string }).delta ?? "";
+                  if (currentFunctionCallIndex >= 0 && pendingFunctionCalls[currentFunctionCallIndex]) {
+                    pendingFunctionCalls[currentFunctionCallIndex].arguments += delta;
+                  }
+                  break;
                 }
-                break;
-              }
 
-              case "response.function_call_arguments.done": {
-                // Function call arguments are complete — will execute after stream ends
-                break;
-              }
+                case "response.function_call_arguments.done": {
+                  // Function call arguments are complete — will execute after stream ends
+                  break;
+                }
 
-              case "error": {
-                const errorMsg = (event as { message?: string }).message ?? "OpenAI stream error";
-                input.onError(new Error(errorMsg));
-                break;
+                case "error": {
+                  const errorMsg = (event as { message?: string }).message ?? "OpenAI stream error";
+                  input.onError(new Error(errorMsg));
+                  break;
+                }
               }
             }
+          } catch (error) {
+            streamIterationError = error instanceof Error ? error : new Error("OpenAI stream failed");
+            console.error(`[openai.ts] Stream iteration error at step ${step + 1}:`, streamIterationError.message, streamIterationError);
           }
-        } catch (error) {
-          streamIterationError = error instanceof Error ? error : new Error("OpenAI stream failed");
-          console.error(`[openai.ts] Stream iteration error at step ${step + 1}:`, streamIterationError.message, streamIterationError);
-        }
 
-        // Always attempt finalResponse() — even after a stream iteration error.
-        // Native MCP calls suppress response.output_text.delta events; the text
-        // lives only in finalResponse().output. If finalResponse() also fails,
-        // then we have a real failure and should abort this step.
-        let finalResponse: unknown;
-        try {
-          finalResponse = await stream.finalResponse();
-        } catch (finalErr) {
-          const msg = finalErr instanceof Error ? finalErr.message : "finalResponse() failed";
-          console.error(`[openai.ts] finalResponse() failed at step ${step + 1}:`, msg);
-          // Signal the error and stop the step loop
-          if (streamIterationError) input.onError(streamIterationError);
-          else input.onError(new Error(msg));
-          break;
+          // Always attempt finalResponse() — even after a stream iteration error.
+          // Native MCP calls suppress response.output_text.delta events; the text
+          // lives only in finalResponse().output. If finalResponse() also fails,
+          // then we have a real failure and should abort this step.
+          let stepError: Error | null = streamIterationError;
+          // `classifyError` is what we run the 424 classification against (the
+          // raw provider error, so a 424 buried in finalErr is still detected).
+          // `surfaceError` is what we hand to `input.onError` for the non-424
+          // path — kept BYTE-IDENTICAL to the pre-#530 behavior:
+          // `streamIterationError ?? new Error(msg)` (a fresh Error from the
+          // message, never the raw finalErr object).
+          let classifyError: unknown = streamIterationError;
+          try {
+            finalResponse = await stream.finalResponse();
+            stepError = null;
+          } catch (finalErr) {
+            const msg = finalErr instanceof Error ? finalErr.message : "finalResponse() failed";
+            console.error(`[openai.ts] finalResponse() failed at step ${step + 1}:`, msg);
+            stepError = streamIterationError ?? new Error(msg);
+            classifyError = streamIterationError ?? finalErr;
+          }
+
+          if (!stepError) break attempt; // success — fall through to output handling
+
+          // The attempt failed. Classify it as a hosted-MCP 424 against the
+          // tools we actually sent. `none` (any non-424, or already retried) →
+          // surface the original error and abort the step, exactly as before.
+          const recovery =
+            attempt === 0
+              ? planMcpToolListErrorRecovery(
+                  classifyError,
+                  attemptTools,
+                  process.env.CINATRA_RUNTIME_MODE === "development",
+                )
+              : ({ kind: "none" } as const);
+
+          if (recovery.kind === "retry") {
+            console.warn("[openai] MCP tool enumeration failed (424) — retrying stream without MCP tool (dev)");
+            attemptTools = recovery.toolsWithoutMcp;
+            continue attempt;
+          }
+          if (recovery.kind === "fail") {
+            await writeOpenAILogFile({
+              label: `${logLabel}-step-${step + 1}`,
+              kind: "response",
+              body: { error: String(classifyError), message: recovery.message },
+            }).catch(() => {});
+            // ES2017 lib lacks the ErrorOptions.cause type; attach it manually.
+            // Cause is the RAW provider 424 (classifyError), mirroring generate().
+            const wrapped = new Error(recovery.message);
+            (wrapped as { cause?: unknown }).cause = classifyError;
+            input.onError(wrapped);
+            recovered = true;
+            break attempt;
+          }
+          // Not a recoverable hosted-MCP 424 — original behavior: surface the
+          // pre-#530 `streamIterationError ?? new Error(msg)` error and stop.
+          input.onError(stepError);
+          recovered = true;
+          break attempt;
         }
+        if (recovered) break; // a real (non-recoverable) step error was surfaced
         await writeOpenAILogFile({
           label: `${logLabel}-step-${step + 1}`,
           kind: "response",

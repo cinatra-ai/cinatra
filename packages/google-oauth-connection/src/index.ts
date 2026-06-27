@@ -120,7 +120,7 @@ export async function getUserGoogleOAuthStatus(userId: string) {
   return {
     status: "not_connected" as const,
     accountEmail: undefined,
-    detail: "Connect your Google account through Nango to enable Gmail and Google Calendar access.",
+    detail: "Connect your Google account to enable Gmail and Google Calendar access.",
   };
 }
 

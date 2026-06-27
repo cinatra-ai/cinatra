@@ -1,12 +1,12 @@
 import "server-only";
 
 // ---------------------------------------------------------------------------
-// Require-signatures readiness preflight (eng#162 — the SDK-P0 trust-gate floor).
+// Require-signatures readiness preflight (the SDK-P0 trust-gate floor).
 //
 // WHAT THIS ANSWERS: "If we armed `CINATRA_EXTENSION_REQUIRE_SIGNATURES=true`
 // right now, would EVERY currently-activatable install still activate?" It is the
 // GO/NO-GO gate the owner runs BEFORE flipping that production lever — the one
-// remaining open item on eng#162. The signature backfill
+// remaining open item on the SDK-P0 trust-gate. The signature backfill
 // (`extension-signature-backfill.ts`) WRITES signatures onto legacy rows; this
 // module PROVES the fleet would survive the flip. They are complementary: repair
 // vs. confirmation.

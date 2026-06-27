@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
-// Route-handler regression test for the skill-autosave config route (eng#267).
+// Route-handler regression test for the skill-autosave config route.
 // The authz kernel runs for real; the session, the skill-autosave store, and
 // the audit sink are mocked. Asserts: GET needs a session (401), PATCH is
 // platform-admin only (401 no session, 403 non-platform), cross-origin -> 403,

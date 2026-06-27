@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // GET /.well-known/oauth-protected-resource/api/cli — RFC 9728 protected-
-// resource metadata for the `/api/cli/*` CLI control plane (eng#231).
+// resource metadata for the `/api/cli/*` CLI control plane.
 //
 // Lets the CLI / OAuth SDK discover that `<origin>/api/cli` is a protected
 // resource served by this instance's authorization server, and which scopes

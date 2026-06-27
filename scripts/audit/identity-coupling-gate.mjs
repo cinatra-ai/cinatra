@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Identity-surface coupling gate — blocks NEW dangerous name-coupling
-// (cinatra-engineering#155; owner ruling eng#168(c) "the middle path": accept
+// (the identity-surface ruling, "the middle path": accept
 // the unavoidable name-references as a documented exempt class, FIX the
 // genuinely dangerous kinds, and ADD this lightweight gate so the dangerous
 // kinds cannot creep back).

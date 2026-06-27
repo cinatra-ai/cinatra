@@ -1,7 +1,7 @@
 // Unit tests for `createHostDepsSlot` — the single host-dependency-slot primitive
 // the per-contract DI slots (action-guard, connector-config, objects-provider,
 // crm-request-actor, a2a-connection, google-oauth-connection, mcp-oauth-clients,
-// crm external-resolver) are migrated onto (eng#159 #11).
+// crm external-resolver) are migrated onto (host-deps DI slots).
 //
 // The two load-bearing guarantees: (1) the slot is anchored on `globalThis` under
 // the GLOBAL `Symbol.for(key)` registry, so any two compiled instances of the SDK

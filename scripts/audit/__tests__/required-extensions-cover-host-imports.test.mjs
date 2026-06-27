@@ -438,8 +438,12 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
     // tests above).
     expect(live.byFile["src/lib/register-transport-connectors.ts"]).toBeUndefined();
     expect(live.byFile["src/lib/register-host-connector-services.ts"]).toBeUndefined();
+    // These connectors stay guarded-optional (NOT in the required/system set),
+    // so the host never statically imports them. openai-connector was
+    // RE-PROMOTED to the required/system set (refs #595) — it is now legitimately
+    // host-imported via its generated `required` loader and covered by the
+    // declaration + lock, so it is no longer pinned here.
     for (const pkg of [
-      "@cinatra-ai/openai-connector",
       "@cinatra-ai/anthropic-connector",
       "@cinatra-ai/drupal-mcp-connector",
       "@cinatra-ai/wordpress-mcp-connector",

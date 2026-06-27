@@ -11,7 +11,7 @@ import "server-only";
 
 import type { EmailConnector, HostEmailRoutingService } from "@cinatra-ai/sdk-extensions";
 // Import the capability id from the SDK rather than RE-DECLARING the literal
-// (cinatra-engineering#155, eng#168(c) "fix the dangerous"): the SDK is the single
+// (identity-surface ruling, "fix the dangerous"): the SDK is the single
 // authority for the `email-send` capability id; a host-side re-declaration would
 // silently drift if the SDK constant ever changed. (llm-toolbox-providers.ts is
 // the precedent — it imports LLM_TOOLBOX_CAPABILITY.) The capability-id CONSTANTS

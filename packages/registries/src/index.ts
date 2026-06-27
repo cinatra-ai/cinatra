@@ -43,6 +43,7 @@ export {
   getAgentPackage,
   getPublishedExtensionKind,
   extractAgentPackage,
+  readAgentPayloadFromExtractedPackage,
   cleanupExtractedAgentPackage,
   // Fail-fast DI guard helper. Re-exported so packages/agents
   // can use the same helper without duplicating the body.

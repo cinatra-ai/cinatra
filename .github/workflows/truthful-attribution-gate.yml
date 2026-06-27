@@ -1,7 +1,8 @@
 name: truthful-attribution-gate
 
 # Thin caller for the org-reusable truthful-attribution-gate (cinatra-ai/ci),
-# per the ratified spec cinatra-engineering#119 (re-scopes/supersedes #116).
+# per the Truthful Attribution protocol; supersedes the earlier paused
+# no-AI-attribution gate.
 #
 # ENFORCE mode (spec §7 step 5): the gate computes presence + anti-fabrication
 # findings (a truthful `Assisted-by`; a `Reviewed-by` that matches a real,
@@ -10,8 +11,8 @@ name: truthful-attribution-gate
 # `.github/gate-suite.json` and whose required contexts ran green; high-risk
 # paths require the human arm at tier=maintainer) and FAILS the check on any
 # error-severity finding. The WARN→ENFORCE flip is unblocked because the
-# dedicated machine identity for agent-opened PRs is live (spec §5/§8.5,
-# cinatra-engineering#137 CLOSED) — the bot authors agent PRs, @groganz approves,
+# dedicated machine identity for agent-opened PRs is live (spec §5/§8.5) —
+# the bot authors agent PRs, @groganz approves,
 # so `author != approver` holds mechanically and self-approval never deadlocks.
 #
 # Double-pinned: the reusable workflow is pinned to an immutable SHA AND carries

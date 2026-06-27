@@ -9,7 +9,7 @@
 // verified remote Bearer carrying `cli:status`, or the dev-admin loopback
 // bypass). Platform-admin because the payload is INSTANCE-GLOBAL (userCount,
 // JWKS health, MCP public URL) with no org predicate — an org-admin must not
-// see instance-wide posture (eng#231 D6). READ-ONLY.
+// see instance-wide posture (CLI control-plane status endpoint). READ-ONLY.
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";

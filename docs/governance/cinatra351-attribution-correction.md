@@ -1,7 +1,7 @@
-# Attribution-record correction — #351 upgrade-track inventory (cinatra-engineering#119 §5)
+# Attribution-record correction — #351 upgrade-track inventory (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #443 (`chore(upgrade-track): inventory + pin-drift first
 pass`, squash commit `0bbde391ed4de863a6da4b9d5c5e8605aeb68be6`,
 closing #351).

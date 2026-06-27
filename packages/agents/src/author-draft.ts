@@ -138,7 +138,7 @@ function isValidSkillRelPath(relPath: string): boolean {
  * the `\n```\s*$` tail is polynomial (O(n^2)) on adversarial input such as
  * "```\n" + "\n".repeat(n). `stripWrappingCodeFence` runs over LLM completion
  * text (not a bounded trusted config surface), so the linear form removes the
- * ReDoS (js/polynomial-redos, eng#196). Verified identical to the old regex's
+ * ReDoS (js/polynomial-redos). Verified identical to the old regex's
  * captured body via a 4M-case fuzz.
  */
 function matchWrappingCodeFenceBody(trimmed: string): string | null {

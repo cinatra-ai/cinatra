@@ -1,5 +1,5 @@
 {
-  "note": "File-size ratchet baseline (no-new-rot ratchet, eng#308). Each entry is the CURRENT line-count ceiling for a tracked architecture-bottleneck file. The gate fails when a tracked file grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch. Regenerate with `node scripts/audit/file-size-ratchet.mjs --write-baseline` — a ceiling should only ever be LOWERED as extractions land (thin facades + vertical slices), never raised. Add/remove a tracked file via TRACKED_FILES in the gate, then regenerate.",
+  "note": "File-size ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT line-count ceiling for a tracked architecture-bottleneck file. The gate fails when a tracked file grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch. Regenerate with `node scripts/audit/file-size-ratchet.mjs --write-baseline` — a ceiling should only ever be LOWERED as extractions land (thin facades + vertical slices), never raised. Add/remove a tracked file via TRACKED_FILES in the gate, then regenerate.",
   "files": {
     "packages/agents/src/mcp/handlers.ts": 6257,
     "src/lib/drizzle-store.ts": 4577,

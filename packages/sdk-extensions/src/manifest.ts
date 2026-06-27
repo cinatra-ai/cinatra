@@ -46,7 +46,7 @@ export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
 
 /**
  * Self-declared connector vendor identity (#12 connector vendor-identity
- * end-state, eng#159 / owner ruling eng#183 decision 2).
+ * end-state; vendor identity is self-declared per the nango-system-contract ruling).
  *
  * Vendor identity lives WITH the connector — a `kind:"connector"` extension
  * declares its own vendor key + display name here, in its own manifest. The SDK

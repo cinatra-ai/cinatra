@@ -74,7 +74,7 @@ const DIRECT_GRANTS: Record<Role, ReadonlySet<Permission>> = {
     "settings.update",
     "audit.read",
     // Operator console — platform-level. `operations.execute` is a
-    // destructive operator power kept platform-admin-only; eng#231 can later
+    // destructive operator power kept platform-admin-only; the CLI control-plane model can later
     // split it onto a narrower platform grant without a catalog change.
     // It is whitelisted in the platform-admin-grants invariant alongside
     // registry.* / settings.update (platform-level, not user-resource CRUD).

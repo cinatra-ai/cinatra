@@ -80,7 +80,7 @@ export type CreateMcpServerAuthPluginsOptions = {
   scopes?: readonly string[];
   /**
    * Additional base path(s) whose `<origin>/<path>` URLs (local + public)
-   * become valid token audiences alongside the MCP base path. eng#231 adds
+   * become valid token audiences alongside the MCP base path. The CLI control-plane model adds
    * `/api/cli` so an authorize with `resource=<origin>/api/cli` mints a JWT
    * bound to `aud=<origin>/api/cli` — a DEDICATED audience the CLI verifier
    * pins (reciprocal isolation from the `/api/mcp` audience).
@@ -88,13 +88,13 @@ export type CreateMcpServerAuthPluginsOptions = {
   extraAudienceBasePaths?: readonly string[];
   /**
    * Scopes EXCLUDED from the DCR default-scope set. A client that does not
-   * EXPLICITLY request these never silently receives them (eng#231 keeps the
+   * EXPLICITLY request these never silently receives them (the CLI control-plane model keeps the
    * `cli:*` scopes out of DCR defaults). When omitted, the DCR default is the
    * full `scopes` list (today's behaviour).
    */
   clientRegistrationDefaultScopes?: readonly string[];
   /**
-   * Scopes a DCR client MAY request at registration. eng#231 keeps `cli:*`
+   * Scopes a DCR client MAY request at registration. The CLI control-plane model keeps `cli:*`
    * here (so the first-party CLI can register with them) — the real authority
    * boundary is the verified-subject platform-admin gate, not this list.
    * When omitted, defaults to the full `scopes` list (today's behaviour).
@@ -841,7 +841,7 @@ export {
   type McpAuthPluginsOptions,
 };
 
-// Facade re-exports for the split runtime/request-context modules (eng#305).
+// Facade re-exports for the split runtime/request-context modules.
 // Public consumers keep importing these from `@cinatra-ai/mcp-server`; the
 // facade re-exports DOWNWARD only (no subpath, no `Symbol.for` backing). The
 // runtime types (`McpRuntimeToolServer`/`ScreenDescriptor`) are consumed by
@@ -882,7 +882,7 @@ export function createMcpServerAuthPlugins(
   const publicMcpUrl = getPublicMcpServerUrl();
   const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
 
-  // eng#231: extend validAudiences with `<origin><extraBasePath>` for each
+  // CLI control-plane: extend validAudiences with `<origin><extraBasePath>` for each
   // configured extra base path (e.g. /api/cli), on BOTH the local and public
   // origins, so an authorize with `resource=<origin>/api/cli` mints a JWT
   // bound to that dedicated audience. The MCP audiences are unchanged — each

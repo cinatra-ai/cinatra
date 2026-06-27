@@ -1,5 +1,5 @@
 // cinatra#327 (PR #336) — the robust-B TOTAL-normalizer guard for the
-// core__0006 migration. Owner decision eng#206: NO backward compat — a ONE-SHOT
+// core__0006 migration. Owner decision: NO backward compat — a ONE-SHOT
 // migration must rewrite EVERY legacy/corrupt-at-rest dashboard body into a
 // registry-VALID apiVersion-1.2 analytics envelope; the strict validator STAYS strict.
 //

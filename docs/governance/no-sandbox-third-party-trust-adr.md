@@ -1,10 +1,11 @@
 # ADR — In-process, no-sandbox extension trust (first-party launch posture)
 
-- Status: ACCEPTED (cinatra-engineering#168 ruling (a), 2026-06-13)
+- Status: ACCEPTED (owner ruling on extension trust posture, item (a), 2026-06-13)
 - Scope: the trust posture for executing extension code, NOT a runtime change
-- Supersedes nothing; records the posture eng#122 surfaced and eng#168 (a) ruled
-- Source: eng#122 Tier-1 must-do #5 (cinatra-engineering#122); unblocked by the
-  owner ruling on cinatra-engineering#168 (a)
+- Supersedes nothing; records the posture the third-party-trust review surfaced
+  and the owner ruling (a) settled
+- Source: the no-sandbox third-party-trust posture review; unblocked by the
+  owner ruling on extension trust posture (a)
 
 ## Context
 

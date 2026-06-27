@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
-// Route-handler regression test for the Codex-bridge route (eng#267). The
+// Route-handler regression test for the Codex-bridge route. The
 // authz kernel runs for real (so the platform-only gate is exercised
 // end-to-end); the session, the Codex bridge spawn, and the audit sink are
 // mocked so no Redis/DB/child-process is needed. Asserts: no session -> 401,

@@ -36,7 +36,7 @@ export const DEFAULT_MCP_SCOPES = [
 ] as const;
 
 /**
- * The CLI control-plane scopes (eng#231). ADMISSION scopes for the
+ * The CLI control-plane scopes. ADMISSION scopes for the
  * `/api/cli/*` surface, bound to the dedicated `<origin>/api/cli` audience.
  * The authorization server advertises them and a DCR client MAY request them,
  * but they are EXCLUDED from the DCR default set (a client that does not

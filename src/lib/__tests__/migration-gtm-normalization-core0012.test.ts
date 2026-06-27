@@ -1,4 +1,4 @@
-// Contract test for the cinatra-ai/engineering#309 cleanup: the removal of the
+// Contract test for the GTM-normalization removal cleanup: the removal of the
 // legacy GTM-era normalization from the hot core-store path
 // (src/lib/database.ts) and its replacement by the one-time data migration
 // migrations/core/core__0012_drop-gtm-normalization.mjs.

@@ -10,7 +10,7 @@ import { logAuditEventStrict } from "@/lib/authz/audit";
 // (/api/admin/operations/jobs). This is the destructive operator console:
 // QueueDash forwards to BullMQ retry/remove/clean/promote/pause/... mutations.
 //
-// Design (eng#229, codex-converged):
+// Design (operator-mutation authz, codex-converged):
 //   - Classify EACH tRPC procedure in the (possibly batched) request by the
 //     router's OWN procedure type map (query vs mutation). This is drift-proof:
 //     a procedure not present in the router -> unknown -> DENY (fail-closed),
