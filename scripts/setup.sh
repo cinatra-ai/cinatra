@@ -158,8 +158,17 @@ if [ "$RESOLVED_MODE" != "production" ]; then
   # the clone-back) ever runs (cinatra#109/#110). The sync script is
   # deliberately pre-install-safe (node builtins + git only); CI runs the same
   # script before its own install for the same reason.
-  info "Cloning companion extension repos (pre-install)..."
-  node scripts/ci/sync-dev-extensions.mjs
+  #
+  # `--pinned` (cinatra#489): check each companion repo out DETACHED at the sha
+  # committed in cinatra-required-extensions.lock.json / cinatra-dev-extensions.lock.json,
+  # the same refs the committed pnpm-lock.yaml + src/lib/generated/* maps were
+  # built against, so a fresh `make setup` ends with a CLEAN git tree. Without it
+  # the clone-back tracked floating `main` HEADs that can drift ahead of the
+  # committed lockfile, leaving a fresh install with a dirty tree (lockfile + maps
+  # silently mutated by the unfrozen `pnpm install` below). The floating-HEAD
+  # canary stays an explicit opt-in (the CI clone-extensions action's `head` mode).
+  info "Cloning companion extension repos (pre-install, pinned to the committed lock shas)..."
+  node scripts/ci/sync-dev-extensions.mjs --pinned
 fi
 
 info "Installing dependencies..."

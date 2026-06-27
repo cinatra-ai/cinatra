@@ -1,11 +1,13 @@
 import { resolveConfiguredLlmRuntime, runResolvedDeterministicLlmTask, parseStructuredJson } from "@cinatra-ai/llm";
 // Personal-skill authoring uses the installed-agents reader so users can
 // only attach personal skills to actual installed agents, not workspace
-// packages.
+// packages. `selectAttachableAgents` additionally drops internal `system-*`
+// runtime templates, which are not user-facing attach targets.
 import {
   getAssignedSkillIdsForAgent,
   readAgentsForSkillMatching,
 } from "@/lib/agents-store";
+import { selectAttachableAgents } from "./attachable-agents";
 import type { CampaignStore } from "@/lib/types";
 // SavedDraftUpdatePrompt is only used locally in this file.
 type SavedDraftUpdatePrompt = {
@@ -248,7 +250,7 @@ export async function createOrUpdateCustomSkillForAgent(input: {
 
   const { requireResourceAccess, buildSkillResourceRef } = await import("@cinatra-ai/agents/auth-policy");
 
-  const [agents, assignedSkillIds, installedSkills, existingPersonalSkill] = await Promise.all([
+  const [allAgents, assignedSkillIds, installedSkills, existingPersonalSkill] = await Promise.all([
     readAgentsForSkillMatching(),
     // Thread actor so the resolver's custom + workspace assignments resolve
     // under the actor's scope. Actor-less resolution is post-filtered below
@@ -260,6 +262,7 @@ export async function createOrUpdateCustomSkillForAgent(input: {
       : Promise.resolve(null),
   ]);
 
+  const agents = selectAttachableAgents(allAgents);
   const npmSuffix = input.agentId.includes("/")
     ? (input.agentId.split("/").pop() ?? input.agentId)
     : input.agentId;
