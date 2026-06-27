@@ -37,24 +37,74 @@ function NavBadge({ children }: { children: ReactNode }) {
   return <Badge className="rounded-full px-1 py-0 text-xs">{children}</Badge>;
 }
 
-function checkIsActive(href: string, item: NavItem, mainNav = false) {
+// A url is a "prefix match" of path when path equals it or is a sub-path of it
+// at a path boundary. The trailing "/" anchors the boundary so "/agents" never
+// matches "/agent...", and the root guard ("/" !== url) stops a root item from
+// matching every route.
+function isPrefixMatch(path: string, url: string | undefined): url is string {
+  if (!url || url === "/") return path === url;
+  return path === url || path.startsWith(url + "/");
+}
+
+/**
+ * Whether `item` should render as the active sidebar entry for `href`.
+ *
+ * A top-level link is active when the current path is its section OR a sub-path
+ * of it (prefix match at a path boundary) — this fixes parent highlighting on
+ * nested routes (cinatra#581). `siblingUrls` carries the urls of the item's
+ * peers so that, among OVERLAPPING links (e.g. "/data" and "/data/types", or
+ * "/configuration" and "/configuration/approvals"), only the MOST SPECIFIC
+ * (longest) matching url lights up — the parent no longer over-highlights when
+ * a deeper sibling owns the route. An exact match always wins.
+ */
+export function checkIsActive(
+  href: string,
+  item: NavItem,
+  mainNav = false,
+  siblingUrls: string[] = [],
+) {
+  const path = href.split("?")[0];
+
+  if (href === item.url || path === item.url) return true;
+
+  // Group/collapsible: active when any of its children own the route.
+  if (
+    item?.items?.some((i) => i.url === path || path.startsWith(i.url + "/"))
+  ) {
+    return true;
+  }
+
+  // Nested-route prefix match, suppressed when a more-specific sibling exists.
+  if (isPrefixMatch(path, item.url)) {
+    const url = item.url;
+    const hasMoreSpecificSibling = siblingUrls.some(
+      (sib) => sib.length > url.length && isPrefixMatch(path, sib),
+    );
+    if (!hasMoreSpecificSibling) return true;
+  }
+
   return (
-    href === item.url ||
-    href.split("?")[0] === item.url ||
-    !!item?.items?.filter((i) => i.url === href || href.startsWith(i.url + "/")).length ||
-    (mainNav &&
-      href.split("/")[1] !== "" &&
-      href.split("/")[1] === item?.url?.split("/")[1])
+    mainNav &&
+    href.split("/")[1] !== "" &&
+    href.split("/")[1] === item?.url?.split("/")[1]
   );
 }
 
-function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
+function SidebarMenuLink({
+  item,
+  href,
+  siblingUrls,
+}: {
+  item: NavLink;
+  href: string;
+  siblingUrls: string[];
+}) {
   const { setOpenMobile } = useSidebar();
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
-        isActive={checkIsActive(href, item)}
+        isActive={checkIsActive(href, item, false, siblingUrls)}
         tooltip={item.title}
       >
         <Link href={item.url} onClick={() => setOpenMobile(false)}>
@@ -70,6 +120,7 @@ function SidebarMenuLink({ item, href }: { item: NavLink; href: string }) {
 
 function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: string }) {
   const { setOpenMobile } = useSidebar();
+  const subUrls = item.items.map((i) => i.url);
   return (
     <Collapsible
       asChild
@@ -91,7 +142,7 @@ function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: st
               <SidebarMenuSubItem key={subItem.title}>
                 <SidebarMenuSubButton
                   asChild
-                  isActive={checkIsActive(href, subItem)}
+                  isActive={checkIsActive(href, subItem, false, subUrls)}
                 >
                   <Link href={subItem.url} onClick={() => setOpenMobile(false)}>
                     {subItem.icon && <subItem.icon />}
@@ -109,6 +160,7 @@ function SidebarMenuCollapsible({ item, href }: { item: NavCollapsible; href: st
 }
 
 function SidebarMenuCollapsedDropdown({ item, href }: { item: NavCollapsible; href: string }) {
+  const subUrls = item.items.map((i) => i.url);
   return (
     <SidebarMenuItem>
       <DropdownMenu>
@@ -132,7 +184,7 @@ function SidebarMenuCollapsedDropdown({ item, href }: { item: NavCollapsible; hr
             <DropdownMenuItem key={`${sub.title}-${sub.url}`} asChild>
               <Link
                 href={sub.url}
-                className={checkIsActive(href, sub) ? "bg-secondary" : ""}
+                className={checkIsActive(href, sub, false, subUrls) ? "bg-secondary" : ""}
               >
                 {sub.icon && <sub.icon />}
                 <span className="max-w-52 text-wrap">{sub.title}</span>
@@ -150,6 +202,13 @@ export function NavGroup({ title, items, className }: NavGroupProps & { classNam
   const { state, isMobile } = useSidebar();
   const pathname = usePathname();
 
+  // Urls of every leaf link in this group, so an overlapping pair (e.g.
+  // "/configuration" + "/configuration/approvals") resolves to the most
+  // specific match rather than lighting up both (cinatra#581).
+  const leafUrls = items
+    .filter((i): i is NavLink => !i.items && !!i.url)
+    .map((i) => i.url);
+
   return (
     <SidebarGroup className={className}>
       {title && <SidebarGroupLabel>{title}</SidebarGroupLabel>}
@@ -158,7 +217,14 @@ export function NavGroup({ title, items, className }: NavGroupProps & { classNam
           const key = `${item.title}-${item.url ?? ""}`;
 
           if (!item.items)
-            return <SidebarMenuLink key={key} item={item as NavLink} href={pathname} />;
+            return (
+              <SidebarMenuLink
+                key={key}
+                item={item as NavLink}
+                href={pathname}
+                siblingUrls={leafUrls}
+              />
+            );
 
           if (state === "collapsed" && !isMobile)
             return <SidebarMenuCollapsedDropdown key={key} item={item as NavCollapsible} href={pathname} />;

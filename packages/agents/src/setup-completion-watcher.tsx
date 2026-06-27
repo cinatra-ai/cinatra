@@ -50,6 +50,11 @@ export function SetupCompletionWatcher({
     if (hasFiredRef.current) return;
     const isPending = initialStatus === "pending_input" || initialStatus === "pending_approval";
     if (isPending) return;
+    // A run that is already `failed`/`stopped` on load must stay on the run page
+    // so its error stays visible — redirecting away would mask the failure
+    // (cinatra#580). Non-failure post-setup states (completed and legitimate
+    // in-flight `queued`/`running`) still advance to /trigger.
+    if (initialStatus === "failed" || initialStatus === "stopped") return;
     const params = initialInputParams ?? {};
     const allFilled = requiredFields.every((f) =>
       Object.prototype.hasOwnProperty.call(params, f),
@@ -86,7 +91,12 @@ export function SetupCompletionWatcher({
         if (!r.ok) throw new Error("fetch failed");
         return r.json();
       })
-      .then((data: { inputParams?: Record<string, unknown> }) => {
+      .then((data: { status?: string; inputParams?: Record<string, unknown> }) => {
+        // A run that failed/stopped after the setup interrupt cleared must stay
+        // on the run page so its error stays visible — never redirect away from
+        // a failure here (cinatra#580). Non-terminal post-setup states
+        // (queued/running) and `completed` still advance to /trigger.
+        if (data.status === "failed" || data.status === "stopped") return;
         const params = data.inputParams ?? {};
         const allFilled = requiredFields.every((f) =>
           Object.prototype.hasOwnProperty.call(params, f),
@@ -107,8 +117,10 @@ export function SetupCompletionWatcher({
       fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, { cache: "no-store" })
         .then((r) => r.ok ? r.json() : Promise.reject())
         .then((data: { status?: string; inputParams?: Record<string, unknown> }) => {
-          const terminal = ["completed", "failed", "stopped"].includes(data.status ?? "");
-          if (!terminal) return;
+          // Only redirect on genuine setup-success. `failed`/`stopped` are NOT
+          // setup completion — redirecting on them navigates the user away from
+          // a failed run and discards the visible error (cinatra#580).
+          if (data.status !== "completed") return;
           const params = data.inputParams ?? {};
           const allFilled = requiredFields.every((f) =>
             Object.prototype.hasOwnProperty.call(params, f),

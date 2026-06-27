@@ -131,8 +131,16 @@ function getHandler(): (req: unknown) => Promise<unknown> {
   return createAgentBuilderPrimitiveHandlers()["agent_source_write_files"];
 }
 
-async function readWrittenPackageJson(slug: string): Promise<Record<string, unknown>> {
-  const p = path.join(tmpRoot, "cinatra-ai", slug, "package.json");
+// The source tree is written under <installRoot>/<vendor>/<slug>/ (cinatra#537),
+// where <vendor> is the same namespace the package.json#name is rescoped to —
+// e.g. "acme" for an operator on @acme, "cinatra-ai" for the default instance.
+// Every test that reads back a written package.json runs on the @acme operator,
+// so the on-disk vendor segment is "acme".
+async function readWrittenPackageJson(
+  slug: string,
+  vendor = "acme",
+): Promise<Record<string, unknown>> {
+  const p = path.join(tmpRoot, vendor, slug, "package.json");
   const raw = await fs.readFile(p, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
 }
