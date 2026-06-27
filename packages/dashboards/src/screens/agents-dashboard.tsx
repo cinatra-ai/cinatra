@@ -21,8 +21,9 @@
 import "server-only";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { agentTemplates } from "@cinatra-ai/agents/schema";
+import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
 import { Play, Plus } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
@@ -86,24 +87,69 @@ async function loadAgentsConfig(
   return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG);
 }
 
+// Cap on rows fetched for the "Installed agents" card. The total count is
+// queried separately (loadInstalledAgents.total) so the heading never
+// undercounts when an org has more than this many templates (#307 review).
+const INSTALLED_AGENTS_DISPLAY_LIMIT = 60;
+
 // Installed agent templates for this org. The dashboard portlets only chart
 // agent_runs, so a fresh instance (0 runs) rendered blank even with templates
 // installed (#307). This lists the installed agents so the page is meaningful
 // before any run. Org-scoped (the same primary filter readAgentTemplates uses).
+//
+// `status` here is the CANONICAL install lifecycle (active | archived) resolved
+// from `installed_extension` via readEffectiveStatusByPackageNames — NOT
+// agentTemplates.status, which is the agent-builder lifecycle
+// (draft | published | archived) and is the wrong concept for an "Installed
+// agents" view (see packages/agents/src/schema.ts: install state lives
+// canonically in installed_extension). A package absent from the canonical map
+// (no row / read failure fails-open) defaults to "active", matching the
+// marketplace readers + chat-widget catalog precedent.
 async function loadInstalledAgents(organizationId: string) {
   const db = getDashboardsDb();
-  return db
-    .select({
-      id: agentTemplates.id,
-      name: agentTemplates.name,
-      description: agentTemplates.description,
-      type: agentTemplates.type,
-      status: agentTemplates.status,
-    })
-    .from(agentTemplates)
-    .where(eq(agentTemplates.orgId, organizationId))
-    .orderBy(desc(agentTemplates.createdAt))
-    .limit(60);
+  const orgFilter = eq(agentTemplates.orgId, organizationId);
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: agentTemplates.id,
+        name: agentTemplates.name,
+        description: agentTemplates.description,
+        type: agentTemplates.type,
+        packageName: agentTemplates.packageName,
+      })
+      .from(agentTemplates)
+      .where(orgFilter)
+      .orderBy(desc(agentTemplates.createdAt))
+      .limit(INSTALLED_AGENTS_DISPLAY_LIMIT),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(agentTemplates)
+      .where(orgFilter),
+  ]);
+  // Fail-open: a canonical-store outage must not take down /agents. On read
+  // failure every template falls back to "active" (we never assert "archived"
+  // without evidence) — mirrors the chat-widget catalog's try/catch precedent.
+  let statusByPackage = new Map<string, "active" | "archived">();
+  try {
+    statusByPackage = await readEffectiveStatusByPackageNames(
+      rows.map((r) => r.packageName),
+    );
+  } catch (err) {
+    console.warn(
+      "[agents-dashboard] canonical install-status read failed — defaulting to active:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  const agents = rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    type: r.type,
+    // A package absent from the canonical map (no install_extension row, or the
+    // fail-open empty map above) defaults to "active".
+    status: statusByPackage.get(r.packageName) ?? "active",
+  }));
+  return { agents, total };
 }
 
 export async function AgentsDashboardPage() {
@@ -113,10 +159,15 @@ export async function AgentsDashboardPage() {
     redirect("/sign-in");
   }
   const dashboardId = buildAgentsDashboardId(ctx.organizationId, ctx.userId);
-  const [initialConfig, installedAgents] = await Promise.all([
-    loadAgentsConfig(dashboardId, ctx.organizationId, ctx.userId),
-    loadInstalledAgents(ctx.organizationId),
-  ]);
+  const [initialConfig, { agents: installedAgents, total: installedTotal }] =
+    await Promise.all([
+      loadAgentsConfig(dashboardId, ctx.organizationId, ctx.userId),
+      loadInstalledAgents(ctx.organizationId),
+    ]);
+  // The list is capped at INSTALLED_AGENTS_DISPLAY_LIMIT rows; `installedTotal`
+  // is the true org-wide count so the heading does not undercount, and the
+  // truncation is surfaced explicitly when more exist than are shown (#307).
+  const installedTruncated = installedTotal > installedAgents.length;
 
   return (
     <Main className="min-h-screen">
@@ -153,29 +204,36 @@ export async function AgentsDashboardPage() {
       <PageContent className="flex flex-col gap-6 pb-8">
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-foreground">
-            Installed agents ({installedAgents.length})
+            Installed agents ({installedTotal})
           </h2>
-          {installedAgents.length === 0 ? (
+          {installedTotal === 0 ? (
             <p className="text-sm text-muted-foreground">
               No agents installed yet — create one above or install from the marketplace.
             </p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {installedAgents.map((a) => (
-                <div key={a.id} className="rounded-panel border border-line bg-surface p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium text-foreground">{a.name}</span>
-                    <span className="shrink-0 rounded-control border border-line bg-surface-muted px-2 py-0.5 text-xs text-muted-foreground">
-                      {a.type}
-                    </span>
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {installedAgents.map((a) => (
+                  <div key={a.id} className="rounded-panel border border-line bg-surface p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-medium text-foreground">{a.name}</span>
+                      <span className="shrink-0 rounded-control border border-line bg-surface-muted px-2 py-0.5 text-xs text-muted-foreground">
+                        {a.type}
+                      </span>
+                    </div>
+                    {a.description ? (
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{a.description}</p>
+                    ) : null}
+                    <div className="mt-2 text-xs text-muted-foreground">Status: {a.status}</div>
                   </div>
-                  {a.description ? (
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{a.description}</p>
-                  ) : null}
-                  <div className="mt-2 text-xs text-muted-foreground">Status: {a.status}</div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              {installedTruncated ? (
+                <p className="text-xs text-muted-foreground">
+                  Showing the {installedAgents.length} most recent of {installedTotal} installed agents.
+                </p>
+              ) : null}
+            </>
           )}
         </section>
         <AnalyticsPortletView
