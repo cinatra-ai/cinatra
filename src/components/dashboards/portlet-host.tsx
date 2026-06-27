@@ -37,12 +37,12 @@ const COMPONENT_MAP: Record<string, ComponentType<PortletComponentProps>> = {
 // (ESLint Layer 4) because it mounts `drizzle-cube/client`; this app-dir host
 // cannot import that, so it lazy-loads the view through the app-local re-export.
 // The dynamic import keeps the DC client bundle off non-analytics dashboards.
-const AnalyticsPortletView = dynamic(() =>
-  import("@/components/dashboards/analytics-portlet-view").then((m) => m.AnalyticsPortletView),
+const EmbeddedDrizzleCubeDashboardGrid = dynamic(() =>
+  import("@/components/dashboards/embedded-drizzle-cube-dashboard-grid").then((m) => m.EmbeddedDrizzleCubeDashboardGrid),
 );
 // Type-only — erased at build, so it never pulls drizzle-cube/client into the
 // app-dir bundle (the runtime component is the dynamic import above).
-type AnalyticsDashboardConfig = import("@/components/dashboards/analytics-portlet-view").AnalyticsPortletViewProps["dashboard"];
+type AnalyticsDashboardConfig = import("@/components/dashboards/embedded-drizzle-cube-dashboard-grid").EmbeddedDrizzleCubeDashboardGridProps["dashboard"];
 
 // Per-kind chrome policy. Most kinds render as a titled `<Card>` in the vertical
 // stack; the `analytics` kind renders BARE (no surrounding card chrome,
@@ -100,7 +100,7 @@ export function PortletHost({
           return (
             <div key={p.instanceId} className="w-full">
               {dashboard && typeof dashboard === "object" ? (
-                <AnalyticsPortletView dashboard={dashboard as AnalyticsDashboardConfig} />
+                <EmbeddedDrizzleCubeDashboardGrid dashboard={dashboard as AnalyticsDashboardConfig} />
               ) : (
                 <p className="text-sm text-muted-foreground">
                   Analytics portlet <span className="font-mono">{p.instanceId}</span> is missing its

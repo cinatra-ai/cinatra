@@ -78,6 +78,7 @@
       "@cinatra-ai/marketing-icp-artifact": "https://github.com/cinatra-ai/marketing-icp-artifact.git",
       "@cinatra-ai/marketing-strategy-artifact": "https://github.com/cinatra-ai/marketing-strategy-artifact.git",
       "@cinatra-ai/mcp-client-connector": "https://github.com/cinatra-ai/mcp-client-registry-connector.git",
+      "@cinatra-ai/mcp-server-connector": "https://github.com/cinatra-ai/mcp-server-connector.git",
       "@cinatra-ai/media-feed-lister-agent": "https://github.com/cinatra-ai/media-feed-lister-agent.git",
       "@cinatra-ai/media-feeds-connector": "https://github.com/cinatra-ai/media-feeds-connector.git",
       "@cinatra-ai/media-transcript-agent": "https://github.com/cinatra-ai/media-transcript-agent.git",

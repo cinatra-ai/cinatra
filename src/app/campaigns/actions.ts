@@ -29,6 +29,7 @@ import {
   getExternalMcpServerById,
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
+import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { randomUUID } from "node:crypto";
 import { saveEmailSystemDevelopmentSettings } from "@/lib/email-system";
 import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
@@ -452,6 +453,16 @@ export async function setWordPressBlogConnectorAction(formData: FormData) {
 // External MCP servers
 // ---------------------------------------------------------------------------
 
+// The external-MCP management UI moved to the "MCP Servers" connector's setup
+// page (cinatra#612). These host actions still OWN the admin-authorization
+// boundary + the post-write redirect; they redirect back to the connector
+// setup page (where the saved/deleted banner renders) instead of the retired
+// /configuration/llm modal. Falls back to /configuration/llm if the connector
+// is somehow absent from the catalog.
+function externalMcpRedirectBase(): string {
+  return getConnectorSetupHref("mcp-server-connector") ?? "/configuration/llm";
+}
+
 const externalMcpSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
@@ -516,7 +527,7 @@ export async function createExternalMcpServerAction(formData: FormData) {
     userId: scope === "user" ? session.user.id : null,
     enabled: true,
   });
-  redirect("/configuration/llm");
+  redirect(`${externalMcpRedirectBase()}?saved=1`);
 }
 
 export async function deleteExternalMcpServerAction(formData: FormData) {
@@ -526,7 +537,7 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
   const session = await requireAuthSession();
   const server = getExternalMcpServerById(id);
   if (!server) {
-    redirect("/configuration/llm");
+    redirect(externalMcpRedirectBase());
   }
   if (server.scope === "global") {
     await requireAdminSession();
@@ -539,7 +550,7 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
     }
   }
   deleteExternalMcpServer(id);
-  redirect("/configuration/llm");
+  redirect(`${externalMcpRedirectBase()}?deleted=1`);
 }
 
 // GitHub connection actions are connector-owned (@cinatra-ai/github-connector/actions),

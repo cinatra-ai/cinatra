@@ -18,7 +18,7 @@
 //     entity screens (#328) keep their route-scoped toolbar + Grid/Rows toggle.
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
-//     src/components/__tests__/analytics-portlet-view.test.tsx
+//     src/components/__tests__/embedded-drizzle-cube-dashboard-grid.test.tsx
 
 import "./jsdom-shims";
 import React from "react";
@@ -35,14 +35,14 @@ vi.mock("drizzle-cube/client", async (importOriginal) => {
   };
 });
 
-import { AnalyticsPortletView } from "../analytics-portlet-view";
+import { EmbeddedDrizzleCubeDashboardGrid } from "../embedded-drizzle-cube-dashboard-grid";
 import { AGENTS_DEFAULT_CONFIG } from "../seed-configs/agents-default";
 
 afterEach(cleanup);
 
-describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProvider shell", () => {
+describe("EmbeddedDrizzleCubeDashboardGrid — embedded drizzle-cube grid under the CubeProvider shell", () => {
   test("mounts the embedded analytics grid (real DC composition) for config.dashboard", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} />);
 
     // The DC grid surface + modals mount — the embedded analytics dashboard
     // renders the real drizzle-cube composition, not a placeholder.
@@ -51,7 +51,7 @@ describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProv
   });
 
   test("editable non-empty dashboard mounts the Cinatra toolbar (owner Edit affordance)", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} editable onSave={async () => {}} />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} editable onSave={async () => {}} />);
 
     // Editable + non-empty → the Cinatra toolbar mounts (same gating as
     // ComposedDashboard); the grid surface still renders.
@@ -61,7 +61,7 @@ describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProv
   });
 
   test("provides the CubeProvider/QueryClient shell around the grid (#325(a))", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} />);
 
     // DashboardsClientShell stamps the shell marker attribute and wraps the grid;
     // the grid surface lives INSIDE that shell (the data context travels with the
@@ -72,14 +72,14 @@ describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProv
   });
 
   test("is read-only by default — no Edit affordance (the embedded-extension acceptance)", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} />);
     // No page anchor + not editable → the toolbar renders without the owner Edit
     // button (DashboardGridContainer read-only branch: ComposedDashboard editable=false).
     expect(screen.queryByRole("button", { name: "Edit dashboard" })).toBeNull();
   });
 
   test("forwards pageAnchor to the shell so route-scoped toolbar actions render (#328 seam)", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} editable pageAnchor="agents" />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} editable pageAnchor="agents" />);
 
     const liveAction = document.querySelector(
       '[data-cinatra-dashboard-shell="true"][data-cinatra-page-anchor="agents"] ' +
@@ -91,7 +91,7 @@ describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProv
 
   test("forwards dashboardModes — ['grid','rows'] surfaces the Grid/Rows toggle in edit mode", () => {
     render(
-      <AnalyticsPortletView
+      <EmbeddedDrizzleCubeDashboardGrid
         dashboard={AGENTS_DEFAULT_CONFIG}
         editable
         onSave={async () => {}}
@@ -105,7 +105,7 @@ describe("AnalyticsPortletView — embedded drizzle-cube grid under the CubeProv
   });
 
   test("default dashboardModes (['grid']) keeps the Grid/Rows toggle hidden", () => {
-    render(<AnalyticsPortletView dashboard={AGENTS_DEFAULT_CONFIG} editable onSave={async () => {}} />);
+    render(<EmbeddedDrizzleCubeDashboardGrid dashboard={AGENTS_DEFAULT_CONFIG} editable onSave={async () => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
     expect(screen.queryByRole("button", { name: "Grid" })).toBeNull();

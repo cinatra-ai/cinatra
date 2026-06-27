@@ -164,6 +164,29 @@ function isRegistryPackageNotFound(error: unknown): boolean {
   return code === "E404" || status === 404;
 }
 
+/**
+ * True when the agent-detail read failed because the gatekept install-authorize
+ * call was denied — either a marketplace transport/auth denial
+ * (`MarketplaceMcpError`, e.g. surfaced as HTTP 502) or a local
+ * credential-resolution failure (`VendorCredentialsMissingError`, which also
+ * covers the corrupt-consumer-attachment case). cinatra #627: these degrade the
+ * detail page to a READ-ONLY listing rather than crashing into the generic
+ * Application Error page.
+ *
+ * Detection is by ERROR CLASS, NOT by HTTP status — the denial surfaces as a
+ * `MarketplaceMcpError` regardless of the upstream status, so status-keying
+ * would miss it (per the codex review on the issue). We match on the stable
+ * `error.name` so this stays decoupled from both the vendored marketplace MCP
+ * client package (import-banned in NEW call sites) and the server-only
+ * `@/lib/gatekept-install` module graph (kept out of the static import set so
+ * screens.tsx test-loads without the MCP/http client). The class `name` is set
+ * in each constructor and survives subclassing/serialization.
+ */
+function isInstallAuthorizeDegradeError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === "MarketplaceMcpError" || name === "VendorCredentialsMissingError";
+}
+
 function formatDate(date: Date | string | null | undefined): string {
   if (!date) return "—";
   try {
@@ -562,6 +585,59 @@ export async function resolveDetailReadConfig(
 }
 
 // ---------------------------------------------------------------------------
+// RegistryEntryDegradedSections
+//
+// cinatra #627 degrade path: the agent-detail manifest read needs a gatekept
+// install-authorize grant (`resolveGatekeptInstallConfig`). When that authorize
+// call is DENIED — a marketplace `MarketplaceMcpError` (e.g. HTTP 502) or a
+// local `VendorCredentialsMissingError` / corrupt consumer-attachment — there
+// is no `entry` manifest to render the admin metadata or install controls from.
+// Rather than re-throwing (which crashes the whole route into the generic
+// Application Error page), the detail body degrades to a READ-ONLY listing: the
+// route still owns the marketplace hero (name/kind/license/version), this
+// renders the marketplace-sourced README primary body plus a clear
+// "install unavailable" notice, and NO install/update/uninstall controls (the
+// authorize grant they depend on is exactly what is unavailable).
+// ---------------------------------------------------------------------------
+
+function RegistryEntryDegradedSections({
+  packageName,
+  readmeMarkdown,
+}: {
+  packageName: string;
+  readmeMarkdown?: string | null;
+}) {
+  return (
+    <>
+      {/* PRIMARY BODY — the marketplace-sourced README, the SAME field the route
+          threads in on the healthy path. Empty/absent → no section (no empty
+          pane), exactly as the healthy detail body behaves. */}
+      <MarketplaceReadmeMarkdownSection markdown={readmeMarkdown} />
+
+      <Alert variant="warning">
+        <TriangleAlert />
+        <AlertTitle>Install unavailable</AlertTitle>
+        <AlertDescription>
+          <p>
+            This extension can be viewed but not installed right now — the
+            marketplace install authorization for{" "}
+            <span className="font-mono">{packageName}</span> could not be
+            obtained. The listing below is read-only; install, update, and
+            uninstall controls are disabled until the authorization succeeds.
+          </p>
+          <p>
+            This is usually a transient or operator-side configuration issue
+            (the instance&rsquo;s marketplace install credential). Try again
+            shortly; if it persists, ask an operator to check the instance&rsquo;s
+            marketplace connection.
+          </p>
+        </AlertDescription>
+      </Alert>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // RegistryEntryDetailSections
 //
 // The agent-specific BODY of the marketplace detail view. The page shell —
@@ -625,6 +701,49 @@ export async function RegistryEntryDetailSections({
   } catch (error) {
     if (isRegistryPackageNotFound(error)) {
       notFound();
+    }
+    // cinatra #627: a gatekept install-authorize denial (a marketplace
+    // `MarketplaceMcpError` — e.g. HTTP 502 — OR a local
+    // `VendorCredentialsMissingError` / corrupt-attachment) must NOT crash the
+    // route into the generic Application Error page. Degrade to a READ-ONLY
+    // listing: the route still renders the marketplace hero + README; here we
+    // render an "install unavailable" notice with the install controls
+    // suppressed, and emit a diagnostic naming WHICH credential source was in
+    // play so the next such failure is diagnosable.
+    if (isInstallAuthorizeDegradeError(error)) {
+      // Source label is a non-secret classifier (never a token value) of which
+      // marketplace bearer the authorize call would have drawn from. Dynamically
+      // imported to keep the host server-only credential modules out of the
+      // static import graph (mirrors the `@/lib/gatekept-install` pattern); any
+      // failure to derive it must not re-break the degrade path, so it defaults
+      // to "unknown".
+      let credentialSource = "unknown";
+      try {
+        const [{ describeMarketplaceTokenSource }, { readInstanceIdentity }] =
+          await Promise.all([
+            import("@/lib/marketplace-credentials"),
+            import("@/lib/instance-identity-store"),
+          ]);
+        credentialSource = describeMarketplaceTokenSource(readInstanceIdentity());
+      } catch (diagErr) {
+        console.warn(
+          "[registry-detail] could not derive marketplace credential source for the install-authorize degrade diagnostic:",
+          diagErr instanceof Error ? diagErr.message : diagErr,
+        );
+      }
+      console.warn(
+        "[registry-detail] install-authorize failed for %s — degrading to a read-only listing (install disabled). errorClass=%s credentialSource=%s message=%s",
+        packageName,
+        (error as { name?: string })?.name ?? "unknown",
+        credentialSource,
+        error instanceof Error ? error.message : String(error),
+      );
+      return (
+        <RegistryEntryDegradedSections
+          packageName={packageName}
+          readmeMarkdown={readmeMarkdown}
+        />
+      );
     }
     throw error;
   }

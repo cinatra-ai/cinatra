@@ -7,7 +7,7 @@
  * apiVersion 1.2 analytics envelope. This spec proves the other half — a
  * persisted apiVersion 1.2 analytics row OPENS at `/dashboards/[id]` and renders
  * the full interactive drizzle-cube grid through
- * `PortletHost` → `AnalyticsPortletView`, identical to `/agents`.
+ * `PortletHost` → `EmbeddedDrizzleCubeDashboardGrid`, identical to `/agents`.
  *
  * The row is seeded in `auth.setup.ts` (`seedV12AnalyticsDashboard`) as the
  * literal envelope the mutation service's `wrapDcAsV12` emits, and that setup

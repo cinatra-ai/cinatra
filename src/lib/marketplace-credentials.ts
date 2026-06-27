@@ -150,6 +150,69 @@ export function hasConsumerOrVendorMarketplaceToken(identity: InstanceIdentity |
 }
 
 /**
+ * Non-secret label of WHICH credential source {@link resolveConsumerOrVendorMarketplaceToken}
+ * would draw from, given `identity`. Mirrors the resolver's resolution order
+ * exactly but NEVER decrypts or returns any token value — it is a pure
+ * source-shape classifier safe to log.
+ *
+ * Diagnostic only (cinatra #627): when an install-authorize call fails and the
+ * detail page degrades to read-only, the next operator needs to know which
+ * marketplace bearer was in play (operator env override vs the consumer
+ * attachment vs the legacy vendor token) without re-deriving the resolution by
+ * hand. The returned label never carries token bytes.
+ *
+ * Returns:
+ *  - `"env-instance-token"` — `MARKETPLACE_INSTANCE_TOKEN` env override is set.
+ *  - `"consumer-attachment-corrupted"` — a consumerAttachment is present but
+ *    malformed (the resolver would throw `CONSUMER_ATTACHMENT_CORRUPTED`).
+ *  - `"consumer-attachment"` — a well-formed consumerAttachment would be used.
+ *  - `"vendor-token"` — the legacy vendor `tokenCiphertext` would be used.
+ *  - `"none"` — no source available (the resolver would throw
+ *    `VENDOR_CREDENTIALS_MISSING`).
+ */
+export type MarketplaceTokenSource =
+  | "env-instance-token"
+  | "consumer-attachment"
+  | "consumer-attachment-corrupted"
+  | "vendor-token"
+  | "none";
+
+export function describeMarketplaceTokenSource(
+  identity: InstanceIdentity | null,
+): MarketplaceTokenSource {
+  const envToken = process.env.MARKETPLACE_INSTANCE_TOKEN?.trim();
+  if (envToken && envToken.length > 0) {
+    return "env-instance-token";
+  }
+
+  if (identity) {
+    const attachment = identity.consumerAttachment;
+    if (attachment !== undefined) {
+      // Same well-formedness gate the resolver enforces — a present-but-broken
+      // attachment is its own (operator-visible) source class, never a silent
+      // fall-through to the vendor token.
+      const wellFormed =
+        typeof attachment.marketplaceTokenCiphertext === "string" &&
+        attachment.marketplaceTokenCiphertext.length > 0 &&
+        typeof attachment.marketplaceTokenIv === "string" &&
+        attachment.marketplaceTokenIv.length > 0 &&
+        attachment.marketplaceTokenAlgo === "aes-256-gcm";
+      return wellFormed ? "consumer-attachment" : "consumer-attachment-corrupted";
+    }
+
+    if (
+      typeof identity.tokenCiphertext === "string" &&
+      identity.tokenCiphertext.length > 0 &&
+      typeof identity.tokenIv === "string"
+    ) {
+      return "vendor-token";
+    }
+  }
+
+  return "none";
+}
+
+/**
  * Resolve the marketplace MCP bearer used EXCLUSIVELY by admin/moderator
  * call sites (the vendor-application moderation queue, vendor-application
  * approve/reject/reset abilities, and any other PRINCIPAL_ADMIN-bound MCP
