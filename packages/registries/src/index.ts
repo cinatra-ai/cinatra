@@ -12,7 +12,12 @@ export {
   FIRST_PARTY_PACKAGE_SCOPE,
   vendorScopeOfPackage,
   dependencyScopePrefixesFor,
+  // Canonical `@vendor/name` → {vendor, name} splitter (first `/` only; never
+  // splits the scope on `-`). The single source of truth for vendor/name
+  // decomposition across the agent-create + on-disk writers (cinatra#537).
+  parsePackageId,
 } from "./scope";
+export type { PackageId } from "./scope";
 
 export {
   PluginDependencyCycleError,

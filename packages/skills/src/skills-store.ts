@@ -7,6 +7,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
+import { parsePackageId } from "@cinatra-ai/registries";
 
 // Auto-sync the configured GitHub repository once per process lifetime.
 // After the first call (success or failure), the flag stays true so subsequent
@@ -135,13 +136,25 @@ export function deriveContextFromLegacy(
         agent_template_id: null,
       };
     case "agent": {
-      // Try to split packageSlug at the first dash to derive vendor/package.
+      // Derive vendor/package from packageSlug via the canonical splitter
+      // (cinatra#537): split on the FIRST `/` ONLY, never on `-`. A scoped
+      // "@vendor/name" yields {vendor, name}; a legacy no-`@` "<vendor>/<pkg>"
+      // pair splits on the first `/`; a flat slug with no vendor leaves both
+      // null so the resolver doesn't synthesize a bogus vendor from a hyphen.
       // Callers should pass explicit context with agent_template_id to satisfy
       // the bidirectional CHECK constraint; the bridge fallback uses
       // binding_scope='owner' for safety.
-      const dashIdx = packageSlug.indexOf("-");
-      const vendor = dashIdx > 0 ? packageSlug.slice(0, dashIdx) : null;
-      const pkg = dashIdx > 0 ? packageSlug.slice(dashIdx + 1) : packageSlug;
+      let vendor: string | null = null;
+      let pkg: string = packageSlug;
+      const parsed = parsePackageId(packageSlug);
+      if (parsed && parsed.vendor) {
+        vendor = parsed.vendor;
+        pkg = parsed.name;
+      } else if (packageSlug.includes("/")) {
+        const ix = packageSlug.indexOf("/");
+        vendor = packageSlug.slice(0, ix);
+        pkg = packageSlug.slice(ix + 1);
+      }
       return {
         ...base,
         owner_scope: "workspace",
@@ -370,18 +383,26 @@ function getSkillDiskDir(
       // (the LOCAL_USER_ID sentinel).
       return path.join(root, "personal", ownerUserId ?? "local-user", skillSlug);
     case "agent": {
-      // packageSlug may be npm-scoped ("cinatra/email-test-delivery-agent")
-      // or flat ("cinatra-email-test-delivery-agent"). Prefer the npm-scoped
-      // shape; for flat slugs, fall back to splitting at the
-      // FIRST dash. Result: workspace/~agents/<vendor>/<package>/<skill>/
+      // packageSlug may be npm-scoped ("@cinatra-ai/email-test-delivery-agent"),
+      // a legacy no-`@` "<vendor>/<package>" pair, or a flat slug with no
+      // vendor. The canonical splitter is the SINGLE source of truth for
+      // vendor/name (cinatra#537): it splits on the FIRST `/` ONLY and NEVER
+      // on `-`, so a hyphen in the scope ("@marcushorndt-local/...") can no
+      // longer be mis-read as a vendor/name boundary. The legacy no-`@`
+      // "<vendor>/<package>" shape is handled below since parsePackageId only
+      // treats a leading-`@` input as scoped; a flat slug with no `/` keeps
+      // the historical "unknown" vendor fallback.
+      // Result: workspace/~agents/<vendor>/<package>/<skill>/
       let vendor = "unknown";
       let pkg = packageSlug;
-      if (packageSlug.includes("/")) {
+      const parsed = parsePackageId(packageSlug);
+      if (parsed && parsed.vendor) {
+        // npm-scoped "@vendor/name".
+        vendor = parsed.vendor;
+        pkg = parsed.name;
+      } else if (packageSlug.includes("/")) {
+        // Legacy no-`@` "<vendor>/<package>" — split on the FIRST `/` only.
         const ix = packageSlug.indexOf("/");
-        vendor = packageSlug.slice(0, ix);
-        pkg = packageSlug.slice(ix + 1);
-      } else if (packageSlug.includes("-")) {
-        const ix = packageSlug.indexOf("-");
         vendor = packageSlug.slice(0, ix);
         pkg = packageSlug.slice(ix + 1);
       }
@@ -1200,9 +1221,27 @@ export async function upsertSkill(input: {
   // provided (e.g. `cinatra-ai/assistant-skills`), else fall back to the
   // packageName-slugified flat slug. The DB packageId/packageRecord still
   // use the flat `packageSlug` so existing catalog keys stay stable.
+  //
+  // cinatra#537: for AGENT-bound skills the disk layout is
+  // `~agents/<vendor>/<package>/<skill>/`. Deriving that split from the FLAT
+  // slugified `packageSlug` (e.g. "marcushorndt-local-page-summarizer-agent")
+  // is impossible without mis-cutting the scope on a hyphen. So when the caller
+  // didn't pass an explicit storagePackagePath, derive a canonical
+  // `<vendor>/<package>` from the REAL `input.packageName` via parsePackageId
+  // (split on the FIRST `/` only; never on `-`). This makes
+  // "@marcushorndt-local/page-summarizer-agent" land at
+  // `~agents/marcushorndt-local/page-summarizer-agent/` — consistent with the
+  // extensions/<vendor>/<slug>/ writer and the package.json#name.
+  let agentStoragePath: string | undefined;
+  if (input.type === "agent" && !input.storagePackagePath) {
+    const parsed = parsePackageId(input.packageName.trim());
+    if (parsed && parsed.vendor) {
+      agentStoragePath = `${parsed.vendor}/${parsed.name}`;
+    }
+  }
   const skillDiskDir = getSkillDiskDir(
     input.type,
-    input.storagePackagePath ?? packageSlug,
+    input.storagePackagePath ?? agentStoragePath ?? packageSlug,
     skillSlug,
     input.ownerUserId,
   );
@@ -1223,7 +1262,11 @@ export async function upsertSkill(input: {
   //      writes must land in the canonical store — this prevents a crafted
   //      segment from resolving into the sibling legacy root for a cross-root
   //      clobber.
-  for (const segment of [input.storagePackagePath ?? packageSlug, skillSlug, input.ownerUserId ?? ""]) {
+  // Validate the SAME package-path segment that actually feeds getSkillDiskDir
+  // (the explicit storagePackagePath, the cinatra#537 agent vendor/package
+  // derivation, or the flat packageSlug), so a stray `..` can never escape via
+  // any of the three sources.
+  for (const segment of [input.storagePackagePath ?? agentStoragePath ?? packageSlug, skillSlug, input.ownerUserId ?? ""]) {
     if (segment.split(/[/\\]/).some((part) => part === ".." || part === ".")) {
       throw new Error("Refusing to write a skill to a path containing a traversal segment.");
     }

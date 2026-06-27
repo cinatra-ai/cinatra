@@ -33,6 +33,65 @@ export function vendorScopeOfPackage(packageName: string): string | null {
 }
 
 /**
+ * The canonical (vendor, name) decomposition of an npm-scoped package id.
+ *
+ * `vendor` is `null` ONLY for an unscoped input (no leading `@`). For that
+ * case `name` carries the whole input verbatim and the CALLER decides its own
+ * vendor fallback — this mirrors `vendorScopeOfPackage` returning `null` for
+ * unscoped names. The vendor here is WITHOUT npm's leading `@`, so it can be
+ * used directly as an on-disk `<vendor>/` path segment.
+ */
+export interface PackageId {
+  /** Vendor segment WITHOUT the leading `@` (e.g. "marcushorndt-local"). `null` for unscoped names. */
+  vendor: string | null;
+  /** Package name segment after the first `/` (e.g. "page-summarizer-agent"). */
+  name: string;
+}
+
+/**
+ * THE single canonical splitter for `@vendor/name` package ids → `{vendor, name}`.
+ *
+ * Every subsystem that derives a (vendor, name) pair from a package name MUST
+ * route through this helper so the agent-create path, the
+ * `extensions/<vendor>/<name>` writer, and the skill-store
+ * `~agents/<vendor>/<name>` writer can never disagree (cinatra#537).
+ *
+ * Rules:
+ *   - SCOPED `@vendor/name`: split on the FIRST `/` ONLY. The `@` is stripped
+ *     from the returned `vendor`. A hyphen in the scope (e.g.
+ *     `@marcushorndt-local/page-summarizer-agent`) is NEVER a vendor/name
+ *     boundary → `{vendor: "marcushorndt-local", name: "page-summarizer-agent"}`.
+ *     Any further `/` in the name part is preserved verbatim in `name`.
+ *   - UNSCOPED `name` (no leading `@`): `{vendor: null, name}` — caller applies
+ *     its own documented fallback. We deliberately do NOT guess a vendor by
+ *     splitting on `-`; that hyphen-split was the exact bug #537 fixes.
+ *   - MALFORMED scoped inputs ("@" alone, "@x" with no slash, "@/x" empty
+ *     scope, "@x/" empty name): returns `null`. Mirrors
+ *     `vendorScopeOfPackage`'s rejection set so the two helpers agree.
+ *
+ * Input is trimmed before parsing.
+ */
+export function parsePackageId(packageName: string): PackageId | null {
+  if (typeof packageName !== "string") return null;
+  const trimmed = packageName.trim();
+  if (trimmed.length === 0) return null;
+
+  if (!trimmed.startsWith("@")) {
+    // Unscoped — no vendor. Caller decides the fallback; we never split on `-`.
+    return { vendor: null, name: trimmed };
+  }
+
+  const slash = trimmed.indexOf("/");
+  // Reject "@" alone, "@x" (no slash), and "@/x" (empty scope): require at
+  // least one char between "@" and the FIRST "/".
+  if (slash <= 1) return null;
+  const vendor = trimmed.slice(1, slash); // strip leading "@"
+  const name = trimmed.slice(slash + 1); // everything after the FIRST "/"
+  if (name.length === 0) return null; // "@x/" — empty name
+  return { vendor, name };
+}
+
+/**
  * Build the dependency-scope allowlist for installing `rootPackageName`:
  * the root package's OWN vendor scope plus the first-party base-layer scope
  * (deduplicated, each as a "@scope/" prefix).

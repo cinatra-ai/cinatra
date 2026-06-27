@@ -43,6 +43,18 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@cinatra-ai/registries", () => ({
   extractExtensionPackage: vi.fn(),
   loadVerdaccioConfig: vi.fn(),
+  // skills-store imports parsePackageId for the cinatra#537 agent vendor/name
+  // split; provide the real-shaped impl so any incidental call works.
+  parsePackageId: (name: string) => {
+    if (typeof name !== "string") return null;
+    const t = name.trim();
+    if (!t) return null;
+    if (!t.startsWith("@")) return { vendor: null, name: t };
+    const i = t.indexOf("/");
+    if (i <= 1) return null;
+    const n = t.slice(i + 1);
+    return n.length === 0 ? null : { vendor: t.slice(1, i), name: n };
+  },
 }));
 
 vi.mock("@/lib/database", () => ({

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIRST_PARTY_PACKAGE_SCOPE,
   dependencyScopePrefixesFor,
+  parsePackageId,
   vendorScopeOfPackage,
 } from "@cinatra-ai/registries";
 
@@ -19,6 +20,67 @@ describe("vendorScopeOfPackage", () => {
     expect(vendorScopeOfPackage("@foo")).toBeNull(); // no slash
     expect(vendorScopeOfPackage("@/foo")).toBeNull(); // empty scope
     expect(vendorScopeOfPackage("")).toBeNull();
+  });
+});
+
+describe("parsePackageId — canonical @vendor/name splitter (cinatra#537)", () => {
+  it("splits a hyphenated SCOPE on the first '/' only — never on '-'", () => {
+    // The exact #537 regression: the hyphen in the scope must NOT be treated
+    // as a vendor/name boundary.
+    expect(parsePackageId("@marcushorndt-local/page-summarizer-agent")).toEqual({
+      vendor: "marcushorndt-local",
+      name: "page-summarizer-agent",
+    });
+  });
+
+  it("parses a first-party scoped name", () => {
+    expect(parsePackageId("@cinatra-ai/foo")).toEqual({ vendor: "cinatra-ai", name: "foo" });
+  });
+
+  it("keeps every hyphen in a multi-hyphen scope inside the vendor", () => {
+    expect(parsePackageId("@a-b-c-d/my-cool-agent")).toEqual({
+      vendor: "a-b-c-d",
+      name: "my-cool-agent",
+    });
+  });
+
+  it("strips the leading '@' from the returned vendor (usable as a path segment)", () => {
+    const parsed = parsePackageId("@acme/widget");
+    expect(parsed?.vendor).toBe("acme"); // no leading "@"
+    expect(parsed?.name).toBe("widget");
+  });
+
+  it("preserves additional '/' segments in the name part verbatim", () => {
+    expect(parsePackageId("@acme/sub/deep")).toEqual({ vendor: "acme", name: "sub/deep" });
+  });
+
+  it("returns vendor=null for an unscoped name (caller decides its own fallback)", () => {
+    // The repo convention: unscoped → no vendor, name is the whole input. We
+    // deliberately do NOT guess a vendor by splitting on '-' (that was the bug).
+    expect(parsePackageId("page-summarizer-agent")).toEqual({
+      vendor: null,
+      name: "page-summarizer-agent",
+    });
+  });
+
+  it("trims surrounding whitespace before parsing", () => {
+    expect(parsePackageId("  @acme/widget  ")).toEqual({ vendor: "acme", name: "widget" });
+  });
+
+  it("returns null for malformed scoped inputs (mirrors vendorScopeOfPackage)", () => {
+    expect(parsePackageId("@foo")).toBeNull(); // no slash
+    expect(parsePackageId("@/foo")).toBeNull(); // empty scope
+    expect(parsePackageId("@acme/")).toBeNull(); // empty name
+    expect(parsePackageId("@")).toBeNull();
+    expect(parsePackageId("")).toBeNull();
+  });
+
+  it("agrees with vendorScopeOfPackage on the vendor for every well-formed scoped name", () => {
+    for (const name of ["@cinatra-ai/foo", "@marcushorndt-local/page-summarizer-agent", "@acme/widget"]) {
+      const parsed = parsePackageId(name);
+      const scope = vendorScopeOfPackage(name);
+      expect(scope).toBe(`@${parsed?.vendor}`);
+    }
   });
 });
 

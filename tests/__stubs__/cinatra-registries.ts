@@ -48,7 +48,12 @@ export {
   FIRST_PARTY_PACKAGE_SCOPE,
   vendorScopeOfPackage,
   dependencyScopePrefixesFor,
+  // Canonical @vendor/name splitter (cinatra#537) — pure, re-export the real
+  // impl so host modules that route vendor/name derivation through it get the
+  // real first-`/`-only parsing, not a missing symbol.
+  parsePackageId,
 } from "../../packages/registries/src/scope";
+export type { PackageId } from "../../packages/registries/src/scope";
 
 // Version primitives for the dependency planner (#180). Pure semver wrappers
 // — re-export the real implementations (no pacote/native chain).

@@ -304,3 +304,72 @@ describe("agent_source_write_files — package.json#name rescoping", () => {
     expect(result.error).toMatch(/packageJson must be a JSON object/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#537 — the oas.json writer (agent_source_write), the package.json
+// writer (agent_source_write_files), and the package.json#name MUST all derive
+// ONE vendor segment for a hyphenated-scope operator. Before the fix, the
+// oas.json writer hardcoded "cinatra-ai", so a user agent on a hyphenated
+// vendor (e.g. "marcushorndt-local") was split across
+// extensions/cinatra-ai/<slug>/cinatra/oas.json and
+// extensions/marcushorndt-local/<slug>/package.json — three identities for one
+// agent.
+// ---------------------------------------------------------------------------
+describe("agent source writers agree on one vendor segment for a hyphenated scope (cinatra#537)", () => {
+  const HYPHEN_VENDOR = "marcushorndt-local";
+  const SLUG = "page-summarizer-agent";
+
+  function getWriteFilesHandler(): (req: unknown) => Promise<unknown> {
+    return createAgentBuilderPrimitiveHandlers()["agent_source_write_files"];
+  }
+  function actor() {
+    return { actorType: "user", source: "ui", userId: "u-admin", platformRole: "platform_admin" };
+  }
+
+  it("resolveInstanceVendorSegment returns the hyphenated vendor verbatim (no '-' split)", async () => {
+    const mod = (await import("../mcp/handlers")) as unknown as {
+      __resolveInstanceVendorSegment: () => string;
+    };
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
+    expect(mod.__resolveInstanceVendorSegment()).toBe(HYPHEN_VENDOR);
+  });
+
+  it("the oas.json WRITE resolver and the package.json writer share ONE vendor dir (not cinatra-ai)", async () => {
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
+
+    // (a) The oas.json writer's resolver — previously hardcoded "cinatra-ai".
+    const mod = (await import("../mcp/handlers")) as unknown as {
+      __resolveAgentJsonPathForWrite: (slug: string) => { dir: string; path: string };
+    };
+    const oasTarget = mod.__resolveAgentJsonPathForWrite(SLUG);
+    // oas.json lands at <root>/<vendor>/<slug>/cinatra/oas.json — the vendor/slug
+    // root is the dir two levels up from the cinatra/ dir.
+    const oasVendorSlugRoot = path.dirname(path.dirname(oasTarget.path));
+    expect(oasVendorSlugRoot).toBe(path.join(process.cwd(), HYPHEN_VENDOR, SLUG));
+    expect(oasTarget.path).not.toContain(`${path.sep}cinatra-ai${path.sep}`);
+
+    // (b) The package.json writer (agent_source_write_files).
+    const filesRes = (await getWriteFilesHandler()({
+      primitiveName: "agent_source_write_files",
+      input: {
+        packageSlug: SLUG,
+        packageJson: JSON.stringify({ name: `@${HYPHEN_VENDOR}/${SLUG}`, version: "0.1.0" }),
+        skillMd: "---\nname: x\n---\nClean.",
+      },
+      actor: actor(),
+      mode: "deterministic",
+    })) as { written?: boolean };
+    expect(filesRes.written).toBe(true);
+
+    const pkgVendorSlugRoot = path.join(tmpRoot, HYPHEN_VENDOR, SLUG);
+    const pkg = JSON.parse(
+      await fs.readFile(path.join(pkgVendorSlugRoot, "package.json"), "utf-8"),
+    ) as { name?: string };
+    // package.json#name vendor === on-disk vendor === oas.json vendor.
+    expect(pkg.name).toBe(`@${HYPHEN_VENDOR}/${SLUG}`);
+    expect(oasVendorSlugRoot).toBe(pkgVendorSlugRoot);
+
+    // No first-party-namespace pollution: nothing was written under cinatra-ai/.
+    await expect(fs.stat(path.join(tmpRoot, "cinatra-ai", SLUG))).rejects.toThrow();
+  });
+});
