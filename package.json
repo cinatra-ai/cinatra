@@ -241,7 +241,6 @@
     "@cinatra-ai/connectors-catalog": "workspace:*",
     "@cinatra-ai/dashboards": "workspace:*",
     "@cinatra-ai/errors": "workspace:*",
-    "@cinatra-ai/extensions": "workspace:*",
     "@cinatra-ai/google-oauth-connection": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-server": "workspace:*",
