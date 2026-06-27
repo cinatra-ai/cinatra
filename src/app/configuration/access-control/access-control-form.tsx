@@ -9,22 +9,30 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 
-import { setAuditRetentionAction, setSingleOrgModeAction } from "./actions";
+import { setAuditRetentionAction, setRegistrationClosedAction, setSingleOrgModeAction } from "./actions";
 
 type Props = {
   initialSingleOrg: boolean;
+  initialRegistrationClosed: boolean;
   initialRetentionDays: number;
 };
 
 /**
- * admin knobs for single-org mode + audit-log
- * retention. Two independent shadcn Cards; each submits
+ * admin knobs for single-org mode, self-registration, and
+ * audit-log retention. Independent shadcn Cards; each submits
  * to its server action.
  */
-export function AccessControlForm({ initialSingleOrg, initialRetentionDays }: Props) {
+export function AccessControlForm({
+  initialSingleOrg,
+  initialRegistrationClosed,
+  initialRetentionDays,
+}: Props) {
   const [singleOrg, setSingleOrg] = useState(initialSingleOrg);
+  // UI uses the inverse phrasing "Allow new sign-ups" (D9): allowSignUps = !closed.
+  const [registrationClosed, setRegistrationClosed] = useState(initialRegistrationClosed);
   const [retentionDays, setRetentionDays] = useState(String(initialRetentionDays));
   const [pendingOrg, startOrg] = useTransition();
+  const [pendingRegistration, startRegistration] = useTransition();
   const [pendingRetention, startRetention] = useTransition();
 
   function saveSingleOrg(next: boolean) {
@@ -38,6 +46,24 @@ export function AccessControlForm({ initialSingleOrg, initialRetentionDays }: Pr
       } catch {
         setSingleOrg(!next);
         toast.error("Could not update single-organization mode.");
+      }
+    });
+  }
+
+  // The switch is labeled "Allow new sign-ups"; checked = registration OPEN.
+  // Persisted flag is the inverse (closedRegistration), so closed = !allow.
+  function saveAllowSignUps(allow: boolean) {
+    const nextClosed = !allow;
+    setRegistrationClosed(nextClosed);
+    startRegistration(async () => {
+      try {
+        const fd = new FormData();
+        fd.set("registrationClosed", nextClosed ? "true" : "false");
+        await setRegistrationClosedAction(fd);
+        toast.success(allow ? "New sign-ups allowed." : "New sign-ups closed.");
+      } catch {
+        setRegistrationClosed(!nextClosed);
+        toast.error("Could not update self-registration.");
       }
     });
   }
@@ -73,6 +99,27 @@ export function AccessControlForm({ initialSingleOrg, initialRetentionDays }: Pr
               checked={singleOrg}
               disabled={pendingOrg}
               onCheckedChange={saveSingleOrg}
+            />
+          </Field>
+        </CardContent>
+      </Card>
+
+      <Card className="border-line bg-surface backdrop-blur-none">
+        <CardHeader>
+          <CardTitle>Self-registration</CardTitle>
+          <CardDescription>
+            When off, no one can self-register. Existing users sign in normally; an admin can still
+            create accounts. This blocks both email/password sign-up and social (Google) first-login.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Field orientation="horizontal">
+            <FieldLabel htmlFor="allow-signups-switch">Allow new sign-ups</FieldLabel>
+            <Switch
+              id="allow-signups-switch"
+              checked={!registrationClosed}
+              disabled={pendingRegistration}
+              onCheckedChange={saveAllowSignUps}
             />
           </Field>
         </CardContent>

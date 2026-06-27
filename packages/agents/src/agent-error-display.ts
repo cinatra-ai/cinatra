@@ -56,3 +56,21 @@ const OPENAI_RE = /openai/i;
 export function isOpenAiKeyError(text: string): boolean {
   return API_KEY_RE.test(text) && OPENAI_RE.test(text);
 }
+
+// In-app route to the MCP server configuration, where the instance's public MCP
+// URL / tunnel is set, so the panel can link the user straight to where an
+// unreachable-MCP failure is fixed (#500).
+export const MCP_CONFIG_HREF = "/configuration/mcp";
+
+// Whether an error is the hosted-MCP "tool list unreachable" 424 (#500). OpenAI
+// returns HTTP 424 (Failed Dependency) when it cannot enumerate the cinatra MCP
+// server's tools because the instance's public MCP URL is unreachable from the
+// provider. Matches BOTH the raw provider text ("… Http status code: 424 …
+// MCP server …") and our typed replacement message; requires the 424 status AND
+// an MCP marker so it does not fire on unrelated 424s.
+const HTTP_424_RE = /\b424\b/;
+const MCP_RE = /\bmcp\b/i;
+
+export function isMcpUnreachableError(text: string): boolean {
+  return HTTP_424_RE.test(text) && MCP_RE.test(text);
+}

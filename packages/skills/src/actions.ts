@@ -3,8 +3,11 @@
 import { redirect } from "next/navigation";
 import { z } from "zod";
 // Personal-skill saves validate against the installed-agents reader, not the
-// workspace-packages scan.
+// workspace-packages scan. `selectAttachableAgents` drops the internal
+// `system-*` runtime templates so a directly-POSTed system agentId is rejected
+// the same as it is hidden from the dropdown.
 import { readAgentsForSkillMatching } from "@/lib/agents-store";
+import { selectAttachableAgents } from "./attachable-agents";
 // Auth-session is resolved via dynamic import so unit tests can vi.doMock it
 // without dragging in the full app-server module graph (e.g.
 // mcp-client-connector, nango, google-oauth-connection).
@@ -116,7 +119,7 @@ export async function savePersonalSkillAction(formData: FormData) {
     redirect(`${editorPath}?error=${encodeMessage(message)}`);
   }
 
-  const agents = await readAgentsForSkillMatching();
+  const agents = selectAttachableAgents(await readAgentsForSkillMatching());
   const agent = agents.find((entry) => entry.id === parsed.data.agentId);
   if (!agent) {
     redirect(`${editorPath}?error=${encodeMessage("The selected agent is no longer available.")}`);

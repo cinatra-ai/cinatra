@@ -24,6 +24,17 @@ import type { Action } from "./registry";
 // Single-org mode
 // ---------------------------------------------------------------------------
 
+// Shared read-modify-write of the `instance_identity` connector_config row.
+// Both instance-level toggles (`singleOrg`, `closedRegistration`) live in the
+// SAME row, so each setter must preserve the other's key (and any future keys)
+// rather than overwrite the whole object. This helper centralizes that RMW so a
+// new toggle can never accidentally clobber a sibling key (D8).
+async function updateInstanceIdentityConfig(patch: Record<string, unknown>): Promise<void> {
+  const { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } = await import("@/lib/database");
+  const existing = readConnectorConfigFromDatabase<Record<string, unknown> | null>("instance_identity", null) ?? {};
+  writeConnectorConfigToDatabase("instance_identity", { ...existing, ...patch });
+}
+
 /** Read the single-org toggle. Defaults to false (multi-org). */
 export async function isSingleOrgMode(): Promise<boolean> {
   try {
@@ -35,11 +46,40 @@ export async function isSingleOrgMode(): Promise<boolean> {
   }
 }
 
-/** Admin knob — set the single-org toggle. */
+/** Admin knob — set the single-org toggle. Preserves other instance_identity keys. */
 export async function setSingleOrgMode(singleOrg: boolean): Promise<void> {
-  const { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } = await import("@/lib/database");
-  const existing = readConnectorConfigFromDatabase<Record<string, unknown> | null>("instance_identity", null) ?? {};
-  writeConnectorConfigToDatabase("instance_identity", { ...existing, singleOrg });
+  await updateInstanceIdentityConfig({ singleOrg });
+}
+
+// ---------------------------------------------------------------------------
+// Closed-registration mode
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the closed-registration toggle. Defaults to FALSE (registration open) so
+ * the OSS fresh-install behavior is preserved (D5/D8). Mirrors isSingleOrgMode:
+ * any read error → false (FAIL OPEN). A DB-backed flag read failing implies
+ * broader DB unavailability where account creation likely fails anyway; the
+ * authoritative block-time count (auth.ts) fails CLOSED on its own count error,
+ * which is the path that matters when the operator has explicitly closed the
+ * door. Only a stored primitive `true` enables the closed state.
+ */
+export async function isRegistrationClosed(): Promise<boolean> {
+  try {
+    const { readConnectorConfigFromDatabase } = await import("@/lib/database");
+    const cfg = readConnectorConfigFromDatabase<{ closedRegistration?: boolean } | null>("instance_identity", null);
+    return cfg?.closedRegistration === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Admin knob — set the closed-registration toggle. Preserves other
+ * instance_identity keys (e.g. `singleOrg`) via the shared RMW helper (D8).
+ */
+export async function setRegistrationClosed(closed: boolean): Promise<void> {
+  await updateInstanceIdentityConfig({ closedRegistration: closed });
 }
 
 // Org-creation in single-org mode is gated authoritatively inside the

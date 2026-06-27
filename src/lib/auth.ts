@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { cinatraAuthAdditionalUserFields } from "./better-auth-schema";
 import {
@@ -356,6 +357,20 @@ export const auth = betterAuth({
         }
       : undefined,
   databaseHooks: {
+    user: {
+      create: {
+        // Closed-registration enforcement (D1–D5). The SINGLE authoritative
+        // server-side gate for both email/password sign-up AND social
+        // first-login (both create the user row through this path). It is
+        // dynamic (reads the DB-backed toggle per request) because
+        // `emailAndPassword.disableSignUp` is a STATIC boot option that cannot
+        // read the DB per request. Throws an APIError to abort (never returns
+        // false / {data:false} — D2/D10). See enforceClosedRegistration.
+        async before(user, ctx) {
+          await enforceClosedRegistration(user, ctx);
+        },
+      },
+    },
     account: {
       create: {
         async after(account) {
@@ -481,6 +496,98 @@ export async function hasAnyBetterAuthUsers() {
   );
 
   return Number(result.rows[0]?.count ?? "0") > 0;
+}
+
+// Definitive count of HUMAN users (userType is distinct from 'assistant' — D3),
+// for the closed-registration gate. Unlike hasAnyBetterAuthUsers(), this THROWS
+// on any inspection failure (D4): hasAnyBetterAuthUsers returns false on error,
+// conflating "zero humans" with "DB unavailable", which would let the
+// first-human bootstrap exception fire on an UNKNOWN count and silently open a
+// closed door. The gate orchestrator needs a value it can trust, so this
+// propagates the error and the orchestrator fails CLOSED on it.
+//
+// Wrapped in a pg advisory transaction lock.
+// HONEST SCOPE OF THE LOCK: it serializes the GATE'S OWN COUNT READ so two
+// concurrent gate evaluations observe a consistent snapshot of the count. It
+// does NOT — and cannot — serialize better-auth's subsequent user INSERT: the
+// lock is `pg_advisory_xact_lock`, released at the end of THIS short
+// count-transaction, well before better-auth performs the INSERT in its own
+// later transaction. So the pre-existing concurrent-first-signup race (two fresh
+// installs both seeing humanCount=0 and both creating a "first" user) is NOT
+// closed by this feature; that race lives in `ensureInitialAdminBootstrap`'s
+// bootstrap path and is explicitly OUT OF SCOPE per DECISIONS.md D4. The lock is
+// kept only to give the gate's count read a single, low-contention serialization
+// point; the count value itself is what the decision depends on.
+async function countHumanUsersLocked(): Promise<number> {
+  return betterAuthDb.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext('cinatra'), hashtext('registration-gate'))`,
+    );
+    const result = await tx.execute<{ count: string }>(
+      sql`select count(*)::text as count from public."user" where "userType" is distinct from 'assistant'`,
+    );
+    const raw = result.rows[0]?.count;
+    const parsed = Number(raw ?? NaN);
+    if (!Number.isFinite(parsed)) {
+      // Reachable DB returning no/garbage count row is itself an inspection
+      // failure — THROW so the gate fails CLOSED (D4) rather than treating an
+      // unparseable result as "zero humans" (which would open the door).
+      throw new Error(`registration-gate: unparseable human count (raw=${String(raw)})`);
+    }
+    return parsed;
+  });
+}
+
+/**
+ * Thin production wrapper for the `user.create.before` database hook (D1–D5).
+ * The allow/block DECISION is owned entirely by the shared, unit-tested
+ * `resolveRegistrationDecision` orchestrator in `@/lib/closed-registration-gate`
+ * — there is NO parallel branch logic here. This wrapper only (a) injects the
+ * real side-effect deps (`isRegistrationClosed`, `countHumanUsersLocked`) and
+ * (b) THROWS the FORBIDDEN APIError on a "block" decision (D2). One decision
+ * authority, importable and tested directly.
+ *
+ * `ctx` is the current endpoint's auth context (better-auth passes
+ * `await getCurrentAuthContext().catch(() => null)` to every db `before` hook,
+ * so `ctx.path` is the endpoint being executed). It can be `null` when the user
+ * row is created outside any endpoint — treated as a public path by the gate.
+ *
+ * OAuth limitation (acceptable per spec): on the OAuth first-login path
+ * (`/callback/:id`), better-auth converts this thrown APIError into an OAuth
+ * redirect error keyed on the message, so the `REGISTRATION_CLOSED` machine code
+ * is NOT preserved to the client on that path — only the email endpoint
+ * (`/sign-up/email`) returns the exact 403 + code. The block itself still
+ * happens on both paths (the user row is never created).
+ */
+async function enforceClosedRegistration(
+  user: { userType?: unknown } & Record<string, unknown>,
+  ctx: { path?: unknown } | null,
+): Promise<void> {
+  const {
+    resolveRegistrationDecision,
+    REGISTRATION_CLOSED_CODE,
+    REGISTRATION_CLOSED_MESSAGE,
+  } = await import("@/lib/closed-registration-gate");
+  const { isRegistrationClosed } = await import("@/lib/authz/instance-mode");
+
+  const decision = await resolveRegistrationDecision({
+    user,
+    ctx,
+    // D5 — isRegistrationClosed swallows read errors to false (fail OPEN).
+    isClosed: isRegistrationClosed,
+    // D4 — throws on inspection failure; the orchestrator catches and fails CLOSED.
+    countHumans: countHumanUsersLocked,
+  });
+
+  if (decision === "block") {
+    // D2 — throw an APIError so the email endpoint returns FORBIDDEN (403) with
+    // a precise code, not the generic "unable to create user" that
+    // `return false` would yield. (See OAuth limitation above.)
+    throw APIError.from("FORBIDDEN", {
+      code: REGISTRATION_CLOSED_CODE,
+      message: REGISTRATION_CLOSED_MESSAGE,
+    });
+  }
 }
 
 export async function ensureInitialAdminBootstrap(userId: string) {

@@ -125,7 +125,7 @@ async function OpenAIModalContent() {
       <NangoManagedApiCard
         connectorKey="openai"
         title="OpenAI API"
-        description="Connect OpenAI through Nango for Cinatra's model-backed workflows."
+        description="Connect your OpenAI account to power Cinatra's AI features."
         badge={isConnected ? "Connected" : hasNangoConnection ? "API key provided" : "Setup required"}
         isConnected={hasNangoConnection || isConnected}
         usesConnectUI={true}
