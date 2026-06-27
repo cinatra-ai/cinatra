@@ -34,6 +34,7 @@ import {
   type DelegatedMcpActor,
 } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
+import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
 import { McpAuthUiProvider } from "./components/mcp-auth-ui-provider";
 import { McpClientDetailManager, McpClientsDashboard, type OAuthClientRecord } from "./components/mcp-client-manager";
@@ -51,6 +52,7 @@ import {
   urlRequestHost,
 } from "./dev-admin-bypass";
 import { PageHeader } from "@/components/page-header";
+import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getLocalMcpServerUrl, getPublicMcpServerUrl, getTrustedTokenOrigins } from "./llm-credentials";
 import { z } from "zod";
 
@@ -401,38 +403,6 @@ function emitDevTrustedHostsWarningOnce(): void {
       hosts.join(", ") +
       ". Never list a publicly-reachable hostname unless you accept unauthenticated admin access.",
   );
-}
-
-function replaceOriginInString(value: string, sourceOrigin: string, targetOrigin: string) {
-  let nextValue = value;
-
-  if (sourceOrigin !== targetOrigin) {
-    nextValue = nextValue.replaceAll(sourceOrigin, targetOrigin);
-  }
-
-  return nextValue
-    .replaceAll("http://localhost:3000", targetOrigin)
-    .replaceAll("https://localhost:3000", targetOrigin)
-    .replaceAll("http://127.0.0.1:3000", targetOrigin)
-    .replaceAll("https://127.0.0.1:3000", targetOrigin);
-}
-
-function replaceOriginInValue(value: unknown, sourceOrigin: string, targetOrigin: string): unknown {
-  if (typeof value === "string") {
-    return replaceOriginInString(value, sourceOrigin, targetOrigin);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => replaceOriginInValue(entry, sourceOrigin, targetOrigin));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, replaceOriginInValue(entry, sourceOrigin, targetOrigin)]),
-    );
-  }
-
-  return value;
 }
 
 async function rewriteJsonOriginResponse(input: {
@@ -1585,7 +1555,13 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
               queryString={queryString}
             />
 
-            <AuthView path={path} />
+            {/* cinatra#484: keep the better-auth-ui password show/hide toggle out
+                of the field→field Tab flow and correctly announced to assistive
+                tech (it ships no tabIndex / accessible name and offers no
+                override hook). Mirrors the primary sign-up form fix. */}
+            <PasswordToggleA11y>
+              <AuthView path={path} />
+            </PasswordToggleA11y>
             </CardContent>
           </Card>
         </div>

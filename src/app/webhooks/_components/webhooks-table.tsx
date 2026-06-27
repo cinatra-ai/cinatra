@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { WebhookIcon } from "lucide-react";
+
 import {
   GENERATED_WEBHOOK_REGISTRY_META,
   type GeneratedWebhookRegistryMeta,
@@ -10,6 +13,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Button } from "@/components/ui/button";
+
+/**
+ * Where the webhook-authoring guide lives. Inbound webhooks are
+ * EXTENSION-AUTHORED (declared via `cinatra.webhooks` in an extension's
+ * package.json) — there is no built-in form to register one from this page,
+ * so the empty state points authors at the guide + the marketplace.
+ */
+const WEBHOOK_AUTHORING_DOCS_HREF =
+  "https://github.com/cinatra-ai/cinatra/blob/main/docs/webhooks/authoring-inbound-webhooks.md";
+const MARKETPLACE_HREF = "/configuration/marketplace";
 
 /**
  * Derive the public inbound-webhook path prefix for a registry row. Mirrors the
@@ -28,13 +50,39 @@ export function WebhooksTable({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-card border border-line bg-surface px-6 py-12 text-center">
-        <p className="text-sm font-medium text-foreground">No webhooks registered yet</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Inbound webhooks declared by extensions (via <code>cinatra.webhooks</code>) appear
-          here once an extension registers a hook.
-        </p>
-      </div>
+      <Empty
+        className="rounded-card border border-line bg-surface py-12"
+        data-testid="webhooks-empty-state"
+      >
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <WebhookIcon />
+          </EmptyMedia>
+          <EmptyTitle>No webhooks registered yet</EmptyTitle>
+          <EmptyDescription>
+            Inbound webhooks are <strong>provided by installed extensions</strong> that
+            declare <code>cinatra.webhooks</code> in their <code>package.json</code> — you
+            can&apos;t register one from this page. A hook appears here once such an
+            extension is installed and the registry is regenerated. For example, an
+            extension declaring a <code>post-published</code> hook is served at{" "}
+            <code>/webhook/&lt;vendor&gt;/&lt;slug&gt;/post-published/&lt;bindingId&gt;</code>.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild>
+            <Link
+              href={WEBHOOK_AUTHORING_DOCS_HREF}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Learn how to author a webhook
+            </Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href={MARKETPLACE_HREF}>Browse extensions</Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
     );
   }
 

@@ -69,6 +69,28 @@ describe("WebhooksTable", () => {
     expect(container.querySelectorAll("tbody tr")).toHaveLength(0);
   });
 
+  it("gives actionable empty-state guidance (issue 615)", () => {
+    const container = render([]);
+    const text = container.textContent ?? "";
+    // (1) make clear webhooks are extension-authored, not registered here.
+    expect(text).toContain("provided by installed extensions");
+    expect(text).toContain("cinatra.webhooks");
+    expect(text).toMatch(/can.?t register one from this page/);
+    // (2) a concrete example of how a webhook is served once declared.
+    expect(text).toContain("post-published");
+    // (3) a docs link to the webhook-authoring guide + a marketplace link.
+    const hrefs = Array.from(
+      container.querySelectorAll("a"),
+      (a) => a.getAttribute("href"),
+    );
+    expect(
+      hrefs.some((h) =>
+        h?.includes("docs/webhooks/authoring-inbound-webhooks.md"),
+      ),
+    ).toBe(true);
+    expect(hrefs).toContain("/configuration/marketplace");
+  });
+
   it("renders a row per registered webhook with the derived public path", () => {
     const container = render([sampleRow]);
     const text = container.textContent ?? "";

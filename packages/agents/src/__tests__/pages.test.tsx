@@ -91,12 +91,15 @@ describe("NewAgentPage merged discovery table", () => {
     const source = readSource();
     expect(source).toMatch(/No human-in-the-loop agents installed/);
     expect(source).toMatch(
-      /Install an agent with review or approval steps from the registry, or connect an external A2A server\./,
+      /Install an agent with review or approval steps from the marketplace, or connect an external A2A server\./,
     );
-    expect(source).toMatch(/Open registry/);
+    expect(source).toMatch(/Browse marketplace/);
     expect(source).toMatch(/Connect A2A server/);
-    expect(source).toMatch(/\/agents\/registry/);
+    expect(source).toMatch(/\/configuration\/marketplace/);
     expect(source).toMatch(/\/connectors\?tool=a2a-server/);
+    // Empty state must NOT point at the retired in-app registry route.
+    expect(source).not.toMatch(/\/agents\/registry/);
+    expect(source).not.toMatch(/Open registry/);
   });
 
   // Icon pinning — Bot only (not Ai which doesn't exist in lucide-react)

@@ -6,7 +6,7 @@
     "packages/agents/src/store.ts": 4488,
     "packages/chat/src/chat-page.tsx": 3380,
     "packages/skills/src/skills-store.ts": 2841,
-    "packages/mcp-server/src/index.tsx": 1993,
+    "packages/mcp-server/src/index.tsx": 1969,
     "src/lib/background-jobs.ts": 990,
     "src/lib/database.ts": 1742,
     "src/lib/extension-install-pipeline.ts": 1607,
