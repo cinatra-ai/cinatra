@@ -15,6 +15,12 @@ import { runResourceProjectMove } from "@/lib/resource-project-move";
 import { deliverMentionWebhook } from "@/lib/assistant-webhook";
 import { callCodexCliAssistant } from "@/lib/codex-bridge";
 import { callGeminiCliAssistant } from "@/lib/gemini-cli-bridge";
+// Operator authz + strict pre-spawn audit + prompt-byte bound for the
+// in-process @chatgpt / @gemini host-CLI bridge (engineering#339). Mirrors the
+// /api/chat/chatgpt route gate so the chat-mention path cannot be reached by an
+// ordinary authenticated org member (chat_thread_send is object.create, not
+// operator-only).
+import { authorizeChatBridgeMention } from "@/app/api/chat/chatgpt/gate";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { decodeCursor, buildListPage } from "@/lib/mcp-pagination";
 import { randomUUID } from "node:crypto";
@@ -340,14 +346,60 @@ async function handleChatThreadSend(
     });
   }
 
+  // engineering#339: the in-process @chatgpt / @gemini bridge spawns the host
+  // Codex / Gemini CLI on the host's provider credentials — the SAME operator
+  // power the /api/chat/chatgpt route gates. Resolve the caller's full
+  // ActorContext ONCE (only when a built-in CLI mention is actually present, to
+  // avoid an unnecessary DB lookup) so each bridge call below can run the
+  // identical operator-authz + strict pre-spawn audit + prompt-byte bound
+  // BEFORE spawning. A denial persists a denial reply instead of spawning.
+  const hasBuiltInCliMention = resolved.some(
+    (m) => m.handle === "chatgpt" || m.handle === "gemini",
+  );
+  let bridgeActorContext: import("@/lib/authz/actor-context").ActorContext | undefined;
+  // Prompt material the bound is measured against. Both bridges feed the last
+  // 10 thread messages PLUS the new message to the spawned child, so bound that
+  // combined text — not just `message` — so the byte cap is equivalent to the
+  // route's raw-body cap (the route caps the whole body the prompt is built
+  // from). This still cannot let a member bypass operator authz; it just makes
+  // the byte ceiling match what actually reaches the child.
+  let bridgePromptMaterial = message;
+  if (hasBuiltInCliMention) {
+    const contextText = (thread.messages ?? [])
+      .slice(-10)
+      .map((m) => m.content ?? "")
+      .join("\n");
+    bridgePromptMaterial = contextText ? `${contextText}\n${message}` : message;
+    try {
+      const resolvedCtx = await resolveUserContextForUserId(actor.userId, {
+        activeOrganizationId: transportOrgId,
+        platformRole: transportPlatformRole,
+      });
+      bridgeActorContext = resolvedCtx.actorContext;
+    } catch {
+      // Fail closed: an unresolvable actor context denies the bridge below
+      // (bridgeActorContext stays undefined -> authorizeChatBridgeMention 401).
+      bridgeActorContext = undefined;
+    }
+  }
+
   // Handle built-in @chatgpt mention synchronously in-process.
   const chatgptMention = resolved.find((m) => m.handle === "chatgpt");
   if (chatgptMention) {
     let codexReply: string;
-    try {
-      codexReply = await callCodexCliAssistant(thread, message);
-    } catch (err) {
-      codexReply = `@chatgpt failed: ${err instanceof Error ? err.message : String(err)}`;
+    const gate = await authorizeChatBridgeMention({
+      bridge: "chatgpt",
+      actor: bridgeActorContext,
+      prompt: bridgePromptMaterial,
+    });
+    if (gate.kind === "deny") {
+      codexReply = gate.reason;
+    } else {
+      try {
+        codexReply = await callCodexCliAssistant(thread, message);
+      } catch (err) {
+        codexReply = `@chatgpt failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
 
     // Re-read the thread state (user message was already persisted above)
@@ -392,10 +444,19 @@ async function handleChatThreadSend(
   const geminiMention = resolved.find((m) => m.handle === "gemini");
   if (geminiMention) {
     let geminiReply: string;
-    try {
-      geminiReply = await callGeminiCliAssistant(thread, message);
-    } catch (err) {
-      geminiReply = `@gemini failed: ${err instanceof Error ? err.message : String(err)}`;
+    const gate = await authorizeChatBridgeMention({
+      bridge: "gemini",
+      actor: bridgeActorContext,
+      prompt: bridgePromptMaterial,
+    });
+    if (gate.kind === "deny") {
+      geminiReply = gate.reason;
+    } else {
+      try {
+        geminiReply = await callGeminiCliAssistant(thread, message);
+      } catch (err) {
+        geminiReply = `@gemini failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
 
     // Re-read the thread state (user message was already persisted above)
