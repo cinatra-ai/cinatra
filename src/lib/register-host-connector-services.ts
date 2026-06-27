@@ -46,10 +46,15 @@ import {
 // deps slot at activation. The create/delete WRITE actions own the
 // admin-authorization boundary + the post-write redirect — the connector
 // reimplements NO auth; it submits FormData to these opaque server actions.
-import {
-  createExternalMcpServerAction,
-  deleteExternalMcpServerAction,
-} from "@/app/campaigns/actions";
+//
+// `@/app/campaigns/actions` is imported LAZILY (the `skillsCatalog` precedent
+// below): that "use server" module carries a heavy nango/wordpress/llm edge
+// graph, and a STATIC import here would drag it onto the synchronous boot path
+// AND into every unit test whose module graph reaches this host binder (e.g.
+// packages/agents store helpers), forcing those tests to mock host campaign
+// internals they have no business knowing. The actions are only INVOKED at
+// form-submit time (never at register()), so the lazy `import()` keeps the
+// action's "use server" identity while loading it on first use.
 import { requireAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
@@ -335,8 +340,18 @@ export function registerHostConnectorServices(): void {
     // The carved "MCP Servers" connector binds these into its deps slot. The
     // WRITE actions own the admin-authorization boundary + redirect host-side
     // (src/app/campaigns/actions.ts) — the connector reimplements NO auth.
-    createServerAction: createExternalMcpServerAction,
-    deleteServerAction: deleteExternalMcpServerAction,
+    // Lazy `import()` (see the module-head note): the "use server" actions load
+    // on first form-submit, never at boot/test-collection. The connector's
+    // `register(ctx)` already wraps these in `(fd) => registry().…(fd)`
+    // closures, so the indirection is transparent to `<form action={…}>`.
+    createServerAction: async (formData: FormData) => {
+      const { createExternalMcpServerAction } = await import("@/app/campaigns/actions");
+      return createExternalMcpServerAction(formData);
+    },
+    deleteServerAction: async (formData: FormData) => {
+      const { deleteExternalMcpServerAction } = await import("@/app/campaigns/actions");
+      return deleteExternalMcpServerAction(formData);
+    },
     // Resolve the viewer (platform-admin flag + user id) for visibility
     // scoping. Mirrors the derivation the host external-MCP page carried —
     // `requireAuthSession` redirects an unauthenticated viewer to sign-in.
