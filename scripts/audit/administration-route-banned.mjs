@@ -135,6 +135,15 @@ const ALLOWLISTED_FILES = new Set([
   // Next.js UI route). Same external-Drupal-admin rationale as the entries
   // above; the gate's docblock notes Drupal `/admin/...` is unrelated.
   "src/lib/connect-provisioning.ts",
+  // cinatra#480 closed-registration gate: references better-auth's admin-plugin
+  // hook context path `ctx.path === "/admin/create-user"` (mounted under
+  // `/api/auth`, so the exposed sub-path is the bare `/admin/create-user`) to
+  // permit admin-created users when self-registration is closed. This is an
+  // auth-handler API context path, NOT a Cinatra Next.js UI route — same
+  // not-a-UI-route rationale as the Drupal/WordPress entries above. The test
+  // asserts the exact literal, so it is allowlisted too.
+  "src/lib/closed-registration-gate.ts",
+  "src/lib/__tests__/closed-registration-gate.test.ts",
 ]);
 
 function shouldSkipDir(name) {
