@@ -87,7 +87,7 @@ which matches **no** high-risk glob (verified against the central
 `cinatra-ai/ci` `high-risk-defaults.json` and this repo's
 `.github/gate-suite.json` `highRiskPaths`). A non-high-risk change's correct
 verification arm is the **machine gate arm** (`Gate-suite` + `Accountable`),
-mirroring the §5 precedent cinatra#212 → `cinatra-eng150-attribution-correction.md`,
+mirroring the §5 precedent cinatra#212 → `cinatra150-attribution-correction.md`,
 whose own post-merge gate concluded success. The squash record this correction
 carries is:
 
@@ -127,4 +127,4 @@ high-risk change's honest human review is documented above.
 | Content tampering | none (#234 diff byte-identical to approved #231/#232) |
 | This correction's risk class | non-high-risk (single `docs/governance/` file) |
 | This correction's verification arm | machine gate arm (`Gate-suite: cinatra-core@2026.06.1` + `Accountable`) |
-| Precedent | cinatra#212 → `cinatra-eng150-attribution-correction.md` (machine-arm §5 correction); cinatra#211, cinatra#228 |
+| Precedent | cinatra#212 → `cinatra150-attribution-correction.md` (machine-arm §5 correction); cinatra#211, cinatra#228 |

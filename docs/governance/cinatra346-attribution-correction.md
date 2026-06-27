@@ -115,4 +115,4 @@ defective SHA.
 | Content tampering | none (#346 code unchanged) |
 | This correction's risk class | non-high-risk (single `docs/governance/` file) |
 | This correction's verification arm | human arm (`Reviewed-by: … (@groganz, tier=maintainer)`) supplied by @groganz approving this bot-authored PR |
-| Precedent | cinatra#234 → `cinatra234-attribution-correction.md` (high-risk human-arm §5 correction); cinatra#212 → `cinatra-eng150-attribution-correction.md` |
+| Precedent | cinatra#234 → `cinatra234-attribution-correction.md` (high-risk human-arm §5 correction); cinatra#212 → `cinatra150-attribution-correction.md` |
