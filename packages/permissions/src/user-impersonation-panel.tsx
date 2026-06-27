@@ -94,7 +94,7 @@ export function UserImpersonationPanel(props: {
         </Label>
         <p className="text-sm leading-6 text-muted-foreground">
           Platform admins can temporarily sign in as another user to troubleshoot access, review the UI from that
-          user&apos;s perspective, or verify permissions. Better Auth keeps the original admin session available so
+          user&apos;s perspective, or verify permissions. Your original admin session stays available so
           you can stop impersonating later.
         </p>
       </div>

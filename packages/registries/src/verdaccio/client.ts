@@ -49,7 +49,15 @@ export type ExtractedAgentPackage = {
   packageVersion: string;
   /** Raw parsed package.json — packages/agents re-validates via agentPackageManifestSchema. */
   manifest: unknown;
-  /** Raw parsed agent.json — packages/agents re-validates via agentPackagePayloadSchema. */
+  /**
+   * Raw parsed agent payload. Resolved from `cinatra/oas.json` (the format every
+   * published `@cinatra-ai/*-agent` package ships — an OAS Flow document), with a
+   * back-compat fallback to a root `agent.json` for legacy packages. `null` when a
+   * package carries neither (a manifest-only extension): callers that need the
+   * payload re-validate via agentPackagePayloadSchema, while the read-only detail
+   * path degrades to manifest-only rather than 500ing. See
+   * `readAgentPayloadFromExtractedPackage`.
+   */
   payload: unknown;
   readme: string | null;
   tempDir: string;
@@ -266,6 +274,53 @@ async function registryJson<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * Resolve + parse the agent payload from an already-extracted package tree.
+ *
+ * Pure local-file half of `extractAgentPackage` (mirrors
+ * `readReadmeFromExtractedPackage`) so the payload-path resolution is unit
+ * testable without a live registry.
+ *
+ * Resolution order:
+ *   1. `cinatra/oas.json` — the format EVERY published `@cinatra-ai/*-agent`
+ *      package ships (an OAS Flow document). This is the canonical payload the
+ *      materializer requires (see materialize-agent-package.ts), so the
+ *      registry extractor must read it from the same place.
+ *   2. `agent.json` (root) — legacy fallback for any pre-OAS package that still
+ *      ships a flat structured payload.
+ *   3. `null` — neither file present (a manifest-only extension). Returning
+ *      `null` rather than throwing ENOENT lets the read-only detail path render
+ *      manifest-only instead of 500ing; the install path (which needs a payload)
+ *      surfaces its own typed error when it re-validates via
+ *      agentPackagePayloadSchema.
+ *
+ * A JSON parse error on a present file IS thrown — a corrupt payload is a real
+ * fault, not a "missing payload" degrade case.
+ */
+export async function readAgentPayloadFromExtractedPackage(
+  tempDir: string,
+): Promise<unknown> {
+  // Ordered candidate paths; first one that exists wins.
+  const candidates = [
+    path.join(tempDir, "cinatra", "oas.json"),
+    path.join(tempDir, "agent.json"),
+  ];
+  for (const candidate of candidates) {
+    let raw: string;
+    try {
+      raw = await readFile(candidate, "utf8");
+    } catch (error: unknown) {
+      // ENOENT is the expected "this candidate is not the one" case — try next.
+      const code = (error as { code?: string } | undefined)?.code;
+      if (code === "ENOENT") continue;
+      throw error;
+    }
+    // Present-but-unparseable is a real fault — surface it.
+    return JSON.parse(raw);
+  }
+  return null;
+}
+
 export async function extractAgentPackage(
   input: {
     packageName: string;
@@ -283,9 +338,9 @@ export async function extractAgentPackage(
       pacoteOptions(resolvedConfig),
     );
 
-    const [manifestRaw, payloadRaw] = await Promise.all([
+    const [manifestRaw, payload] = await Promise.all([
       readFile(path.join(tempDir, "package.json"), "utf8"),
-      readFile(path.join(tempDir, "agent.json"), "utf8"),
+      readAgentPayloadFromExtractedPackage(tempDir),
     ]);
     const readmePath = path.join(tempDir, "README.md");
     const hasReadme = await access(readmePath).then(() => true).catch(() => false);
@@ -293,9 +348,10 @@ export async function extractAgentPackage(
 
     // Raw parse — agent-specific validation stays in packages/agents
     // (install-from-package.ts re-applies agentPackageManifestSchema /
-    // agentPackagePayloadSchema).
+    // agentPackagePayloadSchema). `payload` is the OAS Flow document from
+    // `cinatra/oas.json` (or a legacy root `agent.json`), or `null` when the
+    // package ships neither.
     const manifest = JSON.parse(manifestRaw);
-    const payload = JSON.parse(payloadRaw);
     const packageName =
       (getField<string>(manifest, "name") as string | undefined) ?? input.packageName;
     const packageVersion =
@@ -322,10 +378,11 @@ export async function cleanupExtractedAgentPackage(tempDir: string): Promise<voi
 /**
  * Kind-agnostic extractor.
  *
- * `extractAgentPackage` above eagerly reads `agent.json` and throws for any
- * package that doesn't ship one. That made it impossible to install
- * `kind:"skill"`, `kind:"connector"`, or `kind:"artifact"` packages via the
- * same Verdaccio path. This sibling extractor reads ONLY `package.json` and
+ * `extractAgentPackage` above resolves an agent payload (`cinatra/oas.json`,
+ * legacy `agent.json` fallback) — `null` when neither is present, so it no
+ * longer throws ENOENT on a payload-less tarball. It still surfaces a
+ * payload-shaped result, which is wrong for `kind:"skill"`, `kind:"connector"`,
+ * or `kind:"artifact"` packages. This sibling extractor reads ONLY `package.json` and
  * exposes the temp dir to the caller for per-kind walking. The skill
  * install path uses this to walk `skills/<slug>/SKILL.md` files in the
  * extracted tree.
@@ -695,20 +752,20 @@ export async function getAgentPackage(
 /**
  * Kind-agnostic extension-kind resolver.
  *
- * `getAgentPackage()` extracts agent.json and throws for skill/connector/
- * artifact packages (no agent payload). Install dispatch must therefore NOT
- * derive kind from a `getAgentPackage(...).catch(()=>null)` failure (that
- * silently falls back to "agent"). This reads the published package.json
- * `cinatra.kind` straight from the packument — authoritative for every kind,
- * no tarball extraction, no agent.json requirement.
+ * `getAgentPackage()` extracts an agent-shaped result (its summary fields are
+ * derived from an agent payload) and is wrong for skill/connector/artifact
+ * packages. Install dispatch must therefore NOT derive kind from a
+ * `getAgentPackage(...).catch(()=>null)` failure (that silently falls back to
+ * "agent"). This reads the published package.json `cinatra.kind` straight from
+ * the packument — authoritative for every kind, no tarball extraction.
  */
 /**
  * Kind-agnostic packument summary.
  *
  * Returns kind + the resolved version's manifest in a single packument
  * read. Used by the extension lifecycle dispatcher to apply visibility
- * checks WITHOUT extracting the tarball (which would fail for non-agent
- * kinds via `extractAgentPackage`'s mandatory agent.json read).
+ * checks WITHOUT extracting the tarball (which yields an agent-shaped result
+ * unsuitable for non-agent kinds).
  */
 export interface PublishedExtensionSummary {
   kind: "agent" | "skill" | "connector" | "artifact" | "workflow" | null;
