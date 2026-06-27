@@ -30,9 +30,17 @@ import { FieldRendererInit } from "./field-renderer-init";
 export function Providers({
   children,
   googleEnabled,
+  signUpEnabled = true,
 }: {
   children: ReactNode;
   googleEnabled: boolean;
+  // D7: when registration is closed (and the instance is past bootstrap), the
+  // root AuthUIProvider receives signUp={false}, which hides the "Sign up"
+  // footer link on /sign-in and suppresses the sign-up view across better-auth-ui.
+  // The authoritative gate remains the auth.ts user.create.before hook (D1/D2);
+  // this is advisory UI only. Defaults to true (open) so an undefined prop never
+  // accidentally hides sign-up.
+  signUpEnabled?: boolean;
 }) {
   const router = useRouter();
 
@@ -44,6 +52,7 @@ export function Providers({
     <AuthUIProvider
       authClient={authClient}
       changeEmail
+      signUp={signUpEnabled ? undefined : false}
       credentials={{
         confirmPassword: true,
         forgotPassword: true,

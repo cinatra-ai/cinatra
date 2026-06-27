@@ -950,7 +950,7 @@ function UserMessageBubble({
             }
           }}
           style={{ boxShadow: "none" }}
-          className="min-h-0 w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground shadow-none outline-none focus-visible:ring-0"
+          className="min-h-0 w-full resize-none border-0 bg-transparent px-3 py-2 text-sm text-foreground shadow-none outline-none focus-visible:ring-0"
           rows={1}
         />
         <div className="mt-3 flex justify-end gap-2">
@@ -2736,7 +2736,7 @@ const skipNextThreadLoadRef = useRef(false);
             userScrolledUpRef.current = distanceFromBottom > 5;
           }}
         >
-          <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4">
+          {/* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */}<div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
             {messages.map((message) => {
               const isUser = message.role === "user";
               if (isSlackMode) {
