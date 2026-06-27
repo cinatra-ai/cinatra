@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, SlidersHorizontal, Unplug } from "lucide-react";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -15,7 +15,6 @@ import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGithub from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { FaLinkedin } from "react-icons/fa6";
 import { Button } from "@/components/ui/button";
-import { StatusPill } from "@/components/ui/status-pill";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -180,7 +179,10 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
     >
       {icon}
       <ArrowLeftRight className="size-4 text-muted-foreground" aria-hidden="true" />
-      <CinatraLogo className="size-5" />
+      {/* Cinatra mark renders in brand mustard (the app-icon treatment) rather
+          than the default ink. `CinatraLogo` fills with currentColor, so the
+          `text-brand-mustard` token is sufficient and stays scoped to the card. */}
+      <CinatraLogo className="size-5 text-brand-mustard" />
     </div>
   );
 }
@@ -189,11 +191,29 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 // Badge
 // ---------------------------------------------------------------------------
 
+// Connection state is shown as a plug icon (replacing the text StatusPill):
+//   connected    → green "connected plug" (PlugZap) in the design success /
+//                  sea-green token (`text-success`), keeping the connector's
+//                  `connectedLabel` count alongside it when one is provided.
+//   disconnected → red "unplug" (Unplug) in the failed / red token
+//                  (`text-destructive`).
 function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
   if (connected) {
-    return <StatusPill status="approved">{label ?? "Connected"}</StatusPill>;
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 text-sm font-semibold text-success"
+        aria-label={label ? `Connected (${label})` : "Connected"}
+      >
+        <PlugZap className="size-4" aria-hidden="true" />
+        {label ? <span aria-hidden="true">{label}</span> : null}
+      </span>
+    );
   }
-  return <StatusPill status="idle">Not connected</StatusPill>;
+  return (
+    <span className="inline-flex items-center text-destructive" aria-label="Not connected">
+      <Unplug className="size-4" aria-hidden="true" />
+    </span>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -264,16 +284,34 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
         </ToolbarGroup>
         <ToolbarSeparator />
         <ToolbarGroup>
+          {/* Design-system Toggle / Toggle-group spec (#604): one outer hairline
+              border with hairline dividers between segments, no gaps, 7px radius.
+              The default toggle variant already carries the on-state — indigo
+              soft-tint fill + indigo content (`data-[state=on]:bg-primary/10
+              data-[state=on]:text-primary`); the rest segments are transparent
+              with slate (`text-muted-foreground`) content. We avoid the generic
+              `outline` variant (grey accent fill on a grey ground) and instead
+              compose the spec from tokens here. */}
           <ToggleGroup
             type="single"
-            variant="outline"
             size="sm"
             value={filterType}
             onValueChange={(v) => v && setFilterType(v as FilterType)}
             aria-label="Filter by connection state"
+            className="overflow-hidden rounded-[7px] border border-line [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-line"
           >
-            <ToggleGroupItem value="connected">Connected</ToggleGroupItem>
-            <ToggleGroupItem value="available">Available</ToggleGroupItem>
+            <ToggleGroupItem
+              value="connected"
+              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+            >
+              Connected
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="available"
+              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+            >
+              Available
+            </ToggleGroupItem>
           </ToggleGroup>
         </ToolbarGroup>
         <ToolbarSeparator />

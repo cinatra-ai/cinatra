@@ -287,6 +287,10 @@ export default defineConfig({
       // SDK Nango connect surfaces: orphaned Connect UI cleanup contract (#48)
       // (source-text + module-load smoke; vitest env is node — no DOM render).
       "packages/sdk-ui/src/**/__tests__/**/*.test.{ts,tsx}",
+      // Connectors grid design-system contract (#604/#605/#606): source-text
+      // assertions on the toggle-group spec, plug-status icon, and mustard mark
+      // (vitest env is node — no DOM render).
+      "packages/connectors/src/**/__tests__/**/*.test.{ts,tsx}",
       // Extension inventory + dependency-graph generator (pure; reads repo).
       "scripts/extensions/__tests__/**/*.test.{ts,mjs}",
       // CI clone-back pinning helpers (pure cores; dependency-injected IO).
