@@ -23,7 +23,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { eq, desc, sql } from "drizzle-orm";
 import { agentTemplates } from "@cinatra-ai/agents/schema";
-import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
 import { Play, Plus } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
@@ -37,6 +36,7 @@ import { buildSecurityContextFromSession } from "../auth/security-context";
 import { and } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "../store/db";
+import { readEffectiveStatusByPackageNames } from "../store/extension-dashboard-reads";
 import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
