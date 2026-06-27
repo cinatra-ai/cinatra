@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 // Pure helpers for the chat error card (#534). Mirrors the established
 // agent-run error pattern from @cinatra-ai/agents' agent-error-display.ts
 // (#498): run errors arrive as plain provider strings (e.g. an OpenAI 401
@@ -62,4 +64,45 @@ const OPENAI_RE = /openai/i;
 
 export function isOpenAiKeyError(text: string): boolean {
   return API_KEY_RE.test(text) && OPENAI_RE.test(text);
+}
+
+// Presentational body of the chat error card (#534): the "Something went wrong"
+// heading plus the friendly message. Long unbreakable provider tokens (e.g. a
+// masked sk-proj-… key in a raw "401 Incorrect API key provided …" string)
+// overflowed the card horizontally; the caller constrains the container
+// (max-w-full overflow-hidden) and this wraps with whitespace-pre-wrap
+// break-all. Linkify provider URLs so they are actionable, and surface the
+// in-app key-settings CTA for recognized OpenAI key errors. Mirrors the
+// agent-run panel.
+export function FriendlyErrorBody({ error }: { error: string }) {
+  return (
+    <>
+      <p className="text-sm font-medium text-destructive">Something went wrong</p>
+      <p className="mt-0.5 whitespace-pre-wrap break-all text-sm text-destructive/80">
+        {linkifyErrorText(error).map((seg, i) =>
+          seg.kind === "link" ? (
+            <a
+              key={i}
+              href={seg.href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline underline-offset-2"
+            >
+              {seg.value}
+            </a>
+          ) : (
+            <span key={i}>{seg.value}</span>
+          ),
+        )}
+      </p>
+      {isOpenAiKeyError(error) && (
+        <Link
+          href={LLM_PROVIDER_SETTINGS_HREF}
+          className="mt-2 inline-flex text-xs font-medium text-destructive underline underline-offset-2"
+        >
+          Update your OpenAI API key →
+        </Link>
+      )}
+    </>
+  );
 }

@@ -36,13 +36,7 @@ import {
 } from "./actions";
 // Chat prompt-window HITL drive.
 import { classifyPromptForGate } from "./inline-hitl-classify";
-// Friendly error rendering for the chat error card (#534): wrap/linkify the raw
-// provider string and surface the in-app key-settings CTA for OpenAI key errors.
-import {
-  linkifyErrorText,
-  isOpenAiKeyError,
-  LLM_PROVIDER_SETTINGS_HREF,
-} from "./chat-error-display";
+import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
@@ -673,38 +667,7 @@ function ErrorCard({ error, errorRaw }: { error: string; errorRaw?: string }) {
           <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
         </svg>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-destructive">Something went wrong</p>
-          {/* Long unbreakable provider tokens (e.g. a masked sk-proj-… key in a
-              raw "401 Incorrect API key provided …" string) overflowed the card
-              horizontally; constrain the container (max-w-full overflow-hidden)
-              and wrap with whitespace-pre-wrap break-all. Linkify provider URLs
-              so they are actionable, and surface the in-app key-settings CTA for
-              recognized OpenAI key errors. Mirrors the agent-run panel. (#534) */}
-          <p className="mt-0.5 whitespace-pre-wrap break-all text-sm text-destructive/80">
-            {linkifyErrorText(error).map((seg, i) =>
-              seg.kind === "link" ? (
-                <a
-                  key={i}
-                  href={seg.href}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="underline underline-offset-2"
-                >
-                  {seg.value}
-                </a>
-              ) : (
-                <span key={i}>{seg.value}</span>
-              ),
-            )}
-          </p>
-          {isOpenAiKeyError(error) && (
-            <Link
-              href={LLM_PROVIDER_SETTINGS_HREF}
-              className="mt-2 inline-flex text-xs font-medium text-destructive underline underline-offset-2"
-            >
-              Update your OpenAI API key →
-            </Link>
-          )}
+          <FriendlyErrorBody error={error} />
         </div>
       </div>
       <div className="mt-2 flex items-center justify-end">
