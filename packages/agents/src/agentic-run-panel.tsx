@@ -7,6 +7,8 @@ import {
   linkifyErrorText,
   isOpenAiKeyError,
   LLM_PROVIDER_SETTINGS_HREF,
+  isMcpUnreachableError,
+  MCP_CONFIG_HREF,
 } from "./agent-error-display";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -1065,6 +1067,17 @@ export function AgenticRunPanel({
               className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
             >
               Update your OpenAI API key →
+            </Link>
+          )}
+          {/* Hosted-MCP 424: the provider could not reach this instance's public
+              MCP URL to load the cinatra toolbox. Link to the MCP config so the
+              user can fix the public URL / tunnel. (#500) */}
+          {isMcpUnreachableError(error) && !isOpenAiKeyError(error) && (
+            <Link
+              href={MCP_CONFIG_HREF}
+              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+            >
+              Check your MCP server configuration →
             </Link>
           )}
         </div>
