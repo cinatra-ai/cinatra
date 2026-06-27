@@ -253,6 +253,11 @@
       "resolvedSha": "18d10f7002108d7986a143700d95b77801cd8556"
     },
     {
+      "packageName": "@cinatra-ai/mcp-server-connector",
+      "repo": "cinatra-ai/mcp-server-connector",
+      "resolvedSha": "12f067319976a869bee655419b82b5b60a7a5b9b"
+    },
+    {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
       "repo": "cinatra-ai/media-feed-lister-agent",
       "resolvedSha": "50f686619fa7743ec232743a91139213c48f9274"

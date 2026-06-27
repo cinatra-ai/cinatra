@@ -16,7 +16,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { DefaultProvidersCard } from "@/app/configuration/llm/_default-llm-select";
 import { Input } from "@/components/ui/input";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
-import { ExternalMcpSettingsPage } from "@/lib/external-mcp-settings-page";
+import { redirect } from "next/navigation";
+import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
 import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connection-store";
 // Connector status reads, model lists, and settings components resolve through
@@ -261,6 +262,18 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
 
   const modal = pickSearchParam(resolvedSearchParams.modal);
 
+  // External-MCP config carved out into the "MCP Servers" connector (cinatra#612):
+  // its UI now lives on the connector's setup page. The legacy
+  // `/configuration/llm?modal=external-mcp` deep link redirects there (mirrors
+  // src/app/configuration/llm/[apiSlug]/page.tsx). The host-owned
+  // external_mcp_servers registry + create/delete actions stay HOST-side; the
+  // connector reaches them through the @cinatra-ai/host:external-mcp-registry
+  // capability.
+  if (modal === "external-mcp") {
+    const href = getConnectorSetupHref("mcp-server-connector");
+    redirect(href ?? "/connectors");
+  }
+
   // Settings components resolve through the generated settings-page loader map
   // only when their modal is requested.
   const LinkedInSettings =
@@ -332,9 +345,6 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
         </ConnectorSettingsDialog>
       ) : null}
 
-      {modal === "external-mcp" ? (
-        <ExternalMcpSettingsPage searchParams={searchParams} />
-      ) : null}
     </>
   );
 }

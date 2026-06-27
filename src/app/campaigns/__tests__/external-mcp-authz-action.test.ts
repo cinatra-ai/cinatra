@@ -52,6 +52,15 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => redirect(url),
 }));
 
+// External-MCP UI moved to the "MCP Servers" connector setup page (cinatra#612);
+// the host actions redirect back there after a successful write. Stub the
+// catalog href resolver so the unit asserts a stable target.
+const MCP_SERVER_SETUP_HREF = "/connectors/cinatra-ai/mcp-server-connector/setup";
+vi.mock("@/lib/connectors-registry.server", () => ({
+  getConnectorSetupHref: (slug: string) =>
+    slug === "mcp-server-connector" ? MCP_SERVER_SETUP_HREF : null,
+}));
+
 // Real predicate so the mocked session role string drives owner/admin checks
 // the same way production code does.
 function realIsPlatformAdmin(session: { user?: { role?: string | null } | null } | null) {
@@ -207,7 +216,7 @@ describe("external MCP server actions — authorization boundary", () => {
     form.set("scope", "global");
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
-    expect(redirect).toHaveBeenCalledWith("/configuration/llm");
+    expect(redirect).toHaveBeenCalledWith(`${MCP_SERVER_SETUP_HREF}?saved=1`);
     expect(upsertExternalMcpServer).toHaveBeenCalledTimes(1);
     const arg = upsertExternalMcpServer.mock.calls[0][0] as Record<string, unknown>;
     expect(arg.scope).toBe("global");
@@ -225,7 +234,7 @@ describe("external MCP server actions — authorization boundary", () => {
     form.set("scope", "user");
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
-    expect(redirect).toHaveBeenCalledWith("/configuration/llm");
+    expect(redirect).toHaveBeenCalledWith(`${MCP_SERVER_SETUP_HREF}?saved=1`);
     expect(requireAdminSession).not.toHaveBeenCalled();
     expect(upsertExternalMcpServer).toHaveBeenCalledTimes(1);
     const arg = upsertExternalMcpServer.mock.calls[0][0] as Record<string, unknown>;

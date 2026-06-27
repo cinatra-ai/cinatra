@@ -212,6 +212,18 @@ const RAW_DESCRIPTORS = [
     mcpPrimitivePrefixes: ["plane_"],
     setupSubroute: "setup",
   },
+  // mcp-server-connector (cinatra#612) carries the carved external-MCP
+  // ("MCP Servers" — the outbound MCP servers Cinatra connects to) management
+  // UI as its setup page. Admin-visibility (global/org/team config). It ships
+  // NO MCP primitives of its own — the registered external servers ARE the MCP;
+  // this connector only manages their host-owned registry rows — so no prefixes.
+  {
+    slug: "mcp-server-connector",
+    displayName: "MCP Servers",
+    defaultVisibility: "admin",
+    mcpPrimitivePrefixes: [],
+    setupSubroute: "setup",
+  },
 ];
 
 /**
