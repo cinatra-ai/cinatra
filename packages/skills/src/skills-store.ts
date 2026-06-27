@@ -1,13 +1,32 @@
 import { revalidatePath } from "next/cache";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
+// Pure realpath/symlink containment primitives (#300) — extracted to a sibling
+// module to keep this file under the file-size ratchet (behavior identical).
+import {
+  isRealpathContained,
+  isFileLeafContainedInDir,
+  assertLeafNotSymlink,
+} from "./skill-path-containment";
+// Re-export for `verdaccio.ts`, which imports `isRealpathContained` from here.
+export { isRealpathContained } from "./skill-path-containment";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
-import { parsePackageId, isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
+import { assertSafePathSegment } from "@cinatra-ai/registries";
+// Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
+// sibling module to keep this file under the file-size ratchet (behavior
+// identical). The shared `parsePackageId`/`isSafePathSegment` guard lives inside
+// those helpers; only `assertSafePathSegment` is still called directly here (the
+// belt-and-suspenders join guard in getSkillDiskDir).
+import {
+  deriveAgentBindingVendorPackage,
+  deriveAgentDiskVendorPackage,
+  deriveAgentStoragePathFromPackageName,
+} from "./agent-skill-paths";
 // NOTE (cinatra#537): the shared `isSafePathSegment`/`assertSafePathSegment`
 // guard in @cinatra-ai/registries now rejects leading-"@" segments directly, so
 // a single shared guard covers the `~agents/<vendor>/<package>` joins below — no
@@ -141,52 +160,14 @@ export function deriveContextFromLegacy(
         agent_template_id: null,
       };
     case "agent": {
-      // Derive vendor/package from packageSlug via the canonical splitter
-      // (cinatra#537): split on the FIRST `/` ONLY, never on `-`. A scoped
-      // "@vendor/name" yields {vendor, name}; a legacy no-`@` "<vendor>/<pkg>"
-      // pair splits on the first `/`; a flat slug with no vendor leaves both
-      // null so the resolver doesn't synthesize a bogus vendor from a hyphen.
-      // Callers should pass explicit context with agent_template_id to satisfy
-      // the bidirectional CHECK constraint; the bridge fallback uses
-      // binding_scope='owner' for safety.
-      // INVARIANT (cinatra#537): a parsePackageId-REJECTED, @-scoped input
-      // (after trimming) must NEVER contribute a path segment. Trim ONCE and
-      // gate everything on `trimmed` — `parsePackageId` trims internally, so
-      // gating the legacy fallback on the RAW value would let " @../foo" (leading
-      // whitespace) bypass the scoped check and reach the legacy splitter.
-      const trimmed = packageSlug.trim();
-      let vendor: string | null = null;
-      let pkg: string = trimmed;
-      const parsed = parsePackageId(trimmed);
-      if (parsed && parsed.vendor) {
-        // (a) Canonical scoped "@vendor/name" — both parts already safe segments.
-        vendor = parsed.vendor;
-        pkg = parsed.name;
-      } else if (trimmed.startsWith("@")) {
-        // (b) MALFORMED SCOPED id that parsePackageId rejected (e.g. "@../foo",
-        // "@/foo", "@~evil/foo", "@..", "@."). FAIL CLOSED: derive nothing — do
-        // NOT hand it to the legacy splitter (which would mint a literal "@..",
-        // "@" or "@~evil" vendor). Leaves vendor=null (no binding).
-        vendor = null;
-      } else if (trimmed.includes("/")) {
-        // (c) Legacy NON-scoped "<vendor>/<package>" — split on the FIRST `/`.
-        const ix = trimmed.indexOf("/");
-        vendor = trimmed.slice(0, ix);
-        pkg = trimmed.slice(ix + 1);
-      }
-      // (d) else: unscoped single name → vendor stays null (no hyphen mis-split).
-      //
-      // Belt-and-suspenders (cinatra#537): the derived segments become on-disk
-      // path segments downstream (resolveSkillDir). Drop the binding to the null
-      // fallback if either segment is not a single safe path segment. The shared
-      // `isSafePathSegment` rejects separators/`..`/control/leading-`~` AND
-      // leading-`@`, so a leaked "@.."-style value can never persist as a vendor.
-      if (
-        vendor !== null &&
-        (!isSafePathSegment(vendor) || !isSafePathSegment(pkg))
-      ) {
-        vendor = null;
-      }
+      // Derive vendor/package via the canonical splitter (cinatra#537): split on
+      // the FIRST `/` ONLY, never on `-`; a parsePackageId-rejected @-scoped id
+      // fails closed to vendor=null (no binding). Logic lives in
+      // ./agent-skill-paths (extracted to keep this file under the size ratchet;
+      // behavior identical). Callers should pass explicit context with
+      // agent_template_id to satisfy the bidirectional CHECK constraint; the
+      // bridge fallback uses binding_scope='owner' for safety.
+      const { vendor, pkg } = deriveAgentBindingVendorPackage(packageSlug);
       return {
         ...base,
         owner_scope: "workspace",
@@ -415,52 +396,17 @@ function getSkillDiskDir(
       // (the LOCAL_USER_ID sentinel).
       return path.join(root, "personal", ownerUserId ?? "local-user", skillSlug);
     case "agent": {
-      // packageSlug may be npm-scoped ("@cinatra-ai/email-test-delivery-agent"),
-      // a legacy no-`@` "<vendor>/<package>" pair, or a flat slug with no
-      // vendor. The canonical splitter is the SINGLE source of truth for
-      // vendor/name (cinatra#537): it splits on the FIRST `/` ONLY and NEVER
-      // on `-`, so a hyphen in the scope ("@marcushorndt-local/...") can no
-      // longer be mis-read as a vendor/name boundary. The legacy no-`@`
-      // "<vendor>/<package>" shape is handled below since parsePackageId only
-      // treats a leading-`@` input as scoped; a flat slug with no `/` keeps
-      // the historical "unknown" vendor fallback.
-      // Result: workspace/~agents/<vendor>/<package>/<skill>/
-      //
-      // INVARIANT (cinatra#537): a parsePackageId-REJECTED, @-scoped input
-      // (after trimming) must NEVER contribute a path segment. Trim ONCE and
-      // gate on `trimmed` — parsePackageId trims internally, so gating the legacy
-      // fallback on the RAW value would let " @../foo" (leading whitespace)
-      // bypass the scoped check and reach the legacy splitter.
-      const trimmed = packageSlug.trim();
-      let vendor = "unknown";
-      let pkg = trimmed;
-      const parsed = parsePackageId(trimmed);
-      if (parsed && parsed.vendor) {
-        // (a) Canonical scoped "@vendor/name" — both parts already safe segments.
-        vendor = parsed.vendor;
-        pkg = parsed.name;
-      } else if (trimmed.startsWith("@")) {
-        // (b) MALFORMED SCOPED id that parsePackageId rejected (e.g. "@../foo",
-        // "@/foo", "@~evil/foo", "@..", "@."). FAIL CLOSED: refuse outright so
-        // the malformed value can NEVER become a path segment (not as a vendor,
-        // and not as a `pkg` under "unknown" either — e.g. no `~agents/unknown/@..`).
-        throw new Error(
-          `agent skill packageSlug is a malformed scoped id: ${JSON.stringify(trimmed)}`,
-        );
-      } else if (trimmed.includes("/")) {
-        // (c) Legacy NON-scoped "<vendor>/<package>" — split on the FIRST `/`.
-        const ix = trimmed.indexOf("/");
-        vendor = trimmed.slice(0, ix);
-        pkg = trimmed.slice(ix + 1);
-      }
-      // (d) else: unscoped single name → "unknown" vendor, pkg = the name.
-      //
-      // Belt-and-suspenders (cinatra#537): every segment joined into the
-      // `~agents/<vendor>/<package>/<skill>/` path MUST be a single safe path
+      // Disk layout: workspace/~agents/<vendor>/<package>/<skill>/. The
+      // (vendor, pkg) split is the canonical splitter (cinatra#537): FIRST `/`
+      // only, never `-`; a parsePackageId-rejected @-scoped id THROWS (fail
+      // closed — must not land as a literal "@.." segment, not even under
+      // "unknown"). Logic lives in ./agent-skill-paths (extracted to keep this
+      // file under the size ratchet; behavior identical).
+      const { vendor, pkg } = deriveAgentDiskVendorPackage(packageSlug);
+      // Belt-and-suspenders: every joined segment MUST be a single safe path
       // segment. The shared `assertSafePathSegment` rejects separators/`..`/
-      // control chars/leading-`~` AND leading-`@`, so neither a multi-segment
-      // `pkg` ("vendor/foo/bar") nor a leaked literal "@.." segment can reach
-      // path.join.
+      // control chars/leading-`~`/leading-`@`, so neither a multi-segment `pkg`
+      // ("vendor/foo/bar") nor a leaked literal "@.." segment can reach path.join.
       assertSafePathSegment(vendor, "agent skill vendor");
       assertSafePathSegment(pkg, "agent skill package");
       assertSafePathSegment(skillSlug, "agent skill slug");
@@ -1307,10 +1253,7 @@ export async function upsertSkill(input: {
   // extensions/<vendor>/<slug>/ writer and the package.json#name.
   let agentStoragePath: string | undefined;
   if (input.type === "agent" && !input.storagePackagePath) {
-    const parsed = parsePackageId(input.packageName.trim());
-    if (parsed && parsed.vendor) {
-      agentStoragePath = `${parsed.vendor}/${parsed.name}`;
-    }
+    agentStoragePath = deriveAgentStoragePathFromPackageName(input.packageName);
   }
   const skillDiskDir = getSkillDiskDir(
     input.type,
@@ -1602,85 +1545,6 @@ export const upsertPersonalSkill = upsertCustomSkill;
  * realpath'd ancestor is the correct containment anchor. Falls back to the
  * lexical resolve at the filesystem root (defensive; the root always exists).
  */
-function realpathNearestExisting(target: string): string {
-  let current = path.resolve(target);
-  for (;;) {
-    if (existsSync(current)) {
-      return realpathSync.native(current);
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return current;
-    }
-    current = parent;
-  }
-}
-
-/**
- * Realpath-containment re-assertion (#300). After the lexical resolve+prefix
- * check confirms `resolved` is lexically inside one of the allowed roots, this
- * canonicalizes the root and the target (via the nearest existing ancestor for
- * not-yet-created leaves) and re-checks containment on the REAL paths. A
- * symlinked ancestor under a root passes the lexical check but resolves OUT of
- * it — this layer rejects that. Behavior is identical for legitimate
- * non-symlink and not-yet-created paths (realpath is a no-op on those).
- */
-export function isRealpathContained(resolved: string, root: string): boolean {
-  const realRoot = realpathNearestExisting(root);
-  const realTarget = realpathNearestExisting(resolved);
-  return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
-}
-
-/**
- * File-LEAF realpath confinement (the next layer beyond #300's directory
- * containment). `assertSkillDirectoryInsideRoot` confines a scan/repository
- * BASE directory, but a confined directory can still hold a FILE that is a
- * symlink to outside — e.g. `<repositoryPath>/README.md -> /outside/secret`, or
- * a discovered `<skillDir>/SKILL.md` symlinked out — and a `readFileSync` would
- * follow it. Before reading any content file rooted on an already-confined base
- * dir, assert the file's REAL path stays inside the REAL base dir. A
- * non-existent file is already skipped by its own `existsSync` gate, so this
- * only confines existing leaves (and realpath is a no-op on non-symlink files,
- * keeping behavior identical for legitimate layouts). Returns `false` on a
- * symlink escape so the caller skips the read instead of exfiltrating an
- * arbitrary local file.
- */
-function isFileLeafContainedInDir(baseDir: string, filePath: string): boolean {
-  return isRealpathContained(path.resolve(filePath), path.resolve(baseDir));
-}
-
-/**
- * Dangling-write-leaf confinement (#300). The directory + leaf realpath checks
- * above use `existsSync`, which FOLLOWS symlinks: a leaf that is a DANGLING
- * symlink (the symlink file pre-exists but its target does NOT) makes
- * `existsSync` return false, so the realpath checks treat it as an absent /
- * not-yet-created leaf and pass — then `writeFile` follows the dangling symlink
- * and CREATES the file at the OUTSIDE target. `lstatSync` does NOT follow the
- * symlink, so it catches the dangling case. Call this immediately before any
- * write whose leaf was only confined via `existsSync`/nearest-ancestor realpath.
- * ENOENT (no leaf at all) → genuinely new file, proceed. A regular file →
- * proceed (the dir is already realpath-confined and overwriting a regular file
- * stays inside). A symlink (dangling or live) → throw, refusing to write
- * through it. Behavior is identical for legitimate new-file and regular-file
- * writes (lstat is a no-op decision on those).
- */
-function assertLeafNotSymlink(leafPath: string): void {
-  let stats;
-  try {
-    stats = lstatSync(leafPath);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return; // genuinely new file — safe to create
-    }
-    throw err;
-  }
-  if (stats.isSymbolicLink()) {
-    throw new Error(
-      `Skill write path leaf is a symlink; refusing to write through it: ${leafPath}`,
-    );
-  }
-}
-
 /**
  * Strict-containment guard for any direct read of a stored skill `sourcePath`.
  * Callers that read raw bytes (e.g. the Anthropic sync uploader needs a Buffer

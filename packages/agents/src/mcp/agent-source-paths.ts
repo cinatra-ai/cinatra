@@ -144,26 +144,16 @@ export function resolveAgentJsonPathForWrite(packageSlug: string): {
   // non-single-segment slug before it reaches path.join (cinatra#537 hardening;
   // the calling handler already rejects separators, this is defense-in-depth).
   assertSafePathSegment(packageSlug, "packageSlug");
-  // For writes: prefer the new canonical layout. If a legacy flat
-  // <installDir>/<legacySlug>/agent.json exists, overwrite in
-  // place to avoid creating a divergent second copy; otherwise write to the
-  // new canonical path under cinatra/<slug>/cinatra/oas.json.
+  // SINGLE canonical write root (cinatra#537 / CodeRabbit data-integrity fix):
+  // OAS always writes to `<installDir>/<vendor>/<slug>/cinatra/oas.json` under
+  // the operator's OWN vendor segment — the SAME `<vendor>/<slug>/` dir that
+  // handleAgentBuilderGitWriteFiles writes package.json + skills/ into. We do
+  // NOT honor a pre-existing legacy-flat `<installDir>/<legacySlug>/agent.json`
+  // for WRITES: doing so split the agent's identity (oas.json under the legacy
+  // root, package.json under the canonical vendor root) and broke the read-side
+  // sibling lookup, which is exactly what #602 removes. Legacy installs stay
+  // READABLE via resolveAgentJsonPathForRead's rungs 3–4; only writes converge.
   const root = resolveAgentInstallDir();
-  const legacySlug = LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  const legacyFlat = join(root, legacySlug, "agent.json");
-  if (existsSync(legacyFlat)) {
-    return {
-      dir: join(root, legacySlug),
-      path: legacyFlat,
-      relPath: relative(process.cwd(), legacyFlat),
-    };
-  }
-  // Canonical write: <installDir>/<vendor>/<slug>/cinatra/oas.json under the
-  // operator's OWN vendor segment — NOT a hardcoded "cinatra-ai" (cinatra#537).
-  // This keeps the oas.json in the SAME `<vendor>/<slug>/` dir that
-  // handleAgentBuilderGitWriteFiles writes package.json + skills/ into, so a
-  // user agent ("@marcushorndt-local/...") never pollutes the first-party
-  // `extensions/cinatra-ai/` vendor dir.
   const canonicalDir = join(root, resolveInstanceVendorSegment(), packageSlug, "cinatra");
   const canonicalPath = join(canonicalDir, "oas.json");
   return {

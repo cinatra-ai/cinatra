@@ -373,6 +373,40 @@ describe("agent source writers agree on one vendor segment for a hyphenated scop
     await expect(fs.stat(path.join(tmpRoot, "cinatra-ai", SLUG))).rejects.toThrow();
   });
 
+  it("OAS write + package.json land on the SAME root even when a legacy flat agent.json pre-exists (CodeRabbit data-integrity)", async () => {
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
+    // Plant a pre-existing LEGACY FLAT layout: <root>/<slug>/agent.json.
+    // Previously the OAS writer would overwrite there (legacy root), splitting
+    // the agent's identity from the canonical <vendor>/<slug>/ package.json.
+    await fs.mkdir(path.join(tmpRoot, SLUG), { recursive: true });
+    await fs.writeFile(path.join(tmpRoot, SLUG, "agent.json"), "{}", "utf-8");
+
+    const mod = (await import("../mcp/handlers")) as unknown as {
+      __resolveAgentJsonPathForWrite: (slug: string) => { dir: string; path: string };
+    };
+    const oasTarget = mod.__resolveAgentJsonPathForWrite(SLUG);
+    // OAS now ALWAYS resolves to the canonical <vendor>/<slug>/cinatra/oas.json,
+    // NOT the legacy flat <slug>/agent.json — the same root as package.json.
+    const oasVendorSlugRoot = path.dirname(path.dirname(oasTarget.path));
+    expect(oasVendorSlugRoot).toBe(path.join(process.cwd(), HYPHEN_VENDOR, SLUG));
+    expect(oasTarget.path.endsWith(path.join("cinatra", "oas.json"))).toBe(true);
+    expect(oasTarget.path).not.toContain(`${path.sep}${SLUG}${path.sep}agent.json`);
+
+    // Drive the package.json writer too; assert both share one root.
+    const filesRes = (await getWriteFilesHandler()({
+      primitiveName: "agent_source_write_files",
+      input: {
+        packageSlug: SLUG,
+        packageJson: JSON.stringify({ name: `@${HYPHEN_VENDOR}/${SLUG}`, version: "0.1.0" }),
+        skillMd: "---\nname: x\n---\nClean.",
+      },
+      actor: actor(),
+      mode: "deterministic",
+    })) as { written?: boolean };
+    expect(filesRes.written).toBe(true);
+    expect(oasVendorSlugRoot).toBe(path.join(tmpRoot, HYPHEN_VENDOR, SLUG));
+  });
+
   it("the write resolver FAILS CLOSED on a traversal slug (cinatra#537 hardening)", async () => {
     mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
     const mod = (await import("../mcp/handlers")) as unknown as {
