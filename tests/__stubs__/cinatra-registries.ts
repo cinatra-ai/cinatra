@@ -48,10 +48,13 @@ export {
   FIRST_PARTY_PACKAGE_SCOPE,
   vendorScopeOfPackage,
   dependencyScopePrefixesFor,
-  // Canonical @vendor/name splitter (cinatra#537) — pure, re-export the real
-  // impl so host modules that route vendor/name derivation through it get the
-  // real first-`/`-only parsing, not a missing symbol.
+  // Canonical @vendor/name splitter + shared safe-path-segment guard
+  // (cinatra#537) — pure, re-export the real impls so host modules that route
+  // vendor/name derivation + path-segment validation through them get the real
+  // behavior, not a missing symbol.
   parsePackageId,
+  isSafePathSegment,
+  assertSafePathSegment,
 } from "../../packages/registries/src/scope";
 export type { PackageId } from "../../packages/registries/src/scope";
 

@@ -32,7 +32,7 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   readLocalPackageSkillContent: vi.fn(),
 }));
-vi.mock("@cinatra-ai/registries", () => ({ listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("@cinatra-ai/objects", () => ({ createDeterministicObjectsClient: vi.fn(() => ({})) }));
 vi.mock("@cinatra-ai/llm", () => ({
   getActorContext: () => null,
@@ -371,5 +371,31 @@ describe("agent source writers agree on one vendor segment for a hyphenated scop
 
     // No first-party-namespace pollution: nothing was written under cinatra-ai/.
     await expect(fs.stat(path.join(tmpRoot, "cinatra-ai", SLUG))).rejects.toThrow();
+  });
+
+  it("the write resolver FAILS CLOSED on a traversal slug (cinatra#537 hardening)", async () => {
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
+    const mod = (await import("../mcp/handlers")) as unknown as {
+      __resolveAgentJsonPathForWrite: (slug: string) => unknown;
+      __resolveAgentJsonPathForRead: (slug: string) => unknown;
+    };
+    // A `..` / separator / leading-~ slug must never reach path.join.
+    expect(() => mod.__resolveAgentJsonPathForWrite("..")).toThrow(/unsafe/);
+    expect(() => mod.__resolveAgentJsonPathForWrite("a/b")).toThrow(/unsafe/);
+    // The read resolver returns null (no throw) for an unsafe slug — a read miss.
+    expect(mod.__resolveAgentJsonPathForRead("..")).toBeNull();
+    expect(mod.__resolveAgentJsonPathForRead("../../etc")).toBeNull();
+  });
+
+  it("resolveInstanceVendorSegment FAILS CLOSED on an unsafe identity-derived vendor", async () => {
+    const mod = (await import("../mcp/handlers")) as unknown as {
+      __resolveInstanceVendorSegment: () => string;
+    };
+    // A misconfigured identity providing a traversal/separator vendor must throw
+    // rather than silently joining it into the on-disk path.
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: "../evil" });
+    expect(() => mod.__resolveInstanceVendorSegment()).toThrow(/unsafe/);
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: "a/b" });
+    expect(() => mod.__resolveInstanceVendorSegment()).toThrow(/unsafe/);
   });
 });

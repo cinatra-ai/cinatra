@@ -49,7 +49,60 @@ export interface PackageId {
 }
 
 /**
- * THE single canonical splitter for `@vendor/name` package ids → `{vendor, name}`.
+ * Is `seg` a SINGLE, filesystem-safe path segment?
+ *
+ * THE shared guard for every on-disk `<vendor>/<name>` segment before it is
+ * fed into `path.join` (cinatra#537 hardening). A segment is safe only if it
+ * is a single normal name component — NOT a traversal token, NOT a path with
+ * separators, NOT absolute/drive-like, and free of NUL/control chars and the
+ * leading-`~` home/reserved-bucket marker.
+ *
+ * REJECTS (returns false):
+ *   - empty string
+ *   - "." and ".." (traversal tokens)
+ *   - any segment containing "/" or "\" (separator injection → nested dirs)
+ *   - NUL or any C0/C1 control char (0x00–0x1F, 0x7F)
+ *   - a leading "~" (home-dir / reserved-bucket marker — see RESERVED_SUBBUCKETS)
+ *   - absolute / drive-like forms ("/x" and "C:\..." are already caught by the
+ *     separator + the windows-drive checks below)
+ *
+ * This is path-safety ONLY — it intentionally does NOT enforce npm's
+ * lowercase-alnum-dash name policy (callers/validators own that). Keeping the
+ * guard a denylist of dangerous forms (rather than a narrow allowlist) avoids
+ * silently breaking legitimate vendor/name shapes the rest of the system
+ * already accepts.
+ */
+export function isSafePathSegment(seg: unknown): seg is string {
+  if (typeof seg !== "string") return false;
+  if (seg.length === 0) return false;
+  if (seg === "." || seg === "..") return false;
+  if (seg.includes("/") || seg.includes("\\")) return false;
+  // NUL + C0 (0x00-0x1F) + DEL (0x7F) control characters.
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(seg)) return false;
+  // Leading "~" — home-dir expansion / reserved sub-bucket marker.
+  if (seg.startsWith("~")) return false;
+  // Windows drive-letter prefix ("C:", "C:foo"). The backslash form is already
+  // rejected above; this catches the colon-drive form regardless of slash.
+  if (/^[a-zA-Z]:/.test(seg)) return false;
+  return true;
+}
+
+/**
+ * Assert `seg` is a single safe path segment; throw otherwise.
+ * Fail-closed companion to {@link isSafePathSegment} for call sites that must
+ * never join an unvalidated segment.
+ */
+export function assertSafePathSegment(seg: unknown, label = "path segment"): asserts seg is string {
+  if (!isSafePathSegment(seg)) {
+    throw new Error(
+      `unsafe ${label}: ${JSON.stringify(seg)} is not a single filesystem-safe segment`,
+    );
+  }
+}
+
+/**
+ * THE single canonical splitter for `@vendor/name` package ids → {vendor, name}.
  *
  * Every subsystem that derives a (vendor, name) pair from a package name MUST
  * route through this helper so the agent-create path, the
@@ -61,15 +114,24 @@ export interface PackageId {
  *     from the returned `vendor`. A hyphen in the scope (e.g.
  *     `@marcushorndt-local/page-summarizer-agent`) is NEVER a vendor/name
  *     boundary → `{vendor: "marcushorndt-local", name: "page-summarizer-agent"}`.
- *     Any further `/` in the name part is preserved verbatim in `name`.
- *   - UNSCOPED `name` (no leading `@`): `{vendor: null, name}` — caller applies
- *     its own documented fallback. We deliberately do NOT guess a vendor by
- *     splitting on `-`; that hyphen-split was the exact bug #537 fixes.
+ *   - Both `vendor` AND `name` MUST be a SINGLE safe path segment
+ *     ({@link isSafePathSegment}). If the part after the first `/` itself
+ *     contains another `/` (e.g. `@acme/foo/bar`), or either part is a
+ *     traversal token / contains a backslash / is absolute-like, the input is
+ *     treated as MALFORMED → returns `null`. We do NOT silently keep a
+ *     multi-segment `name` (that was the separator-injection traversal gap).
+ *   - UNSCOPED `name` (no leading `@`): `{vendor: null, name}` IFF `name` is a
+ *     single safe segment; otherwise `null`. Caller applies its own documented
+ *     vendor fallback. We deliberately do NOT guess a vendor by splitting on
+ *     `-`; that hyphen-split was the exact bug #537 fixes.
  *   - MALFORMED scoped inputs ("@" alone, "@x" with no slash, "@/x" empty
  *     scope, "@x/" empty name): returns `null`. Mirrors
  *     `vendorScopeOfPackage`'s rejection set so the two helpers agree.
  *
- * Input is trimmed before parsing.
+ * Input is trimmed before parsing. Because both returned segments pass
+ * {@link isSafePathSegment}, callers may join them into a path WITHOUT
+ * re-validating — though defense-in-depth re-validation at the join site is
+ * encouraged.
  */
 export function parsePackageId(packageName: string): PackageId | null {
   if (typeof packageName !== "string") return null;
@@ -78,6 +140,8 @@ export function parsePackageId(packageName: string): PackageId | null {
 
   if (!trimmed.startsWith("@")) {
     // Unscoped — no vendor. Caller decides the fallback; we never split on `-`.
+    // The whole input must be a single safe segment (rejects "foo/bar", "..").
+    if (!isSafePathSegment(trimmed)) return null;
     return { vendor: null, name: trimmed };
   }
 
@@ -88,6 +152,10 @@ export function parsePackageId(packageName: string): PackageId | null {
   const vendor = trimmed.slice(1, slash); // strip leading "@"
   const name = trimmed.slice(slash + 1); // everything after the FIRST "/"
   if (name.length === 0) return null; // "@x/" — empty name
+  // Both parts MUST be single safe segments. A second "/" in `name`
+  // (e.g. "@acme/foo/bar") or any traversal/separator/absolute form fails here
+  // → malformed. This closes the separator-injection traversal gap.
+  if (!isSafePathSegment(vendor) || !isSafePathSegment(name)) return null;
   return { vendor, name };
 }
 

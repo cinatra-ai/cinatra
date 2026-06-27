@@ -16,6 +16,11 @@ export {
   // splits the scope on `-`). The single source of truth for vendor/name
   // decomposition across the agent-create + on-disk writers (cinatra#537).
   parsePackageId,
+  // Shared filesystem-safe single-segment guard for every `<vendor>/<name>`
+  // disk-join site (cinatra#537 hardening — rejects `..`, separators, control
+  // chars, leading-`~`, drive-like).
+  isSafePathSegment,
+  assertSafePathSegment,
 } from "./scope";
 export type { PackageId } from "./scope";
 

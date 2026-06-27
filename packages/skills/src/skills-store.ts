@@ -7,7 +7,7 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
-import { parsePackageId } from "@cinatra-ai/registries";
+import { parsePackageId, isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
 
 // Auto-sync the configured GitHub repository once per process lifetime.
 // After the first call (success or failure), the flag stays true so subsequent
@@ -154,6 +154,15 @@ export function deriveContextFromLegacy(
         const ix = packageSlug.indexOf("/");
         vendor = packageSlug.slice(0, ix);
         pkg = packageSlug.slice(ix + 1);
+      }
+      // Fail-closed (cinatra#537 hardening): vendor/package become on-disk path
+      // segments downstream (resolveSkillDir). If the legacy split produced a
+      // non-single-segment value (e.g. "<vendor>/foo/bar" → pkg "foo/bar") or
+      // any traversal/separator/control form, drop the binding to the null
+      // fallback rather than persisting an unsafe segment. parsePackageId values
+      // are already guaranteed safe.
+      if (vendor !== null && (!isSafePathSegment(vendor) || !isSafePathSegment(pkg))) {
+        vendor = null;
       }
       return {
         ...base,
@@ -397,7 +406,8 @@ function getSkillDiskDir(
       let pkg = packageSlug;
       const parsed = parsePackageId(packageSlug);
       if (parsed && parsed.vendor) {
-        // npm-scoped "@vendor/name".
+        // npm-scoped "@vendor/name" — parsePackageId already guarantees both
+        // parts are single safe segments.
         vendor = parsed.vendor;
         pkg = parsed.name;
       } else if (packageSlug.includes("/")) {
@@ -406,6 +416,14 @@ function getSkillDiskDir(
         vendor = packageSlug.slice(0, ix);
         pkg = packageSlug.slice(ix + 1);
       }
+      // Fail-closed (cinatra#537 hardening): every segment joined into the
+      // `~agents/<vendor>/<package>/<skill>/` path MUST be a single safe path
+      // segment. The legacy `<vendor>/<package>` split above can leave a
+      // multi-segment `pkg` (e.g. "vendor/foo/bar") or a `..` token; assert
+      // here so separator/traversal injection can never reach path.join.
+      assertSafePathSegment(vendor, "agent skill vendor");
+      assertSafePathSegment(pkg, "agent skill package");
+      assertSafePathSegment(skillSlug, "agent skill slug");
       return path.join(root, "workspace", "~agents", vendor, pkg, skillSlug);
     }
     case "system":

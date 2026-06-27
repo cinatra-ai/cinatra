@@ -3,6 +3,8 @@ import {
   FIRST_PARTY_PACKAGE_SCOPE,
   dependencyScopePrefixesFor,
   parsePackageId,
+  isSafePathSegment,
+  assertSafePathSegment,
   vendorScopeOfPackage,
 } from "@cinatra-ai/registries";
 
@@ -81,6 +83,62 @@ describe("parsePackageId — canonical @vendor/name splitter (cinatra#537)", () 
       const scope = vendorScopeOfPackage(name);
       expect(scope).toBe(`@${parsed?.vendor}`);
     }
+  });
+
+  it("treats separator-injection as MALFORMED — never silently keeps a multi-segment name (cinatra#537 hardening)", () => {
+    // A second "/" after the first must NOT be preserved in `name` (that would
+    // land as nested path segments at the writer). The whole input is rejected.
+    expect(parsePackageId("@acme/foo/bar")).toBeNull();
+    expect(parsePackageId("@acme/foo/bar/baz")).toBeNull();
+  });
+
+  it("rejects traversal / separator / absolute forms in either segment", () => {
+    expect(parsePackageId("@acme/../../etc")).toBeNull();
+    expect(parsePackageId("@acme/..")).toBeNull(); // name is ".."
+    expect(parsePackageId("@../x")).toBeNull(); // vendor is ".."
+    expect(parsePackageId("@acme/foo\\bar")).toBeNull(); // backslash
+    expect(parsePackageId("@acme/~evil")).toBeNull(); // leading-~ name
+    expect(parsePackageId("../etc")).toBeNull(); // unscoped traversal
+    expect(parsePackageId("foo/bar")).toBeNull(); // unscoped with separator
+    expect(parsePackageId("..")).toBeNull(); // unscoped dotdot
+  });
+
+  it("rejects a NUL / control char in the name", () => {
+    expect(parsePackageId("@acme/a" + String.fromCharCode(0) + "b")).toBeNull();
+    expect(parsePackageId("@acme/a\nb")).toBeNull();
+  });
+});
+
+describe("isSafePathSegment / assertSafePathSegment (cinatra#537 path-traversal guard)", () => {
+  it("accepts normal single segments", () => {
+    expect(isSafePathSegment("marcushorndt-local")).toBe(true);
+    expect(isSafePathSegment("page-summarizer-agent")).toBe(true);
+    expect(isSafePathSegment("a.b_c-d")).toBe(true);
+    expect(isSafePathSegment("cinatra-ai")).toBe(true);
+  });
+
+  it("rejects empty, traversal tokens, separators, control chars, leading-~, drive-like, non-string", () => {
+    expect(isSafePathSegment("")).toBe(false);
+    expect(isSafePathSegment(".")).toBe(false);
+    expect(isSafePathSegment("..")).toBe(false);
+    expect(isSafePathSegment("foo/bar")).toBe(false);
+    expect(isSafePathSegment("foo\\bar")).toBe(false);
+    expect(isSafePathSegment("a" + String.fromCharCode(0) + "b")).toBe(false); // NUL
+    expect(isSafePathSegment("a\nb")).toBe(false); // newline (control)
+    expect(isSafePathSegment("a" + String.fromCharCode(127) + "b")).toBe(false); // DEL
+    expect(isSafePathSegment("~agents")).toBe(false); // leading ~
+    expect(isSafePathSegment("/etc")).toBe(false); // absolute-like (has /)
+    expect(isSafePathSegment("C:")).toBe(false); // windows drive
+    expect(isSafePathSegment("C:foo")).toBe(false);
+    expect(isSafePathSegment(42 as unknown)).toBe(false);
+    expect(isSafePathSegment(null as unknown)).toBe(false);
+  });
+
+  it("assertSafePathSegment throws on unsafe and is a no-op on safe", () => {
+    expect(() => assertSafePathSegment("..")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("a/b")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("~x")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("ok-seg")).not.toThrow();
   });
 });
 

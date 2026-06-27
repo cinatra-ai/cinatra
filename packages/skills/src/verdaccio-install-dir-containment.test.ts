@@ -40,20 +40,32 @@ mkdirSync(outsideDir, { recursive: true });
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
+const _isSafeSeg = (s: unknown): boolean =>
+  typeof s === "string" && s.length > 0 && s !== "." && s !== ".." &&
+  !s.includes("/") && !s.includes("\\") &&
+  // eslint-disable-next-line no-control-regex
+  !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s);
 vi.mock("@cinatra-ai/registries", () => ({
   extractExtensionPackage: vi.fn(),
   loadVerdaccioConfig: vi.fn(),
-  // skills-store imports parsePackageId for the cinatra#537 agent vendor/name
-  // split; provide the real-shaped impl so any incidental call works.
+  // skills-store imports parsePackageId + the safe-segment guard for the
+  // cinatra#537 agent vendor/name split; provide real-shaped impls so any
+  // incidental call works.
   parsePackageId: (name: string) => {
     if (typeof name !== "string") return null;
     const t = name.trim();
     if (!t) return null;
-    if (!t.startsWith("@")) return { vendor: null, name: t };
+    if (!t.startsWith("@")) return _isSafeSeg(t) ? { vendor: null, name: t } : null;
     const i = t.indexOf("/");
     if (i <= 1) return null;
+    const v = t.slice(1, i);
     const n = t.slice(i + 1);
-    return n.length === 0 ? null : { vendor: t.slice(1, i), name: n };
+    if (n.length === 0) return null;
+    return _isSafeSeg(v) && _isSafeSeg(n) ? { vendor: v, name: n } : null;
+  },
+  isSafePathSegment: _isSafeSeg,
+  assertSafePathSegment: (s: unknown, label = "path segment"): void => {
+    if (!_isSafeSeg(s)) throw new Error(`unsafe ${label}: ${JSON.stringify(s)}`);
   },
 }));
 
