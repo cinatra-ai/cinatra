@@ -63,7 +63,9 @@ async function authorizeManage(workflowId: string): Promise<string> {
 
 function revalidate(workflowId: string): void {
   revalidatePath(`/workflows/${workflowId}`);
-  revalidatePath("/workflows");
+  // The `/workflows` browse/index page was removed (cinatra#609) — overview/
+  // tracking lives in Plane now — so there is no index cache to revalidate.
+  // The per-workflow detail route above remains and is revalidated here.
 }
 
 /**

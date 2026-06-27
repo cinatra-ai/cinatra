@@ -31,7 +31,7 @@ import {
   humanizePathSegment,
   type BreadcrumbCrumb,
 } from "@/lib/breadcrumb-trail";
-import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Workflow, Wrench } from "lucide-react";
+import { Building2, FolderKanban, MessageSquare, Play, Plus, Settings, TriangleAlert, UsersRound, Wrench } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -610,12 +610,10 @@ export function AppShell({
                     Create agent
                   </Link>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/chat?mode=create-workflow" className="flex items-center gap-2">
-                    <Workflow className="h-4 w-4" />
-                    Create workflow
-                  </Link>
-                </DropdownMenuItem>
+                {/* Top-bar "Create workflow" item removed (cinatra#609) —
+                    redundant with the "Build a workflow" chat badge, which is
+                    now the single conversational creation entry point
+                    (→ /chat?mode=create-workflow). */}
                 {canCreateProjects ? (
                   <DropdownMenuItem asChild>
                     <Link href="/projects/new" className="flex items-center gap-2">
