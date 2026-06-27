@@ -49,53 +49,46 @@ export interface PackageId {
 }
 
 /**
+ * Strict POSITIVE ALLOWLIST of bare, post-parse path-segment characters
+ * (cinatra#537). A safe segment:
+ *   - starts AND ends with an ASCII alphanumeric, and
+ *   - in between contains only ASCII alphanumerics plus `.`, `_`, `-`.
+ * Single-char alphanumerics (`a`) are allowed.
+ */
+const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
+/**
  * Is `seg` a SINGLE, filesystem-safe path segment?
  *
- * THE shared guard for every on-disk `<vendor>/<name>` segment before it is
- * fed into `path.join` (cinatra#537 hardening). A segment is safe only if it
- * is a single normal name component — NOT a traversal token, NOT a path with
- * separators, NOT absolute/drive-like, and free of NUL/control chars and the
- * leading-`~` home/reserved-bucket marker.
+ * THE shared guard for every on-disk `<vendor>/<name>`/`<slug>` segment before
+ * it is fed into `path.join` (cinatra#537). Implemented as a POSITIVE ALLOWLIST
+ * (not a denylist) so no edge case can slip through: a segment is safe ONLY if
+ * it matches {@link SAFE_PATH_SEGMENT_RE} — i.e. a normal bare name component of
+ * ASCII alphanumerics + interior `.`/`_`/`-`, starting and ending alphanumeric.
  *
- * REJECTS (returns false):
- *   - empty string
- *   - "." and ".." (traversal tokens)
- *   - any segment containing "/" or "\" (separator injection → nested dirs)
- *   - NUL or any C0/C1 control char (0x00–0x1F, 0x7F)
- *   - a leading "~" (home-dir / reserved-bucket marker — see RESERVED_SUBBUCKETS)
- *   - a leading "@" — on-disk segments are ALWAYS post-parse: `parsePackageId`
- *     strips the scope's "@", legacy/unscoped names are bare, and instance
- *     vendor segments are bare. So a valid vendor/name/slug segment NEVER starts
- *     with "@". Rejecting it here makes a rejected/malformed scoped value (e.g.
- *     "@..", "@.", "@~evil") that leaked past parsePackageId fail closed at
- *     EVERY join site automatically, instead of landing as a literal "@.."
- *     directory segment (cinatra#537).
- *   - absolute / drive-like forms ("/x" and "C:\..." are already caught by the
- *     separator + the windows-drive checks below)
+ * The allowlist SUBSUMES every prior denylist rule and then some — it rejects:
+ *   - empty string, and any string with whitespace anywhere (space/tab/newline)
+ *   - "." and ".." (don't end alphanumeric) — traversal tokens
+ *   - any "/" or "\" (separator injection → nested dirs)
+ *   - a leading "@" — on-disk segments are ALWAYS post-parse (`parsePackageId`
+ *     strips the scope's "@"; legacy/unscoped names + instance vendor segments
+ *     are bare), so a leading "@" means a rejected/malformed scoped value leaked
+ *     and must fail closed at EVERY join site automatically
+ *   - a leading "~" (home-dir / reserved-bucket marker)
+ *   - leading/trailing "."/"_"/"-" (e.g. "-foo", "foo.")
+ *   - NUL / control chars, "C:"/drive forms, and any other non-allowlisted byte
  *
- * This is path-safety ONLY — it intentionally does NOT enforce npm's
- * lowercase-alnum-dash name policy (callers/validators own that). Keeping the
- * guard a denylist of dangerous forms (rather than a narrow allowlist) avoids
- * silently breaking legitimate vendor/name shapes the rest of the system
- * already accepts.
+ * Rationale for the bound: the codebase's canonical vendor/package shape is
+ * `^[a-z0-9][a-z0-9-]*$` (materialize-agent-package PACKAGE_NAME_RE /
+ * PACKAGE_DIR_RE) and slugs are slugified to that form; this allowlist is a
+ * strict superset (also tolerates uppercase + interior `.`/`_`, matching the
+ * historical `a.b_c-d` fixture) so it never rejects a genuinely-valid segment.
+ * This is path-safety, not npm name policy — callers still own that.
  */
 export function isSafePathSegment(seg: unknown): seg is string {
   if (typeof seg !== "string") return false;
-  if (seg.length === 0) return false;
-  if (seg === "." || seg === "..") return false;
-  if (seg.includes("/") || seg.includes("\\")) return false;
-  // NUL + C0 (0x00-0x1F) + DEL (0x7F) control characters.
-  // eslint-disable-next-line no-control-regex
-  if (/[\x00-\x1f\x7f]/.test(seg)) return false;
-  // Leading "~" — home-dir expansion / reserved sub-bucket marker.
-  if (seg.startsWith("~")) return false;
-  // Leading "@" — on-disk segments are post-parse and never scoped; a leading
-  // "@" means a rejected/malformed scoped value leaked here (e.g. "@..").
-  if (seg.startsWith("@")) return false;
-  // Windows drive-letter prefix ("C:", "C:foo"). The backslash form is already
-  // rejected above; this catches the colon-drive form regardless of slash.
-  if (/^[a-zA-Z]:/.test(seg)) return false;
-  return true;
+  if (seg === "." || seg === "..") return false; // explicit (regex already forbids them)
+  return SAFE_PATH_SEGMENT_RE.test(seg);
 }
 
 /**

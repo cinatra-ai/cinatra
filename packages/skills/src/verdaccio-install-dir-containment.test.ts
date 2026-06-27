@@ -45,10 +45,8 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // top-level helper would be referenced before initialization).
 vi.mock("@cinatra-ai/registries", () => {
   const isSafeSeg = (s: unknown): boolean =>
-    typeof s === "string" && s.length > 0 && s !== "." && s !== ".." &&
-    !s.includes("/") && !s.includes("\\") &&
-    // eslint-disable-next-line no-control-regex
-    !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s);
+    typeof s === "string" && s !== "." && s !== ".." &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(s);
   return {
     extractExtensionPackage: vi.fn(),
     loadVerdaccioConfig: vi.fn(),
