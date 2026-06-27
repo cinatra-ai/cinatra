@@ -5,7 +5,7 @@
  * Scans the repo for imports from `@cinatra-ai/marketplace-mcp-client` (the
  * vendored copy at `packages/marketplace-mcp-client/`). The plan is to swap
  * every import over to the published `@cinatra-ai/marketplace-mcp-contract`
- * package (in the marketplace repo) and delete the vendored copy.
+ * package (published by the Cinatra marketplace service) and delete the vendored copy.
  * That swap is gated on the operator publishing the contract package.
  *
  * Until the publish lands, the current import sites listed in CURRENT_ALLOWLIST

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 // Contract pin for index-surface PageHeader chrome (issue 620).
 //
-// Canonical pattern (per cinatra-ai/design `specs/app.html` + the live
+// Canonical pattern (per the Cinatra design system's `app.html` spec + the live
 // `/skills`, `/connectors`, `/data-safety/change-sets` surfaces): a
 // top-level index page renders a title-only PageHeader with no section
 // eyebrow (`label=`). The `label="Administration"` overline that used to
