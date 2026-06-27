@@ -82,7 +82,7 @@ async function readBootGoogleOAuthSettings() {
 
 const googleOAuthSettings = await readBootGoogleOAuthSettings();
 // Base advertised scopes (OIDC + the MCP / A2A admission scopes). The CLI
-// control-plane scopes (eng#231) are appended so the AS can ISSUE them; they
+// control-plane scopes (CLI Class-A) are appended so the AS can ISSUE them; they
 // are bound to the dedicated `/api/cli` audience (extraAudienceBasePaths) and
 // kept OUT of the DCR default set (clientRegistrationDefaultScopes) so a
 // client that does not explicitly request them never silently receives one.

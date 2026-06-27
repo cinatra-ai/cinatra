@@ -1,7 +1,7 @@
-# Attribution-record correction — capability-provider impersonation fix (cinatra-engineering#150)
+# Attribution-record correction — capability-provider impersonation fix
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #212 (`fix(extensions): bind capability-provider identity to
 the host-injected packageName`).
 

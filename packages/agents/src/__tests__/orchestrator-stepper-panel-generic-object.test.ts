@@ -32,7 +32,7 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
   it("defines isGenericObjectSchema as schema-field-fallback xRenderer combined with object type", () => {
     // The condition must check BOTH the xRenderer id AND the schema type.
     // A missing type check would incorrectly show Continue for non-object schemas.
-    // The id is centralized (cinatra-engineering#155): the panel references the
+    // The id is centralized (identity-surface ruling): the panel references the
     // SCHEMA_FIELD_FALLBACK_RENDERER_ID constant rather than the inline literal.
     const referencesFallback =
       /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(SRC) ||

@@ -392,7 +392,7 @@ export {
 
 // Agent-builder identity table — the single authority for every
 // `@cinatra-ai/agent-builder:<id>` x-renderer / skill / object-type id routed
-// within @cinatra-ai/agents (cinatra-engineering#155). Sourced from the pure,
+// within @cinatra-ai/agents (identity-surface ruling). Sourced from the pure,
 // environment-neutral ./agent-builder-ids module (NOT through the client
 // renderer barrel), so importing an id never pulls a client/server graph in.
 export {

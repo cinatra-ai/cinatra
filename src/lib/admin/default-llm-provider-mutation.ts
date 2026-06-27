@@ -6,7 +6,7 @@ import { logAuditEventStrict } from "@/lib/authz/audit";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
-// Single chokepoint for mutating the GLOBAL default LLM provider (eng#229).
+// Single chokepoint for mutating the GLOBAL default LLM provider.
 //
 // The default LLM provider is a platform-level global setting reachable from
 // (a) the admin API route and (b) the LLM-settings server actions. Every path

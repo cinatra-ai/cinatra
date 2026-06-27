@@ -519,7 +519,7 @@ export async function publishAgentPackageFromGitDir(
 }
 
 /**
- * Publish a DECLARATIVE extension package directory (SDK-P5, eng#167).
+ * Publish a DECLARATIVE extension package directory (SDK-P5).
  *
  * Distinct from `publishAgentPackageFromGitDir`: it does NOT require/compile a
  * `cinatra/oas.json` and does NOT build the agent-shaped distManifest/distPayload

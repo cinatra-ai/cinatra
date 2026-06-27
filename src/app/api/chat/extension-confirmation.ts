@@ -25,7 +25,7 @@ const EXTENSION_IMPLEMENTATION_TOOLS = new Set([
 ]);
 
 const FUTURE_EXTENSION_AUTHORING_PATTERNS = [
-  // `workflow`, `artifact`, and `skill` are now LIVE (SDK-P5, eng#167): the
+  // `workflow`, `artifact`, and `skill` are now LIVE (SDK-P5): the
   // {workflow,artifact,skill}_source_* package-authoring tools require the same
   // implementation-confirmation gate as the agent_source_* tools. The remaining
   // kinds (connector/asset/entity/extension) stay anticipated-but-unbuilt and

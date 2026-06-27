@@ -1,6 +1,6 @@
 /**
  * resolveCliBearerActor — verified remote-Bearer actor resolver tests
- * (eng#231). Mocks `better-auth/client` (JWKS signature/aud/iss verification),
+ * (CLI Class-A remote Bearer). Mocks `better-auth/client` (JWKS signature/aud/iss verification),
  * `@/lib/auth-session` (live user/org role resolve), and
  * `@/lib/service-accounts` (service-account row lookup) so the test runs with
  * no DB / live JWKS.

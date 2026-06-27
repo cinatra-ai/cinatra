@@ -69,7 +69,7 @@ describe("SDK ABI 2.2.0 foundation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ABI-evolution policy (eng#159 #13): MINIMUM-MINOR semantics keyed off
+// ABI-evolution policy: MINIMUM-MINOR semantics keyed off
 // sdkAbiRange. At a declared >= 2.2 floor the five 2.2-added nango getters are
 // REQUIRED (AbiScopedNangoPort); below 2.2 they stay OPTIONAL (the base port).
 // ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ describe("ABI minimum-minor: AbiScopedNangoPort keyed off sdkAbiRange", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ABI-evolution policy (eng#159 #13): least-privilege grant-typed ctx variant.
+// ABI-evolution policy: least-privilege grant-typed ctx variant.
 // GrantedHostContext exposes ONLY granted ports (+ ambient + identity); the
 // runtime fail-loud stays as defense-in-depth. Additive: ExtensionHostContext
 // (all ports required) is unchanged + still consumable.

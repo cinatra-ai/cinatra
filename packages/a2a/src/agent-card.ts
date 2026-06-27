@@ -128,7 +128,7 @@ const TOP_LEVEL_DESCRIPTION =
  *
  * Replaces the regex `value.replace(/\/+$/, "")`, which is polynomial
  * (O(n^2)) on adversarial input such as `"/".repeat(n) + "x"` — the
- * end-anchored `\/+$` retries at every offset (js/polynomial-redos, eng#196).
+ * end-anchored `\/+$` retries at every offset (js/polynomial-redos).
  * Behaviorally identical to the old regex (verified by fuzz).
  */
 function stripTrailingSlashes(value: string): string {

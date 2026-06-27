@@ -1,4 +1,4 @@
-// File-size ratchet gate — unit tests for the pure helpers (eng#308).
+// File-size ratchet gate — unit tests for the pure helpers.
 // Zero-dep (node:test) to match the gate (a .mjs gate can't import .ts deps).
 import { test } from "node:test";
 import assert from "node:assert/strict";

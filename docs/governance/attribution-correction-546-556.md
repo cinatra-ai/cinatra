@@ -1,6 +1,6 @@
 # Attribution-record correction for #546 + #556 (Skills Wave-2 + arch #308 ratchet)
 
-Forward attribution-record correction (cinatra-engineering#119 §5) for two
+Forward attribution-record correction (the Truthful Attribution protocol §5) for two
 high-risk squashes that post-merge-failed [tree-mismatch]:
 
 - b35edb49194679ff9a771f33a9c6bcbf3e6379bd (PR #556, engineering#308 file-size/complexity ratchet gate)

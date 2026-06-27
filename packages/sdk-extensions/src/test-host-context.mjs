@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // createTestHostContext — the AUTHOR-FACING local test harness host context.
 //
-// PURPOSE (cinatra-engineering#163, SDK-P1). An extension author writing a unit
+// PURPOSE (SDK-P1 author-facing test harness). An extension author writing a unit
 // test for their `register(ctx)` hook needs a faithful `ExtensionHostContext`
 // they can construct WITHOUT the server-only host (`@/lib/extension-host-
 // context.ts` imports `server-only`, the DB, Nango, etc.). This module is the

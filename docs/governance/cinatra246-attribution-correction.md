@@ -1,7 +1,7 @@
-# Attribution-record correction — #278 + #279 (cinatra#246 stack) (cinatra-engineering#119 §5)
+# Attribution-record correction — #278 + #279 (cinatra#246 stack) (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution records that landed with the
+the Truthful Attribution protocol §5) for the attribution records that landed with the
 squash merges of two PRs in the cinatra#246 content-editor relay work:
 
 - **#278** — `fix(content-editor): carry real agent_run OBO identity to /api/mcp (#246)`,

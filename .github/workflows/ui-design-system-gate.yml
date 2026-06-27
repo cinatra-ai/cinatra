@@ -1,7 +1,7 @@
 name: ui-design-system-gate
 
 # Thin caller for the org-wide shadcn design-system gate
-# (cinatra-ai/cinatra-engineering#62). The preset's import/raw-JSX blocks are
+# (org shadcn design-system gate). The preset's import/raw-JSX blocks are
 # integrated into this repo's own eslint.config.mjs (Layers 1, 4, 4b, 5 + the
 # raw-JSX warn block — see PR #44); the gate installs deps and runs ESLint
 # against that config. The inputs mirror the in-repo carve-outs:

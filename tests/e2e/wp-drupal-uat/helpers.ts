@@ -129,7 +129,7 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
 }
 
 /**
- * cinatra#410 / eng#230 — install network listeners that assert the REAL dual-
+ * cinatra#410 — install network listeners that assert the REAL dual-
  * token auth path is healthy, so the suite fails LOUD on a genuine auth
  * regression instead of timing out silently on "Thinking…"/(no response):
  *   - the same-origin broker relays for /widget-auth/{init,token} succeed (2xx),

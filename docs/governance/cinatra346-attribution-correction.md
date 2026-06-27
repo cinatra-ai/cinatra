@@ -1,7 +1,7 @@
-# Attribution-record correction — #346 DCR/MCP authorize fix (cinatra-engineering#119 §5)
+# Attribution-record correction — #346 DCR/MCP authorize fix (the Truthful Attribution protocol §5)
 
 This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+the Truthful Attribution protocol §5) for the attribution record that landed with the
 squash merge of PR #346 (`fix(auth): ensure DCR clients can authorize against
 the MCP resource (mcp:connect)`, squash commit
 `5b0e644686af66572386c7c0092412f3b45ce80b`).
@@ -115,4 +115,4 @@ defective SHA.
 | Content tampering | none (#346 code unchanged) |
 | This correction's risk class | non-high-risk (single `docs/governance/` file) |
 | This correction's verification arm | human arm (`Reviewed-by: … (@groganz, tier=maintainer)`) supplied by @groganz approving this bot-authored PR |
-| Precedent | cinatra#234 → `cinatra234-attribution-correction.md` (high-risk human-arm §5 correction); cinatra#212 → `cinatra-eng150-attribution-correction.md` |
+| Precedent | cinatra#234 → `cinatra234-attribution-correction.md` (high-risk human-arm §5 correction); cinatra#212 → `cinatra150-attribution-correction.md` |

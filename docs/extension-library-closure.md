@@ -34,7 +34,7 @@ lockfile ──► canonical PLAN ──► closureHash ──► v2 signature
 
 ## Builder modes (`cinatra.dependencyMode`)
 
-> **Stability: `cinatra.dependencyMode` is a PUBLIC field** (cinatra-engineering#168
+> **Stability: `cinatra.dependencyMode` is a PUBLIC field** (the extension
 > ruling (e), 2026-06-13). It is **not** gated behind a separate experimental
 > flag: the package is still **v0.1.x**, and the version number already conveys
 > that the contract is not stable. Treat the field as public-but-pre-stable —
@@ -101,7 +101,7 @@ side is **pending** — host-side complete, producer pending:
   package can never reach any trusted tier on a v1 signature — see the verdict
   rule above). To make that failure loud at sign time rather than silent at
   install time, the standalone signer **refuses** a closure-mode manifest and
-  points at this section (extension-release-tooling change, eng#160 closure
+  points at this section (extension-release-tooling change, the closure
   half).
 
 End-state statement: **closure verification is host-side complete; closure

@@ -143,7 +143,7 @@ const KNOWN_PREFIX_PATTERNS: Array<{ name: string; re: RegExp }> = [
 // unanchored regex retries the unbounded `+` segments at every offset. Because
 // `detectCredentialPattern` runs over untrusted, author-submitted agent
 // OAS/JSON string values (see scanOasForLiteralSecrets -> walkOasForScannableStrings),
-// that quadratic blowup is a reachable ReDoS (js/polynomial-redos, eng#196).
+// that quadratic blowup is a reachable ReDoS (js/polynomial-redos).
 //
 // This scanner is behaviorally identical to the old regex (verified against the
 // original via a 500k-case fuzz, including the exact matched substring) but

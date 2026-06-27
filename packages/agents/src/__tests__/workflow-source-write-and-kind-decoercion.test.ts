@@ -1,5 +1,5 @@
 /**
- * SDK-P5 (eng#167) — declarative WORKFLOW package source-authoring + the
+ * SDK-P5 — declarative WORKFLOW package source-authoring + the
  * de-coercion of the agent-only `cinatra.kind` write path.
  *
  * Two cohesive concerns:

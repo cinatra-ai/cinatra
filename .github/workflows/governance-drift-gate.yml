@@ -1,7 +1,7 @@
 name: governance-drift-gate
 
 # Scheduled / on-demand release-governance drift detector
-# (cinatra-ai/engineering#315). NOT a required pull_request check: reading branch
+# (release-governance drift detection). NOT a required pull_request check: reading branch
 # protection + org rulesets needs admin scope a fork PR's GITHUB_TOKEN lacks.
 # Until GOVERNANCE_DRIFT_READ_TOKEN is provisioned the gate green-skips with a
 # ::notice; once provisioned it diffs the committed .github/*-protection(s)
