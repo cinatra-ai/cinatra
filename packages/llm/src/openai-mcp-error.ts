@@ -48,3 +48,43 @@ export function buildMcpUnreachableMessage(serverUrl?: string): string {
     `provider, then try again.`
   );
 }
+
+/**
+ * The decision for handling a caught provider error against a request that
+ * carried MCP tool injection. Both `generate()` (non-streaming) and `stream()`
+ * route a caught 424 through {@link planMcpToolListErrorRecovery} so the two
+ * paths stay behaviourally identical (#530 CodeRabbit follow-up):
+ *  - `none`     → not a hosted-MCP 424 (or the request had no tools): the caller
+ *                 re-throws / surfaces the original error UNCHANGED.
+ *  - `retry`    → dev mode AND non-MCP tools remain: retry WITHOUT the MCP tool,
+ *                 using `toolsWithoutMcp` as the replacement `tools` payload.
+ *  - `fail`     → production (stable URL) or MCP-only: FAIL LOUD with the clear,
+ *                 actionable `message` (a typed rewrite of the opaque raw 424).
+ */
+export type McpToolListErrorRecovery =
+  | { kind: "none" }
+  | { kind: "retry"; toolsWithoutMcp: Array<{ type?: string }> }
+  | { kind: "fail"; message: string };
+
+/**
+ * Classify a caught provider error against the request's `tools` payload and
+ * decide how to recover from the hosted-MCP tool-list 424 (#500). Pure: takes
+ * the caught value, the request's `tools`, and whether we are in dev mode, and
+ * returns a {@link McpToolListErrorRecovery}. The `client.responses.*` call and
+ * the actual throw/log live in the provider; only the BRANCH lives here, so the
+ * non-streaming and streaming paths cannot drift apart.
+ */
+export function planMcpToolListErrorRecovery(
+  err: unknown,
+  tools: unknown,
+  isDevMode: boolean,
+): McpToolListErrorRecovery {
+  if (!isHostedMcpToolListError(err) || !tools) return { kind: "none" };
+  const toolsWithoutMcp = Array.isArray(tools)
+    ? (tools as Array<{ type?: string }>).filter((t) => t.type !== "mcp")
+    : [];
+  if (isDevMode && toolsWithoutMcp.length > 0) {
+    return { kind: "retry", toolsWithoutMcp };
+  }
+  return { kind: "fail", message: buildMcpUnreachableMessage(extractMcpServerUrl(tools)) };
+}
