@@ -32,8 +32,11 @@ import {
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
 // Skill-authoring + edit pages list installed agents from the canonical
-// agent_templates reader, not workspace packages from packages/*.
+// agent_templates reader, not workspace packages from packages/*. The internal
+// `system-*` runtime templates are filtered out via `selectAttachableAgents`
+// so the dropdown only offers user-facing, currently-installed agents.
 import { readAgentsForSkillMatching } from "@/lib/agents-store";
+import { selectAttachableAgents } from "./attachable-agents";
 import {
   createSkillFromTemplateAction,
   deletePersonalSkillAction,
@@ -539,7 +542,7 @@ export async function CreateFromSkillPage({ params }: CreateFromSkillPageProps) 
 export async function NewSkillPage({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   const resolvedSearchParams: SearchParams = await (searchParams ?? Promise.resolve({} as SearchParams));
   await requireActorContext();
-  const agents = await readAgentsForSkillMatching();
+  const agents = selectAttachableAgents(await readAgentsForSkillMatching());
   const errorMessage = pickSearchParam(resolvedSearchParams.error);
 
   return (
@@ -618,17 +621,26 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
     (searchParams ?? Promise.resolve({})) as Promise<SearchParams>,
     requireActorContext(),
   ]);
-  const [skill, agents] = await Promise.all([
+  const [skill, allAgents] = await Promise.all([
     getCustomSkillById({
       ownerUserId: actor.principalId,
       skillId: decodeURIComponent(skillId),
     }),
     readAgentsForSkillMatching(),
   ]);
+  const agents = selectAttachableAgents(allAgents);
 
   if (!skill) {
     notFound();
   }
+
+  // A legacy personal skill could be attached to an agent that is no longer
+  // attachable (a `system-*` template, or one that has since been uninstalled).
+  // That agent is now absent from `agents`, so the `required` <select> would
+  // otherwise silently default to the first remaining option and let a save
+  // re-target the skill onto a different agent. Detect that case and force an
+  // explicit re-selection via a disabled placeholder.
+  const currentAgentIsAttachable = agents.some((agent) => agent.id === skill.agentId);
 
   const errorMessage = pickSearchParam(resolvedSearchParams.error);
 
@@ -657,9 +669,14 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
               <select
                 name="agentId"
                 required
-                defaultValue={skill.agentId ?? ""}
+                defaultValue={currentAgentIsAttachable ? (skill.agentId ?? "") : ""}
                 className="rounded-control border border-line bg-surface-strong px-4 py-3 text-sm font-normal text-foreground outline-none transition focus:border-primary"
               >
+                {currentAgentIsAttachable ? null : (
+                  <option value="" disabled>
+                    Select an agent
+                  </option>
+                )}
                 {agents.map((agent) => (
                   <option key={agent.id} value={agent.id}>
                     {agent.humanReadableName}
