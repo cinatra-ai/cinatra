@@ -164,7 +164,7 @@ export async function getGitHubAPIStatus(): Promise<GitHubConnectionStatus> {
 
   return {
     status: "not_connected",
-    detail: "Configure GitHub OAuth to connect a GitHub account through Nango.",
+    detail: "Configure GitHub OAuth to connect your GitHub account.",
     settingsConfigured: false,
     selectedRepositoryFullName: settings.selectedRepositoryFullName,
     selectedRepositoryUrl: settings.selectedRepositoryUrl,
