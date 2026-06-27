@@ -36,7 +36,6 @@ import { buildSecurityContextFromSession } from "../auth/security-context";
 import { and } from "drizzle-orm";
 
 import { dashboards, getDashboardsDb } from "../store/db";
-import { readEffectiveStatusByPackageNames } from "../store/extension-dashboard-reads";
 import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
@@ -92,20 +91,36 @@ async function loadAgentsConfig(
 // undercounts when an org has more than this many templates (#307 review).
 const INSTALLED_AGENTS_DISPLAY_LIMIT = 60;
 
+// Resolver that maps installed package names -> their CANONICAL install
+// lifecycle (active | archived). The dashboards package MUST NOT read the
+// canonical install manifest itself: that table is owned by the canonical store
+// in `@cinatra-ai/extensions`, and importing that package here would close a
+// real dependency cycle (extensions -> workflows -> dashboards) the
+// workspace-dep-cycles gate forbids. So the canonical reader is INJECTED from
+// the app layer (src/app/agents/page.tsx), which already depends on
+// @cinatra-ai/extensions. See `drift-canonical-gate-reach` (all canonical
+// install-manifest access lives in the canonical store) + `workspace-dep-cycles`.
+export type ResolveInstallStatus = (
+  packageNames: string[],
+) => Promise<Map<string, "active" | "archived">>;
+
 // Installed agent templates for this org. The dashboard portlets only chart
 // agent_runs, so a fresh instance (0 runs) rendered blank even with templates
 // installed (#307). This lists the installed agents so the page is meaningful
 // before any run. Org-scoped (the same primary filter readAgentTemplates uses).
 //
-// `status` here is the CANONICAL install lifecycle (active | archived) resolved
-// from `installed_extension` via readEffectiveStatusByPackageNames — NOT
+// `status` is the CANONICAL install lifecycle (active | archived) — NOT
 // agentTemplates.status, which is the agent-builder lifecycle
 // (draft | published | archived) and is the wrong concept for an "Installed
-// agents" view (see packages/agents/src/schema.ts: install state lives
-// canonically in installed_extension). A package absent from the canonical map
-// (no row / read failure fails-open) defaults to "active", matching the
-// marketplace readers + chat-widget catalog precedent.
-async function loadInstalledAgents(organizationId: string) {
+// agents" view. The canonical status is resolved by the injected
+// `resolveInstallStatus` (app layer). When no resolver is provided (the package
+// renders standalone) every template defaults to "active", matching the
+// marketplace readers + chat-widget catalog precedent. A package absent from the
+// resolved map likewise defaults to "active".
+async function loadInstalledAgents(
+  organizationId: string,
+  resolveInstallStatus?: ResolveInstallStatus,
+) {
   const db = getDashboardsDb();
   const orgFilter = eq(agentTemplates.orgId, organizationId);
   const [rows, [{ total }]] = await Promise.all([
@@ -126,33 +141,42 @@ async function loadInstalledAgents(organizationId: string) {
       .from(agentTemplates)
       .where(orgFilter),
   ]);
-  // Fail-open: a canonical-store outage must not take down /agents. On read
-  // failure every template falls back to "active" (we never assert "archived"
-  // without evidence) — mirrors the chat-widget catalog's try/catch precedent.
+  // Fail-open: a canonical-store outage (or no resolver at all) must not take
+  // down /agents. Without a resolver, or on read failure, every template falls
+  // back to "active" (we never assert "archived" without evidence) — mirrors the
+  // chat-widget catalog's try/catch precedent.
   let statusByPackage = new Map<string, "active" | "archived">();
-  try {
-    statusByPackage = await readEffectiveStatusByPackageNames(
-      rows.map((r) => r.packageName),
-    );
-  } catch (err) {
-    console.warn(
-      "[agents-dashboard] canonical install-status read failed — defaulting to active:",
-      err instanceof Error ? err.message : err,
-    );
+  if (resolveInstallStatus) {
+    try {
+      statusByPackage = await resolveInstallStatus(rows.map((r) => r.packageName));
+    } catch (err) {
+      console.warn(
+        "[agents-dashboard] canonical install-status read failed — defaulting to active:",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
   const agents = rows.map((r) => ({
     id: r.id,
     name: r.name,
     description: r.description,
     type: r.type,
-    // A package absent from the canonical map (no install_extension row, or the
-    // fail-open empty map above) defaults to "active".
+    // A package absent from the resolved map (no resolver, no canonical
+    // install row, or the fail-open empty map above) defaults to "active".
     status: statusByPackage.get(r.packageName) ?? "active",
   }));
   return { agents, total };
 }
 
-export async function AgentsDashboardPage() {
+export async function AgentsDashboardPage({
+  resolveInstallStatus,
+}: {
+  // Injected by the app route (src/app/agents/page.tsx) so the canonical
+  // install-status read lives in @cinatra-ai/extensions, NOT in this package
+  // (see ResolveInstallStatus above + loadInstalledAgents). Optional: without it
+  // the screen renders self-contained with every agent defaulting to "active".
+  resolveInstallStatus?: ResolveInstallStatus;
+} = {}) {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
@@ -162,7 +186,7 @@ export async function AgentsDashboardPage() {
   const [initialConfig, { agents: installedAgents, total: installedTotal }] =
     await Promise.all([
       loadAgentsConfig(dashboardId, ctx.organizationId, ctx.userId),
-      loadInstalledAgents(ctx.organizationId),
+      loadInstalledAgents(ctx.organizationId, resolveInstallStatus),
     ]);
   // The list is capped at INSTALLED_AGENTS_DISPLAY_LIMIT rows; `installedTotal`
   // is the true org-wide count so the heading does not undercount, and the
