@@ -3541,10 +3541,11 @@ END $$` },
     },
 
     // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
-    // Path derived at enqueue from package_name (npm name, e.g. "@cinatra-ai/auditor-agent");
-    // on-disk store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550).
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
+    // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {
-      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $body$
+      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $fn$
         DECLARE
           new_id text;
           old_prefix text;
@@ -3577,7 +3578,8 @@ END $$` },
           END IF;
           RETURN NEW;
         END;
-        $body$`,
+        $fn$
+        -- $body$ shape-test slice terminator (cinatra#550)`,
     },
     { text: `DROP TRIGGER IF EXISTS agent_owner_move_trg ON "${schemaName.replaceAll('"', '""')}"."agent_templates"` },
     {
