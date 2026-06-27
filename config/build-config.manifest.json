@@ -178,7 +178,7 @@
     { "alias": "@cinatra-ai/dashboards/auth", "target": "./packages/dashboards/src/auth/index.ts" },
     { "alias": "@cinatra-ai/dashboards/require-dashboard-access", "target": "./packages/dashboards/src/auth/require-dashboard-access.ts" },
     { "alias": "@cinatra-ai/dashboards/extension-dashboard-reads", "target": "./packages/dashboards/src/store/extension-dashboard-reads.ts" },
-    { "alias": "@cinatra-ai/dashboards/analytics-portlet-view", "target": "./packages/dashboards/src/components/analytics-portlet-view.tsx" },
+    { "alias": "@cinatra-ai/dashboards/embedded-drizzle-cube-dashboard-grid", "target": "./packages/dashboards/src/components/embedded-drizzle-cube-dashboard-grid.tsx" },
     { "alias": "@cinatra-ai/dashboards/audit", "target": "./packages/dashboards/src/audit/index.ts" },
     { "alias": "@cinatra-ai/dashboards/providers", "target": "./packages/dashboards/src/providers/index.tsx" },
     { "alias": "@cinatra-ai/dashboards/cubes-mcp-module", "target": "./packages/dashboards/src/mcp-cubes/index.ts" },

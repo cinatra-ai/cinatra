@@ -12,7 +12,7 @@
  *
  * Why the envelope (not bare 1.1):
  *   `/dashboards/[id]` renders apiVersion 1.2 rows through `PortletHost` →
- *   `AnalyticsPortletView` (one renderer), so an agent-created dashboard shows
+ *   `EmbeddedDrizzleCubeDashboardGrid` (one renderer), so an agent-created dashboard shows
  *   its real analytics grid instead of the legacy read-only branch (cinatra#272,
  *   #325 keystone). #326 makes the CREATE/SAVE paths emit that shape.
  *

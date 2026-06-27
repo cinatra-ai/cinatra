@@ -20,7 +20,7 @@ import {
   ORGANIZATIONS_DEFAULT_CONFIG,
   buildOrganizationsDashboardId,
 } from "../components/seed-configs/organizations-default";
-import { AnalyticsPortletView } from "../components/analytics-portlet-view";
+import { EmbeddedDrizzleCubeDashboardGrid } from "../components/embedded-drizzle-cube-dashboard-grid";
 import { saveOrganizationsDashboardAction } from "../actions";
 
 async function loadOrganizationsConfig(
@@ -44,7 +44,7 @@ async function loadOrganizationsConfig(
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
   // config the grid mounts (an absent/corrupt/non-1.2 row falls back to the
   // seed; the legacy 1.0/1.1 read path was removed in cinatra#329 after the
-  // migration). #328 renders via AnalyticsPortletView (the PortletHost grid
+  // migration). #328 renders via EmbeddedDrizzleCubeDashboardGrid (the PortletHost grid
   // renderer); the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(rows[0], ORGANIZATIONS_DEFAULT_CONFIG);
 }
@@ -73,7 +73,7 @@ export async function OrganizationsDashboardPage() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <AnalyticsPortletView
+        <EmbeddedDrizzleCubeDashboardGrid
           dashboard={initialConfig}
           editable
           onSave={saveOrganizationsDashboardAction}

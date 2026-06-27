@@ -187,7 +187,7 @@ export function registerCorePortletKinds(): void {
 
   // analytics (keystone, cinatra#325) — embeds a WHOLE drizzle-cube
   // DashboardConfig at `config.dashboard` and renders the full interactive grid
-  // (charts/filters/save/drag-resize) via PortletHost → analytics-portlet-view.
+  // (charts/filters/save/drag-resize) via PortletHost → embedded-drizzle-cube-dashboard-grid.
   // Self-contained: no inputs/outputs (the cube SQL predicate owns tenant
   // isolation, so the scopePolicy carries no op — like the launcher kinds that
   // delegate authz to the wrapped primitive). Registered under both the

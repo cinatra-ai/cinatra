@@ -1,7 +1,11 @@
 "use client";
 /**
- * AnalyticsPortletView — the keystone renderer for the apiVersion 1.2
- * `analytics` portlet kind (cinatra#325).
+ * EmbeddedDrizzleCubeDashboardGrid — the keystone embedded drizzle-cube grid
+ * renderer. Used for BOTH the apiVersion 1.2 `analytics` portlet kind
+ * (cinatra#325) AND the entity dashboard pages (projects / teams /
+ * organizations / agents / artifacts / personal — cinatra#328, #626). The name
+ * reflects what it renders (the embedded drizzle-cube dashboard grid), not the
+ * narrower `analytics` portlet it originally shipped for (renamed in #628).
  *
  * An apiVersion 1.2 dashboard may carry a single `analytics` portlet whose
  * `config.dashboard` is a WHOLE drizzle-cube `DashboardConfig` (the embedded
@@ -23,7 +27,7 @@
  * Editability:
  *   - Read-only by default (embedded extension/agent analytics dashboards, the
  *     #325 acceptance) — no `onSave`, no autosave wiring.
- *   - The optional `editable` + `onSave` props are the seam for the later
+ *   - The optional `editable` + `onSave` props are the seam for the
  *     entity-dashboard work (#328): when an editable screen threads them
  *     through, the underlying `DashboardGridContainer` wires its autosave
  *     coordinator. This component intentionally does NOT own the apiVersion 1.2
@@ -42,7 +46,7 @@ import {
   type DashboardPageAnchor,
 } from "./dashboards-client-shell";
 
-export type AnalyticsPortletViewProps = {
+export type EmbeddedDrizzleCubeDashboardGridProps = {
   /** The embedded drizzle-cube dashboard config (the analytics portlet's
    *  `config.dashboard`), already unwrapped from the apiVersion 1.2 envelope. */
   readonly dashboard: DashboardConfigV1_1;
@@ -57,13 +61,13 @@ export type AnalyticsPortletViewProps = {
   readonly dashboardModes?: readonly DashboardMode[];
 };
 
-export function AnalyticsPortletView({
+export function EmbeddedDrizzleCubeDashboardGrid({
   dashboard,
   editable = false,
   onSave,
   pageAnchor,
   dashboardModes,
-}: AnalyticsPortletViewProps) {
+}: EmbeddedDrizzleCubeDashboardGridProps) {
   return (
     <DashboardsClientShell pageAnchor={pageAnchor} dashboardModes={dashboardModes}>
       <DashboardGridContainer

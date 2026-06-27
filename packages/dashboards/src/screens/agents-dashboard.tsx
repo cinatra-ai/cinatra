@@ -11,7 +11,7 @@
  *      via the dashboards store. If missing, mounts AGENTS_DEFAULT_CONFIG
  *      directly - first save materializes the row via
  *      upsertDashboardConfig.
- *   3. Mounts the apiVersion 1.2 `<AnalyticsPortletView>` (the single
+ *   3. Mounts the apiVersion 1.2 `<EmbeddedDrizzleCubeDashboardGrid>` (the single
  *      PortletHost analytics-grid renderer) editable, threading the same page
  *      anchor + Grid/Rows modes + save action the legacy grid used (#328).
  *
@@ -42,7 +42,7 @@ import {
   AGENTS_DEFAULT_CONFIG,
   buildAgentsDashboardId,
 } from "../components/seed-configs/agents-default";
-import { AnalyticsPortletView } from "../components/analytics-portlet-view";
+import { EmbeddedDrizzleCubeDashboardGrid } from "../components/embedded-drizzle-cube-dashboard-grid";
 import { saveAgentsDashboardAction } from "../actions";
 
 /**
@@ -81,7 +81,7 @@ async function loadAgentsConfig(
   // `config.dashboard` (an absent / corrupt / mislabeled / non-1.2 row falls
   // back to the seed — first save then materializes via upsertDashboardConfig;
   // the legacy 1.0/1.1 read path was removed in cinatra#329 after the migration).
-  // #328 swapped the RENDER (now AnalyticsPortletView, the PortletHost grid
+  // #328 swapped the RENDER (now EmbeddedDrizzleCubeDashboardGrid, the PortletHost grid
   // renderer) — the data shape stays the bare DC config the view mounts.
   return readDcConfigFromRow(existing, AGENTS_DEFAULT_CONFIG);
 }
@@ -260,7 +260,7 @@ export async function AgentsDashboardPage({
             </>
           )}
         </section>
-        <AnalyticsPortletView
+        <EmbeddedDrizzleCubeDashboardGrid
           dashboard={initialConfig}
           editable
           onSave={saveAgentsDashboardAction}

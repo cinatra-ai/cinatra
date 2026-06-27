@@ -3,7 +3,7 @@
  * Server Actions for the dashboards package.
  *
  * `saveAgentsDashboardAction` is invoked from the /agents screen via the
- * `AnalyticsPortletView` `onSave` prop (cinatra#328). It funnels every
+ * `EmbeddedDrizzleCubeDashboardGrid` `onSave` prop (cinatra#328). It funnels every
  * save through the mutation service's `upsertDashboardConfig`, which
  * is the single writer (audit-event row written inside the
  * same TX; advisory-lock serializes concurrent writers).
@@ -29,6 +29,7 @@ import { buildProjectsDashboardId } from "./components/seed-configs/projects-def
 import { buildTeamsDashboardId } from "./components/seed-configs/teams-default";
 import { buildOrganizationsDashboardId } from "./components/seed-configs/organizations-default";
 import { buildArtifactsDashboardId } from "./components/seed-configs/artifacts-default";
+import { buildPersonalDashboardId } from "./components/seed-configs/personal-default";
 import type { DashboardActor } from "./permissions";
 
 export async function saveAgentsDashboardAction(config: unknown): Promise<void> {
@@ -115,4 +116,8 @@ export async function saveOrganizationsDashboardAction(config: unknown): Promise
 
 export async function saveArtifactsDashboardAction(config: unknown): Promise<void> {
   await saveCinatraDashboardAction(buildArtifactsDashboardId, "Artifacts", config);
+}
+
+export async function savePersonalDashboardAction(config: unknown): Promise<void> {
+  await saveCinatraDashboardAction(buildPersonalDashboardId, "Personal", config);
 }
