@@ -48,7 +48,7 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   listInstalledExtensions: vi.fn(async () => []),
 }));
 
-vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); },
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); },
   ensureConfig: (c: unknown) => c ?? { registryUrl: "https://registry.cinatra.ai", packageScope: "@cinatra-ai", token: "t", uiUrl: null },
   extractAgentPackage: async () => ({
     packageName: "@cinatra-ai/pkg",

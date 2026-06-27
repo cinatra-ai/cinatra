@@ -32,7 +32,7 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   readLocalPackageSkillContent: vi.fn(),
 }));
-vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("@cinatra-ai/objects", () => ({ createDeterministicObjectsClient: vi.fn(() => ({})) }));
 vi.mock("@cinatra-ai/llm", () => ({
   getActorContext: () => null,
@@ -379,23 +379,31 @@ describe("agent source writers agree on one vendor segment for a hyphenated scop
       __resolveAgentJsonPathForWrite: (slug: string) => unknown;
       __resolveAgentJsonPathForRead: (slug: string) => unknown;
     };
-    // A `..` / separator / leading-~ slug must never reach path.join.
+    // A `..` / separator / leading-~ / leading-@ slug must never reach path.join.
     expect(() => mod.__resolveAgentJsonPathForWrite("..")).toThrow(/unsafe/);
     expect(() => mod.__resolveAgentJsonPathForWrite("a/b")).toThrow(/unsafe/);
+    expect(() => mod.__resolveAgentJsonPathForWrite("@..")).toThrow(/unsafe/);
+    expect(() => mod.__resolveAgentJsonPathForWrite("@~evil")).toThrow(/unsafe/);
     // The read resolver returns null (no throw) for an unsafe slug — a read miss.
     expect(mod.__resolveAgentJsonPathForRead("..")).toBeNull();
     expect(mod.__resolveAgentJsonPathForRead("../../etc")).toBeNull();
+    expect(mod.__resolveAgentJsonPathForRead("@..")).toBeNull();
+    expect(mod.__resolveAgentJsonPathForRead("@~evil")).toBeNull();
   });
 
   it("resolveInstanceVendorSegment FAILS CLOSED on an unsafe identity-derived vendor", async () => {
     const mod = (await import("../mcp/handlers")) as unknown as {
       __resolveInstanceVendorSegment: () => string;
     };
-    // A misconfigured identity providing a traversal/separator vendor must throw
-    // rather than silently joining it into the on-disk path.
+    // A misconfigured identity providing a traversal/separator/@-prefixed vendor
+    // must throw rather than silently joining it into the on-disk path.
     mockReadInstanceIdentity.mockReturnValue({ vendorName: "../evil" });
     expect(() => mod.__resolveInstanceVendorSegment()).toThrow(/unsafe/);
     mockReadInstanceIdentity.mockReturnValue({ vendorName: "a/b" });
+    expect(() => mod.__resolveInstanceVendorSegment()).toThrow(/unsafe/);
+    // A vendor that still carries an "@" (e.g. a mis-stored scoped value) is a
+    // leaked malformed segment — the shared guard rejects leading-"@".
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: "@evil" });
     expect(() => mod.__resolveInstanceVendorSegment()).toThrow(/unsafe/);
   });
 });

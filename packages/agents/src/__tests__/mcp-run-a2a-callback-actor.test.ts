@@ -186,7 +186,7 @@ vi.mock("../verdaccio/client", () => ({
 }));
 vi.mock("../verdaccio/publish-metadata", () => ({ derivePublishMetadataFromSnapshot: vi.fn() }));
 vi.mock("../install-from-package", () => ({ installAgentFromPackage: vi.fn() }));
-vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s.length > 0 && s !== "." && s !== ".." && !s.includes("/") && !s.includes("\\") && !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("@cinatra-ai/skills", () => ({ upsertSkill: vi.fn(), parseFrontmatter: vi.fn() }));
 vi.mock("../review-task-actions", () => ({ approveReviewTaskInternal: vi.fn() }));
 vi.mock("../trigger-service", () => ({

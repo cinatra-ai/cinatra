@@ -8,22 +8,11 @@ import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
 import { parsePackageId, isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
-
-/**
- * Assert a value is a single filesystem-safe path segment that ALSO does not
- * start with "@" (cinatra#537 belt-and-suspenders). A valid vendor/name never
- * starts with "@" after `parsePackageId` strips the scope marker, so an
- * "@"-prefixed segment reaching a join means a malformed/rejected value leaked
- * through — reject it. `isSafePathSegment` alone permits "@.." / "@~evil"
- * (they aren't exactly "..", contain no "/", and start with "@" not "~"), so
- * the extra "@" check is required to keep them out of the `~agents` path.
- */
-function assertNoAtSafeSegment(seg: string, label: string): void {
-  assertSafePathSegment(seg, label);
-  if (seg.startsWith("@")) {
-    throw new Error(`unsafe ${label}: ${JSON.stringify(seg)} must not start with '@'`);
-  }
-}
+// NOTE (cinatra#537): the shared `isSafePathSegment`/`assertSafePathSegment`
+// guard in @cinatra-ai/registries now rejects leading-"@" segments directly, so
+// a single shared guard covers the `~agents/<vendor>/<package>` joins below — no
+// local "@"-specific wrapper is needed (a valid on-disk segment is always
+// post-parse and never starts with "@").
 
 // Auto-sync the configured GitHub repository once per process lifetime.
 // After the first call (success or failure), the flag stays true so subsequent
@@ -189,15 +178,12 @@ export function deriveContextFromLegacy(
       //
       // Belt-and-suspenders (cinatra#537): the derived segments become on-disk
       // path segments downstream (resolveSkillDir). Drop the binding to the null
-      // fallback if either segment is not a single safe path segment OR starts
-      // with "@" — a valid vendor/name never starts with "@" after parsePackageId
-      // strips it, so an "@"-prefixed segment means a malformed value leaked.
+      // fallback if either segment is not a single safe path segment. The shared
+      // `isSafePathSegment` rejects separators/`..`/control/leading-`~` AND
+      // leading-`@`, so a leaked "@.."-style value can never persist as a vendor.
       if (
         vendor !== null &&
-        (!isSafePathSegment(vendor) ||
-          !isSafePathSegment(pkg) ||
-          vendor.startsWith("@") ||
-          pkg.startsWith("@"))
+        (!isSafePathSegment(vendor) || !isSafePathSegment(pkg))
       ) {
         vendor = null;
       }
@@ -471,16 +457,13 @@ function getSkillDiskDir(
       //
       // Belt-and-suspenders (cinatra#537): every segment joined into the
       // `~agents/<vendor>/<package>/<skill>/` path MUST be a single safe path
-      // segment AND must NOT start with "@". The legacy `<vendor>/<package>`
-      // split can leave a multi-segment `pkg` ("vendor/foo/bar") or a `..` token;
-      // and a valid vendor/name never starts with "@" after parsePackageId
-      // strips it, so an "@"-prefixed segment reaching here is a leaked malformed
-      // value. assertNoAtSafeSegment throws on either, so neither
-      // separator/traversal injection nor a literal "@.." segment can reach
+      // segment. The shared `assertSafePathSegment` rejects separators/`..`/
+      // control chars/leading-`~` AND leading-`@`, so neither a multi-segment
+      // `pkg` ("vendor/foo/bar") nor a leaked literal "@.." segment can reach
       // path.join.
-      assertNoAtSafeSegment(vendor, "agent skill vendor");
-      assertNoAtSafeSegment(pkg, "agent skill package");
-      assertNoAtSafeSegment(skillSlug, "agent skill slug");
+      assertSafePathSegment(vendor, "agent skill vendor");
+      assertSafePathSegment(pkg, "agent skill package");
+      assertSafePathSegment(skillSlug, "agent skill slug");
       return path.join(root, "workspace", "~agents", vendor, pkg, skillSlug);
     }
     case "system":

@@ -63,6 +63,13 @@ export interface PackageId {
  *   - any segment containing "/" or "\" (separator injection → nested dirs)
  *   - NUL or any C0/C1 control char (0x00–0x1F, 0x7F)
  *   - a leading "~" (home-dir / reserved-bucket marker — see RESERVED_SUBBUCKETS)
+ *   - a leading "@" — on-disk segments are ALWAYS post-parse: `parsePackageId`
+ *     strips the scope's "@", legacy/unscoped names are bare, and instance
+ *     vendor segments are bare. So a valid vendor/name/slug segment NEVER starts
+ *     with "@". Rejecting it here makes a rejected/malformed scoped value (e.g.
+ *     "@..", "@.", "@~evil") that leaked past parsePackageId fail closed at
+ *     EVERY join site automatically, instead of landing as a literal "@.."
+ *     directory segment (cinatra#537).
  *   - absolute / drive-like forms ("/x" and "C:\..." are already caught by the
  *     separator + the windows-drive checks below)
  *
@@ -82,6 +89,9 @@ export function isSafePathSegment(seg: unknown): seg is string {
   if (/[\x00-\x1f\x7f]/.test(seg)) return false;
   // Leading "~" — home-dir expansion / reserved sub-bucket marker.
   if (seg.startsWith("~")) return false;
+  // Leading "@" — on-disk segments are post-parse and never scoped; a leading
+  // "@" means a rejected/malformed scoped value leaked here (e.g. "@..").
+  if (seg.startsWith("@")) return false;
   // Windows drive-letter prefix ("C:", "C:foo"). The backslash form is already
   // rejected above; this catches the colon-drive form regardless of slash.
   if (/^[a-zA-Z]:/.test(seg)) return false;

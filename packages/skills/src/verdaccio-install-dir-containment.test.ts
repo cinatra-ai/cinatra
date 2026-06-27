@@ -48,7 +48,7 @@ vi.mock("@cinatra-ai/registries", () => {
     typeof s === "string" && s.length > 0 && s !== "." && s !== ".." &&
     !s.includes("/") && !s.includes("\\") &&
     // eslint-disable-next-line no-control-regex
-    !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !/^[a-zA-Z]:/.test(s);
+    !/[\x00-\x1f\x7f]/.test(s) && !s.startsWith("~") && !s.startsWith("@") && !/^[a-zA-Z]:/.test(s);
   return {
     extractExtensionPackage: vi.fn(),
     loadVerdaccioConfig: vi.fn(),

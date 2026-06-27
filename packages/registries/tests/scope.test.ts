@@ -142,10 +142,25 @@ describe("isSafePathSegment / assertSafePathSegment (cinatra#537 path-traversal 
     expect(isSafePathSegment(null as unknown)).toBe(false);
   });
 
+  it("rejects any leading-'@' segment — on-disk segments are post-parse, never scoped (cinatra#537)", () => {
+    // A valid vendor/name/slug NEVER starts with "@" (parsePackageId strips the
+    // scope marker; legacy/unscoped names + instance vendors are bare). So a
+    // leading-"@" segment is a rejected/malformed scoped value that leaked — it
+    // must fail the shared guard so EVERY join site fails closed automatically.
+    expect(isSafePathSegment("@..")).toBe(false);
+    expect(isSafePathSegment("@x")).toBe(false);
+    expect(isSafePathSegment("@~evil")).toBe(false);
+    expect(isSafePathSegment("@.")).toBe(false);
+    expect(isSafePathSegment("@")).toBe(false);
+    expect(isSafePathSegment("@cinatra-ai")).toBe(false); // even a "real" scope is invalid as a SEGMENT
+  });
+
   it("assertSafePathSegment throws on unsafe and is a no-op on safe", () => {
     expect(() => assertSafePathSegment("..")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("a/b")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("~x")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("@x")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("@..")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("ok-seg")).not.toThrow();
   });
 });
