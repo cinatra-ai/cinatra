@@ -46,12 +46,28 @@ vi.mock("@/lib/auth", () => ({
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(),
 }));
+// PermissionsAuthPage now reads the closed-registration flag on the display
+// side (D7). Mock the instance-mode module so the page stays hermetic (the real
+// module is `server-only` + reaches @/lib/database).
+vi.mock("@/lib/authz/instance-mode", () => ({
+  isRegistrationClosed: vi.fn(),
+}));
 
-async function mockAuthState({ hasUsers, session }: { hasUsers: boolean; session: unknown }) {
+async function mockAuthState({
+  hasUsers,
+  session,
+  registrationClosed = false,
+}: {
+  hasUsers: boolean;
+  session: unknown;
+  registrationClosed?: boolean;
+}) {
   const { hasAnyBetterAuthUsers } = await import("@/lib/auth");
   const { getAuthSession } = await import("@/lib/auth-session");
+  const { isRegistrationClosed } = await import("@/lib/authz/instance-mode");
   (hasAnyBetterAuthUsers as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(hasUsers);
   (getAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(session);
+  (isRegistrationClosed as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(registrationClosed);
 }
 
 async function renderAuthPage(path: string): Promise<string> {
@@ -127,5 +143,42 @@ describe("authenticated visitor", () => {
     await mockAuthState({ hasUsers: false, session: { user: { id: "user-1" } } });
     await expectAuthPageRedirect("sign-in", "/");
     await expectAuthPageRedirect("sign-up", "/");
+  });
+});
+
+describe("closed registration (D7 display-side notice)", () => {
+  it("humans + closed: /sign-up renders the 'Registration is closed' notice, not the sign-up form", async () => {
+    await mockAuthState({ hasUsers: true, session: null, registrationClosed: true });
+    const html = await renderAuthPage("sign-up");
+    expect(html).toMatch(/Registration is closed/);
+    // No bootstrap create-first-account form, and no sign-up form is shown.
+    expect(html).not.toMatch(/Create the first account/);
+    expect(html).not.toMatch(/data-testid="sign-up-form"/);
+    // Existing users can still sign in — the login view is mounted under the notice.
+    expect(html).toMatch(/data-path="sign-in"/);
+  });
+
+  it("humans + closed: /sign-in stays the normal login view (no notice forced there)", async () => {
+    await mockAuthState({ hasUsers: true, session: null, registrationClosed: true });
+    const html = await renderAuthPage("sign-in");
+    expect(html).toMatch(/data-testid="auth-view"/);
+    expect(html).toMatch(/data-path="sign-in"/);
+    expect(html).not.toMatch(/Registration is closed/);
+  });
+
+  it("zero humans + closed: /sign-up STILL shows the bootstrap create-first-account form (bootstrap wins over flag)", async () => {
+    await mockAuthState({ hasUsers: false, session: null, registrationClosed: true });
+    const html = await renderAuthPage("sign-up");
+    expect(html).toMatch(/Create the first account/);
+    expect(html).toMatch(/data-testid="sign-up-form"/);
+    expect(html).not.toMatch(/Registration is closed/);
+  });
+
+  it("humans + open: /sign-up renders the normal sign-up view (regression)", async () => {
+    await mockAuthState({ hasUsers: true, session: null, registrationClosed: false });
+    const html = await renderAuthPage("sign-up");
+    expect(html).toMatch(/data-testid="auth-view"/);
+    expect(html).toMatch(/data-path="sign-up"/);
+    expect(html).not.toMatch(/Registration is closed/);
   });
 });

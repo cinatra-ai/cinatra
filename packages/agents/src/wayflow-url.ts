@@ -51,6 +51,67 @@ export const WAYFLOW_A2A_TIMEOUT_MS = 86_400_000;
  */
 export const AGENT_RUN_TIMEOUT_MAX_SECONDS = 86_400;
 
+/**
+ * Map a dispatch error thrown while reaching the WayFlow runtime into an
+ * actionable run-error string that names the target URL and the underlying
+ * cause (#562).
+ *
+ * When `client.sendTask` can't connect, undici's `fetch` throws a bare
+ * `TypeError: fetch failed` whose only useful context lives in `err.cause`
+ * (e.g. `Error: connect ECONNREFUSED 127.0.0.1:8001` with `.code`). Recording
+ * `err.message` alone surfaces just "fetch failed" on the run — no endpoint, no
+ * reason — which is undebuggable (the issue's exact symptom: started_at null,
+ * no steps, bare "fetch failed").
+ *
+ * This helper is pure (no I/O, no env) so it is unit-testable and so the call
+ * site can both log the structured form server-side and store the returned
+ * string on the run. Non-fetch errors (e.g. a WayFlow 500 surfaced by the A2A
+ * client) pass through unchanged so existing actionable messages — like the
+ * OpenAI-key 401 that the error panel already linkifies — are preserved.
+ *
+ * @param err         The thrown dispatch error (unknown shape).
+ * @param wayflowUrl  The resolved WayFlow A2A URL the dispatch targeted.
+ */
+export function describeWayflowDispatchError(
+  err: unknown,
+  wayflowUrl: string,
+): string {
+  const message = err instanceof Error ? err.message : String(err);
+
+  // Only rewrite the bare connectivity failure. A non-"fetch failed" error
+  // (HTTP 4xx/5xx body, validation error, etc.) already carries actionable
+  // text and must pass through verbatim.
+  if (!/fetch failed/i.test(message)) {
+    return message;
+  }
+
+  // undici nests the real reason in `.cause` (and occasionally a deeper
+  // `.cause.cause`). Walk a bounded chain to pull the first code/message.
+  let cause: unknown =
+    err instanceof Error ? (err as { cause?: unknown }).cause : undefined;
+  let causeCode: string | undefined;
+  let causeMessage: string | undefined;
+  for (let depth = 0; depth < 4 && cause != null; depth += 1) {
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0 && !causeCode) {
+      causeCode = code;
+    }
+    const msg = (cause as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.length > 0 && !causeMessage) {
+      causeMessage = msg;
+    }
+    cause = (cause as { cause?: unknown }).cause;
+  }
+
+  const detail = causeCode ?? causeMessage;
+  const reason = detail ? ` (${detail})` : "";
+  return (
+    `Could not reach the agent runtime at ${wayflowUrl} — fetch failed${reason}. ` +
+    `Check that the WayFlow runtime is running and reachable (e.g. the dev ` +
+    `tunnel/Funnel and WAYFLOW_BASE_URL).`
+  );
+}
+
 export function resolveWayflowUrl(
   packageName: string | null | undefined,
 ): string {

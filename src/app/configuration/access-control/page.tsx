@@ -4,7 +4,7 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { requireAdminSession } from "@/lib/auth-session";
-import { isSingleOrgMode } from "@/lib/authz/instance-mode";
+import { isRegistrationClosed, isSingleOrgMode } from "@/lib/authz/instance-mode";
 import { getAuditRetentionDays } from "@/lib/authz/audit";
 
 import { AccessControlForm } from "./access-control-form";
@@ -20,8 +20,9 @@ export const metadata: Metadata = {
  */
 export default async function AccessControlPage() {
   await requireAdminSession();
-  const [singleOrg, retentionDays] = await Promise.all([
+  const [singleOrg, registrationClosed, retentionDays] = await Promise.all([
     isSingleOrgMode().catch(() => false),
+    isRegistrationClosed().catch(() => false),
     getAuditRetentionDays().catch(() => 365),
   ]);
 
@@ -29,10 +30,14 @@ export default async function AccessControlPage() {
     <Main className="min-h-screen">
       <PageHeader
         title="Access Control"
-        description="Platform-wide authorization controls — organization mode and audit-log retention."
+        description="Platform-wide authorization controls — organization mode, self-registration, and audit-log retention."
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <AccessControlForm initialSingleOrg={singleOrg} initialRetentionDays={retentionDays} />
+        <AccessControlForm
+          initialSingleOrg={singleOrg}
+          initialRegistrationClosed={registrationClosed}
+          initialRetentionDays={retentionDays}
+        />
       </PageContent>
     </Main>
   );
