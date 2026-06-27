@@ -9,6 +9,22 @@ import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
 import { parsePackageId, isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
 
+/**
+ * Assert a value is a single filesystem-safe path segment that ALSO does not
+ * start with "@" (cinatra#537 belt-and-suspenders). A valid vendor/name never
+ * starts with "@" after `parsePackageId` strips the scope marker, so an
+ * "@"-prefixed segment reaching a join means a malformed/rejected value leaked
+ * through — reject it. `isSafePathSegment` alone permits "@.." / "@~evil"
+ * (they aren't exactly "..", contain no "/", and start with "@" not "~"), so
+ * the extra "@" check is required to keep them out of the `~agents` path.
+ */
+function assertNoAtSafeSegment(seg: string, label: string): void {
+  assertSafePathSegment(seg, label);
+  if (seg.startsWith("@")) {
+    throw new Error(`unsafe ${label}: ${JSON.stringify(seg)} must not start with '@'`);
+  }
+}
+
 // Auto-sync the configured GitHub repository once per process lifetime.
 // After the first call (success or failure), the flag stays true so subsequent
 // catalog reads skip the network check entirely.
@@ -144,31 +160,45 @@ export function deriveContextFromLegacy(
       // Callers should pass explicit context with agent_template_id to satisfy
       // the bidirectional CHECK constraint; the bridge fallback uses
       // binding_scope='owner' for safety.
+      // INVARIANT (cinatra#537): a parsePackageId-REJECTED, @-scoped input
+      // (after trimming) must NEVER contribute a path segment. Trim ONCE and
+      // gate everything on `trimmed` — `parsePackageId` trims internally, so
+      // gating the legacy fallback on the RAW value would let " @../foo" (leading
+      // whitespace) bypass the scoped check and reach the legacy splitter.
+      const trimmed = packageSlug.trim();
       let vendor: string | null = null;
-      let pkg: string = packageSlug;
-      const parsed = parsePackageId(packageSlug);
+      let pkg: string = trimmed;
+      const parsed = parsePackageId(trimmed);
       if (parsed && parsed.vendor) {
+        // (a) Canonical scoped "@vendor/name" — both parts already safe segments.
         vendor = parsed.vendor;
         pkg = parsed.name;
-      } else if (!packageSlug.startsWith("@") && packageSlug.includes("/")) {
-        // Legacy no-`@` "<vendor>/<package>" — split on the FIRST `/` only.
-        // IMPORTANT (cinatra#537 fail-closed): gated on `!startsWith("@")`. A
-        // scoped id that parsePackageId REJECTED (e.g. "@../foo", "@/foo",
-        // "@~evil/foo") is malformed and must NOT be reinterpreted by the legacy
-        // splitter — that would mint a literal vendor "@..", "@" or "@~evil"
-        // that slips past the safe-segment check below. Rejected scoped ids stay
-        // on the null-vendor fallback (no binding).
-        const ix = packageSlug.indexOf("/");
-        vendor = packageSlug.slice(0, ix);
-        pkg = packageSlug.slice(ix + 1);
+      } else if (trimmed.startsWith("@")) {
+        // (b) MALFORMED SCOPED id that parsePackageId rejected (e.g. "@../foo",
+        // "@/foo", "@~evil/foo", "@..", "@."). FAIL CLOSED: derive nothing — do
+        // NOT hand it to the legacy splitter (which would mint a literal "@..",
+        // "@" or "@~evil" vendor). Leaves vendor=null (no binding).
+        vendor = null;
+      } else if (trimmed.includes("/")) {
+        // (c) Legacy NON-scoped "<vendor>/<package>" — split on the FIRST `/`.
+        const ix = trimmed.indexOf("/");
+        vendor = trimmed.slice(0, ix);
+        pkg = trimmed.slice(ix + 1);
       }
-      // Fail-closed (cinatra#537 hardening): vendor/package become on-disk path
-      // segments downstream (resolveSkillDir). If the legacy split produced a
-      // non-single-segment value (e.g. "<vendor>/foo/bar" → pkg "foo/bar") or
-      // any traversal/separator/control form, drop the binding to the null
-      // fallback rather than persisting an unsafe segment. parsePackageId values
-      // are already guaranteed safe.
-      if (vendor !== null && (!isSafePathSegment(vendor) || !isSafePathSegment(pkg))) {
+      // (d) else: unscoped single name → vendor stays null (no hyphen mis-split).
+      //
+      // Belt-and-suspenders (cinatra#537): the derived segments become on-disk
+      // path segments downstream (resolveSkillDir). Drop the binding to the null
+      // fallback if either segment is not a single safe path segment OR starts
+      // with "@" — a valid vendor/name never starts with "@" after parsePackageId
+      // strips it, so an "@"-prefixed segment means a malformed value leaked.
+      if (
+        vendor !== null &&
+        (!isSafePathSegment(vendor) ||
+          !isSafePathSegment(pkg) ||
+          vendor.startsWith("@") ||
+          pkg.startsWith("@"))
+      ) {
         vendor = null;
       }
       return {
@@ -409,34 +439,48 @@ function getSkillDiskDir(
       // treats a leading-`@` input as scoped; a flat slug with no `/` keeps
       // the historical "unknown" vendor fallback.
       // Result: workspace/~agents/<vendor>/<package>/<skill>/
+      //
+      // INVARIANT (cinatra#537): a parsePackageId-REJECTED, @-scoped input
+      // (after trimming) must NEVER contribute a path segment. Trim ONCE and
+      // gate on `trimmed` — parsePackageId trims internally, so gating the legacy
+      // fallback on the RAW value would let " @../foo" (leading whitespace)
+      // bypass the scoped check and reach the legacy splitter.
+      const trimmed = packageSlug.trim();
       let vendor = "unknown";
-      let pkg = packageSlug;
-      const parsed = parsePackageId(packageSlug);
+      let pkg = trimmed;
+      const parsed = parsePackageId(trimmed);
       if (parsed && parsed.vendor) {
-        // npm-scoped "@vendor/name" — parsePackageId already guarantees both
-        // parts are single safe segments.
+        // (a) Canonical scoped "@vendor/name" — both parts already safe segments.
         vendor = parsed.vendor;
         pkg = parsed.name;
-      } else if (!packageSlug.startsWith("@") && packageSlug.includes("/")) {
-        // Legacy no-`@` "<vendor>/<package>" — split on the FIRST `/` only.
-        // IMPORTANT (cinatra#537 fail-closed): this fallback is gated on
-        // `!startsWith("@")`. A scoped id that parsePackageId REJECTED (e.g.
-        // "@../foo", "@/foo", "@~evil/foo") is malformed and must NOT be
-        // reinterpreted by the legacy splitter — doing so would mint a literal
-        // vendor "@..", "@" or "@~evil" that slips past the safe-segment guard
-        // below. Such inputs stay on the "unknown" vendor path (fail-closed).
-        const ix = packageSlug.indexOf("/");
-        vendor = packageSlug.slice(0, ix);
-        pkg = packageSlug.slice(ix + 1);
+      } else if (trimmed.startsWith("@")) {
+        // (b) MALFORMED SCOPED id that parsePackageId rejected (e.g. "@../foo",
+        // "@/foo", "@~evil/foo", "@..", "@."). FAIL CLOSED: refuse outright so
+        // the malformed value can NEVER become a path segment (not as a vendor,
+        // and not as a `pkg` under "unknown" either — e.g. no `~agents/unknown/@..`).
+        throw new Error(
+          `agent skill packageSlug is a malformed scoped id: ${JSON.stringify(trimmed)}`,
+        );
+      } else if (trimmed.includes("/")) {
+        // (c) Legacy NON-scoped "<vendor>/<package>" — split on the FIRST `/`.
+        const ix = trimmed.indexOf("/");
+        vendor = trimmed.slice(0, ix);
+        pkg = trimmed.slice(ix + 1);
       }
-      // Fail-closed (cinatra#537 hardening): every segment joined into the
+      // (d) else: unscoped single name → "unknown" vendor, pkg = the name.
+      //
+      // Belt-and-suspenders (cinatra#537): every segment joined into the
       // `~agents/<vendor>/<package>/<skill>/` path MUST be a single safe path
-      // segment. The legacy `<vendor>/<package>` split above can leave a
-      // multi-segment `pkg` (e.g. "vendor/foo/bar") or a `..` token; assert
-      // here so separator/traversal injection can never reach path.join.
-      assertSafePathSegment(vendor, "agent skill vendor");
-      assertSafePathSegment(pkg, "agent skill package");
-      assertSafePathSegment(skillSlug, "agent skill slug");
+      // segment AND must NOT start with "@". The legacy `<vendor>/<package>`
+      // split can leave a multi-segment `pkg` ("vendor/foo/bar") or a `..` token;
+      // and a valid vendor/name never starts with "@" after parsePackageId
+      // strips it, so an "@"-prefixed segment reaching here is a leaked malformed
+      // value. assertNoAtSafeSegment throws on either, so neither
+      // separator/traversal injection nor a literal "@.." segment can reach
+      // path.join.
+      assertNoAtSafeSegment(vendor, "agent skill vendor");
+      assertNoAtSafeSegment(pkg, "agent skill package");
+      assertNoAtSafeSegment(skillSlug, "agent skill slug");
       return path.join(root, "workspace", "~agents", vendor, pkg, skillSlug);
     }
     case "system":
@@ -456,6 +500,21 @@ function getSkillDiskDir(
       // SkillLevel "custom" + any future enum value
       return path.join(root, "workspace", packageSlug, skillSlug);
   }
+}
+
+/**
+ * Test-only seam for {@link getSkillDiskDir} (cinatra#537 path-safety). The
+ * function is internal; this thin export lets the unit test exercise the REAL
+ * agent-case disk-path derivation (fail-closed on malformed scoped ids) without
+ * widening the production API surface beyond a `__`-prefixed test hook.
+ */
+export function __getSkillDiskDirForTest(
+  type: SkillLevel,
+  packageSlug: string,
+  skillSlug: string,
+  ownerUserId?: string,
+): string {
+  return getSkillDiskDir(type, packageSlug, skillSlug, ownerUserId);
 }
 
 function parseFrontmatter(content: string) {

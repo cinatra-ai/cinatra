@@ -58,7 +58,7 @@ vi.mock("@/lib/database", () => ({
 }));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
 
-import { deriveContextFromLegacy } from "../skills-store";
+import { deriveContextFromLegacy, __getSkillDiskDirForTest } from "../skills-store";
 
 describe("deriveContextFromLegacy — agent vendor/name (cinatra#537)", () => {
   it("splits a scoped name on the first '/' only, NEVER the hyphen in the scope", () => {
@@ -115,16 +115,76 @@ describe("deriveContextFromLegacy — agent vendor/name (cinatra#537)", () => {
   // rejects must NOT be reinterpreted by the legacy `<vendor>/<package>`
   // splitter (which would mint a literal "@..", "@" or "@~evil" vendor that
   // slips past isSafePathSegment). All of these must drop to the null fallback.
+  // Includes the no-slash forms (@.., @., @~evil) and the WHITESPACE-bypass
+  // forms (" @../foo", "  @/foo  ") — gating is on the TRIMMED value so leading/
+  // surrounding whitespace cannot route a scoped id into the legacy splitter.
   it.each([
     ["@../foo"],
     ["@/foo"],
     ["@~evil/foo"],
     ["@.."],
     ["@."],
+    ["@~evil"],
     ["@~/foo"],
-  ])("fails closed on rejected scoped id %s (no literal @-vendor)", (slug) => {
+    [" @../foo"],
+    ["  @/foo  "],
+    ["\t@~evil/foo"],
+  ])("fails closed on rejected scoped id %j (no literal @-vendor, trim-safe)", (slug) => {
     const ctx = deriveContextFromLegacy("agent", slug, undefined, "do-the-thing");
     expect(ctx.vendor).toBeNull();
     expect(ctx.package).toBeNull();
+  });
+
+  it("never emits a vendor/package segment that starts with '@' (belt-and-suspenders)", () => {
+    for (const slug of ["@../foo", "@~evil/foo", "@..", "@~evil", " @/foo "]) {
+      const ctx = deriveContextFromLegacy("agent", slug, undefined, "do-the-thing");
+      expect(ctx.vendor === null || !ctx.vendor.startsWith("@")).toBe(true);
+      expect(ctx.package === null || !ctx.package.startsWith("@")).toBe(true);
+    }
+  });
+});
+
+describe("getSkillDiskDir agent-case — fail-closed disk path (cinatra#537)", () => {
+  const dir = (slug: string): string => __getSkillDiskDirForTest("agent", slug, "do-the-thing");
+
+  it("builds the canonical ~agents/<vendor>/<package>/<skill> path for valid ids", () => {
+    expect(dir("@marcushorndt-local/page-summarizer-agent").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/marcushorndt-local/page-summarizer-agent/do-the-thing");
+    expect(dir("@cinatra-ai/foo").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/cinatra-ai/foo/do-the-thing");
+    // legacy no-`@` <vendor>/<package> pair
+    expect(dir("cinatra/email-agent").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/cinatra/email-agent/do-the-thing");
+    // unscoped single name → "unknown" vendor bucket
+    expect(dir("page-summarizer-agent").replace(/\\/g, "/"))
+      .toContain("/workspace/~agents/unknown/page-summarizer-agent/do-the-thing");
+  });
+
+  // A malformed scoped id (after trimming) must NEVER produce a path — not as a
+  // vendor and not as a "@.."-under-unknown package. It throws (fail-closed).
+  // Covers the no-slash leak (@.., @., @~evil) AND the whitespace bypass.
+  it.each([
+    ["@../foo"],
+    ["@/foo"],
+    ["@~evil/foo"],
+    ["@.."],
+    ["@."],
+    ["@~evil"],
+    [" @../foo"],
+    ["  @/foo  "],
+    ["\t@~evil"],
+  ])("throws fail-closed for malformed scoped id %j", (slug) => {
+    expect(() => dir(slug)).toThrow();
+  });
+
+  it("never produces a path containing an '@'- or '..'-prefixed segment", () => {
+    for (const slug of ["@../foo", "@~evil/foo", "@..", "@~evil", " @/foo ", "@.", "\t@~evil/x"]) {
+      let out: string | null = null;
+      try { out = dir(slug); } catch { /* throwing is the desired fail-closed outcome */ }
+      if (out !== null) {
+        const segs = out.replace(/\\/g, "/").split("/");
+        expect(segs.some((s) => s.startsWith("@") || s === "..")).toBe(false);
+      }
+    }
   });
 });
