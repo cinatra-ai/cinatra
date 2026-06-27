@@ -185,9 +185,13 @@ export function parseFrontmatter(content: string): {
  * identical) to keep that file under the size ratchet; CodeQL-neutral.
  */
 export function slugify(value: string): string {
+  // Split on non-alnum runs and rejoin with "-": behavior-identical to
+  // replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"") but with no anchored "-+$"
+  // quantifier (avoids the CodeQL polynomial-ReDoS pattern on uncontrolled input).
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join("-");
 }
