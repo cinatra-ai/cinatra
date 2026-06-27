@@ -18,6 +18,11 @@ export default async function MetricsTracesPage({
   const params = await (searchParams ??
     Promise.resolve({} as Record<string, string | string[] | undefined>));
   const runId = typeof params.runId === "string" ? params.runId : undefined;
+  const str = (v: string | string[] | undefined) =>
+    typeof v === "string" ? v : undefined;
+  const from = str(params.from);
+  const to = str(params.to);
+  const service = str(params.service);
 
   return (
     <Main className="min-h-screen">
@@ -32,7 +37,7 @@ export default async function MetricsTracesPage({
       />
       <MetricApiNav activeTab="traces" />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <MetricsTracesScreen runId={runId} />
+        <MetricsTracesScreen runId={runId} from={from} to={to} service={service} />
       </PageContent>
     </Main>
   );

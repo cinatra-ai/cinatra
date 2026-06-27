@@ -1,0 +1,28 @@
+name: governance-drift-gate
+
+# Scheduled / on-demand release-governance drift detector
+# (cinatra-ai/engineering#315). NOT a required pull_request check: reading branch
+# protection + org rulesets needs admin scope a fork PR's GITHUB_TOKEN lacks.
+# Until GOVERNANCE_DRIFT_READ_TOKEN is provisioned the gate green-skips with a
+# ::notice; once provisioned it diffs the committed .github/*-protection(s)
+# manifests against the live config and fails on any unexplained drift.
+on:
+  schedule:
+    - cron: "17 7 * * *" # daily 07:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  governance-drift-gate:
+    # Pin BOTH to the same SHA: the workflow ref (`@<sha>`) and the `ref` input.
+    # Pinned to the cinatra-ai/ci main (engineering#315 gate landed in ci d35ff02) (engineering#315);
+    # re-pin to the ci release SHA + tag once that PR merges and ci is released.
+    uses: cinatra-ai/ci/.github/workflows/governance-drift-gate.yml@d35ff0226591470444ad4c8a1eb7045911c88794 # v0.1.0-next.d35ff02
+    with:
+      repo: cinatra-ai/cinatra
+      ref: d35ff0226591470444ad4c8a1eb7045911c88794
+      baseline_ruleset_name: baseline-protection
+    secrets:
+      governance_read_token: ${{ secrets.GOVERNANCE_DRIFT_READ_TOKEN }}
