@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import {
   diffCoupling,
   currentCoupling,
@@ -12,13 +12,13 @@ import {
   STRICT_SDK_ONLY_ALLOWLIST,
 } from "../extension-import-ban.mjs";
 import { buildInventory } from "../../extensions/inventory.mjs";
-// Serialize the scratch-fixture mutations of the shared `extensions/` tree (and
-// the gate subprocess that scans it) against inventory.test.mjs, which scans
-// that same tree in the wholesale `pnpm test:root` run (cinatra#418).
-import {
-  withExtensionInventoryLockSync,
-  withExtensionInventoryLock,
-} from "../../extensions/__tests__/extension-inventory-lock.mjs";
+// The "live gate subprocess fixtures" below write a scratch `@/` edge into a
+// connector's `src/` and run the gate over it. To avoid racing inventory.test.mjs
+// (which scans the SHARED `extensions/` tree in the wholesale `pnpm test:root`
+// run), each such write goes into a PRIVATE per-test clone of the tree and the
+// gate is pointed at it via CINATRA_INVENTORY_EXT_ROOT — the shared tree is never
+// mutated, so no concurrent reader can observe the transient fixture (cinatra#380).
+import { makeIsolatedExtensionsTree } from "../../extensions/__tests__/isolated-extensions-tree.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -447,10 +447,11 @@ describe("PINNED EMPTY (cinatra#172 — the zero-floor flip)", () => {
   });
 
   it("the LIVE repo scans zero edges in every dimension (hostInternal 16 -> 0 across H1-H4; honestly empty, not vacuous)", async () => {
-    // Clean-tree assertion: hold the lock so a concurrent scratch-fixture writer
-    // (this file's own mutating tests, or inventory.test.mjs) can't make the
-    // live scan observe a transient `@/` edge and false-fail.
-    const inv = await withExtensionInventoryLock(() => buildInventory());
+    // Clean-tree assertion over the SHARED tree. The scratch-fixture writers in
+    // this file write into PRIVATE per-test clones (CINATRA_INVENTORY_EXT_ROOT),
+    // never the shared tree, so this scan can never observe a transient `@/`
+    // edge — no cross-file lock needed (cinatra#380).
+    const inv = await buildInventory();
     expect(inv.extensions.length).toBeGreaterThan(0); // not vacuous — the extension tree is cloned back
     const c = currentCoupling(inv);
     expect(c.hostInternal).toEqual({});
@@ -459,9 +460,9 @@ describe("PINNED EMPTY (cinatra#172 — the zero-floor flip)", () => {
   });
 
   it("the committed repo state passes the gate, reporting the pinned zeros", () => {
-    // Clean-tree gate run: same lock so a transient scratch fixture can't leak
-    // a non-zero edge into this expected-exit-0 run.
-    const r = withExtensionInventoryLockSync(() => runGate({ IMPORT_BAN_BASE: "" }));
+    // Clean-tree gate run over the SHARED tree: the scratch fixtures live in
+    // isolated clones, so no transient edge can leak into this expected-exit-0 run.
+    const r = runGate({ IMPORT_BAN_BASE: "" });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toMatch(/0 @\/ \+ 0 cross-extension \+ 0 non-SDK/);
     expect(r.stdout).toMatch(/PINNED EMPTY/);
@@ -524,33 +525,38 @@ describe("PINNED EMPTY (cinatra#172 — the zero-floor flip)", () => {
   });
 });
 
-describe("PINNED EMPTY — live gate subprocess fixtures (scratch violation in the cloned-back tree)", () => {
-  const FIXTURE_DIR = join(REPO_ROOT, "extensions/cinatra-ai/gmail-connector/src");
-  const FIXTURE_FILE = join(FIXTURE_DIR, "__pinned-empty-flip-fixture__.ts");
+describe("PINNED EMPTY — live gate subprocess fixtures (scratch violation in an isolated tree clone)", () => {
+  // The scratch edge is written into the gmail-connector's src under a PRIVATE
+  // per-test clone of the extensions tree (relative path within that clone), and
+  // the gate subprocess is pointed at the clone via CINATRA_INVENTORY_EXT_ROOT.
+  // The shared committed `extensions/` tree is never mutated (cinatra#380).
+  const FIXTURE_REL = join("cinatra-ai", "gmail-connector", "src", "__pinned-empty-flip-fixture__.ts");
+  const REAL_FIXTURE_DIR = join(REPO_ROOT, "extensions/cinatra-ai/gmail-connector/src");
   const SCRATCH_MODULE = "@/lib/__pinned-empty-flip-scratch__";
   const BASELINE = join(REPO_ROOT, "scripts/audit/extension-import-ban.baseline.json");
 
-  function withScratchEdge(fn) {
+  // Provision an isolated clone, write `fixtureContents` into the cloned
+  // gmail-connector src, run `fn(extRoot)` with the clone available (the caller
+  // runs the gate with CINATRA_INVENTORY_EXT_ROOT=extRoot), then clean up. The
+  // shared tree must be cloned back (CI) for the clone to be non-vacuous.
+  function withScratchEdge(fixtureContents, fn) {
     expect(
-      existsSync(FIXTURE_DIR),
+      existsSync(REAL_FIXTURE_DIR),
       "extensions tree must be cloned back (scripts/ci/sync-dev-extensions.mjs) before this suite",
     ).toBe(true);
-    // Hold the shared lock ACROSS the write → gate-run → cleanup so a concurrent
-    // inventory.test.mjs scan can never observe the transient scratch fixture.
-    return withExtensionInventoryLockSync(() => {
-      writeFileSync(FIXTURE_FILE, `import "${SCRATCH_MODULE}";\nexport {};\n`);
-      try {
-        return fn();
-      } finally {
-        rmSync(FIXTURE_FILE, { force: true });
-      }
-    });
+    const { extRoot, writeFixture, cleanup } = makeIsolatedExtensionsTree();
+    try {
+      writeFixture(FIXTURE_REL, fixtureContents);
+      return fn(extRoot);
+    } finally {
+      cleanup();
+    }
   }
 
   it("check mode FAILS (exit 1) naming the edge — and NEITHER passing NOR omitting --strict-sdk-only/--strict can weaken it", () => {
-    withScratchEdge(() => {
+    withScratchEdge(`import "${SCRATCH_MODULE}";\nexport {};\n`, (extRoot) => {
       for (const args of [[], ["--strict-sdk-only"], ["--strict"]]) {
-        const r = runGateArgs(args, { IMPORT_BAN_BASE: "" });
+        const r = runGateArgs(args, { IMPORT_BAN_BASE: "", CINATRA_INVENTORY_EXT_ROOT: extRoot });
         expect(r.status, JSON.stringify(args) + "\n" + r.stdout + r.stderr).toBe(1);
         expect(r.stderr).toContain(SCRATCH_MODULE);
         expect(r.stderr).toMatch(/PINNED EMPTY/);
@@ -563,28 +569,19 @@ describe("PINNED EMPTY — live gate subprocess fixtures (scratch violation in t
     // crossExtension dimension (undeclared cross-extension import) and the
     // sdkOnly dimension (non-SDK first-party package) — live CLI proof that
     // the pin covers all three dimensions, not just hostInternal.
-    expect(
-      existsSync(FIXTURE_DIR),
-      "extensions tree must be cloned back (scripts/ci/sync-dev-extensions.mjs) before this suite",
-    ).toBe(true);
-    withExtensionInventoryLockSync(() => {
-      writeFileSync(FIXTURE_FILE, 'import "@cinatra-ai/crm-connector";\nexport {};\n');
-      try {
-        const r = runGateArgs([], { IMPORT_BAN_BASE: "" });
-        expect(r.status, r.stdout + r.stderr).toBe(1);
-        expect(r.stderr).toMatch(/cross-extension import: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
-        expect(r.stderr).toMatch(/non-SDK @cinatra-ai dep: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
-        expect(r.stderr).toMatch(/PINNED EMPTY/);
-      } finally {
-        rmSync(FIXTURE_FILE, { force: true });
-      }
+    withScratchEdge('import "@cinatra-ai/crm-connector";\nexport {};\n', (extRoot) => {
+      const r = runGateArgs([], { IMPORT_BAN_BASE: "", CINATRA_INVENTORY_EXT_ROOT: extRoot });
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/cross-extension import: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
+      expect(r.stderr).toMatch(/non-SDK @cinatra-ai dep: @cinatra-ai\/gmail-connector imports @cinatra-ai\/crm-connector/);
+      expect(r.stderr).toMatch(/PINNED EMPTY/);
     });
   });
 
   it("--write-baseline REFUSES non-empty output (exit 1) and leaves the baseline file byte-unchanged", () => {
     const before = readFileSync(BASELINE, "utf8");
-    withScratchEdge(() => {
-      const r = runGateArgs(["--write-baseline"], { IMPORT_BAN_BASE: "" });
+    withScratchEdge(`import "${SCRATCH_MODULE}";\nexport {};\n`, (extRoot) => {
+      const r = runGateArgs(["--write-baseline"], { IMPORT_BAN_BASE: "", CINATRA_INVENTORY_EXT_ROOT: extRoot });
       expect(r.status, r.stdout + r.stderr).toBe(1);
       expect(r.stderr).toMatch(/refusing to write a NON-EMPTY baseline/);
       expect(r.stderr).toContain(SCRATCH_MODULE);

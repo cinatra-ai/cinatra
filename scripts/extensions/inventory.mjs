@@ -22,7 +22,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
-const EXT_ROOT = join(REPO_ROOT, "extensions");
+// The extension SOURCE tree scanned for the coupling dimensions. Defaults to the
+// cloned-back `extensions/` under the repo root. `CINATRA_INVENTORY_EXT_ROOT`
+// redirects ONLY this scan to an alternate, fully-populated tree — a TEST
+// isolation hook (cinatra#380): the import-ban gate's live-subprocess fixtures
+// write a scratch `@/` edge into a PRIVATE per-test clone of the tree rather than
+// mutating the shared committed `extensions/`, so a concurrent inventory scan in
+// the wholesale `pnpm test:root` run can never observe the transient fixture.
+// Production gate/CLI runs leave it unset and scan the real tree unchanged. Only
+// the EXT scan is redirected; host reference-site scanning and the generated
+// artifacts stay anchored at the real repo root.
+const EXT_ROOT = process.env.CINATRA_INVENTORY_EXT_ROOT
+  ? join(process.env.CINATRA_INVENTORY_EXT_ROOT)
+  : join(REPO_ROOT, "extensions");
 
 // No in-tree-exempt extensions: anthropic-connector is un-exempt — extractable
 // like every other connector. (The exemption only ever made sense for the
