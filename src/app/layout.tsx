@@ -4,7 +4,8 @@ import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import { AppShell } from "@/components/app-shell";
 import { buildCanDoOptsFromSession, getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { canDo } from "@/lib/authz";
-import { isSingleOrgMode } from "@/lib/authz/instance-mode";
+import { hasAnyBetterAuthUsers } from "@/lib/auth";
+import { isRegistrationClosed, isSingleOrgMode } from "@/lib/authz/instance-mode";
 import { userCanCreateTeams } from "@/lib/better-auth-db";
 import { isSetupWizardComplete } from "@/lib/setup-wizard";
 import { getUserAccentColor } from "@/lib/accent-color-store";
@@ -84,13 +85,25 @@ export default async function RootLayout({
   let userAccentColor: ExtensionAccent | null = null;
   // Server-resolved nav gating.
   let singleOrg = false;
+  // D7 — suppress the sign-up surface in the root AuthUIProvider when
+  // registration is closed AND the instance is past bootstrap (≥1 human user).
+  // Defaults to true (sign-up shown) on any resolution error so an open
+  // instance never wrongly hides sign-up.
+  let signUpEnabled = true;
   const hiddenNavTitles: string[] = [];
   // Aggregate of pending workflow approvals + admin-only agent creation
   // requests, resolved server-side and consumed by AppSidebar to drive the
   // Admin → Approvals pill. Defaults to 0 on any resolution error.
   let pendingApprovalsTotal = 0;
   try {
-    const [setupCompleteResult, googleOAuthSettingsResult, session, singleOrgResult] = await Promise.all([
+    const [
+      setupCompleteResult,
+      googleOAuthSettingsResult,
+      session,
+      singleOrgResult,
+      registrationClosedResult,
+      hasUsersResult,
+    ] = await Promise.all([
       isSetupWizardComplete(),
       // Per-call .catch so one DB-dependent read failing does NOT reject the
       // whole Promise.all and discard the others. Critically, a failing
@@ -105,10 +118,16 @@ export default async function RootLayout({
       getGoogleOAuthSettings().catch(() => ({})),
       getAuthSession().catch(() => null),
       isSingleOrgMode().catch(() => false),
+      // D7 — both reads fail-soft so an error keeps sign-up shown (open).
+      isRegistrationClosed().catch(() => false),
+      hasAnyBetterAuthUsers().catch(() => false),
     ]);
     setupComplete = setupCompleteResult;
     googleOAuthSettings = googleOAuthSettingsResult;
     singleOrg = singleOrgResult;
+    // Hide sign-up only when the instance is past bootstrap (a human exists)
+    // AND registration is closed. Zero humans → always show sign-up (bootstrap).
+    signUpEnabled = !(registrationClosedResult && hasUsersResult);
     if (session) {
       const canDoOpts = await buildCanDoOptsFromSession(session).catch(() => ({}));
       canCreateProjects = canDo(session, "project.create", undefined, canDoOpts);
@@ -158,7 +177,7 @@ export default async function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${manrope.variable} ${geist.variable} ${archivo.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
       <body>
-        <Providers googleEnabled={googleEnabled}>
+        <Providers googleEnabled={googleEnabled} signUpEnabled={signUpEnabled}>
           <AppShell
             connectionReady={connectionReady}
             canCreateProjects={canCreateProjects}

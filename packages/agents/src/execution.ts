@@ -15,6 +15,7 @@ import {
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
   resolveWayflowUrl,
+  describeWayflowDispatchError,
   WAYFLOW_A2A_TIMEOUT_MS,
   WAYFLOW_UNDICI_TIMEOUT_MS,
 } from "./wayflow-url";
@@ -1368,8 +1369,21 @@ async function runAgentBuilderExecutionJobInner(
       // status (the DB row was just moved to "running" by the CAS at line 760).
       await handleWayflowTaskState({ runId, run, fromStatus: "running", task });
     } catch (err) {
+      // #562: a bare `TypeError: fetch failed` from the sendTask transport
+      // (WayFlow runtime unreachable) was being recorded verbatim — no target
+      // URL, no cause — leaving the run undebuggable (started_at null, no
+      // steps, no server log). Log the structured failure server-side (target
+      // URL + cause chain) and record an actionable message on the run.
+      console.error(
+        `[wayflow] dispatch failed for run ${runId} targeting ${wayflowUrl}:`,
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+        err instanceof Error && (err as { cause?: unknown }).cause
+          ? { cause: (err as { cause?: unknown }).cause }
+          : "",
+      );
+      const runError = describeWayflowDispatchError(err, wayflowUrl);
       await transitionRunStatus(runId, "running", "failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: runError,
       }).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
         throw e;
