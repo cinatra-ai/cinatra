@@ -15,10 +15,11 @@ import {
   basePackageOf,
   SDK_PACKAGES,
 } from "../inventory.mjs";
-// Serialize live `buildInventory()` scans of the shared `extensions/` tree
-// against the import-ban gate tests, which transiently write a scratch fixture
-// into that same tree (cinatra#418 wholesale-suite isolation defect).
-import { withExtensionInventoryLock } from "./extension-inventory-lock.mjs";
+// These live `buildInventory()` calls scan the SHARED `extensions/` tree. The
+// import-ban gate tests that prove the gate detects a scratch `@/` edge now write
+// that fixture into a PRIVATE per-test clone (CINATRA_INVENTORY_EXT_ROOT) instead
+// of the shared tree, so these scans can never observe a transient edge — no
+// cross-file lock is required (cinatra#380).
 
 // The import-ban gate's declared-cross-extension carve-out is only safe if a
 // dependency must carry the FULL valid ExtensionDependency shape to count as
@@ -80,7 +81,7 @@ describe("buildInventory — declared vs undeclared cross-extension classificati
   // not circular: if a valid declaration were mis-dropped from `declared` and/or
   // mis-listed in `undeclared`, this fails.
   it("every manifest-declared cross-extension dep is classified declared, never undeclared", async () => {
-    const inv = await withExtensionInventoryLock(() => buildInventory());
+    const inv = await buildInventory();
     const allNames = new Set(inv.extensions.map((e) => e.name));
     const nameToKind = new Map(inv.extensions.map((e) => [e.name, e.kind]));
 
@@ -204,7 +205,7 @@ describe("scanCrossExtImportsInText — every scope, not just @cinatra-ai", () =
 // invariants).
 describe("inventory generator", () => {
   it("produces a coherent, acyclic, fully-kinded inventory", async () => {
-    const inv = await withExtensionInventoryLock(() => buildInventory());
+    const inv = await buildInventory();
 
     // every extension has a known kind
     const KINDS = new Set(["agent", "connector", "artifact", "skill", "workflow"]);
@@ -384,7 +385,7 @@ describe("isSdkOnlyViolation / basePackageOf (predicate edges)", () => {
 
 describe("buildInventory — sdkOnlyViolations per extension (live, real repo)", () => {
   it("records ZERO non-SDK first-party coupling (every extension is SDK-only-clean) and (f) NEVER lets SDK packages in", async () => {
-    const inv = await withExtensionInventoryLock(() => buildInventory());
+    const inv = await buildInventory();
     // The connector decouple is complete: every extension imports ONLY the SDK
     // packages now, so no extension carries non-SDK first-party coupling. (The
     // detector's positive/negative behavior is proven non-vacuously by the
