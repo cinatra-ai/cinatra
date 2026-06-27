@@ -214,4 +214,43 @@ describe("agent_source_write_files in-memory credential scan", () => {
     expect(result.code).not.toBe("review_blocked");
     expect(result.written).toBe(true);
   });
+
+  it("writes the source tree under the instance vendor namespace, not hardcoded cinatra-ai (cinatra#537)", async () => {
+    // Operator instance with a non-default vendor namespace.
+    mockReadInstanceIdentity.mockReturnValue({ vendorName: "acme-vendor" });
+    try {
+      const handler = getHandler();
+      const result = (await handler(
+        buildRequest({
+          packageSlug: TEST_SLUG,
+          // LLM emits a stale @cinatra scope; the writer must rescope AND
+          // place the tree under the operator vendor, not cinatra-ai.
+          packageJson: JSON.stringify({ name: `@cinatra/${TEST_SLUG}`, version: "0.1.0" }),
+          skillMd: "---\nname: x\n---\nA perfectly clean SKILL.md body.",
+        }),
+      )) as { written?: boolean; code?: string };
+
+      expect(result.code).not.toBe("review_blocked");
+      expect(result.written).toBe(true);
+
+      // Written under <vendor>/<slug>/, matching the rescoped package name…
+      await expect(
+        fs.access(path.join(tmpRoot, "acme-vendor", TEST_SLUG, "package.json")),
+      ).resolves.toBeUndefined();
+      // …and NOT under the hardcoded first-party namespace (the #537 bug).
+      await expect(
+        fs.access(path.join(tmpRoot, "cinatra-ai", TEST_SLUG, "package.json")),
+      ).rejects.toThrow();
+      // package.json#name is rescoped to the same vendor (no path/scope drift).
+      const written = JSON.parse(
+        await fs.readFile(
+          path.join(tmpRoot, "acme-vendor", TEST_SLUG, "package.json"),
+          "utf8",
+        ),
+      ) as { name?: string };
+      expect(written.name).toBe(`@acme-vendor/${TEST_SLUG}`);
+    } finally {
+      mockReadInstanceIdentity.mockReturnValue(null);
+    }
+  });
 });
