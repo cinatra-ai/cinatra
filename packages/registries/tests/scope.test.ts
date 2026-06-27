@@ -52,8 +52,11 @@ describe("parsePackageId — canonical @vendor/name splitter (cinatra#537)", () 
     expect(parsed?.name).toBe("widget");
   });
 
-  it("preserves additional '/' segments in the name part verbatim", () => {
-    expect(parsePackageId("@acme/sub/deep")).toEqual({ vendor: "acme", name: "sub/deep" });
+  it("rejects (returns null) extra '/' segments in the name part (path-safety)", () => {
+    // A scoped name must be a single path segment; an extra '/' is malformed and
+    // must never be carried into a nested on-disk path. (See the path-traversal
+    // rejection cases below.)
+    expect(parsePackageId("@acme/sub/deep")).toBeNull();
   });
 
   it("returns vendor=null for an unscoped name (caller decides its own fallback)", () => {
