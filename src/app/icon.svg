@@ -11,8 +11,8 @@
   mustard fedora on a navy ground with a larger 14px corner radius.
 
   The fedora reads small when the glyph is shrunk inside its card, so we
-  scale it to match the marketplace favicon (cinatra-ai/marketplace
-  cinatra-favicon.svg), which is the size reference for cross-surface
+  scale it to match the Cinatra marketplace service favicon (the
+  cinatra-favicon.svg reference asset), which is the size reference for cross-surface
   branding consistency (cinatra#387). The fedora's NATIVE drawn path occupies
   a 368x192 box (starting at native 72,64) inside its 0 0 512 320 viewBox, so
   the rendered glyph width is 368 * scale, not 512 * scale. At scale 1.10 the

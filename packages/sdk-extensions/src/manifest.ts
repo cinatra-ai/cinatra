@@ -54,8 +54,8 @@ export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
  * marketplace); the `key` is the OPEN `ConnectorVendorKey` SHAPE (any string,
  * not a frozen union). Authoritative validation — key SHAPE conformance,
  * name/key ownership + uniqueness across the catalog, and provider mapping —
- * is performed at the MARKETPLACE PUBLISH GATE (the `cinatra-ai/marketplace`
- * repo), never in the SDK and never at the host loader (which has no
+ * is performed at the MARKETPLACE PUBLISH GATE (the Cinatra marketplace
+ * service), never in the SDK and never at the host loader (which has no
  * cross-connector roster to check against).
  */
 export type ConnectorVendorIdentity = {
