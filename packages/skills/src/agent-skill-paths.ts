@@ -1,10 +1,13 @@
-// Agent-bound skill identity / on-disk path derivation (cinatra#537).
+// Agent-bound skill identity / on-disk path derivation + pure SKILL.md
+// frontmatter parsing (cinatra#537).
 //
-// Extracted verbatim (behavior-identical) from skills-store.ts to keep that
-// file under the file-size ratchet. These are the SINGLE source of truth for
-// splitting an agent package id into a fail-closed (vendor, package) pair used
-// by both the binding-context bridge (deriveContextFromLegacy) and the on-disk
-// `~agents/<vendor>/<package>/<skill>/` resolver (getSkillDiskDir).
+// Extracted verbatim (behavior-identical) from skills-store.ts to keep that file
+// under the file-size ratchet. All helpers here are PURE (string/identity/parse
+// only — NO fs/path/realpath/symlink operations), so they introduce no taint
+// source and keep CodeQL clean. The agent-identity helpers are the SINGLE source
+// of truth for splitting an agent package id into a fail-closed (vendor, package)
+// pair used by both the binding-context bridge (deriveContextFromLegacy) and the
+// on-disk `~agents/<vendor>/<package>/<skill>/` resolver (getSkillDiskDir).
 //
 // INVARIANT: a parsePackageId-REJECTED, @-scoped input (after trimming) must
 // NEVER contribute a path segment. We trim ONCE and gate on `trimmed`
@@ -112,4 +115,79 @@ export function deriveAgentStoragePathFromPackageName(
 ): string | undefined {
   const parsed = parsePackageId(packageName.trim());
   return parsed && parsed.vendor ? `${parsed.vendor}/${parsed.name}` : undefined;
+}
+
+/**
+ * Minimal SKILL.md frontmatter reader (pure string parsing — no fs/path).
+ * Parses the leading `---\n...\n---` YAML-ish block into a flat
+ * `Record<string, string>` (block-sequence list values are JSON-serialized so
+ * the value type stays `string`) and returns the remaining body. Extracted from
+ * skills-store.ts verbatim (behavior identical) to keep that file under the
+ * size ratchet; it is CodeQL-neutral (operates only on the in-memory string).
+ */
+export function parseFrontmatter(content: string): {
+  attributes: Record<string, string>;
+  body: string;
+} {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) {
+    return { attributes: {} as Record<string, string>, body: content };
+  }
+
+  const attributes: Record<string, string> = {};
+  let lastKey: string | null = null;
+  const listAccumulatorByKey: Record<string, string[]> = {};
+
+  for (const rawLine of match[1].split("\n")) {
+    // Detect YAML block-sequence continuation lines (`  - <value>`)
+    // before trimming, so the leading whitespace signals list membership.
+    const blockSequenceContinuation = /^[ \t]+-[ \t]+/.test(rawLine);
+    if (blockSequenceContinuation && lastKey !== null) {
+      const itemValue = rawLine.replace(/^[ \t]+-[ \t]+/, "").trim().replace(/^["']|["']$/g, "");
+      if (!listAccumulatorByKey[lastKey]) {
+        listAccumulatorByKey[lastKey] = [];
+      }
+      listAccumulatorByKey[lastKey].push(itemValue);
+      continue;
+    }
+
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const separatorIndex = line.indexOf(":");
+    if (separatorIndex < 0) {
+      lastKey = line;
+      attributes[line] = "";
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = line.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
+    lastKey = key;
+    attributes[key] = value;
+  }
+
+  // Serialize collected lists as JSON strings so the Record<string, string> type is preserved.
+  for (const [key, items] of Object.entries(listAccumulatorByKey)) {
+    attributes[key] = JSON.stringify(items);
+  }
+
+  return {
+    attributes,
+    body: content.slice(match[0].length),
+  };
+}
+
+/**
+ * Slugify a value to a filesystem-safe lowercase slug (pure string — no
+ * fs/path). Trims, lowercases, collapses non-alnum runs to `-`, and strips
+ * leading/trailing `-`. Extracted from skills-store.ts verbatim (behavior
+ * identical) to keep that file under the size ratchet; CodeQL-neutral.
+ */
+export function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }

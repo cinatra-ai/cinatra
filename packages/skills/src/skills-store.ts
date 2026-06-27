@@ -1,16 +1,7 @@
 import { revalidatePath } from "next/cache";
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "fs";
 import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
-// Pure realpath/symlink containment primitives (#300) — extracted to a sibling
-// module to keep this file under the file-size ratchet (behavior identical).
-import {
-  isRealpathContained,
-  isFileLeafContainedInDir,
-  assertLeafNotSymlink,
-} from "./skill-path-containment";
-// Re-export for `verdaccio.ts`, which imports `isRealpathContained` from here.
-export { isRealpathContained } from "./skill-path-containment";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { installedSkillPackages } from "./skill-packages";
@@ -26,6 +17,8 @@ import {
   deriveAgentBindingVendorPackage,
   deriveAgentDiskVendorPackage,
   deriveAgentStoragePathFromPackageName,
+  parseFrontmatter,
+  slugify,
 } from "./agent-skill-paths";
 // NOTE (cinatra#537): the shared `isSafePathSegment`/`assertSafePathSegment`
 // guard in @cinatra-ai/registries now rejects leading-"@" segments directly, so
@@ -277,14 +270,6 @@ export type PersistedSkill = {
   allowAnthropicUpload?: boolean;
 };
 
-function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 const SKILL_LEVELS: SkillLevel[] = ["personal", "team", "organization", "workspace", "project", "system", "agent"];
 
 function isSkillLevel(value: unknown): value is SkillLevel {
@@ -444,56 +429,6 @@ export function __getSkillDiskDirForTest(
   ownerUserId?: string,
 ): string {
   return getSkillDiskDir(type, packageSlug, skillSlug, ownerUserId);
-}
-
-function parseFrontmatter(content: string) {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) {
-    return { attributes: {} as Record<string, string>, body: content };
-  }
-
-  const attributes: Record<string, string> = {};
-  let lastKey: string | null = null;
-  const listAccumulatorByKey: Record<string, string[]> = {};
-
-  for (const rawLine of match[1].split("\n")) {
-    // Detect YAML block-sequence continuation lines (`  - <value>`)
-    // before trimming, so the leading whitespace signals list membership.
-    const blockSequenceContinuation = /^[ \t]+-[ \t]+/.test(rawLine);
-    if (blockSequenceContinuation && lastKey !== null) {
-      const itemValue = rawLine.replace(/^[ \t]+-[ \t]+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!listAccumulatorByKey[lastKey]) {
-        listAccumulatorByKey[lastKey] = [];
-      }
-      listAccumulatorByKey[lastKey].push(itemValue);
-      continue;
-    }
-
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex < 0) {
-      lastKey = line;
-      attributes[line] = "";
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
-    lastKey = key;
-    attributes[key] = value;
-  }
-
-  // Serialize collected lists as JSON strings so the Record<string, string> type is preserved.
-  for (const [key, items] of Object.entries(listAccumulatorByKey)) {
-    attributes[key] = JSON.stringify(items);
-  }
-
-  return {
-    attributes,
-    body: content.slice(match[0].length),
-  };
 }
 
 function readPluginManifestLevel(packageRootPath: string): SkillLevel | undefined {
@@ -1545,6 +1480,85 @@ export const upsertPersonalSkill = upsertCustomSkill;
  * realpath'd ancestor is the correct containment anchor. Falls back to the
  * lexical resolve at the filesystem root (defensive; the root always exists).
  */
+function realpathNearestExisting(target: string): string {
+  let current = path.resolve(target);
+  for (;;) {
+    if (existsSync(current)) {
+      return realpathSync.native(current);
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return current;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Realpath-containment re-assertion (#300). After the lexical resolve+prefix
+ * check confirms `resolved` is lexically inside one of the allowed roots, this
+ * canonicalizes the root and the target (via the nearest existing ancestor for
+ * not-yet-created leaves) and re-checks containment on the REAL paths. A
+ * symlinked ancestor under a root passes the lexical check but resolves OUT of
+ * it — this layer rejects that. Behavior is identical for legitimate
+ * non-symlink and not-yet-created paths (realpath is a no-op on those).
+ */
+export function isRealpathContained(resolved: string, root: string): boolean {
+  const realRoot = realpathNearestExisting(root);
+  const realTarget = realpathNearestExisting(resolved);
+  return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
+}
+
+/**
+ * File-LEAF realpath confinement (the next layer beyond #300's directory
+ * containment). `assertSkillDirectoryInsideRoot` confines a scan/repository
+ * BASE directory, but a confined directory can still hold a FILE that is a
+ * symlink to outside — e.g. `<repositoryPath>/README.md -> /outside/secret`, or
+ * a discovered `<skillDir>/SKILL.md` symlinked out — and a `readFileSync` would
+ * follow it. Before reading any content file rooted on an already-confined base
+ * dir, assert the file's REAL path stays inside the REAL base dir. A
+ * non-existent file is already skipped by its own `existsSync` gate, so this
+ * only confines existing leaves (and realpath is a no-op on non-symlink files,
+ * keeping behavior identical for legitimate layouts). Returns `false` on a
+ * symlink escape so the caller skips the read instead of exfiltrating an
+ * arbitrary local file.
+ */
+function isFileLeafContainedInDir(baseDir: string, filePath: string): boolean {
+  return isRealpathContained(path.resolve(filePath), path.resolve(baseDir));
+}
+
+/**
+ * Dangling-write-leaf confinement (#300). The directory + leaf realpath checks
+ * above use `existsSync`, which FOLLOWS symlinks: a leaf that is a DANGLING
+ * symlink (the symlink file pre-exists but its target does NOT) makes
+ * `existsSync` return false, so the realpath checks treat it as an absent /
+ * not-yet-created leaf and pass — then `writeFile` follows the dangling symlink
+ * and CREATES the file at the OUTSIDE target. `lstatSync` does NOT follow the
+ * symlink, so it catches the dangling case. Call this immediately before any
+ * write whose leaf was only confined via `existsSync`/nearest-ancestor realpath.
+ * ENOENT (no leaf at all) → genuinely new file, proceed. A regular file →
+ * proceed (the dir is already realpath-confined and overwriting a regular file
+ * stays inside). A symlink (dangling or live) → throw, refusing to write
+ * through it. Behavior is identical for legitimate new-file and regular-file
+ * writes (lstat is a no-op decision on those).
+ */
+function assertLeafNotSymlink(leafPath: string): void {
+  let stats;
+  try {
+    stats = lstatSync(leafPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return; // genuinely new file — safe to create
+    }
+    throw err;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new Error(
+      `Skill write path leaf is a symlink; refusing to write through it: ${leafPath}`,
+    );
+  }
+}
+
 /**
  * Strict-containment guard for any direct read of a stored skill `sourcePath`.
  * Callers that read raw bytes (e.g. the Anthropic sync uploader needs a Buffer
@@ -2033,9 +2047,7 @@ export async function deleteAgentSkillsForSlugs(
     return { deletedIds: [] };
   }
 
-  const slugify = (value: string) =>
-    value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-
+  // Uses the shared `slugify` imported from ./agent-skill-paths (same impl).
   const slugifiedSet = new Set(safeSlugs.map((s) => slugify(s)));
   const idPrefixes = Array.from(slugifiedSet).map((s) => `custom:${s}:`);
 
