@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MetricsCostOverviewScreen } from "@cinatra-ai/metric-cost-api";
 import { MetricApiNav } from "@/components/metric-api-nav";
+import { analyticsTabDescription } from "@/lib/section-nav";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "LLM Costs | Cinatra" };
@@ -24,7 +25,8 @@ export default async function MetricsCostsPage({
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="LLM Costs"
+        title="LLM"
+        description={analyticsTabDescription("costs")}
         actions={
           <Link href="/analytics/llm/pricing" aria-label="Pricing administration">
             <Settings2 className="h-5 w-5 text-muted-foreground hover:text-foreground transition" />

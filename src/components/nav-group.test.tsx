@@ -141,3 +141,70 @@ describe("checkIsActive — overlapping links resolve to the most specific (cina
     expect(checkIsActive("/agents/new", agents, false, ["/agents"])).toBe(true);
   });
 });
+
+describe("checkIsActive — activePaths claims sibling routes (cinatra#617)", () => {
+  // The Analytics → LLM category: one sidebar entry (url /analytics/llm) that
+  // owns all of its tabs' routes, including ones outside the /analytics/llm/
+  // url-prefix boundary (/analytics/llm-usage, /analytics/api).
+  const llm: NavLink = {
+    title: "LLM",
+    url: "/analytics/llm",
+    activePaths: ["/analytics/llm", "/analytics/llm-usage", "/analytics/api"],
+  };
+
+  it("is active on its own url (Costs tab)", () => {
+    expect(checkIsActive("/analytics/llm", llm)).toBe(true);
+  });
+
+  it("is active on a nested sub-route of its url (/analytics/llm/pricing)", () => {
+    expect(checkIsActive("/analytics/llm/pricing", llm)).toBe(true);
+  });
+
+  it("is active on the Usage tab (sibling route via activePaths)", () => {
+    // /analytics/llm-usage is NOT under the /analytics/llm/ boundary, so only
+    // activePaths can light it up — the #581 caveat for /analytics/llm*.
+    expect(checkIsActive("/analytics/llm-usage", llm)).toBe(true);
+  });
+
+  it("is active on the API Requests tab (sibling route via activePaths)", () => {
+    expect(checkIsActive("/analytics/api", llm)).toBe(true);
+    expect(checkIsActive("/analytics/api?runId=abc", llm)).toBe(true);
+  });
+
+  it("does not over-match an unrelated analytics-adjacent route", () => {
+    expect(checkIsActive("/analytics/websites", llm)).toBe(false);
+    expect(checkIsActive("/analytics/llm-usage-archive", llm)).toBe(false);
+  });
+
+  // The Analytics group is a COLLAPSIBLE whose single child (LLM) owns the tab
+  // routes via activePaths. The parent must open + highlight on those sibling
+  // routes too — otherwise a direct load of /analytics/llm-usage leaves the
+  // group collapsed and the LLM entry hidden.
+  const analyticsGroup: NavCollapsible = {
+    title: "Analytics",
+    items: [
+      {
+        title: "LLM",
+        url: "/analytics/llm",
+        activePaths: ["/analytics/llm", "/analytics/llm-usage", "/analytics/api"],
+      },
+    ],
+  };
+
+  it("the parent collapsible is active on a child's own url", () => {
+    expect(checkIsActive("/analytics/llm", analyticsGroup, true)).toBe(true);
+  });
+
+  it("the parent collapsible is active on a child's activePaths sibling routes", () => {
+    expect(checkIsActive("/analytics/llm-usage", analyticsGroup, true)).toBe(true);
+    expect(checkIsActive("/analytics/api", analyticsGroup, true)).toBe(true);
+  });
+
+  it("the parent collapsible is active on a nested child sub-route", () => {
+    expect(checkIsActive("/analytics/llm/pricing", analyticsGroup, true)).toBe(true);
+  });
+
+  it("the parent collapsible is not active on an unrelated analytics route", () => {
+    expect(checkIsActive("/analytics/websites", analyticsGroup, false)).toBe(false);
+  });
+});
