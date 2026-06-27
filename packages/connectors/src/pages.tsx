@@ -23,7 +23,10 @@ import {
 // Readiness comes from the registry's per-connector probes; importing the
 // built-in probe module registers them (side effect).
 import "@/lib/connector-readiness.server";
-import { listConnectorRegistryEntries } from "@/lib/connectors-registry.server";
+import {
+  isConnectorInstalled,
+  listConnectorRegistryEntries,
+} from "@/lib/connectors-registry.server";
 import { isConnectorVisibleToActor } from "@/lib/connector-policy";
 
 import {
@@ -118,7 +121,16 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   // built-in probe module or at runtime); a connector without a probe reports
   // not connected. Probes run only for the cards the actor can see.
   const readinessContext = { userId: session.user?.id ?? null };
+  // Render ONLY cards whose connector extension is actually installed/bundled in
+  // the running image (cinatra#607). The catalog lists every first-party
+  // connector cinatra knows about, but a connector absent from the running image
+  // is omitted from the generated manifest — showing its card would imply it is
+  // available when it is not, dead-ending at the "requires a rebuild" setup
+  // state. The installed predicate gates the set IN ADDITION to access policy +
+  // scope; card metadata below is still sourced from the installed extension's
+  // own descriptor (manifest displayName/logo) over the catalog fallback.
   const visibleEntries = listConnectorRegistryEntries()
+    .filter((entry) => isConnectorInstalled(entry.packageId))
     .filter((entry) => isConnectorVisibleToActor(entry.packageId, actor))
     .filter((entry) =>
       scopeSelectionMatches(
