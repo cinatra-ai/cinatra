@@ -150,7 +150,14 @@ export function deriveContextFromLegacy(
       if (parsed && parsed.vendor) {
         vendor = parsed.vendor;
         pkg = parsed.name;
-      } else if (packageSlug.includes("/")) {
+      } else if (!packageSlug.startsWith("@") && packageSlug.includes("/")) {
+        // Legacy no-`@` "<vendor>/<package>" — split on the FIRST `/` only.
+        // IMPORTANT (cinatra#537 fail-closed): gated on `!startsWith("@")`. A
+        // scoped id that parsePackageId REJECTED (e.g. "@../foo", "@/foo",
+        // "@~evil/foo") is malformed and must NOT be reinterpreted by the legacy
+        // splitter — that would mint a literal vendor "@..", "@" or "@~evil"
+        // that slips past the safe-segment check below. Rejected scoped ids stay
+        // on the null-vendor fallback (no binding).
         const ix = packageSlug.indexOf("/");
         vendor = packageSlug.slice(0, ix);
         pkg = packageSlug.slice(ix + 1);
@@ -410,8 +417,14 @@ function getSkillDiskDir(
         // parts are single safe segments.
         vendor = parsed.vendor;
         pkg = parsed.name;
-      } else if (packageSlug.includes("/")) {
+      } else if (!packageSlug.startsWith("@") && packageSlug.includes("/")) {
         // Legacy no-`@` "<vendor>/<package>" — split on the FIRST `/` only.
+        // IMPORTANT (cinatra#537 fail-closed): this fallback is gated on
+        // `!startsWith("@")`. A scoped id that parsePackageId REJECTED (e.g.
+        // "@../foo", "@/foo", "@~evil/foo") is malformed and must NOT be
+        // reinterpreted by the legacy splitter — doing so would mint a literal
+        // vendor "@..", "@" or "@~evil" that slips past the safe-segment guard
+        // below. Such inputs stay on the "unknown" vendor path (fail-closed).
         const ix = packageSlug.indexOf("/");
         vendor = packageSlug.slice(0, ix);
         pkg = packageSlug.slice(ix + 1);

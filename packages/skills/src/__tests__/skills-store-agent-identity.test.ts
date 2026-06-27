@@ -110,4 +110,21 @@ describe("deriveContextFromLegacy — agent vendor/name (cinatra#537)", () => {
     expect(ctx.vendor).toBeNull();
     expect(ctx.package).toBeNull();
   });
+
+  // cinatra#537 fail-closed bypass: a MALFORMED SCOPED id that parsePackageId
+  // rejects must NOT be reinterpreted by the legacy `<vendor>/<package>`
+  // splitter (which would mint a literal "@..", "@" or "@~evil" vendor that
+  // slips past isSafePathSegment). All of these must drop to the null fallback.
+  it.each([
+    ["@../foo"],
+    ["@/foo"],
+    ["@~evil/foo"],
+    ["@.."],
+    ["@."],
+    ["@~/foo"],
+  ])("fails closed on rejected scoped id %s (no literal @-vendor)", (slug) => {
+    const ctx = deriveContextFromLegacy("agent", slug, undefined, "do-the-thing");
+    expect(ctx.vendor).toBeNull();
+    expect(ctx.package).toBeNull();
+  });
 });

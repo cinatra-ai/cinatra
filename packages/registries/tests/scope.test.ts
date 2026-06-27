@@ -99,6 +99,11 @@ describe("parsePackageId — canonical @vendor/name splitter (cinatra#537)", () 
     expect(parsePackageId("@acme/../../etc")).toBeNull();
     expect(parsePackageId("@acme/..")).toBeNull(); // name is ".."
     expect(parsePackageId("@../x")).toBeNull(); // vendor is ".."
+    expect(parsePackageId("@../foo")).toBeNull(); // vendor ".." (the bypass case)
+    expect(parsePackageId("@/foo")).toBeNull(); // empty scope (the bypass case)
+    expect(parsePackageId("@~evil/foo")).toBeNull(); // leading-~ vendor (the bypass case)
+    expect(parsePackageId("@..")).toBeNull(); // scoped, no slash → null (the bypass case)
+    expect(parsePackageId("@.")).toBeNull(); // scoped, no slash → null (the bypass case)
     expect(parsePackageId("@acme/foo\\bar")).toBeNull(); // backslash
     expect(parsePackageId("@acme/~evil")).toBeNull(); // leading-~ name
     expect(parsePackageId("../etc")).toBeNull(); // unscoped traversal
