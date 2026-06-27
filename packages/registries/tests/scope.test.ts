@@ -119,9 +119,11 @@ describe("parsePackageId — canonical @vendor/name splitter (cinatra#537)", () 
 
 describe("isSafePathSegment / assertSafePathSegment — positive allowlist (cinatra#537)", () => {
   // A POSITIVE ALLOWLIST: a segment is safe ONLY if it is a bare post-parse
-  // name component — ASCII alnum + interior `.`/`_`/`-`, starting AND ending
-  // alphanumeric. This subsumes every prior denylist rule (traversal, @, ~,
-  // separators, control chars, drive forms) AND closes the whitespace gap.
+  // name component — starts ASCII-alnum, interior `.`/`_`/`-`, ENDS alnum OR
+  // hyphen. It is a TRUE SUPERSET of the repo's canonical package shape
+  // `^[a-z0-9][a-z0-9-]*$` (which permits a trailing `-`), and subsumes every
+  // prior denylist rule (traversal, @, ~, separators, control, drive,
+  // whitespace) while still rejecting a trailing `.`/`_`.
   it("accepts normal single segments (and single-char alnum)", () => {
     expect(isSafePathSegment("a")).toBe(true);
     expect(isSafePathSegment("cinatra-ai")).toBe(true);
@@ -134,6 +136,15 @@ describe("isSafePathSegment / assertSafePathSegment — positive allowlist (cina
     expect(isSafePathSegment("unknown")).toBe(true);
   });
 
+  it("accepts a TRAILING hyphen — true superset of canonical ^[a-z0-9][a-z0-9-]*$ (cinatra#537)", () => {
+    // The canonical PACKAGE_NAME_RE / PACKAGE_DIR_RE permit a trailing `-`, so
+    // the guard must too — else a real (if rare) name like "foo-" would fail to
+    // write. (Trailing `.`/`_` stay rejected; see below.)
+    expect(isSafePathSegment("foo-")).toBe(true);
+    expect(isSafePathSegment("a-")).toBe(true);
+    expect(isSafePathSegment("x9-")).toBe(true);
+  });
+
   it("rejects whitespace anywhere (the denylist gap the allowlist closes)", () => {
     expect(isSafePathSegment(" @..")).toBe(false); // leading space + scoped
     expect(isSafePathSegment(".. ")).toBe(false); // trailing space
@@ -144,7 +155,7 @@ describe("isSafePathSegment / assertSafePathSegment — positive allowlist (cina
     expect(isSafePathSegment("foo\n")).toBe(false); // newline
   });
 
-  it("rejects traversal, separators, @, ~, drive, leading/trailing punctuation, control, non-string", () => {
+  it("rejects traversal, separators, @, ~, drive, bad punctuation, control, non-string", () => {
     expect(isSafePathSegment("")).toBe(false);
     expect(isSafePathSegment(".")).toBe(false);
     expect(isSafePathSegment("..")).toBe(false);
@@ -158,23 +169,40 @@ describe("isSafePathSegment / assertSafePathSegment — positive allowlist (cina
     expect(isSafePathSegment("C:")).toBe(false);
     expect(isSafePathSegment("C:foo")).toBe(false);
     expect(isSafePathSegment("-foo")).toBe(false); // leading "-"
-    expect(isSafePathSegment("foo.")).toBe(false); // trailing "."
+    expect(isSafePathSegment(".foo")).toBe(false); // leading "."
     expect(isSafePathSegment("_foo")).toBe(false); // leading "_"
-    expect(isSafePathSegment("foo-")).toBe(false); // trailing "-"
+    expect(isSafePathSegment("foo.")).toBe(false); // trailing "." (Windows footgun)
+    expect(isSafePathSegment("foo_")).toBe(false); // trailing "_"
     expect(isSafePathSegment("a" + String.fromCharCode(0) + "b")).toBe(false); // NUL
     expect(isSafePathSegment("a" + String.fromCharCode(127) + "b")).toBe(false); // DEL
     expect(isSafePathSegment(42 as unknown)).toBe(false);
     expect(isSafePathSegment(null as unknown)).toBe(false);
   });
 
-  it("assertSafePathSegment throws on unsafe and is a no-op on safe", () => {
+  it("is a true superset of the canonical ^[a-z0-9][a-z0-9-]*$ shape", () => {
+    // Exhaustive up to length 3 across [a-z0-9-]: every canonical string passes.
+    const canonical = /^[a-z0-9][a-z0-9-]*$/;
+    const chars = "abz09-".split("");
+    for (const a of "abz09".split("")) {
+      for (const b of ["", ...chars]) {
+        for (const c of ["", ...chars]) {
+          const s = a + b + c;
+          if (canonical.test(s)) expect(isSafePathSegment(s)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("assertSafePathSegment throws on unsafe and is a no-op on safe (incl. trailing-hyphen)", () => {
     expect(() => assertSafePathSegment("..")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("a/b")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("~x")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("@x")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("@..")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment(" foo")).toThrow(/unsafe/);
+    expect(() => assertSafePathSegment("foo.")).toThrow(/unsafe/);
     expect(() => assertSafePathSegment("ok-seg")).not.toThrow();
+    expect(() => assertSafePathSegment("foo-")).not.toThrow();
   });
 });
 

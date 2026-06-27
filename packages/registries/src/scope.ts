@@ -51,11 +51,19 @@ export interface PackageId {
 /**
  * Strict POSITIVE ALLOWLIST of bare, post-parse path-segment characters
  * (cinatra#537). A safe segment:
- *   - starts AND ends with an ASCII alphanumeric, and
+ *   - STARTS with an ASCII alphanumeric;
+ *   - if longer than one char, ENDS with an ASCII alphanumeric OR a hyphen
+ *     (alnum or `-`, but NOT `.` or `_`); and
  *   - in between contains only ASCII alphanumerics plus `.`, `_`, `-`.
  * Single-char alphanumerics (`a`) are allowed.
+ *
+ * The trailing-`-` allowance makes this a TRUE SUPERSET of the repo's canonical
+ * package/vendor shape `^[a-z0-9][a-z0-9-]*$` (materialize-agent-package
+ * PACKAGE_NAME_RE / PACKAGE_DIR_RE), which itself permits a trailing `-`. We
+ * still forbid a trailing `.` (a Windows/footgun char the canonical shape never
+ * produces) and a trailing `_`.
  */
-const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/;
 
 /**
  * Is `seg` a SINGLE, filesystem-safe path segment?
@@ -63,27 +71,31 @@ const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
  * THE shared guard for every on-disk `<vendor>/<name>`/`<slug>` segment before
  * it is fed into `path.join` (cinatra#537). Implemented as a POSITIVE ALLOWLIST
  * (not a denylist) so no edge case can slip through: a segment is safe ONLY if
- * it matches {@link SAFE_PATH_SEGMENT_RE} — i.e. a normal bare name component of
- * ASCII alphanumerics + interior `.`/`_`/`-`, starting and ending alphanumeric.
+ * it matches {@link SAFE_PATH_SEGMENT_RE} — a bare name component of ASCII
+ * alphanumerics + interior `.`/`_`/`-`, starting alphanumeric and ending with an
+ * alphanumeric OR a hyphen.
  *
  * The allowlist SUBSUMES every prior denylist rule and then some — it rejects:
  *   - empty string, and any string with whitespace anywhere (space/tab/newline)
- *   - "." and ".." (don't end alphanumeric) — traversal tokens
+ *   - "." and ".." (don't match the shape) — traversal tokens
  *   - any "/" or "\" (separator injection → nested dirs)
  *   - a leading "@" — on-disk segments are ALWAYS post-parse (`parsePackageId`
  *     strips the scope's "@"; legacy/unscoped names + instance vendor segments
  *     are bare), so a leading "@" means a rejected/malformed scoped value leaked
  *     and must fail closed at EVERY join site automatically
  *   - a leading "~" (home-dir / reserved-bucket marker)
- *   - leading/trailing "."/"_"/"-" (e.g. "-foo", "foo.")
+ *   - leading "."/"_"/"-" (e.g. "-foo", ".foo", "_foo")
+ *   - a TRAILING "." or "_" (e.g. "foo.", "foo_") — a trailing "-" IS allowed
+ *     because the canonical package shape permits it (see below)
  *   - NUL / control chars, "C:"/drive forms, and any other non-allowlisted byte
  *
  * Rationale for the bound: the codebase's canonical vendor/package shape is
  * `^[a-z0-9][a-z0-9-]*$` (materialize-agent-package PACKAGE_NAME_RE /
- * PACKAGE_DIR_RE) and slugs are slugified to that form; this allowlist is a
- * strict superset (also tolerates uppercase + interior `.`/`_`, matching the
- * historical `a.b_c-d` fixture) so it never rejects a genuinely-valid segment.
- * This is path-safety, not npm name policy — callers still own that.
+ * PACKAGE_DIR_RE) — which permits a trailing `-`. This allowlist is a TRUE
+ * SUPERSET of it (also tolerates uppercase + interior `.`/`_`, matching the
+ * historical `a.b_c-d` fixture) so it never rejects a genuinely-valid segment,
+ * including a real (if rare) trailing-hyphen name like "foo-". This is
+ * path-safety, not npm name policy — callers still own that.
  */
 export function isSafePathSegment(seg: unknown): seg is string {
   if (typeof seg !== "string") return false;

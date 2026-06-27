@@ -46,7 +46,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@cinatra-ai/registries", () => {
   const isSafeSeg = (s: unknown): boolean =>
     typeof s === "string" && s !== "." && s !== ".." &&
-    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(s);
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s);
   return {
     extractExtensionPackage: vi.fn(),
     loadVerdaccioConfig: vi.fn(),
