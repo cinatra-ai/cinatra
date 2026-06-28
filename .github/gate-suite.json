@@ -1,7 +1,7 @@
 {
   "$comment": "Named, versioned machine-verification suite for cinatra-ai/cinatra — the gate-arm half of the truthful verification-record model (the Truthful Attribution protocol §4). The truthful-attribution-gate reads THIS file at the merged SHA (authoritative, no TOCTOU) when a merge record carries a Gate-suite arm: the cited suiteId@version must equal this file's, the Accountable trailer must equal accountable{github,name,email}, and every requiredContexts entry must have concluded success on the reviewed head. highRiskPaths EXTENDS the central cinatra-ai/ci defaults (the gate verifies the effective set is a superset). High-risk changes (this file is itself one — see **/gate-suite.json in the defaults) require the HUMAN arm at tier=maintainer; the gate arm alone is rejected, so this file's birth carries a maintainer Reviewed-by, not a self-blessing gate arm. lastAuditedAt + auditEvidence are the §4 monthly-audit record; the Accountable engineer re-audits monthly and bumps BOTH coupled in one commit (the gate warns >35d, fails the gate arm >65d; the human arm is always still available).",
   "suiteId": "cinatra-core",
-  "version": "2026.06.3",
+  "version": "2026.06.4",
   "accountable": {
     "name": "Sandro Groganz",
     "email": "sandro@cinatra.ai",
@@ -16,7 +16,7 @@
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml",
-      "pinned": "7e6e94c95390c73a252a2cf40a643b5033f93ff0",
+      "pinned": "83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf",
       "callerPath": ".github/workflows/truthful-attribution-gate.yml",
       "allowedEvents": ["pull_request", "push"]
     }
@@ -52,5 +52,5 @@
     "**/transport-registry/**"
   ],
   "lastAuditedAt": "2026-06-28",
-  "auditEvidence": "2026-06-28 re-pin (source-leak-gate rollout realign): the org-wide source-leak-gate adoption bumped this repo's source-leak-gate caller (PR #637) uses:@ from cinatra-ai/ci@7e6e94c95390c73a252a2cf40a643b5033f93ff0 to @83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf (ci v0.1.1) — the SHA referenced_workflows reports and the machine arm verifies — with the caller's with.ref engine-checkout pin moved to the same SHA. requiredContexts[].pinned must equal the referenced_workflows uses:@ SHA, so the source-leak-gate entry is realigned 7e6e94c9->83ca29ef; the truthful-attribution-gate caller was NOT bumped in that rollout (still @7e6e94c9 # v0.1.0, with.ref 8eede102), so its pinned stays 7e6e94c9. 83ca29ef is a clean descendant of 7e6e94c9 on cinatra-ai/ci main carrying the source-leak-gate rollout changes; the engine itself stays separately pinned via the source-leak caller's with.ref (=83ca29ef) and is protected by the high-risk-path review on .github/workflows/**. version bumped 2026.06.2->2026.06.3 because the pinned content changed (suiteId@version must be immutable per content)."
+  "auditEvidence": "2026-06-28 re-pin (cinatra-ai/ci gate-caller realign — two same-day events): (1) the org-wide source-leak-gate adoption bumped this repo's source-leak-gate caller (PR #637) uses:@ from cinatra-ai/ci@7e6e94c95390c73a252a2cf40a643b5033f93ff0 to @83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf (ci v0.1.1), with its with.ref engine-checkout moved to the same SHA, so the source-leak-gate entry was realigned 7e6e94c9->83ca29ef (PR #646, version 2026.06.2->2026.06.3). (2) PR #638 (Dependabot github-actions group bump + same-SHA pin reconcile) then bumped the truthful-attribution-gate caller uses:@ from 7e6e94c9 to @83ca29ef as well (its with.ref engine-checkout stays separately pinned at 8eede102), so the truthful-attribution-gate entry is now realigned 7e6e94c9->83ca29ef to match (version 2026.06.3->2026.06.4). requiredContexts[].pinned must equal the SHA referenced_workflows reports for each caller's uses:@, so both entries are now @83ca29ef. 83ca29ef is a clean descendant of 7e6e94c9 on cinatra-ai/ci main; each gate engine stays separately pinned via its caller's with.ref and is protected by the high-risk-path review on .github/workflows/**. version is bumped whenever the pinned content changes (suiteId@version must be immutable per content)."
 }
