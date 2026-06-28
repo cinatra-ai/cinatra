@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-28
+
+A coordinated security-hardening release, a cleaner and more consistent UI built on the design system, and a tighter connectors and agents experience.
+
+### Added
+
+- **External MCP Servers connector.** A first-class **MCP Servers** connector lets you register external Model Context Protocol servers from its own setup page, with the external-MCP configuration moved off the global settings screen onto that connector. The connector card is now labelled **MCP Clients** to match its role.
+- **Close self-registration.** Administrators can now turn off open self-registration for an instance from a single admin toggle, so a workspace can be locked to invited members only.
+- **Installed agent templates on the Agents page.** The **Agents** page now lists the agent templates you have installed (including operator-vendor agents in the agent runner), so you can see and launch what is available without hunting through the marketplace.
+- **Observable extension control plane.** Extension activation is now generated and observable through a first-class control plane, giving operators a clearer view of what is active on an instance.
+- **API Requests analytics filters.** The API Requests analytics view gained server-side date-range and per-service filtering.
+
+### Changed
+
+- **UI on the design system.** A broad pass moved raw HTML elements across the app, packages, and configuration screens onto the shared shadcn-based design system — connector cards, onboarding, dashboards, skills, agents, permissions, and more — for consistent styling, theming, and accessibility. Connector cards now show a clear toggle, plug-status icon, and themed logo.
+- **Connectors page.** The connectors list now shows only installed connector cards, and connector chrome (breadcrumbs, empty states, page headers) is aligned to the app's canonical layout.
+- **Workflows.** The standalone Workflows browse page and its navigation entry were removed; the workflow engine and approvals are unchanged and remain available.
+- **AI provider setup.** AI-provider key setup is surfaced consistently as **AI Providers**, and the Anthropic configuration section is hidden until that connector is set up.
+- **OpenAI connector is now part of the bundled system set**, so an OpenAI-backed instance works out of the box.
+- Internal: the dependency stack received bounded currency updates, and several large modules were refactored into focused units behind unchanged behavior.
+
+### Fixed
+
+- The assistant chat no longer "thinks forever" on a dropped connection — the event stream is guarded and the run is aborted cleanly on disconnect.
+- Clearer, actionable diagnostics replaced bare "fetch failed"-style errors across chat, agent runs, the Nango connector, and the LLM-to-MCP path, each pointing at the concrete next step (for example, the missing OpenAI key).
+- Agent run detail pages keep failed and stopped runs on screen instead of redirecting away, and only navigate on a successful setup.
+- Numerous accessibility and polish fixes: password-toggle focus order and labelling, breadcrumb keys, sidebar active-state on nested routes, chat spacing, and themed empty states for Webhooks and Agents.
+
+### Security
+
+- This release ships a body of **coordinated security hardening** across the chat, agent, connector, and external-MCP surfaces — among them XSS hardening of the chat markdown renderer, tightened authorization on chat and connector routes, stricter actor binding and token-scope enforcement on the agent-to-agent bridge and MCP token minting, admin-gating of global external-MCP server writes, and a safer default for in-process extension activation trust. Coordinated advisories for the individually-tracked items will be published after deploy.
+
+### Known issues
+
+Carried forward to a future release:
+
+- CLI backup restore is not yet end-to-end: restoring a CLI-created backup can fail while restoring the connector database. Tracked in [cinatra-cli#68](https://github.com/cinatra-ai/cinatra-cli/issues/68).
+- The **source-checkout** production install path (`MODE=prod make setup` from a cloned tree) can abort during extension re-verification. The published **container image** install path is unaffected. Tracked in [cinatra-cli#74](https://github.com/cinatra-ai/cinatra-cli/issues/74).
+- On a fresh local development setup, `make setup` can exit non-zero when the pre-wizard doctor check for the LLM-MCP connection runs before that connection is configurable. Tracked in [cinatra#674](https://github.com/cinatra-ai/cinatra/issues/674).
+
 ## [0.1.3] - 2026-06-25
 
 A reusable webhooks and streams facility, an authenticated control plane for the CLI, security hardening, and a platform-dependency refresh.
@@ -104,6 +144,7 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
+[0.1.4]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.4
 [0.1.3]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.2
 [0.1.1]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.1
