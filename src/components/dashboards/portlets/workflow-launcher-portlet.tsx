@@ -13,6 +13,7 @@
 //   - placeholder prefills ← `inputs[placeholderName]` (selection chain).
 //   - Operator edits add to `dirty` → those fields stay user-controlled.
 import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -167,9 +168,9 @@ export function WorkflowLauncherPortlet({ config, inputs, rowContext, onOutput }
           {launching ? "Launching…" : "Launch workflow"}
         </Button>
         {workflowId ? (
-          <a href={`/workflows/${workflowId}`} className="text-sm text-primary underline">
+          <Link href={`/workflows/${workflowId}`} className="text-sm text-primary underline">
             View workflow
-          </a>
+          </Link>
         ) : null}
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
