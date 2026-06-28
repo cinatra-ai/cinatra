@@ -39,6 +39,15 @@ import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
 // agents like email-drafting-agent, web-scrape-agent, etc. Mirrors the
 // `handleAgentBuilderGitList` resolution order in packages/agents/src/mcp/handlers.ts.
 import { resolveAgentInstallDir } from "@cinatra-ai/agents/agent-install-path";
+// cinatra#538 (defect 2 — approved≠runnable): the picker must enumerate the
+// operator's OWN vendor dir, not only the first-party "cinatra-ai" one. Post-#537,
+// user agents are written under `<installRoot>/<operator-vendor>/...` (e.g.
+// `marcushorndt-local`), so a picker that scans only `cinatra-ai` misses them.
+// Mirrors `safeVendorSegmentsForRead()` in
+// packages/agents/src/mcp/agent-source-paths.ts (operator vendor first, then
+// first-party, deduped, filesystem-safe).
+import { readInstanceIdentity } from "@/lib/instance-identity-store";
+import { isSafePathSegment } from "@cinatra-ai/registries";
 
 type FlatFrontmatterValue = string | string[];
 
@@ -439,38 +448,82 @@ const PROVIDER_AGENT_LEGACY_SLUG_MAP: Record<string, string> = {
   "wordpress-agent": "wordpress-content-editor",
 };
 
-// Four-rung agent-definition path resolution. Mirrors
-// `resolveAgentJsonPathForRead` in packages/agents/src/mcp/handlers.ts so
-// agents authored with supported on-disk layouts all surface in the
-// matcher's "agents" axis.
-function resolveProviderAgentJsonPath(installRoot: string, packageSlug: string): string | null {
+// First-party on-disk vendor segment (the `@cinatra-ai` scope WITHOUT npm's
+// leading "@"). Mirrors `DEFAULT_VENDOR_SEGMENT` in
+// packages/agents/src/mcp/agent-source-paths.ts.
+const PROVIDER_DEFAULT_VENDOR_SEGMENT = "cinatra-ai";
+
+/**
+ * The deduped, FILESYSTEM-SAFE vendor-segment candidates the picker probes:
+ * the operator's OWN vendor segment FIRST (where agents authored on THIS
+ * instance are written post-#537), then the first-party "cinatra-ai" segment
+ * so bundled/installed first-party agents still resolve.
+ *
+ * cinatra#538: without the operator segment an approved/published user agent
+ * (e.g. `@marcushorndt-local/...`, materialized under
+ * `<installRoot>/marcushorndt-local/...`) never surfaced in `/agents/run`.
+ *
+ * Source of truth: the operator's instance identity (`instanceNamespace`,
+ * which `readInstanceIdentity` already normalizes from the legacy `vendorName`
+ * key). Unsafe identity-derived segments are DROPPED (not thrown): a malformed
+ * identity must not crash a read, it just yields no probe under that segment.
+ * The first-party default is always retained. Mirrors
+ * `safeVendorSegmentsForRead()` in agent-source-paths.ts.
+ */
+function safeProviderVendorSegments(): string[] {
+  const out: string[] = [];
+  let instanceSegment = PROVIDER_DEFAULT_VENDOR_SEGMENT;
+  try {
+    const identity = readInstanceIdentity();
+    if (identity?.instanceNamespace) instanceSegment = identity.instanceNamespace;
+  } catch (err) {
+    // A read failure must not crash the picker — fall back to first-party only.
+    console.warn("[agents-store] readInstanceIdentity failed:", err);
+  }
+  for (const seg of [instanceSegment, PROVIDER_DEFAULT_VENDOR_SEGMENT]) {
+    if (isSafePathSegment(seg) && !out.includes(seg)) out.push(seg);
+  }
+  return out;
+}
+
+// Agent-definition path resolution. Mirrors `resolveAgentJsonPathForRead` in
+// packages/agents/src/mcp/handlers.ts so agents authored with supported on-disk
+// layouts all surface in the matcher's "agents" axis.
+//
+// cinatra#538: resolution is VENDOR-SCOPED, not "first match across vendors".
+// The new-layout rungs (1–2) resolve under ONE specific vendor segment so a
+// same-slug agent under the operator vendor and under first-party "cinatra-ai"
+// BOTH surface as distinct packageIds — instead of the operator dir shadowing
+// the first-party one (the previous "operator-first, return on first hit"
+// behavior hid a same-slug first-party agent from /agents/run).
+function resolveProviderAgentJsonPathUnderVendor(
+  installRoot: string,
+  vendor: string,
+  packageSlug: string,
+): string | null {
   // Rung 1 — canonical layout
-  const rung1 = path.join(installRoot, "cinatra-ai", packageSlug, "cinatra", "oas.json");
+  const rung1 = path.join(installRoot, vendor, packageSlug, "cinatra", "oas.json");
   if (existsSync(rung1)) return rung1;
   // Rung 2 — same directory, alternate filename
-  const rung2 = path.join(installRoot, "cinatra-ai", packageSlug, "cinatra", "agent.json");
+  const rung2 = path.join(installRoot, vendor, packageSlug, "cinatra", "agent.json");
   if (existsSync(rung2)) return rung2;
-  // Rung 3 — alternate directory via explicit slug map
+  return null;
+}
+
+// Legacy/flat top-level layout (rungs 3–4): <installDir>/<legacySlug>/[cinatra/]agent.json.
+// These dirs are NOT vendor-scoped; they predate the `<vendor>/<slug>/` layout.
+function resolveLegacyProviderAgentJsonPath(
+  installRoot: string,
+  packageSlug: string,
+): string | null {
   const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
+  // Rung 3 — alternate directory via explicit slug map
   const rung3 = path.join(installRoot, legacySlug, "cinatra", "agent.json");
   if (existsSync(rung3)) return rung3;
   // Rung 4 — flat package layout
   const rung4 = path.join(installRoot, legacySlug, "agent.json");
   if (existsSync(rung4)) return rung4;
   return null;
-}
-
-function resolveProviderAgentSiblingPackageJsonPaths(
-  installRoot: string,
-  packageSlug: string,
-): string[] {
-  const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  return [
-    // New-layout sibling: <installDir>/cinatra/<slug>/package.json
-    path.join(installRoot, "cinatra-ai", packageSlug, "package.json"),
-    // Alternate-layout sibling: <installDir>/<legacySlug>/package.json
-    path.join(installRoot, legacySlug, "package.json"),
-  ];
 }
 
 /**
@@ -501,14 +554,32 @@ export function readProviderDeclaredAgents(
 
   if (!existsSync(installRoot)) return [];
 
-  const slugSet = new Set<string>();
+  // cinatra#538: collect one candidate per on-disk location where an agent
+  // actually exists — the operator's OWN vendor dir AND the first-party
+  // "cinatra-ai" dir for the new `<vendor>/<slug>/` layout, plus the legacy/flat
+  // top-level layout. Resolution is PER-VENDOR (not "operator-first, first
+  // hit"), so a same-slug agent under the operator vendor and under "cinatra-ai"
+  // BOTH surface as distinct packageIds — the operator dir no longer shadows a
+  // same-slug first-party agent. Without enumerating the operator vendor dir at
+  // all, an approved user agent materialized under
+  // `<installRoot>/<operator-vendor>/...` never surfaced in `/agents/run`.
+  const candidates: Array<{ agentJsonPath: string; siblingPkgPaths: string[] }> = [];
+  const vendorSegments = safeProviderVendorSegments();
 
-  // New layout: <installDir>/cinatra/<slug>/
-  const vendorDir = path.join(installRoot, "cinatra-ai");
-  if (existsSync(vendorDir)) {
+  // New layout: <installDir>/<vendor>/<slug>/cinatra/{oas,agent}.json
+  for (const vendor of vendorSegments) {
+    const vendorDir = path.join(installRoot, vendor);
+    if (!existsSync(vendorDir)) continue;
     try {
       for (const sub of readdirSync(vendorDir, { withFileTypes: true })) {
-        if (sub.isDirectory()) slugSet.add(sub.name);
+        if (!sub.isDirectory()) continue;
+        const jsonPath = resolveProviderAgentJsonPathUnderVendor(installRoot, vendor, sub.name);
+        if (jsonPath) {
+          candidates.push({
+            agentJsonPath: jsonPath,
+            siblingPkgPaths: [path.join(installRoot, vendor, sub.name, "package.json")],
+          });
+        }
       }
     } catch (err) {
       if (options.throwOnError) throw err;
@@ -516,7 +587,7 @@ export function readProviderDeclaredAgents(
     }
   }
 
-  // Alternate layout: <installDir>/<slug>/ — only entries that look like agent dirs.
+  // Alternate/legacy layout: <installDir>/<slug>/ that is NOT a walked vendor dir.
   type DirEntry = { name: string; isDirectory: () => boolean };
   let topEntries: DirEntry[] = [];
   try {
@@ -525,23 +596,23 @@ export function readProviderDeclaredAgents(
     if (options.throwOnError) throw err;
     console.warn("[agents-store] readdir install root failed:", err);
   }
+  const walkedVendorSegments = new Set(vendorSegments);
   for (const entry of topEntries) {
     if (!entry.isDirectory()) continue;
-    if (entry.name === "cinatra") continue; // already walked
-    // Probe alternate paths so non-agent dirs are filtered out.
-    if (
-      existsSync(path.join(installRoot, entry.name, "cinatra", "agent.json"))
-      || existsSync(path.join(installRoot, entry.name, "agent.json"))
-    ) {
-      slugSet.add(entry.name);
+    if (walkedVendorSegments.has(entry.name)) continue; // already walked above
+    const jsonPath = resolveLegacyProviderAgentJsonPath(installRoot, entry.name);
+    if (jsonPath) {
+      const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[entry.name] ?? entry.name;
+      candidates.push({
+        agentJsonPath: jsonPath,
+        siblingPkgPaths: [path.join(installRoot, legacySlug, "package.json")],
+      });
     }
   }
 
   const persisted: PersistedAgent[] = [];
-  for (const packageSlug of slugSet) {
-    const agentJsonPath = resolveProviderAgentJsonPath(installRoot, packageSlug);
-    if (!agentJsonPath) continue;
-
+  const seenPackageIds = new Set<string>();
+  for (const { agentJsonPath, siblingPkgPaths } of candidates) {
     let agentJson: Record<string, unknown>;
     try {
       agentJson = JSON.parse(readFileSync(agentJsonPath, "utf8")) as Record<string, unknown>;
@@ -553,11 +624,11 @@ export function readProviderDeclaredAgents(
       // permissive skip + warn behavior.
       if (options.throwOnError) {
         throw err instanceof Error
-          ? new Error(`failed to parse provider agent.json for ${packageSlug}: ${err.message}`)
+          ? new Error(`failed to parse provider agent.json at ${agentJsonPath}: ${err.message}`)
           : err;
       }
       console.warn(
-        `[agents-store] failed to parse provider agent.json for ${packageSlug}:`,
+        `[agents-store] failed to parse provider agent.json at ${agentJsonPath}:`,
         err,
       );
       continue;
@@ -575,7 +646,7 @@ export function readProviderDeclaredAgents(
     const displayName = (agentJson.name as string | null | undefined) ?? null;
 
     if (!packageName || !description) {
-      for (const pkgPath of resolveProviderAgentSiblingPackageJsonPaths(installRoot, packageSlug)) {
+      for (const pkgPath of siblingPkgPaths) {
         try {
           const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
             name?: unknown;
@@ -598,7 +669,7 @@ export function readProviderDeclaredAgents(
           if (options.throwOnError && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
             throw err instanceof Error
               ? new Error(
-                  `failed to read sibling package.json at ${pkgPath} for ${packageSlug}: ${err.message}`,
+                  `failed to read sibling package.json at ${pkgPath} for agent ${agentJsonPath}: ${err.message}`,
                 )
               : err;
           }
@@ -610,6 +681,11 @@ export function readProviderDeclaredAgents(
     // Drop agents with no resolvable packageName — `cinatra.skill_matches`
     // is keyed by packageId and we cannot persist matches without one.
     if (!packageName) continue;
+    // cinatra#538: dedupe by packageId. Distinct vendors yield distinct
+    // packageIds (both kept); the same packageId resolved twice (e.g. a new- and
+    // legacy-layout copy of one agent) collapses to a single entry.
+    if (seenPackageIds.has(packageName)) continue;
+    seenPackageIds.add(packageName);
 
     const derivedSlug = slugify(packageName.replace(/^@[^/]+\//, "") || packageName);
     const humanReadableName = displayName?.trim() || derivedSlug;
