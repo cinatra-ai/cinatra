@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { StatusPill } from "@/components/ui/status-pill";
 import type { InstanceIdentity } from "@/lib/instance-identity-store";
 import {
@@ -79,7 +80,7 @@ export function VendorApplicationStatusCard({
         </form>
         <form action={cancelVendorApplicationAction}>
           {applicationId ? (
-            <input type="hidden" name="application_id" value={applicationId} />
+            <Input type="hidden" name="application_id" value={applicationId} />
           ) : null}
           <Button type="submit" variant="outline" size="sm">
             Cancel application

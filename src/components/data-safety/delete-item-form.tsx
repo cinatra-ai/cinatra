@@ -4,6 +4,7 @@ import { useActionState, useEffect, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/cinatra-toast";
 import { showUndoToast } from "@/components/data-safety/undo-toast";
 import type { MutationResult } from "@/lib/object-history";
@@ -82,7 +83,7 @@ export function DeleteItemForm<T = unknown>({
   return (
     <form action={formAction}>
       {hiddenFields.map((field) => (
-        <input key={field.name} type="hidden" name={field.name} value={field.value} />
+        <Input key={field.name} type="hidden" name={field.name} value={field.value} />
       ))}
       <DeleteSubmit
         className={className}

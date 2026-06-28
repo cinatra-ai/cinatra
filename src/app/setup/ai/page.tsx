@@ -132,7 +132,7 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
       {/* Card 1: API key + project + organization */}
       <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
         <form action={saveOpenAIConnectionAction} className="grid gap-4">
-          <input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
+          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
           <Field>
             <FieldLabel>API key</FieldLabel>
             <Input
@@ -167,11 +167,11 @@ export default async function SetupOpenAIPage({ searchParams }: SetupOpenAIPageP
           </p>
         ) : null}
         <form action={saveOpenAIConnectionAction} className="mt-5">
-          <input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
+          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
           <fieldset disabled={!hasApiKey} className="grid items-start gap-4 sm:grid-cols-2 disabled:opacity-50">
             <Field>
               <FieldLabel>Service tier</FieldLabel>
-              <input type="hidden" name="serviceTier" value={lockedServiceTier} />
+              <Input type="hidden" name="serviceTier" value={lockedServiceTier} />
               <Select value={lockedServiceTier} disabled={!hasApiKey}>
                 <SelectTrigger>
                   <SelectValue placeholder="Standard" />

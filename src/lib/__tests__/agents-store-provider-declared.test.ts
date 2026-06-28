@@ -29,6 +29,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import type { InstanceIdentity } from "@/lib/instance-identity-store";
 
 vi.mock("server-only", () => ({}));
 
@@ -47,6 +48,30 @@ const resolveAgentInstallDirMock = vi.fn();
 vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
   resolveAgentInstallDir: () => resolveAgentInstallDirMock(),
 }));
+
+// cinatra#538 (defect 2): the picker now enumerates the operator's OWN vendor
+// segment (from the instance identity) in addition to first-party "cinatra-ai".
+// Mock `readInstanceIdentity` so the picker never reaches the synchronous
+// Postgres worker (which would HANG the vitest worker — the known footgun).
+// Default: no identity → first-party "cinatra-ai" only. Tests override.
+const readInstanceIdentityMock = vi.fn((): InstanceIdentity | null => null);
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentity: () => readInstanceIdentityMock(),
+}));
+
+// Build a complete InstanceIdentity for the mock. Only `instanceNamespace`
+// matters to the picker; the other required fields are inert filler.
+function makeInstanceIdentity(
+  instanceNamespace: string,
+  instanceDisplayName: string,
+): InstanceIdentity {
+  return {
+    instanceNamespace,
+    instanceDisplayName,
+    firstPublishedAt: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
 
 vi.mock("@/lib/database", () => ({
   readAgentCatalogFromDatabase: vi.fn(() => ({ agents: [] })),
@@ -96,20 +121,23 @@ function makeProviderAgentDir(
     name?: string;
     siblingPackageName?: string | null;
     siblingDescription?: string | null;
+    /** On-disk vendor segment for new-* layouts; defaults to first-party. */
+    vendor?: string;
   },
 ) {
   const dirName = spec.legacyDirName ?? slug;
   const layout = spec.layout ?? "new-oas";
+  const vendor = spec.vendor ?? "cinatra-ai";
 
   let jsonDir: string;
   let jsonFile: string;
   switch (layout) {
     case "new-oas":
-      jsonDir = path.join(installRoot, "cinatra-ai", dirName, "cinatra");
+      jsonDir = path.join(installRoot, vendor, dirName, "cinatra");
       jsonFile = "oas.json";
       break;
     case "new-agent":
-      jsonDir = path.join(installRoot, "cinatra-ai", dirName, "cinatra");
+      jsonDir = path.join(installRoot, vendor, dirName, "cinatra");
       jsonFile = "agent.json";
       break;
     case "legacy-cinatra":
@@ -136,7 +164,7 @@ function makeProviderAgentDir(
   if (spec.siblingPackageName !== undefined || spec.siblingDescription !== undefined) {
     const pkgDir =
       layout === "new-oas" || layout === "new-agent"
-        ? path.join(installRoot, "cinatra-ai", dirName)
+        ? path.join(installRoot, vendor, dirName)
         : path.join(installRoot, dirName);
     mkdirSync(pkgDir, { recursive: true });
     writeFileSync(
@@ -155,6 +183,8 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
   beforeEach(() => {
     readInstalledAgentTemplatesMock.mockReset();
     resolveAgentInstallDirMock.mockReset();
+    readInstanceIdentityMock.mockReset();
+    readInstanceIdentityMock.mockReturnValue(null);
     tmpRoot = mkdtempSync(path.join(tmpdir(), "cinatra-provider-declared-"));
     resolveAgentInstallDirMock.mockReturnValue(tmpRoot);
   });
@@ -176,6 +206,114 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     expect(result[0].packageId).toBe("@cinatra-ai/email-drafting-agent");
     expect(result[0].humanReadableName).toBe("Email Drafting Agent");
     expect(result[0].description).toBe("Drafts cold-outreach emails for a list of contacts.");
+  });
+
+  it("cinatra#538: discovers an agent under a NON-cinatra-ai operator vendor dir", () => {
+    // Post-#537, a user agent authored on this instance is written under the
+    // operator's OWN vendor segment (instanceNamespace), e.g.
+    // `<installRoot>/marcushorndt-local/<slug>/cinatra/oas.json`. Before the
+    // fix the picker only scanned `cinatra-ai`, so this agent never appeared
+    // in `/agents/run`.
+    readInstanceIdentityMock.mockReturnValue(
+      makeInstanceIdentity("marcushorndt-local", "Marcus Local"),
+    );
+    makeProviderAgentDir(tmpRoot, "page-summarizer-agent", {
+      layout: "new-oas",
+      vendor: "marcushorndt-local",
+      metadataPackageName: "@marcushorndt-local/page-summarizer-agent",
+      name: "Page Summarizer Agent",
+      description: "Summarizes a web page.",
+    });
+
+    const result = readProviderDeclaredAgents();
+    expect(result).toHaveLength(1);
+    expect(result[0].packageId).toBe("@marcushorndt-local/page-summarizer-agent");
+    expect(result[0].humanReadableName).toBe("Page Summarizer Agent");
+  });
+
+  it("cinatra#538: unions operator-vendor AND first-party cinatra-ai agents", () => {
+    // Operator vendor dir and the first-party dir must BOTH be enumerated.
+    readInstanceIdentityMock.mockReturnValue(
+      makeInstanceIdentity("marcushorndt-local", "Marcus Local"),
+    );
+    makeProviderAgentDir(tmpRoot, "page-summarizer-agent", {
+      layout: "new-oas",
+      vendor: "marcushorndt-local",
+      metadataPackageName: "@marcushorndt-local/page-summarizer-agent",
+      name: "Page Summarizer Agent",
+      description: "User agent under the operator vendor dir.",
+    });
+    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+      layout: "new-oas",
+      vendor: "cinatra-ai",
+      metadataPackageName: "@cinatra-ai/email-drafting-agent",
+      name: "Email Drafting Agent",
+      description: "First-party agent under cinatra-ai.",
+    });
+
+    const packageIds = readProviderDeclaredAgents()
+      .map((a) => a.packageId)
+      .sort();
+    expect(packageIds).toEqual([
+      "@cinatra-ai/email-drafting-agent",
+      "@marcushorndt-local/page-summarizer-agent",
+    ]);
+  });
+
+  it("cinatra#538: a SAME-slug agent under operator AND cinatra-ai both surface (no shadowing)", () => {
+    // Regression for the per-vendor resolution fix: when the operator authors an
+    // agent whose slug collides with a shipped first-party slug, the picker must
+    // return BOTH (distinct packageIds) — the operator dir must NOT shadow/hide
+    // the first-party agent (the prior "operator-first, return first hit"
+    // behavior dropped the first-party one).
+    readInstanceIdentityMock.mockReturnValue(
+      makeInstanceIdentity("marcushorndt-local", "Marcus Local"),
+    );
+    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+      layout: "new-oas",
+      vendor: "marcushorndt-local",
+      metadataPackageName: "@marcushorndt-local/email-drafting-agent",
+      name: "My Email Drafter",
+      description: "Operator's same-slug agent.",
+    });
+    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+      layout: "new-oas",
+      vendor: "cinatra-ai",
+      metadataPackageName: "@cinatra-ai/email-drafting-agent",
+      name: "Email Drafting Agent",
+      description: "First-party same-slug agent.",
+    });
+
+    const packageIds = readProviderDeclaredAgents()
+      .map((a) => a.packageId)
+      .sort();
+    expect(packageIds).toEqual([
+      "@cinatra-ai/email-drafting-agent",
+      "@marcushorndt-local/email-drafting-agent",
+    ]);
+  });
+
+  it("cinatra#538: with NO instance identity, still scans first-party cinatra-ai only", () => {
+    // Default null identity → first-party segment retained; no operator dir.
+    readInstanceIdentityMock.mockReturnValue(null);
+    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+      layout: "new-oas",
+      vendor: "cinatra-ai",
+      metadataPackageName: "@cinatra-ai/email-drafting-agent",
+      name: "Email Drafting Agent",
+      description: "First-party agent.",
+    });
+    // An agent under a vendor dir we should NOT scan (no identity configured).
+    makeProviderAgentDir(tmpRoot, "page-summarizer-agent", {
+      layout: "new-oas",
+      vendor: "marcushorndt-local",
+      metadataPackageName: "@marcushorndt-local/page-summarizer-agent",
+      name: "Page Summarizer Agent",
+      description: "Should NOT be discovered without an instance identity.",
+    });
+
+    const packageIds = readProviderDeclaredAgents().map((a) => a.packageId);
+    expect(packageIds).toEqual(["@cinatra-ai/email-drafting-agent"]);
   });
 
   it("walks transitional and legacy layouts (4-rung resolver parity with handleAgentBuilderGitList)", () => {
@@ -344,7 +482,7 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     // so the legacy `agent_skill_matches` projection cannot be clobbered
     // with a partial / misleading snapshot on a transient corruption.
     expect(() => readProviderDeclaredAgents({ throwOnError: true })).toThrow(
-      /failed to parse provider agent\.json for broken-agent/,
+      /failed to parse provider agent\.json at .*broken-agent/,
     );
   });
 });

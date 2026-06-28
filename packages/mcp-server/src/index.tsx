@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { LinkIcon } from "lucide-react";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -29,10 +31,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import {
-  mcpRequestContextStorage,
-  type DelegatedMcpActor,
-} from "./request-context";
+import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
 import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
@@ -1412,7 +1411,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
                   {configuredProviders.length > 0 && (
                     <form action={`${adminBasePath}/connectivity-check`} method="POST" className="flex items-center gap-2">
                       {configuredProviders.length > 1 && (
-                        <select
+                        <NativeSelect
                           name="provider"
                           defaultValue={checkedProvider ?? configuredProviders[0] ?? ""}
                           disabled={!settings.publicBaseUrl}
@@ -1421,10 +1420,10 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
                           {configuredProviders.map((p) => (
                             <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
                           ))}
-                        </select>
+                        </NativeSelect>
                       )}
                       {configuredProviders.length === 1 && (
-                        <input type="hidden" name="provider" value={configuredProviders[0]} />
+                        <Input type="hidden" name="provider" value={configuredProviders[0]} />
                       )}
                       <Button
                         type="submit"

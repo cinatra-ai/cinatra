@@ -30,6 +30,7 @@ import "./pdf-promise-with-resolvers-polyfill";
 
 import { useEffect, useRef, useState } from "react";
 import type { ReactElement } from "react";
+import Link from "next/link";
 import { Download } from "lucide-react";
 import { Document, Page, pdfjs } from "react-pdf";
 
@@ -99,10 +100,10 @@ export default function PdfFallbackViewer({
           This PDF can&rsquo;t be previewed inline on this device.
         </p>
         <Button asChild variant="outline">
-          <a href={downloadHref} download>
+          <Link href={downloadHref} download>
             <Download data-icon="inline-start" aria-hidden="true" />
             Download PDF
-          </a>
+          </Link>
         </Button>
       </article>
     );
