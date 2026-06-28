@@ -1,5 +1,5 @@
 // core__0006: one-time migration of legacy dashboard configs to the v1.2
-// analytics envelope (cinatra#327, design §4; owner decision eng#206).
+// analytics envelope (cinatra#327, design §4).
 //
 // BEFORE: two structurally-incompatible dashboard config families shared the
 // `dashboards.config_json` jsonb column, discriminated by `config_version`:
@@ -15,7 +15,7 @@
 // `/dashboards/[id]` renders every dashboard through the one `PortletHost` path
 // and the legacy parse/dispatch becomes deletable (#329).
 //
-// OWNER DECISION (eng#206): NO backward compatibility. This is a ONE-SHOT,
+// OWNER DECISION: NO backward compatibility. This is a ONE-SHOT,
 // LOSSY-BY-DESIGN canonicalization. The strict v1.2 + analytics validator STAYS
 // strict; #329 deletes the legacy parse path. So this migration must
 // CANONICALIZE invalid-at-rest legacy data into a registry-VALID v1.2 envelope —

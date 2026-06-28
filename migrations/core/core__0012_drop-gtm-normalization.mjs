@@ -1,6 +1,6 @@
 // core__0012: one-time rewrite of legacy GTM-era persisted tokens to their
 // Cinatra names, retiring the runtime normalization in the hot core-store path
-// (cinatra-ai/engineering#309).
+// (retires the runtime GTM-token normalization).
 //
 // BACKGROUND. Before this change, `src/lib/database.ts` ran a
 // `normalizePersistedString` / `normalizePersistedValue` pass on EVERY core-store
