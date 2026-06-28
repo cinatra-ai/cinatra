@@ -9,6 +9,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogClose,
@@ -47,7 +48,7 @@ export function WithdrawSubmissionButton({
           </DialogDescription>
         </DialogHeader>
         <form action={withdrawSubmissionAction}>
-          <input type="hidden" name="submission_id" value={submissionId} />
+          <Input type="hidden" name="submission_id" value={submissionId} />
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="ghost">

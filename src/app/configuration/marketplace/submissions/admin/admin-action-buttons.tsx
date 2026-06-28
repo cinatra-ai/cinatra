@@ -22,6 +22,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
@@ -61,8 +62,8 @@ export function ApproveButton({
           </DialogDescription>
         </DialogHeader>
         <form action={approveSubmissionAction}>
-          <input type="hidden" name="submission_id" value={submissionId} />
-          <input type="hidden" name="return_status" value={returnStatus} />
+          <Input type="hidden" name="submission_id" value={submissionId} />
+          <Input type="hidden" name="return_status" value={returnStatus} />
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="ghost">
@@ -114,8 +115,8 @@ export function RejectButton({
           </DialogDescription>
         </DialogHeader>
         <form action={rejectSubmissionAction}>
-          <input type="hidden" name="submission_id" value={submissionId} />
-          <input type="hidden" name="return_status" value={returnStatus} />
+          <Input type="hidden" name="submission_id" value={submissionId} />
+          <Input type="hidden" name="return_status" value={returnStatus} />
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="reject-reason">Reason</FieldLabel>
@@ -182,8 +183,8 @@ export function RetryPromotionButton({
           </DialogDescription>
         </DialogHeader>
         <form action={retryPromotionAction}>
-          <input type="hidden" name="submission_id" value={submissionId} />
-          <input type="hidden" name="return_status" value={returnStatus} />
+          <Input type="hidden" name="submission_id" value={submissionId} />
+          <Input type="hidden" name="return_status" value={returnStatus} />
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="ghost">
