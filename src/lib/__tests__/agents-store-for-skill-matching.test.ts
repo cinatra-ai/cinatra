@@ -36,6 +36,13 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   readInstalledAgentTemplates: () => readInstalledAgentTemplatesMock(),
 }));
 
+// cinatra#538 (defect 2): the provider-declared picker now reads the instance
+// identity to enumerate the operator's vendor dir. Mock it so the picker never
+// reaches the synchronous Postgres worker (the known vitest-hang footgun).
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentity: vi.fn(() => null),
+}));
+
 // agents-store.ts pulls from @/lib/database for the legacy
 // readAgentsCatalog path; readAgentsForSkillMatching doesn't touch it,
 // but the module-init side imports it.

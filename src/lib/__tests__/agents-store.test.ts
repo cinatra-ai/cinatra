@@ -68,6 +68,13 @@ vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
   resolveAgentInstallDir: vi.fn(() => "/nonexistent-install-dir"),
 }));
 
+// cinatra#538 (defect 2): defensive mock — the provider-declared picker reads
+// the instance identity. The nonexistent install dir short-circuits before it
+// is called, but mocking keeps the synchronous Postgres worker unreachable.
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentity: vi.fn(() => null),
+}));
+
 vi.mock("@cinatra-ai/skills", async () => {
   // The @cinatra-ai/skills barrel transitively pulls personal-skills.ts
   // (→ @cinatra-ai/llm) which does not fully resolve under vitest aliasing,
