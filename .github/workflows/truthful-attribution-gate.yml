@@ -45,7 +45,7 @@ permissions:
 
 jobs:
   truthful-attribution-gate:
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
     with:
       mode: enforce
       ref: 8eede1022e835997d94974e4bd6205daf72131a2

@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   ui-design-system-gate:
-    uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
     with:
       ui_globs: "**/components/ui/**,**/src/ui/**"
       drizzle_cube_globs: "packages/dashboards/src/components/**"
