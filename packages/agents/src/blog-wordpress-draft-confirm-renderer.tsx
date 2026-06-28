@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -97,14 +98,14 @@ export function BlogWordpressDraftConfirmRenderer({
         </p>
         {v.wordpressAdminUrl && (
           <p>
-            <a
+            <Link
               href={v.wordpressAdminUrl}
               target="_blank"
               rel="noreferrer"
               className="text-foreground underline-offset-4 hover:underline"
             >
               Open WordPress draft →
-            </a>
+            </Link>
           </p>
         )}
         {v.wordpressInstanceId && (

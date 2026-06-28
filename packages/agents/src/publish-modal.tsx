@@ -69,10 +69,10 @@ export function PublishModal({
         maxWidth="max-w-md"
       >
         <form action={publishAction} className="flex flex-col gap-4 pt-2">
-          <input type="hidden" name="templateId" value={templateId} />
+          <Input type="hidden" name="templateId" value={templateId} />
           {/* Destination value is threaded into form data so the server action
               can resolve the publish destination before publishing. */}
-          <input type="hidden" name="destination" value={destination} />
+          <Input type="hidden" name="destination" value={destination} />
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="pub-semver">Version</Label>

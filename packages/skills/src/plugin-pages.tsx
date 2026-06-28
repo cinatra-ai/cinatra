@@ -500,7 +500,7 @@ export async function CreateFromSkillPage({ params }: CreateFromSkillPageProps) 
         <Card className="border-line bg-surface backdrop-blur-none">
         <CardContent className="p-6">
         <form action={createSkillFromTemplateAction} className="grid gap-6">
-          <input type="hidden" name="basedOnSkillId" value={skill.id} />
+          <Input type="hidden" name="basedOnSkillId" value={skill.id} />
 
           <div className="grid gap-5 md:grid-cols-2">
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
@@ -565,6 +565,9 @@ export async function NewSkillPage({ searchParams }: { searchParams?: Promise<Se
           <form action={savePersonalSkillAction} className="grid gap-5">
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
               Agent
+              {/* audit-allow: server-action-select — native <select> posts directly
+                  on this server-component form submit; the Radix <Select> would force
+                  a client component + controlled value, changing the form's behavior. */}
               <select
                 name="agentId"
                 required
@@ -662,10 +665,13 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
 
         <Card className="border-line bg-surface backdrop-blur-none p-6">
           <form action={savePersonalSkillAction} className="grid gap-5">
-            <input type="hidden" name="skillId" value={skill.id} />
+            <Input type="hidden" name="skillId" value={skill.id} />
 
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
               Agent
+              {/* audit-allow: server-action-select — native <select> posts directly
+                  on this server-component form submit; the Radix <Select> would force
+                  a client component + controlled value, changing the form's behavior. */}
               <select
                 name="agentId"
                 required
