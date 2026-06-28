@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import {
   TableBody,
   TableCell,
@@ -565,10 +566,13 @@ export async function NewSkillPage({ searchParams }: { searchParams?: Promise<Se
           <form action={savePersonalSkillAction} className="grid gap-5">
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
               Agent
-              {/* audit-allow: server-action-select — native <select> posts directly
-                  on this server-component form submit; the Radix <Select> would force
-                  a client component + controlled value, changing the form's behavior. */}
-              <select
+              {/* NativeSelect (the design-system seam for the platform
+                  <select>) preserves the native form-post behavior this
+                  server-component form relies on: the value submits with the
+                  server action WITHOUT client JS. The Radix <Select> would
+                  force a client component + controlled value, changing the
+                  form's behavior — so the native control is the contract here. */}
+              <NativeSelect
                 name="agentId"
                 required
                 defaultValue=""
@@ -582,7 +586,7 @@ export async function NewSkillPage({ searchParams }: { searchParams?: Promise<Se
                     {agent.humanReadableName}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Label>
 
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
@@ -669,10 +673,13 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
 
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">
               Agent
-              {/* audit-allow: server-action-select — native <select> posts directly
-                  on this server-component form submit; the Radix <Select> would force
-                  a client component + controlled value, changing the form's behavior. */}
-              <select
+              {/* NativeSelect (the design-system seam for the platform
+                  <select>) preserves the native form-post behavior this
+                  server-component form relies on: the value submits with the
+                  server action WITHOUT client JS. The Radix <Select> would
+                  force a client component + controlled value, changing the
+                  form's behavior — so the native control is the contract here. */}
+              <NativeSelect
                 name="agentId"
                 required
                 defaultValue={currentAgentIsAttachable ? (skill.agentId ?? "") : ""}
@@ -688,7 +695,7 @@ export async function EditSkillPage({ params, searchParams }: EditSkillPageProps
                     {agent.humanReadableName}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Label>
 
             <Label className="grid gap-2 text-sm font-semibold leading-normal text-foreground">

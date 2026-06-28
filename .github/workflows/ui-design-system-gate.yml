@@ -37,7 +37,7 @@ jobs:
     with:
       ui_globs: "**/components/ui/**,**/src/ui/**"
       drizzle_cube_globs: "packages/dashboards/src/components/**"
-      strictness: warn
+      strictness: error
       lint_command: |
         REPORT="${RUNNER_TEMP:-/tmp}/ui-design-system-report.json"
         npx eslint . --no-inline-config -f json -o "$REPORT" || true

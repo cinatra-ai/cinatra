@@ -117,10 +117,12 @@ const GRID_LAYOUT_BAN = [
   },
 ];
 
-// Raw control JSX is flagged in favor of the shadcn wrappers. WARN for now —
-// the import bans above are the high-signal rule; the raw-JSX ban is noisier
-// and is ramped to error once the tree is clean. The vendored primitives
-// themselves render the raw elements, so the ui dirs are exempt below.
+// Raw control JSX is flagged in favor of the shadcn wrappers. ERROR — the
+// tree is now clean of raw restricted elements (the last carve-outs went
+// through the wrappers / the NativeSelect seam), so this is ramped from warn
+// to error to keep main green only while the design-system boundary holds.
+// The vendored primitives themselves render the raw elements, so the ui dirs
+// are exempt below.
 const RAW_JSX_RESTRICTIONS = [
   ["button", "<Button> (components/ui/button)"],
   ["input", "<Input> (components/ui/input)"],
@@ -328,14 +330,15 @@ const eslintConfig = defineConfig([
     },
   },
 
-  // ───── Design system: raw control JSX (warn) ─────
-  // Outside the vendored shadcn primitives, raw control elements should go
-  // through the shadcn wrappers. WARN until the tree is clean.
+  // ───── Design system: raw control JSX (error) ─────
+  // Outside the vendored shadcn primitives, raw control elements must go
+  // through the shadcn wrappers. ERROR now that the tree is clean — any
+  // net-new raw restricted element fails the ui-design-system-gate.
   {
     files: ["**/*.{jsx,tsx}"],
     ignores: ["**/components/ui/**", "**/src/ui/**"],
     rules: {
-      "no-restricted-syntax": ["warn", ...RAW_JSX_RESTRICTIONS],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS],
     },
   },
 

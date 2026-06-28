@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 function escapeHtml(input: string) {
   return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -40,8 +41,13 @@ export function SkillMarkdownEditor({ name, defaultValue, label = "Skill markdow
           className="pointer-events-none min-h-[32rem] whitespace-pre-wrap break-words px-5 py-4 font-mono text-sm leading-6 text-foreground"
           dangerouslySetInnerHTML={{ __html: highlightMarkdown(value || "") + "\n" }}
         />
-        {/* audit-allow: inline-typography-input — overlay textarea paired with backdrop highlighter; shadcn Textarea defaults (border/rounded/shadow) would clash with the absolute-positioned overlay */}
-        <textarea
+        {/* Overlay textarea paired with the backdrop highlighter. The leading
+            reset block strips the <Textarea> wrapper's own chrome (border,
+            rounding, surface bg, shadow, default min-height/padding/text size,
+            and the focus ring) so the field stays the transparent overlay it
+            was as a raw <textarea> — the shadcn defaults would otherwise clash
+            with the absolute-positioned highlighter. */}
+        <Textarea
           id={id}
           name={name}
           value={value}
@@ -55,7 +61,7 @@ export function SkillMarkdownEditor({ name, defaultValue, label = "Skill markdow
           // An inline background-color beats any stylesheet selector — smallest
           // blast radius — so keep the overlay see-through.
           style={{ backgroundColor: "transparent" }}
-          className="absolute inset-0 min-h-[32rem] w-full resize-y bg-transparent px-5 py-4 font-mono text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-accent-soft"
+          className="rounded-none border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:ring-0 md:text-sm absolute inset-0 min-h-[32rem] w-full resize-y px-5 py-4 font-mono text-sm leading-6 text-transparent caret-foreground outline-none selection:bg-accent-soft"
         />
       </div>
       <p className="text-xs text-muted-foreground">Markdown syntax highlighting is shown in the editor backdrop while you edit.</p>
