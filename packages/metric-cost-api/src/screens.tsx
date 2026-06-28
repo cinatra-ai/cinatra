@@ -102,7 +102,9 @@ export async function MetricsCostPricingScreen() {
 import { readTracesByRunId, readRecentTraces, readTraceServices } from "./store";
 import { parseTraceFilters } from "./trace-filters";
 import { TraceSpanTable } from "./components/trace-span-table";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
@@ -142,16 +144,16 @@ function TraceFilterBar({
       </div>
       <div>
         <Label htmlFor="tf-service" className="text-xs font-medium text-muted-foreground">Service</Label>
-        <select id="tf-service" name="service" defaultValue={service ?? "all"} className={FILTER_FIELD_CLASS}>
+        <NativeSelect id="tf-service" name="service" defaultValue={service ?? "all"} className={FILTER_FIELD_CLASS}>
           <option value="all">All services</option>
           {services.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       <Button type="submit" variant="outline" size="sm">Apply</Button>
       <Button asChild variant="ghost" size="sm">
-        <a href="?">Clear</a>
+        <Link href="?">Clear</Link>
       </Button>
     </form>
   );

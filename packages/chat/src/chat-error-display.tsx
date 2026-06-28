@@ -81,7 +81,7 @@ export function FriendlyErrorBody({ error }: { error: string }) {
       <p className="mt-0.5 whitespace-pre-wrap break-all text-sm text-destructive/80">
         {linkifyErrorText(error).map((seg, i) =>
           seg.kind === "link" ? (
-            <a
+            <Link
               key={i}
               href={seg.href}
               target="_blank"
@@ -89,7 +89,7 @@ export function FriendlyErrorBody({ error }: { error: string }) {
               className="underline underline-offset-2"
             >
               {seg.value}
-            </a>
+            </Link>
           ) : (
             <span key={i}>{seg.value}</span>
           ),

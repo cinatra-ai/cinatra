@@ -34,6 +34,7 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LayoutButton } from "@/components/ui/layout-button";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { IconButton } from "@/components/icon-button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -666,7 +667,7 @@ function NotificationRow({
           : "bg-surface-muted text-foreground",
       )}
     >
-      <button
+      <LayoutButton
         type="button"
         onClick={() => onSelect(notification)}
         className="flex min-w-0 flex-1 flex-col items-start gap-0 whitespace-normal text-left"
@@ -702,7 +703,7 @@ function NotificationRow({
         <p className="mt-2 text-[11px] uppercase tracking-[0.15em] text-muted-foreground">
           {formatNotificationTimestamp(notification.createdAt)}
         </p>
-      </button>
+      </LayoutButton>
       {running ? null : (
         <Button
           type="button"

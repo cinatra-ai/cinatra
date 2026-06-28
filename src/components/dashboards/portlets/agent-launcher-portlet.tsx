@@ -5,6 +5,7 @@
 // accepts arbitrary inputs); the user can edit the JSON before launching. The
 // run is execute-gated server-side by the agent_run handler.
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { launchAgentAction } from "@/lib/dashboards/portlet-actions";
@@ -65,9 +66,9 @@ export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletCompon
           {pending ? "Starting…" : "Run agent"}
         </Button>
         {runId ? (
-          <a href={`/agents/runs/${runId}`} className="text-sm text-primary underline">
+          <Link href={`/agents/runs/${runId}`} className="text-sm text-primary underline">
             View run
-          </a>
+          </Link>
         ) : null}
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

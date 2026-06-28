@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { saveLegacyCost, updateLegacyCostAction, deleteLegacyCostAction } from "../actions";
 import type { LegacyCostEntry } from "../store";
 
@@ -53,21 +54,21 @@ export function LegacyCostList({ legacyCosts, connectedProviders }: LegacyCostLi
       >
         <div>
           <Label htmlFor="lc-costType" className="text-xs font-medium text-muted-foreground">Cost type</Label>
-          <select id="lc-costType" name="costType" defaultValue="legacy"
+          <NativeSelect id="lc-costType" name="costType" defaultValue="legacy"
             className="mt-1 block w-36 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
             <option value="legacy">One-time</option>
             <option value="subscription">Subscription</option>
-          </select>
+          </NativeSelect>
         </div>
         <div>
           <Label htmlFor="lc-provider" className="text-xs font-medium text-muted-foreground">Provider</Label>
-          <select id="lc-provider" name="provider" required
+          <NativeSelect id="lc-provider" name="provider" required
             className="mt-1 block w-36 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
             <option value="">Select...</option>
             {connectedProviders.map((p) => (
               <option key={p.value} value={p.value}>{p.label}</option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
         <div>
           <Label htmlFor="lc-description" className="text-xs font-medium text-muted-foreground">Description</Label>
@@ -81,12 +82,12 @@ export function LegacyCostList({ legacyCosts, connectedProviders }: LegacyCostLi
         </div>
         <div>
           <Label htmlFor="lc-frequency" className="text-xs font-medium text-muted-foreground">Frequency</Label>
-          <select id="lc-frequency" name="frequency" defaultValue="once"
+          <NativeSelect id="lc-frequency" name="frequency" defaultValue="once"
             className="mt-1 block w-28 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
             <option value="once">Once</option>
             <option value="monthly">Monthly</option>
             <option value="yearly">Yearly</option>
-          </select>
+          </NativeSelect>
         </div>
         <div>
           <Label htmlFor="lc-startDate" className="text-xs font-medium text-muted-foreground">Start date</Label>
@@ -120,24 +121,24 @@ export function LegacyCostList({ legacyCosts, connectedProviders }: LegacyCostLi
                     }}
                     className="flex flex-wrap items-end gap-3"
                   >
-                    <input type="hidden" name="id" value={entry.id} />
+                    <Input type="hidden" name="id" value={entry.id} />
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">Cost type</Label>
-                      <select name="costType" defaultValue={entry.costType}
+                      <NativeSelect name="costType" defaultValue={entry.costType}
                         className="mt-1 block w-36 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
                         <option value="legacy">One-time</option>
                         <option value="subscription">Subscription</option>
-                      </select>
+                      </NativeSelect>
                     </div>
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">Provider</Label>
-                      <select name="provider" required defaultValue={entry.provider}
+                      <NativeSelect name="provider" required defaultValue={entry.provider}
                         className="mt-1 block w-36 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
                         <option value="">Select...</option>
                         {connectedProviders.map((p) => (
                           <option key={p.value} value={p.value}>{p.label}</option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </div>
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">Description</Label>
@@ -151,12 +152,12 @@ export function LegacyCostList({ legacyCosts, connectedProviders }: LegacyCostLi
                     </div>
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">Frequency</Label>
-                      <select name="frequency" defaultValue={entry.frequency}
+                      <NativeSelect name="frequency" defaultValue={entry.frequency}
                         className="mt-1 block w-28 rounded-control border border-line bg-surface px-3 py-1.5 text-sm text-foreground">
                         <option value="once">Once</option>
                         <option value="monthly">Monthly</option>
                         <option value="yearly">Yearly</option>
-                      </select>
+                      </NativeSelect>
                     </div>
                     <div>
                       <Label className="text-xs font-medium text-muted-foreground">Start date</Label>
@@ -200,7 +201,7 @@ export function LegacyCostList({ legacyCosts, connectedProviders }: LegacyCostLi
                         Edit
                       </Button>
                       <form action={deleteLegacyCostAction}>
-                        <input type="hidden" name="id" value={entry.id} />
+                        <Input type="hidden" name="id" value={entry.id} />
                         <Button variant="link" type="submit"
                           className="h-auto p-0 text-xs text-muted-foreground transition hover:text-foreground hover:no-underline">
                           Delete

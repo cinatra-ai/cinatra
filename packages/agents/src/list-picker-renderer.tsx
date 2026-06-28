@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -175,14 +176,14 @@ export function ListPickerRenderer({
           keeps the child run's review gates visible and actionable.
         */}
         <Button asChild type="button" variant="default" disabled={disabled}>
-          <a
+          <Link
             href="/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker"
             target="_blank"
             rel="noreferrer"
             data-testid="build-list-with-ai-cta"
           >
             Build a list with AI
-          </a>
+          </Link>
         </Button>
       </div>
 

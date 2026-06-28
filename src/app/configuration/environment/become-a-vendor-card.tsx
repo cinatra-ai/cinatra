@@ -181,8 +181,8 @@ function ApplyDialog({
           </DialogDescription>
         </DialogHeader>
         <form action={applyVendorApplicationAction}>
-          <input type="hidden" name="terms_version" value={termsVersion} />
-          <input type="hidden" name="terms_digest" value={termsDigest} />
+          <Input type="hidden" name="terms_version" value={termsVersion} />
+          <Input type="hidden" name="terms_digest" value={termsDigest} />
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="vendor-display-name">
@@ -240,14 +240,14 @@ function ApplyDialog({
               <FieldLabel htmlFor="terms-accepted">
                 I accept the{" "}
                 {termsUrl ? (
-                  <a
+                  <Link
                     href={termsUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline underline-offset-4 hover:text-primary"
                   >
                     Cinatra Marketplace Vendor Terms ({termsVersion})
-                  </a>
+                  </Link>
                 ) : (
                   <span>
                     Cinatra Marketplace Vendor Terms ({termsVersion})

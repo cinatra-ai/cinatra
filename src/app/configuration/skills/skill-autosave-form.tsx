@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { saveSkillAutosaveAction } from "./actions";
@@ -48,9 +49,9 @@ export function SkillAutosaveForm({ initialConfig }: SkillAutosaveFormProps) {
   return (
     <form action={handleSubmit} className="mt-5 grid gap-4">
       {/* Hidden inputs carry the state values for form submission */}
-      <input type="hidden" name="enabled" value={enabled ? "on" : ""} />
-      <input type="hidden" name="userCanConfigure" value={userCanConfigure ? "on" : ""} />
-      <input type="hidden" name="userCanSeeIndicator" value={userCanSeeIndicator ? "on" : ""} />
+      <Input type="hidden" name="enabled" value={enabled ? "on" : ""} />
+      <Input type="hidden" name="userCanConfigure" value={userCanConfigure ? "on" : ""} />
+      <Input type="hidden" name="userCanSeeIndicator" value={userCanSeeIndicator ? "on" : ""} />
 
       <div className="flex items-center gap-3">
         <Checkbox

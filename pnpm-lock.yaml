@@ -1239,6 +1239,9 @@ importers:
       '@cinatra-ai/sdk-ui':
         specifier: workspace:*
         version: link:../../../packages/sdk-ui
+      '@nangohq/frontend':
+        specifier: ^0.70.3
+        version: 0.70.7
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

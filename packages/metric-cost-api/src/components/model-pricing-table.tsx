@@ -123,9 +123,9 @@ export function ModelPricingTable({ rows }: ModelPricingTableProps) {
                     }}
                     className="flex flex-wrap items-end gap-3"
                   >
-                    <input type="hidden" name="id" value={row.id} />
-                    <input type="hidden" name="provider" value={row.provider} />
-                    <input type="hidden" name="modelName" value={row.modelName} />
+                    <Input type="hidden" name="id" value={row.id} />
+                    <Input type="hidden" name="provider" value={row.provider} />
+                    <Input type="hidden" name="modelName" value={row.modelName} />
                     <span className="self-center text-sm font-medium text-foreground">{row.provider}</span>
                     <span className="self-center text-sm text-foreground truncate max-w-[12rem]">{row.modelName}</span>
                     <div>

@@ -26,6 +26,7 @@ vi.mock("@/app/campaigns/actions", () => ({
 
 import { SaveOpenAiSkillsForm } from "../save-openai-skills-form";
 import { saveOpenAISkillsSettingsAction } from "@/app/campaigns/actions";
+import { Button } from "@/components/ui/button";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -61,7 +62,7 @@ async function renderAndSubmit(): Promise<void> {
   await act(async () => {
     root.render(
       <SaveOpenAiSkillsForm>
-        <button type="submit">Save</button>
+        <Button type="submit">Save</Button>
       </SaveOpenAiSkillsForm>,
     );
   });

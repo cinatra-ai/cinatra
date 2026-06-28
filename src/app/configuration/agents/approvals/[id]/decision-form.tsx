@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field";
 import {
@@ -26,7 +27,7 @@ export function ApprovalDecisionForm({
           publish under the same admin actor (the snapshot is unchanged — no re-decide).
         </FieldDescription>
         <form action={retryPublishAgentCreationRequest}>
-          <input type="hidden" name="id" value={requestId} />
+          <Input type="hidden" name="id" value={requestId} />
           <Button type="submit">Retry publish</Button>
         </form>
       </div>
@@ -42,8 +43,8 @@ export function ApprovalDecisionForm({
       </FieldDescription>
 
       <form action={approveAgentCreationRequest} className="flex items-center gap-3">
-        <input type="hidden" name="id" value={requestId} />
-        <input type="hidden" name="snapshotHash" value={snapshotHash} />
+        <Input type="hidden" name="id" value={requestId} />
+        <Input type="hidden" name="snapshotHash" value={snapshotHash} />
         <Button type="submit">Approve &amp; publish (private)</Button>
         <span className="text-xs text-muted-foreground">
           Approving materializes the snapshot, compiles, and publishes private-scoped.
@@ -51,8 +52,8 @@ export function ApprovalDecisionForm({
       </form>
 
       <form action={rejectAgentCreationRequest} className="flex flex-col gap-3">
-        <input type="hidden" name="id" value={requestId} />
-        <input type="hidden" name="snapshotHash" value={snapshotHash} />
+        <Input type="hidden" name="id" value={requestId} />
+        <Input type="hidden" name="snapshotHash" value={snapshotHash} />
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="reason">Rejection reason (required)</FieldLabel>

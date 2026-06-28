@@ -1,6 +1,8 @@
 "use client";
 
 import * as React from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { RenameWorkflowActionResult } from "@/app/workflows/[workflowId]/actions";
 
@@ -87,7 +89,7 @@ export function WorkflowEditableTitle({
 
   if (editing) {
     return (
-      <input
+      <Input
         ref={inputRef}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -104,9 +106,13 @@ export function WorkflowEditableTitle({
         disabled={pending}
         // Inherit the h1 typography from PageHeader; only override the
         // chrome (border, padding, background) so the input visually melts
-        // into the heading.
+        // into the heading. The leading reset block strips the <Input>
+        // wrapper's own chrome (fixed height, all-side border, rounding,
+        // padding, surface bg, text size, shadow, focus ring) so the
+        // melt-into-heading appearance from the raw <input> is preserved.
         className={cn(
-          "bg-transparent font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance",
+          "h-auto rounded-none border-0 px-0 py-0 shadow-none bg-transparent text-[length:inherit] md:text-[length:inherit] focus-visible:ring-0 focus-visible:border-foreground",
+          "font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance",
           "border-b border-line outline-none focus:border-foreground",
           "w-full min-w-[8rem] max-w-full",
           "text-inherit",
@@ -118,11 +124,17 @@ export function WorkflowEditableTitle({
   }
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={startEdit}
-      // Same trick — never reapply h1 typography; only override chrome.
+      // Same trick — never reapply h1 typography; only override chrome. The
+      // leading reset block strips the <Button> base/ghost chrome (centred
+      // inline-flex, fixed height, padding, rounding, font size/weight,
+      // nowrap, ghost hover bg) so the inline read-mode affordance keeps the
+      // raw <button>'s heading-inherited look.
       className={cn(
+        "inline-block h-auto rounded-none px-0 py-0 text-[length:inherit] font-[inherit] whitespace-normal hover:bg-transparent hover:text-inherit",
         "cursor-text bg-transparent text-left",
         "border-b border-transparent hover:border-line",
         "text-inherit",
@@ -130,6 +142,6 @@ export function WorkflowEditableTitle({
       title="Click to rename"
     >
       {name}
-    </button>
+    </Button>
   );
 }

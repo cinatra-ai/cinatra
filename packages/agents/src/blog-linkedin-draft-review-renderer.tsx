@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -124,14 +125,14 @@ export function BlogLinkedinDraftReviewRenderer({
             {v.blogPostUrl && (
               <p>
                 <span className="text-foreground">Blog post:</span>{" "}
-                <a
+                <Link
                   href={v.blogPostUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="underline-offset-4 hover:underline"
                 >
                   {v.blogPostUrl}
-                </a>
+                </Link>
               </p>
             )}
           </div>

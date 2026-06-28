@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -58,7 +59,7 @@ export function CardListRenderer({ hint, mode = "view" }: { hint: CardListHint; 
               {item.viewUrl ? (
                 <CardContent>
                   <Button asChild variant="link" size="sm" className="px-0">
-                    <a
+                    <Link
                       href={item.viewUrl}
                       target={isExternal ? "_blank" : undefined}
                       rel={isExternal ? "noopener noreferrer" : undefined}
@@ -67,7 +68,7 @@ export function CardListRenderer({ hint, mode = "view" }: { hint: CardListHint; 
                       {isExternal ? (
                         <ExternalLink className="ml-1 h-3.5 w-3.5" />
                       ) : null}
-                    </a>
+                    </Link>
                   </Button>
                 </CardContent>
               ) : null}

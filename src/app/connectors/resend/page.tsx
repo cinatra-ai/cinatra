@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { requireAdminSession } from "@/lib/auth-session";
@@ -104,7 +105,7 @@ export default async function ResendConnectorPage(props: { searchParams?: Promis
             <Field>
               <FieldLabel>Enabled</FieldLabel>
               <label className="flex items-center gap-2 text-sm text-foreground">
-                <input type="checkbox" name="enabled" defaultChecked={config.enabled} />
+                <Checkbox name="enabled" defaultChecked={config.enabled} />
                 Use Resend for assigned email purposes
               </label>
             </Field>
@@ -127,7 +128,7 @@ export default async function ResendConnectorPage(props: { searchParams?: Promis
               </span>
               {config.hasApiKeyOverride ? (
                 <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <input type="checkbox" name="clearApiKey" />
+                  <Checkbox name="clearApiKey" />
                   Remove the in-app key and fall back to RESEND_API_KEY
                 </label>
               ) : null}

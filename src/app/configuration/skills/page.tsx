@@ -380,8 +380,8 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
                           <div className="flex flex-shrink-0 items-center gap-2">
                             <MatchesRowAction agentId={packageId} skillId={assignment.skillId} />
                             <RemoveMatchForm>
-                              <input type="hidden" name="agentId" value={agent.id} />
-                              <input type="hidden" name="skillId" value={assignment.skillId} />
+                              <Input type="hidden" name="agentId" value={agent.id} />
+                              <Input type="hidden" name="skillId" value={assignment.skillId} />
                               <Button type="submit" variant="outline" size="sm">
                                 Remove
                               </Button>

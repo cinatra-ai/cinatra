@@ -2945,10 +2945,10 @@ const skipNextThreadLoadRef = useRef(false);
                                       return (
                                         <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
                                           <span className="text-muted-foreground">{i + 1}.</span>
-                                          <a href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                                          <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
                                             {c.title || host}
                                             <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                          </a>
+                                          </Link>
                                         </li>
                                       );
                                     })}
@@ -3018,10 +3018,10 @@ const skipNextThreadLoadRef = useRef(false);
                                       return (
                                         <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
                                           <span className="text-muted-foreground">{i + 1}.</span>
-                                          <a href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                                          <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
                                             {c.title || host}
                                             <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                          </a>
+                                          </Link>
                                         </li>
                                       );
                                     })}
@@ -3166,10 +3166,10 @@ const skipNextThreadLoadRef = useRef(false);
                                   return (
                                     <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
                                       <span className="text-muted-foreground">{i + 1}.</span>
-                                      <a href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                                      <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
                                         {c.title || host}
                                         <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                      </a>
+                                      </Link>
                                     </li>
                                   );
                                 })}
@@ -3242,10 +3242,10 @@ const skipNextThreadLoadRef = useRef(false);
                                   return (
                                     <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
                                       <span className="text-muted-foreground">{i + 1}.</span>
-                                      <a href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
+                                      <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
                                         {c.title || host}
                                         <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                      </a>
+                                      </Link>
                                     </li>
                                   );
                                 })}

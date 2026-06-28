@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   ACCENT_PALETTE,
@@ -85,8 +86,9 @@ export function ExtensionCard({
 
   if (!isShell) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={onClick}
         data-slot="extension-card"
         data-accent={accentColor}
@@ -95,7 +97,16 @@ export function ExtensionCard({
         // some scrapers treat as decorative.
         aria-label={name}
         className={cn(
-          "group/extension relative w-full overflow-hidden rounded-card border border-line bg-surface-strong text-left transition-all hover:-translate-y-px hover:shadow-strong focus-visible:ring-3 focus-visible:ring-ring/40 outline-none",
+          // Reset the Button base/ghost chrome so this stays the full-bleed
+          // card it was as a raw <button>: block layout (not inline-flex
+          // centred), auto height, no inner padding/font/whitespace clamp,
+          // and no ghost hover background (the card owns its own hover lift).
+          // rounded-[var(--radius-card)] (not the rounded-card token) so
+          // tailwind-merge recognizes the radius group and deterministically
+          // drops the Button base's rounded-lg — same computed radius as
+          // rounded-card, but order-independent.
+          "block h-auto p-0 text-sm font-normal whitespace-normal hover:bg-transparent hover:text-inherit",
+          "group/extension relative w-full overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface-strong text-left transition-all hover:-translate-y-px hover:shadow-strong focus-visible:ring-3 focus-visible:ring-ring/40 outline-none",
           className,
         )}
       >
@@ -105,7 +116,7 @@ export function ExtensionCard({
           emblem={emblem}
           indicator={indicator}
         />
-      </button>
+      </Button>
     );
   }
 
