@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   source-leak-gate:
-    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/source-leak-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.1
     with:
       profile: ts-monorepo
       ratchet_mode: line
@@ -18,4 +18,4 @@ jobs:
       # basename: they necessarily contain the version-comment markers they
       # enforce (same exemption cinatra-ai/ci applies to its own copy).
       config: .github/source-leak-gate.config.json
-      ref: 4c903fe9ca71ad47752a2bc92b72893e5f7c9814
+      ref: 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf
