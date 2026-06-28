@@ -5,8 +5,10 @@
 // Standard-Webhooks verify/sign primitives, the import-free registry, the
 // leased idempotency state machine, and the secret-service contract.
 //
-// INERT until #343: no extension declares `cinatra.webhooks` yet, so the
-// generated registry is empty and the route 404s every request safely.
+// LIVE since #343: the host route, secret store, and idempotency ledger are
+// wired and serving. An extension contributes handlers by declaring
+// `cinatra.webhooks`; until one does the generated registry is empty and the
+// route 404s every request safely.
 
 export * from "./types";
 

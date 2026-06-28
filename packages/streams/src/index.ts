@@ -7,10 +7,10 @@
 // coupling, and NO `server-only` import — every host detail arrives as a
 // parameter.
 //
-// STAGED (cinatra#344): no host surface is migrated onto this package yet — the
-// A2A run stream, the widget relay, and the `cit_` widget broker stay byte-for-
-// byte as they are. This package + its `cinatra.streams` manifest capability
-// ship INERT (no extension declares `cinatra.streams` on day one).
+// LIVE since #343: this package and its `cinatra.streams` manifest capability
+// are wired and serving via the generic `/api/streams/<slug>` route. An
+// extension opts a surface in by declaring `cinatra.streams`; until one does the
+// generated stream registry is empty and the route 404s safely.
 
 export {
   createDurableEventLog,
