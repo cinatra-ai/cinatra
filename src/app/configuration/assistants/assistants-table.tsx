@@ -180,7 +180,7 @@ export function AssistantsTable({ assistants: initialAssistants }: AssistantsTab
                 </TableCell>
                 <TableCell>
                   <form action={handleWebhook} className="flex items-center gap-2">
-                    <input type="hidden" name="assistantUserId" value={a.id} />
+                    <Input type="hidden" name="assistantUserId" value={a.id} />
                     <InputGroup className="w-52">
                       <InputGroupAddon>
                         <LinkIcon aria-hidden="true" />

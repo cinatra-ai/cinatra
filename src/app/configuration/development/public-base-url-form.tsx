@@ -100,8 +100,9 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
                 role="listbox"
               >
                 {tailscaleUrl ? (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     role="option"
                     aria-selected={trimmed === tailscaleUrl}
                     // onMouseDown (not onClick) so it fires before the input
@@ -110,14 +111,14 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
                       e.preventDefault();
                       pickTailscale();
                     }}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted"
+                    className="flex h-auto w-full items-center justify-start gap-2 rounded-none border-0 px-3 py-2 text-left text-sm font-normal whitespace-normal hover:bg-surface-muted"
                   >
                     <TailscaleLogo className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="font-mono text-xs">
                       <span className="font-semibold text-muted-foreground">TAILSCALE: </span>
                       <span className="break-all">{tailscaleUrl}</span>
                     </span>
-                  </button>
+                  </Button>
                 ) : (
                   <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
                     <TailscaleLogo className="h-4 w-4 shrink-0" />
