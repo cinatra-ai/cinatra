@@ -5,65 +5,65 @@
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "538a8176f12a5e9dfe0c95f29b4b74cd711f7038",
+      "resolvedSha": "e15a7ca545003145bf2025ed3e093999bb4fe158",
       "packageVersion": "0.1.0",
-      "treeSha256": "16af1c45f35e63dce29b420be021ae529c85245d9bfe690304951a1c4c9adaab"
+      "treeSha256": "85e05c35044a9e1b70968359be7bb2da213688daaaf1a33f1bd900fe998f9e0b"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "6871ed164ddee839a6ddb225ec42ec4f12fbd51a",
+      "resolvedSha": "7a565f4b911719979af1c923905d66b6c93bd763",
       "packageVersion": "0.1.0",
-      "treeSha256": "8a3abfacc6bff60078ccda6f7e2cdccdafac1a5753b7f7605072c37fa1390fe7"
+      "treeSha256": "45fe638829f8c62a24b6743022a070a6cf67f19d97350bb25f0cc438400734ea"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
-      "resolvedSha": "124bac513c91e6911f62680cf23e74525d450049",
+      "resolvedSha": "5a0289781c587c83cd058f3dee502ca8f8f2c53c",
       "packageVersion": "0.1.0",
-      "treeSha256": "4f289b35b542ba0b834907152487a23148bc68c7ecfbb5d33aab7a64ad130804"
+      "treeSha256": "44cf8eb6bac5d77dc0e71c7b06380ab3a671283aa5ddaf00bc396b52eb620258"
     },
     {
       "packageName": "@cinatra-ai/default-artifact",
       "repo": "cinatra-ai/default-artifact",
-      "resolvedSha": "e69b8023f21e7d152d2017f3ea001ed82f30ffe1",
+      "resolvedSha": "1a4bf30b6c94c18da116b2cd76a8488bddf179ca",
       "packageVersion": "0.1.0",
-      "treeSha256": "55b2c003862b7bb8a077e7e7809a5a1a694184da6917b3528a4cf1a489f99a96"
+      "treeSha256": "d883fbcadf3be974a3ce923c0202119df84c308135705b2d9c0da8f69a755032"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
       "repo": "cinatra-ai/lint-policy-agent",
-      "resolvedSha": "525376b6179bead5f31f5a7673b6d7537efe2f63",
+      "resolvedSha": "6f4cc58539eb6fe2132d8044b97ae63b1eb0d298",
       "packageVersion": "0.1.0",
-      "treeSha256": "578ada1892165c6e1c9b4d7e45610a5995d23648fb3e9b95eded36686e118d7a"
+      "treeSha256": "d38b002ed646d3d654a5113ff6e6543a7df4afcabb4aa875c721b5adf2b765b1"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "98554903b5bbdeaa1f785fb2e7357ee4eda69364",
-      "packageVersion": "0.1.1",
-      "treeSha256": "a723de73eac1c12c66366bc6873cef924f884381db1fb7216aa416bca542bc0e"
+      "resolvedSha": "91186fe86c5276ba1f0421fc6dbad9a78c4a482b",
+      "packageVersion": "0.1.2",
+      "treeSha256": "7a0417992fdb3ab3d2e4a368974b60d8100babdd0314bc2f1f9ca394d2ea4f7c"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "11e3a8f9c5b58cf80b89b9ad0b4eeea79edb9e30",
+      "resolvedSha": "eafb01d45b4361aace3204cd41e8a50615cbe7e1",
       "packageVersion": "0.1.3",
-      "treeSha256": "23cee0d41c03dd4e8dbcaa38f1e67113d77524237ccc639b7347e71ed0f3d265"
+      "treeSha256": "d46d7e9155865320214d22a5a4cfbc28ec76c312fdca1f13a1e4b6c45281515a"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
-      "resolvedSha": "bb2ede986ed12180d6cb7e2a7e5953be8077e541",
+      "resolvedSha": "cbcba003278568711943a725ddbd82be728ebfa8",
       "packageVersion": "0.1.0",
-      "treeSha256": "4dd3b301cf939a105055dacbbd7d20304dfcc53a7b8f8d486e413e427ec04767"
+      "treeSha256": "7b6c992eaa8d91d7ae06024a90a7ab018bfc27e613f3138023900714c13ab028"
     },
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "eaa230a61358dcc56c4dafdd0bd3ab283e217d8f",
+      "resolvedSha": "fdd1c2758d849046484b50dabcebd7c468c6069d",
       "packageVersion": "0.1.0",
-      "treeSha256": "b98d1f5998f8861edbfc6fcffe6fd5fd1aa333efb3ca195e3ca359ad4f0e69ea"
+      "treeSha256": "8214430d36aea6aa7d9437d8c69452c4acaeb620d3b97efa794da5c8f5d15da8"
     }
   ]
 }
