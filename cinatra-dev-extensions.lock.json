@@ -325,7 +325,7 @@
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "88ded33c430c3d815c2c54992164fbf991d16ec4"
+      "resolvedSha": "8f23d08eac5f0dd773f062c308614de480867400"
     },
     {
       "packageName": "@cinatra-ai/trigger-agent",
