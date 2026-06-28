@@ -10,10 +10,11 @@
  * mutation, no DC-internal class selectors.
  *
  * What it renders:
- *   - Route-scoped primary actions (left) — plain anchors from the
+ *   - Route-scoped primary actions (left) — anchors from the
  *     `DASHBOARD_PAGE_ACTIONS` registry, keyed by the shell's page anchor.
- *     Plain `<a href>` (not `next/link`) on purpose: works under CSP and
- *     preserves middle-click/right-click, matching the previous behavior.
+ *     Rendered through `next/link` (`<ToolbarButton asChild><Link/>`), which
+ *     emits a real `<a href>` — preserving middle-click/right-click and the
+ *     previous navigation behavior while satisfying the shadcn link pattern.
  *   - Owner-doctrine edit toggle (right) — "Edit dashboard" in view mode,
  *     "Save dashboard" in edit mode, via `actions.toggleEditMode()`. Saving
  *     itself rides the same dirty-state path the bundled toolbar used
@@ -35,6 +36,7 @@
  * that restyled DC's internal toolbar DOM is gone with the old toolbar.
  */
 import { useDashboardContext } from "drizzle-cube/client";
+import Link from "next/link";
 import {
   LayoutGrid,
   Pencil,
@@ -133,14 +135,14 @@ export function CinatraDashboardToolbar() {
             const ActionIcon = action.icon;
             return (
               <ToolbarButton key={action.id} asChild>
-                <a
+                <Link
                   href={action.href}
                   data-cinatra-page-action={action.id}
                   className="font-semibold text-foreground"
                 >
                   <ActionIcon aria-hidden="true" className="size-3.5 shrink-0" />
                   {action.label}
-                </a>
+                </Link>
               </ToolbarButton>
             );
           })}

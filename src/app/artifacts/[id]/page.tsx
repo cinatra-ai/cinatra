@@ -31,6 +31,7 @@
  *     http/https before it ever reaches this href).
  */
 import "server-only";
+import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { Download, ExternalLink } from "lucide-react";
@@ -119,22 +120,22 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
             <>
               {artifact.sourceUrl ? (
                 <Button asChild variant="outline">
-                  <a
+                  <Link
                     href={artifact.sourceUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
                     <ExternalLink data-icon="inline-start" aria-hidden="true" />
                     Open in source application
-                  </a>
+                  </Link>
                 </Button>
               ) : null}
               {downloadHref ? (
                 <Button asChild variant="outline">
-                  <a href={downloadHref} download>
+                  <Link href={downloadHref} download>
                     <Download data-icon="inline-start" aria-hidden="true" />
                     Download
-                  </a>
+                  </Link>
                 </Button>
               ) : null}
             </>

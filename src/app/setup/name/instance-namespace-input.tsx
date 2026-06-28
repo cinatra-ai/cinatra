@@ -27,6 +27,7 @@ import {
 } from "react";
 import { useFormStatus } from "react-dom";
 
+import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -217,14 +218,14 @@ function NamespaceErrorMessage({ error }: { error: NamespaceValidationError }) {
       {error.reservedSubstring}&quot; are reserved for Cinatra.ai-affiliated instances and require
       pre-registration. To request approval,{" "}
       {error.contact.href ? (
-        <a
+        <Link
           href={error.contact.href}
           target="_blank"
           rel="noopener noreferrer"
           className="text-destructive underline hover:text-destructive/80"
         >
           {error.contact.channel}
-        </a>
+        </Link>
       ) : (
         <span className="underline">{error.contact.channel}</span>
       )}
