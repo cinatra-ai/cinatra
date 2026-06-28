@@ -224,20 +224,16 @@ echo "    seeded ${SEED_COUNT} rows"
 #     (buildCreateStoreSchemaQueries). Additive over the previous tables; adds
 #     the new tables (installed_extension, extension_install_ops, …) the later
 #     migrations operate on. Run from the checkout via tsx.
+# Invoke a REAL on-disk module rather than `node --import tsx -e '<inline>'`:
+# the inline-eval form cannot resolve the NAMED export from the tsx-transformed
+# .ts source on Node 22 (the importer is a virtual `[eval1]` module — tsx throws
+# "does not provide an export named 'buildCreateStoreSchemaQueries'"), so the
+# proof would fail locally on the common LTS while passing on CI's Node 24. A
+# real entry file resolves the export on BOTH Node 22 and 24. See the header of
+# scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs.
 echo "==> [candidate] apply bootstrap DDL (buildCreateStoreSchemaQueries)"
 SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node --import tsx -e '
-    import { Client } from "pg";
-    import { buildCreateStoreSchemaQueries } from "./src/lib/drizzle-store.ts";
-    const schema = process.env.SUPABASE_SCHEMA || "cinatra";
-    const c = new Client({ connectionString: process.env.SUPABASE_DB_URL });
-    await c.connect();
-    const qs = buildCreateStoreSchemaQueries(schema);
-    let applied = 0;
-    try { for (const q of qs) { await c.query(q.text, q.values); applied++; } }
-    finally { await c.end(); }
-    console.log(`    bootstrap DDL applied: ${applied}/${qs.length} statements`);
-  ' \
+  node --import tsx scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs \
   || fail "candidate bootstrap DDL failed against the upgraded database."
 
 # 4b. Candidate core migration chain — the SAME runner production uses
