@@ -19,10 +19,10 @@ jobs:
     # Pin BOTH to the same SHA: the workflow ref (`@<sha>`) and the `ref` input.
     # Pinned to the cinatra-ai/ci main (engineering#315 gate landed in ci d35ff02) (engineering#315);
     # re-pin to the ci release SHA + tag once that PR merges and ci is released.
-    uses: cinatra-ai/ci/.github/workflows/governance-drift-gate.yml@d35ff0226591470444ad4c8a1eb7045911c88794 # v0.1.0-next.d35ff02
+    uses: cinatra-ai/ci/.github/workflows/governance-drift-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0-next.83ca29
     with:
       repo: cinatra-ai/cinatra
-      ref: d35ff0226591470444ad4c8a1eb7045911c88794
+      ref: 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf
       baseline_ruleset_name: baseline-protection
     secrets:
       governance_read_token: ${{ secrets.GOVERNANCE_DRIFT_READ_TOKEN }}

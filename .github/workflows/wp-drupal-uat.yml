@@ -76,7 +76,7 @@ jobs:
       # is always defined.)
       run_uat: ${{ steps.filter.outputs.relevant == 'true' && github.event.pull_request.draft != true && !contains(github.event.pull_request.labels.*.name, 'override-wp-drupal-uat') }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         with:
@@ -110,9 +110,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Checkout the canonical contract repo
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: cinatra-ai/wordpress-assistant-connector
           path: .wp-drupal-contract
@@ -210,7 +210,7 @@ jobs:
         run: echo "No WP/Drupal contract paths touched, or draft/override-labeled PR — UAT not applicable (real UAT runs on ready non-draft PRs touching contract paths, and nightly)."
       - name: Checkout
         if: needs.changed-paths.outputs.run_uat == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
         if: needs.changed-paths.outputs.run_uat == 'true'
         run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
@@ -227,7 +227,7 @@ jobs:
           echo "app-service env present"
       - name: Run full UAT suite
         if: needs.changed-paths.outputs.run_uat == 'true'
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
         with:
           # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
           # when configured so a future private flip keeps working unchanged.
@@ -281,7 +281,7 @@ jobs:
       # OpenAI call. Zero-secret placeholder (mirrors dashboard-live-verify.yml).
       OPENAI_API_KEY: ci-placeholder-not-used-by-wp-drupal-uat
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
         run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
@@ -295,7 +295,7 @@ jobs:
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"
       - name: Run full UAT suite
-        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+        uses: cinatra-ai/ci/.github/actions/wp-drupal-uat-run@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
         with:
           # OPTIONAL — devApp repos are public (anonymous HTTPS clone). Forwarded
           # when configured so a future private flip keeps working unchanged.
