@@ -3,6 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Check, Pencil } from "lucide-react";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 
 export type InlinePageTitleProps = {
   /** Current saved value. Empty string falls back to `placeholder`. */
@@ -95,10 +96,15 @@ export const InlinePageTitle = forwardRef<InlinePageTitleHandle, InlinePageTitle
               {sizerText}
             </span>
             {/* Input absolutely fills the card; browser handles text scroll without a visible scrollbar */}
-            {/* audit-allow: inline-typography-input — typography-styled inline editor; shadcn Input would override every default style */}
-            <input
+            {/* The leading reset block strips the <Input> wrapper's own chrome
+                (fixed height, border, rounding, surface bg, shadow, the
+                text-base/md:text-sm sizing, and the focus ring) so this stays
+                the typography-styled inline editor it was as a raw <input>;
+                md:text-[2rem] re-asserts the heading size past the wrapper's
+                md:text-sm. */}
+            <Input
               ref={inputRef}
-              className="absolute inset-0 w-full px-3 py-1 bg-transparent text-[2rem] font-semibold tracking-[-0.03em] text-foreground outline-none overflow-x-hidden"
+              className="h-auto rounded-none border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:ring-0 md:text-[2rem] absolute inset-0 w-full px-3 py-1 text-[2rem] font-semibold tracking-[-0.03em] text-foreground outline-none overflow-x-hidden"
               value={editValue}
               onChange={(e) => setEditValue(e.target.value)}
               onKeyDown={(e) => {

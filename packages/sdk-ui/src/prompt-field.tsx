@@ -5,6 +5,7 @@ import { Plus, Paperclip } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
+import { Input } from "./ui/input";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -295,19 +296,26 @@ function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false }: Att
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        {/* audit-allow: chrome-less trigger — the prompt field intentionally omits the
-            ghost-button background; a bare <button> via asChild keeps the layout flush.
-            State color uses semantic tokens (data-[state=open] from the radix trigger). */}
-        <button
+        {/* The prompt field intentionally omits the ghost-button background;
+            the leading reset block strips the <Button> ghost/icon chrome
+            (rounding, border, the ghost hover AND aria-expanded background +
+            foreground recolor) so the trigger stays chrome-less and flush.
+            State color uses semantic tokens: hover/focus/open all resolve to
+            text-primary (data-[state=open] + aria-expanded both come from the
+            radix trigger). */}
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           aria-label="Prompt options"
           className={cn(
-            "flex size-8 items-center justify-center bg-transparent shadow-none outline-none transition",
-            "text-muted-foreground hover:text-primary focus-visible:text-primary data-[state=open]:text-primary",
+            "rounded-none border-0 shadow-none hover:bg-transparent aria-expanded:bg-transparent",
+            "flex items-center justify-center bg-transparent outline-none transition",
+            "text-muted-foreground hover:text-primary focus-visible:text-primary aria-expanded:text-primary data-[state=open]:text-primary",
           )}
         >
           <Plus className="size-4" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
 
       <DropdownMenuContent side="top" align="start" alignOffset={-8} sideOffset={12} className="w-56">
@@ -779,11 +787,13 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
       {/* Prop-gated attachment picker. The hidden <input> is opened by
           the "Upload files" row inside the Plus flyout (AttachmentMenu);
           selected files are forwarded to the consumer callback. */}
-      {/* audit-allow: hidden-file-input — visually hidden native file picker
-          driven programmatically via ref; sdk-ui ships no <Input> wrapper and
-          shadcn Input chrome is irrelevant to a display:none control. */}
+      {/* Visually hidden native file picker driven programmatically via ref.
+          className="hidden" (display:none) out-specifies every default chrome
+          class the <Input> wrapper carries, so the wrapped control renders
+          identically to the prior raw <input> — no shadcn chrome reaches a
+          display:none element. */}
       {onAttachmentsSelected && (
-        <input
+        <Input
           ref={fileInputRef}
           type="file"
           multiple
