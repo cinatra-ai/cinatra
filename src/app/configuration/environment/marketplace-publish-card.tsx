@@ -1,7 +1,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Input } from "@/components/ui/input";
 import { readRegistryPolicy } from "@cinatra-ai/extensions/registry-policy";
+
+import { MarketplaceTermsCheckbox } from "./marketplace-terms-checkbox";
 import {
   readMarketplaceVendorStatus,
   requestMarketplacePublishAction,
@@ -107,21 +110,7 @@ function RegisterForm() {
         This instance is not yet registered as a marketplace vendor. The vendor namespace will be
         the instance namespace; no further input is required.
       </p>
-      <label className="flex items-start gap-2 text-xs text-foreground">
-        <input type="checkbox" name="termsAccepted" required className="mt-0.5" />
-        <span>
-          I have read and accept the{" "}
-          <a
-            href="https://marketplace.cinatra.ai/terms"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary underline"
-          >
-            Cinatra Marketplace Vendor Terms of Service
-          </a>
-          .
-        </span>
-      </label>
+      <MarketplaceTermsCheckbox />
       <div className="flex justify-end">
         <Button type="submit" variant="default">
           Register as a vendor
@@ -138,7 +127,7 @@ function SelfServiceControls({ status }: { status: MarketplaceVendorStatusView }
   return (
     <div className="flex flex-col gap-3">
       <form action={setMarketplaceProfileVisibilityAction} className="flex items-center gap-2">
-        <input type="hidden" name="visibility" value={nextVisibility} />
+        <Input type="hidden" name="visibility" value={nextVisibility} />
         <Button type="submit" variant="outline" size="sm" disabled={isLocked}>
           {isLocked
             ? "Profile locked public (has published extensions)"

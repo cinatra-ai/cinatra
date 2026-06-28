@@ -75,6 +75,10 @@ export function ExtensionCard({
 
   if (!isShell) {
     return (
+      // audit-allow: card-as-button — the whole card is the clickable control;
+      // the shadcn <Button> base (inline-flex/justify-center, fixed height,
+      // rounded-lg, text-sm) would override this card's block layout and accent
+      // chrome. Mirrors the app's src/components/extension-card.tsx raw <button>.
       <button
         type="button"
         onClick={onClick}

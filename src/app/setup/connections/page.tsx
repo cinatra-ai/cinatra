@@ -57,7 +57,7 @@ export default async function SetupNangoPage({ searchParams }: SetupNangoPagePro
       ) : null}
 
       <form action={saveNangoConnectionAction} className="mt-6 grid gap-4">
-        <input type="hidden" name="redirectTo" value="/setup" />
+        <Input type="hidden" name="redirectTo" value="/setup" />
         <FieldGroup>
           <Field>
             <FieldLabel>Secret key</FieldLabel>

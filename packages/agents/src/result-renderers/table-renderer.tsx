@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   TableBody,
   TableCell,
@@ -52,7 +53,7 @@ function stringifyCell(value: unknown): string {
 function CellLink({ href, children }: { href: string; children: React.ReactNode }) {
   const isExternal = !href.startsWith("/");
   return (
-    <a
+    <Link
       href={href}
       target={isExternal ? "_blank" : undefined}
       rel={isExternal ? "noopener noreferrer" : undefined}
@@ -60,7 +61,7 @@ function CellLink({ href, children }: { href: string; children: React.ReactNode 
     >
       {children}
       {isExternal ? <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" /> : null}
-    </a>
+    </Link>
   );
 }
 

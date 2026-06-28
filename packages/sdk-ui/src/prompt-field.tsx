@@ -779,6 +779,9 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
       {/* Prop-gated attachment picker. The hidden <input> is opened by
           the "Upload files" row inside the Plus flyout (AttachmentMenu);
           selected files are forwarded to the consumer callback. */}
+      {/* audit-allow: hidden-file-input — visually hidden native file picker
+          driven programmatically via ref; sdk-ui ships no <Input> wrapper and
+          shadcn Input chrome is irrelevant to a display:none control. */}
       {onAttachmentsSelected && (
         <input
           ref={fileInputRef}

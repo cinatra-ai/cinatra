@@ -22,6 +22,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   Sheet,
   SheetContent,
@@ -68,8 +69,8 @@ export function ApproveButton({
           </DialogDescription>
         </DialogHeader>
         <form action={approveVendorApplicationAction}>
-          <input type="hidden" name="application_id" value={applicationId} />
-          <input type="hidden" name="return_status" value={returnStatus} />
+          <Input type="hidden" name="application_id" value={applicationId} />
+          <Input type="hidden" name="return_status" value={returnStatus} />
           <DialogFooter>
             <DialogClose asChild>
               <Button type="button" variant="ghost">
@@ -121,8 +122,8 @@ export function RejectButton({
           </DialogDescription>
         </DialogHeader>
         <form action={rejectVendorApplicationAction}>
-          <input type="hidden" name="application_id" value={applicationId} />
-          <input type="hidden" name="return_status" value={returnStatus} />
+          <Input type="hidden" name="application_id" value={applicationId} />
+          <Input type="hidden" name="return_status" value={returnStatus} />
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="vendor-reject-reason">

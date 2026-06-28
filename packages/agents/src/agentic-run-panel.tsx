@@ -1015,9 +1015,9 @@ export function AgenticRunPanel({
               Run paused — awaiting human approval before continuing.
             </span>
             <Button asChild variant="outline" size="sm">
-              <a href={`/configuration/agents/approvals?runId=${encodeURIComponent(runId)}`}>
+              <Link href={`/configuration/agents/approvals?runId=${encodeURIComponent(runId)}`}>
                 Review approval
-              </a>
+              </Link>
             </Button>
           </div>
         </>
@@ -1026,13 +1026,13 @@ export function AgenticRunPanel({
       {traceId ? (
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <a
+            <Link
               href={`/analytics/api?runId=${encodeURIComponent(runId)}`}
               target="_blank"
               rel="noreferrer"
             >
               View trace
-            </a>
+            </Link>
           </Button>
         </div>
       ) : null}
@@ -1047,7 +1047,7 @@ export function AgenticRunPanel({
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all">
             {linkifyErrorText(error).map((seg, i) =>
               seg.kind === "link" ? (
-                <a
+                <Link
                   key={i}
                   href={seg.href}
                   target="_blank"
@@ -1055,7 +1055,7 @@ export function AgenticRunPanel({
                   className="underline underline-offset-2"
                 >
                   {seg.value}
-                </a>
+                </Link>
               ) : (
                 <span key={i}>{seg.value}</span>
               ),

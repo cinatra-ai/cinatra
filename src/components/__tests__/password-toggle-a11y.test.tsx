@@ -13,6 +13,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PasswordToggleA11y } from "../password-toggle-a11y";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { HIDE_PASSWORD_LABEL, SHOW_PASSWORD_LABEL } from "@/lib/password-toggle-a11y";
 
 let container: HTMLDivElement;
@@ -33,8 +35,8 @@ afterEach(() => {
 function PasswordField({ type = "password" }: { type?: "password" | "text" }) {
   return (
     <div className="relative">
-      <input type={type} autoComplete="new-password" />
-      <button type="button">eye</button>
+      <Input type={type} autoComplete="new-password" />
+      <Button type="button">eye</Button>
     </div>
   );
 }
@@ -68,9 +70,9 @@ describe("PasswordToggleA11y", () => {
       const [show, setShow] = React.useState(false);
       return (
         <PasswordToggleA11y>
-          <button type="button" data-testid="reveal" onClick={() => setShow(true)}>
+          <Button type="button" data-testid="reveal" onClick={() => setShow(true)}>
             reveal
-          </button>
+          </Button>
           {show ? <PasswordField /> : null}
         </PasswordToggleA11y>
       );
@@ -99,10 +101,10 @@ describe("PasswordToggleA11y", () => {
       return (
         <PasswordToggleA11y>
           <div className="relative">
-            <input type={visible ? "text" : "password"} autoComplete="new-password" />
-            <button type="button" onClick={() => setVisible((v) => !v)}>
+            <Input type={visible ? "text" : "password"} autoComplete="new-password" />
+            <Button type="button" onClick={() => setVisible((v) => !v)}>
               eye
-            </button>
+            </Button>
           </div>
         </PasswordToggleA11y>
       );

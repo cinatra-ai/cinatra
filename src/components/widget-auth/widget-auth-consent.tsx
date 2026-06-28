@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { WidgetAuthSuccess } from "@/components/widget-auth/widget-auth-success";
 import type { ConsentActionResult } from "@/app/widget-auth/actions";
 
@@ -68,8 +69,8 @@ export function WidgetAuthConsent({
         </p>
       ) : null}
       <form action={formAction}>
-        <input type="hidden" name="txn" value={txnId} />
-        <input type="hidden" name="consent_csrf" value={consentCsrf} />
+        <Input type="hidden" name="txn" value={txnId} />
+        <Input type="hidden" name="consent_csrf" value={consentCsrf} />
         <ConsentSubmit />
       </form>
       <p className="break-all text-xs text-muted-foreground">
