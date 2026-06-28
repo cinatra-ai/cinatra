@@ -38,6 +38,7 @@
 
 "use client";
 
+import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 
@@ -104,7 +105,7 @@ export function RenameConfirmation({
       </div>
       {/* The ONLY form field named instanceNamespace — carries the new value
           out of the modal into the server action. */}
-      <input type="hidden" name="instanceNamespace" value={pendingName} />
+      <Input type="hidden" name="instanceNamespace" value={pendingName} />
       <div className="flex gap-3">
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -241,14 +242,14 @@ function NamespaceErrorMessage({ error }: { error: NamespaceValidationError }) {
       {error.reservedSubstring}&quot; are reserved for Cinatra.ai-affiliated instances and require
       pre-registration. To request approval,{" "}
       {error.contact.href ? (
-        <a
+        <Link
           href={error.contact.href}
           target="_blank"
           rel="noopener noreferrer"
           className="text-destructive underline hover:text-destructive/80"
         >
           {error.contact.channel}
-        </a>
+        </Link>
       ) : (
         <span className="underline">{error.contact.channel}</span>
       )}
