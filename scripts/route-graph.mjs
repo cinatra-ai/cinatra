@@ -41,7 +41,7 @@ try {
 // the route's own page/route module (layouts are shared chrome and excluded so
 // the count isolates the route-specific graph being edited).
 // ---------------------------------------------------------------------------
-const FIXED_ROUTES = [
+export const FIXED_ROUTES = [
   { route: "/sign-in", entry: "src/app/sign-in/page.tsx" },
   { route: "/api/mcp", entry: "src/app/api/mcp/route.ts" },
   { route: "/chat", entry: "src/app/chat/[[...slug]]/page.tsx" },
@@ -355,7 +355,7 @@ function reachableFrom(entryAbsList) {
   return { visited, missing };
 }
 
-function analyzeRoute(entryRel) {
+export function analyzeRoute(entryRel) {
   const entryAbs = tryFile(path.join(REPO_ROOT, entryRel));
   if (!entryAbs) return { ok: false, error: `entry not found: ${entryRel}` };
   const { visited, missing } = reachableFrom([entryAbs]);
@@ -539,4 +539,9 @@ function renderMd(result) {
   return lines.join("\n");
 }
 
-main();
+// Only run the CLI when executed directly. Importing this module (e.g. from
+// scripts/audit/route-graph-ratchet.mjs, which reuses analyzeRoute + FIXED_ROUTES
+// as the ratchet's measurement source) must NOT trigger the analysis or write
+// any artifact. Mirrors the same direct-execution guard the sibling
+// file-size-ratchet gate uses.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();
