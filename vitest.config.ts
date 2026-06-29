@@ -301,6 +301,16 @@ export default defineConfig({
       // aliases + next.config package lists from one manifest and gates
       // byte-exact drift. Pure renderers + CLI --check (no DB/network).
       "scripts/config/__tests__/**/*.test.{ts,mjs}",
+      // Runtime dashboard cube/portlet registries (cinatra#660 / PR-7). Pure
+      // unit tests over the runtime-cube registry, the CG-5 serve-gate decision,
+      // the runtime portlet-kind registry, and the host-cube alias helper. No
+      // DB/DOM — gated by the root suite (the rest of packages/dashboards stays
+      // pinned in build-image.yml). Added by precise path (not whole-dir) so the
+      // jsdom/DB dashboards tests are NOT pulled into the node root run.
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-registry.test.ts",
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-serve-gate.test.ts",
+      "packages/dashboards/src/__tests__/runtime-portlet-kind.test.ts",
+      "packages/sdk-dashboard/src/adapters/drizzle-cube/__tests__/alias-cube.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
@@ -314,13 +324,14 @@ export default defineConfig({
       // run via `node --test` by its own dedicated workflow or step
       // (gatekept-install-no-direct-registry, actions-pin-gate,
       // workspace-phantom-deps, workspace-dep-cycles, file-size-ratchet,
-      // crm-pointer-gate, schema-migration-gate, sdk-abi-readme-gate), NOT as
-      // vitest tests.
+      // route-graph-ratchet, crm-pointer-gate, schema-migration-gate,
+      // sdk-abi-readme-gate), NOT as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
       "scripts/audit/__tests__/file-size-ratchet.test.mjs",
+      "scripts/audit/__tests__/route-graph-ratchet.test.mjs",
       "scripts/audit/__tests__/manifest-resolve.test.mjs",
       "scripts/audit/__tests__/crm-pointer-gate.test.mjs",
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",

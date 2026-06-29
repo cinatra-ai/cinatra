@@ -40,6 +40,19 @@ export type PortletKindEntry = {
   readonly allowsArbitraryInputs?: boolean;
   /** Install-time per-kind validation over the portlet instance. Returns [] when ok. */
   readonly validateConfig?: (portlet: PortletInstanceForValidation) => PortletConfigError[];
+  /**
+   * For a RUNTIME-registered kind (cinatra#660): the EXISTING kind whose client
+   * component renders this kind. A runtime kind is ALIAS-only — it NEVER ships a
+   * new React component (the no-unsigned-code invariant), so it MUST render as
+   * an existing kind whose component the host already bundles. Undefined for
+   * bundled (core) kinds. */
+  readonly rendersAs?: string;
+  /**
+   * The source package that contributed a runtime kind (used to unregister on
+   * teardown). Undefined for bundled (core) kinds. */
+  readonly sourcePackageName?: string;
+  /** Process activation generation at registration time (runtime kinds only). */
+  readonly activationGeneration?: number;
 };
 
 /** The descriptor shape `validateDashboardConfigV12({ getPortletKind })`
@@ -64,6 +77,124 @@ export function registerPortletKind(entry: PortletKindEntry): void {
   registry.set(keyOf(entry.kind, entry.version), entry);
 }
 
+export type RuntimePortletKindRegistration = {
+  readonly kind: string;
+  readonly version: string;
+  /** The existing kind whose component + validation this runtime kind reuses. */
+  readonly rendersAs: string;
+  readonly sourcePackageName: string;
+  readonly activationGeneration: number;
+};
+
+export type RuntimePortletKindResult =
+  | { ok: true }
+  | { ok: false; code: string; reason: string };
+
+/**
+ * Register a RUNTIME portlet kind (cinatra#660). ALIAS-ONLY: the kind renders
+ * via an EXISTING bundled kind's component (`rendersAs`) and INHERITS that
+ * kind's scopePolicy + input/output keys + per-kind config validation. It ships
+ * NO new component and NO new SQL/schema — preserving the no-unsigned-code
+ * invariant. Fail-closed:
+ *   - `rendersAs` must resolve to an existing registered kind whose component
+ *     the host bundles (checked by the injected `hasComponentFor`) — a kind that
+ *     maps to no component is REJECTED (no placeholder-only kinds in prod);
+ *   - the new kind id may NOT shadow an existing bundled/runtime kind id;
+ *   - the kind id + version must be non-empty.
+ * Re-registering the SAME (kind,version) from the SAME source package is
+ * idempotent (replaces). A collision with a DIFFERENT source is rejected.
+ */
+export function registerRuntimePortletKind(
+  reg: RuntimePortletKindRegistration,
+  opts: {
+    /** Whether the host bundles a client component for `rendersAs`. */
+    readonly hasComponentFor: (kind: string) => boolean;
+  },
+): RuntimePortletKindResult {
+  if (!reg.kind || reg.kind.length === 0 || !reg.version || reg.version.length === 0) {
+    return { ok: false, code: "portlet_kind_invalid", reason: "kind and version are required" };
+  }
+  if (!reg.rendersAs || reg.rendersAs.length === 0) {
+    return { ok: false, code: "portlet_renders_as_required", reason: "runtime portlet kind must declare rendersAs" };
+  }
+  // The render target must be an EXISTING kind WITH a bundled component.
+  const target = getPortletKind(reg.rendersAs, reg.version) ?? findAnyVersion(reg.rendersAs);
+  if (!target) {
+    return {
+      ok: false,
+      code: "portlet_renders_as_unknown",
+      reason: `rendersAs "${reg.rendersAs}" is not a registered portlet kind`,
+    };
+  }
+  if (!opts.hasComponentFor(reg.rendersAs)) {
+    return {
+      ok: false,
+      code: "portlet_renders_as_no_component",
+      reason: `rendersAs "${reg.rendersAs}" has no bundled client component — runtime kinds may not be placeholder-only`,
+    };
+  }
+  const key = keyOf(reg.kind, reg.version);
+  const existing = registry.get(key);
+  if (existing) {
+    // A collision with a BUNDLED kind (no sourcePackageName) or a DIFFERENT
+    // runtime source is rejected; same-source re-register replaces.
+    if (existing.sourcePackageName !== reg.sourcePackageName) {
+      return {
+        ok: false,
+        code: "portlet_kind_collision",
+        reason: `portlet kind "${reg.kind}@${reg.version}" already registered${existing.sourcePackageName ? ` by "${existing.sourcePackageName}"` : " as a bundled kind"}`,
+      };
+    }
+  }
+  // Inherit the render target's scopePolicy / keys / validation verbatim — the
+  // alias kind is the target kind under a new name.
+  registry.set(key, {
+    kind: reg.kind,
+    version: reg.version,
+    scopePolicy: target.scopePolicy,
+    inputKeys: target.inputKeys,
+    outputKeys: target.outputKeys,
+    allowsArbitraryInputs: target.allowsArbitraryInputs,
+    validateConfig: target.validateConfig,
+    rendersAs: reg.rendersAs,
+    sourcePackageName: reg.sourcePackageName,
+    activationGeneration: reg.activationGeneration,
+  });
+  return { ok: true };
+}
+
+/** Find any registered version of a kind (for rendersAs resolution). */
+function findAnyVersion(kind: string): PortletKindEntry | undefined {
+  for (const e of registry.values()) {
+    if (e.kind === kind) return e;
+  }
+  return undefined;
+}
+
+/** Unregister a single runtime portlet kind (must be runtime + source-owned). */
+export function unregisterRuntimePortletKind(kind: string, version: string, sourcePackageName: string): boolean {
+  const e = registry.get(keyOf(kind, version));
+  if (!e || e.sourcePackageName !== sourcePackageName) return false;
+  return registry.delete(keyOf(kind, version));
+}
+
+/** Unregister every runtime portlet kind contributed by `sourcePackageName`. */
+export function unregisterRuntimePortletKindsForPackage(sourcePackageName: string): string[] {
+  const removed: string[] = [];
+  for (const [key, e] of registry) {
+    if (e.sourcePackageName === sourcePackageName) {
+      registry.delete(key);
+      removed.push(e.kind);
+    }
+  }
+  return removed;
+}
+
+/** True when a kind is RUNTIME-contributed (has a source package). */
+export function isRuntimePortletKind(kind: string, version: string): boolean {
+  return getPortletKind(kind, version)?.sourcePackageName !== undefined;
+}
+
 export function getPortletKind(kind: string, version: string): PortletKindEntry | undefined {
   return registry.get(keyOf(kind, version));
 }
@@ -71,6 +202,16 @@ export function getPortletKind(kind: string, version: string): PortletKindEntry 
 /** Descriptor lookup (used as the injected `getPortletKind`). */
 export function getPortletKindDescriptor(kind: string, version: string): PortletKindDescriptor | undefined {
   const e = getPortletKind(kind, version);
+  return e
+    ? { kind: e.kind, version: e.version, inputKeys: e.inputKeys, outputKeys: e.outputKeys, allowsArbitraryInputs: e.allowsArbitraryInputs }
+    : undefined;
+}
+
+/** Descriptor lookup by kind, ANY version (the first registered). Used when a
+ *  runtime kind's `rendersAs` target may be registered under a different
+ *  version than the runtime kind itself. */
+export function getPortletKindDescriptorAnyVersion(kind: string): PortletKindDescriptor | undefined {
+  const e = findAnyVersion(kind);
   return e
     ? { kind: e.kind, version: e.version, inputKeys: e.inputKeys, outputKeys: e.outputKeys, allowsArbitraryInputs: e.allowsArbitraryInputs }
     : undefined;

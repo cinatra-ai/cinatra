@@ -37,15 +37,17 @@ export {
 
 // The runtime-installer cube guard. The saga's preflight calls it against the
 // materialized storeDir's dashboard config to reject an extension that references
-// an unregistered cube (`reject`) or declares new cube contributions
-// (`requires-rebuild`) BEFORE any write. Re-exported here (the stable
-// extension-materialization subpath) so the host saga has one import surface; the
-// guard's own logic is unchanged. The host cube catalog (`listRegisteredCubeNames`)
-// stays on its own `@cinatra-ai/dashboards/cubes-platform` subpath — that module
-// pulls the pg-backed cube singleton, which the saga loads lazily, not statically.
+// an unregistered cube (`reject`) or to register-runtime a package that declares
+// host-allowlisted cube descriptors (`register-runtime`) BEFORE any write.
+// Re-exported here (the stable extension-materialization subpath) so the host
+// saga has one import surface; the guard's own logic is unchanged. The host cube
+// catalog (`listRegisteredCubeNames`) stays on its own
+// `@cinatra-ai/dashboards/cubes-platform` subpath — that module pulls the
+// pg-backed cube singleton, which the saga loads lazily, not statically.
 export {
   validateExtensionCubeUsage,
   PORTLET_CUBE_CONFIG_FIELDS,
+  type DeclaredRuntimeCubeDescriptor,
   type ExtensionCubeUsageInput,
   type ExtensionCubeUsageOptions,
   type ExtensionCubeUsageVerdict,
@@ -53,6 +55,22 @@ export {
 
 // The typed-portlet registry the saga's preflight uses so the kind/version check
 // runs WITH the real registry (closing the "validate-without-registry" gap)
-// BEFORE the first write, mirroring `assertConfigV12`'s self-wire.
-export { getPortletKindDescriptor } from "./portlets/registry";
-export { registerCorePortletKinds } from "./portlets/kinds";
+// BEFORE the first write, mirroring `assertConfigV12`'s self-wire. The runtime
+// portlet-kind installer symbols (cinatra#660) ride the same import surface.
+export {
+  getPortletKindDescriptor,
+  getPortletKindDescriptorAnyVersion,
+  registerRuntimePortletKind,
+  unregisterRuntimePortletKind,
+  unregisterRuntimePortletKindsForPackage,
+  isRuntimePortletKind,
+  type RuntimePortletKindRegistration,
+  type RuntimePortletKindResult,
+} from "./portlets/registry";
+export {
+  registerCorePortletKinds,
+  hostBundledPortletKinds,
+  PORTLET_KINDS_WITH_BUNDLED_COMPONENT,
+  ANALYTICS_PORTLET_KIND,
+  ANALYTICS_PORTLET_KIND_ALIAS,
+} from "./portlets/kinds";

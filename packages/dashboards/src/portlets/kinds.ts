@@ -36,6 +36,35 @@ export function isAnalyticsPortletKind(kind: string): boolean {
   return kind === ANALYTICS_PORTLET_KIND || kind === ANALYTICS_PORTLET_KIND_ALIAS;
 }
 
+/**
+ * The portlet kinds for which the host bundles a CLIENT component (the keys of
+ * `COMPONENT_MAP` in `src/components/dashboards/portlet-host.tsx`, plus the
+ * `analytics`/`cube-dashboard` keystone kinds rendered by the embedded grid).
+ * Server-safe (no React import) so the runtime portlet-kind installer can gate
+ * `rendersAs` against the set of kinds that actually have a component WITHOUT
+ * importing the `"use client"` host. A parity test
+ * (`portlet-component-parity.test.ts`) asserts this list equals the live
+ * COMPONENT_MAP keys ∪ analytics aliases.
+ */
+export const PORTLET_KINDS_WITH_BUNDLED_COMPONENT = [
+  "object-list",
+  "object-detail",
+  "artifact-list",
+  "artifact-version-history",
+  "artifact-edit-text",
+  "artifact-edit-binary-prompt",
+  "workflow-launcher",
+  "agent-launcher",
+  "workflow-status",
+  ANALYTICS_PORTLET_KIND,
+  ANALYTICS_PORTLET_KIND_ALIAS,
+] as const;
+
+/** A fresh array of the kinds that have a bundled client component. */
+export function hostBundledPortletKinds(): string[] {
+  return [...PORTLET_KINDS_WITH_BUNDLED_COMPONENT];
+}
+
 /** Install-time validation for the analytics kind: `config.dashboard` must be a
  *  structurally-valid drizzle-cube DashboardConfig (the 1.1 shape, which is the
  *  embedded format). The 1.1 schema is `.passthrough()`, so future DC fields are

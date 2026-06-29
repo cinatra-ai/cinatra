@@ -4,6 +4,7 @@ import * as path from "node:path";
 const serverOnlyStub = path.join(__dirname, "tests/__stubs__/server-only.ts");
 const mcpServerStub = path.join(__dirname, "tests/__stubs__/mcp-server.ts");
 const betterAuthDbStub = path.join(__dirname, "tests/__stubs__/better-auth-db.ts");
+const runtimeCubeServeHostStub = path.join(__dirname, "tests/__stubs__/runtime-cube-serve-host.ts");
 const root = path.resolve(__dirname, "../..");
 
 export default defineConfig({
@@ -17,6 +18,12 @@ export default defineConfig({
       // The stub returns an empty membership list, which is sufficient for
       // MCP-side cube registration tests.
       { find: "@/lib/better-auth-db", replacement: betterAuthDbStub },
+      // cinatra#660 — stub the host serve-gate bridge before the generic `@/`
+      // pattern; the real module chains through the read-model → canonical
+      // store → Postgres which throws under a missing SUPABASE_DB_URL. Bundled
+      // cubes always pass the gate, which is what the MCP-path tests exercise;
+      // cross-org runtime denial is covered host-side with a mocked read-model.
+      { find: "@/lib/dashboards/runtime-cube-serve-host", replacement: runtimeCubeServeHostStub },
       { find: /^@\/(.+)$/, replacement: path.join(root, "src") + "/$1" },
       // Vitest can't resolve workspace package subpath imports without explicit
       // aliases, so mirror the tsconfig paths used by the host app for the
@@ -38,6 +45,20 @@ export default defineConfig({
       {
         find: "@cinatra-ai/dashboards/cubes-platform",
         replacement: path.join(root, "packages/dashboards/src/cubes/platform-singleton.ts"),
+      },
+      // cinatra#660 — the host serve-gate bridge (imported by mcp-cubes/handlers
+      // via @/lib/dashboards/runtime-cube-serve-host) resolves these subpaths.
+      {
+        find: "@cinatra-ai/dashboards/runtime-cube-registry",
+        replacement: path.join(root, "packages/dashboards/src/cubes/runtime-cube-registry.ts"),
+      },
+      {
+        find: "@cinatra-ai/dashboards/runtime-cube-serve-gate",
+        replacement: path.join(root, "packages/dashboards/src/cubes/runtime-cube-serve-gate.ts"),
+      },
+      {
+        find: /^@cinatra-ai\/sdk-dashboard$/,
+        replacement: path.join(root, "packages/sdk-dashboard/src/index.ts"),
       },
     ],
   },
