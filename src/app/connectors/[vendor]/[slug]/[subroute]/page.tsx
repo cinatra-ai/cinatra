@@ -5,7 +5,13 @@ import type { Metadata } from "next";
 import { getActorContext } from "@/lib/auth-session";
 import {
   getConnectorRegistryEntryBySlug,
+  resolveConnectorBadgeState,
 } from "@/lib/connectors-registry.server";
+// Importing the built-in readiness probes (side effect) registers a probe per
+// bundled connector, so the host-injected setup-page badge reads the SAME live
+// connection signal the /connectors card grid does.
+import "@/lib/connector-readiness.server";
+import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge";
 import {
   enforceConnectorPolicy,
 } from "@/lib/connector-policy";
@@ -131,6 +137,24 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // admin-only value from a non-admin).
   const isAdmin = actor?.platformRole === "platform_admin";
 
+  // The HOST injects the connection-status badge top-right on EVERY
+  // setup page — never the extension. State + count come from the SAME readiness
+  // probe that feeds the connector's `/connectors` card badge, so the two stay
+  // identical. Resolution is fail-soft (a throwing/absent probe → "not
+  // connected"); for a user-scoped connector the count comes from the actor's
+  // own saved connections, so we thread the human user id through.
+  const readinessUserId =
+    actor?.principalType === "HumanUser" ? actor.principalId : null;
+  const badgeState = await resolveConnectorBadgeState(packageId, {
+    userId: readinessUserId,
+  });
+  const statusBadge = (
+    <ConnectorBadge
+      connected={badgeState.connected}
+      label={badgeState.connectedLabel}
+    />
+  );
+
   if (render.kind === "schema-config") {
     // Resolve the addressable install id so named actions / status probes can
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
@@ -139,7 +163,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     const installId = await resolveActiveInstallIdForActor(packageId, actor);
     return (
       <Main className="min-h-screen">
-        <PageHeader title={displayName} description="Connector setup" />
+        <PageHeader
+          title={displayName}
+          description="Connector setup"
+          actions={statusBadge}
+        />
         <PageContent className="flex flex-col gap-6 pb-8">
           {installId ? (
             <SchemaConfigConnectorForm
@@ -161,7 +189,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // configSchema renders an error, NEVER the bundled-react importer.
     return (
       <Main className="min-h-screen">
-        <PageHeader title={displayName} description="Connector setup" />
+        <PageHeader
+          title={displayName}
+          description="Connector setup"
+          actions={statusBadge}
+        />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert variant="destructive">
             <AlertTitle>This connector&apos;s setup schema is invalid</AlertTitle>
@@ -184,7 +216,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     const rebuild = requiresRebuildState(packageId);
     return (
       <Main className="min-h-screen">
-        <PageHeader title={displayName} description="Connector setup" />
+        <PageHeader
+          title={displayName}
+          description="Connector setup"
+          actions={statusBadge}
+        />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert>
             <AlertTitle>This connector requires a rebuild</AlertTitle>
@@ -225,7 +261,11 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     const rebuild = requiresRebuildState(packageId);
     return (
       <Main className="min-h-screen">
-        <PageHeader title={displayName} description="Connector setup" />
+        <PageHeader
+          title={displayName}
+          description="Connector setup"
+          actions={statusBadge}
+        />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert>
             <AlertTitle>This connector requires a rebuild</AlertTitle>
@@ -240,12 +280,25 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     packageId,
     manifest?.requestedHostPorts ?? [],
   );
+  // The bundled-react setup page renders its OWN chrome (its own
+  // PageHeader / `<main>`), so the host cannot inject into its actions slot the
+  // way the schema-config branches do. Instead the host floats the SAME
+  // `<ConnectorBadge>` top-right of the page, OVER the extension's chrome, via a
+  // positioned overlay. The overlay is `pointer-events-none` so it never steals
+  // a click from the extension's own header controls during the connector-repo
+  // cleanup window (the extension's own status indicator is removed per repo —
+  // openai-connector is the exemplar). The badge itself stays read-only.
   return (
-    <SetupPage
-      packageId={packageId}
-      slug={catalogEntry.slug}
-      searchParams={searchParams}
-      ctx={ctx}
-    />
+    <div className="relative">
+      <div className="pointer-events-none absolute right-4 top-6 z-10 sm:right-8 lg:right-6">
+        {statusBadge}
+      </div>
+      <SetupPage
+        packageId={packageId}
+        slug={catalogEntry.slug}
+        searchParams={searchParams}
+        ctx={ctx}
+      />
+    </div>
   );
 }

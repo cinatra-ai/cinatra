@@ -75,6 +75,7 @@
     { "alias": "@cinatra-ai/connectors", "target": "./packages/connectors/src/index.ts" },
     { "alias": "@cinatra-ai/connectors/pages", "target": "./packages/connectors/src/pages.tsx" },
     { "alias": "@cinatra-ai/connectors/connectors-client", "target": "./packages/connectors/src/connectors-client.tsx" },
+    { "alias": "@cinatra-ai/connectors/connector-badge", "target": "./packages/connectors/src/connector-badge.tsx" },
     { "alias": "@cinatra-ai/connectors-catalog", "target": "./packages/connectors-catalog/src/descriptors.mjs" },
     { "alias": "@cinatra-ai/connectors-catalog/descriptors.mjs", "target": "./packages/connectors-catalog/src/descriptors.mjs" },
     { "alias": "@cinatra-ai/apollo-connector", "target": "./extensions/cinatra-ai/apollo-connector/src/index.ts" },

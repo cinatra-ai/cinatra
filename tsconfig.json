@@ -87,6 +87,7 @@
       "@cinatra-ai/connectors": ["./packages/connectors/src/index.ts"],
       "@cinatra-ai/connectors/pages": ["./packages/connectors/src/pages.tsx"],
       "@cinatra-ai/connectors/connectors-client": ["./packages/connectors/src/connectors-client.tsx"],
+      "@cinatra-ai/connectors/connector-badge": ["./packages/connectors/src/connector-badge.tsx"],
       "@cinatra-ai/connectors-catalog": ["./packages/connectors-catalog/src/descriptors.mjs"],
       "@cinatra-ai/connectors-catalog/descriptors.mjs": ["./packages/connectors-catalog/src/descriptors.mjs"],
       "@cinatra-ai/apollo-connector": ["./extensions/cinatra-ai/apollo-connector/src/index.ts"],

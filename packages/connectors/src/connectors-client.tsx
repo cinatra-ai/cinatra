@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug } from "lucide-react";
+import { ConnectorBadge } from "./connector-badge";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -15,7 +16,6 @@ import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGithub from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { FaLinkedin } from "react-icons/fa6";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -190,41 +190,13 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 }
 
 // ---------------------------------------------------------------------------
-// Badge
-// ---------------------------------------------------------------------------
-
-// Connection state is shown as a state-coloured BACKGROUND badge (#682), built
-// from the design-system `Badge` (variant tokens, contrast-checked: the
-// `bg-success/10 text-success` / `bg-destructive/10 text-destructive` treatment
-// is the same one used across the app), wrapping the #605 plug icon:
-//   connected    → green-background badge: "connected plug" (PlugZap) in the
-//                  design success / sea-green token, keeping the connector's
-//                  `connectedLabel` count alongside it when one is provided.
-//   disconnected → red-background badge: "unplug" (Unplug) in the failed / red
-//                  token.
-function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
-  if (connected) {
-    return (
-      <Badge
-        variant="success"
-        className="font-semibold"
-        aria-label={label ? `Connected (${label})` : "Connected"}
-      >
-        <PlugZap data-icon="inline-start" aria-hidden="true" />
-        {label ? <span aria-hidden="true">{label}</span> : null}
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="destructive" aria-label="Not connected">
-      <Unplug data-icon="inline-start" aria-hidden="true" />
-    </Badge>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main client component
 // ---------------------------------------------------------------------------
+//
+// The per-card connection-status badge is the SHARED `ConnectorBadge`
+// (`./connector-badge`), the same component the host injects into the connector
+// setup-page header — so the card badge and the setup-page badge stay
+// byte-identical.
 
 // localStorage key for the persisted Connected/Available filter selection.
 const FILTER_STORAGE_KEY = "cinatra:connectors:filter";

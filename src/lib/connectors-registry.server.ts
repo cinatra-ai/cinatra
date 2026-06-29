@@ -239,6 +239,40 @@ export function getConnectorReadinessProbe(
 }
 
 /**
+ * The HOST-side connection state + count for a single connector, resolved
+ * through the SAME readiness-probe pipeline that feeds the `/connectors` card
+ * grid (`packages/connectors/src/pages.tsx`). This is the source of
+ * truth for the host-injected setup-page badge: the badge and the card stay in
+ * lock-step because both read this probe.
+ *
+ * FAIL-SOFT (mirrors `resolveReadinessFailSoft` for the card grid): a connector
+ * with no registered probe falls back to `DEFAULT_PROBE` ({connected:false}),
+ * and a probe that THROWS (the connector's host deps were never registered, a
+ * status read fails) degrades to "not connected" rather than 500-ing the setup
+ * page. A runtime-only connector (no catalog descriptor, hence no built-in
+ * probe) therefore renders a disconnected badge — exactly as its card does.
+ *
+ * SECURITY: this is a READ-ONLY status read. It exposes nothing the card grid
+ * does not already expose to the same actor, and it runs AFTER the dispatch
+ * route's authorization/trust gates — it grants no render/write authority.
+ */
+export async function resolveConnectorBadgeState(
+  packageId: string,
+  ctx: ConnectorReadinessContext,
+): Promise<ConnectorReadiness> {
+  try {
+    return await getConnectorReadinessProbe(packageId)(ctx);
+  } catch (err) {
+    console.warn(
+      `[connectors-registry] setup-page readiness probe failed for "${packageId}" ` +
+        `(rendering the badge as not connected):`,
+      err instanceof Error ? err.message : err,
+    );
+    return { connected: false };
+  }
+}
+
+/**
  * The connector's vendor scope. The generated manifest (installed-extension
  * identity) is authoritative; a connector the manifest does not cover derives
  * its vendor from the packageId's scope segment.

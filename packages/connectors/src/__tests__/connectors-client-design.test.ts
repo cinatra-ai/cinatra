@@ -31,6 +31,16 @@ const SRC = readFileSync(
   "utf8",
 );
 
+// The connection-status badge was EXTRACTED into the shared
+// `connector-badge.tsx` (consumed by both the card grid here and the
+// host-injected setup-page header). The #605/#682 badge-shape assertions now
+// read the shared component source; the toggle / +Connector / mustard
+// assertions stay on `connectors-client.tsx` (`SRC`).
+const BADGE_SRC = readFileSync(
+  join(__dirname, "..", "connector-badge.tsx"),
+  "utf8",
+);
+
 describe("ConnectorsClient design-system contract", () => {
   it("is a client component", () => {
     expect(SRC.startsWith('"use client"')).toBe(true);
@@ -73,19 +83,20 @@ describe("ConnectorsClient design-system contract", () => {
 
     it("renders the connected plug in a success-variant badge", () => {
       // The connected branch is a <Badge variant="success"> wrapping <PlugZap>
-      // (the success variant carries bg-success/10 text-success; see #682).
-      expect(SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
+      // (the success variant carries bg-success/10 text-success; see #682). The
+      // badge now lives in the shared connector-badge.tsx.
+      expect(BADGE_SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
     });
 
     it("renders the disconnected plug in a destructive-variant badge", () => {
       // The disconnected branch is a <Badge variant="destructive"> wrapping
       // <Unplug> (bg-destructive/10 text-destructive; see #682).
-      expect(SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
+      expect(BADGE_SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
     });
 
     it("keeps the connectedLabel count alongside the connected plug", () => {
       // label is rendered inside the connected branch (after the plug icon)
-      expect(SRC).toMatch(/<PlugZap[\s\S]*?\{label \? <span/);
+      expect(BADGE_SRC).toMatch(/<PlugZap[\s\S]*?\{label \? <span/);
     });
   });
 
@@ -96,19 +107,35 @@ describe("ConnectorsClient design-system contract", () => {
   });
 
   describe("#682 per-card connection state is a coloured-background badge", () => {
+    // The badge component is shared (connector-badge.tsx); the card grid
+    // imports it rather than defining the Badge inline.
+    it("the card grid consumes the shared ConnectorBadge component", () => {
+      expect(SRC).toContain('from "./connector-badge"');
+      expect(SRC).toMatch(/<ConnectorBadge\b/);
+    });
+
+    it("threads each card's live connection state + count into the badge", () => {
+      // Lock the per-card wiring, not just the element: a regression that
+      // hardcoded `connected={true}` (or dropped the count) would still import
+      // and render <ConnectorBadge> but break the card's real status.
+      expect(SRC).toMatch(
+        /<ConnectorBadge\s+connected=\{connector\.connected\}\s+label=\{connector\.connectedLabel\}\s*\/>/,
+      );
+    });
+
     it("uses the design-system Badge component", () => {
-      expect(SRC).toContain('from "@/components/ui/badge"');
-      expect(SRC).toMatch(/<Badge\b/);
+      expect(BADGE_SRC).toContain('from "@/components/ui/badge"');
+      expect(BADGE_SRC).toMatch(/<Badge\b/);
     });
 
     it("renders the connected state as a green/success-background badge", () => {
       // The success variant resolves to bg-success/10 text-success — a
       // state-coloured background, not a bare text-only indicator.
-      expect(SRC).toMatch(/<Badge[^>]*variant="success"/);
+      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="success"/);
     });
 
     it("renders the disconnected state as a red/destructive-background badge", () => {
-      expect(SRC).toMatch(/<Badge[^>]*variant="destructive"/);
+      expect(BADGE_SRC).toMatch(/<Badge[^>]*variant="destructive"/);
     });
   });
 
