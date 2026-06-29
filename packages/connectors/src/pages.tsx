@@ -24,9 +24,12 @@ import {
 // built-in probe module registers them (side effect).
 import "@/lib/connector-readiness.server";
 import {
-  isConnectorInstalled,
   listConnectorRegistryEntries,
 } from "@/lib/connectors-registry.server";
+import {
+  resolveInstalledCatalogConnectorIds,
+  listRuntimeOnlyConnectorCards,
+} from "@/lib/installed-connectors.server";
 import { isConnectorVisibleToActor } from "@/lib/connector-policy";
 
 import {
@@ -121,16 +124,22 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   // built-in probe module or at runtime); a connector without a probe reports
   // not connected. Probes run only for the cards the actor can see.
   const readinessContext = { userId: session.user?.id ?? null };
-  // Render ONLY cards whose connector extension is actually installed/bundled in
-  // the running image (cinatra#607). The catalog lists every first-party
-  // connector cinatra knows about, but a connector absent from the running image
-  // is omitted from the generated manifest — showing its card would imply it is
-  // available when it is not, dead-ending at the "requires a rebuild" setup
-  // state. The installed predicate gates the set IN ADDITION to access policy +
-  // scope; card metadata below is still sourced from the installed extension's
-  // own descriptor (manifest displayName/logo) over the catalog fallback.
-  const visibleEntries = listConnectorRegistryEntries()
-    .filter((entry) => isConnectorInstalled(entry.packageId))
+  // cinatra#658 (F1): the card filter is now RUNTIME-SOURCED (the #657 payoff).
+  // A catalog connector is shown iff it is "installed" for THIS actor — a live
+  // (active|locked) addressable canonical `installed_extension` row OR (no
+  // addressable row AND bundled in the image). So a runtime-installed catalog
+  // connector becomes visible without a rebuild, and an operator-ARCHIVED bundled
+  // connector disappears. The actor-scoped installed set is pre-resolved in ONE
+  // batched canonical read (vs. one read per card), then the sync filter keys off
+  // it (fail-closed for runtime rows + store outage; bundled fallback only for a
+  // bundled built-in that legitimately has no row — CG-1).
+  const catalogEntries = listConnectorRegistryEntries();
+  const installedCatalogIds = await resolveInstalledCatalogConnectorIds(
+    catalogEntries.map((entry) => entry.packageId),
+    actor,
+  );
+  const visibleEntries = catalogEntries
+    .filter((entry) => installedCatalogIds.has(entry.packageId))
     .filter((entry) => isConnectorVisibleToActor(entry.packageId, actor))
     .filter((entry) =>
       scopeSelectionMatches(
@@ -138,7 +147,12 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
         normalizedScopeForConnector(entry.slug, entry.defaultVisibility),
       ),
     );
-  const cards: ConnectorCardData[] = await Promise.all(
+  // Runtime-ONLY connectors (installed at runtime, NO build-time catalog
+  // descriptor) — resolved behind the full trust gate (anchor → integrity →
+  // signature → trust). Their card metadata is sourced from the TRUSTED
+  // materialized manifest; route vendor/slug are derived from the package name.
+  const runtimeOnlyCards = await listRuntimeOnlyConnectorCards(actor);
+  const catalogCards: ConnectorCardData[] = await Promise.all(
     visibleEntries.map(async (entry) => {
       // FAIL-SOFT per connector (cinatra#110): one throwing probe degrades its
       // own card to "not connected" instead of 500-ing the whole index.
@@ -160,6 +174,17 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
       };
     }),
   );
+  // Runtime-only cards: their setup href is the dispatch route derived from the
+  // trusted package-name identity. Readiness is "not connected" (no catalog
+  // readiness probe exists for a non-catalog connector).
+  const runtimeOnlyCardData: ConnectorCardData[] = runtimeOnlyCards.map((card) => ({
+    slug: card.slug,
+    name: card.displayName,
+    logo: card.logo,
+    connected: false,
+    href: `/connectors/${card.vendor}/${card.slug}/setup`,
+  }));
+  const cards: ConnectorCardData[] = [...catalogCards, ...runtimeOnlyCardData];
 
   return (
     <Main className="min-h-screen">

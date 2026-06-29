@@ -256,6 +256,34 @@ export async function resolveRuntimeConnectorUiRecord(
   actor: ActorContext | undefined | null,
   deps: RuntimeConnectorUiDeps = {},
 ): Promise<ConnectorUiManifest | null> {
+  const record = await resolveTrustedRuntimeStoreRecord(packageName, actor, deps);
+  if (!record) return null;
+  // Only the two UI-render fields cross back to the route.
+  return pickRuntimeConnectorUiRecord([record], packageName);
+}
+
+/**
+ * The shared trust gate, returning the VERIFIED `PackageStoreRecord` (or null) so
+ * BOTH the UI-render projection (`resolveRuntimeConnectorUiRecord`) and the
+ * card/descriptor projection (`resolveRuntimeConnectorCardRecord`) consume the
+ * exact same anchor → integrity → signature → trust-classification gate — no
+ * second, weaker path can exist. Gate order (fail-closed, mirrors the boot
+ * loader): (a) active canonical install for the actor's scope; (b) a non-null
+ * TRUSTED install anchor sourced OUTSIDE the writable store; (c) a discovered
+ * store record for the package; (d) integrity re-verification against the anchor;
+ * (e) `classifyExtensionTrust(...).trusted`.
+ *
+ * Codex finding 5 (digest selection): the store may hold MULTIPLE digest snapshots
+ * for one package name. Rather than `find()` the first (which might be a stale
+ * digest that fails integrity while the current one would pass), we scan EVERY
+ * candidate record for the package and return the FIRST that passes the full gate.
+ * A package whose every candidate fails → null (fail-closed, never rendered).
+ */
+async function resolveTrustedRuntimeStoreRecord(
+  packageName: string,
+  actor: ActorContext | undefined | null,
+  deps: RuntimeConnectorUiDeps = {},
+): Promise<PackageStoreRecord | null> {
   if (!actor) return null;
 
   // (a) the actor must have an active install for this package (canonical store;
@@ -276,47 +304,141 @@ export async function resolveRuntimeConnectorUiRecord(
   const anchor = await resolveTrustAnchor(packageName);
   if (!anchor) return null;
 
-  // (c) discover the materialized store record for this package.
+  // (c) discover the materialized store records for this package (ALL candidate
+  // digests, not just the first).
   const storeRoot = deps.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
   const discover =
     deps.discoverRecords ?? ((root: string) => discoverPackageStoreRecords(root, realStoreFs));
   const records = await discover(storeRoot);
-  const record = records.find((r) => r.packageName === packageName);
-  if (!record) return null;
+  const candidates = records.filter((r) => r.packageName === packageName);
+  if (candidates.length === 0) return null;
 
-  // (d) + (e) apply the SAME trust gate the boot loader applies before importing
-  // a package: re-verify the materialized files against the trusted anchor, then
-  // classify (vendor-agnostic: verified integrity + persisted trust decision
-  // + resolved host ∈ trustedActivationHosts + verified signature OR bootstrap).
-  // A revoked/non-trusted-host/tampered/unsigned-when-required package → not
-  // trusted → null. We never render its schema-config surface.
   const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;
   const classifyTrust = deps.classifyTrust ?? classifyExtensionTrust;
-  const integrityVerified = await verifyIntegrity(record, anchor);
-  const verdict = classifyTrust({
-    packageName,
-    registryUrl: anchor.registryUrl,
-    integrityVerified,
-    persistedTrustDecision: anchor.trustDecision,
-    // Same signature gate as the boot loader — a require-signatures host
-    // (or a present-but-invalid signature) must not render the package's
-    // schema-config/uiSurface either.
-    signatureVerified: resolveSignatureVerdict({
-      packageName,
-      version: anchor.version ?? "",
-      integrity: anchor.integrity,
-      signature: anchor.signature,
-      // cinatra#181: same closure downgrade-refusal as the boot loader.
-      closureHash: anchor.closureHash ?? null,
-    }),
-    // Vendor-agnostic trust: same host allowlist + bootstrap lever the boot
-    // loader uses. Rendering the connector UI is import-trust only (no privileged
-    // capability), so `trusted-signed` OR `trusted-bootstrap` may render.
-    trustedActivationHosts: trustedActivationHosts(),
-    allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
-  });
-  if (!verdict.trusted) return null;
 
-  // Only the two UI-render fields cross back to the route.
-  return pickRuntimeConnectorUiRecord([record], packageName);
+  // (d) + (e) apply the SAME trust gate the boot loader applies before importing
+  // a package, scanning candidates until ONE passes (codex finding 5). A
+  // revoked/non-trusted-host/tampered/unsigned-when-required package → not
+  // trusted → skipped; if none passes → null.
+  for (const record of candidates) {
+    const integrityVerified = await verifyIntegrity(record, anchor);
+    const verdict = classifyTrust({
+      packageName,
+      registryUrl: anchor.registryUrl,
+      integrityVerified,
+      persistedTrustDecision: anchor.trustDecision,
+      // Same signature gate as the boot loader — a require-signatures host
+      // (or a present-but-invalid signature) must not render the package either.
+      signatureVerified: resolveSignatureVerdict({
+        packageName,
+        version: anchor.version ?? "",
+        integrity: anchor.integrity,
+        signature: anchor.signature,
+        // cinatra#181: same closure downgrade-refusal as the boot loader.
+        closureHash: anchor.closureHash ?? null,
+      }),
+      // Vendor-agnostic trust: same host allowlist + bootstrap lever the boot
+      // loader uses. Rendering the connector UI is import-trust only (no
+      // privileged capability), so `trusted-signed` OR `trusted-bootstrap` may
+      // render.
+      trustedActivationHosts: trustedActivationHosts(),
+      allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
+    });
+    if (verdict.trusted) return record;
+  }
+  return null;
+}
+
+/**
+ * A sanitized RUNTIME connector card/descriptor projection — the trusted store
+ * record's identity needed to render a card + reach its setup route for a
+ * connector that has NO build-time catalog descriptor (a purely runtime-installed
+ * connector). Behind the SAME trust gate as the UI-render projection.
+ *
+ * codex finding 3: the route `vendor`/`slug` are DERIVED FROM THE PACKAGE NAME
+ * (`@<vendor>/<slug>`), NEVER from self-described manifest metadata, so a
+ * connector cannot spoof another connector's route. Only the DISPLAY-only fields
+ * (displayName, logo) come from the manifest — and only AFTER the trust gate
+ * passes — and the logo is sanitized to a safe data-URI (host-side, the same
+ * allowlist the static path applies).
+ */
+export type RuntimeConnectorCardRecord = {
+  packageName: string;
+  /** Derived from the package name scope (`@<vendor>/…`). */
+  vendor: string;
+  /** Derived from the package name path (`@…/<slug>`). */
+  slug: string;
+  /** Trusted manifest display name, or the slug as a safe fallback. */
+  displayName: string;
+  /** Sanitized data-URI logo, or null. */
+  logo: string | null;
+  /** The connector's declared UI surface (schema-config / bundled-react / null). */
+  uiSurface: ConnectorUiManifest["uiSurface"];
+};
+
+/** A self-describing logo is rendered as an <img src>; accept ONLY a small,
+ *  raster `data:` URI (no `svg`, no remote URL, no `javascript:`) — identical
+ *  posture to the static card path's logo handling. */
+function sanitizeSelfDescribedLogo(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (!/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(value)) {
+    return null;
+  }
+  // Cap the size so a card payload can't be abused as a multi-MB blob.
+  return value.length <= 64_000 ? value : null;
+}
+
+/** Derive `{ vendor, slug }` from a scoped package name `@<vendor>/<slug>`. */
+export function deriveVendorSlugFromPackageName(
+  packageName: string,
+): { vendor: string; slug: string } | null {
+  const m = /^@([^/]+)\/([^/]+)$/.exec(packageName);
+  if (!m) return null;
+  return { vendor: m[1], slug: m[2] };
+}
+
+export async function resolveRuntimeConnectorCardRecord(
+  packageName: string,
+  actor: ActorContext | undefined | null,
+  deps: RuntimeConnectorUiDeps & {
+    /** Read a materialized package's manifest JSON (override for tests). */
+    readManifest?: (storeDir: string) => Promise<Record<string, unknown> | null>;
+  } = {},
+): Promise<RuntimeConnectorCardRecord | null> {
+  const record = await resolveTrustedRuntimeStoreRecord(packageName, actor, deps);
+  if (!record) return null;
+  const derived = deriveVendorSlugFromPackageName(packageName);
+  if (!derived) return null;
+
+  // Display-only metadata from the TRUSTED materialized manifest (read only AFTER
+  // the gate passed). On any read failure, fall back to the derived slug — never
+  // fail the card over missing cosmetic metadata.
+  const readManifest =
+    deps.readManifest ??
+    (async (storeDir: string) => {
+      try {
+        const txt = await readFile(`${storeDir}/package.json`, "utf8");
+        const parsed = JSON.parse(txt) as Record<string, unknown>;
+        return parsed;
+      } catch {
+        return null;
+      }
+    });
+  const manifest = await readManifest(record.storeDir);
+  const cinatra = (manifest?.cinatra ?? null) as Record<string, unknown> | null;
+  const displayName =
+    typeof cinatra?.displayName === "string" && cinatra.displayName.trim()
+      ? cinatra.displayName
+      : derived.slug;
+  const logo = sanitizeSelfDescribedLogo(cinatra?.logo);
+
+  return {
+    packageName,
+    vendor: derived.vendor,
+    slug: derived.slug,
+    displayName,
+    logo,
+    uiSurface: record.uiSurface ?? null,
+  };
 }

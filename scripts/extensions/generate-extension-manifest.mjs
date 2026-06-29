@@ -906,17 +906,63 @@ const SCHEMA_CONFIG_FIELD_KINDS = new Set([
   "status-probe",
   "copyable-credential",
   "named-action",
+  // cinatra#658 (PR-4) extended vocabulary.
+  "select",
+  "record-list",
+  "banner",
+  "advisory",
+]);
+// Exact per-kind key allowlists — mirror src/lib/extension-schema-config.ts so a
+// smuggled executable/HTML carrier key is REJECTED at generation too (fail-closed
+// pure-data invariant). Keep these in lockstep with the TS parser.
+const SCHEMA_CONFIG_FIELD_KEYS = {
+  text: new Set(["kind", "key", "label", "placeholder", "required", "description"]),
+  secret: new Set(["kind", "key", "label", "required", "description"]),
+  "nango-connect": new Set(["kind", "label", "providerConfigKey", "description"]),
+  "repeatable-list": new Set(["kind", "key", "label", "itemLabel", "itemFields", "description"]),
+  "status-probe": new Set(["kind", "label", "actionId", "description"]),
+  "copyable-credential": new Set(["kind", "key", "label", "description"]),
+  "named-action": new Set(["kind", "label", "actionId", "confirm", "description"]),
+  select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
+  "record-list": new Set([
+    "kind", "label", "listActionId", "deleteActionId", "emptyState",
+    "itemTitleKey", "itemSubtitleKey", "itemBadges", "description",
+  ]),
+  banner: new Set(["kind", "label", "variants"]),
+  advisory: new Set(["kind", "label", "tone", "probeActionId", "whenReady", "whenNotReady", "description"]),
+};
+const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields"]);
+const SCHEMA_CONFIG_BADGE_VARIANTS = new Set([
+  "outline", "secondary", "destructive", "success", "warning", "info", "ghost", "muted",
+]);
+const SCHEMA_CONFIG_BANNER_TONES = new Set([
+  "default", "destructive", "warning", "success", "info",
 ]);
 function nonEmptyStr(v) {
   return typeof v === "string" && v.length > 0;
 }
+function rejectUnknownConfigKeys(raw, allowed, at, errors) {
+  let ok = true;
+  for (const k of Object.keys(raw)) {
+    if (!allowed.has(k)) {
+      errors.push(`${at}: unexpected key ${JSON.stringify(k)}`);
+      ok = false;
+    }
+  }
+  return ok;
+}
 function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
+  const allowed = SCHEMA_CONFIG_FIELD_KEYS[kind];
+  if (allowed && !rejectUnknownConfigKeys(raw, allowed, at, errors)) {
+    return;
+  }
   if (!nonEmptyStr(raw.label)) {
     errors.push(`${at}: missing "label"`);
     return;
   }
   const needsKey =
-    kind === "text" || kind === "secret" || kind === "copyable-credential" || kind === "repeatable-list";
+    kind === "text" || kind === "secret" || kind === "copyable-credential" ||
+    kind === "repeatable-list" || kind === "select";
   if (needsKey) {
     if (!nonEmptyStr(raw.key) || !SCHEMA_CONFIG_KEY_RE.test(raw.key)) {
       errors.push(`${at}: invalid or missing "key"`);
@@ -950,13 +996,91 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
       validateConfigSchemaField(item.kind, item, itemAt, errors, itemSeen);
     });
   }
+  if (kind === "select") {
+    const options = raw.options;
+    if (!Array.isArray(options) || options.length === 0) {
+      errors.push(`${at}: select requires a non-empty "options"`);
+      return;
+    }
+    const seenValues = new Set();
+    options.forEach((opt, j) => {
+      const optAt = `${at}.options[${j}]`;
+      if (!isObj(opt) || !rejectUnknownConfigKeys(opt, new Set(["value", "label", "adminOnly"]), optAt, errors)) {
+        if (isObj(opt)) return;
+        errors.push(`${optAt}: must be an object`);
+        return;
+      }
+      if (!nonEmptyStr(opt.value) || !nonEmptyStr(opt.label)) {
+        errors.push(`${optAt}: requires string "value" and "label"`);
+        return;
+      }
+      seenValues.add(opt.value);
+    });
+    if (nonEmptyStr(raw.defaultValue) && !seenValues.has(raw.defaultValue)) {
+      errors.push(`${at}: defaultValue is not one of "options"`);
+    }
+  }
+  if (kind === "record-list") {
+    if (!nonEmptyStr(raw.listActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.listActionId)) {
+      errors.push(`${at}: record-list requires a valid "listActionId"`);
+    }
+    if (raw.deleteActionId !== undefined && (!nonEmptyStr(raw.deleteActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.deleteActionId))) {
+      errors.push(`${at}: record-list "deleteActionId" must be a valid action id`);
+    }
+    if (!nonEmptyStr(raw.emptyState)) errors.push(`${at}: record-list requires "emptyState"`);
+    if (!nonEmptyStr(raw.itemTitleKey)) errors.push(`${at}: record-list requires "itemTitleKey"`);
+    const badges = raw.itemBadges;
+    if (!Array.isArray(badges)) {
+      errors.push(`${at}: record-list requires an "itemBadges" array`);
+    } else {
+      badges.forEach((b, j) => {
+        const bAt = `${at}.itemBadges[${j}]`;
+        if (!isObj(b) || !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant"]), bAt, errors)) {
+          if (isObj(b)) return;
+          errors.push(`${bAt}: must be an object`);
+          return;
+        }
+        if (!nonEmptyStr(b.key) || !nonEmptyStr(b.label)) errors.push(`${bAt}: requires "key" and "label"`);
+        if (!nonEmptyStr(b.variant) || !SCHEMA_CONFIG_BADGE_VARIANTS.has(b.variant)) {
+          errors.push(`${bAt}: invalid badge variant ${JSON.stringify(b.variant)}`);
+        }
+      });
+    }
+  }
+  if (kind === "banner") {
+    const variants = raw.variants;
+    if (!Array.isArray(variants) || variants.length === 0) {
+      errors.push(`${at}: banner requires a non-empty "variants"`);
+    } else {
+      variants.forEach((v, j) => {
+        const vAt = `${at}.variants[${j}]`;
+        if (!isObj(v) || !rejectUnknownConfigKeys(v, new Set(["name", "tone", "message"]), vAt, errors)) {
+          if (isObj(v)) return;
+          errors.push(`${vAt}: must be an object`);
+          return;
+        }
+        if (!nonEmptyStr(v.name) || !SCHEMA_CONFIG_KEY_RE.test(v.name)) errors.push(`${vAt}: requires a valid "name"`);
+        if (!nonEmptyStr(v.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(v.tone)) errors.push(`${vAt}: invalid tone`);
+        if (!nonEmptyStr(v.message)) errors.push(`${vAt}: requires a "message"`);
+      });
+    }
+  }
+  if (kind === "advisory") {
+    if (!nonEmptyStr(raw.probeActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.probeActionId)) {
+      errors.push(`${at}: advisory requires a valid "probeActionId"`);
+    }
+    if (!nonEmptyStr(raw.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(raw.tone)) errors.push(`${at}: advisory requires a valid "tone"`);
+    if (!nonEmptyStr(raw.whenReady) || !nonEmptyStr(raw.whenNotReady)) errors.push(`${at}: advisory requires "whenReady" and "whenNotReady"`);
+  }
 }
 export function validateConfigSchema(raw) {
   if (!isObj(raw)) return ["configSchema must be an object"];
-  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
-    return ["configSchema.fields must be a non-empty array"];
-  }
   const errors = [];
+  rejectUnknownConfigKeys(raw, SCHEMA_CONFIG_ROOT_KEYS, "configSchema", errors);
+  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
+    errors.push("configSchema.fields must be a non-empty array");
+    return errors;
+  }
   const seenKeys = new Set();
   raw.fields.forEach((field, i) => {
     const at = `fields[${i}]`;

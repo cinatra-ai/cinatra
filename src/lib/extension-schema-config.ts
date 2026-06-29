@@ -18,7 +18,11 @@ export type SchemaConfigFieldKind =
   | "repeatable-list"
   | "status-probe"
   | "copyable-credential"
-  | "named-action";
+  | "named-action"
+  | "select"
+  | "record-list"
+  | "banner"
+  | "advisory";
 
 export type TextField = {
   kind: "text";
@@ -82,6 +86,103 @@ export type NamedActionField = {
   description?: string;
 };
 
+/**
+ * A single-select / enum field. `options` are the static choices; an option
+ * flagged `adminOnly: true` is HOST-EVALUATED against the actor (only a platform
+ * admin sees + may submit it) — the package never evaluates the actor, and the
+ * host write handler re-rejects an admin-only value submitted by a non-admin
+ * (defense in depth). PURE DATA: no executable code, no HTML.
+ */
+export type SelectOption = {
+  value: string;
+  label: string;
+  /** Host-evaluated: only a platform admin may see/submit this option. */
+  adminOnly?: boolean;
+};
+export type SelectField = {
+  kind: "select";
+  key: string;
+  label: string;
+  options: SelectOption[];
+  defaultValue?: string;
+  description?: string;
+};
+
+/** A self-describing badge variant the renderer accepts (closed allowlist). */
+export type RecordListBadgeVariant =
+  | "outline"
+  | "secondary"
+  | "destructive"
+  | "success"
+  | "warning"
+  | "info"
+  | "ghost"
+  | "muted";
+export type RecordListBadge = {
+  /** Row field whose TRUTHY value (boolean true, or a non-empty string) shows this badge. */
+  key: string;
+  label: string;
+  variant: RecordListBadgeVariant;
+};
+/**
+ * A LIVE list of existing rows (distinct from the create-time `repeatable-list`).
+ * The renderer invokes `listActionId` (a host named action) to load rows, renders
+ * each with a title/subtitle + data-driven badges, and (when `deleteActionId` is
+ * set) a per-row delete button that POSTs `{ id }` to the host delete action. All
+ * dispatch is host-authorized via `/api/extensions/{installId}/actions/{actionId}`;
+ * the package supplies NO server actions. PURE DATA.
+ */
+export type RecordListField = {
+  kind: "record-list";
+  label: string;
+  /** Host named action returning `{ servers: Row[] }` / `{ items: Row[] }` / `Row[]`. */
+  listActionId: string;
+  /** Host named action the per-row delete button POSTs `{ id }` to (optional). */
+  deleteActionId?: string;
+  emptyState: string;
+  /** Row field used as the item title. */
+  itemTitleKey: string;
+  /** Row field used as the item subtitle (optional). */
+  itemSubtitleKey?: string;
+  itemBadges: RecordListBadge[];
+  description?: string;
+};
+
+/** A result banner tone (maps onto the Alert component variants). */
+export type BannerTone = "default" | "destructive" | "warning" | "success" | "info";
+export type BannerVariant = {
+  /** Identity matched against an action RESULT `{ banner: <name> }`. */
+  name: string;
+  tone: BannerTone;
+  message: string;
+};
+/**
+ * A result-driven banner. It renders NOTHING until a named action returns a
+ * result `{ banner: <name> }` matching one of `variants` (e.g. createServer →
+ * `{ banner: "saved" }`). NOT search-param driven. PURE DATA.
+ */
+export type BannerField = {
+  kind: "banner";
+  label: string;
+  variants: BannerVariant[];
+};
+
+/**
+ * A conditional readiness advisory. Runs `probeActionId` (a host named action
+ * returning `{ ready: boolean }`) and renders `whenReady` / `whenNotReady` copy
+ * accordingly. Covers connection-service readiness + private-URL guidance.
+ * PURE DATA — the copy is fixed text, the verdict is host-computed.
+ */
+export type AdvisoryField = {
+  kind: "advisory";
+  label: string;
+  tone: BannerTone;
+  probeActionId: string;
+  whenReady: string;
+  whenNotReady: string;
+  description?: string;
+};
+
 export type SchemaConfigField =
   | TextField
   | SecretField
@@ -89,7 +190,11 @@ export type SchemaConfigField =
   | RepeatableListField
   | StatusProbeField
   | CopyableCredentialField
-  | NamedActionField;
+  | NamedActionField
+  | SelectField
+  | RecordListField
+  | BannerField
+  | AdvisoryField;
 
 export type SchemaConfigSurface = {
   title?: string;
@@ -110,7 +215,87 @@ const FIELD_KINDS = new Set<SchemaConfigFieldKind>([
   "status-probe",
   "copyable-credential",
   "named-action",
+  "select",
+  "record-list",
+  "banner",
+  "advisory",
 ]);
+
+// Exact key allowlist per field kind. The parser REJECTS any field carrying a key
+// outside its kind's allowlist (fail-closed): this denies a malicious connector
+// smuggling an executable/HTML carrier key (`onClick`, `html`, `dangerouslySet…`,
+// `script`, …) into a field the renderer might otherwise spread. Pure-data
+// invariant (security invariant 1): no field kind may carry executable code.
+const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = {
+  text: new Set(["kind", "key", "label", "placeholder", "required", "description"]),
+  secret: new Set(["kind", "key", "label", "required", "description"]),
+  "nango-connect": new Set(["kind", "label", "providerConfigKey", "description"]),
+  "repeatable-list": new Set(["kind", "key", "label", "itemLabel", "itemFields", "description"]),
+  "status-probe": new Set(["kind", "label", "actionId", "description"]),
+  "copyable-credential": new Set(["kind", "key", "label", "description"]),
+  "named-action": new Set(["kind", "label", "actionId", "confirm", "description"]),
+  select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
+  "record-list": new Set([
+    "kind",
+    "label",
+    "listActionId",
+    "deleteActionId",
+    "emptyState",
+    "itemTitleKey",
+    "itemSubtitleKey",
+    "itemBadges",
+    "description",
+  ]),
+  banner: new Set(["kind", "label", "variants"]),
+  advisory: new Set([
+    "kind",
+    "label",
+    "tone",
+    "probeActionId",
+    "whenReady",
+    "whenNotReady",
+    "description",
+  ]),
+};
+
+// Keys allowed at the configSchema ROOT (besides `fields`). Anything else is
+// rejected fail-closed (no executable/HTML carrier at the root either).
+const ROOT_KEY_ALLOWLIST: ReadonlySet<string> = new Set(["title", "description", "fields"]);
+
+const BADGE_VARIANTS: ReadonlySet<string> = new Set([
+  "outline",
+  "secondary",
+  "destructive",
+  "success",
+  "warning",
+  "info",
+  "ghost",
+  "muted",
+]);
+const BANNER_TONES: ReadonlySet<string> = new Set([
+  "default",
+  "destructive",
+  "warning",
+  "success",
+  "info",
+]);
+
+/** Reject any key on `raw` not in the kind's allowlist (fail-closed). */
+function rejectUnknownKeys(
+  raw: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  at: string,
+  errors: string[],
+): boolean {
+  let ok = true;
+  for (const k of Object.keys(raw)) {
+    if (!allowed.has(k)) {
+      errors.push(`${at}: unexpected key ${JSON.stringify(k)}`);
+      ok = false;
+    }
+  }
+  return ok;
+}
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -128,9 +313,13 @@ function str(v: unknown): v is string {
 export function parseSchemaConfig(raw: unknown): ParseResult {
   const errors: string[] = [];
   if (!isObj(raw)) return { ok: false, errors: ["configSchema must be an object"] };
+  // Fail-closed: reject any unexpected root key (no executable/HTML carrier at
+  // the root) before reading `fields`.
+  rejectUnknownKeys(raw, ROOT_KEY_ALLOWLIST, "configSchema", errors);
   const rawFields = raw.fields;
   if (!Array.isArray(rawFields) || rawFields.length === 0) {
-    return { ok: false, errors: ["configSchema.fields must be a non-empty array"] };
+    errors.push("configSchema.fields must be a non-empty array");
+    return { ok: false, errors };
   }
 
   const seenKeys = new Set<string>();
@@ -182,6 +371,12 @@ function validateField(
   errors: string[],
   seenKeys: Set<string>,
 ): SchemaConfigField | null {
+  // Fail-closed: reject any key outside this kind's exact allowlist FIRST, so a
+  // smuggled executable/HTML carrier key (onClick/html/script/…) is refused
+  // before any value is read (security invariant 1: pure data only).
+  if (!rejectUnknownKeys(raw, FIELD_KEY_ALLOWLIST[kind], at, errors)) {
+    return null;
+  }
   const label = raw.label;
   if (!str(label)) {
     errors.push(`${at}: missing "label"`);
@@ -243,6 +438,181 @@ function validateField(
       if (itemFields.length === 0) return null;
       return { kind, key, label, itemLabel: str(raw.itemLabel) ? raw.itemLabel : undefined, itemFields, description };
     }
+    case "select": {
+      const key = requireKey(raw, at, errors, seenKeys);
+      if (!key) return null;
+      const rawOptions = raw.options;
+      if (!Array.isArray(rawOptions) || rawOptions.length === 0) {
+        errors.push(`${at}: select requires a non-empty "options"`);
+        return null;
+      }
+      const options: SelectOption[] = [];
+      const seenValues = new Set<string>();
+      rawOptions.forEach((optRaw, j) => {
+        const optAt = `${at}.options[${j}]`;
+        if (!isObj(optRaw)) {
+          errors.push(`${optAt}: must be an object`);
+          return;
+        }
+        if (!rejectUnknownKeys(optRaw, new Set(["value", "label", "adminOnly"]), optAt, errors)) {
+          return;
+        }
+        if (!str(optRaw.value) || !str(optRaw.label)) {
+          errors.push(`${optAt}: requires string "value" and "label"`);
+          return;
+        }
+        if (seenValues.has(optRaw.value)) {
+          errors.push(`${optAt}: duplicate value ${JSON.stringify(optRaw.value)}`);
+          return;
+        }
+        seenValues.add(optRaw.value);
+        options.push({
+          value: optRaw.value,
+          label: optRaw.label,
+          ...(optRaw.adminOnly === true ? { adminOnly: true } : {}),
+        });
+      });
+      if (options.length === 0) return null;
+      const defaultValue = str(raw.defaultValue) ? raw.defaultValue : undefined;
+      if (defaultValue !== undefined && !seenValues.has(defaultValue)) {
+        errors.push(`${at}: defaultValue ${JSON.stringify(defaultValue)} is not one of "options"`);
+        return null;
+      }
+      return { kind, key, label, options, defaultValue, description };
+    }
+    case "record-list": {
+      if (!str(raw.listActionId) || !KEY_RE.test(raw.listActionId)) {
+        errors.push(`${at}: record-list requires a valid "listActionId"`);
+        return null;
+      }
+      if (raw.deleteActionId !== undefined && (!str(raw.deleteActionId) || !KEY_RE.test(raw.deleteActionId))) {
+        errors.push(`${at}: record-list "deleteActionId" must be a valid action id`);
+        return null;
+      }
+      if (!str(raw.emptyState)) {
+        errors.push(`${at}: record-list requires "emptyState"`);
+        return null;
+      }
+      if (!str(raw.itemTitleKey)) {
+        errors.push(`${at}: record-list requires "itemTitleKey"`);
+        return null;
+      }
+      const rawBadges = raw.itemBadges;
+      if (!Array.isArray(rawBadges)) {
+        errors.push(`${at}: record-list requires an "itemBadges" array`);
+        return null;
+      }
+      const itemBadges: RecordListBadge[] = [];
+      let badgeOk = true;
+      rawBadges.forEach((bRaw, j) => {
+        const bAt = `${at}.itemBadges[${j}]`;
+        if (!isObj(bRaw)) {
+          errors.push(`${bAt}: must be an object`);
+          badgeOk = false;
+          return;
+        }
+        if (!rejectUnknownKeys(bRaw, new Set(["key", "label", "variant"]), bAt, errors)) {
+          badgeOk = false;
+          return;
+        }
+        if (!str(bRaw.key) || !str(bRaw.label)) {
+          errors.push(`${bAt}: requires string "key" and "label"`);
+          badgeOk = false;
+          return;
+        }
+        if (!str(bRaw.variant) || !BADGE_VARIANTS.has(bRaw.variant)) {
+          errors.push(`${bAt}: invalid badge variant ${JSON.stringify(bRaw.variant)}`);
+          badgeOk = false;
+          return;
+        }
+        itemBadges.push({
+          key: bRaw.key,
+          label: bRaw.label,
+          variant: bRaw.variant as RecordListBadgeVariant,
+        });
+      });
+      if (!badgeOk) return null;
+      return {
+        kind,
+        label,
+        listActionId: raw.listActionId,
+        ...(str(raw.deleteActionId) ? { deleteActionId: raw.deleteActionId } : {}),
+        emptyState: raw.emptyState,
+        itemTitleKey: raw.itemTitleKey,
+        ...(str(raw.itemSubtitleKey) ? { itemSubtitleKey: raw.itemSubtitleKey } : {}),
+        itemBadges,
+        description,
+      };
+    }
+    case "banner": {
+      const rawVariants = raw.variants;
+      if (!Array.isArray(rawVariants) || rawVariants.length === 0) {
+        errors.push(`${at}: banner requires a non-empty "variants"`);
+        return null;
+      }
+      const variants: BannerVariant[] = [];
+      const seenNames = new Set<string>();
+      let bOk = true;
+      rawVariants.forEach((vRaw, j) => {
+        const vAt = `${at}.variants[${j}]`;
+        if (!isObj(vRaw)) {
+          errors.push(`${vAt}: must be an object`);
+          bOk = false;
+          return;
+        }
+        if (!rejectUnknownKeys(vRaw, new Set(["name", "tone", "message"]), vAt, errors)) {
+          bOk = false;
+          return;
+        }
+        if (!str(vRaw.name) || !KEY_RE.test(vRaw.name)) {
+          errors.push(`${vAt}: requires a valid "name"`);
+          bOk = false;
+          return;
+        }
+        if (seenNames.has(vRaw.name)) {
+          errors.push(`${vAt}: duplicate variant name ${JSON.stringify(vRaw.name)}`);
+          bOk = false;
+          return;
+        }
+        seenNames.add(vRaw.name);
+        if (!str(vRaw.tone) || !BANNER_TONES.has(vRaw.tone)) {
+          errors.push(`${vAt}: invalid tone ${JSON.stringify(vRaw.tone)}`);
+          bOk = false;
+          return;
+        }
+        if (!str(vRaw.message)) {
+          errors.push(`${vAt}: requires a "message"`);
+          bOk = false;
+          return;
+        }
+        variants.push({ name: vRaw.name, tone: vRaw.tone as BannerTone, message: vRaw.message });
+      });
+      if (!bOk || variants.length === 0) return null;
+      return { kind, label, variants };
+    }
+    case "advisory": {
+      if (!str(raw.probeActionId) || !KEY_RE.test(raw.probeActionId)) {
+        errors.push(`${at}: advisory requires a valid "probeActionId"`);
+        return null;
+      }
+      if (!str(raw.tone) || !BANNER_TONES.has(raw.tone)) {
+        errors.push(`${at}: advisory requires a valid "tone"`);
+        return null;
+      }
+      if (!str(raw.whenReady) || !str(raw.whenNotReady)) {
+        errors.push(`${at}: advisory requires "whenReady" and "whenNotReady"`);
+        return null;
+      }
+      return {
+        kind,
+        label,
+        tone: raw.tone as BannerTone,
+        probeActionId: raw.probeActionId,
+        whenReady: raw.whenReady,
+        whenNotReady: raw.whenNotReady,
+        description,
+      };
+    }
     default:
       errors.push(`${at}: unsupported kind`);
       return null;
@@ -254,6 +624,11 @@ export function collectActionIds(surface: SchemaConfigSurface): string[] {
   const ids = new Set<string>();
   for (const f of surface.fields) {
     if (f.kind === "status-probe" || f.kind === "named-action") ids.add(f.actionId);
+    else if (f.kind === "advisory") ids.add(f.probeActionId);
+    else if (f.kind === "record-list") {
+      ids.add(f.listActionId);
+      if (f.deleteActionId) ids.add(f.deleteActionId);
+    }
   }
   return [...ids];
 }

@@ -16,6 +16,7 @@ import { chooseConnectorUiRender } from "@/lib/connector-ui-render";
 import {
   resolveActiveInstallIdForActor,
   resolveRuntimeConnectorUiRecord,
+  resolveRuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { requiresRebuildState } from "@/lib/extension-schema-config";
 import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config-connector-form";
@@ -57,57 +58,98 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     props.searchParams ?? Promise.resolve({}),
   ]);
 
+  const actor = await getActorContext();
+
   // Resolve the connector by slug, then require the vendor segment to match
   // its manifest-resolved identity (installed-extension scope) — no hardcoded
-  // vendor handling.
-  const entry = getConnectorRegistryEntryBySlug(slug);
-  if (!entry || entry.vendor !== vendor) {
-    notFound();
-  }
-  if (subroute !== entry.setupSubroute) {
-    notFound();
+  // vendor handling. A connector with a build-time CATALOG descriptor takes the
+  // catalog path; a purely RUNTIME-installed connector with NO catalog descriptor
+  // takes the runtime-only fallback (cinatra#658 Track 2 — closing the L62 gap
+  // where `getConnectorRegistryEntryBySlug` returned undefined and the route
+  // notFound()'d before any runtime lookup).
+  const catalogEntry = getConnectorRegistryEntryBySlug(slug);
+
+  // Resolved connector identity for this route, from EITHER source.
+  let packageId: string;
+  let displayName: string;
+  let isCatalog: boolean;
+
+  if (catalogEntry) {
+    if (catalogEntry.vendor !== vendor) notFound();
+    if (subroute !== catalogEntry.setupSubroute) notFound();
+    // Catalog policy gate (unchanged): canonical-first → legacy fallback.
+    const decision = enforceConnectorPolicy(catalogEntry.packageId, actor, "read");
+    if (!decision.allowed) notFound();
+    packageId = catalogEntry.packageId;
+    displayName = catalogEntry.displayName;
+    isCatalog = true;
+  } else {
+    // RUNTIME-ONLY fallback. `enforceConnectorPolicy` denies a no-catalog package
+    // (`unknown_connector`) BEFORE any canonical check (codex finding 1), so we
+    // CANNOT reach the runtime surface through it. Instead, resolve the trusted
+    // runtime card record: it runs the FULL trust gate (actor has an active
+    // canonical install in scope → anchor → integrity → signature → trust). A
+    // non-null result is therefore BOTH proof of trust AND of actor authorization
+    // for this install (the canonical install row is addressable in the actor's
+    // scope) — the exact two facts the catalog policy + bundled manifest provide.
+    // We never loosen the catalog policy; this is a parallel trusted-runtime path.
+    const packageName = `@${vendor}/${slug}`;
+    const cardRecord = await resolveRuntimeConnectorCardRecord(packageName, actor);
+    // Fail closed: no trusted+addressable runtime install → not found (never leak
+    // existence to an unauthorized/cross-org actor).
+    if (!cardRecord || cardRecord.vendor !== vendor || cardRecord.slug !== slug) {
+      notFound();
+    }
+    // A runtime-only connector reaches its setup route only via the schema-config
+    // surface (it ships no base-image React loader). Reuse the catalog setup
+    // subroute convention ("setup").
+    if (subroute !== "setup") notFound();
+    packageId = packageName;
+    displayName = cardRecord.displayName;
+    isCatalog = false;
   }
 
-  const actor = await getActorContext();
-  const decision = enforceConnectorPolicy(entry.packageId, actor, "read");
-  if (!decision.allowed) {
-    notFound();
-  }
-
-  const manifest = STATIC_EXTENSION_MANIFEST[entry.packageId];
+  const manifest = isCatalog ? STATIC_EXTENSION_MANIFEST[packageId] : undefined;
 
   // Prefer the RUNTIME (marketplace-installed) connector-UI record when one
   // exists: a schema-config connector installed at runtime declares its surface
   // as DATA in the on-disk package store, NOT in the base-image static manifest.
   // The resolver is fail-closed — it returns a record only for a TRUSTED, active
   // install for this actor (canonical store + trusted anchor); otherwise null,
-  // and the static manifest is the bundled/base-image fallback.
-  const runtimeUiRecord = await resolveRuntimeConnectorUiRecord(entry.packageId, actor);
+  // and the static manifest is the bundled/base-image fallback. For a runtime-only
+  // connector there IS no static manifest entry, so the runtime record is the
+  // only source (and the trust gate already passed via the card record above).
+  const runtimeUiRecord = await resolveRuntimeConnectorUiRecord(packageId, actor);
 
   // Branch on the connector's declared UI surface. A `schema-config` connector
   // ships NO React — the host renders its declared `cinatra.configSchema` from
   // its single `sdk-ui` instance. Only this branch diverges from the legacy
   // base-image setup-page path; `bundled-react` / legacy connectors keep it.
   const render = chooseConnectorUiRender(runtimeUiRecord ?? manifest);
+  // Host-evaluated admin flag for the schema-config renderer's `select.adminOnly`
+  // option gating (UX scoping only; the host write handler re-rejects an
+  // admin-only value from a non-admin).
+  const isAdmin = actor?.platformRole === "platform_admin";
 
   if (render.kind === "schema-config") {
     // Resolve the addressable install id so named actions / status probes can
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
     // installed/active for the actor's workspace, show an explicit Install /
     // Activate CTA instead of letting action POSTs 404 opaquely.
-    const installId = await resolveActiveInstallIdForActor(entry.packageId, actor);
+    const installId = await resolveActiveInstallIdForActor(packageId, actor);
     return (
       <Main className="min-h-screen">
-        <PageHeader title={entry.displayName} description="Connector setup" />
+        <PageHeader title={displayName} description="Connector setup" />
         <PageContent className="flex flex-col gap-6 pb-8">
           {installId ? (
             <SchemaConfigConnectorForm
               installId={installId}
-              packageName={entry.packageId}
+              packageName={packageId}
               surface={render.surface}
+              isAdmin={isAdmin}
             />
           ) : (
-            <InstallActivateCta displayName={entry.displayName} />
+            <InstallActivateCta displayName={displayName} />
           )}
         </PageContent>
       </Main>
@@ -119,15 +161,34 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // configSchema renders an error, NEVER the bundled-react importer.
     return (
       <Main className="min-h-screen">
-        <PageHeader title={entry.displayName} description="Connector setup" />
+        <PageHeader title={displayName} description="Connector setup" />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert variant="destructive">
             <AlertTitle>This connector&apos;s setup schema is invalid</AlertTitle>
             <AlertDescription>
-              {entry.displayName} declares a schema-driven setup surface, but its
+              {displayName} declares a schema-driven setup surface, but its
               configuration schema could not be validated. The connector must be
               fixed and republished before it can be configured.
             </AlertDescription>
+          </Alert>
+        </PageContent>
+      </Main>
+    );
+  }
+
+  // From here on, only a CATALOG connector with a bundled-react setup page can
+  // proceed. A runtime-only connector ships no base-image React loader, so it can
+  // only ever be schema-config / invalid above — if it falls through to here,
+  // surface the "requires rebuild" state rather than crash.
+  if (!catalogEntry) {
+    const rebuild = requiresRebuildState(packageId);
+    return (
+      <Main className="min-h-screen">
+        <PageHeader title={displayName} description="Connector setup" />
+        <PageContent className="flex flex-col gap-6 pb-8">
+          <Alert>
+            <AlertTitle>This connector requires a rebuild</AlertTitle>
+            <AlertDescription>{rebuild.message}</AlertDescription>
           </Alert>
         </PageContent>
       </Main>
@@ -140,7 +201,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // ports the manifest lists in `requestedHostPorts` are wired; the rest are
   // fail-loud on access (least-privilege). Render-time only — server actions
   // cannot safely close over `ctx`.
-  const loadSetupPage = entry.loadSetupPage;
+  const loadSetupPage = catalogEntry.loadSetupPage;
   let mod: Awaited<ReturnType<NonNullable<typeof loadSetupPage>>>;
   try {
     if (!loadSetupPage) {
@@ -161,10 +222,10 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // No loadable React module means the connector's bundled-react setup page is
     // not in this base image — surface the "requires rebuild" state rather than
     // throwing an opaque placeholder error.
-    const rebuild = requiresRebuildState(entry.packageId);
+    const rebuild = requiresRebuildState(packageId);
     return (
       <Main className="min-h-screen">
-        <PageHeader title={entry.displayName} description="Connector setup" />
+        <PageHeader title={displayName} description="Connector setup" />
         <PageContent className="flex flex-col gap-6 pb-8">
           <Alert>
             <AlertTitle>This connector requires a rebuild</AlertTitle>
@@ -176,13 +237,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   }
   const SetupPage = mod.default;
   const ctx = createExtensionHostContext(
-    entry.packageId,
+    packageId,
     manifest?.requestedHostPorts ?? [],
   );
   return (
     <SetupPage
-      packageId={entry.packageId}
-      slug={entry.slug}
+      packageId={packageId}
+      slug={catalogEntry.slug}
       searchParams={searchParams}
       ctx={ctx}
     />

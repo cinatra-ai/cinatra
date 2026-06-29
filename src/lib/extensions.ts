@@ -17,6 +17,13 @@ import "@/lib/extension-data-teardown-wiring";
 // lives in a shared lightweight module — single source of truth the host wires
 // here and the per-kind-teardown invariant test asserts directly.
 import { teardownExtensionCapabilities } from "@/lib/extension-capability-teardown";
+// Side-effect import: HOST-side binding of the external-MCP-registry connector's
+// WRITE named actions (createServer/deleteServer), discovered from the generated
+// manifest (core names no extension). The connector's own register(ctx) registers
+// only the read/probe actions and DEFERS the write actions + their per-operation
+// authorization to the host (cinatra#658, PR-4). Registering them here lands them
+// in the same ui-action registry the host action endpoint reads.
+import "@/lib/mcp-server-write-actions";
 import { createAgentExtensionHandler } from "@cinatra-ai/agents/extension-handler";
 import { createSkillExtensionHandler } from "@cinatra-ai/skills/extension-handler";
 import { createConnectorExtensionHandler } from "@cinatra-ai/extensions/connector-handler";
