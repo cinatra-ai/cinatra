@@ -2107,6 +2107,9 @@ importers:
       standardwebhooks:
         specifier: 1.0.0
         version: 1.0.0
+      undici:
+        specifier: ^8.5.0
+        version: 8.5.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3

@@ -35,10 +35,47 @@ export interface OutboundDeliveryRequest {
   readonly extraHeaders?: Readonly<Record<string, string>>;
 }
 
+/**
+ * The minimal transport `deliverOutbound` needs: a `fetch`-shaped function plus
+ * an optional per-attempt `dispatcher` (undici) the production transport uses to
+ * PIN the connection to the egress-validated address (DNS-rebind defense).
+ *
+ * The production default uses undici's own `fetch` (it interops with the
+ * undici@8 Agent the egress guard builds; Node's global `fetch` does NOT — they
+ * bundle different undici majors). Tests inject a fake transport to assert the
+ * request without real network/DNS.
+ */
+export type OutboundTransport = (
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    signal: AbortSignal;
+    redirect: "manual";
+    dispatcher?: unknown;
+  },
+) => Promise<{ status: number }>;
+
+/** Injectable DNS resolver seam for the egress guard (see egress-guard.ts). */
+export type OutboundEgressLookup = (
+  hostname: string,
+) => Promise<readonly { readonly address: string; readonly family: number }[]>;
+
 /** Tuning knobs for a single delivery attempt. */
 export interface OutboundDeliveryOptions {
   /** Per-attempt request timeout. Default 10_000ms. */
   readonly timeoutMs?: number;
+  /**
+   * Egress-guard seams. `lookup` overrides DNS resolution (default
+   * `dns.lookup`); `transport` overrides the HTTP transport (default: undici
+   * fetch pinned to the validated address). Both exist for tests ONLY — neither
+   * is wired to operator config, so a target can never opt out of the guard.
+   */
+  readonly egress?: {
+    readonly lookup?: OutboundEgressLookup;
+    readonly transport?: OutboundTransport;
+  };
 }
 
 /**

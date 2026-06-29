@@ -23,7 +23,23 @@ export type {
   OutboundDeliveryRequest,
   OutboundDeliveryOptions,
   OutboundDeliveryResult,
+  OutboundTransport,
+  OutboundEgressLookup,
 } from "./outbound-types";
+
+export {
+  assertEgressAllowed,
+  buildPinnedAgent,
+  classifyIpLiteral,
+  isEgressBlock,
+  EgressBlockedError,
+  EGRESS_BLOCKED,
+} from "./egress-guard";
+export type {
+  EgressLookup,
+  EgressGuardOptions,
+  LookupAddress,
+} from "./egress-guard";
 
 export {
   createWebhookRegistry,

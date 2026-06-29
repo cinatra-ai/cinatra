@@ -16,6 +16,7 @@
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "standardwebhooks": "1.0.0",
+    "undici": "^8.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
