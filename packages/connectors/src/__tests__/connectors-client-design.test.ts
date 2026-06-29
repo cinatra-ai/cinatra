@@ -3,9 +3,9 @@
  *
  * Like the other component tests in this repo, this is a source-file assertion
  * suite (@testing-library/react isn't available; the root vitest env is "node").
- * It locks the three design-system decisions for the connectors grid:
+ * It locks the design-system decisions for the connectors grid:
  *
- *   #604  the Connected/Available toggle uses the design-system toggle-group
+ *   #604  the Connected/Disconnected toggle uses the design-system toggle-group
  *         spec — single outer hairline border + hairline dividers, no gaps,
  *         7px radius, slate (muted-foreground) rest content — NOT the generic
  *         shadcn `outline` variant (grey accent fill on a grey ground).
@@ -14,6 +14,13 @@
  *         connectedLabel count alongside the green plug when one is provided.
  *   #606  the Cinatra mark in connector cards renders in brand mustard
  *         (text-brand-mustard) rather than the default ink foreground.
+ *   #681  the toolbar carries a trailing "+ Connector" button linking to the
+ *         marketplace pre-filtered to connectors (?tab=connector).
+ *   #682  the per-card connection-state indicator is a state-coloured BACKGROUND
+ *         badge (design-system Badge `success`/`destructive` variants) wrapping
+ *         the #605 plug icon (+ count).
+ *   #683  the toggle items lead with the card plug glyphs and the second item
+ *         reads "Disconnected" (the persisted `available` value is unchanged).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -64,14 +71,16 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).toContain("Unplug");
     });
 
-    it("renders the connected plug in the success/sea-green token", () => {
-      // A wrapping element carries text-success and contains the <PlugZap> icon.
-      expect(SRC).toMatch(/text-success"[\s\S]*?<PlugZap\b/);
+    it("renders the connected plug in a success-variant badge", () => {
+      // The connected branch is a <Badge variant="success"> wrapping <PlugZap>
+      // (the success variant carries bg-success/10 text-success; see #682).
+      expect(SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
     });
 
-    it("renders the disconnected plug in the failed/red token", () => {
-      // A wrapping element carries text-destructive and contains the <Unplug> icon.
-      expect(SRC).toMatch(/text-destructive"[\s\S]*?<Unplug\b/);
+    it("renders the disconnected plug in a destructive-variant badge", () => {
+      // The disconnected branch is a <Badge variant="destructive"> wrapping
+      // <Unplug> (bg-destructive/10 text-destructive; see #682).
+      expect(SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
     });
 
     it("keeps the connectedLabel count alongside the connected plug", () => {
@@ -83,6 +92,53 @@ describe("ConnectorsClient design-system contract", () => {
   describe("#606 Cinatra mark renders in brand mustard", () => {
     it("applies the text-brand-mustard token to CinatraLogo in the card", () => {
       expect(SRC).toMatch(/<CinatraLogo[^>]*text-brand-mustard/);
+    });
+  });
+
+  describe("#682 per-card connection state is a coloured-background badge", () => {
+    it("uses the design-system Badge component", () => {
+      expect(SRC).toContain('from "@/components/ui/badge"');
+      expect(SRC).toMatch(/<Badge\b/);
+    });
+
+    it("renders the connected state as a green/success-background badge", () => {
+      // The success variant resolves to bg-success/10 text-success — a
+      // state-coloured background, not a bare text-only indicator.
+      expect(SRC).toMatch(/<Badge[^>]*variant="success"/);
+    });
+
+    it("renders the disconnected state as a red/destructive-background badge", () => {
+      expect(SRC).toMatch(/<Badge[^>]*variant="destructive"/);
+    });
+  });
+
+  describe("#683 toggle items carry plug glyphs and the Disconnected label", () => {
+    it("renames the second toggle option from Available to Disconnected", () => {
+      expect(SRC).not.toContain(">\n              Available\n");
+      expect(SRC).toContain("Disconnected");
+    });
+
+    it("keeps the persisted filter value 'available' for back-compat", () => {
+      // The visible label changed but the stored key / filter semantics did not.
+      expect(SRC).toMatch(/value="available"/);
+      expect(SRC).toContain('"cinatra:connectors:filter"');
+    });
+
+    it("leads each toggle item with the matching card plug glyph", () => {
+      // connected item → PlugZap before the label; disconnected → Unplug.
+      expect(SRC).toMatch(/value="connected"[\s\S]*?<PlugZap[\s\S]*?Connected/);
+      expect(SRC).toMatch(/value="available"[\s\S]*?<Unplug[\s\S]*?Disconnected/);
+    });
+  });
+
+  describe("#681 toolbar carries a trailing + Connector action", () => {
+    it("renders a Button-as-Link to the connector-filtered marketplace", () => {
+      expect(SRC).toContain('from "next/link"');
+      expect(SRC).toMatch(/<Link href="\/configuration\/marketplace\?tab=connector"/);
+    });
+
+    it("labels the action 'Connector' with a leading Plus icon", () => {
+      expect(SRC).toMatch(/<Plus[\s\S]*?Connector/);
     });
   });
 });

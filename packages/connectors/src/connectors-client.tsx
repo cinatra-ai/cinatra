@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, SlidersHorizontal, Unplug } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug } from "lucide-react";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -14,6 +15,7 @@ import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGithub from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { FaLinkedin } from "react-icons/fa6";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -191,28 +193,32 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 // Badge
 // ---------------------------------------------------------------------------
 
-// Connection state is shown as a plug icon (replacing the text StatusPill):
-//   connected    → green "connected plug" (PlugZap) in the design success /
-//                  sea-green token (`text-success`), keeping the connector's
+// Connection state is shown as a state-coloured BACKGROUND badge (#682), built
+// from the design-system `Badge` (variant tokens, contrast-checked: the
+// `bg-success/10 text-success` / `bg-destructive/10 text-destructive` treatment
+// is the same one used across the app), wrapping the #605 plug icon:
+//   connected    → green-background badge: "connected plug" (PlugZap) in the
+//                  design success / sea-green token, keeping the connector's
 //                  `connectedLabel` count alongside it when one is provided.
-//   disconnected → red "unplug" (Unplug) in the failed / red token
-//                  (`text-destructive`).
+//   disconnected → red-background badge: "unplug" (Unplug) in the failed / red
+//                  token.
 function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
   if (connected) {
     return (
-      <span
-        className="inline-flex items-center gap-1.5 text-sm font-semibold text-success"
+      <Badge
+        variant="success"
+        className="font-semibold"
         aria-label={label ? `Connected (${label})` : "Connected"}
       >
-        <PlugZap className="size-4" aria-hidden="true" />
+        <PlugZap data-icon="inline-start" aria-hidden="true" />
         {label ? <span aria-hidden="true">{label}</span> : null}
-      </span>
+      </Badge>
     );
   }
   return (
-    <span className="inline-flex items-center text-destructive" aria-label="Not connected">
-      <Unplug className="size-4" aria-hidden="true" />
-    </span>
+    <Badge variant="destructive" aria-label="Not connected">
+      <Unplug data-icon="inline-start" aria-hidden="true" />
+    </Badge>
   );
 }
 
@@ -300,17 +306,24 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
             aria-label="Filter by connection state"
             className="overflow-hidden rounded-[7px] border border-line [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-line"
           >
+            {/* Each item leads with the SAME plug glyph the cards use (#605):
+                connected → PlugZap, disconnected → Unplug. The second item's
+                visible label is "Disconnected" (#683), but its `value` stays
+                "available" so the persisted localStorage key and the filter
+                semantics (`connected` vs `!connected`) are unchanged. */}
             <ToggleGroupItem
               value="connected"
               className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
             >
+              <PlugZap data-icon="inline-start" aria-hidden="true" />
               Connected
             </ToggleGroupItem>
             <ToggleGroupItem
               value="available"
               className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
             >
-              Available
+              <Unplug data-icon="inline-start" aria-hidden="true" />
+              Disconnected
             </ToggleGroupItem>
           </ToggleGroup>
         </ToolbarGroup>
@@ -343,6 +356,18 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        </ToolbarGroup>
+        {/* Trailing "+ Connector" action (#681): jump to the marketplace
+            pre-filtered to connectors. `?tab=connector` is honoured by the
+            marketplace client (extensions-marketplace-client: searchParams
+            .get("tab") → the "connector" tab). */}
+        <ToolbarGroup>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/configuration/marketplace?tab=connector">
+              <Plus data-icon="inline-start" aria-hidden="true" />
+              Connector
+            </Link>
+          </Button>
         </ToolbarGroup>
       </Toolbar>
 
