@@ -795,6 +795,29 @@ export async function runHostExtensionInstallAndActivate(
     );
     const deps = await makeDefaultInstallPipelineDeps();
     const result = await installExtensionFromRegistry({ packageName, version, orgId }, deps);
+
+    // ARTIFACT-BRIDGE RESCAN (cinatra#661): an artifact package is metadata-only
+    // (no serverEntry), so the in-process activation half returns
+    // `no-server-entry` and never registers the object type. After a finalized
+    // artifact install, rescan the store scoped to THIS package so its type
+    // registers in-process WITHOUT a restart (the runtime parallel to the
+    // server-entry activator). Best-effort: a rescan failure never un-finalizes a
+    // committed install (the boot rescan is the durable path). Reads
+    // `package.json` only — never imports/executes package code.
+    if (result.installed === true && row.kind === "artifact") {
+      try {
+        const { rescanArtifactBridgeFromStore } = await import(
+          "@/lib/extension-artifact-bridge-rescan"
+        );
+        await rescanArtifactBridgeFromStore({ onlyPackage: packageName });
+      } catch (err) {
+        console.warn(
+          `[extension-runtime-activate] artifact-bridge rescan threw for "${packageName}" (non-fatal):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     return {
       finalized: result.installed === true,
       activated: result.activated,
