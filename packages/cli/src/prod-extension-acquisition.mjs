@@ -195,9 +195,12 @@ export function foldTreeHash(records) {
  * Compute the canonical tree hash of an on-disk package directory (the
  * marker-hit RE-VERIFICATION path). The acquisition marker at the package
  * root is excluded (it is written by us after verification, never part of
- * the upstream tree). Any directory entry that is not a regular file or a
- * directory (e.g. a symlink introduced after acquisition) is a hard error —
- * a verified tree never contains one.
+ * the upstream tree). `node_modules/` directories are also excluded — pnpm
+ * populates them between the initial acquisition and the `setup:prod`
+ * re-verify step (workspace symlinks, never part of the upstream tarball).
+ * Any other directory entry that is not a regular file or a directory
+ * (e.g. a symlink introduced after acquisition) is a hard error — a
+ * verified tree never contains one.
  */
 export function computeTreeSha256FromDir(rootDir) {
   const records = [];
@@ -207,6 +210,7 @@ export function computeTreeSha256FromDir(rootDir) {
       const rel = path.relative(rootDir, full).split(path.sep).join("/");
       if (rel === ACQUISITION_MARKER_FILENAME) continue;
       if (dirent.isDirectory()) {
+        if (dirent.name === "node_modules") continue; // pnpm-added post-acquisition; never part of the verified tree
         walk(full);
       } else if (dirent.isFile()) {
         const st = statSync(full);
