@@ -12,16 +12,22 @@
         "src/app/plugins-routes.tsx",
         "src/app/field-renderer-init.tsx",
         "src/lib/generated/**/*.{ts,tsx}",
-        "scripts/**/*.{mjs,mts,js}"
+        "scripts/**/*.{ts,mjs,mts,js}"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
-        "scripts/**/*.{mjs,mts,js}"
+        "scripts/**/*.{ts,mjs,mts,js}"
       ]
     },
     "packages/*": {
       "entry": [
         "src/index.{ts,tsx,mjs,mts}"
+      ]
+    },
+    "packages/cli": {
+      "entry": [
+        "src/index.{ts,tsx,mjs,mts}",
+        "bin/cinatra.mjs"
       ]
     }
   },
@@ -37,6 +43,19 @@
     "**/*.generated.{ts,tsx}",
     "tests/e2e/**",
     "**/vitest.integration.config.ts"
+  ],
+  "ignoreDependencies": [
+    "tw-animate-css",
+    "@queuedash/ui",
+    "node-pg-migrate",
+    "bpmn-moddle",
+    "moddle-xml",
+    "katex",
+    "@axe-core/playwright",
+    "@ag-ui/core",
+    "@a2ui/web_core",
+    "libnpmpublish",
+    "@types/katex"
   ],
   "ignoreExportsUsedInFile": true
 }
