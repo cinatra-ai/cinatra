@@ -185,6 +185,7 @@
     { "alias": "@cinatra-ai/dashboards/cubes-post-process", "target": "./packages/dashboards/src/cubes/agent-runs-post-process.ts" },
     { "alias": "@cinatra-ai/dashboards/cubes-platform", "target": "./packages/dashboards/src/cubes/platform-singleton.ts" },
     { "alias": "@cinatra-ai/extensions/connector-handler", "target": "./packages/extensions/src/connector-handler.ts" },
+    { "alias": "@cinatra-ai/extensions/connector-installed-predicate", "target": "./packages/extensions/src/connector-installed-predicate.ts" },
     { "alias": "@cinatra-ai/extensions/artifact-handler", "target": "./packages/extensions/src/artifact-handler.ts" },
     { "alias": "@cinatra-ai/extensions/agent-produces-reader", "target": "./packages/extensions/src/agent-produces-reader.ts" },
     { "alias": "@cinatra-ai/extensions/agent-context-slots-reader", "target": "./packages/extensions/src/agent-context-slots-reader.ts" },

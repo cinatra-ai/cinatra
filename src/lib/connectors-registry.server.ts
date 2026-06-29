@@ -16,6 +16,14 @@ import {
   type ConnectorVendorKey,
   type ConnectorVendorIdentity,
 } from "@cinatra-ai/sdk-extensions";
+import { isConnectorInstalledFromRuntime } from "@cinatra-ai/extensions/connector-installed-predicate";
+import {
+  pickActiveInstallId,
+  isInstallRowAddressableByActor,
+  type InstallRowForPick,
+} from "@/lib/extension-install-resolution";
+import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
+import type { ActorContext } from "@/lib/authz/actor-context";
 
 export type ConnectorDescriptor = (typeof CONNECTOR_DESCRIPTORS)[number];
 
@@ -62,23 +70,114 @@ export type ConnectorRegistryEntry = ConnectorDescriptor & {
 };
 
 /**
- * Whether a connector is actually INSTALLED / BUNDLED in the running image
- * (cinatra#607). The generated `STATIC_EXTENSION_MANIFEST` is regenerated at
- * every consuming surface against the extension tree ACTUALLY PRESENT (`make
- * setup`, the prod image build stage), so an extension absent from the running
- * image is OMITTED from the manifest. Membership is therefore the authoritative
- * installed/bundled predicate: a catalog descriptor whose package is not in the
- * manifest exists only as catalog data — it is not installed here.
+ * Whether a connector is BUNDLED in the running image (cinatra#607). The
+ * generated `STATIC_EXTENSION_MANIFEST` is regenerated at every consuming surface
+ * against the extension tree ACTUALLY PRESENT (`make setup`, the prod image build
+ * stage), so an extension absent from the running image is OMITTED from the
+ * manifest.
  *
- * Use this to gate the /connectors visible card set: a card must only render for
- * an installed connector, never for the full static catalog (which would imply a
- * connector is available when it is not bundled, dead-ending at the
- * "requires a rebuild" setup state).
+ * cinatra#657 DEMOTION: this is no longer the SOLE installed predicate — it is
+ * the BUNDLED-FALLBACK primitive. The runtime source of truth is a live canonical
+ * `installed_extension` row for the actor's scope (see
+ * `isConnectorInstalledForActor`). This sync, actor-less predicate is retained for
+ * (a) the bundled fallback inside `isConnectorInstalledForActor`, and (b) the
+ * existing sync card-filter render path (`packages/connectors/src/pages.tsx`),
+ * which migrates to the actor-scoped predicate in Phase B (cinatra#658) — kept
+ * intact here so PR-2 does not ripple the synchronous render path.
+ *
+ * Membership is own-key only — never an inherited prototype key (e.g.
+ * "constructor") that `in` would falsely report as an installed connector.
  */
 export function isConnectorInstalled(packageId: string): boolean {
-  // Own-key membership only — never an inherited prototype key (e.g.
-  // "constructor") that `in` would falsely report as an installed connector.
   return Object.hasOwn(STATIC_EXTENSION_MANIFEST, packageId);
+}
+
+/**
+ * The cinatra#657 RUNTIME-SOURCED connector "installed" predicate, scoped to the
+ * actor. A connector is "installed" iff EITHER (a) a live (active|locked)
+ * canonical `installed_extension` row addressable in the actor's scope exists
+ * (the runtime source of truth, via `resolveActiveInstallIdForActor` →
+ * `pickActiveInstallId`, which fail-closes on archived/cross-org/owner-less rows),
+ * OR (b) the package is bundled in the running image (the bundled fallback —
+ * `STATIC_EXTENSION_MANIFEST`).
+ *
+ * CG-1: the bundled fallback is LOAD-BEARING — but PRECISE. The boot seeder
+ * (`static-bundle-lifecycle.ts`) anchors a canonical row only for bundled
+ * serverEntry OR required-in-prod packages, so a bundled schema-config connector
+ * that is neither has NO row on a fresh instance — a naive fail-closed flip would
+ * blank it. So the bundled fallback applies for a bundled built-in that
+ * LEGITIMATELY has no addressable row, AND for a canonical-store OUTAGE. It does
+ * NOT apply when a bundled connector has an addressable ARCHIVED row: that is an
+ * explicit operator disable, and the fallback must not resurrect a torn-down
+ * surface. We therefore compute BOTH a live-row signal and a status-agnostic
+ * addressable-row signal and hand them to the pure predicate.
+ *
+ * Store-outage handling: a canonical-store read failure is caught and treated as
+ * "no addressable row at all" (we never invent a row). A bundled connector stays
+ * visible because the static manifest is an in-image build-time constant; a
+ * purely runtime-installed connector (no bundled entry) correctly fails closed —
+ * its installed-ness cannot be proven during the outage.
+ *
+ * SECURITY: this predicate authorizes only LIST/CARD VISIBILITY. It is NOT render
+ * or write authorization — rendering a runtime schema-config surface still passes
+ * the full trust gate (`resolveRuntimeConnectorUiRecord`: anchor → integrity →
+ * signature → trust classification), and action endpoints keep their own
+ * install/action policy gates. A `true` here never grants render/execute.
+ */
+export async function isConnectorInstalledForActor(
+  packageId: string,
+  actor: ActorContext | undefined | null,
+  deps: {
+    /** Override the canonical-row reader (tests). */
+    readRows?: (packageName: string) => Promise<InstallRowForPick[]>;
+  } = {},
+): Promise<boolean> {
+  const bundledInStaticManifest = Object.hasOwn(STATIC_EXTENSION_MANIFEST, packageId);
+
+  // A null actor can address no scoped row: only the bundled fallback can apply.
+  if (!actor) {
+    return isConnectorInstalledFromRuntime({
+      hasAddressableLiveCanonicalRowForActor: false,
+      hasAddressableCanonicalRowForActor: false,
+      bundledInStaticManifest,
+    });
+  }
+
+  const readRows = deps.readRows ?? readInstalledExtensionsByPackageName;
+  let hasAddressableLiveCanonicalRowForActor = false;
+  let hasAddressableCanonicalRowForActor = false;
+  try {
+    const rows = await readRows(packageId);
+    const scope = {
+      organizationId: actor.organizationId ?? null,
+      ownerId: actor.principalId ?? null,
+      teamIds: actor.teamIds ?? [],
+    };
+    // status-agnostic: ANY addressable row (live or archived) — distinguishes a
+    // legitimate "no row" (bundled fallback applies) from an explicit archive
+    // (bundled fallback must NOT resurrect it).
+    hasAddressableCanonicalRowForActor = rows.some((r) =>
+      isInstallRowAddressableByActor(r, scope),
+    );
+    // the live-row source of truth (active|locked, addressable).
+    hasAddressableLiveCanonicalRowForActor = pickActiveInstallId(rows, scope) !== null;
+  } catch (err) {
+    // Canonical-store OUTAGE: treat as no addressable row — never invent one. A
+    // runtime-only connector (no bundled entry) fails closed; a bundled connector
+    // survives via the static manifest fallback in the pure predicate.
+    console.warn(
+      `[connectors-registry] canonical install-row read failed for "${packageId}" ` +
+        `(treating as no addressable row; bundled fallback still applies):`,
+      err instanceof Error ? err.message : err,
+    );
+    hasAddressableLiveCanonicalRowForActor = false;
+    hasAddressableCanonicalRowForActor = false;
+  }
+  return isConnectorInstalledFromRuntime({
+    hasAddressableLiveCanonicalRowForActor,
+    hasAddressableCanonicalRowForActor,
+    bundledInStaticManifest,
+  });
 }
 
 /**

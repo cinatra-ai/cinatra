@@ -52,18 +52,49 @@ export type ActorScopeForPick = {
 };
 
 /**
- * Pure pick: from all install rows for a package, choose the id of the live row
- * the actor can address. A row matches when its org equals the actor's active
- * org (cross-org rows are never addressable). Workspace/org-owned rows match any
- * member of the org. A USER-owned row requires the actor to be that user
- * (a non-null `ownerId === actor.ownerId`). A TEAM-owned row requires the actor
- * to be a member of that team (a non-null `ownerId ∈ actor.teamIds`) — a team
- * install must surface to every team member, not only whoever happens to share
- * the actor's principalId. Owner-scoped rows FAIL CLOSED on a null `ownerId`:
- * the DB invariant is that a user/team row always carries an owner, but the pure
- * auth predicate never trusts that invariant — a malformed owner-less user/team
- * row is never surfaced. Returns the first matching live row's id, or null when
- * none exists.
+ * Pure SCOPE predicate (status-agnostic): whether `row` is addressable in the
+ * actor's scope, IGNORING lifecycle status. A row matches when its org equals the
+ * actor's active org (cross-org rows are never addressable; a workspace-level row
+ * with no org is addressable by any authenticated actor). A USER-owned row
+ * requires the actor to be that user (a non-null `ownerId === actor.ownerId`);
+ * a TEAM-owned row requires the actor to be a member of that team (a non-null
+ * `ownerId ∈ actor.teamIds`) — a team install must surface to every team member.
+ * Owner-scoped rows FAIL CLOSED on a null `ownerId`: the DB invariant is that a
+ * user/team row always carries an owner, but this pure auth predicate never
+ * trusts that invariant — a malformed owner-less user/team row is never
+ * addressable.
+ *
+ * Factored out of `pickActiveInstallId` (cinatra#657) so a status-aware
+ * read-model can distinguish `archived` (an addressable-but-not-live row) from
+ * `absent` (no addressable row at all) WITHOUT re-implementing the scope rules;
+ * `pickActiveInstallId` layers the live-status filter on top of this.
+ */
+export function isInstallRowAddressableByActor(
+  row: InstallRowForPick,
+  actor: ActorScopeForPick,
+): boolean {
+  // Org scoping: a row with an org must match the actor's active org; a row
+  // with no org (workspace-level) is addressable by any authenticated actor.
+  if (row.organizationId !== null && row.organizationId !== actor.organizationId) {
+    return false;
+  }
+  // Owner scoping. user → only the owning user; team → any member of the
+  // owning team; organization/workspace → already org-gated above (open).
+  // Fail closed on a malformed owner-less user/team row regardless of the DB
+  // invariant: a null owner can never be authorized against a concrete actor.
+  if (row.ownerLevel === "user") {
+    if (row.ownerId === null || row.ownerId !== actor.ownerId) return false;
+  } else if (row.ownerLevel === "team") {
+    if (row.ownerId === null || !actor.teamIds.includes(row.ownerId)) return false;
+  }
+  return true;
+}
+
+/**
+ * Pure pick: from all install rows for a package, choose the id of the LIVE
+ * (active|locked) row the actor can address. Layers the live-status filter on top
+ * of `isInstallRowAddressableByActor` (the shared scope predicate). Returns the
+ * first matching live row's id, or null when none exists.
  */
 export function pickActiveInstallId(
   rows: readonly InstallRowForPick[],
@@ -71,20 +102,7 @@ export function pickActiveInstallId(
 ): string | null {
   for (const row of rows) {
     if (!LIVE_STATUSES.has(row.status)) continue;
-    // Org scoping: a row with an org must match the actor's active org; a row
-    // with no org (workspace-level) is addressable by any authenticated actor.
-    if (row.organizationId !== null && row.organizationId !== actor.organizationId) {
-      continue;
-    }
-    // Owner scoping. user → only the owning user; team → any member of the
-    // owning team; organization/workspace → already org-gated above (open).
-    // Fail closed on a malformed owner-less user/team row regardless of the DB
-    // invariant: a null owner can never be authorized against a concrete actor.
-    if (row.ownerLevel === "user") {
-      if (row.ownerId === null || row.ownerId !== actor.ownerId) continue;
-    } else if (row.ownerLevel === "team") {
-      if (row.ownerId === null || !actor.teamIds.includes(row.ownerId)) continue;
-    }
+    if (!isInstallRowAddressableByActor(row, actor)) continue;
     return row.id;
   }
   return null;
