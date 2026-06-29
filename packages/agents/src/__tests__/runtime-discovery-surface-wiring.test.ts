@@ -18,28 +18,39 @@ const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
 
 describe("agent_run (MCP execution) routes through the runtime-lifecycle gate", () => {
   const handlers = read("mcp/handlers.ts");
+  const gate = read("runtime-install-gate.ts");
 
-  it("handleAgentBuilderRun intersects the resolved template against resolveRunnableAgentPackageNames", () => {
-    // Gate present, sourced from the shared pure module.
-    expect(handlers).toMatch(/resolveRunnableAgentPackageNames/);
+  it("handleAgentBuilderRun intersects the resolved template against the shared gate", () => {
+    // Gate present, sourced from the shared module via the named call-site helper
+    // (which itself wraps resolveRunnableAgentPackageNames / isAgentRuntimeRunnable).
+    expect(handlers).toMatch(/assertAgentPackageRunnable/);
     expect(handlers).toMatch(/runtime-install-gate/);
+    // The call-site helper is the one that reads the canonical source of truth.
+    expect(gate).toMatch(/assertAgentPackageRunnable[\s\S]*resolveRunnableAgentPackageNames/);
   });
 
   it("refuses execution when the agent is not runnable (fail-closed return)", () => {
-    expect(handlers).toMatch(/Agent is not installed \(disabled or uninstalled\)/);
+    // The refusal text is the gate contract — kept in the shared gate module.
+    expect(gate).toMatch(/Agent is not installed \(disabled or uninstalled\)/);
   });
 });
 
 describe("agent_list (MCP discovery) filters by the runtime-lifecycle gate", () => {
   const handlers = read("mcp/handlers.ts");
+  const gate = read("runtime-install-gate.ts");
 
-  it("post-filters the listed items by the runnable set (gate referenced twice: run + list)", () => {
-    // Both agent_run and agent_list import the gate → at least two references.
-    expect((handlers.match(/resolveRunnableAgentPackageNames/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  it("post-filters the listed items by the runnable set (both run + list route through the gate)", () => {
+    // agent_run uses assertAgentPackageRunnable; agent_list uses
+    // partitionRunnableAgentPackages — both shared-gate call-site helpers.
+    expect(handlers).toMatch(/assertAgentPackageRunnable/);
+    expect(handlers).toMatch(/partitionRunnableAgentPackages/);
+    // The list helper itself must route through the canonical source-of-truth read.
+    expect(gate).toMatch(/partitionRunnableAgentPackages[\s\S]*resolveRunnableAgentPackageNames/);
   });
 
   it("keeps null-packageName + CG-1 no-row items (the bundled floor) in the list", () => {
-    expect(handlers).toMatch(/t\.packageName == null \|\| runnable\.has\(t\.packageName\)/);
+    // The keep predicate is the gate contract — kept in the shared gate module.
+    expect(gate).toMatch(/t\.packageName == null \|\| runnable\.has\(t\.packageName\)/);
   });
 });
 
