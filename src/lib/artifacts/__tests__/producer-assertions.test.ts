@@ -5,11 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // must yield `validatedRunId: null` (so the creation path never
 // persists a cross-tenant provenance pointer) AND empty produces.
 
-const { runPostgresQueriesSyncMock, getAgentPackageMock, readProducesMock } =
+const { runPostgresQueriesSyncMock, getAgentPackageMock, readProducesMock, writeAllowedMock } =
   vi.hoisted(() => ({
     runPostgresQueriesSyncMock: vi.fn(),
     getAgentPackageMock: vi.fn(),
     readProducesMock: vi.fn(),
+    writeAllowedMock: vi.fn<(ext: string) => Promise<boolean>>(async () => true),
   }));
 
 vi.mock("@/lib/postgres-sync", () => ({
@@ -28,6 +29,12 @@ vi.mock("@cinatra-ai/registries", () => ({
 
 vi.mock("@cinatra-ai/extensions/agent-produces-reader", () => ({
   readAgentProducesFromPackageManifest: readProducesMock,
+}));
+
+// CG-4 (cinatra#661): produces entries are filtered through the install-active
+// write gate. Mock it; default allow, override per test.
+vi.mock("../artifact-extension-access", () => ({
+  isArtifactExtensionWriteAllowed: writeAllowedMock,
 }));
 
 import { resolveProducerAssertionPlan } from "../producer-assertions";
@@ -55,6 +62,7 @@ describe("resolveProducerAssertionPlan", () => {
     runPostgresQueriesSyncMock.mockReset();
     getAgentPackageMock.mockReset();
     readProducesMock.mockReset();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
   });
 
   it("no createdByRunId → no DB calls, empty plan", async () => {
@@ -134,6 +142,25 @@ describe("resolveProducerAssertionPlan", () => {
       packageName: "@vendor/the-agent",
       packageVersion: "2.3.1",
     });
+  });
+
+  it("CG-4: drops a produces entry whose artifact extension is archived (install-active gate)", async () => {
+    stageRunRow({ org_id: "org-a", package_version: "2.3.1", template_id: "tpl-1" });
+    stageTemplateRow({ package_name: "@vendor/the-agent" });
+    getAgentPackageMock.mockResolvedValue({ manifest: { cinatra: {} } });
+    readProducesMock.mockReturnValue([
+      { extension: "@cinatra-ai/marketing-icp-artifact" }, // active
+      { extension: "@vendor/archived-artifact" }, // archived → dropped
+    ]);
+    writeAllowedMock.mockImplementation(async (ext: string) => ext !== "@vendor/archived-artifact");
+
+    const plan = await resolveProducerAssertionPlan({
+      createdByRunId: "run-x",
+      orgId: "org-a",
+    });
+    expect(plan.validatedRunId).toBe("run-x");
+    // The archived artifact extension is NOT asserted onto the new artifact.
+    expect(plan.produces).toEqual(["@cinatra-ai/marketing-icp-artifact"]);
   });
 
   it("null package_version → getAgentPackage called with undefined (dist-tag default)", async () => {

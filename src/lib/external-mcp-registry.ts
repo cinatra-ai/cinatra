@@ -164,6 +164,36 @@ export function getExternalMcpServerById(id: string): ExternalMcpServerRecord | 
 }
 
 /**
+ * TOCTOU-safe authorization read (Refs cinatra#658). `getExternalMcpServerById`
+ * serves from the in-process 30s TTL cache (`listExternalMcpServers`), which is
+ * invalidated ONLY on in-process writes — so under cross-worker staleness it can
+ * return a row whose scope/owner has since changed (e.g. an admin promoted the
+ * actor's own row to `global` on another worker). A privileged write action that
+ * authorizes against that stale row and then writes unconditionally by id would
+ * defeat the "global requires admin" / "modify your own" invariant.
+ *
+ * This reads the single row DIRECTLY from the database, bypassing AND not
+ * populating the cache, so the pre-write authorization decision sees the current
+ * row. (It is paired with the guarded compare-and-write helpers below; the fresh
+ * read alone narrows but does not eliminate the window — the conditional write
+ * closes it atomically.) Returns null when the row does not exist.
+ */
+export function getExternalMcpServerByIdFresh(id: string): ExternalMcpServerRecord | null {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" WHERE id = $1 LIMIT 1`,
+        values: [id],
+      },
+    ],
+  });
+  const rows = (result?.rows ?? []) as RawRow[];
+  return rows.length > 0 ? toRecord(rows[0]) : null;
+}
+
+/**
  * Resolve the upstream bearer for an external MCP server row via Nango. Used
  * by both the LLM-side injection (when the row has no catalog allowlist and
  * the bearer is forwarded directly in the Authorization header) and by the
@@ -269,6 +299,174 @@ export function deleteExternalMcpServer(id: string): void {
       },
     ],
   });
+  invalidateCache();
+}
+
+// ---------------------------------------------------------------------------
+// TOCTOU-safe guarded writes (Refs cinatra#658)
+//
+// The privileged write actions (`createExternalMcpServerAction` /
+// `deleteExternalMcpServerAction` and the `createServerHandler` /
+// `deleteServerHandler` connector-setup bindings) authorize against a row, then
+// mutate by id. The plain helpers above mutate UNCONDITIONALLY by id, so a row
+// that changed scope/owner between the authorization read and the write (cache
+// staleness across workers + a concurrent admin promotion) could be
+// overwritten/deleted in violation of the authorized precondition.
+//
+// These helpers make the mutation CONDITIONAL on the row STILL matching the
+// witnessed (authorized) scope+owner, so the write is atomic with the
+// re-validated precondition. They throw `ExternalMcpServerWriteConflictError`
+// when the row no longer matches (changed or vanished) — the caller treats that
+// as an authorization denial (fail-closed), NEVER as a best-effort write.
+// ---------------------------------------------------------------------------
+
+/** Thrown by the guarded writes when the row no longer matches the authorized
+ *  scope/owner at write time (the TOCTOU race fired). Fail-closed: callers map
+ *  this to a "not authorized" denial, never a silent best-effort mutation. */
+export class ExternalMcpServerWriteConflictError extends Error {
+  constructor(message = "External MCP server changed under the authorized operation.") {
+    super(message);
+    this.name = "ExternalMcpServerWriteConflictError";
+  }
+}
+
+/** The witnessed scope+owner the authorization decision was made against. The
+ *  guarded write only proceeds if the row STILL matches this. */
+export type ExternalMcpServerGuard = {
+  scope: ExternalMcpServerScope;
+  userId: string | null;
+};
+
+/**
+ * Strict INSERT of a BRAND-NEW row (Refs cinatra#658). Unlike
+ * `upsertExternalMcpServer`, this NEVER updates an existing row: `ON CONFLICT
+ * (id) DO NOTHING RETURNING id` makes a colliding id a no-op, and a zero-row
+ * result is surfaced as a conflict. This closes the residual race where a
+ * caller-supplied id resolves to "no row" on the fresh authz read but is created
+ * by a concurrent worker before this insert — the plain upsert would have
+ * silently clobbered it. (Detecting the conflict via `rowCount` is reliable
+ * without relying on the sync worker to propagate the pg duplicate-key code.)
+ */
+export function insertExternalMcpServerStrict(input: ExternalMcpServerUpsertInput): void {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `INSERT INTO "${q(postgresSchema)}"."external_mcp_servers" (id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, created_at, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+               ON CONFLICT (id) DO NOTHING
+               RETURNING id`,
+        values: [
+          input.id,
+          input.label,
+          input.serverUrl,
+          input.nangoConnectionId,
+          input.scope,
+          input.orgId,
+          input.userId,
+          input.enabled,
+          input.allowedTools ?? null,
+          input.allowedCatalogTools ?? null,
+        ],
+      },
+    ],
+  });
+  if ((result?.rowCount ?? 0) === 0) {
+    throw new ExternalMcpServerWriteConflictError(
+      "An external MCP server with this id already exists.",
+    );
+  }
+  invalidateCache();
+}
+
+/**
+ * Guarded UPDATE of an EXISTING row (Refs cinatra#658). Sets the caller's
+ * DESIRED final column values, but only if the row STILL matches the witnessed
+ * `expected` scope+owner — so a row promoted/re-owned/deleted between the authz
+ * read and this write fails closed instead of being clobbered. A legitimate
+ * admin promotion (e.g. user->global) still works: the guard matches the
+ * witnessed `scope='user'`+owner, and the SET applies the new scope.
+ *
+ * `user_id IS NOT DISTINCT FROM $expectedUserId` is the NULL-safe equality the
+ * global/shared rows (NULL owner) require. Throws
+ * `ExternalMcpServerWriteConflictError` on a zero-row match.
+ */
+export function updateExternalMcpServerGuarded(
+  input: ExternalMcpServerUpsertInput,
+  expected: ExternalMcpServerGuard,
+): void {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `UPDATE "${q(postgresSchema)}"."external_mcp_servers" SET
+                 label = $2,
+                 server_url = $3,
+                 nango_connection_id = $4,
+                 scope = $5,
+                 org_id = $6,
+                 user_id = $7,
+                 enabled = $8,
+                 allowed_tools = $9,
+                 allowed_catalog_tools = $10,
+                 updated_at = now()
+               WHERE id = $1
+                 AND scope = $11
+                 AND user_id IS NOT DISTINCT FROM $12
+               RETURNING id`,
+        values: [
+          input.id,
+          input.label,
+          input.serverUrl,
+          input.nangoConnectionId,
+          input.scope,
+          input.orgId,
+          input.userId,
+          input.enabled,
+          input.allowedTools ?? null,
+          input.allowedCatalogTools ?? null,
+          expected.scope,
+          expected.userId,
+        ],
+      },
+    ],
+  });
+  if ((result?.rowCount ?? 0) === 0) {
+    throw new ExternalMcpServerWriteConflictError();
+  }
+  invalidateCache();
+}
+
+/**
+ * Guarded DELETE (Refs cinatra#658). Deletes by id only if the row STILL matches
+ * the witnessed `expected` scope+owner. A row that changed scope/owner or
+ * vanished since the authz read fails closed (a delete that no longer matches
+ * the authorized precondition is refused, not silently treated as success).
+ * Throws `ExternalMcpServerWriteConflictError` on a zero-row match.
+ */
+export function deleteExternalMcpServerGuarded(
+  id: string,
+  expected: ExternalMcpServerGuard,
+): void {
+  ensurePostgresSchema();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `DELETE FROM "${q(postgresSchema)}"."external_mcp_servers"
+               WHERE id = $1
+                 AND scope = $2
+                 AND user_id IS NOT DISTINCT FROM $3
+               RETURNING id`,
+        values: [id, expected.scope, expected.userId],
+      },
+    ],
+  });
+  if ((result?.rowCount ?? 0) === 0) {
+    throw new ExternalMcpServerWriteConflictError();
+  }
   invalidateCache();
 }
 

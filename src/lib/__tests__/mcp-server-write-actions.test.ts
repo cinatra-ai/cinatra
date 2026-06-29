@@ -1,5 +1,5 @@
-// cinatra#658 (PR-4) — HOST-side write-action authorization for the
-// mcp-server-connector schema-config surface (createServer / deleteServer).
+// cinatra#658 (PR-4 + TOCTOU hardening) — HOST-side write-action authorization
+// for the mcp-server-connector schema-config surface (createServer / deleteServer).
 //
 // These prove the per-operation authorization the host enforces INSIDE the
 // handler (defense in depth over the action endpoint's `use`-tier gate):
@@ -8,13 +8,40 @@
 //   - an unsafe scope (org/team/workspace) is REJECTED fail-closed (codex finding
 //     2: the store can't scope it safely today);
 //   - an id-overwrite re-derives authority from the EXISTING row.
+//
+// TOCTOU hardening (Refs cinatra#658): the authorization read is FRESH (bypasses
+// the registry's 30s TTL cache) and the write is CONDITIONAL on the row still
+// matching the witnessed scope+owner. The mock below models that compare-and-write:
+// `getExternalMcpServerByIdFresh` returns the configurable AUTHZ view, while the
+// guarded writers compare against the REAL `servers` map — so a stale authz view
+// over a row that has since flipped surfaces as a write conflict (fail-closed),
+// exactly the cross-worker cache-staleness race.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- mocks ----------------------------------------------------------------
 let sessionUserId = "u1";
 let platformAdmin = false;
-const servers = new Map<string, { id: string; scope: string; userId: string | null; label: string; serverUrl: string }>();
+type Row = { id: string; scope: string; userId: string | null; label: string; serverUrl: string };
+// The REAL backing store (what the guarded compare-and-write checks against).
+const servers = new Map<string, Row>();
+// The AUTHZ view the FRESH read returns. Defaults to mirroring `servers`; a test
+// can OVERRIDE a single id to a stale row to simulate the TOCTOU race (authz sees
+// the stale row, the guarded write sees the real — flipped — row).
+const authzOverride = new Map<string, Row | null>();
+
+class ExternalMcpServerWriteConflictError extends Error {
+  constructor(message = "conflict") {
+    super(message);
+    this.name = "ExternalMcpServerWriteConflictError";
+  }
+}
+
+function guardMatches(real: Row | undefined, expected: { scope: string; userId: string | null }): boolean {
+  if (!real) return false;
+  // NULL-safe equality, mirroring `user_id IS NOT DISTINCT FROM`.
+  return real.scope === expected.scope && real.userId === expected.userId;
+}
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: async () => ({ user: { id: sessionUserId } }),
@@ -22,11 +49,29 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 
 vi.mock("@/lib/external-mcp-registry", () => ({
-  getExternalMcpServerById: (id: string) => servers.get(id) ?? null,
-  upsertExternalMcpServer: (input: { id: string; scope: string; userId: string | null; label: string; serverUrl: string }) => {
+  ExternalMcpServerWriteConflictError,
+  getExternalMcpServerByIdFresh: (id: string) =>
+    authzOverride.has(id) ? authzOverride.get(id) : servers.get(id) ?? null,
+  insertExternalMcpServerStrict: (input: Row) => {
+    if (servers.has(input.id)) throw new ExternalMcpServerWriteConflictError("id exists");
     servers.set(input.id, input);
   },
-  deleteExternalMcpServer: (id: string) => {
+  updateExternalMcpServerGuarded: (
+    input: Row,
+    expected: { scope: string; userId: string | null },
+  ) => {
+    if (!guardMatches(servers.get(input.id), expected)) {
+      throw new ExternalMcpServerWriteConflictError("guard miss");
+    }
+    servers.set(input.id, input);
+  },
+  deleteExternalMcpServerGuarded: (
+    id: string,
+    expected: { scope: string; userId: string | null },
+  ) => {
+    if (!guardMatches(servers.get(id), expected)) {
+      throw new ExternalMcpServerWriteConflictError("guard miss");
+    }
     servers.delete(id);
   },
 }));
@@ -38,6 +83,7 @@ beforeEach(() => {
   sessionUserId = "u1";
   platformAdmin = false;
   servers.clear();
+  authzOverride.clear();
 });
 
 describe("createServerHandler authz", () => {
@@ -110,6 +156,38 @@ describe("createServerHandler authz", () => {
     platformAdmin = false;
     await expect(createServerHandler({ id: "org1", label: "O2", serverUrl: "https://o2", scope: "user" })).rejects.toThrow(/platform admin/i);
   });
+
+  // --- TOCTOU race (Refs cinatra#658) -------------------------------------
+  it("REFUSES an overwrite when the row was promoted to GLOBAL under the actor (stale-cache race)", async () => {
+    // The actor (u1) owns the row per the AUTHZ view, so the per-operation authz
+    // checks pass. But the REAL row has been promoted to `global` (no owner) by a
+    // concurrent admin — the guarded UPDATE must refuse rather than clobber the
+    // now-global row by id.
+    servers.set("row1", { id: "row1", scope: "global", userId: null, label: "G", serverUrl: "https://g" });
+    authzOverride.set("row1", { id: "row1", scope: "user", userId: "u1", label: "G", serverUrl: "https://g" });
+    sessionUserId = "u1";
+    platformAdmin = false;
+    await expect(
+      createServerHandler({ id: "row1", label: "hijack", serverUrl: "https://attacker", scope: "user" }),
+    ).rejects.toThrow(/changed while saving|not authorized/i);
+    // The real global row is untouched.
+    expect(servers.get("row1")?.scope).toBe("global");
+    expect(servers.get("row1")?.label).toBe("G");
+  });
+
+  it("REFUSES a strict-insert when a row with the supplied id was created concurrently", async () => {
+    // Fresh authz read sees no row (authzOverride → null), so the create path is
+    // chosen — but a concurrent worker created the id. The strict INSERT must
+    // refuse (no ON CONFLICT clobber).
+    authzOverride.set("c1", null);
+    servers.set("c1", { id: "c1", scope: "global", userId: null, label: "real", serverUrl: "https://real" });
+    sessionUserId = "u1";
+    platformAdmin = false;
+    await expect(
+      createServerHandler({ id: "c1", label: "evil", serverUrl: "https://evil", scope: "user" }),
+    ).rejects.toThrow(/changed while saving|not authorized/i);
+    expect(servers.get("c1")?.label).toBe("real");
+  });
 });
 
 describe("deleteServerHandler authz", () => {
@@ -152,5 +230,18 @@ describe("deleteServerHandler authz", () => {
 
   it("requires an id", async () => {
     await expect(deleteServerHandler({})).rejects.toThrow(/id is required/i);
+  });
+
+  // --- TOCTOU race (Refs cinatra#658) -------------------------------------
+  it("REFUSES a delete when the row was promoted to GLOBAL under the actor (stale-cache race)", async () => {
+    // Authz view says the actor owns a user row → owner-delete authz passes. The
+    // REAL row is global. The guarded DELETE must refuse rather than delete the
+    // now-global row by id.
+    servers.set("d1", { id: "d1", scope: "global", userId: null, label: "G", serverUrl: "https://g" });
+    authzOverride.set("d1", { id: "d1", scope: "user", userId: "u1", label: "G", serverUrl: "https://g" });
+    sessionUserId = "u1";
+    platformAdmin = false;
+    await expect(deleteServerHandler({ id: "d1" })).rejects.toThrow(/changed while deleting|not authorized/i);
+    expect(servers.has("d1")).toBe(true);
   });
 });

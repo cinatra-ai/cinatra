@@ -48,6 +48,7 @@ import "server-only";
 
 import { registerExtensionUiAction } from "@/lib/extension-ui-registry";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
+import type { ExternalMcpServerScope } from "@/lib/external-mcp-registry";
 
 /** The write-action ids the host binds for the external-MCP registry surface. */
 const CREATE_ACTION_ID = "createServer";
@@ -137,8 +138,10 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
 
   const session = await requireSession();
   const {
-    getExternalMcpServerById,
-    upsertExternalMcpServer,
+    getExternalMcpServerByIdFresh,
+    insertExternalMcpServerStrict,
+    updateExternalMcpServerGuarded,
+    ExternalMcpServerWriteConflictError,
   } = await import("@/lib/external-mcp-registry");
 
   // A global write is a platform-wide trust mutation → PLATFORM ADMIN required.
@@ -153,9 +156,20 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
   // org-scoped row. `preservedUserId` keeps the EXISTING owner of a user row so an
   // admin edit never silently reassigns ownership to the admin (codex final-r1
   // finding 1: a `scope:"user"` overwrite must not steal the row).
+  //
+  // TOCTOU hardening (Refs cinatra#658): the authorization read is FRESH
+  // (`getExternalMcpServerByIdFresh` — bypasses the 30s TTL cache that
+  // `getExternalMcpServerById` serves from, which could otherwise hand back a row
+  // whose scope/owner changed on another worker), and the write is CONDITIONAL on
+  // the row STILL matching the witnessed scope+owner
+  // (`updateExternalMcpServerGuarded` for an existing row;
+  // `insertExternalMcpServerStrict` for a new id, which never clobbers a
+  // concurrently-created row). A race that flips the row under the actor surfaces
+  // as a conflict → mapped to a fail-closed denial below.
   let preservedUserId: string | null | undefined;
+  let guard: { scope: ExternalMcpServerScope; userId: string | null } | undefined;
   if (requestedId) {
-    const existing = getExternalMcpServerById(requestedId);
+    const existing = getExternalMcpServerByIdFresh(requestedId);
     if (existing) {
       if (existing.scope === "global") {
         if (!actorIsAdmin) {
@@ -182,11 +196,14 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
           );
         }
       }
+      // The compare-and-write guard is the WITNESSED existing scope+owner; the
+      // conditional write only lands if the row still matches it at write time.
+      guard = { scope: existing.scope, userId: existing.userId };
     }
   }
 
   const { randomUUID } = await import("node:crypto");
-  upsertExternalMcpServer({
+  const row = {
     id: requestedId || randomUUID(),
     label,
     serverUrl,
@@ -197,7 +214,25 @@ export async function createServerHandler(input: unknown): Promise<{ banner: "sa
     // (never steal it), else bind to the creating actor. Global rows have no owner.
     userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
-  });
+  };
+  try {
+    if (guard) {
+      // Existing row: conditional UPDATE guarded on the witnessed scope+owner.
+      updateExternalMcpServerGuarded(row, guard);
+    } else {
+      // New row (no existing row at the fresh read): strict INSERT that refuses
+      // to clobber a concurrently-created id.
+      insertExternalMcpServerStrict(row);
+    }
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed under the authorized operation (TOCTOU race) → deny.
+      throw new WriteActionError(
+        "This MCP server changed while saving — re-check its scope and try again.",
+      );
+    }
+    throw err;
+  }
   return { banner: "saved" };
 }
 
@@ -211,8 +246,16 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
   if (!id) throw new WriteActionError("A server id is required.");
 
   const session = await requireSession();
-  const { getExternalMcpServerById, deleteExternalMcpServer } = await import("@/lib/external-mcp-registry");
-  const server = getExternalMcpServerById(id);
+  // TOCTOU hardening (Refs cinatra#658): authorize against a FRESH read (not the
+  // 30s TTL cache) and delete CONDITIONALLY on the witnessed scope+owner so a row
+  // promoted/re-owned between read and delete fails closed instead of being
+  // deleted under the actor's stale view.
+  const {
+    getExternalMcpServerByIdFresh,
+    deleteExternalMcpServerGuarded,
+    ExternalMcpServerWriteConflictError,
+  } = await import("@/lib/external-mcp-registry");
+  const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
     // Already gone — idempotent success (the row is not there to over-expose).
     return { banner: "deleted" };
@@ -231,7 +274,17 @@ export async function deleteServerHandler(input: unknown): Promise<{ banner: "de
       throw new WriteActionError("Only a platform admin can delete this MCP server.");
     }
   }
-  deleteExternalMcpServer(id);
+  try {
+    deleteExternalMcpServerGuarded(id, { scope: server.scope, userId: server.userId });
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed/vanished under the authorized delete (TOCTOU race) → deny.
+      throw new WriteActionError(
+        "This MCP server changed while deleting — re-check its scope and try again.",
+      );
+    }
+    throw err;
+  }
   return { banner: "deleted" };
 }
 
