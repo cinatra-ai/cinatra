@@ -1,7 +1,6 @@
-# Attribution-record correction — #638 Dependabot github-actions group bump + cinatra-ai/ci same-SHA reconcile (cinatra-engineering#119 §5)
+# Attribution-record correction — #638 Dependabot github-actions group bump + cinatra-ai/ci same-SHA reconcile (per the truthful verification-record spec §5)
 
-This note is the forward correction (truthful verification-record spec
-cinatra-engineering#119 §5) for the attribution record that landed with the
+This note is the forward correction (truthful verification-record spec §5) for the attribution record that landed with the
 squash merge of PR #638 (`ci: bump the github-actions group + reconcile
 cinatra-ai/ci pins to the same-SHA invariant`, squash commit
 `6375c40837711c0f6416b3aad35f82d83ddb8305`).
