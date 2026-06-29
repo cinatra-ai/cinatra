@@ -135,7 +135,8 @@ function buildSidebarData(_opts: SidebarOpts) {
       // direct link.
       { title: "Skills", url: "/skills", icon: domainIcons.skills },
       { title: "Connectors", url: "/connectors", icon: domainIcons.connectors },
-      { title: "Webhooks", url: "/webhooks", icon: domainIcons.webhooks },
+      // Webhooks moved under Configuration (cinatra#696) — see the Webhooks
+      // card on /configuration → /configuration/webhooks.
     ] as NavItem[],
   });
 

@@ -2,7 +2,7 @@
 /**
  * WebhooksTable presentational contract (cinatra#342).
  *
- * The Tools → Webhooks list renders the inbound-webhook registry from the
+ * The Configuration → Webhooks list renders the inbound-webhook registry from the
  * import-free GENERATED_WEBHOOK_REGISTRY_META pure data:
  *   - empty (the default state today, pre-#343) → crash-free empty-state copy.
  *   - non-empty → a row per hook showing vendor, scope, hook (+label) and the

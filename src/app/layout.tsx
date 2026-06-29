@@ -149,14 +149,9 @@ export default async function RootLayout({
       hiddenNavTitles.push("Analytics");
     }
     isAdmin = isPlatformAdmin(session);
-    // The inbound-webhook registry (Tools → Webhooks, cinatra#342) is an
-    // admin-tier surface — hide it for any non-admin actor (covers the
-    // no-session and the non-admin-member cases). The page itself re-enforces
-    // with requireAdminSession(); this hide is cosmetic-but-correct, mirroring
-    // the admin-group gate rather than the member-granted settings.read.
-    if (!isAdmin) {
-      hiddenNavTitles.push("Webhooks");
-    }
+    // The inbound-webhook registry moved under Configuration (cinatra#696) — it
+    // no longer has its own sidebar nav title to hide. The page itself
+    // (/configuration/webhooks) re-enforces with requireAdminSession().
     if (session) {
       try {
         const { pendingApprovalsCount } = await import("@/lib/pending-approvals-count");
