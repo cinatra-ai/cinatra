@@ -24,9 +24,11 @@ import {
 import { requireAuthSession, requireAdminSession, isPlatformAdmin, getActorContext } from "@/lib/auth-session";
 import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
 import {
-  upsertExternalMcpServer,
-  deleteExternalMcpServer,
-  getExternalMcpServerById,
+  getExternalMcpServerByIdFresh,
+  insertExternalMcpServerStrict,
+  updateExternalMcpServerGuarded,
+  deleteExternalMcpServerGuarded,
+  ExternalMcpServerWriteConflictError,
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
@@ -488,14 +490,25 @@ export async function createExternalMcpServerAction(formData: FormData) {
   const session =
     scope === "user" ? await requireAuthSession() : await requireAdminSession();
 
-  // ID-overwrite guard. `upsertExternalMcpServer` is `ON CONFLICT (id) DO
-  // UPDATE`, so an attacker-supplied existing `id` would otherwise let a
+  // ID-overwrite guard. An attacker-supplied existing `id` must not let a
   // user-scoped write overwrite a global row (or another user's row). Re-derive
   // the authority required from the EXISTING row's scope/owner, not just the
   // requested scope, and deny cross-actor / cross-scope id reuse.
+  //
+  // TOCTOU hardening (Refs cinatra#658): the authorization read is FRESH
+  // (`getExternalMcpServerByIdFresh` — bypasses the 30s in-process TTL cache that
+  // `getExternalMcpServerById` serves from, which could otherwise return a row
+  // whose scope/owner changed on another worker), and the write is CONDITIONAL on
+  // the row STILL matching the witnessed scope+owner
+  // (`updateExternalMcpServerGuarded` for an existing row;
+  // `insertExternalMcpServerStrict` for a new id, which never clobbers a
+  // concurrently-created row). A race that flips the row under the actor is
+  // refused (fail-closed) rather than applied.
   const requestedId = parsed.id?.trim() || undefined;
+  let guard: { scope: ExternalMcpServerScope; userId: string | null } | undefined;
+  let preservedUserId: string | null | undefined;
   if (requestedId) {
-    const existing = getExternalMcpServerById(requestedId);
+    const existing = getExternalMcpServerByIdFresh(requestedId);
     if (existing) {
       if (existing.scope === "global") {
         // Touching an existing global row always requires platform admin,
@@ -513,20 +526,41 @@ export async function createExternalMcpServerAction(formData: FormData) {
         if (scope === "global" && !actorIsAdmin) {
           redirect("/not-authorized");
         }
+        // Preserve the existing owner of a user row on overwrite — an admin edit
+        // must never silently reassign ownership to the admin (mirrors the
+        // connector-setup handler's `preservedUserId`).
+        if (existing.scope === "user" && scope === "user") {
+          preservedUserId = existing.userId;
+        }
       }
+      // The compare-and-write guard is the WITNESSED existing scope+owner.
+      guard = { scope: existing.scope, userId: existing.userId };
     }
   }
 
-  upsertExternalMcpServer({
+  const row = {
     id: requestedId || randomUUID(),
     label: parsed.label,
     serverUrl: parsed.serverUrl,
     scope,
     nangoConnectionId: null,
     orgId: null,
-    userId: scope === "user" ? session.user.id : null,
+    userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
-  });
+  };
+  try {
+    if (guard) {
+      updateExternalMcpServerGuarded(row, guard);
+    } else {
+      insertExternalMcpServerStrict(row);
+    }
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed under the authorized operation (TOCTOU race) → deny.
+      redirect("/not-authorized");
+    }
+    throw err;
+  }
   redirect(`${externalMcpRedirectBase()}?saved=1`);
 }
 
@@ -534,8 +568,13 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
   const id = z.string().min(1).parse(formData.get("id"));
   // Authorization boundary. The delete path had NO authz guard at all. Require platform admin to delete
   // a global row, and owner-or-admin for a user-scoped row. Fail closed.
+  //
+  // TOCTOU hardening (Refs cinatra#658): authorize against a FRESH read (not the
+  // 30s TTL cache) and delete CONDITIONALLY on the witnessed scope+owner so a row
+  // promoted/re-owned between read and delete fails closed instead of being
+  // deleted under the actor's stale view.
   const session = await requireAuthSession();
-  const server = getExternalMcpServerById(id);
+  const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
     redirect(externalMcpRedirectBase());
   }
@@ -549,7 +588,15 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
       redirect("/not-authorized");
     }
   }
-  deleteExternalMcpServer(id);
+  try {
+    deleteExternalMcpServerGuarded(id, { scope: server.scope, userId: server.userId });
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed/vanished under the authorized delete (TOCTOU race) → deny.
+      redirect("/not-authorized");
+    }
+    throw err;
+  }
   redirect(`${externalMcpRedirectBase()}?deleted=1`);
 }
 

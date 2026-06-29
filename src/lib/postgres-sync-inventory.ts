@@ -127,7 +127,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/external-mcp-registry.ts": {
     class: "migratable-background-setup",
     justification:
-      "Reads/writes the external-MCP server registry — configuration state mutated on admin/setup paths, read on registry warm-up rather than per request.",
+      "Reads/writes the external-MCP server registry — configuration state mutated on admin/setup paths, read on registry warm-up rather than per request. The TOCTOU-safe helpers (cinatra#658) add a cache-bypassing fresh-read and atomic compare-and-write/strict-insert call sites used by the admin/setup write actions; these are deliberately direct (not cached) so the authorization read and the guarded mutation observe the same row.",
   },
 
   // --- migratable-request-path: request-time stores/reads, signature is sync ---

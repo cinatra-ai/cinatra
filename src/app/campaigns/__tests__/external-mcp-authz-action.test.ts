@@ -25,9 +25,24 @@ const requireAuthSession = vi.fn();
 const requireAdminSession = vi.fn();
 const isPlatformAdmin = vi.fn();
 
-const upsertExternalMcpServer = vi.fn();
-const deleteExternalMcpServer = vi.fn();
-const getExternalMcpServerById = vi.fn();
+// TOCTOU hardening (Refs cinatra#658): the action now authorizes against a FRESH
+// read (`getExternalMcpServerByIdFresh`, bypassing the registry's 30s TTL cache)
+// and writes CONDITIONALLY — a brand-new id via `insertExternalMcpServerStrict`,
+// an existing id via `updateExternalMcpServerGuarded`, delete via
+// `deleteExternalMcpServerGuarded` — each of which throws
+// `ExternalMcpServerWriteConflictError` when the row no longer matches the
+// witnessed scope+owner. A conflict maps to a fail-closed /not-authorized redirect.
+const insertExternalMcpServerStrict = vi.fn();
+const updateExternalMcpServerGuarded = vi.fn();
+const deleteExternalMcpServerGuarded = vi.fn();
+const getExternalMcpServerByIdFresh = vi.fn();
+
+class ExternalMcpServerWriteConflictError extends Error {
+  constructor(message = "conflict") {
+    super(message);
+    this.name = "ExternalMcpServerWriteConflictError";
+  }
+}
 
 const redirect = vi.fn((url: string) => {
   // next/navigation redirect throws a control-flow signal (NEXT_REDIRECT) in
@@ -43,9 +58,11 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 
 vi.mock("@/lib/external-mcp-registry", () => ({
-  upsertExternalMcpServer: (...a: unknown[]) => upsertExternalMcpServer(...a),
-  deleteExternalMcpServer: (...a: unknown[]) => deleteExternalMcpServer(...a),
-  getExternalMcpServerById: (...a: unknown[]) => getExternalMcpServerById(...a),
+  ExternalMcpServerWriteConflictError,
+  insertExternalMcpServerStrict: (...a: unknown[]) => insertExternalMcpServerStrict(...a),
+  updateExternalMcpServerGuarded: (...a: unknown[]) => updateExternalMcpServerGuarded(...a),
+  deleteExternalMcpServerGuarded: (...a: unknown[]) => deleteExternalMcpServerGuarded(...a),
+  getExternalMcpServerByIdFresh: (...a: unknown[]) => getExternalMcpServerByIdFresh(...a),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -82,7 +99,7 @@ beforeEach(() => {
     throw Object.assign(new Error("NEXT_REDIRECT"), { __redirectTo: url });
   });
   isPlatformAdmin.mockImplementation((s) => realIsPlatformAdmin(s as never));
-  getExternalMcpServerById.mockReturnValue(null);
+  getExternalMcpServerByIdFresh.mockReturnValue(null);
 });
 
 describe("external MCP server actions — authorization boundary", () => {
@@ -101,7 +118,8 @@ describe("external MCP server actions — authorization boundary", () => {
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(requireAdminSession).toHaveBeenCalled();
-    expect(upsertExternalMcpServer).not.toHaveBeenCalled();
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+    expect(updateExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   it("rejects the missing-scope default (which maps to global) for a non-admin", async () => {
@@ -116,16 +134,17 @@ describe("external MCP server actions — authorization boundary", () => {
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(requireAdminSession).toHaveBeenCalled();
-    expect(upsertExternalMcpServer).not.toHaveBeenCalled();
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+    expect(updateExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   // --- NEGATIVE: id-overwrite guard ----------------------------------------
 
-  it("rejects a user-scope upsert that reuses an existing GLOBAL row id (no ON CONFLICT global overwrite)", async () => {
+  it("rejects a user-scope upsert that reuses an existing GLOBAL row id (no guarded global overwrite)", async () => {
     requireAuthSession.mockResolvedValue({ user: { id: "u_attacker", role: "user" } });
     // First requireAdminSession is the existing-global-id branch → reject.
     requireAdminSession.mockImplementation(adminRedirect);
-    getExternalMcpServerById.mockReturnValue({
+    getExternalMcpServerByIdFresh.mockReturnValue({
       id: "global-row-1",
       scope: "global",
       userId: null,
@@ -140,13 +159,14 @@ describe("external MCP server actions — authorization boundary", () => {
     form.set("scope", "user");
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
-    expect(upsertExternalMcpServer).not.toHaveBeenCalled();
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+    expect(updateExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   it("rejects a user-scope upsert that reuses ANOTHER user's row id (cross-actor)", async () => {
     requireAuthSession.mockResolvedValue({ user: { id: "u_attacker", role: "user" } });
     requireAdminSession.mockImplementation(adminRedirect);
-    getExternalMcpServerById.mockReturnValue({
+    getExternalMcpServerByIdFresh.mockReturnValue({
       id: "victim-row",
       scope: "user",
       userId: "u_victim",
@@ -162,7 +182,8 @@ describe("external MCP server actions — authorization boundary", () => {
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(redirect).toHaveBeenCalledWith("/not-authorized");
-    expect(upsertExternalMcpServer).not.toHaveBeenCalled();
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+    expect(updateExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   // --- NEGATIVE: delete guard ----------------------------------------------
@@ -170,7 +191,7 @@ describe("external MCP server actions — authorization boundary", () => {
   it("rejects a non-admin delete of a global row", async () => {
     requireAuthSession.mockResolvedValue({ user: { id: "u_attacker", role: "user" } });
     requireAdminSession.mockImplementation(adminRedirect);
-    getExternalMcpServerById.mockReturnValue({
+    getExternalMcpServerByIdFresh.mockReturnValue({
       id: "global-row-1",
       scope: "global",
       userId: null,
@@ -182,12 +203,12 @@ describe("external MCP server actions — authorization boundary", () => {
     form.set("id", "global-row-1");
 
     await expect(deleteExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
-    expect(deleteExternalMcpServer).not.toHaveBeenCalled();
+    expect(deleteExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   it("rejects a non-owner non-admin delete of another user's row (cross-actor)", async () => {
     requireAuthSession.mockResolvedValue({ user: { id: "u_attacker", role: "user" } });
-    getExternalMcpServerById.mockReturnValue({
+    getExternalMcpServerByIdFresh.mockReturnValue({
       id: "victim-row",
       scope: "user",
       userId: "u_victim",
@@ -200,7 +221,7 @@ describe("external MCP server actions — authorization boundary", () => {
 
     await expect(deleteExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(redirect).toHaveBeenCalledWith("/not-authorized");
-    expect(deleteExternalMcpServer).not.toHaveBeenCalled();
+    expect(deleteExternalMcpServerGuarded).not.toHaveBeenCalled();
   });
 
   // --- POSITIVE: authorized paths still work --------------------------------
@@ -217,8 +238,11 @@ describe("external MCP server actions — authorization boundary", () => {
 
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(redirect).toHaveBeenCalledWith(`${MCP_SERVER_SETUP_HREF}?saved=1`);
-    expect(upsertExternalMcpServer).toHaveBeenCalledTimes(1);
-    const arg = upsertExternalMcpServer.mock.calls[0][0] as Record<string, unknown>;
+    // A brand-new row (no id supplied) goes through the strict INSERT, never the
+    // ON-CONFLICT-clobbering path.
+    expect(insertExternalMcpServerStrict).toHaveBeenCalledTimes(1);
+    expect(updateExternalMcpServerGuarded).not.toHaveBeenCalled();
+    const arg = insertExternalMcpServerStrict.mock.calls[0][0] as Record<string, unknown>;
     expect(arg.scope).toBe("global");
     expect(arg.userId).toBeNull();
   });
@@ -236,15 +260,15 @@ describe("external MCP server actions — authorization boundary", () => {
     await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
     expect(redirect).toHaveBeenCalledWith(`${MCP_SERVER_SETUP_HREF}?saved=1`);
     expect(requireAdminSession).not.toHaveBeenCalled();
-    expect(upsertExternalMcpServer).toHaveBeenCalledTimes(1);
-    const arg = upsertExternalMcpServer.mock.calls[0][0] as Record<string, unknown>;
+    expect(insertExternalMcpServerStrict).toHaveBeenCalledTimes(1);
+    const arg = insertExternalMcpServerStrict.mock.calls[0][0] as Record<string, unknown>;
     expect(arg.scope).toBe("user");
     expect(arg.userId).toBe("u_self");
   });
 
-  it("allows a user to overwrite + delete their OWN user-scoped row", async () => {
+  it("allows a user to overwrite + delete their OWN user-scoped row (guarded compare-and-write)", async () => {
     requireAuthSession.mockResolvedValue({ user: { id: "u_self", role: "user" } });
-    getExternalMcpServerById.mockReturnValue({
+    getExternalMcpServerByIdFresh.mockReturnValue({
       id: "self-row",
       scope: "user",
       userId: "u_self",
@@ -258,12 +282,71 @@ describe("external MCP server actions — authorization boundary", () => {
     upForm.set("serverUrl", "https://self.example/mcp2");
     upForm.set("scope", "user");
     await expect(actions.createExternalMcpServerAction(upForm)).rejects.toThrow("NEXT_REDIRECT");
-    expect(upsertExternalMcpServer).toHaveBeenCalledTimes(1);
+    // An EXISTING id overwrites via the guarded UPDATE, never the strict INSERT.
+    expect(updateExternalMcpServerGuarded).toHaveBeenCalledTimes(1);
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+    const upArg = updateExternalMcpServerGuarded.mock.calls[0];
+    // The write row preserves the owner, and the guard is the witnessed scope+owner.
+    expect((upArg[0] as Record<string, unknown>).userId).toBe("u_self");
+    expect(upArg[1]).toEqual({ scope: "user", userId: "u_self" });
 
     const delForm = new FormData();
     delForm.set("id", "self-row");
     await expect(actions.deleteExternalMcpServerAction(delForm)).rejects.toThrow("NEXT_REDIRECT");
-    expect(deleteExternalMcpServer).toHaveBeenCalledTimes(1);
-    expect(deleteExternalMcpServer).toHaveBeenCalledWith("self-row");
+    expect(deleteExternalMcpServerGuarded).toHaveBeenCalledTimes(1);
+    expect(deleteExternalMcpServerGuarded).toHaveBeenCalledWith("self-row", {
+      scope: "user",
+      userId: "u_self",
+    });
+  });
+
+  // --- TOCTOU race (Refs cinatra#658) --------------------------------------
+  // The authz read sees the actor's OWN user row (passes owner checks), but the
+  // guarded write throws a conflict because the underlying row was promoted to
+  // global under the actor (cross-worker cache staleness). The action must
+  // fail-closed to /not-authorized — never best-effort apply the write.
+
+  it("REFUSES an overwrite when the guarded write reports a scope/owner conflict (stale-cache race)", async () => {
+    requireAuthSession.mockResolvedValue({ user: { id: "u_self", role: "user" } });
+    // Stale authz view: the actor owns a user row → owner checks pass.
+    getExternalMcpServerByIdFresh.mockReturnValue({
+      id: "raced-row",
+      scope: "user",
+      userId: "u_self",
+    });
+    // Underlying row flipped to global → the guarded UPDATE refuses.
+    updateExternalMcpServerGuarded.mockImplementation(() => {
+      throw new ExternalMcpServerWriteConflictError();
+    });
+
+    const { createExternalMcpServerAction } = await import("@/app/campaigns/actions");
+    const form = new FormData();
+    form.set("id", "raced-row");
+    form.set("label", "hijack");
+    form.set("serverUrl", "https://attacker.example/mcp");
+    form.set("scope", "user");
+
+    await expect(createExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith("/not-authorized");
+    expect(insertExternalMcpServerStrict).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a delete when the guarded delete reports a scope/owner conflict (stale-cache race)", async () => {
+    requireAuthSession.mockResolvedValue({ user: { id: "u_self", role: "user" } });
+    getExternalMcpServerByIdFresh.mockReturnValue({
+      id: "raced-row",
+      scope: "user",
+      userId: "u_self",
+    });
+    deleteExternalMcpServerGuarded.mockImplementation(() => {
+      throw new ExternalMcpServerWriteConflictError();
+    });
+
+    const { deleteExternalMcpServerAction } = await import("@/app/campaigns/actions");
+    const form = new FormData();
+    form.set("id", "raced-row");
+
+    await expect(deleteExternalMcpServerAction(form)).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith("/not-authorized");
   });
 });
