@@ -110,6 +110,35 @@ export function extensionActivationPhases(
       },
     },
     {
+      name: "artifact-bridge-store-rescan",
+      policy: "retryable",
+      run: async () => {
+        // PROD artifact-bridge rescan (cinatra#661). A RUNTIME-installed artifact
+        // package is metadata-only (no serverEntry), so the runtime-package-loader
+        // above returns `no-server-entry` for it and never registers its object
+        // type in-process. This phase scans `/data/extensions/packages` and
+        // registers each install-active `kind:"artifact"` package's object type
+        // (WITH provenance) so a marketplace-installed artifact type appears after
+        // boot WITHOUT an image rebuild — the registration path parallel to the
+        // server-entry activator. NEVER imports/executes package code (reads
+        // `package.json` only). Best-effort/retryable: an artifact-bridge failure
+        // must never abort boot.
+        if (process.env.CINATRA_DISABLE_RUNTIME_PACKAGE_LOADER === "true") {
+          return SKIPPED_BY_KILL_SWITCH("CINATRA_DISABLE_RUNTIME_PACKAGE_LOADER");
+        }
+        const { rescanArtifactBridgeFromStore } = await import(
+          "@/lib/extension-artifact-bridge-rescan"
+        );
+        const { registered } = await rescanArtifactBridgeFromStore();
+        if (registered.length) {
+          console.info(
+            `[boot] artifact-bridge rescan: registered ${registered.length} runtime artifact type(s) — ` +
+              registered.map((p) => p.replace("@cinatra-ai/", "")).join(", "),
+          );
+        }
+      },
+    },
+    {
       name: "required-activation-assert",
       policy: "fatal",
       run: async () => {

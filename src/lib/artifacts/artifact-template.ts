@@ -6,6 +6,7 @@ import {
   type CreateSemanticArtifactResult,
 } from "./artifact-creation";
 import { assertSemanticType } from "./semantic-assertion-store";
+import { canAccessArtifactExtension } from "./artifact-extension-access";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ export type MaterializeArtifactFromTemplateInput = {
 
 export type MaterializeArtifactFromTemplateError =
   | { ok: false; reason: "extension-not-found"; message: string }
+  | { ok: false; reason: "access-denied"; message: string }
   | { ok: false; reason: "extension-not-file-form"; message: string }
   | { ok: false; reason: "no-text-template-mime"; message: string }
   | { ok: false; reason: "template-path-not-supported"; message: string };
@@ -109,6 +111,26 @@ export async function materializeArtifactFromTemplate(
       message: `Extension "${input.extension}" is registered but carries no semantic manifest.`,
     };
   }
+
+  // CG-4 (cinatra#661) — SERVICE-LAYER write gate (defense-in-depth). The
+  // single app caller (library-import-actions.ts) already gates on the same
+  // uniform extension-access (execute), but the in-memory `objectTypeRegistry`
+  // is NOT the only authz: a registered-but-archived type (an install row taken
+  // down while the registry entry lingers, or a stale process whose teardown
+  // never fired) must REFUSE a direct write here, not merely vanish from a list.
+  // `canAccessArtifactExtension` is DB-status-driven (deny when the install row
+  // is archived; allow when ungoverned/no-row — a bundled/disk artifact), so a
+  // future caller that forgets to gate, or a stale worker, still cannot
+  // materialize a typed artifact + semantic_assertion for a disabled extension.
+  // Mirrors the internal gate `authorArtifact` already enforces.
+  if (!(await canAccessArtifactExtension(input.extension, input.actor, "execute"))) {
+    return {
+      ok: false,
+      reason: "access-denied",
+      message: `You do not have access to create artifacts with extension "${input.extension}".`,
+    };
+  }
+
   const fileForms = manifest.accepts?.file?.mimeTypes;
   if (!fileForms || fileForms.length === 0) {
     // This deterministic path supports file-form templates only. Dashboard

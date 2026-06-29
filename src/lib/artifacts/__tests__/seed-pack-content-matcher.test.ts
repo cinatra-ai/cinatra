@@ -70,6 +70,11 @@ vi.mock("../semantic-assertion-store", () => ({
 vi.mock("@/lib/extensions-dev-watcher", () => ({
   registerArtifactExtensionSkillsForPackage: lazyRegisterMock,
 }));
+// CG-4 (cinatra#661): matcher candidates pass through the install-active write
+// gate; these seed packs are bundled (ungoverned) → allow all.
+vi.mock("../artifact-extension-access", () => ({
+  isArtifactExtensionWriteAllowed: async () => true,
+}));
 
 import {
   runArtifactMatch,

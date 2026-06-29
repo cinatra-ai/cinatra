@@ -4,11 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // createSemanticArtifact + postgres-sync paths because this suite focuses on
 // manifest lookup, MIME/template defaulting, and authoring_skill assertion writes.
 
-const { listArtifactsMock, registerAllObjectTypesMock, createSemanticArtifactMock, assertSemanticTypeMock } = vi.hoisted(() => ({
+const {
+  listArtifactsMock,
+  registerAllObjectTypesMock,
+  createSemanticArtifactMock,
+  assertSemanticTypeMock,
+  canAccessMock,
+} = vi.hoisted(() => ({
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
   createSemanticArtifactMock: vi.fn(),
   assertSemanticTypeMock: vi.fn(),
+  canAccessMock: vi.fn(async (): Promise<boolean> => true),
 }));
 
 vi.mock("@cinatra-ai/objects/registry", () => ({
@@ -22,6 +29,11 @@ vi.mock("../artifact-creation", () => ({
 }));
 vi.mock("../semantic-assertion-store", () => ({
   assertSemanticType: assertSemanticTypeMock,
+}));
+// CG-4 (cinatra#661): the service-layer write gate now reads installed_extension
+// via canAccessArtifactExtension. Mock it; default allow, override per test.
+vi.mock("../artifact-extension-access", () => ({
+  canAccessArtifactExtension: canAccessMock,
 }));
 
 import { materializeArtifactFromTemplate } from "../artifact-template";
@@ -52,6 +64,7 @@ describe("materializeArtifactFromTemplate", () => {
     registerAllObjectTypesMock.mockReset();
     createSemanticArtifactMock.mockReset();
     assertSemanticTypeMock.mockReset();
+    canAccessMock.mockReset().mockResolvedValue(true);
     createSemanticArtifactMock.mockResolvedValue({
       objectId: "art-1",
       artifactId: "art-1",
@@ -235,6 +248,43 @@ describe("materializeArtifactFromTemplate", () => {
     });
     expect(createSemanticArtifactMock.mock.calls[0][0].title).toBe(
       "marketing-icp starter",
+    );
+  });
+
+  // CG-4 (cinatra#661): the in-memory registry is NOT the only authz — a write
+  // to an archived/disabled artifact type must be REFUSED at the service-layer
+  // write site, not merely vanish from a list.
+  it("REFUSES the write (access-denied) when the install is disabled — the disable→write-refused negative", async () => {
+    listArtifactsMock.mockReturnValue([
+      makeDef("@cinatra-ai/marketing-icp-artifact", ["text/markdown"]),
+    ]);
+    canAccessMock.mockResolvedValue(false); // canonical install row archived.
+    const res = await materializeArtifactFromTemplate({
+      orgId: "org-a",
+      actor: ACTOR,
+      extension: "@cinatra-ai/marketing-icp-artifact",
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe("access-denied");
+    // No artifact + no typed assertion are written for a refused extension.
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("gates on the extension package name with op=execute", async () => {
+    listArtifactsMock.mockReturnValue([
+      makeDef("@cinatra-ai/marketing-icp-artifact", ["text/markdown"]),
+    ]);
+    await materializeArtifactFromTemplate({
+      orgId: "org-a",
+      actor: ACTOR,
+      extension: "@cinatra-ai/marketing-icp-artifact",
+    });
+    expect(canAccessMock).toHaveBeenCalledWith(
+      "@cinatra-ai/marketing-icp-artifact",
+      ACTOR,
+      "execute",
     );
   });
 });
