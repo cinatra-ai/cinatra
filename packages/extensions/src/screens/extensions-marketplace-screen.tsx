@@ -241,9 +241,17 @@ export async function ExtensionsMarketplaceScreen({
         {!registryConnected && (
           <Alert variant="info">
             <AlertTitle>Installing requires the package registry</AlertTitle>
-            <AlertDescription>
-              You can browse the catalog, but installing an extension needs the package registry
-              connected. Connect it in registry settings to enable Install.
+            <AlertDescription className="flex flex-col items-start gap-3">
+              <span>
+                Browsing the marketplace catalog works without any setup — these listings come
+                straight from the storefront. Installing an extension is what needs the package
+                registry connected. Connect it in registry settings to enable Install.
+              </span>
+              {/* Root-relative link → resolves to this instance's own origin (never a hardcoded
+                  host); points at the registries tab on /configuration/environment. */}
+              <Button asChild size="sm" variant="outline">
+                <Link href="/configuration/environment?tab=registries">Registry settings</Link>
+              </Button>
             </AlertDescription>
           </Alert>
         )}
