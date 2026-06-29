@@ -5,63 +5,63 @@
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "e15a7ca545003145bf2025ed3e093999bb4fe158",
+      "resolvedSha": "a7030f0d78f2f669759207806d88bafae83ed5d2",
       "packageVersion": "0.1.0",
-      "treeSha256": "85e05c35044a9e1b70968359be7bb2da213688daaaf1a33f1bd900fe998f9e0b"
+      "treeSha256": "c64a3971d309f0f7c381c16c6525f72dc03a194a861f77a4b680a7ef5b12ac5b"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
       "repo": "cinatra-ai/author-agent",
-      "resolvedSha": "7a565f4b911719979af1c923905d66b6c93bd763",
+      "resolvedSha": "c3759beb68749973e8b10fc9e4cbc23e62afc9ee",
       "packageVersion": "0.1.0",
       "treeSha256": "45fe638829f8c62a24b6743022a070a6cf67f19d97350bb25f0cc438400734ea"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
       "repo": "cinatra-ai/code-reviewer-agent",
-      "resolvedSha": "5a0289781c587c83cd058f3dee502ca8f8f2c53c",
+      "resolvedSha": "1abdc42e29c9aaebed7e0ce23e55c41b058ff51d",
       "packageVersion": "0.1.0",
       "treeSha256": "44cf8eb6bac5d77dc0e71c7b06380ab3a671283aa5ddaf00bc396b52eb620258"
     },
     {
       "packageName": "@cinatra-ai/default-artifact",
       "repo": "cinatra-ai/default-artifact",
-      "resolvedSha": "1a4bf30b6c94c18da116b2cd76a8488bddf179ca",
+      "resolvedSha": "d235f46ce1c79fe26851c6b4054908cc1618afce",
       "packageVersion": "0.1.0",
       "treeSha256": "d883fbcadf3be974a3ce923c0202119df84c308135705b2d9c0da8f69a755032"
     },
     {
       "packageName": "@cinatra-ai/lint-policy-agent",
       "repo": "cinatra-ai/lint-policy-agent",
-      "resolvedSha": "6f4cc58539eb6fe2132d8044b97ae63b1eb0d298",
+      "resolvedSha": "9755af8488d730250ff8333f45da4c3c8c0dd546",
       "packageVersion": "0.1.0",
       "treeSha256": "d38b002ed646d3d654a5113ff6e6543a7df4afcabb4aa875c721b5adf2b765b1"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "91186fe86c5276ba1f0421fc6dbad9a78c4a482b",
-      "packageVersion": "0.1.2",
-      "treeSha256": "7a0417992fdb3ab3d2e4a368974b60d8100babdd0314bc2f1f9ca394d2ea4f7c"
+      "resolvedSha": "f95e07396d308cf4d20c6623671540a54dcf5dbe",
+      "packageVersion": "0.1.4",
+      "treeSha256": "b574182278257c7616a2b8d39fe556c1c50b7c1abb982c0772abcd0919b161e5"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "eafb01d45b4361aace3204cd41e8a50615cbe7e1",
-      "packageVersion": "0.1.3",
-      "treeSha256": "d46d7e9155865320214d22a5a4cfbc28ec76c312fdca1f13a1e4b6c45281515a"
+      "resolvedSha": "f9f6e38407e038c381850c3b64789ad266fbdb24",
+      "packageVersion": "0.1.5",
+      "treeSha256": "a578254fe35df0ef1c1ceb5460218047377291eab8cfda7c5dc342439243ece5"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",
       "repo": "cinatra-ai/planner-agent",
-      "resolvedSha": "cbcba003278568711943a725ddbd82be728ebfa8",
+      "resolvedSha": "dfa8342c9aaa94422fc6c77bd9fc8a8f854f9e77",
       "packageVersion": "0.1.0",
       "treeSha256": "7b6c992eaa8d91d7ae06024a90a7ab018bfc27e613f3138023900714c13ab028"
     },
     {
       "packageName": "@cinatra-ai/security-reviewer-agent",
       "repo": "cinatra-ai/security-reviewer-agent",
-      "resolvedSha": "fdd1c2758d849046484b50dabcebd7c468c6069d",
+      "resolvedSha": "596e478014695ddff8186263c27bc39f023e3e1b",
       "packageVersion": "0.1.0",
       "treeSha256": "8214430d36aea6aa7d9437d8c69452c4acaeb620d3b97efa794da5c8f5d15da8"
     }
