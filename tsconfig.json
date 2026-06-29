@@ -198,6 +198,8 @@
       "@cinatra-ai/dashboards/cubes-mcp-module": ["./packages/dashboards/src/mcp-cubes/index.ts"],
       "@cinatra-ai/dashboards/cubes-post-process": ["./packages/dashboards/src/cubes/agent-runs-post-process.ts"],
       "@cinatra-ai/dashboards/cubes-platform": ["./packages/dashboards/src/cubes/platform-singleton.ts"],
+      "@cinatra-ai/dashboards/runtime-cube-registry": ["./packages/dashboards/src/cubes/runtime-cube-registry.ts"],
+      "@cinatra-ai/dashboards/runtime-cube-serve-gate": ["./packages/dashboards/src/cubes/runtime-cube-serve-gate.ts"],
       "@cinatra-ai/extensions/connector-handler": ["./packages/extensions/src/connector-handler.ts"],
       "@cinatra-ai/extensions/connector-installed-predicate": ["./packages/extensions/src/connector-installed-predicate.ts"],
       "@cinatra-ai/extensions/artifact-handler": ["./packages/extensions/src/artifact-handler.ts"],

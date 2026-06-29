@@ -301,6 +301,16 @@ export default defineConfig({
       // aliases + next.config package lists from one manifest and gates
       // byte-exact drift. Pure renderers + CLI --check (no DB/network).
       "scripts/config/__tests__/**/*.test.{ts,mjs}",
+      // Runtime dashboard cube/portlet registries (cinatra#660 / PR-7). Pure
+      // unit tests over the runtime-cube registry, the CG-5 serve-gate decision,
+      // the runtime portlet-kind registry, and the host-cube alias helper. No
+      // DB/DOM — gated by the root suite (the rest of packages/dashboards stays
+      // pinned in build-image.yml). Added by precise path (not whole-dir) so the
+      // jsdom/DB dashboards tests are NOT pulled into the node root run.
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-registry.test.ts",
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-serve-gate.test.ts",
+      "packages/dashboards/src/__tests__/runtime-portlet-kind.test.ts",
+      "packages/sdk-dashboard/src/adapters/drizzle-cube/__tests__/alias-cube.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a

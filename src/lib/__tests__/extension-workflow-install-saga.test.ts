@@ -134,6 +134,12 @@ function makeHarness(overrides: Partial<WorkflowInstallSagaDeps> = {}, opts: { p
       events.push("provenance");
     },
 
+    registerRuntimeContributions: async () => {
+      events.push("register-runtime-contributions");
+    },
+    unregisterRuntimeContributions: async () => {
+      events.push("compensate:unregister-runtime-contributions");
+    },
     archiveDashboards: async () => {
       events.push("compensate:archive-dashboards");
     },

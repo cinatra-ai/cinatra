@@ -100,26 +100,46 @@ describe("validateExtensionCubeUsage", () => {
     expect(new Set(r.offendingCubes)).toEqual(new Set(["unknown_a", "unknown_b"]));
   });
 
-  it("returns requires-rebuild when the package declares cube contributions", () => {
-    const r = validateExtensionCubeUsage(
-      { declaredCubeContributions: ["ext_new_cube"] },
-      { knownCubes: KNOWN_CUBES },
-    );
-    expect(r.verdict).toBe("requires-rebuild");
-    expect(r.offendingCubes).toEqual(["ext_new_cube"]);
-    expect(r.reason).toMatch(/static boot|rebuild|restart/i);
-  });
-
-  it("prefers requires-rebuild over reject when a package both declares and misreferences cubes", () => {
+  it("returns register-runtime when the package declares descriptors that ALL validate", () => {
     const r = validateExtensionCubeUsage(
       {
-        declaredCubeContributions: ["ext_new_cube"],
-        dashboardConfig: dashboard([portlet({ cube: "also_unknown" })]),
+        declaredCubeDescriptors: [{ cubeId: "ext_agent_summary", fromTable: "agent_runs", members: ["count"] }],
       },
+      { knownCubes: KNOWN_CUBES, validateDeclaredDescriptors: () => ({ ok: true }) },
+    );
+    expect(r.verdict).toBe("register-runtime");
+    expect(r.registerCubeIds).toEqual(["ext_agent_summary"]);
+  });
+
+  it("rejects a declared descriptor that fails allowlist validation", () => {
+    const r = validateExtensionCubeUsage(
+      {
+        declaredCubeDescriptors: [{ cubeId: "ext_bad", fromTable: "artifacts", members: ["count"] }],
+      },
+      { knownCubes: KNOWN_CUBES, validateDeclaredDescriptors: () => ({ ok: false, reason: "cube_from_not_allowlisted: ..." }) },
+    );
+    expect(r.verdict).toBe("reject");
+    expect(r.offendingCubes).toEqual(["ext_bad"]);
+    expect(r.reason).toMatch(/allowlist|not_allowlisted|rejected/i);
+  });
+
+  it("rejects declared descriptors when no allowlist validator is provided (fail-closed)", () => {
+    const r = validateExtensionCubeUsage(
+      { declaredCubeDescriptors: [{ cubeId: "ext_x", fromTable: "agent_runs", members: ["count"] }] },
       { knownCubes: KNOWN_CUBES },
     );
-    expect(r.verdict).toBe("requires-rebuild");
-    expect(r.offendingCubes).toEqual(["ext_new_cube"]);
+    expect(r.verdict).toBe("reject");
+  });
+
+  it("lets a register-runtime package reference its OWN newly-declared cube from a portlet", () => {
+    const r = validateExtensionCubeUsage(
+      {
+        declaredCubeDescriptors: [{ cubeId: "ext_self", fromTable: "agent_runs", members: ["count"] }],
+        dashboardConfig: dashboard([portlet({ cube: "ext_self" })]),
+      },
+      { knownCubes: KNOWN_CUBES, validateDeclaredDescriptors: () => ({ ok: true }) },
+    );
+    expect(r.verdict).toBe("register-runtime");
   });
 
   it("ignores empty-string / non-string cube config values", () => {
@@ -130,9 +150,9 @@ describe("validateExtensionCubeUsage", () => {
     expect(r.verdict).toBe("ok");
   });
 
-  it("ignores empty-string declared contributions", () => {
+  it("returns ok when no descriptors and no dashboard", () => {
     const r = validateExtensionCubeUsage(
-      { declaredCubeContributions: ["", ""] },
+      { declaredCubeDescriptors: [] },
       { knownCubes: KNOWN_CUBES },
     );
     expect(r.verdict).toBe("ok");

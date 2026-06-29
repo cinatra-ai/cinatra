@@ -1,12 +1,19 @@
 // Cube-usage guard for runtime-installed extensions.
 //
-// Cubes (the semantic-layer FROM/JOIN sources behind chart portlets) register
-// STATICALLY at boot — the fixed literal cube array in
-// `cubes/platform-singleton.ts`. A runtime-installed extension therefore cannot
-// add a new cube: doing so would require a process restart so the static
-// registration runs again. This module is the PURE decision function the
-// install pipeline calls to classify an extension's cube usage against the
-// host's fixed cube catalog (obtained from `listRegisteredCubeNames()`).
+// Cubes (the semantic-layer FROM/JOIN sources behind chart portlets) are
+// host-owned. As of cinatra#660 a runtime-installed extension MAY contribute a
+// cube WITHOUT a rebuild — but ONLY as an ALIAS over a host FROM-allowlisted
+// base cube with a member subset (the host owns all SQL + the tenant predicate;
+// the extension supplies no SQL). This module is the PURE decision function the
+// install pipeline calls to classify an extension's cube usage:
+//   - declared runtime cube descriptors that ALL validate against the host
+//     allowlist → `"register-runtime"` (register at runtime, no rebuild);
+//   - a declared descriptor that fails allowlist validation → `"reject"`;
+//   - a portlet referencing a cube neither in the host catalog nor declared by
+//     this package → `"reject"`;
+//   - otherwise → `"ok"`.
+// The host catalog (bundled ∪ active-runtime) is passed in via `knownCubes`; the
+// allowlist validator is injected via `validateDeclaredDescriptors`.
 //
 // A portlet references a cube via a single string field in its opaque
 // `config` blob, named either `cube` or `cubeRef` (the dashboard-config v1.2
@@ -96,6 +103,19 @@ function analyticsCubeRefs(portlet: PortletConfigV12): string[] {
   return [...refs];
 }
 
+/**
+ * A runtime cube descriptor the package declares (parsed from
+ * `cinatra/cube-descriptors.json`). Validated by the injected
+ * `validateDeclaredDescriptors` against the host FROM-allowlist + published
+ * members. The host owns all SQL — the descriptor names only an alias id, an
+ * allowlisted base table, and a member subset.
+ */
+export type DeclaredRuntimeCubeDescriptor = {
+  readonly cubeId: string;
+  readonly fromTable: string;
+  readonly members: readonly string[];
+};
+
 export type ExtensionCubeUsageInput = {
   /**
    * The extension's parsed dashboard config (v1.2). Optional — an extension
@@ -104,32 +124,50 @@ export type ExtensionCubeUsageInput = {
    */
   readonly dashboardConfig?: DashboardConfigV12 | null;
   /**
-   * Cube names the extension package DECLARES it contributes (e.g. from a
-   * `cinatra.dashboardCubes` manifest field). A non-empty list means the
-   * package wants to register NEW cubes — impossible at runtime.
+   * The runtime cube descriptors the package DECLARES it contributes (parsed
+   * from `cinatra/cube-descriptors.json`). When non-empty AND every descriptor
+   * validates against the host allowlist, the verdict is `"register-runtime"`:
+   * the cubes register at runtime (NO rebuild). A descriptor that fails
+   * allowlist validation makes the whole install `"reject"` (it can never
+   * register). The alias cube ids these declare are added to the known-cube set
+   * so a portlet may reference the package's OWN new runtime cube.
    */
-  readonly declaredCubeContributions?: readonly string[] | null;
+  readonly declaredCubeDescriptors?: readonly DeclaredRuntimeCubeDescriptor[] | null;
 };
 
 export type ExtensionCubeUsageOptions = {
-  /** The host's fixed cube catalog (from `listRegisteredCubeNames()`). */
+  /** The host's current cube catalog (bundled ∪ active-runtime). */
   readonly knownCubes: readonly string[];
+  /**
+   * Validate the declared runtime cube descriptors against the host FROM-
+   * allowlist + published members. Returns `{ ok: true }` when ALL validate, or
+   * the first failure. Injected so the guard stays pure (no host catalog import).
+   * Omitted ⇒ any declared descriptor is `"reject"` (fail-closed: the host has
+   * no allowlist to validate against).
+   */
+  readonly validateDeclaredDescriptors?: (
+    descriptors: readonly DeclaredRuntimeCubeDescriptor[],
+  ) => { ok: true } | { ok: false; reason: string };
 };
 
 export type ExtensionCubeUsageVerdict = {
   /**
    * - `"ok"`: the extension references only registered cubes (or none) and
    *   declares no cube contributions — safe to install at runtime.
-   * - `"reject"`: a portlet references a cube NOT in the host catalog — the
-   *   dashboard would render a broken chart; refuse the install.
-   * - `"requires-rebuild"`: the extension declares cube contributions, which
-   *   can only register via a static boot pass — defer to a rebuild/restart.
+   * - `"register-runtime"`: the extension declares runtime cube descriptors that
+   *   ALL validate against the host allowlist — register them at runtime (no
+   *   rebuild). `registerCubeIds` carries the alias ids to register.
+   * - `"reject"`: a portlet references a cube NOT in the host catalog (and not
+   *   declared by this package), OR a declared descriptor fails allowlist
+   *   validation — refuse the install.
    */
-  readonly verdict: "ok" | "reject" | "requires-rebuild";
+  readonly verdict: "ok" | "reject" | "register-runtime";
   /** Human-readable explanation (present for non-`"ok"` verdicts). */
   readonly reason?: string;
-  /** The offending cube names (present for `"reject"`/`"requires-rebuild"`). */
+  /** The offending cube names (present for `"reject"`). */
   readonly offendingCubes?: string[];
+  /** The alias cube ids to register (present for `"register-runtime"`). */
+  readonly registerCubeIds?: string[];
 };
 
 /** Extract the cube name(s) a single portlet references via config. */
@@ -149,12 +187,15 @@ function cubeRefsOf(portlet: PortletConfigV12): string[] {
 }
 
 /**
- * Classify an extension's cube usage against the host's fixed cube catalog.
+ * Classify an extension's cube usage against the host's current cube catalog.
  *
- * Precedence: declared contributions are decided FIRST — a package that wants
- * to register new cubes is `"requires-rebuild"` regardless of how its portlets
- * reference cubes (the contribution itself, not the reference, is the blocker).
- * Otherwise, unknown cube references → `"reject"`; clean → `"ok"`.
+ * Precedence: declared runtime cube descriptors are decided FIRST. A package
+ * that declares descriptors which ALL validate against the host FROM-allowlist
+ * is `"register-runtime"` (its cubes register at runtime, no rebuild). A
+ * descriptor that fails allowlist validation makes the install `"reject"` (it
+ * can never register). The alias ids a `register-runtime` package declares are
+ * added to the known-cube set so the package's OWN portlets may reference them.
+ * Otherwise, unknown portlet cube references → `"reject"`; clean → `"ok"`.
  */
 export function validateExtensionCubeUsage(
   input: ExtensionCubeUsageInput,
@@ -162,21 +203,40 @@ export function validateExtensionCubeUsage(
 ): ExtensionCubeUsageVerdict {
   const known = new Set(options.knownCubes);
 
-  // (a) Declared cube contributions can only register at static boot.
-  const contributions = (input.declaredCubeContributions ?? []).filter(
-    (c) => typeof c === "string" && c.length > 0,
+  // (a) Declared runtime cube descriptors — validate against the host
+  //     FROM-allowlist. ALL must validate or the install is rejected.
+  const descriptors = (input.declaredCubeDescriptors ?? []).filter(
+    (d): d is DeclaredRuntimeCubeDescriptor =>
+      !!d && typeof d.cubeId === "string" && d.cubeId.length > 0,
   );
-  if (contributions.length > 0) {
-    return {
-      verdict: "requires-rebuild",
-      reason:
-        "extension declares cube contributions, which register only at " +
-        "static boot — a host rebuild/restart is required to add cubes",
-      offendingCubes: [...new Set(contributions)],
-    };
+  let registerCubeIds: string[] = [];
+  if (descriptors.length > 0) {
+    const validate = options.validateDeclaredDescriptors;
+    if (!validate) {
+      // No host allowlist to validate against — fail closed.
+      return {
+        verdict: "reject",
+        reason:
+          "extension declares runtime cube descriptors but the host provided no " +
+          "allowlist validator — refusing the install",
+        offendingCubes: [...new Set(descriptors.map((d) => d.cubeId))],
+      };
+    }
+    const result = validate(descriptors);
+    if (!result.ok) {
+      return {
+        verdict: "reject",
+        reason: `runtime cube descriptor rejected: ${result.reason}`,
+        offendingCubes: [...new Set(descriptors.map((d) => d.cubeId))],
+      };
+    }
+    registerCubeIds = [...new Set(descriptors.map((d) => d.cubeId))];
+    // The package may reference its OWN newly-declared cubes from its portlets.
+    for (const id of registerCubeIds) known.add(id);
   }
 
-  // (b) Portlet cube references must resolve to a registered cube.
+  // (b) Portlet cube references must resolve to a registered cube (bundled,
+  //     active-runtime, OR one this package is registering now).
   const unknownRefs = new Set<string>();
   for (const portlet of input.dashboardConfig?.portlets ?? []) {
     for (const ref of cubeRefsOf(portlet)) {
@@ -192,6 +252,9 @@ export function validateExtensionCubeUsage(
     };
   }
 
-  // (c) References only registered cubes (or none); no contributions.
+  // (c) Declared (valid) descriptors → register-runtime; else clean → ok.
+  if (registerCubeIds.length > 0) {
+    return { verdict: "register-runtime", registerCubeIds };
+  }
   return { verdict: "ok" };
 }

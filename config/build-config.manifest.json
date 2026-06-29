@@ -186,6 +186,8 @@
     { "alias": "@cinatra-ai/dashboards/cubes-mcp-module", "target": "./packages/dashboards/src/mcp-cubes/index.ts" },
     { "alias": "@cinatra-ai/dashboards/cubes-post-process", "target": "./packages/dashboards/src/cubes/agent-runs-post-process.ts" },
     { "alias": "@cinatra-ai/dashboards/cubes-platform", "target": "./packages/dashboards/src/cubes/platform-singleton.ts" },
+    { "alias": "@cinatra-ai/dashboards/runtime-cube-registry", "target": "./packages/dashboards/src/cubes/runtime-cube-registry.ts" },
+    { "alias": "@cinatra-ai/dashboards/runtime-cube-serve-gate", "target": "./packages/dashboards/src/cubes/runtime-cube-serve-gate.ts" },
     { "alias": "@cinatra-ai/extensions/connector-handler", "target": "./packages/extensions/src/connector-handler.ts" },
     { "alias": "@cinatra-ai/extensions/connector-installed-predicate", "target": "./packages/extensions/src/connector-installed-predicate.ts" },
     { "alias": "@cinatra-ai/extensions/artifact-handler", "target": "./packages/extensions/src/artifact-handler.ts" },

@@ -93,12 +93,30 @@ export type WorkflowInstallSagaInput = {
   actor: { userId?: string | null; orgId?: string | null };
 };
 
+/** A runtime cube descriptor the preflight validated for runtime registration. */
+export type PreflightRuntimeCubeDescriptor = {
+  readonly cubeId: string;
+  readonly fromTable: string;
+  readonly members: readonly string[];
+};
+
+/** A runtime portlet kind the preflight validated for runtime registration. */
+export type PreflightRuntimePortletKind = {
+  readonly kind: string;
+  readonly version: string;
+  readonly rendersAs: string;
+};
+
 /** The compiled, ready-to-write artifacts the preflight produces from the store. */
 export type WorkflowInstallPreflightResult = {
   /** The parsed+compiled workflow template manifest (the first write payload). */
   manifest: unknown;
   /** The parsed dashboard config, or null when the extension ships no dashboard. */
   dashboardConfig: unknown | null;
+  /** Runtime cube descriptors to register (cinatra#660). Empty/omitted when none. */
+  runtimeCubeDescriptors?: readonly PreflightRuntimeCubeDescriptor[];
+  /** Runtime portlet kinds to register (cinatra#660). Empty/omitted when none. */
+  runtimePortletKinds?: readonly PreflightRuntimePortletKind[];
 };
 
 export type WorkflowInstallSagaDeps = {
@@ -212,7 +230,23 @@ export type WorkflowInstallSagaDeps = {
    *  the canonical-store read. */
   readCurrentDependencies?: (packageName: string, orgId: string | null) => Promise<ExtensionDependency[] | null>;
 
+  // -- runtime contributions (cinatra#660) -------------------------------
+  /** WRITE 5: register the runtime cube descriptors + portlet kinds the preflight
+   *  validated, then rebuild the cube platform + clear the MCP bridge so the new
+   *  cubes serve WITHOUT a rebuild. A no-op when both lists are empty. Idempotent
+   *  (re-install replaces the package's prior runtime registrations). */
+  registerRuntimeContributions: (input: {
+    packageName: string;
+    orgId: string;
+    cubeDescriptors: readonly PreflightRuntimeCubeDescriptor[];
+    portletKinds: readonly PreflightRuntimePortletKind[];
+  }) => Promise<void>;
+
   // -- compensation (inverse-order rollback inverses) --------------------
+  /** Inverse of WRITE 5 — unregister the package's runtime cube/portlet
+   *  contributions, then rebuild the platform + clear the MCP bridge. Safe no-op
+   *  when the package registered none. */
+  unregisterRuntimeContributions: (input: { packageName: string }) => Promise<void>;
   /** Inverse of WRITE 2/3/4 — archive the extension's dashboards (rows preserved). */
   archiveDashboards: (input: { packageName: string; orgId: string; userId: string }) => Promise<void>;
   /** Inverse of WRITE 1 — hard-delete the workflow_template (refuses an in-use one). */
@@ -320,6 +354,10 @@ export async function installWorkflowExtensionSaga(
     // when nothing was written).
     let createdTemplateId: string | null = null;
     let enteredDashboardWrites = false;
+    // Flips when WRITE 5 (runtime cube/portlet registration) is entered, so a
+    // throw from here on unregisters the package's runtime contributions on
+    // rollback (the inverse is a safe no-op when nothing was registered).
+    let enteredRuntimeContributions = false;
 
     // 1. MATERIALIZE — SRI-verify + unpack into the store (identity resolved
     // above). Runs BEFORE `beginInstallOp`: materialize writes only the package
@@ -493,6 +531,28 @@ export async function installWorkflowExtensionSaga(
         await deps.restoreDashboards({ packageName, orgId, userId });
       }
 
+      // 5b. WRITE 5 — runtime cube descriptors + portlet kinds (cinatra#660).
+      // Registers the runtime contributions the preflight validated and rebuilds
+      // the cube platform so they serve with NO rebuild. Done AFTER the dashboard
+      // rows so a referencing portlet's runtime cube is registered alongside it.
+      // Flip the rollback flag BEFORE the call so a throw mid-register is undone.
+      const runtimeCubeDescriptors = preflight.runtimeCubeDescriptors ?? [];
+      const runtimePortletKinds = preflight.runtimePortletKinds ?? [];
+      if (runtimeCubeDescriptors.length > 0 || runtimePortletKinds.length > 0) {
+        enteredRuntimeContributions = true;
+        if (!enteredDashboardWrites) {
+          // Mark the writing phase even when there's no dashboard config (a
+          // cube-only package) so boot-orphan cleanup knows writes were entered.
+          await deps.advanceInstallOpPhase({ installOpId, phase: "writing" });
+        }
+        await deps.registerRuntimeContributions({
+          packageName,
+          orgId,
+          cubeDescriptors: runtimeCubeDescriptors,
+          portletKinds: runtimePortletKinds,
+        });
+      }
+
       // 6. recordProvenance LATE + FINALIZE (the activatability transition).
       await deps.recordProvenance({
         packageName,
@@ -530,7 +590,7 @@ export async function installWorkflowExtensionSaga(
       // (log-and-continue) so a failed compensation never masks the ORIGINAL
       // error. Order is the inverse of the writes: undo dashboards → undo the
       // workflow_template (ONLY the one THIS attempt created).
-      await compensate({ deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites });
+      await compensate({ deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites, enteredRuntimeContributions });
       // cinatra#158 (append-only journal): `beginInstallOp` above APPENDED a NEW
       // non-finalized op for THIS attempt; it did NOT touch the OLD install's
       // `finalized` op (which still exists). So TERMINALIZE the NEW op
@@ -604,8 +664,21 @@ async function compensate(args: {
   userId: string;
   createdTemplateId: string | null;
   enteredDashboardWrites: boolean;
+  enteredRuntimeContributions: boolean;
 }): Promise<void> {
-  const { deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites } = args;
+  const { deps, packageName, orgId, userId, createdTemplateId, enteredDashboardWrites, enteredRuntimeContributions } = args;
+
+  // Inverse of WRITE 5 — unregister the package's runtime cube/portlet
+  // contributions (then rebuild the platform). Attempted whenever the runtime-
+  // registration region was ENTERED, so a partial register is fully undone.
+  // Runs BEFORE the dashboard archive (inverse order of the writes).
+  if (enteredRuntimeContributions) {
+    try {
+      await deps.unregisterRuntimeContributions({ packageName });
+    } catch (e) {
+      console.error(`[workflow-install-saga] compensation (unregisterRuntimeContributions) failed for ${packageName}:`, e);
+    }
+  }
 
   // Inverse of WRITE 2/3/4 — archive the dashboards (rows preserved; safe no-op
   // when nothing was written). Attempted whenever the dashboard-write region was
@@ -702,10 +775,54 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
     validateDashboardConfigV12,
     validateExtensionCubeUsage,
     getPortletKindDescriptor,
+    getPortletKindDescriptorAnyVersion,
     registerCorePortletKinds,
+    hostBundledPortletKinds,
   } = await import("@cinatra-ai/dashboards/extension-materialization");
-  const { listRegisteredCubeNames } = await import("@cinatra-ai/dashboards/cubes-platform");
+  const { listRegisteredCubeNames, basePublishedMembersAccessor } = await import("@cinatra-ai/dashboards/cubes-platform");
+  const { parseRuntimeCubeDescriptors } = await import("@cinatra-ai/dashboards/runtime-cube-registry");
+  const {
+    reconcileRegisterRuntimeContributions,
+    reconcileUnregisterRuntimeContributions,
+  } = await import("@/lib/dashboards/runtime-cube-reconcile");
   const { preflightExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
+
+  const hostBundledComponentKinds = new Set<string>(hostBundledPortletKinds());
+
+  // Parse `cinatra/cube-descriptors.json` into the declared runtime cube
+  // descriptor shape (cube-guard validates them against the host allowlist).
+  // A non-array / malformed entry yields [] here; the guard then sees no
+  // descriptors. Strict shape validation lives in parseRuntimeCubeDescriptors.
+  function parseDeclaredCubeDescriptorsFromManifest(raw: unknown): { cubeId: string; fromTable: string; members: string[] }[] {
+    if (!Array.isArray(raw)) return [];
+    const out: { cubeId: string; fromTable: string; members: string[] }[] = [];
+    for (const entry of raw) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.cubeId !== "string" || typeof e.fromTable !== "string" || !Array.isArray(e.members)) continue;
+      out.push({
+        cubeId: e.cubeId,
+        fromTable: e.fromTable,
+        members: e.members.filter((m): m is string => typeof m === "string"),
+      });
+    }
+    return out;
+  }
+
+  // Parse `cinatra/portlet-kinds.json` into the declared runtime portlet kind
+  // shape. A non-array / malformed entry is skipped.
+  function parseRuntimePortletKindsFromManifest(raw: unknown): { kind: string; version: string; rendersAs: string }[] {
+    if (!Array.isArray(raw)) return [];
+    const out: { kind: string; version: string; rendersAs: string }[] = [];
+    for (const entry of raw) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.kind !== "string" || typeof e.rendersAs !== "string") continue;
+      const version = typeof e.version === "string" && e.version.length > 0 ? e.version : "1.0.0";
+      out.push({ kind: e.kind, version, rendersAs: e.rendersAs });
+    }
+    return out;
+  }
 
   type HostPortName = Parameters<typeof recordRequestedGrant>[0]["requestedPorts"][number];
 
@@ -727,6 +844,20 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
       // error fails the preflight closed.
       if ((e as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
       throw new WorkflowInstallPreflightError("DASHBOARD_INVALID", `cinatra/dashboard.json could not be read/parsed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Read a sibling `cinatra/<file>` JSON seam (cube-descriptors / portlet-kinds).
+  // ENOENT ⇒ the extension ships none (null). Any other read/parse error fails
+  // the preflight CLOSED with the given code.
+  async function readSiblingJsonFromStore(storeDir: string, file: string, code: string): Promise<unknown | null> {
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    try {
+      return JSON.parse(await readFile(join(storeDir, "cinatra", file), "utf8")) as unknown;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
+      throw new WorkflowInstallPreflightError(code, `cinatra/${file} could not be read/parsed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
@@ -829,30 +960,70 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         throw new WorkflowInstallPreflightError("BPMN_INVALID", sidecar.errors.map((e) => `${e.code}: ${e.detail}`).join("; "));
       }
 
+      // (b0) RUNTIME portlet kinds (cinatra#660) — parse + validate the declared
+      // `cinatra/portlet-kinds.json` BEFORE the dashboard validation, so a
+      // dashboard portlet may reference one of this package's OWN runtime kinds.
+      // Each runtime kind is ALIAS-ONLY (rendersAs → a bundled-component kind);
+      // it INHERITS that kind's descriptor (inputKeys/outputKeys) for validation.
+      registerCorePortletKinds();
+      const portletKindsRaw = await readSiblingJsonFromStore(storeDir, "portlet-kinds.json", "PORTLET_KINDS_INVALID");
+      const runtimePortletKinds = parseRuntimePortletKindsFromManifest(portletKindsRaw);
+      // Build a `getPortletKind` that overlays the declared runtime kinds onto
+      // the core registry — a runtime kind resolves to its rendersAs target's
+      // descriptor (under the runtime kind's own name) so dashboard validation
+      // accepts a portlet of that kind. NOTHING is registered into the global
+      // registry at preflight — registration happens at WRITE 5.
+      const getPortletKindWithRuntime = (kind: string, ver: string) => {
+        const declared = runtimePortletKinds.find((k) => k.kind === kind && k.version === ver);
+        if (declared) {
+          const target = getPortletKindDescriptor(declared.rendersAs, ver) ?? getPortletKindDescriptorAnyVersion(declared.rendersAs);
+          if (target) return { ...target, kind, version: ver };
+          return undefined; // rendersAs unresolved — the (b1) validation below rejects.
+        }
+        return getPortletKindDescriptor(kind, ver);
+      };
+
       // (b) dashboard v1.2 WITH the typed-portlet registry (kind/version BEFORE write).
       const dashboardConfig = await readDashboardConfigFromStore(storeDir);
       let parsedConfig: unknown | null = null;
       if (dashboardConfig != null) {
-        registerCorePortletKinds();
-        const v = validateDashboardConfigV12(dashboardConfig, { getPortletKind: getPortletKindDescriptor });
+        const v = validateDashboardConfigV12(dashboardConfig, { getPortletKind: getPortletKindWithRuntime });
         if (!v.ok) throw new WorkflowInstallPreflightError("DASHBOARD_INVALID", v.errors.join("; "));
         parsedConfig = v.config;
       }
 
-      // (c) cube guard — unknown cube ⇒ reject; declared contributions ⇒ requires-rebuild.
-      const declaredCubeContributions = Array.isArray(pkgCinatra.dashboardCubes)
-        ? (pkgCinatra.dashboardCubes as unknown[]).filter((c): c is string => typeof c === "string")
-        : undefined;
+      // (b1) Validate every declared runtime portlet kind resolves to a bundled
+      // component (rendersAs → a kind the host bundles a component for) — fail
+      // closed (no placeholder-only kinds). Done via a dry-run register against a
+      // throwaway predicate; the REAL registration happens at WRITE 5.
+      for (const pk of runtimePortletKinds) {
+        if (!hostBundledComponentKinds.has(pk.rendersAs)) {
+          throw new WorkflowInstallPreflightError(
+            "PORTLET_KIND_INVALID",
+            `runtime portlet kind "${pk.kind}@${pk.version}" rendersAs "${pk.rendersAs}", which has no bundled component`,
+          );
+        }
+      }
+
+      // (c) cube guard — declared runtime cube descriptors that ALL validate
+      // against the host FROM-allowlist ⇒ register-runtime; an invalid descriptor
+      // or an unknown portlet cube reference ⇒ reject.
+      const cubeDescriptorsRaw = await readSiblingJsonFromStore(storeDir, "cube-descriptors.json", "CUBE_DESCRIPTORS_INVALID");
+      const declaredCubeDescriptors = parseDeclaredCubeDescriptorsFromManifest(cubeDescriptorsRaw);
       const cubeVerdict = validateExtensionCubeUsage(
-        { dashboardConfig: parsedConfig as never, declaredCubeContributions },
-        { knownCubes: listRegisteredCubeNames() },
+        { dashboardConfig: parsedConfig as never, declaredCubeDescriptors },
+        {
+          knownCubes: listRegisteredCubeNames(),
+          validateDeclaredDescriptors: (descriptors) => {
+            const parsed = parseRuntimeCubeDescriptors(descriptors, basePublishedMembersAccessor());
+            return parsed.ok ? { ok: true } : { ok: false, reason: `${parsed.code}: ${parsed.reason}` };
+          },
+        },
       );
       if (cubeVerdict.verdict === "reject") {
         throw new WorkflowInstallPreflightError("CUBE_UNKNOWN", cubeVerdict.reason ?? "dashboard references an unregistered cube");
       }
-      if (cubeVerdict.verdict === "requires-rebuild") {
-        throw new WorkflowInstallRequiresRebuildError(cubeVerdict.reason ?? "extension requires a host rebuild to register cubes", cubeVerdict.offendingCubes ?? []);
-      }
+      const runtimeCubeDescriptors = cubeVerdict.verdict === "register-runtime" ? declaredCubeDescriptors : [];
 
       // (d) migration preflight (#118): the WORKFLOW install path has no
       // host-migration APPLY step (declarative BPMN packages run no server
@@ -880,7 +1051,12 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         );
       }
 
-      return { manifest: sidecar.manifest, dashboardConfig: parsedConfig };
+      return {
+        manifest: sidecar.manifest,
+        dashboardConfig: parsedConfig,
+        runtimeCubeDescriptors,
+        runtimePortletKinds,
+      };
     },
 
     installWorkflowTemplate: async ({ manifest, orgId, userId, packageName }) => {
@@ -1033,6 +1209,21 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
       return target ? target.dependencies : null;
     },
 
+    registerRuntimeContributions: async ({ packageName, orgId, cubeDescriptors, portletKinds }) => {
+      await reconcileRegisterRuntimeContributions({
+        packageName,
+        // A workflow-extension install is organization-scoped (the saga writes
+        // org-owned dashboard rows), so the runtime cube's owner scope is the
+        // installing org. The serve-gate re-derives actor visibility from the
+        // canonical install row at query time — this scope is descriptive.
+        ownerScope: { ownerLevel: "organization", ownerId: orgId, organizationId: orgId },
+        cubeDescriptors,
+        portletKinds,
+      });
+    },
+    unregisterRuntimeContributions: async ({ packageName }) => {
+      await reconcileUnregisterRuntimeContributions({ packageName });
+    },
     archiveDashboards: async ({ packageName, orgId, userId }) => {
       await archiveExtensionDashboards(undefined, { extensionId: packageName, organizationId: orgId, actor: dashboardActor(userId, orgId) });
     },

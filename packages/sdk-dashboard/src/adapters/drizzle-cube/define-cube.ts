@@ -107,5 +107,67 @@ export function defineCinatraCube(
     measures: dcMeasures,
   });
 
-  return { descriptor, dcCube };
+  return { descriptor, dcCube, build };
+}
+
+/**
+ * Derive a runtime-ALIAS `RegisteredCube` from an already-compiled host cube,
+ * reusing the host's SQL build (FROM/JOIN/WHERE + per-member SQL) UNCHANGED.
+ *
+ * The alias gets a NEW cube id (`aliasId`) and a SUBSET of the base cube's
+ * members (`memberIds`). This is how a runtime-installed extension exposes a
+ * host-allowlisted cube under its own id with a narrower projection WITHOUT
+ * supplying any SQL — every dimension/measure SQL and the tenant predicate come
+ * from `base.build`, so the alias inherits the base cube's EXACT row filtering.
+ *
+ * Fail-closed: an empty `aliasId`, an alias id equal to the base id, an empty
+ * member set, or any `memberId` not present on the base cube THROWS — a runtime
+ * cube can never reference a member (and therefore a column) the host did not
+ * already publish for that table.
+ */
+export function aliasCinatraCube(
+  base: RegisteredCube,
+  aliasId: string,
+  memberIds: readonly string[],
+): RegisteredCube {
+  if (!aliasId || aliasId.length === 0) {
+    throw new Error("aliasCinatraCube: aliasId is required");
+  }
+  if (aliasId === base.descriptor.id) {
+    throw new Error(
+      `aliasCinatraCube: aliasId "${aliasId}" must differ from the base cube id`,
+    );
+  }
+  const want = new Set(memberIds);
+  if (want.size === 0) {
+    throw new Error(`aliasCinatraCube(${aliasId}): at least one member is required`);
+  }
+  const baseDimensions = new Map(base.descriptor.dimensions.map((d) => [d.id, d]));
+  const baseMeasures = new Map(base.descriptor.measures.map((m) => [m.id, m]));
+  const dimensions: CubeDescriptor["dimensions"][number][] = [];
+  const measures: CubeDescriptor["measures"][number][] = [];
+  for (const id of want) {
+    const dim = baseDimensions.get(id);
+    const meas = baseMeasures.get(id);
+    if (dim) dimensions.push(dim);
+    else if (meas) measures.push(meas);
+    else {
+      throw new Error(
+        `aliasCinatraCube(${aliasId}): member "${id}" is not published by base cube "${base.descriptor.id}"`,
+      );
+    }
+  }
+  const aliasDescriptor: CubeDescriptor = {
+    id: aliasId,
+    version: base.descriptor.version,
+    displayName: base.descriptor.displayName,
+    description: base.descriptor.description,
+    dimensions,
+    measures,
+  };
+  // Reuse the host SQL build verbatim — defineCinatraCube only reads the SQL
+  // entries for members named in the alias descriptor, so the subset is
+  // honoured while the FROM/JOIN/WHERE (and thus the tenant predicate) is the
+  // base cube's exact closure.
+  return defineCinatraCube(aliasDescriptor, base.build);
 }
