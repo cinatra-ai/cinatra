@@ -214,6 +214,19 @@ jobs:
       - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
         if: needs.changed-paths.outputs.run_uat == 'true'
         run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Derive NANGO_ENCRYPTION_KEY (throwaway base64 32-byte, per-run)
+        if: needs.changed-paths.outputs.run_uat == 'true'
+        # docker-compose.yml's nango-server (default profile, always started by
+        # the composite action's `docker compose --profile wordpress --profile
+        # drupal up`) interpolates `NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}`
+        # from the runner env. Unset → nango boots with a BLANK key and fails
+        # (cinatra#665). nango-server REQUIRES a base64-encoded 32-byte AES key
+        # (mirrors scripts/ci/works-after/nango.sh's wa_throwaway_b64key); a
+        # bare placeholder string like build-image.yml uses is fine only there
+        # because that build stage never boots nango. This is THROWAWAY crypto
+        # minted per run — never an ops secret. Exported to $GITHUB_ENV so the
+        # job env reaches the composite action's `docker compose up` step.
+        run: echo "NANGO_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         if: needs.changed-paths.outputs.run_uat == 'true'
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
@@ -222,6 +235,7 @@ jobs:
         run: |
           : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
           : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
+          : "${NANGO_ENCRYPTION_KEY:?cinatra#665 regression: NANGO_ENCRYPTION_KEY must be derived (openssl rand -base64 32) before docker compose up — nango-server boots blank otherwise}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"
@@ -284,6 +298,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Derive BETTER_AUTH_SECRET (throwaway, per-run)
         run: echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - name: Derive NANGO_ENCRYPTION_KEY (throwaway base64 32-byte, per-run)
+        # docker-compose.yml's nango-server (default profile, always started by
+        # the composite action's `docker compose --profile wordpress --profile
+        # drupal up`) interpolates `NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}`
+        # from the runner env. Unset → nango boots with a BLANK key and fails
+        # (cinatra#665, the nightly-red root cause). nango-server REQUIRES a
+        # base64-encoded 32-byte AES key (mirrors scripts/ci/works-after/nango.sh's
+        # wa_throwaway_b64key). THROWAWAY crypto minted per run — never an ops
+        # secret. Exported to $GITHUB_ENV so the job env reaches the composite
+        # action's `docker compose up` step.
+        run: echo "NANGO_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
       - name: Assert app-service env present (regression pin for cinatra#173)
         # Env-presence guard ONLY (runs in the caller, BEFORE the composite
         # action installs `pg`). Postgres reachability is already guaranteed by
@@ -291,6 +316,7 @@ jobs:
         run: |
           : "${SUPABASE_DB_URL:?cinatra#173 regression: SUPABASE_DB_URL must be exported (postgres service + job env) before cinatra setup dev}"
           : "${BETTER_AUTH_SECRET:?cinatra#173 regression: BETTER_AUTH_SECRET must be derived (openssl rand) before cinatra setup dev}"
+          : "${NANGO_ENCRYPTION_KEY:?cinatra#665 regression: NANGO_ENCRYPTION_KEY must be derived (openssl rand -base64 32) before docker compose up — nango-server boots blank otherwise}"
           : "${OPENAI_API_KEY:?cinatra#173 regression: OPENAI_API_KEY placeholder must be set (next.config.ts REQUIRED_ENV) before the dev server boots}"
           : "${CINATRA_RUNTIME_MODE:?cinatra#173 regression: CINATRA_RUNTIME_MODE=development required (scripted provider fail-closes otherwise)}"
           echo "app-service env present"
