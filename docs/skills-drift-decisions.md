@@ -40,3 +40,33 @@ Skills-unaffected: workflow_draft_create — no name/param change; identifier ap
 Skills-unaffected: @cinatra-ai/email-outreach-agent — the package is unchanged. The only related change is the in-repo trigger SKILL.md (`packages/trigger-email-send/...`) moving `match_when` under `metadata:` for validator compatibility (Wave-2 #546); the public chat-campaign-creation SKILL.md already nests its watches under `metadata:` and references the package name unchanged.
 Skills-unaffected: packages/agents/src/mcp/handlers.ts — refactor + security hardening only: extracted path-resolution helpers into `agent-source-paths`, removed the A2A service-identity actor override on the run path (sec hardening). No watched primitive name, documented param shape, or dispatch convention encoded by the public SKILL.md set changed.
 Skills-unaffected: packages/agents/src/verdaccio/client.ts — comment-only change in the release range (stripped a private-tracker reference from a docstring on `publishAgentPackageFromGitDir`/declarative-publish). No behavior, signature, or surface change.
+
+## v0.1.5
+
+Range: v0.1.4 (`0700d0c`) -> release head (`46c04ae`). Reconciled against the
+release-current `@cinatra-ai/assistant-skills` pin `a7030f0` (current
+assistant-skills main, written into `cinatra-required-extensions.lock.json` by
+#724). The per-PR gate pin (`.github/workflows/skills-drift-gate.yml`
+`skills_ref: 538a8176`) lags the lock by the two intervening assistant-skills
+commits + main HEAD; the lag carries NO new `cinatra-watches` declarations, so the
+sweep verdict is identical at either pin (17 SKILL.md scanned, 13 with declared
+watches, 3 declared-watch findings, 0 unresolved, 0 heuristic). The `skills_ref`
+re-pin to `a7030f0` is a config lockstep fix deferred to a post-tag PR (the
+v0.1.5 app surface is frozen at `46c04ae`).
+
+The v0.1.4->v0.1.5 range touched 3 declared-watch surfaces, all from the #657/#659
+runtime-lifecycle ("installed_extension as the runtime source of truth") work and
+its follow-on refactor (#695) and canary harness (#718). None changed a watched
+primitive's LLM-facing tool CONTRACT (name, documented input params, success-response
+shape, refusal text, or discovery semantics) the public chat-* SKILL.md set teaches:
+a disabled/uninstalled agent now returns a structured refusal / is omitted from
+discovery, behaviour the existing SKILL.md error-handling guidance already covers.
+The route-link staleness scan over the skill set is clean (the app's `/configuration/*`
+and `/connectors` routes; no stale `/settings/connections`, `/settings/*`, removed
+`/workflows`, or `/agents/registry`); assistant-skills already fixed the
+`/settings/connections` -> `/connectors` link in its own commit `e000767` (within
+pin `a7030f0`). Each surface is recorded below with its exact-surface attribution.
+
+Skills-unaffected: agent_run — no name/param/behaviour change: the inline runnable-gate was moved into assertAgentPackageRunnable(); the agent_run { packageName, inputParams } primitive surface and its documented refusal ("Agent is not installed (disabled or uninstalled): <id>") are unchanged. The #659 runtime-lifecycle (installed_extension) gate returns a structured refusal for a disabled agent — behaviour the existing SKILL.md error-handling guidance already covers. No public SKILL.md dispatch instruction drifts.
+Skills-unaffected: agent_list — no name/param/behaviour change: the inline discovery filter was moved into partitionRunnableAgentPackages(); the agent_list primitive surface, its listing shape, and the de-list semantics (drop runtime-archived; keep null-package + CG-1 no-row) are unchanged. The #659 gate omits a disabled agent from discovery — covered by existing SKILL.md guidance.
+Skills-unaffected: packages/agents/src/mcp/handlers.ts — pure internal refactor: the two #659 runtime-lifecycle gate blocks were extracted verbatim into named helpers in runtime-install-gate.ts (#695, behaviour byte-identical), and #718 added a test-only cross-kind hot-install canary harness + fixtures. No watched MCP primitive name, documented param shape, refusal text, or dispatch convention encoded by the public SKILL.md set changed.
