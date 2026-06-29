@@ -4,7 +4,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { requireAdminSession } from "@/lib/auth-session";
-import { WebhooksTable } from "@/app/webhooks/_components/webhooks-table";
+import { WebhooksTable } from "@/app/configuration/webhooks/_components/webhooks-table";
 
 export const metadata: Metadata = { title: "Webhooks" };
 
