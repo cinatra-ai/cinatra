@@ -1,0 +1,16 @@
+{
+  "name": "@cinatra-ai/connector-canary",
+  "version": "1.0.0",
+  "cinatra": {
+    "formatVersion": 2,
+    "kind": "connector",
+    "serverEntry": "./register.mjs",
+    "requestedHostPorts": ["settings"],
+    "sdkAbiRange": "^2",
+    "uiSurface": "schema-config",
+    "configSchema": {
+      "title": "Connector Canary",
+      "fields": [{ "kind": "text", "name": "apiKey", "label": "API key", "required": true }]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@cinatra-ai/cube-canary",
+  "version": "1.0.0",
+  "cinatra": {
+    "formatVersion": 2,
+    "kind": "connector",
+    "serverEntry": "./register.mjs",
+    "sdkAbiRange": "^2",
+    "runtimeCubes": [
+      {
+        "cubeId": "CanaryCube",
+        "fromTable": "ext_cube_canary_rows",
+        "sourcePackageName": "@cinatra-ai/cube-canary"
+      }
+    ]
+  }
+}
