@@ -10,7 +10,13 @@ name: Mirror image to Docker Hub
 # can never disturb the four REQUIRED status checks that build-image.yml owns.
 #
 # How it runs:
-#   - push of a `v*` tag  -> auto-mirror that release (VERSION = the tag).
+#   - completion of "Build and publish image" (build-image.yml) for a `v*` tag
+#     -> auto-mirror that release once the build SUCCEEDED (VERSION = the tag).
+#     This is a `workflow_run` dependency, NOT a parallel `push: tags` trigger:
+#     the mirror starts only AFTER the canonical builder finishes, so it never
+#     races the build and never gives up on a slow build (cinatra#676 — the old
+#     fixed-timeout GHCR wait expired on builds longer than ~10min and failed
+#     the mirror even though the image landed moments later).
 #   - workflow_dispatch    -> one-off / backfill mirror of an existing GHCR tag
 #                             (VERSION = the required `version` input).
 #
@@ -31,9 +37,16 @@ on:
         description: 'GHCR release tag to mirror to Docker Hub. Must already exist on GHCR.'
         required: true
         type: string
-  push:
-    tags:
-      - 'v*'
+  # Run AFTER the canonical builder ("Build and publish image" = build-image.yml's
+  # `name:`) reports completion. The job-level `if` below gates on the upstream run
+  # having SUCCEEDED and having been a `v*` tag push — so a branch push to main, a
+  # PR, a merge_group, or a dispatch run of build-image (none of which publish a
+  # release tag worth mirroring) is filtered out. `workflow_run` always runs from
+  # the default branch ref; the triggering tag is read from
+  # github.event.workflow_run.head_branch (NOT github.ref_name, which is `main`).
+  workflow_run:
+    workflows: ["Build and publish image"]
+    types: [completed]
 
 # Read-only on the repo + GHCR packages. The token only PULLS the source
 # manifest from GHCR; the push target is Docker Hub (separate creds below).
@@ -41,8 +54,12 @@ permissions:
   contents: read
   packages: read
 
+# Key on the resolved release tag, not github.ref. On a `workflow_run` event
+# github.ref is the default branch (main), so keying on it would collapse every
+# release mirror into one group; key on the upstream tag (head_branch) instead,
+# falling back to the dispatch input / github.ref for a backfill.
 concurrency:
-  group: dockerhub-mirror-${{ github.ref }}
+  group: dockerhub-mirror-${{ github.event.workflow_run.head_branch || inputs.version || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -50,9 +67,26 @@ jobs:
     name: Mirror GHCR image to Docker Hub
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Canonical-repo guard: a fork or non-canonical clone must never publish to
-    # the public Docker Hub org, even if a v* tag lands there.
-    if: github.repository == 'cinatra-ai/cinatra'
+    # Run only when:
+    #   - this is the canonical repo (a fork / non-canonical clone must never
+    #     publish to the public Docker Hub org); AND
+    #   - a manual backfill dispatch, OR the upstream builder SUCCEEDED for a
+    #     `v*` TAG push. For a tag-triggered build-image run, the resulting
+    #     workflow_run carries event=='push' and head_branch == the tag name
+    #     (e.g. 'v0.1.5'); build-image also runs on main-branch push / PR /
+    #     merge_group / dispatch, which are excluded here (head_branch 'main' or
+    #     a PR/feature branch fails the `startsWith(..., 'v')` tag guard). The
+    #     strict regex allow-list in "Resolve VERSION" is the final backstop.
+    if: >-
+      github.repository == 'cinatra-ai/cinatra'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (
+          github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && startsWith(github.event.workflow_run.head_branch, 'v')
+        )
+      )
     steps:
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
@@ -74,15 +108,19 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
-          REF_NAME: ${{ github.ref_name }}
+          # The upstream builder's triggering ref. On a `v*` tag push this is the
+          # tag name; we MUST read it from the workflow_run payload, not
+          # github.ref_name (which is the default branch on a workflow_run event).
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             VERSION="$INPUT_VERSION"
           else
-            # push event: github.ref_name is the pushed tag (the 'v*' filter
-            # guarantees a tag triggered this run).
-            VERSION="$REF_NAME"
+            # workflow_run event: the upstream "Build and publish image" run was
+            # triggered by the pushed tag; its name is head_branch (the job `if`
+            # already gated event=='push' + a 'v'-prefixed ref).
+            VERSION="$WORKFLOW_RUN_HEAD_BRANCH"
           fi
           if [ -z "${VERSION}" ]; then
             echo "::error::Empty VERSION — cannot resolve a tag to mirror." >&2
@@ -93,6 +131,7 @@ jobs:
           # ([A-Za-z0-9._-]). This rejects:
           #   - a dispatch typo'd / hand-typed 'latest', whitespace, or a slash/
           #     colon that could escape the ref or write an unintended repo/tag;
+          #   - a non-tag upstream ref (e.g. 'main') that somehow reached here;
           #   - any value that could inject a second line into $GITHUB_OUTPUT.
           # The same shape is what build-image.yml ever pushes to GHCR, so a
           # legitimate tag always passes.
@@ -130,22 +169,24 @@ jobs:
           IS_RELEASE: ${{ steps.ver.outputs.is_release }}
         run: |
           set -euo pipefail
-          # Source-availability wait (race guard). On a `v*` tag push, THIS
-          # workflow and the canonical builder (build-image.yml) start in
-          # parallel from the same tag, so the GHCR source image may not exist
-          # yet when the mirror begins. Poll the source manifest for a bounded
-          # window before giving up. A workflow_dispatch backfill points at an
-          # already-published tag, so it resolves on the first try.
+          # Source-availability check. This workflow now runs only AFTER the
+          # canonical builder (build-image.yml) reports a SUCCESSFUL completion
+          # (workflow_run + conclusion==success), so the GHCR source image is
+          # already published — the old ~10-minute builder-race wait is obsolete
+          # (cinatra#676). A short bounded retry remains only to absorb GHCR
+          # registry/manifest read propagation right after publish, not to wait
+          # on the build. A workflow_dispatch backfill points at an already-
+          # published tag, so it resolves on the first try.
           tries=0
-          max_tries=30   # 30 x 20s = up to 10 minutes
+          max_tries=12   # 12 x 10s = up to 2 minutes of propagation slack
           until docker buildx imagetools inspect "${SRC}:${VERSION}" >/dev/null 2>&1; do
             tries=$((tries + 1))
             if [ "$tries" -ge "$max_tries" ]; then
               echo "::error::Source image ${SRC}:${VERSION} not found on GHCR after waiting — nothing to mirror." >&2
               exit 1
             fi
-            echo "Source ${SRC}:${VERSION} not yet on GHCR (attempt ${tries}/${max_tries}); the builder may still be pushing. Waiting 20s…"
-            sleep 20
+            echo "Source ${SRC}:${VERSION} not yet readable on GHCR (attempt ${tries}/${max_tries}); manifest may still be propagating. Waiting 10s…"
+            sleep 10
           done
 
           # latest-policy (second guard): even for a clean semver release tag,
