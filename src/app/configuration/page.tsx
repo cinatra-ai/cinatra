@@ -71,6 +71,23 @@ const administrationSections = [
     ],
   },
   {
+    // Inbound webhooks are extension-authored (declared via cinatra.webhooks);
+    // this moved out of the left sidebar into Configuration (cinatra#696). The
+    // card title + "Manage" CTA both target the registry, so the inner link
+    // points at the authoring guide rather than re-linking the registry.
+    title: "Webhooks",
+    description:
+      "Inbound webhooks declared by extensions, served by the generic webhook facility.",
+    href: "/configuration/webhooks",
+    icon: domainIcons.webhooks,
+    links: [
+      {
+        label: "Authoring guide",
+        href: "https://github.com/cinatra-ai/cinatra/blob/main/docs/webhooks/authoring-inbound-webhooks.md",
+      },
+    ],
+  },
+  {
     title: "Marketplace",
     description: "Browse registry packages and install extensions.",
     href: "/configuration/marketplace",
@@ -163,7 +180,8 @@ const administrationSections = [
     href: "/configuration/telemetry",
     icon: domainIcons.telemetry,
     links: [
-      { label: "Telemetry", href: "/configuration/telemetry" },
+      // The "Telemetry" inner link was removed (cinatra#697) — it duplicated
+      // the card title + "Manage" CTA. Logs remains as the one distinct target.
       { label: "Logs", href: "/configuration/telemetry?tab=logs" },
     ],
   },
