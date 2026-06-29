@@ -27,32 +27,57 @@ import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
+import type {
+  MarketplaceFailureCategory,
+  MarketplaceInstallActionResult,
+} from "./marketplace-failure-copy";
 
 type MarketplaceInstallFormProps = {
-  /** Bound lifecycle form action (install/update/restore) — redirects on success, throws on failure. */
-  action: () => Promise<void>;
-  /** Friendly, operation-specific error copy shown via toast when the action fails. */
-  failureMessage: string;
+  /**
+   * Bound lifecycle form action (install/update/restore). On SUCCESS it
+   * redirect()s (throws a NEXT_REDIRECT sentinel we re-throw). On FAILURE it
+   * RETURNS `{ ok:false, category }` — a returned value survives Next.js
+   * production masking, so the classified cause reaches us where a thrown
+   * message would not (cinatra#685).
+   */
+  action: () => Promise<MarketplaceInstallActionResult | void>;
+  /**
+   * Per-category, operation-specific, NON-technical end-user copy. The screen
+   * builds this with the extension's display name; we pick `[category]` for the
+   * classified failure (cinatra#685).
+   */
+  failureCopyByCategory: Record<MarketplaceFailureCategory, string>;
+  /**
+   * Last-resort copy used when the action throws (no category available) or
+   * returns an unexpected category. Operation-specific, still non-technical.
+   */
+  defaultFailureMessage: string;
   className?: string;
   children: ReactNode;
 };
 
 export function MarketplaceInstallForm({
   action,
-  failureMessage,
+  failureCopyByCategory,
+  defaultFailureMessage,
   className,
   children,
 }: MarketplaceInstallFormProps) {
   async function handleSubmit() {
     try {
-      await action();
+      const result = await action();
+      // Failure path: the action returned a classified category. Show the
+      // mapped, actionable, non-technical copy — never the raw error.
+      if (result && result.ok === false) {
+        toast.error(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+      }
+      // Success returns undefined (the action redirect()s, which throws below).
     } catch (error) {
       // Success path: redirect() sentinel — re-throw so Next.js navigates.
       if (isRedirectError(error)) throw error;
-      // Real failure (registry 404 / unreachable / lifecycle error): the raw
-      // server-action message is masked in production builds, so show friendly,
-      // operation-specific copy instead of crashing the route.
-      toast.error(failureMessage);
+      // Defense in depth: an unexpected THROWN failure (raw message masked in
+      // production) — show the non-technical default instead of crashing.
+      toast.error(defaultFailureMessage);
     }
   }
 

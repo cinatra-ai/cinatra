@@ -44,42 +44,68 @@ describe("isRedirectError — distinguishes redirect() sentinel from a real fail
 });
 
 describe("graceful submit contract — failure toasts, success re-throws (no page crash)", () => {
-  // Mirrors MarketplaceInstallForm.handleSubmit exactly: a failed action is
-  // caught and surfaced (no re-throw → no unhandled server-action exception →
-  // no page crash); a redirect() sentinel is re-thrown so Next.js navigates.
+  // Mirrors MarketplaceInstallForm.handleSubmit exactly (post-#685): the action
+  // RETURNS `{ ok:false, category }` on a classified failure (a returned value
+  // survives Next prod masking where a thrown message would not), and may still
+  // THROW for an unexpected failure. Both surface a friendly toast (no re-throw →
+  // no unhandled server-action exception → no page crash); a redirect() sentinel
+  // is re-thrown so Next.js navigates.
+  type FailureResult = { ok: false; category: string };
   async function handleSubmit(
-    action: () => Promise<void>,
+    action: () => Promise<FailureResult | void>,
     onFailure: (msg: string) => void,
-    failureMessage: string,
+    failureCopyByCategory: Record<string, string>,
+    defaultFailureMessage: string,
   ): Promise<void> {
     try {
-      await action();
+      const result = await action();
+      if (result && result.ok === false) {
+        onFailure(failureCopyByCategory[result.category] ?? defaultFailureMessage);
+      }
     } catch (error) {
       if (isRedirectError(error)) throw error;
-      onFailure(failureMessage);
+      onFailure(defaultFailureMessage);
     }
   }
 
-  it("does NOT throw and DOES toast when the install fails (the #356 crash is gone)", async () => {
+  const COPY = {
+    "denied-entitlement": "Foo isn't available to install on your workspace.",
+    unrecoverable: "Could not install Foo.",
+  } as Record<string, string>;
+
+  it("does NOT throw and DOES toast the classified copy when the install fails (the #356 crash is gone)", async () => {
     const onFailure = vi.fn();
-    const failing = vi.fn(async () => {
+    // Post-#685: a failed install RETURNS a classified category, it does not throw.
+    const failing = vi.fn(async () => ({ ok: false as const, category: "denied-entitlement" }));
+
+    await expect(
+      handleSubmit(failing, onFailure, COPY, "Could not install Foo."),
+    ).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+      "Foo isn't available to install on your workspace.",
+    );
+  });
+
+  it("falls back to the default copy when the action unexpectedly THROWS", async () => {
+    const onFailure = vi.fn();
+    const throwing = vi.fn(async (): Promise<FailureResult | void> => {
       throw new Error("404 Not Found - no such package available");
     });
 
     await expect(
-      handleSubmit(failing, onFailure, "Could not install Foo."),
+      handleSubmit(throwing, onFailure, COPY, "Could not install Foo."),
     ).resolves.toBeUndefined();
     expect(onFailure).toHaveBeenCalledExactlyOnceWith("Could not install Foo.");
   });
 
   it("re-throws the redirect() sentinel on success and does NOT toast", async () => {
     const onFailure = vi.fn();
-    const redirecting = vi.fn(async () => {
+    const redirecting = vi.fn(async (): Promise<FailureResult | void> => {
       throw { digest: "NEXT_REDIRECT;replace;/configuration/extensions;307;" };
     });
 
     await expect(
-      handleSubmit(redirecting, onFailure, "Could not install Foo."),
+      handleSubmit(redirecting, onFailure, COPY, "Could not install Foo."),
     ).rejects.toMatchObject({ digest: expect.stringContaining("NEXT_REDIRECT") });
     expect(onFailure).not.toHaveBeenCalled();
   });
@@ -92,7 +118,9 @@ describe("wiring — the marketplace screen renders the graceful form, not the c
   it("the wrapper is a client component that re-throws the redirect sentinel and toasts otherwise", () => {
     expect(wrapperSrc).toMatch(/^"use client";/);
     expect(wrapperSrc).toMatch(/isRedirectError\(error\)\) throw error/);
-    expect(wrapperSrc).toMatch(/toast\.error\(failureMessage\)/);
+    // Post-#685 the wrapper toasts category-classified copy (or the default).
+    expect(wrapperSrc).toMatch(/toast\.error\(/);
+    expect(wrapperSrc).toMatch(/failureCopyByCategory\[result\.category\]/);
   });
 
   it("the screen routes Install/Update/Restore through MarketplaceInstallForm", () => {

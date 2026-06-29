@@ -350,16 +350,21 @@ export async function RegistryCatalogScreen({
                                 <div className="flex gap-2 mt-1 items-center">
                                   {hasUpdate && canUpdate && (
                                     <form
-                                      action={updateExtensionPackageFormAction.bind(
-                                        null,
-                                        {
+                                      action={async () => {
+                                        "use server";
+                                        // Plain server-action form (no toast
+                                        // surface on this management screen):
+                                        // discard the #685 classified-failure
+                                        // return so the action stays () => void.
+                                        // Success still redirect()s as before.
+                                        await updateExtensionPackageFormAction({
                                           packageName: template.packageName ?? "",
                                           packageVersion:
                                             registryEntry?.packageVersion ??
                                             template.packageVersion ??
                                             "",
-                                        },
-                                      )}
+                                        });
+                                      }}
                                     >
                                       <Button
                                         type="submit"
@@ -482,10 +487,15 @@ export async function RegistryCatalogScreen({
                                 />
                                 <div className="flex gap-2 mt-1">
                                   <form
-                                    action={restoreExtensionPackageFormAction.bind(
-                                      null,
-                                      { packageName: template.packageName ?? "" },
-                                    )}
+                                    action={async () => {
+                                      "use server";
+                                      // Discard the #685 classified-failure
+                                      // return so the action stays () => void on
+                                      // this plain-form management screen.
+                                      await restoreExtensionPackageFormAction({
+                                        packageName: template.packageName ?? "",
+                                      });
+                                    }}
                                   >
                                     <Button
                                       type="submit"

@@ -15,6 +15,10 @@ import {
 } from "../actions";
 import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
+import {
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "./marketplace-failure-copy";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
 import { Star } from "lucide-react";
@@ -156,9 +160,13 @@ export async function ExtensionsMarketplaceScreen({
             {cta.state === "restore" ? (
               // Restore re-activates an already-installed (archived) template — DB-only.
               // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
+              // The category→copy map keeps the toast actionable + non-technical (#685);
+              // restore rarely yields a marketplace category, so it usually lands on
+              // the non-technical "unrecoverable"/default "try again" copy.
               <MarketplaceInstallForm
                 action={restoreAction}
-                failureMessage={`Could not restore ${card.displayName}. Please try again.`}
+                failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
+                defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
                 className="flex-1"
               >
                 <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…" className="w-full">
@@ -174,11 +182,14 @@ export async function ExtensionsMarketplaceScreen({
                   Install Now
                 </Button>
               ) : (
-                // A failed install (package absent from the connected registry → 404,
-                // registry unreachable, lifecycle error) toasts instead of crashing the route (#356).
+                // A failed install toasts instead of crashing the route (#356). The
+                // message is now classified per the merged install-failure taxonomy
+                // (marketplace#152) into actionable, NON-technical end-user copy —
+                // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
                 <MarketplaceInstallForm
                   action={installAction}
-                  failureMessage={`Could not install ${card.displayName}. The package may be unavailable in the connected registry.`}
+                  failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
                   className="flex-1"
                 >
                   <MarketplaceInstallSubmit pendingLabel="Installing…" className="w-full">
@@ -194,7 +205,8 @@ export async function ExtensionsMarketplaceScreen({
               ) : (
                 <MarketplaceInstallForm
                   action={updateAction}
-                  failureMessage={`Could not update ${card.displayName}. The package may be unavailable in the connected registry.`}
+                  failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
+                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
                   className="flex-1"
                 >
                   <MarketplaceInstallSubmit pendingLabel="Updating…" className="w-full">
