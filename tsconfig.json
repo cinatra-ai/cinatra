@@ -29,6 +29,7 @@
       "@cinatra-ai/extensions/canonical-store": ["./packages/extensions/src/canonical-store.ts"],
       "@cinatra-ai/extensions/canonical-gate": ["./packages/extensions/src/canonical-gate.ts"],
       "@cinatra-ai/extensions/lifecycle-primitive": ["./packages/extensions/src/lifecycle-primitive.ts"],
+      "@cinatra-ai/extensions/swap-reconcile": ["./packages/extensions/src/swap-reconcile.ts"],
       "@cinatra-ai/extensions/registry-immutability": ["./packages/extensions/src/registry-immutability.ts"],
       "@cinatra-ai/extensions/registry-policy": ["./packages/extensions/src/registry-policy.ts"],
       "@cinatra-ai/extensions/required-in-prod": ["./packages/extensions/src/required-in-prod.ts"],

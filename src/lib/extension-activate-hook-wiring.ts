@@ -31,6 +31,8 @@ import {
   setExtensionActivateHook,
   setExtensionInstallOpPhaseReader,
 } from "@cinatra-ai/extensions";
+import { setSwapGenerationBumpHook } from "@cinatra-ai/extensions/swap-reconcile";
+import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
 
 /**
  * Install the in-process hot-activate hook. Idempotent by NATURE — it always
@@ -69,6 +71,18 @@ export function wireExtensionActivateHook(): void {
   setExtensionInstallOpPhaseReader(async (packageName, orgId) => {
     const { readLatestInstallOpPhase } = await import("@/lib/extension-install-ops");
     return (await readLatestInstallOpPhase(packageName, orgId)) ?? null;
+  });
+
+  // Wire the hot-SWAP activation-generation bumper (cinatra#670). The hot-swap
+  // canonical reconcile flips a non-pipeline kind's (agent/skill) canonical
+  // source.version after its native store swap; bumping the control-plane
+  // generation here invalidates the generation-keyed in-process caches (self-MCP)
+  // so the swapped surface flips deterministically. Reason "hot-update" mirrors the
+  // pipeline's superseding-update bump. The activation-generation singleton lives
+  // in the host (`@/lib`), which `@cinatra-ai/extensions` cannot import — hence this
+  // IoC injection (same pattern as the activate + capability-teardown hooks).
+  setSwapGenerationBumpHook((packageName) => {
+    bumpActivationGeneration("hot-update", packageName);
   });
 }
 
