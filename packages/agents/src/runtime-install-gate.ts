@@ -122,3 +122,63 @@ export async function resolveRunnableAgentPackageNames(
   }
   return runnable;
 }
+
+/**
+ * agent_run (MCP execution) call-site helper — the fail-CLOSED execution gate.
+ *
+ * Before any run insert, intersect the resolved template's package against the
+ * canonical `installed_extension` source of truth: a disabled/uninstalled
+ * (archived) agent must NOT execute even though its `agent_templates` row still
+ * exists. CG-1: a template with NO canonical row (legacy/bundled/ungoverned) — or
+ * a `null`/absent `packageName` — is ALLOWED (the bundled floor — same rule the
+ * skills + workflow gates use). Fail-OPEN on a canonical-store outage (handled by
+ * {@link resolveRunnableAgentPackageNames}; never block execution on a degraded
+ * status store; the ownership/tenancy/project gates at the call site are the real
+ * authz boundary). This is ADDITIVE — it does not replace `enforceRunAccess`.
+ *
+ * @returns `null` when the package may run (runnable, or untracked/no-package);
+ *   a `{ error }` structured refusal naming `identifierForError` when the package
+ *   is runtime-archived and must be refused. The refusal text — `Agent is not
+ *   installed (disabled or uninstalled): <identifier>` — is the gate contract.
+ */
+export async function assertAgentPackageRunnable(
+  packageName: string | null | undefined,
+  identifierForError: string,
+  deps: { readStatus?: ReadEffectiveInstallStatus } = {},
+): Promise<{ error: string } | null> {
+  if (!packageName) return null; // no package → untracked/legacy → never blocked
+  const runnable = await resolveRunnableAgentPackageNames([packageName], deps);
+  if (runnable.has(packageName)) return null;
+  return { error: `Agent is not installed (disabled or uninstalled): ${identifierForError}` };
+}
+
+/** A template carrying the canonical `packageName` the runtime-lifecycle gate keys on. */
+export type RunnablePartitionItem = { packageName?: string | null };
+
+/**
+ * agent_list (MCP discovery) / picker call-site helper — the lifecycle FILTER.
+ *
+ * The chat LLM discovers agents via `agent_list` then dispatches via `agent_run`.
+ * Intersect the listed items against the canonical `installed_extension` source of
+ * truth so a disabled/uninstalled (archived) agent disappears from discovery (it
+ * would also be refused at `agent_run`, but the acceptance criterion is
+ * "disappears from listing AND refuses to run"). CG-1: an item with NO canonical
+ * row (legacy/bundled/ungoverned) or a `null` `packageName` stays listed (the
+ * bundled floor). Fail-OPEN on a store outage (keep all — handled by
+ * {@link resolveRunnableAgentPackageNames}).
+ *
+ * @returns the input `items`, in order, with only runtime-archived packages
+ *   removed. `null`/no-package and CG-1 no-row items are always kept. Any `total`
+ *   / count is left to the caller (it is the org-wide upper bound, not the page
+ *   size — under-counting it on a partial page would be misleading).
+ */
+export async function partitionRunnableAgentPackages<T extends RunnablePartitionItem>(
+  items: ReadonlyArray<T>,
+  deps: { readStatus?: ReadEffectiveInstallStatus } = {},
+): Promise<T[]> {
+  const runnable = await resolveRunnableAgentPackageNames(
+    items.map((t) => t.packageName ?? null),
+    deps,
+  );
+  return items.filter((t) => t.packageName == null || runnable.has(t.packageName));
+}
