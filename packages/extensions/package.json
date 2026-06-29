@@ -13,6 +13,7 @@
     "./canonical-store": "./src/canonical-store.ts",
     "./canonical-gate": "./src/canonical-gate.ts",
     "./lifecycle-primitive": "./src/lifecycle-primitive.ts",
+    "./swap-reconcile": "./src/swap-reconcile.ts",
     "./registry-immutability": "./src/registry-immutability.ts",
     "./required-in-prod": "./src/required-in-prod.ts",
     "./static-bundle-anchor": "./src/static-bundle-anchor.ts",

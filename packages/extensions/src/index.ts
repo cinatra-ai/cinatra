@@ -550,6 +550,16 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
 // runtime module need it. Today that is `connector` (model-B / schema-config).
 const KINDS_USING_ACTIVATE_HOOK = new Set(["connector"]);
 
+// Kinds whose canonical `installed_extension` provenance (source.version + dep
+// edges) is rewritten by the kind's OWN materialize path, NOT by the dispatcher.
+// `connector` rewrites it via the real-integrity install pipeline
+// (sourceSwitchExtension); `workflow`'s host-injected saga rewrites it itself. The
+// hot-swap canonical reconcile (cinatra#670) is therefore SKIPPED for these kinds
+// (the dispatcher would otherwise double-write the source row). Every other kind
+// (agent / skill / artifact) only upserts a NATIVE store on update, so the
+// dispatcher must flip the canonical version for them.
+const KINDS_OWNING_CANONICAL_PROVENANCE = new Set(["connector", "workflow"]);
+
 // ---------------------------------------------------------------------------
 // Extension type registry
 // ---------------------------------------------------------------------------
@@ -720,6 +730,45 @@ class ExtensionRegistryImpl {
         await rollbackNonFinalizedCanonicalRow(ensure.rowId);
       }
       throw err;
+    }
+
+    // HOT-SWAP canonical reconcile (cinatra#670). For an UPDATE of a healthy live
+    // row whose kind is NOT pipeline-owned (connector) and NOT saga-owned
+    // (workflow) — i.e. agent / skill / any future native-store kind — the native
+    // `handler.update` above already upserted the NATIVE store (and, for agent,
+    // refreshed dep edges) to the NEW version, but NOTHING has flipped the
+    // canonical `installed_extension.source.version`, leaving the source-of-truth
+    // row on the OLD version (a half-swapped surface). Flip it here, under the SAME
+    // per-package install lock, AFTER the native swap succeeded. A reconcile WRITE
+    // failure THROWS (the dispatcher surfaces a truthful "swap did not reconcile"
+    // failure rather than a silent half-swap) — the native NEW version stays
+    // materialized + the old row is still present (recoverable). Connector +
+    // workflow already flip the canonical row themselves (pipeline / saga), so they
+    // are excluded to avoid a double-write. needsPipeline is true for an update of a
+    // healthy live row (ensure.rowId is that row), so we have the row id.
+    if (op === "update" && !KINDS_USING_ACTIVATE_HOOK.has(typeId) && !KINDS_OWNING_CANONICAL_PROVENANCE.has(typeId) && ensure.rowId) {
+      const { readInstalledExtensionById } = await import("./canonical-store");
+      const { reconcileCanonicalVersionAfterNativeSwap } = await import("./swap-reconcile");
+      const row = await readInstalledExtensionById(ensure.rowId);
+      if (row) {
+        const outcome = await reconcileCanonicalVersionAfterNativeSwap({
+          row,
+          newVersion: ref.version,
+          actorSource: actor.source ?? "dispatcher",
+        });
+        if (!outcome.reconciled && outcome.reason.startsWith("non-concrete-version")) {
+          // A non-concrete update version reached the canonical write — the
+          // native store swapped but we refuse to taint the source-of-truth row
+          // with a moving tag / placeholder. Surface the truth (the MCP/action
+          // surfaces always dispatch a registry-resolved concrete version, so this
+          // is a defensive guard, not the normal path).
+          throw new Error(
+            `update of ${ref.packageName} swapped the native store but could not reconcile the ` +
+              `canonical source-of-truth version (${outcome.reason}) — dispatch a registry-resolved ` +
+              `concrete version so the canonical row can flip deterministically.`,
+          );
+        }
+      }
     }
 
     // 3 + 4. For a hot-loadable-module kind (connector), run the REAL-integrity
