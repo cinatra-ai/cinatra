@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-install-path": "./src/agent-install-path.ts",
+    "./runtime-install-gate": "./src/runtime-install-gate.ts",
     "./extension-handler": "./src/extension-handler.ts",
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
     "./package-contract": "./src/verdaccio/package-contract.ts",

@@ -842,6 +842,23 @@ async function handleAgentBuilderRun(
   // Resolved templateId is what every downstream code path expects.
   const resolvedTemplateId = template.id;
 
+  // RUNTIME-LIFECYCLE GATE (cinatra#659, fail-CLOSED on runtime archive).
+  // Before any run insert, intersect the resolved template's package against the
+  // canonical `installed_extension` source of truth: a disabled/uninstalled
+  // (archived) agent must NOT execute even though its `agent_templates` row still
+  // exists. CG-1: a template with NO canonical row (legacy/bundled/ungoverned) is
+  // ALLOWED (the bundled floor — same rule the skills + workflow gates use).
+  // Fail-OPEN on a canonical-store outage (never block execution on a degraded
+  // status store; the ownership/tenancy/project gates below are the real authz
+  // boundary). This is ADDITIVE — it does not replace `enforceRunAccess`.
+  if (template.packageName) {
+    const { resolveRunnableAgentPackageNames } = await import("../runtime-install-gate");
+    const runnable = await resolveRunnableAgentPackageNames([template.packageName]);
+    if (!runnable.has(template.packageName)) {
+      return { error: `Agent is not installed (disabled or uninstalled): ${identifierForError}` };
+    }
+  }
+
   const actor = request.actor as PrimitiveActorContext;
   const roles = await resolveRoleHintsFromSession();
   const probeRun = {
@@ -1097,8 +1114,27 @@ async function handleAgentBuilderList(
       /* @admin-cross-org */ // admin without an active org reads all orgs.
       skipOrgFilter: isAdmin && !organizationId,
     });
+
+    // RUNTIME-LIFECYCLE GATE (cinatra#659): the chat LLM discovers agents via
+    // `agent_list` then dispatches via `agent_run`. Intersect against the
+    // canonical `installed_extension` source of truth so a disabled/uninstalled
+    // (archived) agent disappears from discovery (it would also be refused at
+    // `agent_run`, but the acceptance criterion is "disappears from listing AND
+    // refuses to run"). CG-1: a template with NO canonical row (legacy/bundled/
+    // ungoverned) and a `null` packageName stay listed (the bundled floor).
+    // Fail-OPEN on a store outage (keep all). The `total` count is left as the
+    // pre-filter store total — it is the org-wide template count, an upper
+    // bound; under-counting it on a partial page would be misleading, and the
+    // gate only removes explicitly-archived rows.
+    const { resolveRunnableAgentPackageNames } = await import("../runtime-install-gate");
+    const runnable = await resolveRunnableAgentPackageNames(
+      result.items.map((t) => t.packageName ?? null),
+    );
+    const visibleItems = result.items.filter(
+      (t) => t.packageName == null || runnable.has(t.packageName),
+    );
     return buildListPage(
-      result.items.map((t) => ({
+      visibleItems.map((t) => ({
         id: t.id,
         name: t.name,
         description: t.description,
