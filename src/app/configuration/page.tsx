@@ -216,8 +216,8 @@ export default async function AdministrationPage() {
               <CardHeader>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-card border border-line bg-surface-muted text-muted-foreground">
-                      <section.icon />
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-control border border-line bg-surface-strong text-foreground">
+                      <section.icon className="size-5" />
                     </div>
                     <CardTitle>{section.title}</CardTitle>
                   </div>
