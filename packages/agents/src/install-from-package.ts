@@ -4,8 +4,7 @@ import "server-only";
 // extract, and reinstall uses upsert semantics so install-after-bootstrap does
 // not collide on the agent_templates.packageName unique index.
 
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   cleanupExtractedAgentPackage,
@@ -32,7 +31,10 @@ import {
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
 } from "./verdaccio/package-contract";
-import { resolveInstallAgentPayload } from "./agent-install-payload";
+// seed the agent_templates row DIRECTLY from cinatra/oas.json +
+// the validated package.json#cinatra block. No materialized `agent.json`
+// formatVersion:2 payload is read, synthesized, or re-parsed on the install path.
+import { buildAgentTemplateInstallSeed } from "./build-agent-template-seed";
 // Imported here so any future spawn-side install paths (e.g. an out-of-band
 // `pnpm install` invocation) can reuse the same explicit-flag construction.
 // Today the install path goes through `pacote` (HTTP, see
@@ -139,21 +141,6 @@ async function _installAgentFromPackageImpl(
   try {
     // Plugin-system returns raw manifest/payload; re-apply agent-specific validation.
     const manifest = agentPackageManifestSchema.parse(extracted.manifest);
-    // The extractor returns the OAS Flow document (`cinatra/oas.json`) as the
-    // raw payload for git-tag-released agents (the DETAIL-page shape, cinatra#582)
-    // — that is NOT a formatVersion:2 dist payload. Resolve the install payload:
-    // a conformant root agent.json (in-app publisher / build-materialized
-    // tarballs) is used verbatim; an OAS-only tarball is COMPILED into the
-    // formatVersion:2 shape here so the install succeeds without a republish.
-    // A present-but-broken OAS throws, failing the install BEFORE any disk
-    // materialize.
-    const payload = await resolveInstallAgentPayload({
-      extractedPayload: extracted.payload,
-      extractedTempDir: extracted.tempDir,
-      packageName: extracted.packageName,
-      packageVersion: extracted.packageVersion,
-      manifest,
-    });
 
     if (manifest.cinatra.packageType !== CINATRA_AGENT_PACKAGE_TYPE) {
       throw new Error(`Unsupported package type: ${manifest.cinatra.packageType}`);
@@ -161,6 +148,21 @@ async function _installAgentFromPackageImpl(
     if (manifest.cinatra.manifestVersion !== CINATRA_AGENT_MANIFEST_VERSION) {
       throw new Error(`Unsupported manifest version: ${manifest.cinatra.manifestVersion}`);
     }
+
+    // derive the agent_templates row seed DIRECTLY from the
+    // extracted `cinatra/oas.json` + the validated `package.json#cinatra` block
+    // (compiled via compileOasAgentJson — the SAME derivation the ZIP-import path
+    // uses). This REPLACES the dropped `agentPackagePayloadSchema.parse`: a
+    // package with no compilable OAS (or a langgraph provider that the OAS cannot
+    // satisfy) THROWS HERE, in the same inert window the old parse occupied —
+    // BEFORE the pin gate, the disk materialize, and any DB write — so a refusal
+    // mutates nothing. The contract is NOT weakened.
+    const seed = await buildAgentTemplateInstallSeed({
+      extractedTempDir: extracted.tempDir,
+      packageName: extracted.packageName,
+      packageVersion: extracted.packageVersion,
+      manifest,
+    });
 
     // REQUIRED-PIN GATE (the host → extension half of the compatibility
     // contract) on the agent-package path: the registry-package server actions
@@ -238,29 +240,18 @@ async function _installAgentFromPackageImpl(
       packageName: extracted.packageName,
     });
 
-    // Propagate manifest.cinatra.type into the template row.
-    const rawType = (manifest.cinatra as { type?: unknown }).type;
-    // Recognize OAS-aligned aliases ("node", "flow") and canonical values
-    // stored on the agent_templates row ("leaf", "orchestrator"). This keeps
-    // the DB representation stable while letting agent.json use OAS terms.
-    // TYPE_TO_GRAPH already accepts both, but some screen/execution branches
-    // still test against the stored row values, so canonicalizing here keeps
-    // those branches stable.
-    const type: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "flow" | "node" =
-      rawType === "proxy" ? "proxy"
-      : rawType === "orchestrator" ? "orchestrator"
-      : rawType === "flow" ? "flow"
-      : rawType === "parallel" ? "parallel"
-      : rawType === "supervisor" ? "supervisor"
-      : rawType === "iterative" ? "iterative"
-      : rawType === "node" ? "node"
-      : "leaf";
+    // Canonical agent type for the template row. Sourced from the OAS-compile
+    // result (compiled.type), falling back to manifest.cinatra.type, with the
+    // same alias canonicalization the row enum requires — all done inside
+    // buildAgentTemplateInstallSeed so install and ZIP-import seed identically.
+    const type = seed.type;
 
-    // Propagate lgGraphCode / lgGraphId from the package payload into the new row.
-    const lgGraphCode: string | null = payload.template.lgGraphCode ?? null;
-    const lgGraphId: string | null = payload.template.lgGraphId ?? null;
-    const executionProvider: string | null =
-      (payload.template as { executionProvider?: string }).executionProvider ?? null;
+    // lgGraph* are NOT in the OAS Flow document → null for WayFlow/OAS packages
+    // (a langgraph provider was already rejected in the seed builder).
+    // executionProvider sources from manifest.cinatra.executionProvider.
+    const lgGraphCode: string | null = seed.lgGraphCode;
+    const lgGraphId: string | null = seed.lgGraphId;
+    const executionProvider: string | null = seed.executionProvider;
 
     // Materialize the tarball's runtime files to the WayFlow agents mount
     // BEFORE the DB write, so the file is the prerequisite for any subsequent
@@ -289,8 +280,8 @@ async function _installAgentFromPackageImpl(
     // in place instead of creating a duplicate row.
     const existing = await readAgentTemplateByPackageName(extracted.packageName);
     if (existing) {
-      const snapshot = payload.version.snapshot;
-      const contentHash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+      const snapshot = seed.snapshot;
+      const contentHash = seed.contentHash;
       const versionId = randomUUID();
 
       try {
@@ -298,21 +289,21 @@ async function _installAgentFromPackageImpl(
       // the seed passed to createLocalAgentTemplateVersion below — every seed
       // field the fresh-install branch writes must land on the upsert branch too.
       await updateAgentTemplate(existing.id, {
-        name: payload.title?.trim() || payload.template.name,
-        description: (payload.description ?? payload.template.description) ?? undefined,
-        sourceNl: payload.template.sourceNl,
-        compiledPlan: payload.template.compiledPlan as CompiledStep[] | undefined,
-        inputSchema: payload.template.inputSchema,
-        outputSchema: payload.template.outputSchema ?? undefined,
-        approvalPolicy: payload.template.approvalPolicy as ApprovalPolicy | undefined,
+        name: seed.name,
+        description: seed.description ?? undefined,
+        sourceNl: seed.sourceNl,
+        compiledPlan: seed.compiledPlan as CompiledStep[] | undefined,
+        inputSchema: seed.inputSchema,
+        outputSchema: seed.outputSchema ?? undefined,
+        approvalPolicy: seed.approvalPolicy as ApprovalPolicy | undefined,
         type,
-        taskSpec: payload.template.taskSpec ?? undefined,
+        taskSpec: seed.taskSpec ?? undefined,
         lgGraphCode,
         lgGraphId,
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
-        hitlScreens: (payload.template as { hitlScreens?: string[] }).hitlScreens ?? undefined,
+        hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? existing.status,
         // Owner tier must follow the install target on re-install too.
         // Otherwise the audit row written by installRegistryPackageAtScope says
@@ -382,17 +373,16 @@ async function _installAgentFromPackageImpl(
     // gets a unique-violation (pg code 23505) on agent_templates_package_name_idx.
     // On collision, fall through to the upsert path with the now-existing row.
     const freshSeed = {
-      name: payload.title?.trim() || payload.template.name,
-      description:
-        payload.description ?? payload.template.description,
-      sourceNl: payload.template.sourceNl,
-      compiledPlan: payload.template.compiledPlan,
-      inputSchema: payload.template.inputSchema,
-      outputSchema: payload.template.outputSchema,
-      approvalPolicy: payload.template.approvalPolicy,
+      name: seed.name,
+      description: seed.description,
+      sourceNl: seed.sourceNl,
+      compiledPlan: seed.compiledPlan,
+      inputSchema: seed.inputSchema,
+      outputSchema: seed.outputSchema,
+      approvalPolicy: seed.approvalPolicy,
       type,
-      taskSpec: payload.template.taskSpec,
-      snapshot: payload.version.snapshot,
+      taskSpec: seed.taskSpec,
+      snapshot: seed.snapshot,
       creatorId: input.creatorId,
       orgId: input.orgId,
       // Owner tier flows through the seed into createAgentTemplate.
@@ -402,6 +392,11 @@ async function _installAgentFromPackageImpl(
       packageVersion: extracted.packageVersion,
       agentDependencies:
         Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+      // hitlScreens flows through the seed into createAgentTemplate so a fresh
+      // install seeds the SAME value the upsert/race branches write. Pass the
+      // array verbatim (even when empty) so all three branches persist an
+      // identical column value ("[]" for no screens) rather than NULL vs "[]".
+      hitlScreens: seed.hitlScreens,
       lgGraphCode,
       lgGraphId,
       executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
@@ -420,24 +415,25 @@ async function _installAgentFromPackageImpl(
       // Race: another concurrent install won the INSERT — apply upsert to its row.
       const raceExisting = await readAgentTemplateByPackageName(extracted.packageName);
       if (!raceExisting) throw insertErr;
-      const snapshot = payload.version.snapshot;
-      const contentHash = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+      const snapshot = seed.snapshot;
+      const contentHash = seed.contentHash;
       versionId = randomUUID();
       await updateAgentTemplate(raceExisting.id, {
-        name: payload.title?.trim() || payload.template.name,
-        description: (payload.description ?? payload.template.description) ?? undefined,
-        sourceNl: payload.template.sourceNl,
-        compiledPlan: payload.template.compiledPlan as CompiledStep[] | undefined,
-        inputSchema: payload.template.inputSchema,
-        outputSchema: payload.template.outputSchema ?? undefined,
-        approvalPolicy: payload.template.approvalPolicy as ApprovalPolicy | undefined,
+        name: seed.name,
+        description: seed.description ?? undefined,
+        sourceNl: seed.sourceNl,
+        compiledPlan: seed.compiledPlan as CompiledStep[] | undefined,
+        inputSchema: seed.inputSchema,
+        outputSchema: seed.outputSchema ?? undefined,
+        approvalPolicy: seed.approvalPolicy as ApprovalPolicy | undefined,
         type,
-        taskSpec: payload.template.taskSpec ?? undefined,
+        taskSpec: seed.taskSpec ?? undefined,
         lgGraphCode,
         lgGraphId,
         executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+        hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? raceExisting.status,
       });
       await updateAgentTemplatePackageVersion(raceExisting.id, extracted.packageVersion);
@@ -514,17 +510,15 @@ async function registerDeclaredObjectTypes(opts: {
   creatorId: string | null;
 }): Promise<void> {
   try {
-    // Resolve the agent-definition path the SAME way the install payload does:
-    // git-tag-released agents ship ONLY cinatra/oas.json (no root agent.json),
-    // so probing only <tempDir>/agent.json would silently skip their declared
-    // output object types. Prefer the canonical cinatra/oas.json, fall back to a
-    // legacy root agent.json.
-    const oasPath = join(opts.extractedTempDir, "cinatra", "oas.json");
-    const rootAgentJsonPath = join(opts.extractedTempDir, "agent.json");
-    const agentJsonPath = existsSync(oasPath) ? oasPath : rootAgentJsonPath;
     const compileResult = await compileOasAgentJson({
       packageName: opts.extractedPackageName,
-      agentJsonPath,
+      // The OAS source doc ships at <tempDir>/cinatra/oas.json (every published
+      // @cinatra-ai/*-agent package declares files:["cinatra","skills"]). Prior
+      // code passed <tempDir>/agent.json, which does NOT exist for
+      // OAS-only tarballs — the compile silently no-op'd (the catch below
+      // swallows it) and declared output_object_types were never registered.
+      // Repointing to cinatra/oas.json fixes that latent bug.
+      agentJsonPath: join(opts.extractedTempDir, "cinatra", "oas.json"),
     });
     if (
       compileResult.ok &&
