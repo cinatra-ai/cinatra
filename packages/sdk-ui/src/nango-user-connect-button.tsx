@@ -7,6 +7,7 @@ import NangoFrontend from "@nangohq/frontend";
 import type { ConnectUI } from "@nangohq/frontend";
 import { StatusPill } from "./status-pill";
 import { Button } from "./ui/button";
+import { describeNangoConnectError } from "./nango-connect-error";
 
 // Host-pure Nango connect UI primitives — connectors depend only on the SDK. All host
 // data arrives via props; `connectorKey` is `string` (the SDK does not import the
@@ -116,7 +117,7 @@ function useNangoUserConnect({
 
           if (event.type === "error") {
             setPending(false);
-            onError?.(event.payload.errorMessage || "Authorization failed.");
+            onError?.(describeNangoConnectError(event.payload.errorMessage));
           }
 
           if (event.type === "close") {
