@@ -53,6 +53,22 @@ export type ExtensionCardProps = {
   badges?: React.ReactNode;
   /** Force render mode. Defaults to true (button) unless body slots are present. */
   interactive?: boolean;
+  /**
+   * Banner variant for the SHELL-mode header (no effect in button mode):
+   *   - `"chip"` (default) — the §V running-agent chip: emblem-left, indicator/
+   *     badges top-right, name BELOW the emblem.
+   *   - `"listing"` — the §IV marketplace listing banner: a 46×46 SQUARE icon
+   *     tile + the name INSIDE the banner (line-clamp 3), the icon resolving
+   *     `iconUrl` → `emblem`. The marketplace storefront opts in explicitly so
+   *     no other shell caller is restyled.
+   */
+  variant?: "chip" | "listing";
+  /**
+   * Hosted square-icon URL for the `"listing"` variant (marketplace spec §IV).
+   * When present the banner renders this image in the 46×46 tile; absent → the
+   * `emblem`. Ignored by the `"chip"` variant.
+   */
+  iconUrl?: string | null;
 };
 
 export function ExtensionCard({
@@ -67,6 +83,8 @@ export function ExtensionCard({
   footer,
   badges,
   interactive,
+  variant = "chip",
+  iconUrl,
 }: ExtensionCardProps) {
   const isShell =
     interactive === false ||
@@ -117,13 +135,23 @@ export function ExtensionCard({
         className,
       )}
     >
-      <ExtensionCardChip
-        name={name}
-        accentColor={accentColor}
-        emblem={emblem}
-        indicator={indicator}
-        badges={badges}
-      />
+      {variant === "listing" ? (
+        <ExtensionCardListingBanner
+          name={name}
+          accentColor={accentColor}
+          emblem={emblem}
+          iconUrl={iconUrl}
+          badges={badges}
+        />
+      ) : (
+        <ExtensionCardChip
+          name={name}
+          accentColor={accentColor}
+          emblem={emblem}
+          indicator={indicator}
+          badges={badges}
+        />
+      )}
       <div className="flex flex-1 flex-col gap-3 bg-surface p-4">
         {description && (
           <p className="text-sm leading-relaxed text-muted-foreground">
@@ -179,6 +207,78 @@ function ExtensionCardChip({
       <div className="font-display text-[20px] font-extrabold italic leading-tight tracking-tight">
         {name}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Marketplace listing-card banner (design spec §IV). The coloured banner area
+ * (category colour, min-h 96px) lays the 46×46 SQUARE icon tile and the
+ * human-readable name out side by side — the name lives INSIDE the banner
+ * (Archivo italic-800, 18px, line-clamp 3), not beneath the emblem (that is the
+ * §V running-agent chip). The icon tile resolves a fallback chain: a hosted
+ * square icon URL → else the kind/vendor `emblem` (the caller resolves
+ * icon → vendor-logo → kind-emblem before passing `iconUrl`/`emblem`).
+ *
+ * `badges` (kind + commerce) overlay the top-right corner so the icon+name row
+ * stays the §IV layout. Mirrors the app's src/components/extension-card.tsx.
+ */
+function ExtensionCardListingBanner({
+  name,
+  accentColor,
+  emblem,
+  iconUrl,
+  badges,
+}: {
+  name: string;
+  accentColor: ExtensionAccent;
+  emblem: React.ReactNode;
+  iconUrl?: string | null;
+  badges?: React.ReactNode;
+}) {
+  const { bg, fg } = ACCENT_PALETTE[accentColor];
+  return (
+    <div
+      data-slot="extension-card-banner"
+      className="relative flex min-h-[96px] items-center gap-3 p-[14px]"
+      style={{ background: bg, color: fg }}
+    >
+      <span
+        data-slot="extension-card-icon"
+        className="grid h-[46px] w-[46px] shrink-0 place-items-center overflow-hidden rounded-[11px] bg-surface-strong shadow-sm"
+        style={{ color: bg }}
+      >
+        {iconUrl ? (
+          // An arbitrary remote marketplace asset host; a sanitized hosted asset
+          // (rasterized, never a raw SVG blob). Not a build-time-known image.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={iconUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            loading="lazy"
+            decoding="async"
+          />
+        ) : (
+          emblem
+        )}
+      </span>
+      <div
+        data-slot="extension-card-name"
+        className={cn(
+          "line-clamp-3 min-w-0 font-display text-[18px] font-extrabold italic leading-[1.12] tracking-[-0.012em]",
+          // Reserve room for the top-right badge overlay so a long, line-clamped
+          // name never runs underneath the badges.
+          badges && "pr-20",
+        )}
+      >
+        {name}
+      </div>
+      {badges && (
+        <div className="absolute right-[14px] top-[14px] flex flex-wrap items-center justify-end gap-1.5">
+          {badges}
+        </div>
+      )}
     </div>
   );
 }

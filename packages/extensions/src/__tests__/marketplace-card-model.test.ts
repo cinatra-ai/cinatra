@@ -26,6 +26,65 @@ function catalogEntry(over: Partial<MarketplaceCatalogEntry> = {}): MarketplaceC
   };
 }
 
+describe("catalogEntryToCardData — listing-card fields (install count, icon/vendor URLs, ABI range)", () => {
+  it("maps a clean install count, icon URL, vendor-logo URL, and ABI range", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        install_count: 2147,
+        icon_url: "https://assets.example/icon.png",
+        vendor_logo_url: "https://assets.example/vendor.png",
+        sdk_abi_range: "^2",
+      }),
+    );
+    expect(card!.installCount).toBe(2147);
+    expect(card!.iconUrl).toBe("https://assets.example/icon.png");
+    expect(card!.vendorLogoUrl).toBe("https://assets.example/vendor.png");
+    expect(card!.sdkAbiRange).toBe("^2");
+  });
+
+  it("degrades every new field to null when the marketplace omits them (older catalog)", () => {
+    // No new fields on the fixture → all optional, all null. Tolerant of an
+    // L4-backend that has not shipped the catalog fields yet.
+    const card = catalogEntryToCardData(catalogEntry());
+    expect(card!.installCount).toBeNull();
+    expect(card!.iconUrl).toBeNull();
+    expect(card!.vendorLogoUrl).toBeNull();
+    expect(card!.sdkAbiRange).toBeNull();
+  });
+
+  it("rejects a garbage install count (negative / non-number / NaN / Infinity → null)", () => {
+    expect(
+      catalogEntryToCardData(catalogEntry({ install_count: -5 }))!.installCount,
+    ).toBeNull();
+    expect(
+      catalogEntryToCardData(catalogEntry({ install_count: NaN }))!.installCount,
+    ).toBeNull();
+    expect(
+      catalogEntryToCardData(catalogEntry({ install_count: Infinity }))!.installCount,
+    ).toBeNull();
+    expect(
+      catalogEntryToCardData(catalogEntry({ install_count: "12" as never }))!.installCount,
+    ).toBeNull();
+    // A fractional count floors to a whole installation.
+    expect(
+      catalogEntryToCardData(catalogEntry({ install_count: 3.9 }))!.installCount,
+    ).toBe(3);
+  });
+
+  it("trims/blank-collapses the optional URL + ABI fields to null", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        icon_url: "  ",
+        vendor_logo_url: "  https://v.example/logo.png  ",
+        sdk_abi_range: "",
+      }),
+    );
+    expect(card!.iconUrl).toBeNull();
+    expect(card!.vendorLogoUrl).toBe("https://v.example/logo.png");
+    expect(card!.sdkAbiRange).toBeNull();
+  });
+});
+
 describe("catalogEntryToCardData", () => {
   it("maps every parity field and the install identifiers", () => {
     const card = catalogEntryToCardData(catalogEntry());

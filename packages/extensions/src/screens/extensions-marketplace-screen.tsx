@@ -76,6 +76,29 @@ function freshnessLabel(freshnessAt: string | null): string | null {
   return `Updated ${formatDistanceToNow(d, { addSuffix: true })}`;
 }
 
+/**
+ * Compact install-count label for the meta row (design spec §IV: "2.1k
+ * installations"). A null/absent count (older marketplace builds omit the
+ * field) renders no line. Singular/plural agree; thousands collapse to a "k"
+ * suffix (one decimal, trailing-zero trimmed: 2100 → "2.1k", 2000 → "2k").
+ */
+function installCountLabel(count: number | null): string | null {
+  if (count === null) return null;
+  if (count < 1000) {
+    return `${count} ${count === 1 ? "installation" : "installations"}`;
+  }
+  const thousands = count / 1000;
+  // One decimal, but drop a trailing ".0" (2000 → "2k", 2150 → "2.2k").
+  const rounded = Math.round(thousands * 10) / 10;
+  const text = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+  return `${text}k installations`;
+}
+
+/** First non-null link of the icon fallback chain: icon → vendor logo. */
+function resolveCardIconUrl(card: MarketplaceCardData): string | null {
+  return card.iconUrl ?? card.vendorLogoUrl ?? null;
+}
+
 export async function ExtensionsMarketplaceScreen({
   cards,
   registryConnected,
@@ -136,16 +159,20 @@ export async function ExtensionsMarketplaceScreen({
     });
 
     const freshness = freshnessLabel(card.freshnessAt);
+    const installs = installCountLabel(card.installCount);
 
     const node = (
       <ExtensionCard
+        variant="listing"
         name={card.displayName}
         accentColor={deriveExtensionAccent(card.packageName)}
         emblem={extensionKindEmblem(card.kindSlug)}
+        iconUrl={resolveCardIconUrl(card)}
         description={card.description}
         meta={
           <div className="flex flex-col gap-1">
             {card.rating && <RatingRow rating={card.rating} />}
+            {installs && <span>{installs}</span>}
             {freshness && <span>{freshness}</span>}
           </div>
         }
