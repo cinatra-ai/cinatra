@@ -223,7 +223,7 @@ export function AccessCombobox({
         </PopoverTrigger>
         <PopoverContent
           align="start"
-          className="w-[var(--radix-popover-trigger-width)] p-0"
+          className="w-auto min-w-[var(--radix-popover-trigger-width)] max-w-[min(28rem,calc(100vw-2rem))] p-0"
         >
           <Command shouldFilter={false}>
             <CommandList className="max-h-72">
@@ -241,7 +241,7 @@ export function AccessCombobox({
                     className={itemClass("owner")}
                   >
                     <div className="flex items-center w-full">
-                      <span className="text-foreground">Only me</span>
+                      <span className="text-foreground whitespace-nowrap">Only me</span>
                       {renderCheckmark("owner")}
                     </div>
                   </CommandItem>
@@ -271,7 +271,7 @@ export function AccessCombobox({
                         className={itemClass(itemValue)}
                       >
                         <div className="flex items-center w-full">
-                          <span className="text-foreground">{p.name}</span>
+                          <span className="text-foreground whitespace-nowrap">{p.name}</span>
                           {renderCheckmark(itemValue)}
                         </div>
                       </CommandItem>
@@ -306,7 +306,7 @@ export function AccessCombobox({
                     className={itemClass("org")}
                   >
                     <div className="flex items-center w-full">
-                      <span className="text-foreground">
+                      <span className="text-foreground whitespace-nowrap">
                         Anyone in {resolvedOrgName}
                       </span>
                       {renderCheckmark("org")}
@@ -328,7 +328,7 @@ export function AccessCombobox({
                       className={cn(itemClass(itemValue), "pl-6")}
                     >
                       <div className="flex items-center w-full">
-                        <span className="text-foreground">{t.name}</span>
+                        <span className="text-foreground whitespace-nowrap">{t.name}</span>
                         {renderCheckmark(itemValue)}
                       </div>
                     </CommandItem>
@@ -361,7 +361,7 @@ export function AccessCombobox({
                     className={itemClass("workspace")}
                   >
                     <div className="flex items-center w-full">
-                      <span className="text-foreground">Whole Workspace</span>
+                      <span className="text-foreground whitespace-nowrap">Whole Workspace</span>
                       {renderCheckmark("workspace")}
                     </div>
                   </CommandItem>
@@ -406,7 +406,7 @@ export function AccessCombobox({
                   className={itemClass("admin")}
                 >
                   <div className="flex items-center w-full">
-                    <span className="text-foreground">Admins only</span>
+                    <span className="text-foreground whitespace-nowrap">Admins only</span>
                     {renderCheckmark("admin")}
                   </div>
                 </CommandItem>
