@@ -236,6 +236,15 @@ export type {
   LegacyDependencySources,
 } from "./dependencies";
 
+// `cinatra.consumes` contract (engineering#422). Only the TYPE is re-exported
+// from the barrel (erased at build → no runtime module added to any host
+// route's reachable graph; route-graph ratchet stays flat). The VALUE helpers
+// (`parseConsumedPrimitives`, `validateConsumedPrimitiveShape`,
+// `ConsumesManifestError`) live in `./consumes` and are imported DIRECTLY by
+// the install/manifest path + the CI closure gate/sweep — pulling them through
+// the barrel would grow every barrel-importing route's first-party graph.
+export type { ConsumedPrimitive } from "./consumes";
+
 export type PluginPropertyValue = string | number | boolean | null;
 
 export type CampaignPluginTypeSeed = {
