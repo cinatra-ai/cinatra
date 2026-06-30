@@ -94,6 +94,16 @@ type AgenticRunPanelProps = {
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  // Render surface discriminator. The sticky bottom-of-page field-assist
+  // conversation (HitlConversationPanel) belongs to the /agents/* run-detail
+  // UI only. In chat (InlineAgentRunCard) the panel is mounted inline and the
+  // user drives an open HITL gate through the normal chat composer via
+  // onActiveGateChange — the field-assist prompt there only duplicates the
+  // composer and, because each inline card portals its OWN PromptField into the
+  // shared <main>, N concurrent pending HITLs stack N prompts (cinatra#767).
+  // Default "agent-detail" keeps the prompt under /agents/*; "chat" suppresses
+  // the whole HitlConversationPanel.
+  surface?: "chat" | "agent-detail";
 };
 
 export type ChatGateField = {
@@ -235,6 +245,7 @@ export function AgenticRunPanel({
   templateId,
   initialStreamedText,
   onActiveGateChange,
+  surface = "agent-detail",
 }: AgenticRunPanelProps) {
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
@@ -1151,7 +1162,7 @@ export function AgenticRunPanel({
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={isPendingApproval && !!effectiveHitlContext?.xRenderer && !!templateId && !!portalTarget}
+      visible={surface !== "chat" && isPendingApproval && !!effectiveHitlContext?.xRenderer && !!templateId && !!portalTarget}
       conversation={conversation}
       promptPending={promptPending}
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}

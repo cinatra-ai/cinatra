@@ -25,6 +25,15 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
+  // HitlConversationPanel renders the field-assist PromptField. Stub it to a
+  // plain element exposing the placeholder text so the cinatra#767 surface test
+  // can assert presence/absence of "Ask Cinatra to suggest edits to the fields
+  // above…". The real PromptField pulls in browser-only deps jsdom can't load.
+  // Use a <div> (not a raw <input>, which the design-system lint gate forbids in
+  // favor of the shadcn <Input>) and surface the placeholder as text content.
+  PromptField: ({ placeholder }: { placeholder?: string }) => (
+    <div data-testid="field-assist-prompt-stub">{placeholder}</div>
+  ),
 }));
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -212,5 +221,63 @@ describe("AgenticRunPanel HITL presentation branch", () => {
     expect(fallbackHeading).not.toBeNull();
     // The DispatchRenderer card title "Review drafts" MUST NOT appear.
     expect(screen.queryByText(/Review drafts/)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#767 — the sticky field-assist PromptField (HitlConversationPanel)
+// belongs to /agents/* only. It must NOT render when AgenticRunPanel is mounted
+// in chat (surface="chat"), where it duplicates the composer and stacks one per
+// pending HITL. Default surface ("agent-detail") keeps it.
+// ---------------------------------------------------------------------------
+
+const FIELD_ASSIST_PLACEHOLDER =
+  /Ask Cinatra to suggest edits to the fields above/i;
+
+describe("AgenticRunPanel field-assist prompt surface gate (cinatra#767)", () => {
+  beforeEach(() => {
+    // HitlConversationPanel portals into document.querySelector("main").
+    cleanup();
+    document.body.innerHTML = "";
+    document.body.appendChild(document.createElement("main"));
+  });
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  // Visibility also requires a templateId. The non-presentation hook result
+  // yields a truthy effectiveHitlContext with an xRenderer + pending_approval,
+  // so with templateId set the only remaining discriminator is `surface`.
+  async function renderWithSurface(surface?: "chat" | "agent-detail") {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      hookResultWithoutPresentation,
+    );
+    return render(
+      <AgenticRunPanel
+        runId="run-1"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+        templateId="tmpl-1"
+        {...(surface ? { surface } : {})}
+      />,
+    );
+  }
+
+  it("renders the field-assist prompt by default (agent-detail surface)", async () => {
+    await renderWithSurface();
+    const prompt = await screen.findByText(FIELD_ASSIST_PLACEHOLDER);
+    expect(prompt).not.toBeNull();
+  });
+
+  it('hides the field-assist prompt when surface="chat"', async () => {
+    await renderWithSurface("chat");
+    // Let any post-mount effects (portalTarget set) flush; the prompt must
+    // still be absent because the surface gate short-circuits `visible`.
+    await Promise.resolve();
+    expect(screen.queryByText(FIELD_ASSIST_PLACEHOLDER)).toBeNull();
   });
 });
