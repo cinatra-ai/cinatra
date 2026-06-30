@@ -305,12 +305,13 @@ describe("AgenticRunPanel chat step-0 setup gate hides redundant Continue (engin
   // renders a "Continue" button ONLY when hideSubmit is not true. Lets us
   // assert the panel's hideSubmit plumbing without the heavy real renderer +
   // its shadcn/sdk-ui deps.
+  // The marker is a <span> (not a raw <button>, which the ui-design-system
+  // gate forbids in favor of the shadcn <Button>); the assertions key off the
+  // text label, not a button role.
   function StubSetupRenderer(props: { hideSubmit?: boolean }) {
     return (
       <div data-testid="stub-setup-renderer">
-        {!props.hideSubmit ? (
-          <button type="button">Setup Continue button</button>
-        ) : null}
+        {!props.hideSubmit ? <span>Setup Continue button</span> : null}
       </div>
     );
   }
