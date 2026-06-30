@@ -129,7 +129,7 @@ describe("MarketplaceDetailHeader", () => {
     expect(html).not.toContain("MIT");
   });
 
-  it("omits freshness and version when absent", () => {
+  it("omits freshness and version when absent, but still renders the meta row (compat badge)", () => {
     const html = renderToStaticMarkup(
       <MarketplaceDetailHeader
         {...baseProps}
@@ -140,6 +140,37 @@ describe("MarketplaceDetailHeader", () => {
     );
     expect(html).not.toContain("Updated ");
     expect(html).not.toContain("Version ");
-    expect(html).not.toContain('data-slot="marketplace-detail-meta"');
+    // The meta row now always renders because it carries the 3-state compat
+    // badge — with no declared sdkAbiRange the badge reads the neutral "Unknown".
+    expect(html).toContain('data-slot="marketplace-detail-meta"');
+    expect(html).toContain('data-slot="extension-compat-badge"');
+    expect(html).toContain('data-compat-state="unknown"');
+    expect(html).toContain("Unknown");
+  });
+
+  it("renders the Compatible (green/success) badge for a satisfied declared range", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange="^2" />,
+    );
+    expect(html).toContain('data-compat-state="compatible"');
+    expect(html).toContain("Compatible");
+    expect(html).toContain('data-variant="success"');
+  });
+
+  it("renders the Incompatible (destructive) badge for an unsatisfied declared range", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange="^99" />,
+    );
+    expect(html).toContain('data-compat-state="incompatible"');
+    expect(html).toContain("Incompatible");
+    expect(html).toContain('data-variant="destructive"');
+  });
+
+  it("NEVER renders green (success) for an undeclared range — neutral Unknown only", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange={null} />,
+    );
+    expect(html).toContain('data-compat-state="unknown"');
+    expect(html).not.toContain('data-variant="success"');
   });
 });

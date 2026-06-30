@@ -12,6 +12,7 @@ import {
   extensionKindEmblem,
   type ExtensionEmblemKind,
 } from "@/components/extension-kind-emblem";
+import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 
 // ---------------------------------------------------------------------------
 // MarketplaceDetailHeader — the in-app mirror of the public marketplace
@@ -85,6 +86,7 @@ export function MarketplaceDetailHeader({
   license,
   version,
   freshnessAt,
+  sdkAbiRange,
 }: {
   /** Scoped npm name — seeds the stable accent, like the browse cards. */
   packageName: string;
@@ -97,6 +99,12 @@ export function MarketplaceDetailHeader({
   version: string | null;
   /** Honest ISO-8601 freshness stamp (see resolveDetailFreshnessAt), or null. */
   freshnessAt: string | null;
+  /**
+   * Declared host/SDK ABI range from the marketplace detail payload, or null.
+   * Drives the in-instance 3-state compatibility badge (absent → neutral
+   * "Unknown", never green). Optional so legacy callers stay valid.
+   */
+  sdkAbiRange?: string | null;
 }) {
   const accent = deriveExtensionAccent(packageName);
   const { bg, fg } = ACCENT_PALETTE[accent];
@@ -146,23 +154,25 @@ export function MarketplaceDetailHeader({
           {name}
         </h1>
       </section>
-      {(freshness || version || badge.license) && (
-        <div
-          data-slot="marketplace-detail-meta"
-          className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground"
-        >
-          {freshness && freshnessDate && (
-            <time
-              dateTime={freshnessDate.toISOString()}
-              title={format(freshnessDate, "PPP")}
-            >
-              {freshness}
-            </time>
-          )}
-          {version && <span>Version {version}</span>}
-          {badge.license && <span>{badge.license} license</span>}
-        </div>
-      )}
+      <div
+        data-slot="marketplace-detail-meta"
+        className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground"
+      >
+        {/* 3-state in-instance ABI compatibility verdict, derived locally from
+            the listing's declared sdkAbiRange (absent → neutral "Unknown",
+            never green). Always rendered — "Unknown" is itself informative. */}
+        <ExtensionCompatBadge sdkAbiRange={sdkAbiRange} />
+        {freshness && freshnessDate && (
+          <time
+            dateTime={freshnessDate.toISOString()}
+            title={format(freshnessDate, "PPP")}
+          >
+            {freshness}
+          </time>
+        )}
+        {version && <span>Version {version}</span>}
+        {badge.license && <span>{badge.license} license</span>}
+      </div>
       <PageHeaderRule />
       <PageHeaderTitleSync title={name} />
     </header>
