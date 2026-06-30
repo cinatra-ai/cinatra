@@ -1,8 +1,10 @@
 /**
  * deriveExtensionCompatState — the 3-state ABI compatibility verdict for the
  * marketplace UI badge. The host's frozen SDK-extensions ABI is 2.2.0 (major 2)
- * in this repo, so a `^2`/`>=2.0.0 <3.0.0` declaration is satisfied, a `^1`/`^3`
- * declaration is not, and an undeclared range is the neutral "unknown".
+ * in this repo, so a supported single-comparator `^2`/`>=2`/`2.x` declaration is
+ * satisfied, a `^1`/`^3` declaration is not, and an undeclared range is the
+ * neutral "unknown". (The SDK checker fails closed on compound/multi-comparator
+ * ranges, so the badge never reads green for one — see the MALFORMED case.)
  */
 import { describe, expect, it } from "vitest";
 
@@ -36,6 +38,11 @@ describe("deriveExtensionCompatState", () => {
     expect(deriveExtensionCompatState("not-a-range")).toBe("incompatible");
     expect(deriveExtensionCompatState("^^2")).toBe("incompatible");
     expect(deriveExtensionCompatState(">>2")).toBe("incompatible");
+    // The SDK checker only supports a SINGLE comparator; a compound/range-set
+    // declaration is unsupported and fails closed — never green — even when it
+    // would notionally include the host ABI. The badge inherits that exactly.
+    expect(deriveExtensionCompatState(">=2.0.0 <3.0.0")).toBe("incompatible");
+    expect(deriveExtensionCompatState("^1 || ^2")).toBe("incompatible");
   });
 
   it("ABSENT (null/undefined/blank) → unknown (neutral, NEVER compatible)", () => {
