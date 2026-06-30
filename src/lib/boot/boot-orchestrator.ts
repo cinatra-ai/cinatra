@@ -20,6 +20,7 @@ import { beginBoot, markBootReady } from "@/lib/boot/boot-state";
 import { runBootPhase, type BootPhase } from "@/lib/boot/boot-phase";
 import { coreBootPhases } from "@/lib/boot/phases/core-boot";
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
+import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
@@ -74,9 +75,21 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // ── extension activation: dual loaders + required-set enforcement + cleanup ──
   await run(extensionActivationPhases(bootActivationResults));
 
+  // ── agent published-marker self-heal (engineering #418) ──────────────────────
+  // PROD-SAFE, always-on (dev AND prod). AWAITED here — before the dev detached
+  // scan starts and before markBootReady() — so every installed agent's
+  // `.cinatra-published.json` marker is present + matches its `oas.json` by the
+  // time wayflow's loader scans. Idempotent / never clobbers a valid marker /
+  // skips in-progress drafts (see the phase module). `degraded`: a failure logs
+  // and boot continues (an unrepairable agent stays gated, as it did pre-#418).
+  await run(agentMarkerBackfillPhases());
+
   // ── dev block 1 (DETACHED in the original — agents/skills scan ~18s) ─────────
   // Original interleave point: right after install-op cleanup, before the
-  // always-on system services. Fire-and-forget; NOT awaited.
+  // always-on system services. Fire-and-forget; NOT awaited. The marker backfill
+  // it used to perform is now the always-on `agent-marker-backfill` phase above;
+  // the detached scan keeps the dev-only git-native agent ingest + skill loading
+  // + hot-reload watcher.
   if (dev) startDetachedAgentsScan();
 
   // ── system services, part 1: assistant bootstrap + otel ──────────────────────
