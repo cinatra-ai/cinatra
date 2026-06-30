@@ -514,6 +514,7 @@ function mapExtensionGetWire(
     marketplaceAssets: wire.marketplace_assets ?? wire.marketplaceAssets ?? [],
     license: wire.license ?? null,
     versionHistory,
+    sdkAbiRange: wire.sdk_abi_range ?? wire.sdkAbiRange ?? null,
   };
 }
 

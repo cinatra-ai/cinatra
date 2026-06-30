@@ -107,6 +107,7 @@ export default async function ExtensionMarketplaceEntryPage({
         license={detail.license ?? null}
         version={detail.latestVersion}
         freshnessAt={resolveDetailFreshnessAt(detail)}
+        sdkAbiRange={detail.sdkAbiRange ?? null}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         {kind === "agent" ? (

@@ -108,6 +108,14 @@ export interface ExtensionDetail extends ExtensionCard {
   marketplaceAssets: MarketplaceAsset[];
   license: string | null;
   versionHistory: Array<{ version: string; releasedAt: string; state: PackageVersionState }>;
+  /**
+   * The extension's declared host/SDK ABI range (`cinatra.sdkAbiRange`), surfaced
+   * so the detail header can render the in-instance 3-state compatibility badge
+   * for a NOT-installed listing without a registry read. OPTIONAL/null when the
+   * extension declares none (badge → neutral "Unknown", never green). The
+   * http-client mapper defaults it to null so legacy fixtures stay valid.
+   */
+  sdkAbiRange?: string | null;
 }
 
 export interface MarketplaceExtensionGetInput {
@@ -148,6 +156,9 @@ export interface MarketplaceExtensionGetWire {
     releasedAt?: string;
     state: PackageVersionState;
   }> | null;
+  /** Declared host/SDK ABI range (`cinatra.sdkAbiRange`); optional/null. */
+  sdk_abi_range?: string | null;
+  sdkAbiRange?: string | null;
 }
 
 // ---------------------------------------------------------------------------

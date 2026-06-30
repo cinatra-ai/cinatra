@@ -30,6 +30,7 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ExtensionCard } from "@/components/extension-card";
+import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { cn } from "@/lib/utils";
 import { readRegistryPolicy } from "../registry-policy";
@@ -170,10 +171,16 @@ export async function ExtensionsMarketplaceScreen({
         iconUrl={resolveCardIconUrl(card)}
         description={card.description}
         meta={
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             {card.rating && <RatingRow rating={card.rating} />}
             {installs && <span>{installs}</span>}
-            {freshness && <span>{freshness}</span>}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {/* 3-state in-instance ABI compatibility verdict, derived locally
+                  from the catalog's declared sdkAbiRange (absent → neutral
+                  "Unknown", never green). */}
+              <ExtensionCompatBadge sdkAbiRange={card.sdkAbiRange} />
+              {freshness && <span>{freshness}</span>}
+            </div>
           </div>
         }
         badges={
