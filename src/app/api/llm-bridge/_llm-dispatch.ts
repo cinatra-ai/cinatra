@@ -27,41 +27,17 @@ import "server-only";
 import {
   ALLOWED_MODEL_IDS,
   LLM_PROVIDERS,
+  canProviderSatisfyCapability,
+  describeCapabilityRequirement,
   type LlmProvider,
   type LlmCapability,
   type OasCinatraLlm,
 } from "@cinatra-ai/agents";
 
-// ---------------------------------------------------------------------------
-// Capability matrix (the truth — drives the runtime gate)
-//
-// function_tools is broad: Gemini supports function
-// tools (see packages/llm/src/providers/gemini.ts:62
-// translateTools() emits FunctionDeclaration[]). Only media_input and
-// native_mcp are narrow (single- or dual-provider gates).
-// ---------------------------------------------------------------------------
-
-export function canProviderSatisfyCapability(
-  provider: LlmProvider,
-  capability: LlmCapability,
-): boolean {
-  switch (capability) {
-    case "media_input":
-      return provider === "gemini";
-    case "function_tools":
-      // Every adapter has a non-null tools translator.
-      return provider === "openai" || provider === "anthropic" || provider === "gemini";
-    case "native_mcp":
-      // Provider-native MCP server tool; function-tool emulation does NOT
-      // qualify here. Gemini is excluded per CLAUDE.md MCP Injection Rule.
-      return provider === "openai" || provider === "anthropic";
-    default:
-      // Defense-in-depth — the Zod schema rejects unknown capability values
-      // before we get here. Keep an explicit `false` so any future enum
-      // expansion at the policy level fails closed.
-      return false;
-  }
-}
+// Capability matrix moved to the declared single source of truth
+// (packages/agents/src/llm-provider-policy.ts). `canProviderSatisfyCapability`
+// + `describeCapabilityRequirement` are imported above so the bridge resolver,
+// the actionable error wording, and any future preflight all share ONE matrix.
 
 // ---------------------------------------------------------------------------
 // Media-branch helpers (pure; importable from tests)
@@ -313,6 +289,14 @@ export async function resolveCinatraLlmDispatch(
           capability,
           effectiveProvider,
           requestedProvider,
+          // Actionable, human-readable guidance (shared SoT wording). The
+          // WayFlow runtime surfaces a failing ApiNode's response body in the
+          // task-failure text (RuntimeError), so this reaches the run's
+          // RUN_ERROR instead of a generic "WayFlow task failed". The honored
+          // provider is available but cannot satisfy the capability.
+          message: describeCapabilityRequirement(capability, {
+            incompatibleProvider: effectiveProvider,
+          }),
         },
       };
     }
@@ -333,6 +317,10 @@ export async function resolveCinatraLlmDispatch(
           code: "CAPABILITY_UNSATISFIABLE",
           capability,
           requestedProvider,
+          // Actionable guidance (shared SoT wording) — no installed AND
+          // configured connector provides this capability. Surfaced to the
+          // run via the WayFlow task-failure text (see Branch A note).
+          message: describeCapabilityRequirement(capability),
         },
       };
     }

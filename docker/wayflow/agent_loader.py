@@ -439,7 +439,51 @@ def _patch_api_call_step_bridge_token() -> None:
         # declare it explicitly on the ApiNode in the OAS — `setdefault`
         # honors any caller-declared timeout.
         request.setdefault("timeout", _DEFAULT_APINODE_TIMEOUT_SECONDS)
-        return await _original(self, request)
+        resp = await _original(self, request)
+
+        # Actionable capability errors (engineering#417).
+        #
+        # When an agent needs an LLM capability (e.g. media_input → gemini)
+        # that no installed+configured connector provides, /api/llm-bridge
+        # returns HTTP 503 with body {code:"CAPABILITY_UNSATISFIABLE",
+        # message:"<actionable sentence>", ...}. WayFlow's ApiCallStep would
+        # otherwise surface that as the raw, buried failure text
+        # "error executing POST request to .../api/llm-bridge: 503, {<json>}".
+        # Pre-empt it here with a clean RuntimeError carrying ONLY the
+        # actionable message, so the run's RUN_ERROR (packages/agents/src/
+        # execution.ts reads task.status.message.parts[0].text) tells the user
+        # exactly which connector to install/configure instead of a generic
+        # "WayFlow task failed".
+        #
+        # Strictly scoped + defensive: ONLY for the bridge URL + that exact
+        # code; any non-503 status, non-bridge URL, missing attr, or parse
+        # failure falls through to `return resp` unchanged (WayFlow then
+        # applies its own non-success handling exactly as before). The
+        # `_original` retry loop has already run, so raising here is correct.
+        if (
+            "/api/llm-bridge" in _ctx_url
+            and getattr(resp, "status_code", None) == 503
+        ):
+            try:
+                _body = resp.json()
+            except Exception:  # noqa: BLE001 — any decode/parse error → fall through
+                _body = None
+            if (
+                isinstance(_body, dict)
+                and _body.get("code") == "CAPABILITY_UNSATISFIABLE"
+            ):
+                _msg = _body.get("message")
+                raise RuntimeError(
+                    _msg
+                    if isinstance(_msg, str) and _msg
+                    else (
+                        "This agent requires an LLM capability that no installed "
+                        "and configured connector provides. Install and configure "
+                        "the required LLM connector, then re-run."
+                    )
+                )
+
+        return resp
 
     _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
     _patched.__wrapped__ = _original  # type: ignore[attr-defined]
