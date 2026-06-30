@@ -9,6 +9,7 @@
 
 import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
+import type { ConsumedPrimitive } from "./consumes";
 
 /**
  * UI hot-pluggability classification (narrowed per cinatra#782 — the connector
@@ -144,6 +145,18 @@ export type CinatraManifest = {
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
   dependencies?: ExtensionDependency[];
+
+  /**
+   * Structured declared-CONSUMED primitives (engineering#422). The machine-
+   * readable used-primitive set the closure VALIDATOR resolves (primitive →
+   * owning package via the ownership registry) and diffs against
+   * `dependencies` to catch UNDER-declaration — an extension that uses a
+   * cross-extension primitive it never declared an edge for. Additive; absent
+   * means "not yet adopted" (the validator falls back to no structured-usage
+   * signal for that package, never an under-declaration claim). See
+   * `./consumes`.
+   */
+  consumes?: ConsumedPrimitive[];
 
   // ---- legacy dependency shims (normalized into `dependencies`) ----
   /** @deprecated agent→agent map; normalized into `dependencies`. */

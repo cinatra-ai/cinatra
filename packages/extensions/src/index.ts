@@ -1089,6 +1089,13 @@ export type {
   RecursionCheck,
 } from "./cross-kind-dep-graph";
 
+// NOTE: the declared-vs-used dependency closure VALIDATOR (engineering#422,
+// `./dependency-declaration-validator`) is deliberately NOT re-exported from
+// this barrel. It is a pure leaf consumed DIRECTLY by a plain-node CI gate
+// (PR-3) and the central pre-promotion sweep (PR-2) — adding it to the
+// server-only barrel would pull it into every host route's reachable graph
+// (the route-graph ratchet). Import it from its module path instead.
+
 // True-IoC split-brain guard.
 // Host-injected in-memory capability teardown hook (purge fires it after the DB
 // delete commits) + the effective-status reader used by the StaticBundleLoader
