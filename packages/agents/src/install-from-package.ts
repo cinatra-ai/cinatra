@@ -5,6 +5,7 @@ import "server-only";
 // not collide on the agent_templates.packageName unique index.
 
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupExtractedAgentPackage,
@@ -28,10 +29,10 @@ import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-de
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import {
   agentPackageManifestSchema,
-  agentPackagePayloadSchema,
   CINATRA_AGENT_PACKAGE_TYPE,
   CINATRA_AGENT_MANIFEST_VERSION,
 } from "./verdaccio/package-contract";
+import { resolveInstallAgentPayload } from "./agent-install-payload";
 // Imported here so any future spawn-side install paths (e.g. an out-of-band
 // `pnpm install` invocation) can reuse the same explicit-flag construction.
 // Today the install path goes through `pacote` (HTTP, see
@@ -138,7 +139,21 @@ async function _installAgentFromPackageImpl(
   try {
     // Plugin-system returns raw manifest/payload; re-apply agent-specific validation.
     const manifest = agentPackageManifestSchema.parse(extracted.manifest);
-    const payload = agentPackagePayloadSchema.parse(extracted.payload);
+    // The extractor returns the OAS Flow document (`cinatra/oas.json`) as the
+    // raw payload for git-tag-released agents (the DETAIL-page shape, cinatra#582)
+    // — that is NOT a formatVersion:2 dist payload. Resolve the install payload:
+    // a conformant root agent.json (in-app publisher / build-materialized
+    // tarballs) is used verbatim; an OAS-only tarball is COMPILED into the
+    // formatVersion:2 shape here so the install succeeds without a republish.
+    // A present-but-broken OAS throws, failing the install BEFORE any disk
+    // materialize.
+    const payload = await resolveInstallAgentPayload({
+      extractedPayload: extracted.payload,
+      extractedTempDir: extracted.tempDir,
+      packageName: extracted.packageName,
+      packageVersion: extracted.packageVersion,
+      manifest,
+    });
 
     if (manifest.cinatra.packageType !== CINATRA_AGENT_PACKAGE_TYPE) {
       throw new Error(`Unsupported package type: ${manifest.cinatra.packageType}`);
@@ -499,11 +514,17 @@ async function registerDeclaredObjectTypes(opts: {
   creatorId: string | null;
 }): Promise<void> {
   try {
+    // Resolve the agent-definition path the SAME way the install payload does:
+    // git-tag-released agents ship ONLY cinatra/oas.json (no root agent.json),
+    // so probing only <tempDir>/agent.json would silently skip their declared
+    // output object types. Prefer the canonical cinatra/oas.json, fall back to a
+    // legacy root agent.json.
+    const oasPath = join(opts.extractedTempDir, "cinatra", "oas.json");
+    const rootAgentJsonPath = join(opts.extractedTempDir, "agent.json");
+    const agentJsonPath = existsSync(oasPath) ? oasPath : rootAgentJsonPath;
     const compileResult = await compileOasAgentJson({
       packageName: opts.extractedPackageName,
-      // Tarball extracts to <tempDir>/agent.json + <tempDir>/package.json
-      // (verified in @cinatra-ai/registries extractAgentPackage).
-      agentJsonPath: join(opts.extractedTempDir, "agent.json"),
+      agentJsonPath,
     });
     if (
       compileResult.ok &&

@@ -75,7 +75,14 @@ vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): bool
 
 vi.mock("../verdaccio/package-contract", () => ({
   agentPackageManifestSchema: { parse: (x: unknown) => x },
-  agentPackagePayloadSchema: { parse: (x: unknown) => x },
+  // `safeParse` succeeds so the install payload resolver
+  // (../agent-install-payload) takes its verbatim fast path and returns the
+  // fixture payload unchanged — preserving this suite's pre-resolver behavior
+  // where the payload parse was an identity passthrough.
+  agentPackagePayloadSchema: {
+    parse: (x: unknown) => x,
+    safeParse: (x: unknown) => ({ success: true, data: x }),
+  },
   CINATRA_AGENT_PACKAGE_TYPE: "agent-package",
   CINATRA_AGENT_MANIFEST_VERSION: "1",
 }));
