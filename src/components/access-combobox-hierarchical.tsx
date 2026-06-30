@@ -96,7 +96,7 @@ export function AccessComboboxHierarchical({
             {parts.type}:
           </span>
         )}
-        <span className="text-foreground">{parts.name}</span>
+        <span className="text-foreground whitespace-nowrap">{parts.name}</span>
         <Check
           className={cn(
             "ml-auto size-4",
@@ -185,7 +185,7 @@ export function AccessComboboxHierarchical({
       </PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[var(--radix-popover-trigger-width)] p-0 bg-surface-strong"
+        className="w-auto min-w-[var(--radix-popover-trigger-width)] max-w-[min(28rem,calc(100vw-2rem))] p-0 bg-surface-strong"
       >
         <Command shouldFilter={false} className="bg-surface-strong">
           <div className="p-2 border-b border-line">
