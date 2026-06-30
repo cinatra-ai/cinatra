@@ -159,6 +159,8 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
+[Unreleased]: https://github.com/cinatra-ai/cinatra/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.5
 [0.1.4]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.4
 [0.1.3]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.3
 [0.1.2]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.2
