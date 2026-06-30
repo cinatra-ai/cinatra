@@ -124,6 +124,19 @@ export type HostNangoPort = {
   listConnectionRecords?(
     connectorKey: string,
   ): Promise<{ connectionId: string; metadata?: Record<string, unknown> }[]>;
+  /**
+   * The canonical OAuth callback URL Nango sends to providers
+   * (`${NANGO_PUBLIC_SERVER_URL}/oauth/callback`) — the exact `redirect_uri` a
+   * connector's setup page must tell admins to register in the provider app.
+   * Optional + null-safe (`ctx.nango.getNangoOAuthCallbackUrl?.()`): it was
+   * ADDED AFTER the 2.2.0 baseline, so it is deliberately NOT one of the five
+   * `NANGO_ABI_2_2_ADDED_METHODS` and stays optional even at a `>= 2.2` floor —
+   * a connector must read it null-safe regardless of its declared minor, and
+   * fall back when a host predates it. Return the literal URL; do NOT normalize
+   * (case/port/trailing-slash) — any divergence from what Nango actually sends
+   * breaks the registered-equals-sent guarantee.
+   */
+  getNangoOAuthCallbackUrl?(): Promise<string>;
 };
 
 // ---------------------------------------------------------------------------

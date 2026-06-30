@@ -42,6 +42,27 @@ describe("SDK ABI 2.2.0 foundation", () => {
     expect(legacyNango.getPrimarySavedConnection).toBeUndefined();
     expect(legacyNango.getPrimarySavedConnections).toBeUndefined();
     expect(legacyNango.listConnectionRecords).toBeUndefined();
+    // getNangoOAuthCallbackUrl is a LATER post-2.2.0 additive optional getter
+    // (NOT one of the five 2.2.0 methods) — also absent from the legacy port.
+    expect(legacyNango.getNangoOAuthCallbackUrl).toBeUndefined();
+  });
+
+  it("keeps getNangoOAuthCallbackUrl optional even at a >= 2.2 floor (post-2.2.0, NOT minimum-minor gated)", () => {
+    // It was added after the 2.2.0 baseline, so it is deliberately excluded from
+    // NANGO_ABI_2_2_ADDED_METHODS: a >= 2.2 scoped port must NOT require it, and a
+    // connector reads it null-safe regardless of its declared minor.
+    expect(NANGO_ABI_2_2_ADDED_METHODS).not.toContain("getNangoOAuthCallbackUrl");
+    const at22WithoutCallback: AbiScopedNangoPort<">=2.2"> = {
+      isConfigured: async () => false,
+      getConnection: async () => null,
+      ensureConnectSession: async () => ({}),
+      getStatus: async () => ({ status: "not_connected" }),
+      getFrontendConfig: async () => ({}),
+      getPrimarySavedConnection: async () => null,
+      getPrimarySavedConnections: async () => ({}),
+      listConnectionRecords: async () => [],
+    };
+    expect(at22WithoutCallback.getNangoOAuthCallbackUrl).toBeUndefined();
   });
 
   it("exposes the structural mcp + artifact contracts (compile-time)", () => {
