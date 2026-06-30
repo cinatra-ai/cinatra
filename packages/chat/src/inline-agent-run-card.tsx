@@ -202,6 +202,7 @@ export function InlineAgentRunCard({
         inputParams={seed.inputParams}
         templateId={seed.templateId}
         onActiveGateChange={onActiveGateChange}
+        surface="chat"
       />
     </div>
   );

@@ -133,6 +133,16 @@ test.describe("chat-prompt-hitl", () => {
       120_000,
     );
 
+    // cinatra#767 regression: the inline HITL card's field-assist prompt
+    // ("Ask Cinatra to suggest edits to the fields above…") belongs to the
+    // /agents/* run UI only. In chat it duplicated the composer and stacked
+    // one per pending HITL. With surface="chat" it must be ABSENT while the
+    // gate is pending; only the normal chat composer remains.
+    await expect(
+      page.getByPlaceholder(/Ask Cinatra to suggest edits to the fields above/i),
+    ).toHaveCount(0);
+    await expect(page.getByTestId("chat-prompt-input")).toBeVisible();
+
     // Pure-approval word path (classifier Step 2 on a 0-required-field gate).
     await typeAndSend(page, "approve");
 

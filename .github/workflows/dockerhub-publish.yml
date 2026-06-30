@@ -67,6 +67,14 @@ jobs:
     name: Mirror GHCR image to Docker Hub
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Gate the public Docker Hub mirror publish behind the org-wide
+    # `release-approval` Environment. Pushing the image to the public
+    # docker.io/cinatra/cinatra repo is a publish of a user-consumable artifact,
+    # so it must pause for an owner approval. The protected Environment is
+    # provisioned in this repo (required reviewer, prevent_self_review=false,
+    # can_admins_bypass=false); a referenced-but-unprovisioned Environment
+    # auto-creates UNPROTECTED, so the line and the provisioning ship together.
+    environment: release-approval
     # Run only when:
     #   - this is the canonical repo (a fork / non-canonical clone must never
     #     publish to the public Docker Hub org); AND
