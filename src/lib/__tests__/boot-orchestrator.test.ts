@@ -24,6 +24,11 @@ vi.mock("@/lib/boot/phases/core-boot", () => ({
 vi.mock("@/lib/boot/phases/extension-activation", () => ({
   extensionActivationPhases: () => [{ name: "ext-x", policy: "retryable", run: async () => {} }],
 }));
+vi.mock("@/lib/boot/phases/required-extension-materialize", () => ({
+  requiredExtensionMaterializePhases: () => [
+    { name: "required-extension-materialize", policy: "fatal", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/agent-marker-backfill", () => ({
   agentMarkerBackfillPhases: () => [
     { name: "agent-marker-backfill", policy: "degraded", run: async () => {} },
@@ -77,6 +82,7 @@ describe("runBoot orchestration", () => {
     expect(order).toEqual([
       "core-x",
       "ext-x",
+      "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
@@ -103,6 +109,7 @@ describe("runBoot orchestration", () => {
     expect(order).toEqual([
       "core-x",
       "ext-x",
+      "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
       "assistant-bootstrap",
       "otel-tracing",
@@ -134,6 +141,29 @@ describe("runBoot orchestration", () => {
         order.indexOf("loops-x"),
       );
       expect(markBootReady).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("runs required-extension-materialize (cinatra-ai/ops#436) after ext-activation and BEFORE marker backfill, in BOTH dev and prod", async () => {
+    for (const dev of [true, false]) {
+      vi.clearAllMocks();
+      const order: string[] = [];
+      const runPhase = vi.fn(async (phase: { name: string }) => {
+        order.push(phase.name);
+        return undefined as never;
+      });
+      await runBoot({ isDevMode: () => dev, runPhase });
+      expect(order).toContain("required-extension-materialize");
+      // After extension-activation (the in-process registry load) so the
+      // required-activation assert is independent of the disk reconcile.
+      expect(order.indexOf("required-extension-materialize")).toBeGreaterThan(
+        order.indexOf("ext-x"),
+      );
+      // BEFORE marker backfill so markers backfill against the freshly
+      // materialized on-disk tree.
+      expect(order.indexOf("required-extension-materialize")).toBeLessThan(
+        order.indexOf("agent-marker-backfill"),
+      );
     }
   });
 

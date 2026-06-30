@@ -20,6 +20,7 @@ import { beginBoot, markBootReady } from "@/lib/boot/boot-state";
 import { runBootPhase, type BootPhase } from "@/lib/boot/boot-phase";
 import { coreBootPhases } from "@/lib/boot/phases/core-boot";
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
+import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
@@ -74,6 +75,17 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
 
   // ── extension activation: dual loaders + required-set enforcement + cleanup ──
   await run(extensionActivationPhases(bootActivationResults));
+
+  // ── required-extension OAS materialize (cinatra-ai/ops#436) ───────────────────
+  // PROD: fail-closed reconcile of the image-baked required-extension OAS seed
+  // into the live agent-install dir, so a new image tag REFRESHES the on-disk
+  // `<vendor>/<slug>/cinatra/oas.json` trees that WayFlow + the host scan (the
+  // ops#431 frozen-volume regression). Runs AFTER core boot (DB/identity) and
+  // BEFORE the marker backfill below, so markers backfill against the freshly
+  // materialized tree. DEV: non-fail-closed no-op when no seed is baked (the dev
+  // git-native scan owns the tree). `fatal` policy — the dev/prod split is in the
+  // phase body, so it only aborts boot in production.
+  await run(requiredExtensionMaterializePhases());
 
   // ── agent published-marker self-heal (engineering #418) ──────────────────────
   // PROD-SAFE, always-on (dev AND prod). AWAITED here — before the dev detached
