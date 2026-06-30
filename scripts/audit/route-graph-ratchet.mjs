@@ -59,6 +59,11 @@
  *   node scripts/audit/route-graph-ratchet.mjs                  # gate (CI)
  *   node scripts/audit/route-graph-ratchet.mjs --report         # current counts vs baseline
  *   node scripts/audit/route-graph-ratchet.mjs --write-baseline # (re)write baseline to current counts (should only ever shrink)
+ *
+ * Note: the four backend route ceilings were reset +10 once (the dashboards
+ * runtime-cube + portlet registries feature added shared backend graph reached
+ * by all four backend routes — legitimate feature growth). That reset landed
+ * while this gate was still inert; the ceilings only ever shrink from here.
  */
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
