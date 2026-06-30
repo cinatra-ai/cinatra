@@ -2200,6 +2200,15 @@ jobs:
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
     runs-on: ubuntu-latest
+    # Gate the public GitHub Release publish behind the org-wide
+    # `release-approval` Environment. Creating the Release is a real publish
+    # surface — it is what fires the downstream prod deploy dispatch — so it
+    # must pause for an owner approval before it runs. The Environment is
+    # provisioned in THIS repo (required reviewer, prevent_self_review=false,
+    # can_admins_bypass=false); without that provisioning a referenced
+    # Environment auto-creates UNPROTECTED and the gate is inert, so the line
+    # and the provisioned Environment ship together.
+    environment: release-approval
     permissions:
       contents: write
     steps:
