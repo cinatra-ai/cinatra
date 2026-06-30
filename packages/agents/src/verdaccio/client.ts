@@ -154,9 +154,15 @@ export async function publishAgentPackage(
 
   try {
     await Promise.all(
-      Object.entries(packageFiles.files).map(([fileName, contents]) =>
-        writeFile(path.join(tempDir, fileName), contents, "utf8"),
-      ),
+      Object.entries(packageFiles.files).map(async ([fileName, contents]) => {
+        const dest = path.join(tempDir, fileName);
+        // File keys may be nested (e.g. "cinatra/oas.json"); ensure the parent
+        // directory exists before writing. Top-level keys mkdir tempDir (a
+        // no-op). readdir(tempDir) below returns "cinatra" as a top-level entry
+        // and tar recurses into it, so the nested file is included.
+        await mkdir(path.dirname(dest), { recursive: true });
+        await writeFile(dest, contents, "utf8");
+      }),
     );
 
     // pacote.tarball() on a local dir requires Arborist in v21+ — use `tar` directly.
