@@ -171,4 +171,64 @@ test.describe("chat-prompt-hitl", () => {
       "run advanced off the approval gate via the prompt-driven submit",
     ).toBeTruthy();
   });
+
+  // engineering#416: a chat-dispatched read-only step-0 INPUT agent must NOT
+  // surface a redundant per-field "Continue" approval button ON TOP of the
+  // inline input form. The human supplying the input inline (Enter / chat
+  // composer) IS the approval; oas-compiler emits the StartNode step-0 gate as
+  // read_only/skipLlm and the setup-interrupt loop is its only emitter, so the
+  // synthetic `setup-<runId>` reviewTaskId is the structural identity of that
+  // read-only input gate (never a side-effect gate). With surface="chat" the
+  // panel passes hideSubmit to the field renderer, dropping the Continue
+  // button; the field input (#field-hitl-field) still renders and submit still
+  // works via the composer. The /agents/* run-detail surface keeps its Continue
+  // (covered by agents-run.spec.ts advanceSchemaFieldFallback). The
+  // skill-recommender test above is the regression that a genuine (non-setup-)
+  // approval gate STILL prompts in chat.
+  test("chat step-0 input gate shows the inline field WITHOUT a redundant Continue button", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(600_000);
+
+    let runId: string | null = null;
+    page.on("request", (req) => {
+      if (runId) return;
+      const m = req.url().match(RUN_ID_RE);
+      if (m && req.method() === "GET") runId = m[1];
+    });
+
+    await page.goto("/chat", { waitUntil: "domcontentloaded" });
+
+    // Dispatch the read-only auditor agent WITHOUT supplying its required
+    // `url` StartNode input, so the chat hard pre-router cannot pre-fill it and
+    // the setup-interrupt loop surfaces the step-0 input gate
+    // (schema-field-fallback renderer). With the url supplied inline the gate
+    // would not fire at all (pendingFields === 0).
+    await typeAndSend(page, "Invoke the cinatra_auditor-agent tool.");
+
+    await expect(
+      page.getByText(/pending approval/i).first(),
+    ).toBeVisible({ timeout: 240_000 });
+    expect(runId, "runId captured").toBeTruthy();
+
+    await awaitPendingApprovalReviewTaskId(request, runId!, 120_000);
+
+    // The inline input form (the schema-field-fallback field) renders so the
+    // user can supply the missing input.
+    await expect(page.locator("#field-hitl-field").first()).toBeVisible({
+      timeout: 60_000,
+    });
+
+    // The redundant per-field Continue/Submit approval button must be ABSENT on
+    // the chat surface — the inline field IS the input-supply == approval, and
+    // the chat composer drives the submit.
+    await expect(
+      page.getByRole("button", { name: /^(Continue|Submit)$/ }),
+    ).toHaveCount(0);
+
+    // The chat composer remains the drive surface (parity with the #767
+    // regression above).
+    await expect(page.getByTestId("chat-prompt-input")).toBeVisible();
+  });
 });
