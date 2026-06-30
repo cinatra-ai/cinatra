@@ -173,4 +173,37 @@ describe("MarketplaceDetailHeader", () => {
     expect(html).toContain('data-compat-state="unknown"');
     expect(html).not.toContain('data-variant="success"');
   });
+
+  it("renders the hosted banner image (with a scrim) when a banner URL is present", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader
+        {...baseProps}
+        bannerUrl="https://assets.example/banner.png"
+      />,
+    );
+    expect(html).toContain('data-has-banner="true"');
+    expect(html).toContain('data-slot="marketplace-detail-banner"');
+    expect(html).toContain('src="https://assets.example/banner.png"');
+    // The banner is DECORATIVE (empty alt) — the H1 name carries the label, so
+    // a screen reader never announces the image. Lock this in.
+    expect(html).toContain('alt=""');
+    // The legibility scrim must render over the banner so the emblem/badge/name
+    // stay readable against an arbitrary image.
+    expect(html).toContain("bg-foreground/55");
+    // The hero still carries the name + emblem over the banner.
+    expect(html).toContain("Acme Widget");
+  });
+
+  it("falls back to the accent panel (no banner image) when the banner URL is absent or blank", () => {
+    for (const bannerUrl of [null, undefined, "   "] as const) {
+      const html = renderToStaticMarkup(
+        <MarketplaceDetailHeader {...baseProps} bannerUrl={bannerUrl} />,
+      );
+      expect(html).toContain('data-has-banner="false"');
+      expect(html).not.toContain('data-slot="marketplace-detail-banner"');
+      // The accent hero still renders the name.
+      expect(html).toContain('data-slot="marketplace-detail-hero"');
+      expect(html).toContain("Acme Widget");
+    }
+  });
 });
