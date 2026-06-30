@@ -43,6 +43,55 @@ export interface MarketplaceCardData {
   rating: { average: number; count: number } | null;
   /** /configuration/marketplace/<scope>/<name> (unchanged detail route). */
   detailHref: string;
+  /**
+   * Total install count, or null when the marketplace does not (yet) track it.
+   * OPTIONAL — the card renders the count only when a non-negative finite
+   * number is present; any absent/garbage value degrades to "no count line".
+   */
+  installCount: number | null;
+  /**
+   * Sanitized hosted URL for the extension's own square icon, or null. First
+   * link in the card icon fallback chain (icon → vendor logo → kind emblem).
+   */
+  iconUrl: string | null;
+  /**
+   * Sanitized hosted URL for the vendor brand logo, or null. Second link in the
+   * card icon fallback chain.
+   */
+  vendorLogoUrl: string | null;
+  /**
+   * Declared host/SDK ABI range (`cinatra.sdkAbiRange`), or null when the
+   * extension declares none. Powers the in-instance 3-state compatibility
+   * badge for NOT-installed listings (absent → neutral "Unknown", never green).
+   */
+  sdkAbiRange: string | null;
+}
+
+/**
+ * Coerce an arbitrary wire value into a non-negative finite install count, or
+ * null. The card renders a count line ONLY for a clean number — a missing
+ * field, a string, NaN, Infinity, or a negative number all collapse to null
+ * (no count line), so a malformed catalog never paints a garbage statistic.
+ */
+function normalizeInstallCount(raw: unknown): number | null {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    return null;
+  }
+  return Math.floor(raw);
+}
+
+/**
+ * Coerce an arbitrary wire value into a non-empty trimmed string, or null.
+ * Used for the OPTIONAL asset URLs and the declared ABI range (older catalogs
+ * omit them), so any non-string / blank value degrades gracefully to null — the
+ * next link in the icon fallback chain, or the neutral "Unknown" compat state.
+ */
+function normalizeOptionalString(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 const KIND_LABELS: Record<MarketplaceCardKind, string> = {
@@ -153,6 +202,12 @@ export function catalogEntryToCardData(
     freshnessAt: entry.freshness_at ?? null,
     rating: entry.rating ?? null,
     detailHref: marketplaceDetailHref(packageName),
+    // New OPTIONAL catalog fields — every one degrades gracefully when the
+    // marketplace build predates the field (absent → null, no broken UI).
+    installCount: normalizeInstallCount(entry.install_count),
+    iconUrl: normalizeOptionalString(entry.icon_url),
+    vendorLogoUrl: normalizeOptionalString(entry.vendor_logo_url),
+    sdkAbiRange: normalizeOptionalString(entry.sdk_abi_range),
   };
 }
 
