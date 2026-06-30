@@ -4,11 +4,14 @@
 // is reachable. Run automatically at the end of `make setup`, and on demand
 // with `make check` / `pnpm check:services`.
 //
-// Each service is checked with a plain TCP connect to its published port — that
-// proves the container is up and listening without depending on service-
-// specific health routes. Ports/hosts are read from .env.local where Cinatra
-// exposes them (SUPABASE_DB_URL, REDIS_URL, NANGO_SERVER_URL, GRAPHITI_URL,
-// WAYFLOW_BASE_URL); the rest fall back to the docker-compose.yml defaults.
+// Most services are checked with a plain TCP connect to their published port —
+// that proves the container is up and listening without depending on service-
+// specific health routes. Nango is the exception: it probes the HTTP `/health`
+// contract, because the emulated amd64 image can hang while still port-bound, in
+// which case a TCP connect "passes" but every connector is broken (cinatra#730).
+// Ports/hosts are read from .env.local where Cinatra exposes them
+// (SUPABASE_DB_URL, REDIS_URL, NANGO_SERVER_URL, GRAPHITI_URL, WAYFLOW_BASE_URL);
+// the rest fall back to the docker-compose.yml defaults.
 //
 // Exit code: non-zero if any REQUIRED service is unreachable (so the check is
 // usable as a CI / scripting gate). Recommended-tier and the app itself never
@@ -26,6 +29,7 @@ import {
   formatDriftRemedy,
   parseHostPort,
 } from "./lib/docker-port-drift.mjs";
+import { nangoHealthUrl, probeHttpHealth } from "./lib/nango-health.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -105,6 +109,9 @@ const services = [
     name: "Nango",
     tier: "required",
     ...hostPort(env.NANGO_SERVER_URL, { host: "127.0.0.1", port: 3003 }),
+    // HTTP /health (not a bare TCP connect): the emulated image can hang while
+    // the port stays bound, which a TCP probe would wrongly report as up.
+    healthUrl: nangoHealthUrl(env.NANGO_SERVER_URL),
     note: "connector OAuth gateway",
   },
   {
@@ -136,7 +143,13 @@ const services = [
 ];
 
 const results = await Promise.all(
-  services.map(async (svc) => ({ ...svc, up: await probe(svc.host, svc.port) })),
+  services.map(async (svc) => ({
+    ...svc,
+    // Nango carries a healthUrl → probe HTTP /health; everything else TCP-connects.
+    up: svc.healthUrl
+      ? (await probeHttpHealth(svc.healthUrl, 2500)).ok
+      : await probe(svc.host, svc.port),
+  })),
 );
 
 console.log(`\n${useColor ? "[1m" : ""}Cinatra service check${useColor ? "[0m" : ""}\n`);

@@ -102,6 +102,13 @@ services:
     # deployment re-resolves and smokes its own digest independently — do not
     # hand-sync the two. Resolved 2026-06-23. See docs/upgrade-track.md.
     image: nangohq/nango-server:hosted@sha256:6f12853c192eab083175865a0427c1ea57a757a2d4d932ed8af46d6e3c002869
+    # Keep the connector backend alive across the intermittent qemu SIGSEGVs the
+    # amd64-only image hits on arm64 dev hosts. `unless-stopped` (NOT
+    # `on-failure:N`, which exhausts its retry budget and returns to
+    # dead-permanently for an intermittently-crashing emulated process); Docker
+    # only applies the policy after a 10s successful start, so a true boot-loop
+    # still surfaces instead of spinning forever. See cinatra-ai/cinatra#730.
+    restart: unless-stopped
     ports:
       - "3003:3003"
       - "3009:3009"
@@ -130,6 +137,27 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Probe the HTTP /health contract (the same one scripts/setup.sh and
+    # scripts/ci/works-after/nango.sh wait on) so the container reports
+    # `unhealthy` when the process is hung-but-port-bound — a plain port check
+    # would mask that. Uses a `node -e` http probe (curl is not guaranteed in
+    # the image; node is, since this IS a node server). start_period covers the
+    # slow first-boot migrations the works-after smoke allows up to 180s for.
+    # NOTE: depends_on conditions only gate the INITIAL start, not the
+    # restart-policy relaunches — acceptable; Nango just retries/stays unhealthy
+    # if a dep is briefly down. See cinatra-ai/cinatra#730.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const http=require('http');const port=Number(process.env.SERVER_PORT||3003);const req=http.get({host:'127.0.0.1',port,path:'/health',timeout:4000},res=>process.exit(res.statusCode>=200&&res.statusCode<300?0:1));req.on('timeout',()=>req.destroy(new Error('timeout')));req.on('error',()=>process.exit(1));",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
 
   wordpress-db:
     profiles: ["wordpress"]
