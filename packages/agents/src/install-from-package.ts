@@ -518,7 +518,7 @@ async function registerDeclaredObjectTypes(opts: {
       // OAS-only tarballs — the compile silently no-op'd (the catch below
       // swallows it) and declared output_object_types were never registered.
       // Repointing to cinatra/oas.json fixes that latent bug.
-      agentJsonPath: join(opts.extractedTempDir, "cinatra", "oas.json"),
+      oasSourcePath: join(opts.extractedTempDir, "cinatra", "oas.json"),
     });
     if (
       compileResult.ok &&

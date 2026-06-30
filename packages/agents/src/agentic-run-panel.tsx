@@ -927,6 +927,34 @@ export function AgenticRunPanel({
                 const isGroupedSetup =
                   effectiveHitlContext.xRenderer === GROUPED_SETUP_FORM_RENDERER_ID ||
                   effectiveHitlContext.xRenderer.startsWith(`${GROUPED_SETUP_FORM_RENDERER_ID}:`);
+                // Chat-surface step-0 input gate (engineering#416). A `setup-`
+                // reviewTaskId is the STRUCTURAL identity of the StartNode
+                // step-0 input gate: oas-compiler hardcodes it
+                // `{stepNumber:0, riskClass:"read_only", skipLlm:true}` and the
+                // setup-interrupt loop in execution.ts is the ONLY emitter of
+                // synthetic `setup-<runId>` ids — it pauses purely to COLLECT
+                // missing inputs, never as a side-effect checkpoint (the real
+                // side-effect gates run through inferStepSideEffects /
+                // SIDE_EFFECT_PATTERNS with their own non-`setup-` ids). So
+                // `setup-` ⇔ "step-0 read_only, !inferStepSideEffects" without
+                // any drift-prone riskClass string match. In chat the human
+                // supplies the inputs inline — that IS the approval — so the
+                // per-field renderer's own "Continue" button is a redundant
+                // second click ON TOP of the inline input form (and the chat
+                // composer also drives the gate via gate.submit). Suppress it
+                // for the chat surface only via hideSubmit; the field still
+                // submits on Enter and through the composer. Strictly scoped to
+                // surface==="chat": /agents/* run-detail (default
+                // "agent-detail") keeps its explicit Continue. Grouped-setup
+                // and mid-run gates are untouched (they own their own single
+                // submit / Continue). A non-`setup-` side-effect gate never
+                // reaches this branch as a setup gate, so it always still
+                // prompts.
+                const isChatSetupGate =
+                  surface === "chat" &&
+                  effectiveHitlContext.reviewTaskId.startsWith("setup-");
+                const hideSetupSubmitInChat =
+                  isChatSetupGate && !isMidRunHitl && !isGroupedSetup;
                 return (
                   <>
                     <RendererComponent
@@ -934,6 +962,7 @@ export function AgenticRunPanel({
                       fieldName="hitl-field"
                       schema={hitlRendererEntry.fieldSchema}
                       value={{ ...effectiveHitlContext.currentValues, ...bufferedHitlValue }}
+                      hideSubmit={hideSetupSubmitInChat}
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to approveReviewTask
                         // for grouped-setup immediate-submit, then setState for the visual update.

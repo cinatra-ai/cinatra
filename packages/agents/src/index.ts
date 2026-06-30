@@ -514,6 +514,9 @@ export {
   ALLOWED_MODEL_IDS,
   DEFAULT_OPENAI_MODEL_ID,
   OasCinatraLlmSchema,
+  canProviderSatisfyCapability,
+  providersForCapability,
+  describeCapabilityRequirement,
 } from "./llm-provider-policy";
 export type {
   LlmProvider,

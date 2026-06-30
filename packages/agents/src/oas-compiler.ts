@@ -57,7 +57,7 @@ import {
 // OAS Flow compiler
 //
 // Translates compact OAS v26.1.0 Flow files (authored under agents/*/cinatra/
-// agent.json) into the legacy graphInput shapes consumed by the Python runtime
+// oas.json) into the legacy graphInput shapes consumed by the Python runtime
 // (orchestrator_v1.py, setup_collector.py, leaf_v1.py). The Python contract is
 // UNCHANGED — this module is the single source of truth for deriving
 // approvalPolicy, inputSchema, outputSchema, prompt, packageName, etc., from
@@ -509,7 +509,7 @@ function mergeParentLeafCinatra(
 }
 
 // ---------------------------------------------------------------------------
-// Path resolution for the agent.json (traversal guard)
+// Path resolution for the OAS source file (traversal guard)
 // ---------------------------------------------------------------------------
 
 // Legacy slug map for the two slugs whose older directory names differ from the slug.
@@ -585,11 +585,11 @@ function resolveAgentJsonPath(packageName: string): string[] | null {
 // Exported for unit testing — production callers should rely on the compiler
 // surfacing this via CompiledAgentOas.cinatraConfig.
 export async function readSiblingCinatraJson(
-  agentJsonPath: string,
+  oasSourcePath: string,
 ): Promise<CinatraAgentConfig | null> {
   const candidates = [
-    join(dirname(agentJsonPath), "..", "cinatra.json"), // cinatra/ layout (most common)
-    join(dirname(agentJsonPath), "cinatra.json"),       // flat layout
+    join(dirname(oasSourcePath), "..", "cinatra.json"), // cinatra/ layout (most common)
+    join(dirname(oasSourcePath), "cinatra.json"),       // flat layout
   ];
   for (const cfgPath of candidates) {
     try {
@@ -625,22 +625,22 @@ export async function readSiblingCinatraJson(
 }
 
 async function readSiblingPackageJson(
-  agentJsonPath: string,
+  oasSourcePath: string,
 ): Promise<{
   packageName: string | null;
   packageVersion: string | null;
   agentDependencies: Record<string, string>;
 } | null> {
-  // agent.json lives at either:
-  //   agents/<slug>/cinatra/agent.json  → package.json is ../../package.json (one up from cinatra/)
-  //   agents/<slug>/agent.json          → package.json is ../package.json
-  // dirname(agentJsonPath) joined with ".." / "package.json" handles the cinatra/ case.
+  // OAS source lives at either:
+  //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
+  //   agents/<slug>/agent.json        → package.json is ../package.json (legacy back-compat)
+  // dirname(oasSourcePath) joined with ".." / "package.json" handles the cinatra/ case.
   // For the flat case, the same path accidentally works because dirname is agents/<slug>/
   // and "..", "package.json" jumps up to agents/package.json (which doesn't exist) — so try
   // both candidates for robustness.
   const candidates = [
-    join(dirname(agentJsonPath), "..", "package.json"), // cinatra/ layout
-    join(dirname(agentJsonPath), "package.json"),       // flat layout
+    join(dirname(oasSourcePath), "..", "package.json"), // cinatra/ layout
+    join(dirname(oasSourcePath), "package.json"),       // flat layout
   ];
   for (const pkgPath of candidates) {
     try {
@@ -973,7 +973,7 @@ function assertHandledComponentType(
 export async function compileOasAgentJson(opts: {
   packageName: string | null | undefined;
   registryPath?: string;
-  agentJsonPath?: string;
+  oasSourcePath?: string;
   // Runtime classification override used by deriveTriggerMode
   // when the OAS itself does not declare `metadata.cinatra.runtime`. Falls back
   // to undefined → "full" (DESIGN.md default). Callers in mcp/handlers.ts may
@@ -985,9 +985,9 @@ export async function compileOasAgentJson(opts: {
     return { ok: false, error: "packageName is required" };
   }
 
-  // 1. Resolve agent.json path (with traversal guard)
-  let agentJsonPath = opts.agentJsonPath ?? null;
-  if (!agentJsonPath) {
+  // 1. Resolve OAS source path (with traversal guard)
+  let oasSourcePath = opts.oasSourcePath ?? null;
+  if (!oasSourcePath) {
     const candidates = resolveAgentJsonPath(opts.packageName);
     if (!candidates) {
       return {
@@ -998,28 +998,28 @@ export async function compileOasAgentJson(opts: {
     for (const candidate of candidates) {
       try {
         await readFile(candidate, "utf8");
-        agentJsonPath = candidate;
+        oasSourcePath = candidate;
         break;
       } catch {
         // try next
       }
     }
-    if (!agentJsonPath) {
+    if (!oasSourcePath) {
       return {
         ok: false,
-        error: `agent.json not found for ${opts.packageName} (tried ${candidates.join(", ")})`,
+        error: `OAS source not found for ${opts.packageName} (tried ${candidates.join(", ")})`,
       };
     }
   }
 
-  // 2. Load agent.json
+  // 2. Load OAS source
   let raw: string;
   try {
-    raw = await readFile(agentJsonPath, "utf8");
+    raw = await readFile(oasSourcePath, "utf8");
   } catch (err) {
     return {
       ok: false,
-      error: `agent.json at ${agentJsonPath} could not be read: ${(err as Error).message}`,
+      error: `OAS source at ${oasSourcePath} could not be read: ${(err as Error).message}`,
     };
   }
   let parsed: Record<string, unknown>;
@@ -1028,7 +1028,7 @@ export async function compileOasAgentJson(opts: {
   } catch (err) {
     return {
       ok: false,
-      error: `agent.json at ${agentJsonPath} is malformed JSON: ${(err as Error).message}`,
+      error: `OAS source at ${oasSourcePath} is malformed JSON: ${(err as Error).message}`,
     };
   }
 
@@ -1037,7 +1037,7 @@ export async function compileOasAgentJson(opts: {
   if (structuralErrors.length > 0) {
     return {
       ok: false,
-      error: `OAS agent.json structural validation failed for ${opts.packageName}:\n${structuralErrors.join("\n")}`,
+      error: `OAS structural validation failed for ${opts.packageName}:\n${structuralErrors.join("\n")}`,
     };
   }
 
@@ -1697,8 +1697,8 @@ export async function compileOasAgentJson(opts: {
   }
 
   // 10. Load sibling package.json
-  const sibling = await readSiblingPackageJson(agentJsonPath);
-  const cinatraConfig = await readSiblingCinatraJson(agentJsonPath);
+  const sibling = await readSiblingPackageJson(oasSourcePath);
+  const cinatraConfig = await readSiblingCinatraJson(oasSourcePath);
 
   // 11. Flow-level metadata
   const flowCinatra = (parsed.metadata as { cinatra: { type: "leaf" | "orchestrator" | "flow" | "node"; hitlScreens?: string[] } })

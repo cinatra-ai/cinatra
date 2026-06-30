@@ -160,7 +160,7 @@ export async function buildAgentTemplateInstallSeed(input: {
   // structurally-invalid) THROWS before any DB write or disk materialize.
   const compileResult = await compileOasAgentJson({
     packageName: input.packageName,
-    agentJsonPath: oasPath,
+    oasSourcePath: oasPath,
     executionProvider: manifestProvider ?? undefined,
     registryPath: input.registryPath,
   });

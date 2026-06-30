@@ -151,7 +151,7 @@ export async function importAgentTemplateCore(
       packageName:
         siblingPkgName ??
         `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`,
-      agentJsonPath: tmpAgentJson,
+      oasSourcePath: tmpAgentJson,
     });
     if (!compileResult.ok) {
       throw new Error(

@@ -37,10 +37,17 @@ export function devAwaitedPhases(): BootPhase[] {
 
 /**
  * Start DETACHED dev BLOCK 1 (fire-and-forget): the dev agents/skills filesystem
- * scan + marker backfill + WayFlow reload + hot-reload watcher (~18s of dev-only
- * work). Returns immediately so `register()` is not blocked. The ORIGINAL boot
- * fired this block at the EARLY interleave point (right after install-op cleanup,
- * before the always-on system services); the orchestrator calls it there.
+ * scan (git-native agent ingest) + skill-package load + hot-reload watcher (~18s
+ * of dev-only work). Returns immediately so `register()` is not blocked. The
+ * ORIGINAL boot fired this block at the EARLY interleave point (right after
+ * install-op cleanup, before the always-on system services); the orchestrator
+ * calls it there.
+ *
+ * The published-marker backfill + WayFlow reload that this block used to perform
+ * was promoted to the always-on `agent-marker-backfill` boot phase (engineering
+ * #418) so PROD installs self-heal too; the orchestrator AWAITS that phase before
+ * starting this detached scan, so markers are already valid by the time the
+ * git-native ingest below runs.
  *
  * Mirrors the original `void (async () => {...})()` block exactly: errors are
  * self-contained (each inner try/catch logs + swallows; the runner is the net).
@@ -86,56 +93,17 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
     const { existsSync } = await import("node:fs");
     const {
       ensureAgentPackageFromGitFile,
-      backfillPublishedMarkers,
-      triggerWayflowReload,
     } = await import("@cinatra-ai/agents");
     const { resolveAgentInstallDir } = await import("@cinatra-ai/agents/agent-install-path");
     const agentsDir = resolveAgentInstallDir();
 
-    // Backfill `.cinatra-published.json` markers for every existing on-disk agent
-    // dir BEFORE wayflow's loader scans. Idempotent; missing markers are derived
-    // from the current oas.json hash and treated as published.
-    try {
-      const result = await backfillPublishedMarkers(agentsDir);
-      const repaired = result.written + result.rewritten;
-      if (repaired > 0 || result.errors.length > 0) {
-        console.log(
-          `[agents/backfill-markers] scanned=${result.scanned} ` +
-            `written=${result.written} rewritten=${result.rewritten} ` +
-            `skipped=${result.skipped} errors=${result.errors.length}`,
-        );
-        for (const err of result.errors) {
-          console.warn(`[agents/backfill-markers] ${err.path}: ${err.reason}`);
-        }
-      }
-      // If backfill wrote any markers, wake the wayflow container (it scanned a
-      // markerless tree at startup). Failure is non-fatal — next publish retries.
-      if (repaired > 0) {
-        try {
-          const reloadResult = await triggerWayflowReload();
-          if (reloadResult.ok) {
-            console.log(
-              `[agents/backfill-markers] post-backfill reload triggered (` +
-                `wrote ${result.written} + rewrote ${result.rewritten} markers; ` +
-                `wayflow mounted ${reloadResult.report.agents ?? "?"} agents)`,
-            );
-          } else {
-            console.warn(
-              `[agents/backfill-markers] post-backfill reload returned ok:false ` +
-                `reason=${reloadResult.reason} detail=${reloadResult.detail ?? "—"} ` +
-                `(wayflow may still be starting; next publish/preflight will retry)`,
-            );
-          }
-        } catch (reloadErr) {
-          console.warn(
-            "[agents/backfill-markers] post-backfill reload threw (non-fatal):",
-            reloadErr,
-          );
-        }
-      }
-    } catch (err) {
-      console.warn("[agents/backfill-markers] failed (non-fatal):", err);
-    }
+    // NOTE: `.cinatra-published.json` marker backfill (+ post-backfill wayflow
+    // reload) now runs in the always-on `agent-marker-backfill` boot phase
+    // (engineering #418), which the orchestrator AWAITS BEFORE starting this
+    // detached dev scan — so by the time the git-native ingest below runs (and
+    // by the time wayflow scans), every on-disk agent already has a valid marker
+    // in BOTH dev and prod. Do not re-run the backfill here (it would be a
+    // redundant second pass on the same tree).
 
     const entries = await readdir(agentsDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -156,7 +124,7 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
             : (existsSync(transitional) ? transitional : null);
           if (target) {
             try {
-              await ensureAgentPackageFromGitFile({ agentJsonPath: target, licenseAcknowledged: true });
+              await ensureAgentPackageFromGitFile({ oasSourcePath: target, licenseAcknowledged: true });
             } catch (fileErr) {
               console.warn(`[agent-builder] git agent load skipped (${entry.name}/${sub.name}):`, fileErr);
             }
@@ -173,13 +141,13 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
       const firstLevelAgentJson = join(entryPath, "agent.json");
       if (existsSync(cinatraAgentJson)) {
         try {
-          await ensureAgentPackageFromGitFile({ agentJsonPath: cinatraAgentJson, licenseAcknowledged: true });
+          await ensureAgentPackageFromGitFile({ oasSourcePath: cinatraAgentJson, licenseAcknowledged: true });
         } catch (fileErr) {
           console.warn(`[agent-builder] git agent load skipped (${entry.name}/cinatra):`, fileErr);
         }
       } else if (existsSync(firstLevelAgentJson)) {
         try {
-          await ensureAgentPackageFromGitFile({ agentJsonPath: firstLevelAgentJson, licenseAcknowledged: true });
+          await ensureAgentPackageFromGitFile({ oasSourcePath: firstLevelAgentJson, licenseAcknowledged: true });
         } catch (fileErr) {
           console.warn(`[agent-builder] git agent load skipped (${entry.name}):`, fileErr);
         }

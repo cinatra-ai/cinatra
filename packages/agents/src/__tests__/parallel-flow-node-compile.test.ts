@@ -59,7 +59,7 @@ describe("ParallelFlowNode — TS compiler support", () => {
   it("compileOasAgentJson returns ok=true for the fixture OAS", async () => {
     const result = await compileOasAgentJson({
       packageName: "@cinatra/parallel-flow-node-spike",
-      agentJsonPath: tmpAgentJsonPath,
+      oasSourcePath: tmpAgentJsonPath,
     });
     expect(result.ok).toBe(true);
   });
@@ -70,7 +70,7 @@ describe("ParallelFlowNode — TS compiler support", () => {
     // transparency contract.
     const result = await compileOasAgentJson({
       packageName: "@cinatra/parallel-flow-node-spike",
-      agentJsonPath: tmpAgentJsonPath,
+      oasSourcePath: tmpAgentJsonPath,
     });
     if (!result.ok) {
       throw new Error(`unexpected compile error: ${result.error}`);
@@ -81,7 +81,7 @@ describe("ParallelFlowNode — TS compiler support", () => {
   it("compiled output preserves the top-level Flow's outputs (lane_*_started_at)", async () => {
     const result = await compileOasAgentJson({
       packageName: "@cinatra/parallel-flow-node-spike",
-      agentJsonPath: tmpAgentJsonPath,
+      oasSourcePath: tmpAgentJsonPath,
     });
     if (!result.ok) {
       throw new Error(`unexpected compile error: ${result.error}`);
@@ -102,7 +102,7 @@ describe("ParallelFlowNode — TS compiler support", () => {
     // Should the filter ever include it, the error surface kicks in clearly.
     const result = await compileOasAgentJson({
       packageName: "@cinatra/parallel-flow-node-spike",
-      agentJsonPath: tmpAgentJsonPath,
+      oasSourcePath: tmpAgentJsonPath,
     });
     expect(result.ok).toBe(true);
   });

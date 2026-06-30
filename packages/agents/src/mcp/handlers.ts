@@ -3674,15 +3674,15 @@ async function handleAgentBuilderGitCompileAndWrite(
   const resolved = resolveAgentJsonPathForRead(packageSlug);
   if (!resolved) {
     return {
-      error: `Agent file not found: agents/${packageSlug}/cinatra/agent.json. Use agent_source_write to create it first.`,
+      error: `Agent file not found: agents/${packageSlug}/cinatra/oas.json. Use agent_source_write to create it first.`,
     };
   }
-  const agentJsonPath = resolved.path;
+  const oasSourcePath = resolved.path;
 
-  // Read existing agent.json
+  // Read existing OAS source
   let raw: string;
   try {
-    raw = (await readFile(agentJsonPath, "utf8")) as string;
+    raw = (await readFile(oasSourcePath, "utf8")) as string;
   } catch {
     return {
       error: `Agent file not found: ${resolved.relPath}. Use agent_source_write to create it first.`,
@@ -3776,7 +3776,7 @@ async function handleAgentBuilderGitCompileAndWrite(
   // policy block. Pre- OAS files round-trip byte-for-byte.
   const updatedRaw = JSON.stringify(agentContent, null, 2);
   try {
-    await writeFile(agentJsonPath, updatedRaw, "utf8");
+    await writeFile(oasSourcePath, updatedRaw, "utf8");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { error: `Failed to write updated agent.json: ${message}` };
