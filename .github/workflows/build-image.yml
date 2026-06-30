@@ -956,6 +956,29 @@ jobs:
       - name: Skill-store canonicality gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/skill-canonicality-gate.test.mjs
 
+      # Route-graph ratchet gate (no-new-rot, cinatra#732). The locked
+      # FIXED_ROUTES (dev-perf route set) each carry a committed
+      # reachable-first-party-module-count ceiling in
+      # scripts/audit/route-graph-ratchet.baseline.json; this fails CI when a
+      # tracked route's first-party graph grows BEYOND its ceiling, when a
+      # tracked route has unresolved first-party imports (missingCount > 0 —
+      # fails closed, which is why it runs AFTER clone-extensions so the
+      # companion graph resolves and reproduces the committed counts), and
+      # (via the base-ref ratchet) when the committed baseline RAISES any
+      # ceiling vs the base branch (blocks the regenerate-to-pass bypass).
+      # Same base ref + no-new-rot shape as skill-canonicality / the
+      # extension-import-ban gates above. The bare invocation (no flag) is the
+      # enforce path; --report / --write-baseline are operator-only.
+      - name: Route-graph ratchet gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must not raise any ceiling
+          # vs the base branch. Same base ref the sibling no-new-rot gates use.
+          ROUTE_GRAPH_RATCHET_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/route-graph-ratchet.mjs
+
+      - name: Route-graph ratchet gate tests
+        run: node --test scripts/audit/__tests__/route-graph-ratchet.test.mjs
+
       # SKILL.md frontmatter validation (cinatra#494) + committed-mirror ban
       # (cinatra#495). Every host-committed SKILL.md under packages/ + src/ must
       # pass upstream-standard frontmatter validation (allowed top-level keys:
