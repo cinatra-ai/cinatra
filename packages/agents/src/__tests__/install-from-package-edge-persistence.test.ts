@@ -107,8 +107,34 @@ vi.mock("../store", () => ({
   createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
 }));
 
+// eng#378 TIER-1: the install path now seeds the agent_templates row by
+// compiling cinatra/oas.json (buildAgentTemplateInstallSeed). The seed builder
+// requires a successful compile, so this fixture returns a minimal-but-valid
+// CompiledAgentOas. (registerDeclaredObjectTypes also calls the compiler; the
+// empty producesObjectTypes keeps it a no-op.)
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: async () => ({ ok: false, error: "fixture: no oas.json" }),
+  compileOasAgentJson: async () => ({
+    ok: true,
+    value: {
+      approvalPolicy: { steps: [] },
+      inputSchema: { type: "object", properties: {} },
+      outputSchema: null,
+      prompt: null,
+      packageName: "@cinatra-ai/pkg",
+      packageVersion: "1.0.0",
+      agentDependencies: {},
+      type: "leaf",
+      compiledPlan: [],
+      hitlScreens: [],
+      llmConfig: null,
+      toolboxes: [],
+      agentSpecVersion: "26.1.0",
+      producesObjectTypes: [],
+      triggerMode: "full",
+      gatedSteps: [],
+      cinatraConfig: null,
+    },
+  }),
 }));
 vi.mock("@cinatra-ai/objects/auto-registrar", () => ({ ensureDynamicObjectType: async () => ({}) }));
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { has: () => false } }));
