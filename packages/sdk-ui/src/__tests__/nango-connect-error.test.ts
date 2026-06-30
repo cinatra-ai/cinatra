@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { describeNangoConnectError } from "../nango-connect-error";
+// Imported from the component module (the sdk-ui test convention — the module
+// LOADS fine in the node env, only rendering needs testing-library). Inlining the
+// helper there keeps it off the route-import graph the dev-perf ratchet tracks.
+import { describeNangoConnectError } from "../nango-user-connect-button";
 
 const GUIDANCE = "registered allow-list";
 
