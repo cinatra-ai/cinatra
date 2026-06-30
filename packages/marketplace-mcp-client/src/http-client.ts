@@ -515,6 +515,7 @@ function mapExtensionGetWire(
     license: wire.license ?? null,
     versionHistory,
     sdkAbiRange: wire.sdk_abi_range ?? wire.sdkAbiRange ?? null,
+    bannerUrl: wire.banner_url ?? wire.bannerUrl ?? null,
   };
 }
 

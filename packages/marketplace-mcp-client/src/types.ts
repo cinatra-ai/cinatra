@@ -116,6 +116,13 @@ export interface ExtensionDetail extends ExtensionCard {
    * http-client mapper defaults it to null so legacy fixtures stay valid.
    */
   sdkAbiRange?: string | null;
+  /**
+   * Sanitized hosted URL for the detail-page hero **banner** image (à la a
+   * WordPress plugin banner), or null. OPTIONAL — absent until the marketplace
+   * asset-upload field ships, so the detail header falls back to the coloured
+   * accent panel. Never a raw SVG blob (the marketplace rasterizes/sanitizes).
+   */
+  bannerUrl?: string | null;
 }
 
 export interface MarketplaceExtensionGetInput {
@@ -159,6 +166,9 @@ export interface MarketplaceExtensionGetWire {
   /** Declared host/SDK ABI range (`cinatra.sdkAbiRange`); optional/null. */
   sdk_abi_range?: string | null;
   sdkAbiRange?: string | null;
+  /** Sanitized hosted detail-banner URL; optional/null. */
+  banner_url?: string | null;
+  bannerUrl?: string | null;
 }
 
 // ---------------------------------------------------------------------------

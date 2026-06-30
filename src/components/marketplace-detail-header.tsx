@@ -2,6 +2,7 @@ import Link from "next/link";
 import { format, formatDistanceToNow } from "date-fns";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { PageHeaderRule } from "@/components/page-header-rule";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import {
@@ -87,6 +88,7 @@ export function MarketplaceDetailHeader({
   version,
   freshnessAt,
   sdkAbiRange,
+  bannerUrl,
 }: {
   /** Scoped npm name — seeds the stable accent, like the browse cards. */
   packageName: string;
@@ -105,9 +107,17 @@ export function MarketplaceDetailHeader({
    * "Unknown", never green). Optional so legacy callers stay valid.
    */
   sdkAbiRange?: string | null;
+  /**
+   * Sanitized hosted detail-banner image URL, or null. When present the hero
+   * renders the banner image (with a scrim so the emblem/badge/name stay
+   * legible); when absent it falls back to the coloured accent panel. Optional
+   * so legacy callers stay valid.
+   */
+  bannerUrl?: string | null;
 }) {
   const accent = deriveExtensionAccent(packageName);
   const { bg, fg } = ACCENT_PALETTE[accent];
+  const banner = typeof bannerUrl === "string" && bannerUrl.trim() !== "" ? bannerUrl.trim() : null;
   const badge = resolveMarketplaceDetailBadge(license);
   const freshnessDate = freshnessAt ? new Date(freshnessAt) : null;
   const freshness =
@@ -131,10 +141,38 @@ export function MarketplaceDetailHeader({
       <section
         data-slot="marketplace-detail-hero"
         data-accent={accent}
-        className="mt-4 flex min-h-[150px] flex-col justify-between gap-6 overflow-hidden rounded-card border border-line p-6"
+        data-has-banner={banner ? "true" : "false"}
+        className="relative mt-4 flex min-h-[150px] flex-col justify-between gap-6 overflow-hidden rounded-card border border-line p-6"
+        // The accent colour is always the ground: the panel itself when there
+        // is no banner, and the placeholder/scrim base behind a banner image
+        // while it loads (graceful fallback — a failed/slow image never leaves a
+        // bare panel).
         style={{ background: bg, color: fg }}
       >
-        <div className="flex items-start justify-between gap-3">
+        {banner && (
+          <>
+            {/* Hosted banner image — fills the hero, object-cover. A sanitized
+                hosted asset per the marketplace contract (rasterized; never a
+                raw SVG blob). Decorative: the name H1 carries the label. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              data-slot="marketplace-detail-banner"
+              src={banner}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover"
+              loading="lazy"
+              decoding="async"
+            />
+            {/* Scrim so the white-pill emblem/badge + the name stay legible over
+                an arbitrary banner image. Uses the semantic `foreground` token
+                (no raw palette) so it tracks the theme. */}
+            <div
+              aria-hidden="true"
+              className="absolute inset-0 bg-foreground/55"
+            />
+          </>
+        )}
+        <div className="relative flex items-start justify-between gap-3">
           {/* Kind emblem — white pill on the coloured ground, like the cards. */}
           <span
             className="inline-grid h-[42px] w-[42px] shrink-0 place-items-center rounded-full bg-surface-strong shadow-sm"
@@ -150,7 +188,15 @@ export function MarketplaceDetailHeader({
             {badge.text}
           </span>
         </div>
-        <h1 className="font-display text-[30px] font-extrabold italic leading-[1.05] tracking-[-0.018em] text-balance">
+        <h1
+          className={cn(
+            "relative font-display text-[30px] font-extrabold italic leading-[1.05] tracking-[-0.018em] text-balance",
+            // Over a banner image the name sits on the `foreground`-token scrim
+            // — use the contrasting `background` token (no raw palette) so it
+            // reads against the scrim in both themes.
+            banner && "text-background",
+          )}
+        >
           {name}
         </h1>
       </section>
