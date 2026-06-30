@@ -15,6 +15,7 @@ import SiYoutube from "@icons-pack/react-simple-icons/icons/SiYoutube.mjs";
 import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGithub from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
+import SiPlane from "@icons-pack/react-simple-icons/icons/SiPlane.mjs";
 import { FaLinkedin } from "react-icons/fa6";
 import { Button } from "@/components/ui/button";
 import {
@@ -149,16 +150,18 @@ const ICON_BY_SLUG = new Map<string, ReactNode>([
   ["a2a-server-connector", <A2AIcon key="a2a" />],
   ["google-oauth-connector", <SiGoogle key="google-oauth" size={20} color="default" aria-hidden="true" />],
   ["twenty-connector", <TwentyIcon key="twenty" />],
+  ["linkedin-oauth-connector", <FaLinkedin key="linkedin-oauth" size={20} color="#0A66C2" aria-hidden="true" />],
+  ["mcp-server-connector", <McpIcon key="mcp-server" className="h-5 w-5" aria-hidden="true" />],
+  ["plane-connector", <SiPlane key="plane" size={20} color="default" aria-hidden="true" />],
 ]);
 
 function iconForSlug(slug: string): ReactNode {
   const icon = ICON_BY_SLUG.get(slug);
   if (icon) return icon;
-  return (
-    <span className="text-xs text-muted-foreground" aria-hidden="true">
-      ?
-    </span>
-  );
+  // Neutral connector glyph for any slug without a brand mark — degrades
+  // gracefully instead of a bare "?" so newly-added connectors still read as
+  // connectors until their icon is mapped.
+  return <PlugZap className="h-5 w-5 text-muted-foreground" aria-hidden="true" />;
 }
 
 // ---------------------------------------------------------------------------
