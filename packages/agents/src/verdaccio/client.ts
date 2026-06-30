@@ -276,7 +276,7 @@ export async function publishAgentPackageFromGitDir(
   //   1. cinatra/oas.json — canonical
   //   2. cinatra/agent.json — transitional
   //   3. agent.json — flat legacy
-  let agentJsonPath: string | null = null;
+  let oasSourcePath: string | null = null;
   let raw: string | null = null;
   for (const candidate of [
     path.join(input.agentDir, "cinatra", "oas.json"),
@@ -285,20 +285,20 @@ export async function publishAgentPackageFromGitDir(
   ]) {
     try {
       raw = await readFile(candidate, "utf8");
-      agentJsonPath = candidate;
+      oasSourcePath = candidate;
       break;
     } catch {
       // try next rung
     }
   }
-  if (!agentJsonPath || raw === null) {
+  if (!oasSourcePath || raw === null) {
     throw new Error(`Cannot read oas.json or agent.json from ${input.agentDir}`);
   }
   let gitAgentJson: Record<string, unknown>;
   try {
     gitAgentJson = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    throw new Error(`Failed to parse ${agentJsonPath}`);
+    throw new Error(`Failed to parse ${oasSourcePath}`);
   }
 
   const cinatra = ((gitAgentJson.metadata as Record<string, unknown> | undefined)?.cinatra ?? {}) as Record<string, unknown>;
@@ -308,7 +308,7 @@ export async function publishAgentPackageFromGitDir(
   // Compile the OAS flow to derive approvalPolicy, inputSchema, taskSpec, and type.
   // Flow-type agents don't store these in metadata.cinatra — they're derived from the
   // flow graph at compile time. Fall back to metadata.cinatra values if compilation
-  // fails (e.g. leaf agents whose agentJsonPath is already fully baked).
+  // fails (e.g. leaf agents whose oasSourcePath is already fully baked).
   let compiledApprovalPolicy: { steps: Array<{ requiresApproval?: boolean }> } | null = null;
   let compiledInputSchema: Record<string, unknown> | null = null;
   let compiledTaskSpec: string | null = null;

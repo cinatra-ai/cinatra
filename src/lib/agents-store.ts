@@ -563,7 +563,7 @@ export function readProviderDeclaredAgents(
   // same-slug first-party agent. Without enumerating the operator vendor dir at
   // all, an approved user agent materialized under
   // `<installRoot>/<operator-vendor>/...` never surfaced in `/agents/run`.
-  const candidates: Array<{ agentJsonPath: string; siblingPkgPaths: string[] }> = [];
+  const candidates: Array<{ oasSourcePath: string; siblingPkgPaths: string[] }> = [];
   const vendorSegments = safeProviderVendorSegments();
 
   // New layout: <installDir>/<vendor>/<slug>/cinatra/{oas,agent}.json
@@ -576,7 +576,7 @@ export function readProviderDeclaredAgents(
         const jsonPath = resolveProviderAgentJsonPathUnderVendor(installRoot, vendor, sub.name);
         if (jsonPath) {
           candidates.push({
-            agentJsonPath: jsonPath,
+            oasSourcePath: jsonPath,
             siblingPkgPaths: [path.join(installRoot, vendor, sub.name, "package.json")],
           });
         }
@@ -604,7 +604,7 @@ export function readProviderDeclaredAgents(
     if (jsonPath) {
       const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[entry.name] ?? entry.name;
       candidates.push({
-        agentJsonPath: jsonPath,
+        oasSourcePath: jsonPath,
         siblingPkgPaths: [path.join(installRoot, legacySlug, "package.json")],
       });
     }
@@ -612,10 +612,10 @@ export function readProviderDeclaredAgents(
 
   const persisted: PersistedAgent[] = [];
   const seenPackageIds = new Set<string>();
-  for (const { agentJsonPath, siblingPkgPaths } of candidates) {
+  for (const { oasSourcePath, siblingPkgPaths } of candidates) {
     let agentJson: Record<string, unknown>;
     try {
-      agentJson = JSON.parse(readFileSync(agentJsonPath, "utf8")) as Record<string, unknown>;
+      agentJson = JSON.parse(readFileSync(oasSourcePath, "utf8")) as Record<string, unknown>;
     } catch (err) {
       // When `throwOnError: true` (matcher write path), per-agent JSON
       // parse failures must propagate. Silently
@@ -624,11 +624,11 @@ export function readProviderDeclaredAgents(
       // permissive skip + warn behavior.
       if (options.throwOnError) {
         throw err instanceof Error
-          ? new Error(`failed to parse provider agent.json at ${agentJsonPath}: ${err.message}`)
+          ? new Error(`failed to parse OAS source at ${oasSourcePath}: ${err.message}`)
           : err;
       }
       console.warn(
-        `[agents-store] failed to parse provider agent.json at ${agentJsonPath}:`,
+        `[agents-store] failed to parse OAS source at ${oasSourcePath}:`,
         err,
       );
       continue;
@@ -669,7 +669,7 @@ export function readProviderDeclaredAgents(
           if (options.throwOnError && (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
             throw err instanceof Error
               ? new Error(
-                  `failed to read sibling package.json at ${pkgPath} for agent ${agentJsonPath}: ${err.message}`,
+                  `failed to read sibling package.json at ${pkgPath} for agent ${oasSourcePath}: ${err.message}`,
                 )
               : err;
           }

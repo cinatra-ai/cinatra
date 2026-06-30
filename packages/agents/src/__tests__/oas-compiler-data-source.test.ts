@@ -105,7 +105,7 @@ describe("oas-compiler — x-data-source", () => {
     // registryPath points to a nonexistent file; loadGlobalRegistry falls back gracefully to {}.
     const result = await compileOasAgentJson({
       packageName: "@test/pkg",
-      agentJsonPath,
+      oasSourcePath: agentJsonPath,
       registryPath: path.join(tempDir, "components.json"),
     });
     // compileOasAgentJson returns { ok: true, value: { inputSchema, ... } }
@@ -120,7 +120,7 @@ describe("oas-compiler — x-data-source", () => {
     const agentJsonPath = writeFixture({ withInputDataSource: false });
     const result = await compileOasAgentJson({
       packageName: "@test/pkg",
-      agentJsonPath,
+      oasSourcePath: agentJsonPath,
       registryPath: path.join(tempDir, "components.json"),
     });
     expect(result.ok).toBe(true);
@@ -134,7 +134,7 @@ describe("oas-compiler — x-data-source", () => {
     const agentJsonPath = writeFixture({ withInputDataSource: true, withRenderer: true });
     const result = await compileOasAgentJson({
       packageName: "@test/pkg",
-      agentJsonPath,
+      oasSourcePath: agentJsonPath,
       registryPath: path.join(tempDir, "components.json"),
     });
     expect(result.ok).toBe(true);

@@ -93,7 +93,7 @@ describe("ensureAgentPackageFromGitFile — version resolves solely from package
     // If the loader read the OAS value, the version-skip guard would fire (skip).
     readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-demo", packageVersion: "0.1.0" });
 
-    const result = await ensureAgentPackageFromGitFile({ agentJsonPath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
 
     // It must have re-imported (package.json#version 0.1.1 ≠ DB row 0.1.0), NOT skipped.
     expect(result.skipped).toBe(false);
@@ -115,7 +115,7 @@ describe("ensureAgentPackageFromGitFile — version resolves solely from package
     // The OAS's 0.1.0 is irrelevant; the loader never reads it.
     readAgentTemplateByPackageNameMock.mockResolvedValue({ id: "tpl-demo", packageVersion: "0.1.1" });
 
-    const result = await ensureAgentPackageFromGitFile({ agentJsonPath: AGENT_JSON_PATH });
+    const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
 
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();

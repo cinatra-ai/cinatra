@@ -398,7 +398,7 @@ def _patch_api_call_step_bridge_token() -> None:
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
-        # headers. setdefault preserves any agent.json-declared headers and
+        # headers. setdefault preserves any OAS-declared headers and
         # adds ours.
         request.setdefault("headers", {})
         request["headers"]["X-Cinatra-Bridge-Token"] = token

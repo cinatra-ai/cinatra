@@ -156,7 +156,7 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
             : (existsSync(transitional) ? transitional : null);
           if (target) {
             try {
-              await ensureAgentPackageFromGitFile({ agentJsonPath: target, licenseAcknowledged: true });
+              await ensureAgentPackageFromGitFile({ oasSourcePath: target, licenseAcknowledged: true });
             } catch (fileErr) {
               console.warn(`[agent-builder] git agent load skipped (${entry.name}/${sub.name}):`, fileErr);
             }
@@ -173,13 +173,13 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
       const firstLevelAgentJson = join(entryPath, "agent.json");
       if (existsSync(cinatraAgentJson)) {
         try {
-          await ensureAgentPackageFromGitFile({ agentJsonPath: cinatraAgentJson, licenseAcknowledged: true });
+          await ensureAgentPackageFromGitFile({ oasSourcePath: cinatraAgentJson, licenseAcknowledged: true });
         } catch (fileErr) {
           console.warn(`[agent-builder] git agent load skipped (${entry.name}/cinatra):`, fileErr);
         }
       } else if (existsSync(firstLevelAgentJson)) {
         try {
-          await ensureAgentPackageFromGitFile({ agentJsonPath: firstLevelAgentJson, licenseAcknowledged: true });
+          await ensureAgentPackageFromGitFile({ oasSourcePath: firstLevelAgentJson, licenseAcknowledged: true });
         } catch (fileErr) {
           console.warn(`[agent-builder] git agent load skipped (${entry.name}):`, fileErr);
         }
