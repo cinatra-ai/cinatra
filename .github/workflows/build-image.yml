@@ -2105,6 +2105,45 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
+      # Release clearance gate (machine assertion, fail-closed). A milestone
+      # release only publishes once the org has cleared THIS exact tag: the
+      # org-level Actions variable RELEASE_CLEARED_VERSION must equal the tag being
+      # published. The variable is set by a separate private release-readiness
+      # workflow; this repo only reads a version string (no other state crosses
+      # over). Mirrors the existing vars.RELEASE_GATING_ENABLED read pattern.
+      #
+      # SCOPE of the exemption (deliberate, not a bypass): a non-semver
+      # checkpoint/marker v-tag (e.g. 'v-pre-extension-system') is a pre-existing,
+      # intentional NON-release artifact — it builds + pushes a GHCR checkpoint
+      # image but cuts no Release and triggers no deploy (see the semver guards in
+      # release-dispatch + create-release). Only a well-formed milestone tag
+      # (vMAJOR.MINOR.PATCH) is a release, so only those are clearance-gated; a
+      # checkpoint tag is neither empty-clearance-bypassing a release nor able to
+      # deploy. Milestone tags fail closed on empty / mismatched clearance.
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to the downstream semver guard used
+          # by release-dispatch / create-release, so any tag those jobs treat as a
+          # release is clearance-gated here too (no narrower-regex bypass). A
+          # non-release checkpoint/marker v-tag is the only exemption.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to publish '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to publish (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
@@ -2171,6 +2210,34 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Release clearance gate (machine assertion, fail-closed) — see the note on
+      # publish-release-image. Independently re-checked here so the outward deploy
+      # dispatch can never fire for an uncleared tag even if reached by another
+      # path. Non-semver checkpoint tags are exempt (they never dispatch a deploy
+      # anyway — see the semver guard in the dispatch step below).
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to this job's downstream semver guard
+          # so no tag it treats as a release escapes the clearance check (no
+          # narrower-regex bypass). A non-release checkpoint/marker v-tag is exempt.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to dispatch deploy for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to dispatch deploy (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
       - name: Trigger prod deploy in ops
         env:
           GH_TOKEN: ${{ secrets.CINATRA_RELEASE_DISPATCH_TOKEN || secrets.CINATRA_OPS_DISPATCH_TOKEN }}
@@ -2331,6 +2398,34 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Release clearance gate (machine assertion, fail-closed) — see the note on
+      # publish-release-image. Independently re-checked so a GitHub Release (a
+      # public release artifact) can never be cut for an uncleared tag. Non-semver
+      # checkpoint tags are exempt (they cut no Release — see the semver guard in
+      # the release step below).
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to this job's downstream semver guard
+          # so no tag it treats as a release escapes the clearance check (no
+          # narrower-regex bypass). A non-release checkpoint/marker v-tag is exempt.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to create Release for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to create Release (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
       - name: Create GitHub Release (auto-generated notes)
         env:
           GH_TOKEN: ${{ github.token }}
