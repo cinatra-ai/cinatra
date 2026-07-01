@@ -53,5 +53,11 @@ test-*.ts
 # keep any stale local copy out of the build context so it's always fresh.
 scripts/better-auth-migrate.bundle.mjs
 
+# Required-extension OAS seed (cinatra-ai/ops#436). Projected INSIDE the build
+# from the acquired /app/extensions (RUN build-required-oas-seed.mjs). A stale
+# local copy must never enter the build context — the later `COPY . .` would
+# otherwise merge/clobber the image-owned seed with unpinned local content.
+.cinatra-required-oas-seed
+
 # OS
 .DS_Store

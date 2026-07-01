@@ -482,7 +482,7 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     // so the legacy `agent_skill_matches` projection cannot be clobbered
     // with a partial / misleading snapshot on a transient corruption.
     expect(() => readProviderDeclaredAgents({ throwOnError: true })).toThrow(
-      /failed to parse provider agent\.json at .*broken-agent/,
+      /failed to parse OAS source at .*broken-agent/,
     );
   });
 });

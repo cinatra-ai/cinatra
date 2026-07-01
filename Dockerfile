@@ -52,6 +52,22 @@ RUN pnpm install --frozen-lockfile
 # packages/cli did. See the runtime-stage COPY below.
 RUN cp -RL node_modules/@cinatra-ai/cinatra /app/.cinatra-cli
 
+# Required-extension OAS seed for deploy-refreshable materialization
+# (cinatra-ai/ops#436). `acquire-prod` (above) materialized the SHA-pinned
+# required set into /app/extensions, but the runtime stage never copies
+# /app/extensions (it is .dockerignore-excluded and not server-traced into
+# .next/standalone), so the required-set `<vendor>/<slug>/cinatra/oas.json`
+# trees that WayFlow + the host scan would be absent in the runtime image — and
+# when a deploy mounts a persistent volume over the install dir (ops#431), the
+# trees freeze, never refreshed by a new tag. This projects a SYMLINK-FREE,
+# image-owned seed (just cinatra/**, skills/**, package.json + an ownership
+# marker per slug) that a PROD boot phase reconciles into the live install dir,
+# making the required set materializable on every deploy. Built here (scripts/
+# is present from the earlier COPY; /app/extensions still holds the acquired
+# set — `.dockerignore` keeps the later `COPY . .` from clobbering it).
+RUN node scripts/extensions/build-required-oas-seed.mjs \
+      --source /app/extensions --out /app/.cinatra-required-oas-seed
+
 COPY . .
 
 # Presence-aware map regeneration (cinatra#7). `COPY . .` restored the
@@ -157,6 +173,16 @@ COPY --from=build /app/migrations ./migrations
 # this bundle over the loose .mts when present; without it, `setup prod` on a
 # fresh database cannot resolve better-auth in the standalone image.
 COPY --from=build /app/scripts/better-auth-migrate.bundle.mjs ./scripts/better-auth-migrate.bundle.mjs
+
+# Required-extension OAS seed (cinatra-ai/ops#436). The image-owned, symlink-free
+# projection of the required set's agent OAS trees (built in the build stage from
+# the acquired /app/extensions). The `required-extension-materialize` PROD boot
+# phase reconciles this seed into the live agent-install dir on every boot, so a
+# new image tag REFRESHES the on-disk trees WayFlow + the host scan rather than
+# leaving them frozen in a persistent volume (the ops#431 regression). The phase
+# is fail-closed in prod, so this COPY is load-bearing — without the seed a prod
+# boot aborts.
+COPY --from=build /app/.cinatra-required-oas-seed ./.cinatra-required-oas-seed
 
 EXPOSE 3000
 CMD ["node", "server.js"]

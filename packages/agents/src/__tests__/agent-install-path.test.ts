@@ -2,7 +2,7 @@
 // Test file lives under src/__tests__/ to match the package's vitest include
 // glob ("src/**/__tests__/**/*.test.ts" — see packages/agent-builder/vitest.config.ts).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "node:path";
 
 vi.mock("@/lib/database", () => ({
@@ -18,7 +18,17 @@ import {
 import * as db from "@/lib/database";
 
 describe("readAgentInstallPath", () => {
-  beforeEach(() => vi.clearAllMocks());
+  const ENV_KEY = "CINATRA_AGENT_INSTALL_DIR";
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedEnv = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedEnv;
+  });
 
   it('returns "extensions" default when metadata is null', () => {
     vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue(null);
@@ -33,6 +43,20 @@ describe("readAgentInstallPath", () => {
   it("falls back to default when stored value is whitespace", () => {
     vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue("   ");
     expect(readAgentInstallPath()).toBe("extensions");
+  });
+
+  it("env CINATRA_AGENT_INSTALL_DIR WINS over the DB metadata (deploy determinism, ops#436)", () => {
+    process.env[ENV_KEY] = "/srv/agents";
+    vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue("db-agents");
+    expect(readAgentInstallPath()).toBe("/srv/agents");
+    // The env override short-circuits — the DB is not even read.
+    expect(db.readMetadataValueFromDatabase).not.toHaveBeenCalled();
+  });
+
+  it("trims the env value and falls through to metadata when env is blank", () => {
+    process.env[ENV_KEY] = "   ";
+    vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue("db-agents");
+    expect(readAgentInstallPath()).toBe("db-agents");
   });
 });
 
@@ -49,7 +73,17 @@ describe("writeAgentInstallPath", () => {
 });
 
 describe("resolveAgentInstallDir", () => {
-  beforeEach(() => vi.clearAllMocks());
+  const ENV_KEY = "CINATRA_AGENT_INSTALL_DIR";
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    savedEnv = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+  });
+  afterEach(() => {
+    if (savedEnv === undefined) delete process.env[ENV_KEY];
+    else process.env[ENV_KEY] = savedEnv;
+  });
 
   it("joins process.cwd() with relative path", () => {
     vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue(null);
@@ -59,5 +93,15 @@ describe("resolveAgentInstallDir", () => {
   it("returns absolute path verbatim", () => {
     vi.mocked(db.readMetadataValueFromDatabase).mockReturnValue("/var/agents");
     expect(resolveAgentInstallDir()).toBe("/var/agents");
+  });
+
+  it("resolves an ABSOLUTE env override verbatim (deploy dir, ops#436)", () => {
+    process.env[ENV_KEY] = "/srv/agents";
+    expect(resolveAgentInstallDir()).toBe("/srv/agents");
+  });
+
+  it("joins a RELATIVE env override against process.cwd()", () => {
+    process.env[ENV_KEY] = "deploy-agents";
+    expect(resolveAgentInstallDir()).toBe(path.join(process.cwd(), "deploy-agents"));
   });
 });

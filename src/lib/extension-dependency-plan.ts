@@ -48,6 +48,7 @@ export class DependencyPlanError extends Error {
       | "INSTALLED_VERSION_CONFLICT"
       | "UNSUPPORTED_CONSTRAINT"
       | "MEMBER_UNRESOLVABLE"
+      | "NONCONFORMANT_METADATA"
       | "DEPENDENCY_SCOPE",
     message: string,
   ) {
@@ -102,13 +103,48 @@ export type DependencyPlanDeps = {
 
 const KNOWN_KINDS = new Set(["agent", "skill", "connector", "artifact", "workflow"]);
 
-function kindToTypeId(kind: string | null, packageName: string): string {
+/**
+ * Resolve a member's dispatch typeId from its declared `cinatra.kind`.
+ *
+ * `willInstall` distinguishes a member the saga WILL actually install (the root
+ * + every to-install dependency) from an already-installed legacy member the
+ * saga SKIPS:
+ *
+ *  - For a member that WILL install, a NULL kind is FAIL-FAST: silently routing
+ *    a kind-less package into the "agent" install contract (the old legacy
+ *    fallback) only defers the failure to a cryptic downstream Zod reject when
+ *    the agent path reads agent-only manifest fields the package never declared
+ *    (the opaque "Install failed" #781 describes). A clear, actionable
+ *    NONCONFORMANT_METADATA error names the real defect — the publisher must
+ *    declare `cinatra.kind` — instead of misrouting. An explicitly UNKNOWN kind
+ *    stays a (separate) loud MEMBER_UNRESOLVABLE for the same reason.
+ *  - For an already-installed member the saga skips (no dispatch happens), the
+ *    legacy null→"agent" fallback is preserved so a stale, kind-less row already
+ *    on disk never BLOCKS installing an otherwise-conformant root. The
+ *    platform-wide `deriveTypeId` (utils.ts) keeps the same legacy fallback for
+ *    uninstall/purge/force_delete of such rows; this is deliberately untouched.
+ */
+function kindToTypeId(
+  kind: string | null,
+  packageName: string,
+  willInstall: boolean,
+): string {
   if (kind === null) {
-    // Legacy packages predating cinatra.kind — mirrors deriveTypeId's fallback.
-    console.warn(
-      `[extension-dependency-plan] ${packageName} has no cinatra.kind — assuming "agent" (legacy fallback)`,
+    if (!willInstall) {
+      // Already-installed, saga-SKIPPED legacy row — never dispatched, so the
+      // legacy null→agent fallback (mirrors deriveTypeId) is harmless and keeps
+      // a kind-less on-disk row from blocking a conformant root install.
+      console.warn(
+        `[extension-dependency-plan] ${packageName} has no cinatra.kind — assuming "agent" (legacy already-installed fallback; not dispatched)`,
+      );
+      return "agent";
+    }
+    throw new DependencyPlanError(
+      "NONCONFORMANT_METADATA",
+      `${packageName} declares no cinatra.kind — its package metadata is non-conformant and ` +
+        `cannot be installed. The publisher must republish ${packageName} with an explicit ` +
+        `cinatra.kind (agent, skill, connector, artifact, or workflow).`,
     );
-    return "agent";
   }
   if (!KNOWN_KINDS.has(kind)) {
     throw new DependencyPlanError(
@@ -332,7 +368,10 @@ export async function planDependencyInstall(
     const member: PlannedMember = {
       packageName,
       version: pin,
-      typeId: kindToTypeId(summary.kind, packageName),
+      // A null kind FAILS FAST for any member the saga will actually install
+      // (the root is never alreadyInstalled, so it is always checked); an
+      // already-installed, saga-skipped legacy row keeps the legacy fallback.
+      typeId: kindToTypeId(summary.kind, packageName, !alreadyInstalled),
       edges,
       alreadyInstalled,
     };

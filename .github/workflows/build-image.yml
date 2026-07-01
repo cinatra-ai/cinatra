@@ -1962,40 +1962,19 @@ jobs:
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Login to GHCR
-        # Publish allowlist: only `push` (main branch + `v*` tags) and a manual
-        # `workflow_dispatch` log in / publish. PR and merge_group never do, and
-        # any future event type is denied by default (no exclusion list to
-        # maintain).
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=sha,format=long,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # Build → boot-gate → push (issue #81). The image is FIRST built and
-      # loaded into the local docker daemon, then booted by the prod-boot e2e
-      # below; only after that gate passes does the (push-event-only) push step
-      # publish it. This ordering means an unbootable image is never published
-      # to GHCR at all — not even transiently — and every PR / merge-queue
-      # candidate proves the boots-without-private-extensions path before merge.
-      # Two build invocations are NOT two builds: the second runs against the
-      # same buildx builder, so every layer is already in its local cache and
-      # the push step is a pure cache re-export.
+      # Build → boot-gate (issue #81). The image is FIRST built and loaded into
+      # the local docker daemon, then booted by the prod-boot e2e below. This
+      # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
+      # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
+      # to prove the boots-without-private-extensions path before merge, and its
+      # `cache-to: type=gha,mode=max` below populates the shared gha cache so the
+      # downstream publish jobs re-export from cache instead of rebuilding. The
+      # GHCR push and the prod-deploy dispatch moved OUT of this job (the
+      # build-image e2e-split) — see the `publish-nonrelease-image`,
+      # `publish-release-image`, and `release-dispatch` jobs below. Keeping
+      # build+e2e here ungated means ordinary PR/merge_group/branch builds never
+      # pause for approval; only the release publish + prod-deploy pause behind
+      # the `release-approval` Environment.
       - name: Build image (load for prod-boot e2e)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -2021,55 +2000,192 @@ jobs:
           IMAGE: cinatra-prod-boot-e2e:ci
         run: bash scripts/ci/prod-boot-e2e.sh
 
+  # ---------------------------------------------------------------------------
+  # build-image e2e-split: the GHCR image PUSH and the prod-deploy dispatch
+  # moved OUT of the ungated `build` job into the three jobs below.
+  # `build` (above) still runs the prod-boot e2e on EVERY trigger and is the
+  # merge gate — it just no longer publishes. The publish surfaces are now
+  # split by event so that ONLY the v*-tag release path pauses for owner
+  # approval while ordinary builds (and the routine main-branch `:latest`
+  # publish) stay ungated:
+  #
+  #   publish-nonrelease-image  — UNGATED. push-to-main + workflow_dispatch
+  #     (NON-v*-tag) GHCR publish. Preserves the prior main-branch `:latest`
+  #     publish behavior byte-for-byte; the Docker Hub mirror keys off GHCR
+  #     `:latest`, so this MUST stay ungated.
+  #   publish-release-image     — GATED (environment: release-approval). The
+  #     v*-tag GHCR image publish. A release artifact, so it pauses for the
+  #     owner before it publishes.
+  #   release-dispatch          — GATED (environment: release-approval). Fires
+  #     the cross-repo `cinatra-release-published` repository_dispatch to ops
+  #     that triggers the prod deploy. The real outward release action — paused.
+  #
+  # All three re-export from the gha cache that `build` populated
+  # (cache-to: type=gha,mode=max), so none of them rebuilds the image; they are
+  # pure cache re-exports gated on `needs: build` (so the boot-e2e still gates
+  # every publish). None is a REQUIRED status check — the four required checks
+  # (detect/test/e2e-rbac/workflows-e2e) are untouched, so a PR's mergeability
+  # is unaffected; on a PR/merge_group run all three are skipped by their `if:`.
+  # ---------------------------------------------------------------------------
+
+  # UNGATED non-release publish: main-branch `:latest` + branch/sha tags +
+  # workflow_dispatch image publish. This is the prior `build`-job `Push image`
+  # step's exact event allowlist (`push || workflow_dispatch`) MINUS v*-tag
+  # pushes (those go through the GATED `publish-release-image` below). Splitting
+  # this out keeps the routine main-push `:latest` publish — which the Docker
+  # Hub mirror depends on — running with ZERO behavior change and ZERO approval
+  # pause.
+  publish-nonrelease-image:
+    name: Publish image (non-release)
+    needs: build
+    # Same publish allowlist as the prior in-`build` Push step, EXCLUDING v*
+    # tags (handled by the gated release job). A non-tag push to main, a
+    # non-v* tag push, or a manual workflow_dispatch publishes here, ungated.
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pure cache re-export — `build` populated type=gha,mode=max, so no layer
+      # is rebuilt. Identical build-args (CI=true) to the load build keep the
+      # cache hit total.
       - name: Push image
-        id: build
-        # Publish allowlist (mirrors the GHCR login gate above): only `push`
-        # (main branch + `v*` tags) and a manual `workflow_dispatch` publish.
-        # PR and merge_group runs stop at the boot-gated load build above.
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Identical build-args to the load build above — required for the
-          # full builder-local cache hit that makes this a re-export, not a build.
           build-args: |
             CI=true
           cache-from: type=gha
 
-      # Release-gating (Model A): on a v* tag, after the image is pushed AND the
-      # v-prefixed tag is confirmed resolvable in GHCR, tell ops to
-      # deploy it to prod immediately. Triggering from HERE (not release:published)
-      # closes the release-before-image race — the image provably exists first.
-      # GITHUB_TOKEN can't do cross-repo repository_dispatch, so this uses a
-      # scoped fine-grained PAT (resource owner cinatra-ai, repo cinatra-ai/ops,
-      # Contents: write). Prefer the release-specific CINATRA_RELEASE_DISPATCH_TOKEN;
-      # fall back to the legacy CINATRA_OPS_DISPATCH_TOKEN so the rename is
-      # non-breaking until the new secret is provisioned. The release dispatch
-      # token MUST be distinct from the cinatra-ai/docs dispatch PAT (also named
-      # CINATRA_OPS_DISPATCH_TOKEN in ops rotation-matrix.json) — reusing one name
-      # across the docs / marketplace / cinatra-app release sources is a
-      # rotation/revocation footgun. See .github/secrets-required.txt.
+  # GATED v*-tag image publish. The image-publish half of the release path is a
+  # real release artifact, so it pauses behind the `release-approval`
+  # Environment (provisioned in THIS repo: required reviewer @groganz,
+  # prevent_self_review=false, can_admins_bypass=false — same Environment
+  # `create-release` already uses). Exposes the pushed digest as a job output
+  # so the gated `release-dispatch` job can forward it to ops. Repo-name guard
+  # mirrors the dispatch/release jobs: only the canonical repo publishes.
+  publish-release-image:
+    name: Publish image (release)
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    environment: release-approval
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pure cache re-export from `build`'s gha cache (no rebuild). `id: build`
+      # so its digest output feeds `release-dispatch` below.
+      - name: Push image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CI=true
+          cache-from: type=gha
+
+  # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
+  # release image is pushed AND the v-prefixed tag is confirmed resolvable in
+  # GHCR, tell ops to deploy it to prod. Triggering from HERE (not
+  # release:published) closes the release-before-image race — the image provably
+  # exists first. This is the real outward release action, so it pauses behind
+  # the `release-approval` Environment (the same Environment as the image
+  # publish above; both pause on the SAME owner approval for one tag run).
+  # GITHUB_TOKEN can't do cross-repo repository_dispatch, so this uses a scoped
+  # fine-grained PAT (resource owner cinatra-ai, repo cinatra-ai/ops,
+  # Contents: write). Prefer the release-specific CINATRA_RELEASE_DISPATCH_TOKEN;
+  # fall back to the legacy CINATRA_OPS_DISPATCH_TOKEN so the rename is
+  # non-breaking until the new secret is provisioned. The release dispatch token
+  # MUST be distinct from the cinatra-ai/docs dispatch PAT (also named
+  # CINATRA_OPS_DISPATCH_TOKEN in ops rotation-matrix.json) — reusing one name
+  # across the docs / marketplace / cinatra-app release sources is a
+  # rotation/revocation footgun. See .github/secrets-required.txt.
+  release-dispatch:
+    name: Trigger prod deploy in ops
+    needs: publish-release-image
+    # Repo-name guard: only the canonical repo dispatches a deploy. A fork or
+    # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
+    # lands there.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-approval
+    permissions:
+      contents: read
+    steps:
       - name: Trigger prod deploy in ops
-        # Repo-name guard: only the canonical repo dispatches a deploy. A fork or
-        # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
-        # lands there.
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
         env:
           GH_TOKEN: ${{ secrets.CINATRA_RELEASE_DISPATCH_TOKEN || secrets.CINATRA_OPS_DISPATCH_TOKEN }}
           TAG: ${{ github.ref_name }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ needs.publish-release-image.outputs.digest }}
           SHA: ${{ github.sha }}
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           set -euo pipefail
           # Only SEMVER release tags (vMAJOR.MINOR(.PATCH)) dispatch a deploy.
-          # The `on.push.tags: ['v*']` filter + the step `if:` above admit ANY
+          # The `on.push.tags: ['v*']` filter + the job `if:` above admit ANY
           # v-prefixed tag, so a marker/checkpoint tag (e.g.
           # 'v-pre-extension-system') reaches here. Such tags still BUILD + push
-          # a GHCR checkpoint image (above), but must NOT trigger a deploy.
+          # a GHCR checkpoint image (publish-release-image), but must NOT trigger
+          # a deploy.
           # Regex mirrors ops scripts/deploy-instance.sh — keep in sync.
           if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::notice::Tag '$TAG' is not a semver release tag — skipping prod deploy dispatch (the checkpoint image was still built + pushed to GHCR)."
@@ -2187,9 +2303,12 @@ jobs:
   # Publish a GitHub Release for a semver v* tag with auto-generated notes
   # (merged PRs / commits since the previous tag). A SEPARATE job (least
   # privilege): only this job holds `contents: write`; the heavy build/push
-  # steps stay at the top-level `contents: read`. `needs: build` runs it AFTER
-  # the image build + push + deploy dispatch succeed, so a failed build cuts no
-  # Release and a Release hiccup cannot block the already-dispatched deploy.
+  # steps stay at the top-level `contents: read`. `needs: publish-release-image`
+  # (release-split — was `needs: build`) runs it AFTER the GATED release image
+  # publish succeeds, so a failed/unapproved image publish cuts no Release. Both
+  # this job and `publish-release-image` carry `environment: release-approval`,
+  # so the one owner approval for the tag run releases the image, this Release,
+  # AND the prod-deploy dispatch together.
   # Uses the built-in GITHUB_TOKEN — NO external action, NO extra secret, NO
   # checkout (the gh API needs neither). Guards mirror the deploy dispatch:
   # semver-only (a checkpoint/marker v-tag built a GHCR image but cuts no
@@ -2197,13 +2316,13 @@ jobs:
   # publishes a Release). Idempotent: skips when the Release already exists.
   create-release:
     name: Create GitHub Release
-    needs: build
+    needs: publish-release-image
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
     runs-on: ubuntu-latest
     # Gate the public GitHub Release publish behind the org-wide
     # `release-approval` Environment. Creating the Release is a real publish
-    # surface — it is what fires the downstream prod deploy dispatch — so it
-    # must pause for an owner approval before it runs. The Environment is
+    # surface, so it must pause for an owner approval before it runs. The
+    # Environment is
     # provisioned in THIS repo (required reviewer, prevent_self_review=false,
     # can_admins_bypass=false); without that provisioning a referenced
     # Environment auto-creates UNPROTECTED and the gate is inert, so the line

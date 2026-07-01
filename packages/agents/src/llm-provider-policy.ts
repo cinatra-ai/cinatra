@@ -32,6 +32,100 @@ export const LLM_CAPABILITIES = ["media_input", "function_tools", "native_mcp"] 
 export type LlmCapability = (typeof LLM_CAPABILITIES)[number];
 
 // ---------------------------------------------------------------------------
+// Capability matrix — THE single source of truth for "which provider(s) can
+// satisfy which capability". Previously this lived inline in
+// `src/app/api/llm-bridge/_llm-dispatch.ts`; it now lives here (the declared
+// SoT) so the bridge dispatch resolver, the agent-run preflight, and any
+// install-time capability check all consult ONE matrix and cannot drift.
+//
+// Kept PURE (provider + capability enums only). MUST NOT import
+// `@cinatra-ai/llm` or any connector package — that would invert the package
+// layering (orchestration → agents) and create a circular dependency.
+//
+//   - media_input    → gemini only (Gemini is the only adapter with a media
+//                       ingestion path; see packages/llm/src/providers/gemini.ts).
+//   - function_tools  → broad: every adapter has a non-null tools translator
+//                       (Gemini emits FunctionDeclaration[] via translateTools()).
+//   - native_mcp      → openai | anthropic. Provider-native MCP server tool;
+//                       Gemini is excluded per the MCP Injection Rule
+//                       (function-tool emulation does NOT qualify).
+// ---------------------------------------------------------------------------
+
+export function canProviderSatisfyCapability(
+  provider: LlmProvider,
+  capability: LlmCapability,
+): boolean {
+  switch (capability) {
+    case "media_input":
+      return provider === "gemini";
+    case "function_tools":
+      return provider === "openai" || provider === "anthropic" || provider === "gemini";
+    case "native_mcp":
+      return provider === "openai" || provider === "anthropic";
+    default:
+      // Defense-in-depth — the Zod schema rejects unknown capability values
+      // before we get here. Keep an explicit `false` so any future enum
+      // expansion fails closed.
+      return false;
+  }
+}
+
+/**
+ * All providers that can satisfy `capability`, in `LLM_PROVIDERS` order.
+ * The inverse view of `canProviderSatisfyCapability`, used by the run-time
+ * preflight and the bridge's actionable error to enumerate the connectors a
+ * user could install/configure to unblock a capability.
+ */
+export function providersForCapability(capability: LlmCapability): LlmProvider[] {
+  return LLM_PROVIDERS.filter((p) => canProviderSatisfyCapability(p, capability));
+}
+
+// ---------------------------------------------------------------------------
+// Build a human-readable, actionable sentence naming the capability and the
+// PROVIDER(s) that can satisfy it. Deliberately names the generic provider id
+// (a member of the LLM_PROVIDERS capability vocabulary), NOT a specific
+// connector package — core must not hardcode an extension-instance name
+// (true-IoC: capabilities come from the manifest/registry, enforced by the
+// core→extension instance-coupling gate; pinning a connector package here
+// would both fail that gate and re-introduce the topology coupling this issue
+// is removing). Shared by the bridge 503 message and any future run-time
+// preflight so the wording cannot drift between surfaces.
+//
+// Two phrasings, matching the two ways a capability goes unsatisfied:
+//   - `incompatibleProvider` set (the preferred provider IS available but
+//     cannot satisfy the capability) → name the mismatch and the alternatives.
+//   - otherwise (no installed+configured provider satisfies the capability)
+//     → tell the user to install/configure a connector for one of the
+//       satisfying providers.
+//
+// Example:
+//   describeCapabilityRequirement("media_input")
+//   → 'This agent requires the "media_input" LLM capability, but no installed
+//      and configured LLM provider supports it. Install and configure an LLM
+//      connector for one of these providers: gemini.'
+// ---------------------------------------------------------------------------
+
+export function describeCapabilityRequirement(
+  capability: LlmCapability,
+  opts?: { incompatibleProvider?: LlmProvider },
+): string {
+  const providers = providersForCapability(capability);
+  const options = providers.join(", ");
+  if (opts?.incompatibleProvider) {
+    return (
+      `This agent requires the "${capability}" LLM capability, but the active ` +
+      `provider "${opts.incompatibleProvider}" cannot satisfy it. Install and ` +
+      `configure an LLM connector for one of these providers instead: ${options}.`
+    );
+  }
+  return (
+    `This agent requires the "${capability}" LLM capability, but no installed ` +
+    `and configured LLM provider supports it. Install and configure an LLM ` +
+    `connector for one of these providers: ${options}.`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Per-provider model allowlist. The first entry in each list is the adapter
 // default (see provider files referenced in the JSDoc below). Every id here
 // MUST be routable by the matching provider's adapter.generate path — do not

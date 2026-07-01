@@ -62,6 +62,15 @@ PG="${RUN_ID}-pg"
 REDIS="${RUN_ID}-redis"
 APP="${RUN_ID}-app"
 
+# Required-extension deploy-materialization (cinatra-ai/ops#436). The app boots
+# with a NON-DEFAULT agent-install dir (proving the CINATRA_AGENT_INSTALL_DIR
+# decoupling) backed by a named volume we pre-seed with STALE state, so the
+# assertions below prove: (i) the env override is honored, (ii) the boot phase
+# materializes the required-set OAS trees from the image seed into that dir,
+# (iii) a stale seed-owned dir is pruned, (iv) a coexisting user dir survives.
+AGENT_INSTALL_DIR="/srv/agents"
+AGENT_INSTALL_VOL="${RUN_ID}-agents"
+
 # The app's public origin must EXACTLY match the origin the probes fetch
 # (Better Auth validates its base URL/origin; an origin mismatch is an
 # avoidable flake). Probes run inside the network, so the origin is the app
@@ -78,6 +87,7 @@ DB_URL_IN_NET="postgresql://postgres:postgres@${PG}:5432/postgres"
 cleanup() {
   docker rm -f "$APP" "$PG" "$REDIS" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
+  docker volume rm "$AGENT_INSTALL_VOL" >/dev/null 2>&1 || true
 }
 
 dump_logs() {
@@ -203,6 +213,25 @@ docker run --rm --network "$NET" \
 # Graphiti) are deliberately absent — the core must boot and serve without
 # them. OPENAI_API_KEY carries an inert placeholder (same set the Dockerfile
 # build phase needs at import time).
+# ── 2b. Pre-seed the agent-install volume with STALE state (ops#436) ─────────
+# Before boot, plant into the (non-default) install dir:
+#   - a STALE seed-owned dir: vendor `zz-stale`/slug `gone-agent` carrying the
+#     ownership marker `.cinatra-required-seed.json` — NOT in the image seed, so
+#     the boot reconcile must PRUNE it;
+#   - a USER dir: vendor `acme`/slug `user-agent` with NO marker — the reconcile
+#     must NEVER touch it.
+# This proves the prune is ownership-bounded and user-installs are preserved.
+echo "==> pre-seeding agent-install volume with stale + user dirs"
+docker run --rm -v "${AGENT_INSTALL_VOL}:${AGENT_INSTALL_DIR}" "$IMAGE" sh -c "
+  set -e
+  mkdir -p '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/cinatra'
+  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/cinatra/oas.json'
+  echo '{\"vendor\":\"zz-stale\",\"slug\":\"gone-agent\",\"kind\":\"required-oas-seed\"}' \
+    > '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/.cinatra-required-seed.json'
+  mkdir -p '${AGENT_INSTALL_DIR}/acme/user-agent/cinatra'
+  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_INSTALL_DIR}/acme/user-agent/cinatra/oas.json'
+"
+
 echo "==> booting app container"
 docker run -d --name "$APP" --network "$NET" \
   -e HOSTNAME=0.0.0.0 \
@@ -218,6 +247,8 @@ docker run -d --name "$APP" --network "$NET" \
   -e CINATRA_RUNTIME_MODE=production \
   -e NANGO_ENCRYPTION_KEY="prod-boot-e2e-placeholder-not-a-real-key" \
   -e OPENAI_API_KEY="sk-prod-boot-e2e-placeholder" \
+  -e CINATRA_AGENT_INSTALL_DIR="$AGENT_INSTALL_DIR" \
+  -v "${AGENT_INSTALL_VOL}:${AGENT_INSTALL_DIR}" \
   "$IMAGE" >/dev/null
 
 # ── 4. Health gate: /api/health must answer 200 {"status":"ok"} ─────────────
@@ -335,4 +366,59 @@ for FATAL in 'did not activate' 'StaticBundleLoader failed'; do
 done
 echo "    boot log OK (loader reported; no fatal markers)"
 
-echo "==> prod-boot e2e PASSED: the image boots and serves with only the lock-acquired required-extension set (no private extensions cloned)."
+# ── 6c. Required-extension deploy-materialization assertion (ops#436) ────────
+# The app booted with CINATRA_AGENT_INSTALL_DIR=${AGENT_INSTALL_DIR} (a
+# non-default, pre-seeded-stale dir). Prove the boot reconcile:
+#   (i)   honored the env override (the install dir is the one we set);
+#   (ii)  materialized the image seed's required agent OAS trees into it
+#         (the dir now mirrors /app/.cinatra-required-oas-seed's manifest);
+#   (iii) PRUNED the stale seed-owned dir (zz-stale/gone-agent);
+#   (iv)  PRESERVED the coexisting user dir (acme/user-agent, no marker).
+echo "==> ops#436 assertion: required-extension materialization into ${AGENT_INSTALL_DIR}"
+MAT_CHECK=$(docker exec "$APP" node -e '
+  const fs = require("fs");
+  const path = require("path");
+  const installDir = process.env.CINATRA_AGENT_INSTALL_DIR;
+  const seedDir = "/app/.cinatra-required-oas-seed";
+  const manifest = JSON.parse(fs.readFileSync(path.join(seedDir, "manifest.json"), "utf8"));
+  const slugs = manifest.slugs || [];
+  // (ii) every seeded required slug is present in the install dir AND its FULL
+  // projected surface (cinatra/**, skills/**, package.json, the seed marker) is
+  // byte-identical to the seed — not just oas.json. A regression that stops
+  // copying skills/ or package.json fails here.
+  const listFiles = (root, rel = "") => {
+    const out = [];
+    for (const name of fs.readdirSync(path.join(root, rel || "."))) {
+      const r = rel ? rel + "/" + name : name;
+      const st = fs.lstatSync(path.join(root, r));
+      if (st.isDirectory()) out.push(...listFiles(root, r));
+      else if (st.isFile()) out.push(r);
+    }
+    return out.sort();
+  };
+  for (const { vendor, slug } of slugs) {
+    const liveDir = path.join(installDir, vendor, slug);
+    const seedSlugDir = path.join(seedDir, vendor, slug);
+    if (!fs.existsSync(liveDir)) { console.error("MISSING " + vendor + "/" + slug); process.exit(1); }
+    for (const rel of listFiles(seedSlugDir)) {
+      const live = path.join(liveDir, rel);
+      const seed = path.join(seedSlugDir, rel);
+      if (!fs.existsSync(live)) { console.error("MISSING-FILE " + vendor + "/" + slug + "/" + rel); process.exit(1); }
+      if (!fs.readFileSync(live).equals(fs.readFileSync(seed))) {
+        console.error("STALE " + vendor + "/" + slug + "/" + rel); process.exit(1);
+      }
+    }
+  }
+  // (iii) the stale seed-owned dir was pruned.
+  if (fs.existsSync(path.join(installDir, "zz-stale", "gone-agent"))) {
+    console.error("STALE-NOT-PRUNED zz-stale/gone-agent"); process.exit(1);
+  }
+  // (iv) the coexisting user dir (no marker) survived.
+  if (!fs.existsSync(path.join(installDir, "acme", "user-agent", "cinatra", "oas.json"))) {
+    console.error("USER-DIR-PRUNED acme/user-agent"); process.exit(1);
+  }
+  console.log("seeded=" + slugs.length + " pruned-stale preserved-user");
+') || fail "ops#436 materialization assertion failed (see node error above)."
+echo "    materialize OK (${MAT_CHECK})"
+
+echo "==> prod-boot e2e PASSED: the image boots and serves with only the lock-acquired required-extension set (no private extensions cloned); required-extension set materialized into the deploy-managed agent dir (ops#436)."

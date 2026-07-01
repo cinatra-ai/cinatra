@@ -289,6 +289,107 @@ describe("planDependencyInstall — kinds", () => {
     expect(plan.ordered.find((m) => m.packageName === ROOT)!.typeId).toBe("agent");
     expect(plan.memberKinds.get("@cinatra-ai/a")).toBe("connector");
   });
+
+  // cinatra#781(a): a kind-less package the saga will INSTALL must FAIL FAST
+  // with an actionable NONCONFORMANT_METADATA error instead of the old silent
+  // null→"agent" misroute (which only deferred the failure to a cryptic
+  // downstream Zod reject in the agent install contract — the opaque "Install
+  // failed" #781 describes). The legacy null→"agent" fallback is preserved ONLY
+  // for an already-installed member the saga SKIPS (it is never dispatched).
+  describe("null cinatra.kind — fail-fast for installs, legacy fallback only for skipped rows", () => {
+    // A deps builder that allows an explicit null kind per package and a set of
+    // already-installed rows (mirrors makeDeps but exposes the null kind).
+    function nullKindDeps(
+      registry: Record<string, { version: string; kind: string | null; dependencies?: ExtensionDependency[] }>,
+      installed: Array<{ packageName: string; version: string }> = [],
+    ): DependencyPlanDeps {
+      return {
+        fetchSummary: vi.fn(async (packageName: string): Promise<MemberSummary> => {
+          const pkg = registry[packageName];
+          if (!pkg) throw new Error(`fixture: no package ${packageName}`);
+          return {
+            resolvedVersion: pkg.version,
+            kind: pkg.kind as MemberSummary["kind"],
+            manifest: {
+              name: packageName,
+              version: pkg.version,
+              cinatra: { ...(pkg.kind ? { kind: pkg.kind } : {}), dependencies: pkg.dependencies ?? [] },
+            },
+          };
+        }),
+        parseEdges: (manifest, packageName) =>
+          parseManifestDependencyEdges(manifest, { packageName }).edges,
+        isAutoInstallableEdge,
+        readInstalledRows: async () =>
+          installed.map(
+            (i) =>
+              ({
+                id: `row-${i.packageName}`,
+                packageName: i.packageName,
+                status: "active",
+                organizationId: null,
+                source: { type: "verdaccio", version: i.version },
+                dependencies: [],
+              }) as unknown as InstalledExtension,
+          ),
+      };
+    }
+
+    it("a kind-less ROOT install FAILS FAST with NONCONFORMANT_METADATA (publisher must declare cinatra.kind)", async () => {
+      const deps = nullKindDeps({ [ROOT]: { version: "1.0.0", kind: null } });
+      try {
+        await planDependencyInstall(
+          { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+          deps,
+        );
+        expect.unreachable("should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(DependencyPlanError);
+        expect((e as DependencyPlanError).code).toBe("NONCONFORMANT_METADATA");
+        expect((e as Error).message).toContain("no cinatra.kind");
+        expect((e as Error).message).toContain("non-conformant");
+        // Actionable: names the real defect + the fix (republish with cinatra.kind).
+        expect((e as Error).message).toContain("republish");
+        expect((e as Error).message).toContain("cinatra.kind");
+      }
+    });
+
+    it("a kind-less TRANSITIVE member that WILL install also FAILS FAST (not just the root)", async () => {
+      const deps = nullKindDeps({
+        [ROOT]: { version: "1.0.0", kind: "agent", dependencies: [edge("@cinatra-ai/a")] },
+        "@cinatra-ai/a": { version: "1.0.0", kind: null },
+      });
+      await expect(
+        planDependencyInstall(
+          { root: { packageName: ROOT, version: "1.0.0" }, orgId: null, closure: null },
+          deps,
+        ),
+      ).rejects.toMatchObject({ code: "NONCONFORMANT_METADATA" });
+    });
+
+    it("a kind-less ALREADY-INSTALLED transitive member is SKIPPED with the legacy 'agent' fallback (never blocks a conformant root)", async () => {
+      const deps = nullKindDeps(
+        {
+          [ROOT]: { version: "1.0.0", kind: "agent", dependencies: [edge("@cinatra-ai/a")] },
+          "@cinatra-ai/a": { version: "1.2.0", kind: null },
+        },
+        // The kind-less dep is already installed at the pinned version → the saga
+        // skips it, so the legacy null→agent fallback applies (no dispatch).
+        [{ packageName: "@cinatra-ai/a", version: "1.2.0" }],
+      );
+      const plan = await planDependencyInstall(
+        {
+          root: { packageName: ROOT, version: "1.0.0" },
+          orgId: null,
+          closure: [{ name: "@cinatra-ai/a", version: "1.2.0" }],
+        },
+        deps,
+      );
+      const a = plan.ordered.find((m) => m.packageName === "@cinatra-ai/a")!;
+      expect(a.alreadyInstalled).toBe(true);
+      expect(a.typeId).toBe("agent"); // legacy fallback, harmless (never installed)
+    });
+  });
 });
 
 describe("planDependencyInstall — #157 dependency-confusion scope gate", () => {
