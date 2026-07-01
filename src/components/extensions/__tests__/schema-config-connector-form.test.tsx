@@ -200,13 +200,14 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
 // hidden true/false), number (min/max/step attrs), free-list (add → hidden JSON).
 describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
   it("dynamic-select-options: fetches options on mount, populates the select + hidden value", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ result: { options: [{ value: "gpt-5.5", label: "GPT-5.5" }, { value: "gpt-5-mini", label: "GPT-5 mini" }] } }),
-          { status: 200 },
-        ),
-    );
+    const seenUrls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      seenUrls.push(String(url));
+      return new Response(
+        JSON.stringify({ result: { options: [{ value: "gpt-5.5", label: "GPT-5.5" }, { value: "gpt-5-mini", label: "GPT-5 mini" }] } }),
+        { status: 200 },
+      );
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const surface = surfaceOf({
       fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels", defaultValue: "gpt-5-mini" }],
@@ -217,7 +218,7 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
       await Promise.resolve();
     });
     // The options action was dispatched to the host endpoint with the install id.
-    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i7/actions/listModels"))).toBe(true);
+    expect(seenUrls.some((u) => u.includes("/api/extensions/i7/actions/listModels"))).toBe(true);
     // The hidden input carries the declared defaultValue (present in fetched options).
     const hidden = container.querySelector<HTMLInputElement>('input[name="model"]');
     expect(hidden?.value).toBe("gpt-5-mini");
@@ -298,7 +299,7 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     // Only the hidden input carries a name — the visible Switch must be nameless.
     const named = container.querySelectorAll('[name="allowNetwork"]');
     expect(named.length).toBe(1);
-    expect((named[0] as HTMLElement).getAttribute("type")).toBe("hidden");
+    expect(named.item(0)?.getAttribute("type")).toBe("hidden");
     // Toggle the switch → hidden flips to "false".
     const toggle = container.querySelector<HTMLButtonElement>("#allowNetwork-toggle");
     expect(toggle).toBeTruthy();
@@ -326,7 +327,7 @@ describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
     // The single named element is the hidden JSON carrier; visible entry inputs are nameless.
     const named = container.querySelectorAll('[name="hosts"]');
     expect(named.length).toBe(1);
-    expect((named[0] as HTMLElement).getAttribute("type")).toBe("hidden");
+    expect(named.item(0)?.getAttribute("type")).toBe("hidden");
     // Type into the first entry.
     const entry = container.querySelector<HTMLInputElement>('input[aria-label="host 1"]');
     expect(entry).toBeTruthy();
