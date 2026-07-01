@@ -23,6 +23,14 @@
  * policy (see src/lib/boot/fatal-error-policy.ts).
  */
 
+// REQUIRED-ENV PREFLIGHT (cinatra#789 item 3). MUST be the FIRST import: it runs at
+// module load, BEFORE every other DI-wiring binder below (several of which throw at
+// import on a missing env var — e.g. @/lib/auth via the register-* chain). Running
+// first lets a misconfigured prod deploy fail with ONE clear, aggregated message
+// naming every missing required var. Inert during `next build` and in dev (see the
+// module's scope guard) so it never breaks the image build.
+import "@/lib/boot/required-env-preflight.init";
+
 // Sentry server SDK init. Runs side-effect-only when SENTRY_DSN
 // is set; otherwise it's a no-op. Must execute BEFORE initializeOtelTracing()
 // so that @sentry/core has a live client when @sentry/opentelemetry attaches

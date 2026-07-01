@@ -53,6 +53,22 @@ describe("boot-state readiness", () => {
     const snap = getBootStateSnapshot();
     expect(snap.readiness).toBe("degraded");
     expect(snap.degradedPhases).toEqual(["otel-tracing", "cache-warmup"]);
+    // blockingPhases = the DURABLE `degraded`-policy failures ONLY (cinatra#789 item 1):
+    // the retryable cache-warmup is NOT deploy-blocking; the degraded otel-tracing IS.
+    expect(snap.blockingPhases).toEqual(["otel-tracing"]);
+  });
+
+  it("blockingPhases excludes retryable-only failures (deploy not blocked)", () => {
+    beginBoot();
+    recordBootPhaseResult(result({ name: "cache-warmup", policy: "retryable", status: "failed", reason: "db blip" }));
+    recordBootPhaseResult(result({ name: "marketplace-attach", policy: "retryable", status: "failed" }));
+    markBootReady();
+
+    const snap = getBootStateSnapshot();
+    expect(snap.readiness).toBe("degraded");
+    expect(snap.degradedPhases).toEqual(["cache-warmup", "marketplace-attach"]);
+    // No durable degraded-policy failure -> nothing deploy-blocking (self-healing).
+    expect(snap.blockingPhases).toEqual([]);
   });
 
   it("becomes 'failed' when a fatal phase failed (and markReady cannot revive it)", () => {

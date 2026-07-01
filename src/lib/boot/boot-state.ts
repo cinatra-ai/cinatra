@@ -43,6 +43,15 @@ export type BootStateSnapshot = {
   phases: readonly BootPhaseResult[];
   /** The names of `degraded`/`retryable` phases that failed (operator deficit list). */
   degradedPhases: readonly string[];
+  /**
+   * The names of failed phases with policy `degraded` ONLY — a DURABLE deficit for
+   * this process lifetime (NOT self-healing). This is the DEPLOY-BLOCKING subset: a
+   * `retryable` failure self-heals on the next boot / a lazy path and must NOT block a
+   * deploy, whereas a `degraded`-policy failure is a durable reduced-functionality
+   * signal the deploy health gate should reject. See src/app/api/health/route.ts.
+   * (cinatra#789 item 1 — the health-contract split.)
+   */
+  blockingPhases: readonly string[];
   /** The name of the `fatal` phase that aborted boot, when readiness is "failed". */
   fatalPhase?: string;
 };
@@ -96,6 +105,11 @@ class BootState {
         (p) => p.status === "failed" && (p.policy === "degraded" || p.policy === "retryable"),
       )
       .map((p) => p.name);
+    // DEPLOY-BLOCKING subset: durable `degraded`-policy failures only (retryable
+    // failures self-heal and must not block a deploy). See the type docstring.
+    const blockingPhases = this.phases
+      .filter((p) => p.status === "failed" && p.policy === "degraded")
+      .map((p) => p.name);
     const fatal = this.phases.find((p) => p.status === "failed" && p.policy === "fatal");
     return {
       scope: "process-local",
@@ -104,6 +118,7 @@ class BootState {
       readyAt: this.readyAt,
       phases: [...this.phases],
       degradedPhases,
+      blockingPhases,
       ...(fatal ? { fatalPhase: fatal.name } : {}),
     };
   }

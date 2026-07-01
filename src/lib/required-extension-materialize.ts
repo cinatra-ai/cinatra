@@ -55,8 +55,10 @@ const STAGE_PREFIX = ".cinatra-stage-";
 // The image-baked seed location (mirrors the Dockerfile COPY destination).
 export const DEFAULT_REQUIRED_OAS_SEED_DIR = "/app/.cinatra-required-oas-seed";
 
-// The durable user-install store — NEVER a valid materialize target.
-const USER_STORE_ROOT = "/data/extensions/packages";
+// The durable user-install store — NEVER a valid materialize target. Exported so the
+// boot-time user-store-mount-check (cinatra#789 item 5) validates the SAME path this
+// module refuses to write into — one source of truth, no drift.
+export const USER_STORE_ROOT = "/data/extensions/packages";
 
 export type MaterializeResult = {
   /** required slug dirs created or refreshed (OAS bytes differed) */

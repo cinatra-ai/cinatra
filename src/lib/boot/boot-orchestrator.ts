@@ -19,9 +19,13 @@
 import { beginBoot, markBootReady } from "@/lib/boot/boot-state";
 import { runBootPhase, type BootPhase } from "@/lib/boot/boot-phase";
 import { coreBootPhases } from "@/lib/boot/phases/core-boot";
+import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-version-precondition";
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
+import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
+import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
+import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
 import {
@@ -73,6 +77,13 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // ── core boot: DI wiring, migrations, cache warm, identity, marketplace ──────
   await run(coreBootPhases());
 
+  // ── schema-version precondition (cinatra#789 item 4) ─────────────────────────
+  // AFTER core-migrations ran the chain `up`, BEFORE extension activation. In the
+  // normal prod path applied==shipped so this passes; it catches the case where the
+  // migrate step was SKIPPED (DB reachable now but couldn't run) yet the schema is
+  // behind — a CLEAR abort instead of a cryptic downstream error. Prod fatal.
+  await run(schemaVersionPreconditionPhases());
+
   // ── extension activation: dual loaders + required-set enforcement + cleanup ──
   await run(extensionActivationPhases(bootActivationResults));
 
@@ -117,6 +128,19 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
 
   // ── system loops: 7 BullMQ seeds + eager worker + workflows + relocation ─────
   await run(systemLoopPhases());
+
+  // ── deploy-robustness readiness signals (cinatra#789 items 3+5+1) ────────────
+  // All NON-deploy-blocking (retryable) except the double-armed degrade probe:
+  //   - required-env-soft-check: surfaces a missing soft-required var (bridge token)
+  //     in the readiness surface (WayFlow deploy sees the deficit; boot not blocked).
+  //   - user-store-mount-check: warns clearly if the durable user store is
+  //     missing/not-writable (installs would be ephemeral) — retryable, non-blocking.
+  //   - boot-degrade-probe: inert unless DOUBLE-armed (CINATRA_BOOT_E2E +
+  //     CINATRA_BOOT_SIMULATE_DEGRADED) — a `degraded`-policy failure to PROVE the
+  //     deploy health gate rejects a durable-degraded boot (e2e acceptance).
+  await run(requiredEnvNotePhases());
+  await run(userStoreMountCheckPhases());
+  await run(bootDegradeProbePhases());
 
   // Boot reached its serving prerequisites: the eager worker + runtime engines are
   // wired and the required-set was enforced. Mark ready (degraded if any
