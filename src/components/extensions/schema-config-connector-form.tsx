@@ -43,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import type {
   SchemaConfigField,
@@ -55,6 +56,10 @@ import type {
   BannerField,
   BannerTone,
   AdvisoryField,
+  DynamicSelectOptionsField,
+  BooleanField,
+  NumberField,
+  FreeListField,
 } from "@/lib/extension-schema-config";
 
 export type SchemaConfigConnectorFormProps = {
@@ -216,6 +221,14 @@ function SchemaConfigFieldRow({
       return <BannerRow field={field} activeName={bannerName} />;
     case "advisory":
       return <AdvisoryRow field={field} installId={installId} />;
+    case "dynamic-select-options":
+      return <DynamicSelectRow field={field} installId={installId} initialValue={initialValues[field.key]} />;
+    case "boolean":
+      return <BooleanRow field={field} initialValue={initialValues[field.key]} />;
+    case "number":
+      return <NumberRow field={field} initialValue={initialValues[field.key]} />;
+    case "free-list":
+      return <FreeListRow field={field} initialValue={initialValues[field.key]} />;
     default:
       return null;
   }
@@ -620,5 +633,242 @@ function AdvisoryRow({ field, installId }: { field: AdvisoryField; installId: st
       <AlertTitle>{field.label}</AlertTitle>
       <AlertDescription>{ready ? field.whenReady : field.whenNotReady}</AlertDescription>
     </Alert>
+  );
+}
+
+type FetchedOption = { value: string; label: string };
+
+/**
+ * Normalize a dynamic-options action result into `{value,label}[]`. Accepts a
+ * bare array, `{ options: [...] }`, or `{ items: [...] }`. Fail-closed: every
+ * entry MUST carry a string `value` and `label`; anything else is dropped, and
+ * duplicate values are de-duped (first wins). Values/labels are rendered as text
+ * only — never spread onto a DOM element.
+ */
+function optionsFromResult(result: unknown): FetchedOption[] {
+  let arr: unknown[] = [];
+  if (Array.isArray(result)) arr = result;
+  else if (result && typeof result === "object") {
+    for (const key of ["options", "items"]) {
+      const v = (result as Record<string, unknown>)[key];
+      if (Array.isArray(v)) {
+        arr = v;
+        break;
+      }
+    }
+  }
+  const out: FetchedOption[] = [];
+  const seen = new Set<string>();
+  for (const o of arr) {
+    if (!o || typeof o !== "object") continue;
+    const value = (o as Record<string, unknown>).value;
+    const label = (o as Record<string, unknown>).label;
+    if (typeof value !== "string" || !value || typeof label !== "string" || !label) continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push({ value, label });
+  }
+  return out;
+}
+
+/**
+ * A select whose options are ACTION-SOURCED (cinatra#782). On mount it dispatches
+ * `optionsAction` through the SAME host action endpoint (`invokeAction`) — no new
+ * endpoint — and renders loading / error / empty / populated states. The hidden
+ * `input[name=key]` carries the selected value into `collectFormInputs`, mirroring
+ * the static `SelectRow`. A stale response after remount/action change is dropped
+ * (active-flag pattern, like `RecordListRow`).
+ */
+function DynamicSelectRow({
+  field,
+  installId,
+  initialValue,
+}: {
+  field: DynamicSelectOptionsField;
+  installId: string;
+  initialValue?: string;
+}) {
+  const [options, setOptions] = useState<FetchedOption[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [value, setValue] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      // Defer the first setState past a microtask so it is never a synchronous
+      // setState inside the effect body (mirrors RecordListRow.fetchRows).
+      await Promise.resolve();
+      if (!active) return;
+      setLoading(true);
+      setError(null);
+      const r = await invokeAction(installId, field.optionsAction, {});
+      if (!active) return;
+      setLoading(false);
+      if (!r.ok) {
+        setOptions([]);
+        setError(r.error ?? "Could not load options.");
+        return;
+      }
+      const opts = optionsFromResult(r.result);
+      setOptions(opts);
+      // Choose the initial value only from the fetched options: the saved value,
+      // else the declared defaultValue, else the first option.
+      const pick =
+        (initialValue && opts.some((o) => o.value === initialValue) && initialValue) ||
+        (field.defaultValue && opts.some((o) => o.value === field.defaultValue) && field.defaultValue) ||
+        opts[0]?.value;
+      setValue(pick || undefined);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [installId, field.optionsAction, field.defaultValue, initialValue]);
+
+  return (
+    <Field data-testid={`dynamic-select-${field.optionsAction}`}>
+      <FieldLabel htmlFor={field.key}>{field.label}</FieldLabel>
+      {/* Hidden input carries the selected value into collectFormInputs(). */}
+      <Input type="hidden" name={field.key} value={value ?? ""} readOnly />
+      {error ? (
+        <Alert variant="destructive" data-testid="dynamic-select-error">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : options === null || loading ? (
+        <FieldDescription data-testid="dynamic-select-loading">Loading options…</FieldDescription>
+      ) : options.length === 0 ? (
+        <FieldDescription data-testid="dynamic-select-empty">
+          {field.placeholder ?? "No options available."}
+        </FieldDescription>
+      ) : (
+        <Select value={value} onValueChange={setValue}>
+          <SelectTrigger id={field.key} aria-label={field.label}>
+            <SelectValue placeholder={field.placeholder ?? field.label} />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+      {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+    </Field>
+  );
+}
+
+/**
+ * A boolean toggle (Switch). Only the HIDDEN input carries a `name`, serializing
+ * `"true"`/`"false"` into `collectFormInputs` (the visible Switch is nameless);
+ * the host write handler parses the exact string, not truthiness.
+ */
+function BooleanRow({ field, initialValue }: { field: BooleanField; initialValue?: string }) {
+  const initial = initialValue !== undefined ? initialValue === "true" : field.defaultValue ?? false;
+  const [checked, setChecked] = useState<boolean>(initial);
+  return (
+    <Field orientation="horizontal">
+      <FieldLabel htmlFor={`${field.key}-toggle`}>{field.label}</FieldLabel>
+      <FieldContent>
+        {/* Hidden input is the ONLY named element — collectFormInputs reads it. */}
+        <Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />
+        <Switch id={`${field.key}-toggle`} checked={checked} onCheckedChange={setChecked} aria-label={field.label} />
+        {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+      </FieldContent>
+    </Field>
+  );
+}
+
+/**
+ * A numeric input with optional min/max/step. Uncontrolled so `collectFormInputs`
+ * reads `el.value`; the min/max/step attributes are UX only — the host write
+ * handler is the authoritative clamp.
+ */
+function NumberRow({ field, initialValue }: { field: NumberField; initialValue?: string }) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={field.key}>{field.label}</FieldLabel>
+      <Input
+        id={field.key}
+        name={field.key}
+        type="number"
+        inputMode="numeric"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        placeholder={field.placeholder}
+        required={field.required}
+        defaultValue={initialValue ?? (field.defaultValue !== undefined ? String(field.defaultValue) : undefined)}
+      />
+      {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+    </Field>
+  );
+}
+
+/**
+ * An add/remove editor for a free-form string list. The visible entry inputs are
+ * NAMELESS; a single hidden `input[name=key]` carries the non-empty entries as a
+ * JSON `string[]` so it round-trips through `collectFormInputs` (which skips
+ * indexed `key[i]` names). The host write handler `JSON.parse`s + re-validates it.
+ */
+function FreeListRow({ field, initialValue }: { field: FreeListField; initialValue?: string }) {
+  const parseInitial = (): string[] => {
+    if (!initialValue) return [""];
+    try {
+      const parsed = JSON.parse(initialValue);
+      if (Array.isArray(parsed)) {
+        const strings = parsed.filter((s): s is string => typeof s === "string");
+        return strings.length > 0 ? strings : [""];
+      }
+    } catch {
+      /* not JSON — start empty */
+    }
+    return [""];
+  };
+  const [entries, setEntries] = useState<string[]>(parseInitial);
+  const setEntry = useCallback((i: number, v: string) => {
+    setEntries((prev) => prev.map((e, idx) => (idx === i ? v : e)));
+  }, []);
+  const addEntry = useCallback(() => setEntries((prev) => [...prev, ""]), []);
+  const removeEntry = useCallback(
+    (i: number) => setEntries((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : [""])),
+    [],
+  );
+  const serialized = JSON.stringify(entries.map((e) => e.trim()).filter((e) => e.length > 0));
+  return (
+    <Field>
+      <FieldLabel>{field.label}</FieldLabel>
+      {/* Single hidden input carries the whole list as JSON into collectFormInputs. */}
+      <Input type="hidden" name={field.key} value={serialized} readOnly />
+      <FieldContent className="gap-2">
+        {entries.map((entry, i) => (
+          <Field key={i} orientation="horizontal" className="items-end">
+            <Input
+              className="flex-1"
+              aria-label={`${field.itemLabel ?? field.label} ${i + 1}`}
+              placeholder={field.placeholder}
+              value={entry}
+              onChange={(e) => setEntry(i, e.target.value)}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => removeEntry(i)}
+              aria-label={`Remove ${field.itemLabel ?? "entry"}`}
+              disabled={entries.length <= 1}
+            >
+              <Trash2Icon />
+            </Button>
+          </Field>
+        ))}
+        <Button type="button" variant="outline" size="sm" className="self-start" onClick={addEntry}>
+          <PlusIcon data-icon="inline-start" />
+          Add {field.itemLabel ?? "entry"}
+        </Button>
+      </FieldContent>
+      {field.description ? <FieldDescription>{field.description}</FieldDescription> : null}
+    </Field>
   );
 }

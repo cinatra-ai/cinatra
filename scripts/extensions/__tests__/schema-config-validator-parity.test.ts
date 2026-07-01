@@ -80,6 +80,28 @@ const CORPUS: Array<{ label: string; raw: unknown }> = [
       ],
     },
   },
+  // ---- cinatra#782 field-kind expansion (valid + invalid families) ----
+  {
+    label: "expansion vocabulary (dynamic-select-options / boolean / number / free-list)",
+    raw: {
+      title: "Expansion",
+      fields: [
+        { kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels", defaultValue: "gpt-5.5", placeholder: "Pick" },
+        { kind: "boolean", key: "allowNetwork", label: "Allow network", defaultValue: false },
+        { kind: "number", key: "pids", label: "PIDs", min: 1, max: 4096, step: 1, defaultValue: 512, required: true },
+        { kind: "free-list", key: "hosts", label: "Hosts", itemLabel: "host", placeholder: "example.com" },
+      ],
+    },
+  },
+  { label: "dynamic-select-options missing optionsAction", raw: { fields: [{ kind: "dynamic-select-options", key: "m", label: "M" }] } },
+  { label: "dynamic-select-options invalid optionsAction", raw: { fields: [{ kind: "dynamic-select-options", key: "m", label: "M", optionsAction: "../x" }] } },
+  { label: "boolean non-boolean defaultValue", raw: { fields: [{ kind: "boolean", key: "b", label: "B", defaultValue: "yes" }] } },
+  { label: "number non-finite min", raw: { fields: [{ kind: "number", key: "n", label: "N", min: "1" }] } },
+  { label: "number min>max", raw: { fields: [{ kind: "number", key: "n", label: "N", min: 9, max: 1 }] } },
+  { label: "number default out of range", raw: { fields: [{ kind: "number", key: "n", label: "N", min: 0, max: 5, defaultValue: 9 }] } },
+  { label: "number step<=0", raw: { fields: [{ kind: "number", key: "n", label: "N", step: 0 }] } },
+  { label: "free-list missing key", raw: { fields: [{ kind: "free-list", label: "L" }] } },
+  { label: "expansion carrier-key smuggle", raw: { fields: [{ kind: "boolean", key: "b", label: "B", onClick: "x" }] } },
 ];
 
 describe("generator validateConfigSchema ⇄ parseSchemaConfig parity", () => {

@@ -194,3 +194,149 @@ describe("SchemaConfigConnectorForm — extended DSL (#658)", () => {
     expect(advisory?.textContent).toContain("Keys stored securely.");
   });
 });
+
+// cinatra#782 renderer coverage for the field-kind expansion: dynamic-select-options
+// (action-sourced options with loading/populate/error/empty), boolean (toggle →
+// hidden true/false), number (min/max/step attrs), free-list (add → hidden JSON).
+describe("SchemaConfigConnectorForm — field-kind expansion (#782)", () => {
+  it("dynamic-select-options: fetches options on mount, populates the select + hidden value", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ result: { options: [{ value: "gpt-5.5", label: "GPT-5.5" }, { value: "gpt-5-mini", label: "GPT-5 mini" }] } }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf({
+      fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels", defaultValue: "gpt-5-mini" }],
+    });
+    await renderForm({ installId: "i7", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The options action was dispatched to the host endpoint with the install id.
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/api/extensions/i7/actions/listModels"))).toBe(true);
+    // The hidden input carries the declared defaultValue (present in fetched options).
+    const hidden = container.querySelector<HTMLInputElement>('input[name="model"]');
+    expect(hidden?.value).toBe("gpt-5-mini");
+    // No loading/error state remains.
+    expect(container.querySelector('[data-testid="dynamic-select-loading"]')).toBeNull();
+    expect(container.querySelector('[data-testid="dynamic-select-error"]')).toBeNull();
+  });
+
+  it("dynamic-select-options: renders the error state when the options action fails", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf({
+      fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels" }],
+    });
+    await renderForm({ installId: "i7", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="dynamic-select-error"]')?.textContent).toContain("boom");
+    // The hidden input carries no value on error.
+    expect(container.querySelector<HTMLInputElement>('input[name="model"]')?.value).toBe("");
+  });
+
+  it("dynamic-select-options: normalizes the action result fail-closed (drops non-string + duplicate options)", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              options: [
+                { value: "gpt-5.5", label: "GPT-5.5" },
+                { value: 123, label: "bad-value-type" }, // non-string value → dropped
+                { value: "no-label" }, // missing label → dropped
+                { value: "gpt-5.5", label: "GPT-5.5 dup" }, // duplicate value → dropped
+                { value: "gpt-5-mini", label: "GPT-5 mini" },
+              ],
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf({
+      fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels" }],
+    });
+    await renderForm({ installId: "i7", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Only valid, de-duped options survive; the hidden value defaults to the first.
+    expect(container.querySelector<HTMLInputElement>('input[name="model"]')?.value).toBe("gpt-5.5");
+    // The dropped bad entries never appear as text.
+    expect(container.textContent).not.toContain("bad-value-type");
+    expect(container.textContent).not.toContain("GPT-5.5 dup");
+  });
+
+  it("dynamic-select-options: renders the empty state when the action returns no options", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { options: [] } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const surface = surfaceOf({
+      fields: [{ kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels", placeholder: "No models" }],
+    });
+    await renderForm({ installId: "i7", packageName: "@x/y", surface });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-testid="dynamic-select-empty"]')?.textContent).toContain("No models");
+  });
+
+  it("boolean: the hidden input reflects the toggle state", async () => {
+    const surface = surfaceOf({ fields: [{ kind: "boolean", key: "allowNetwork", label: "Allow network", defaultValue: true }] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    const hidden = container.querySelector<HTMLInputElement>('input[name="allowNetwork"]');
+    expect(hidden?.value).toBe("true");
+    // Only the hidden input carries a name — the visible Switch must be nameless.
+    const named = container.querySelectorAll('[name="allowNetwork"]');
+    expect(named.length).toBe(1);
+    expect((named[0] as HTMLElement).getAttribute("type")).toBe("hidden");
+    // Toggle the switch → hidden flips to "false".
+    const toggle = container.querySelector<HTMLButtonElement>("#allowNetwork-toggle");
+    expect(toggle).toBeTruthy();
+    await act(async () => {
+      toggle!.click();
+      await Promise.resolve();
+    });
+    expect(container.querySelector<HTMLInputElement>('input[name="allowNetwork"]')?.value).toBe("false");
+  });
+
+  it("number: renders a numeric input carrying min/max/step + the default", async () => {
+    const surface = surfaceOf({ fields: [{ kind: "number", key: "pids", label: "PID limit", min: 1, max: 4096, step: 1, defaultValue: 512 }] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    const input = container.querySelector<HTMLInputElement>('input[name="pids"]');
+    expect(input?.type).toBe("number");
+    expect(input?.getAttribute("min")).toBe("1");
+    expect(input?.getAttribute("max")).toBe("4096");
+    expect(input?.getAttribute("step")).toBe("1");
+    expect(input?.value).toBe("512");
+  });
+
+  it("free-list: adding an entry serializes the non-empty list as JSON in the hidden input", async () => {
+    const surface = surfaceOf({ fields: [{ kind: "free-list", key: "hosts", label: "Egress hosts", itemLabel: "host" }] });
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    // The single named element is the hidden JSON carrier; visible entry inputs are nameless.
+    const named = container.querySelectorAll('[name="hosts"]');
+    expect(named.length).toBe(1);
+    expect((named[0] as HTMLElement).getAttribute("type")).toBe("hidden");
+    // Type into the first entry.
+    const entry = container.querySelector<HTMLInputElement>('input[aria-label="host 1"]');
+    expect(entry).toBeTruthy();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+      setter.call(entry!, "example.com");
+      entry!.dispatchEvent(new Event("input", { bubbles: true }));
+      await Promise.resolve();
+    });
+    const hidden = container.querySelector<HTMLInputElement>('input[name="hosts"]');
+    expect(JSON.parse(hidden!.value)).toEqual(["example.com"]);
+  });
+});

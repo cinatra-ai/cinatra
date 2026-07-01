@@ -5,11 +5,12 @@
 // A `schema-config` connector declares its setup/settings surface as DATA
 // (`cinatra.configSchema`) instead of bundling a React page. The host renders it
 // from this typed vocabulary, so the connector activates + configures at runtime
-// with no rebuild. The six primitive families cover the "more than a basic form"
+// with no rebuild. The primitive families cover the "more than a basic form"
 // connector surfaces: text/secret fields, OAuth-Nango connect, repeatable
-// resource lists, status probes, copyable generated credentials, and named
-// actions. `bundled-react` connectors stay rebuild-only (the installer surfaces
-// a clear "requires rebuild" state — see `requiresRebuildState`).
+// resource lists, status probes, copyable generated credentials, named actions,
+// static + ACTION-SOURCED selects, boolean toggles, numeric inputs, and
+// free-form string lists. `bundled-react` connectors stay rebuild-only (the
+// installer surfaces a clear "requires rebuild" state — see `requiresRebuildState`).
 
 export type SchemaConfigFieldKind =
   | "text"
@@ -22,7 +23,13 @@ export type SchemaConfigFieldKind =
   | "select"
   | "record-list"
   | "banner"
-  | "advisory";
+  | "advisory"
+  // cinatra#782: the openai-blocking field-kind expansion — action-sourced
+  // select options, boolean toggles, numeric inputs, free-form string lists.
+  | "dynamic-select-options"
+  | "boolean"
+  | "number"
+  | "free-list";
 
 export type TextField = {
   kind: "text";
@@ -105,6 +112,71 @@ export type SelectField = {
   label: string;
   options: SelectOption[];
   defaultValue?: string;
+  description?: string;
+};
+
+/**
+ * A single-select whose options are ACTION-SOURCED (cinatra#782). Unlike the
+ * static `select`, the choices are not known at author time: the renderer
+ * invokes `optionsAction` (a host named action, host-authorized) at mount and
+ * builds the `<Select>` from its result — `[{value,label}]`, or `{options:[…]}`
+ * / `{items:[…]}`. Used for the openai `defaultModel` picker (fetches the live
+ * model list). `defaultValue` is a plain string selected only IF the fetched
+ * options contain it (membership is unknowable at parse time). PURE DATA: the
+ * package supplies no server actions; the host owns the action + its scoping.
+ */
+export type DynamicSelectOptionsField = {
+  kind: "dynamic-select-options";
+  key: string;
+  label: string;
+  /** Host named action returning `[{value,label}]` / `{options}` / `{items}`. */
+  optionsAction: string;
+  defaultValue?: string;
+  placeholder?: string;
+  description?: string;
+};
+
+/** A boolean toggle (rendered as a Switch), persisted like other config values. */
+export type BooleanField = {
+  kind: "boolean";
+  key: string;
+  label: string;
+  defaultValue?: boolean;
+  description?: string;
+};
+
+/**
+ * A numeric input with optional min/max/step. The renderer clamps for UX only;
+ * the host write handler is the authoritative validator. `min`/`max`/`step`/
+ * `defaultValue` must be finite numbers (fail-closed): `min <= max`, `step > 0`,
+ * and `defaultValue` within `[min, max]` when those bounds are present.
+ */
+export type NumberField = {
+  kind: "number";
+  key: string;
+  label: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  defaultValue?: number;
+  placeholder?: string;
+  required?: boolean;
+  description?: string;
+};
+
+/**
+ * An add/remove editor for a FREE-FORM string list (distinct from the
+ * structured `repeatable-list` of sub-records). The renderer serializes the
+ * non-empty entries as a single JSON `string[]` under one hidden `input[name=key]`
+ * so it round-trips through the flat form collector; the host write handler
+ * `JSON.parse`s it and re-validates it as a `string[]`.
+ */
+export type FreeListField = {
+  kind: "free-list";
+  key: string;
+  label: string;
+  itemLabel?: string;
+  placeholder?: string;
   description?: string;
 };
 
@@ -194,7 +266,11 @@ export type SchemaConfigField =
   | SelectField
   | RecordListField
   | BannerField
-  | AdvisoryField;
+  | AdvisoryField
+  | DynamicSelectOptionsField
+  | BooleanField
+  | NumberField
+  | FreeListField;
 
 export type SchemaConfigSurface = {
   title?: string;
@@ -219,6 +295,10 @@ const FIELD_KINDS = new Set<SchemaConfigFieldKind>([
   "record-list",
   "banner",
   "advisory",
+  "dynamic-select-options",
+  "boolean",
+  "number",
+  "free-list",
 ]);
 
 // Exact key allowlist per field kind. The parser REJECTS any field carrying a key
@@ -256,6 +336,29 @@ const FIELD_KEY_ALLOWLIST: Record<SchemaConfigFieldKind, ReadonlySet<string>> = 
     "whenNotReady",
     "description",
   ]),
+  "dynamic-select-options": new Set([
+    "kind",
+    "key",
+    "label",
+    "optionsAction",
+    "defaultValue",
+    "placeholder",
+    "description",
+  ]),
+  boolean: new Set(["kind", "key", "label", "defaultValue", "description"]),
+  number: new Set([
+    "kind",
+    "key",
+    "label",
+    "min",
+    "max",
+    "step",
+    "defaultValue",
+    "placeholder",
+    "required",
+    "description",
+  ]),
+  "free-list": new Set(["kind", "key", "label", "itemLabel", "placeholder", "description"]),
 };
 
 // Keys allowed at the configSchema ROOT (besides `fields`). Anything else is
@@ -302,6 +405,10 @@ function isObj(v: unknown): v is Record<string, unknown> {
 }
 function str(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
+}
+/** A finite number (rejects NaN/±Infinity/non-number) — fail-closed. */
+function finiteNum(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
 }
 
 /**
@@ -613,6 +720,93 @@ function validateField(
         description,
       };
     }
+    case "dynamic-select-options": {
+      const key = requireKey(raw, at, errors, seenKeys);
+      if (!key) return null;
+      if (!str(raw.optionsAction) || !KEY_RE.test(raw.optionsAction)) {
+        errors.push(`${at}: dynamic-select-options requires a valid "optionsAction"`);
+        return null;
+      }
+      // defaultValue is a plain string; membership can't be checked at parse
+      // time (options are action-sourced), so the renderer only selects it if
+      // the fetched options contain it.
+      return {
+        kind,
+        key,
+        label,
+        optionsAction: raw.optionsAction,
+        defaultValue: str(raw.defaultValue) ? raw.defaultValue : undefined,
+        placeholder: str(raw.placeholder) ? raw.placeholder : undefined,
+        description,
+      };
+    }
+    case "boolean": {
+      const key = requireKey(raw, at, errors, seenKeys);
+      if (!key) return null;
+      if (raw.defaultValue !== undefined && typeof raw.defaultValue !== "boolean") {
+        errors.push(`${at}: boolean "defaultValue" must be a boolean`);
+        return null;
+      }
+      return {
+        kind,
+        key,
+        label,
+        ...(typeof raw.defaultValue === "boolean" ? { defaultValue: raw.defaultValue } : {}),
+        description,
+      };
+    }
+    case "number": {
+      const key = requireKey(raw, at, errors, seenKeys);
+      if (!key) return null;
+      for (const prop of ["min", "max", "step", "defaultValue"] as const) {
+        if (raw[prop] !== undefined && !finiteNum(raw[prop])) {
+          errors.push(`${at}: number "${prop}" must be a finite number`);
+          return null;
+        }
+      }
+      const min = finiteNum(raw.min) ? raw.min : undefined;
+      const max = finiteNum(raw.max) ? raw.max : undefined;
+      const step = finiteNum(raw.step) ? raw.step : undefined;
+      const defaultValue = finiteNum(raw.defaultValue) ? raw.defaultValue : undefined;
+      if (step !== undefined && step <= 0) {
+        errors.push(`${at}: number "step" must be greater than 0`);
+        return null;
+      }
+      if (min !== undefined && max !== undefined && min > max) {
+        errors.push(`${at}: number "min" must be <= "max"`);
+        return null;
+      }
+      if (defaultValue !== undefined) {
+        if ((min !== undefined && defaultValue < min) || (max !== undefined && defaultValue > max)) {
+          errors.push(`${at}: number "defaultValue" is outside [min, max]`);
+          return null;
+        }
+      }
+      return {
+        kind,
+        key,
+        label,
+        ...(min !== undefined ? { min } : {}),
+        ...(max !== undefined ? { max } : {}),
+        ...(step !== undefined ? { step } : {}),
+        ...(defaultValue !== undefined ? { defaultValue } : {}),
+        placeholder: str(raw.placeholder) ? raw.placeholder : undefined,
+        required: raw.required === true,
+        description,
+      };
+    }
+    case "free-list": {
+      const key = requireKey(raw, at, errors, seenKeys);
+      if (!key) return null;
+      return {
+        kind,
+        key,
+        label,
+        itemLabel: str(raw.itemLabel) ? raw.itemLabel : undefined,
+        placeholder: str(raw.placeholder) ? raw.placeholder : undefined,
+        description,
+      };
+    }
     default:
       errors.push(`${at}: unsupported kind`);
       return null;
@@ -628,7 +822,7 @@ export function collectActionIds(surface: SchemaConfigSurface): string[] {
     else if (f.kind === "record-list") {
       ids.add(f.listActionId);
       if (f.deleteActionId) ids.add(f.deleteActionId);
-    }
+    } else if (f.kind === "dynamic-select-options") ids.add(f.optionsAction);
   }
   return [...ids];
 }

@@ -11,11 +11,17 @@ import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
 
 /**
- * UI hot-pluggability classification:
- *  - `schema-config`: the extension declares its config as DATA; the host
- *    renders a generic schema-driven form → hot-pluggable.
- *  - `bundled-react`: bespoke custom setup-page React → NOT hot-pluggable under
- *    App Router (RSC client chunks are build-known); ships in the base image.
+ * UI hot-pluggability classification (narrowed per cinatra#782 — the connector
+ * itself hot-installs + server-activates in BOTH cases; this classifies only the
+ * CONFIG UI surface):
+ *  - `schema-config`: the extension declares its config as DATA; the host renders
+ *    a generic schema-driven form from that data → the config UI is fully
+ *    hot-configurable at runtime (no rebuild).
+ *  - `bundled-react`: the extension ships a bespoke custom setup-page React
+ *    component. Only that custom config PAGE is base-image-bound — its RSC client
+ *    chunks are build-known, so it resolves solely from the base image and the
+ *    installer surfaces a "requires rebuild" state for it (see
+ *    `requiresRebuildState`). The connector still hot-installs + activates.
  */
 export const UI_SURFACE_KINDS = ["schema-config", "bundled-react"] as const;
 export type UiSurfaceKind = (typeof UI_SURFACE_KINDS)[number];

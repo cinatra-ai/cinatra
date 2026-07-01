@@ -911,6 +911,12 @@ const SCHEMA_CONFIG_FIELD_KINDS = new Set([
   "record-list",
   "banner",
   "advisory",
+  // cinatra#782 field-kind expansion (openai): action-sourced select options,
+  // boolean toggles, numeric inputs, free-form string lists.
+  "dynamic-select-options",
+  "boolean",
+  "number",
+  "free-list",
 ]);
 // Exact per-kind key allowlists — mirror src/lib/extension-schema-config.ts so a
 // smuggled executable/HTML carrier key is REJECTED at generation too (fail-closed
@@ -930,6 +936,14 @@ const SCHEMA_CONFIG_FIELD_KEYS = {
   ]),
   banner: new Set(["kind", "label", "variants"]),
   advisory: new Set(["kind", "label", "tone", "probeActionId", "whenReady", "whenNotReady", "description"]),
+  "dynamic-select-options": new Set([
+    "kind", "key", "label", "optionsAction", "defaultValue", "placeholder", "description",
+  ]),
+  boolean: new Set(["kind", "key", "label", "defaultValue", "description"]),
+  number: new Set([
+    "kind", "key", "label", "min", "max", "step", "defaultValue", "placeholder", "required", "description",
+  ]),
+  "free-list": new Set(["kind", "key", "label", "itemLabel", "placeholder", "description"]),
 };
 const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields"]);
 const SCHEMA_CONFIG_BADGE_VARIANTS = new Set([
@@ -940,6 +954,9 @@ const SCHEMA_CONFIG_BANNER_TONES = new Set([
 ]);
 function nonEmptyStr(v) {
   return typeof v === "string" && v.length > 0;
+}
+function finiteNum(v) {
+  return typeof v === "number" && Number.isFinite(v);
 }
 function rejectUnknownConfigKeys(raw, allowed, at, errors) {
   let ok = true;
@@ -962,7 +979,9 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
   }
   const needsKey =
     kind === "text" || kind === "secret" || kind === "copyable-credential" ||
-    kind === "repeatable-list" || kind === "select";
+    kind === "repeatable-list" || kind === "select" ||
+    kind === "dynamic-select-options" || kind === "boolean" ||
+    kind === "number" || kind === "free-list";
   if (needsKey) {
     if (!nonEmptyStr(raw.key) || !SCHEMA_CONFIG_KEY_RE.test(raw.key)) {
       errors.push(`${at}: invalid or missing "key"`);
@@ -1072,6 +1091,34 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
     if (!nonEmptyStr(raw.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(raw.tone)) errors.push(`${at}: advisory requires a valid "tone"`);
     if (!nonEmptyStr(raw.whenReady) || !nonEmptyStr(raw.whenNotReady)) errors.push(`${at}: advisory requires "whenReady" and "whenNotReady"`);
   }
+  if (kind === "dynamic-select-options") {
+    if (!nonEmptyStr(raw.optionsAction) || !SCHEMA_CONFIG_KEY_RE.test(raw.optionsAction)) {
+      errors.push(`${at}: dynamic-select-options requires a valid "optionsAction"`);
+    }
+  }
+  if (kind === "boolean") {
+    if (raw.defaultValue !== undefined && typeof raw.defaultValue !== "boolean") {
+      errors.push(`${at}: boolean "defaultValue" must be a boolean`);
+    }
+  }
+  if (kind === "number") {
+    for (const prop of ["min", "max", "step", "defaultValue"]) {
+      if (raw[prop] !== undefined && !finiteNum(raw[prop])) {
+        errors.push(`${at}: number "${prop}" must be a finite number`);
+      }
+    }
+    if (finiteNum(raw.step) && raw.step <= 0) errors.push(`${at}: number "step" must be greater than 0`);
+    if (finiteNum(raw.min) && finiteNum(raw.max) && raw.min > raw.max) {
+      errors.push(`${at}: number "min" must be <= "max"`);
+    }
+    if (
+      finiteNum(raw.defaultValue) &&
+      ((finiteNum(raw.min) && raw.defaultValue < raw.min) || (finiteNum(raw.max) && raw.defaultValue > raw.max))
+    ) {
+      errors.push(`${at}: number "defaultValue" is outside [min, max]`);
+    }
+  }
+  // free-list: only key + label (both already validated above); no extra rules.
 }
 export function validateConfigSchema(raw) {
   if (!isObj(raw)) return ["configSchema must be an object"];

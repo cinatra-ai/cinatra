@@ -225,3 +225,76 @@ describe("parseSchemaConfig — extended DSL (#658)", () => {
     ).toBe(false);
   });
 });
+
+// cinatra#782: the openai-blocking field-kind expansion — dynamic-select-options
+// (action-sourced select), boolean (toggle), number (min/max/step), free-list
+// (free-form string list). Fail-closed per kind.
+describe("parseSchemaConfig — field-kind vocabulary expansion (#782)", () => {
+  it("parses each new well-formed kind", () => {
+    const r = parseSchemaConfig({
+      fields: [
+        { kind: "dynamic-select-options", key: "model", label: "Model", optionsAction: "listModels", defaultValue: "gpt-5.5" },
+        { kind: "boolean", key: "allowNetwork", label: "Allow network", defaultValue: true },
+        { kind: "number", key: "pids", label: "PID limit", min: 1, max: 4096, step: 1, defaultValue: 512 },
+        { kind: "free-list", key: "hosts", label: "Egress hosts", itemLabel: "host" },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.surface.fields.map((f) => f.kind)).toEqual([
+      "dynamic-select-options",
+      "boolean",
+      "number",
+      "free-list",
+    ]);
+  });
+
+  it("collectActionIds includes a dynamic-select-options optionsAction", () => {
+    const r = parseSchemaConfig({
+      fields: [{ kind: "dynamic-select-options", key: "m", label: "M", optionsAction: "listModels" }],
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(collectActionIds(r.surface)).toContain("listModels");
+  });
+
+  it("dynamic-select-options: rejects a missing / invalid optionsAction", () => {
+    expect(parseSchemaConfig({ fields: [{ kind: "dynamic-select-options", key: "m", label: "M" }] }).ok).toBe(false);
+    expect(
+      parseSchemaConfig({ fields: [{ kind: "dynamic-select-options", key: "m", label: "M", optionsAction: "../etc" }] }).ok,
+    ).toBe(false);
+  });
+
+  it("boolean: rejects a non-boolean defaultValue", () => {
+    expect(parseSchemaConfig({ fields: [{ kind: "boolean", key: "b", label: "B", defaultValue: "yes" }] }).ok).toBe(false);
+    // omitted defaultValue is fine
+    expect(parseSchemaConfig({ fields: [{ kind: "boolean", key: "b", label: "B" }] }).ok).toBe(true);
+  });
+
+  it("number: rejects non-finite bounds, min>max, out-of-range default, step<=0", () => {
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", min: "1" }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", max: Number.NaN }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", min: 10, max: 1 }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", min: 0, max: 5, defaultValue: 9 }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", step: 0 }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", step: -2 }] }).ok).toBe(false);
+    // a well-formed number with all bounds passes
+    expect(parseSchemaConfig({ fields: [{ kind: "number", key: "n", label: "N", min: 0, max: 10, step: 1, defaultValue: 5 }] }).ok).toBe(true);
+  });
+
+  it("free-list: requires key + label", () => {
+    expect(parseSchemaConfig({ fields: [{ kind: "free-list", label: "L" }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "free-list", key: "l" }] }).ok).toBe(false);
+    expect(parseSchemaConfig({ fields: [{ kind: "free-list", key: "l", label: "L" }] }).ok).toBe(true);
+  });
+
+  it("FAIL-CLOSED: rejects a smuggled carrier key on each new kind", () => {
+    const evil = "onClick";
+    for (const field of [
+      { kind: "dynamic-select-options", key: "m", label: "M", optionsAction: "listModels", [evil]: "x" },
+      { kind: "boolean", key: "b", label: "B", [evil]: "x" },
+      { kind: "number", key: "n", label: "N", [evil]: "x" },
+      { kind: "free-list", key: "l", label: "L", [evil]: "x" },
+    ]) {
+      expect(parseSchemaConfig({ fields: [field] }).ok, `${field.kind} must reject ${evil}`).toBe(false);
+    }
+  });
+});
