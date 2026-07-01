@@ -21,6 +21,11 @@ vi.mock("@/lib/boot/boot-state", () => ({
 vi.mock("@/lib/boot/phases/core-boot", () => ({
   coreBootPhases: () => [{ name: "core-x", policy: "retryable", run: async () => {} }],
 }));
+vi.mock("@/lib/boot/phases/schema-version-precondition", () => ({
+  schemaVersionPreconditionPhases: () => [
+    { name: "schema-version-precondition", policy: "fatal", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/extension-activation", () => ({
   extensionActivationPhases: () => [{ name: "ext-x", policy: "retryable", run: async () => {} }],
 }));
@@ -44,6 +49,21 @@ vi.mock("@/lib/boot/phases/system-services", () => ({
 }));
 vi.mock("@/lib/boot/phases/system-loops", () => ({
   systemLoopPhases: () => [{ name: "loops-x", policy: "retryable", run: async () => {} }],
+}));
+vi.mock("@/lib/boot/phases/required-env-note", () => ({
+  requiredEnvNotePhases: () => [
+    { name: "required-env-soft-check", policy: "retryable", run: async () => {} },
+  ],
+}));
+vi.mock("@/lib/boot/phases/user-store-mount-check", () => ({
+  userStoreMountCheckPhases: () => [
+    { name: "user-store-mount-check", policy: "retryable", run: async () => {} },
+  ],
+}));
+vi.mock("@/lib/boot/phases/boot-degrade-probe", () => ({
+  bootDegradeProbePhases: () => [
+    { name: "boot-degrade-probe", policy: "degraded", run: async () => {} },
+  ],
 }));
 vi.mock("@/lib/boot/phases/dev-boot", () => ({
   devAwaitedPhases: () => [{ name: "a2a-dev-auto-connect", policy: "dev-only", run: async () => {} }],
@@ -81,6 +101,7 @@ describe("runBoot orchestration", () => {
     expect(markBootReady).toHaveBeenCalledTimes(1);
     expect(order).toEqual([
       "core-x",
+      "schema-version-precondition", // cinatra#789 item 4 — after core (migrations), before ext-activation
       "ext-x",
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
@@ -91,6 +112,9 @@ describe("runBoot orchestration", () => {
       "usage-event-subscriber",
       "anthropic-skill-sync-map",
       "loops-x",
+      "required-env-soft-check", // cinatra#789 item 3 — deploy-robustness readiness signals
+      "user-store-mount-check", // cinatra#789 item 5
+      "boot-degrade-probe", // cinatra#789 item 1 — inert unless double-armed
       "[detached] dev-auto-setup", // dev block 2 — LAST + detached
     ]);
   });
@@ -108,6 +132,7 @@ describe("runBoot orchestration", () => {
     expect(startDetachedDevAutoSetupPhase).not.toHaveBeenCalled();
     expect(order).toEqual([
       "core-x",
+      "schema-version-precondition", // cinatra#789 item 4 — runs in PROD (fatal on too-old)
       "ext-x",
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
@@ -117,6 +142,9 @@ describe("runBoot orchestration", () => {
       "usage-event-subscriber",
       "anthropic-skill-sync-map",
       "loops-x",
+      "required-env-soft-check", // cinatra#789 item 3
+      "user-store-mount-check", // cinatra#789 item 5
+      "boot-degrade-probe", // cinatra#789 item 1
     ]);
     expect(markBootReady).toHaveBeenCalledTimes(1);
   });

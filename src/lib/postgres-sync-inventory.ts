@@ -104,6 +104,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Inline DDL + advisory-lock build serialization run once at boot to ensure the schema exists. Boot-time, not request-time.",
   },
+  "src/lib/boot/phases/schema-version-precondition.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Reads the core migration ledger ONCE at boot (cinatra#789 item 4) to assert the DB schema is not behind the image before required-extension activation. Boot-time precondition, never a per-request path.",
+  },
   "src/lib/instance-identity-store.ts": {
     class: "migratable-background-setup",
     justification:
