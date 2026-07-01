@@ -141,7 +141,6 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "linkedin-oauth-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "mcp-client-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "mcp-server-connector", resolution: "guardedOptional" },
-  { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "openai-connector", resolution: "required" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "plane-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "tailscale-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETUP_PAGES", key: "twenty-connector", resolution: "guardedOptional" },
@@ -154,11 +153,9 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "drupal-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "github-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "linkedin-connector", resolution: "guardedOptional" },
-  { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "openai-connector", resolution: "required" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-assistant-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_SETTINGS_PAGES", key: "youtube-connector", resolution: "guardedOptional" },
-  { map: "GENERATED_CONNECTOR_SKILLS_SETTINGS_TABS", key: "openai-connector", resolution: "required" },
 ];
 
 describe("generated guarded-optional loaders", () => {
