@@ -103,10 +103,11 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/apollo-connector",
     uiItems: ["alert", "button", "field", "input", "label", "table", "paginated-table"],
   },
-  {
-    extensionDir: "extensions/cinatra-ai/openai-connector",
-    uiItems: ["button", "input", "label", "textarea"],
-  },
+  // openai-connector converted its setup/settings UI to the schema-config DSL
+  // (0.1.6, uiSurface "schema-config"): the host renders from configSchema, so
+  // the connector no longer ships or imports any design-registry primitives.
+  // Its VENDOR_MANIFEST entry (button/input/label/textarea) was removed to
+  // match — the provenance gate would otherwise fail on the now-absent files.
 ];
 
 // Resolve the transitive registry:ui closure of `directItems` from
