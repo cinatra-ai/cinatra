@@ -42,7 +42,8 @@
     "src/lib/__tests__/fixtures/**",
     "**/*.generated.{ts,tsx}",
     "tests/e2e/**",
-    "**/vitest.integration.config.ts"
+    "**/vitest.integration.config.ts",
+    "src/components/ui/**"
   ],
   "ignoreDependencies": [
     "tw-animate-css",
