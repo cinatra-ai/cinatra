@@ -243,8 +243,8 @@ export async function buildInstalledExtensionReadModel(
       deps.discoverRecords ??
       (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
     const records = await discover(storeRoot);
-    const record = records.find((r) => r.packageName === packageName) ?? null;
-    sourcePackageStoreRecordPresent = record !== null;
+    const candidates = records.filter((r) => r.packageName === packageName);
+    sourcePackageStoreRecordPresent = candidates.length > 0;
 
     const resolveTrustAnchor =
       deps.resolveTrustAnchor ??
@@ -253,6 +253,29 @@ export async function buildInstalledExtensionReadModel(
         return makeDefaultInstallAnchorResolver(actor.organizationId ?? null);
       })());
     const anchor = await resolveTrustAnchor(packageName);
+
+    // cinatra#792: with multi-digest retention (#796) several digests of one
+    // package may legitimately be on disk — evaluate the trust verdict against
+    // the ANCHOR-BOUND record (the digest the DB pins), never an arbitrary
+    // first match; this verdict feeds runtime gates (cube serving), not just
+    // display. Same rules as the boot loader: the canonical row's kind (riding
+    // the anchor) must agree with a record's PATH-derived kind (unbound when
+    // either side carries no kind — legacy resolvers / injected test deps); a
+    // digest-BOUND anchor selects exactly its record; a digest-UNBOUND anchor
+    // proceeds only when the on-disk record is unambiguous (>1 = no verdict,
+    // fail closed).
+    const kindBound =
+      anchor?.kind != null
+        ? candidates.filter((r) => {
+            const recKind = (r as { kind?: string }).kind;
+            return recKind === undefined || recKind === anchor.kind;
+          })
+        : candidates;
+    const record = anchor?.digest
+      ? (kindBound.find((r) => r.declaredDigest === anchor.digest) ?? null)
+      : kindBound.length === 1
+        ? kindBound[0]
+        : null;
 
     if (record && anchor) {
       const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;

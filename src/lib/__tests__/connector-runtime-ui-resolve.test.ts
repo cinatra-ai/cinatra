@@ -232,3 +232,54 @@ describe("static bundled-react fallback (no runtime install)", () => {
     expect(decision.kind).toBe("bundled-react");
   });
 });
+
+// cinatra#792 — anchor kind binding + multi-digest narrowing on the connector
+// UI/card trust gate (the SAME rules the boot loader applies): the canonical
+// row's kind must agree with a record's path-derived kind; a digest-BOUND
+// anchor selects exactly its record; a digest-UNBOUND anchor refuses an
+// ambiguous (multi-record) store.
+describe("resolveRuntimeConnectorUiRecord — cinatra#792 kind binding + digest narrowing", () => {
+  const DIG_A = "a1".padEnd(64, "0");
+  const DIG_B = "b2".padEnd(64, "0");
+  const trustAll = () => ({ tier: "trusted-bootstrap" as const, trusted: true, reason: "test" });
+
+  it("FAIL-CLOSED: the anchor's canonical-row kind contradicts the record's path kind → null", async () => {
+    readRowsMock.mockResolvedValue([activeInstallRow()]);
+    const runtimeRecord = await resolveRuntimeConnectorUiRecord(PKG, actor, {
+      resolveTrustAnchor: async () => ({ ...trustedAnchor, kind: "agent", digest: DIG_A }),
+      discoverRecords: async () => [{ ...storeRecord(), declaredDigest: DIG_A, kind: "connector" }],
+      verifyIntegrity: async () => true,
+      classifyTrust: trustAll,
+    });
+    expect(runtimeRecord).toBeNull();
+  });
+
+  it("a digest-BOUND anchor selects exactly the record it pins among multiple digests", async () => {
+    readRowsMock.mockResolvedValue([activeInstallRow()]);
+    const runtimeRecord = await resolveRuntimeConnectorUiRecord(PKG, actor, {
+      resolveTrustAnchor: async () => ({ ...trustedAnchor, kind: "connector", digest: DIG_A }),
+      discoverRecords: async () => [
+        { ...storeRecord({ uiSurface: "bundled-react", configSchema: null }), declaredDigest: DIG_B, kind: "connector" },
+        { ...storeRecord(), declaredDigest: DIG_A, kind: "connector" },
+      ],
+      verifyIntegrity: async () => true,
+      classifyTrust: trustAll,
+    });
+    // The BOUND record (DIG_A, schema-config) renders — never the retained prior digest.
+    expect(runtimeRecord).toEqual({ uiSurface: "schema-config", configSchema: SCHEMA });
+  });
+
+  it("FAIL-CLOSED: a digest-UNBOUND (legacy) anchor with >1 on-disk record → null (ambiguous)", async () => {
+    readRowsMock.mockResolvedValue([activeInstallRow()]);
+    const runtimeRecord = await resolveRuntimeConnectorUiRecord(PKG, actor, {
+      resolveTrustAnchor: async () => ({ ...trustedAnchor, kind: "connector", digest: null }),
+      discoverRecords: async () => [
+        { ...storeRecord(), declaredDigest: DIG_A, kind: "connector" },
+        { ...storeRecord(), declaredDigest: DIG_B, kind: "connector" },
+      ],
+      verifyIntegrity: async () => true,
+      classifyTrust: trustAll,
+    });
+    expect(runtimeRecord).toBeNull();
+  });
+});

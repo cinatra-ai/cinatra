@@ -74,7 +74,7 @@ import {
 import { aggregateEffectiveStatusByPackageName } from "@cinatra-ai/extensions/canonical-store";
 import {
   isStaticBundleAnchorSource,
-  staticBundleAnchorPath,
+  staticBundleAnchorSource,
 } from "@cinatra-ai/extensions/static-bundle-anchor";
 import { buildInstalledExtensionReadModel } from "@/lib/installed-extension-read-model.server";
 import type { InstalledExtension, ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
@@ -720,8 +720,9 @@ describe("hot-install canary — UNINSTALL teardown revokes (runtime delete vs b
     // A RUNTIME install's source -> NOT a bundle anchor -> uninstall DELETES the row.
     const runtimeSource = { type: "local" as const, path: "/data/extensions/packages/@cinatra-ai/connector-canary", resolvedCommitOrTreeHash: "h" };
     expect(isStaticBundleAnchorSource(runtimeSource)).toBe(false); // -> hard delete on uninstall
-    // A BUNDLED anchor's source -> uninstall writes an ARCHIVED tombstone.
-    const bundledSource = { type: "local" as const, path: staticBundleAnchorPath("@cinatra-ai/bundled-builtin"), resolvedCommitOrTreeHash: "bundled@1.0.0" };
+    // A BUNDLED anchor's source (typed `type:"bundled"`, cinatra#792) ->
+    // uninstall writes an ARCHIVED tombstone.
+    const bundledSource = staticBundleAnchorSource("@cinatra-ai/bundled-builtin", "1.0.0");
     expect(isStaticBundleAnchorSource(bundledSource)).toBe(true); // -> archived tombstone on uninstall
   });
 

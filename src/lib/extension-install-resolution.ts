@@ -310,8 +310,37 @@ async function resolveTrustedRuntimeStoreRecord(
     deps.discoverRecords ??
     (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
   const records = await discover(storeRoot);
-  const candidates = records.filter((r) => r.packageName === packageName);
+  let candidates = records.filter((r) => r.packageName === packageName);
   if (candidates.length === 0) return null;
+
+  // cinatra#792 — ANCHOR KIND BINDING (same rule as the boot loader): the V2
+  // store is kind-segregated, so the canonical row's kind (riding the anchor)
+  // must agree with a record's PATH-derived kind — a record whose on-disk
+  // placement contradicts the canonical row is refused (fail closed). Unbound
+  // when either side carries no kind (legacy resolvers / injected test deps
+  // whose records predate the V2 `kind` field) — no assertion then.
+  if (anchor.kind != null) {
+    candidates = candidates.filter((r) => {
+      const recKind = (r as { kind?: string }).kind;
+      return recKind === undefined || recKind === anchor.kind;
+    });
+    if (candidates.length === 0) return null;
+  }
+
+  // cinatra#792 — ANCHOR DIGEST NARROWING (same rule as the boot loader): a
+  // digest-BOUND anchor selects exactly the on-disk record it pins; none on
+  // disk → refuse (fail closed). Multi-digest discovery is normal once
+  // retention lands (#796). A digest-UNBOUND (legacy) anchor proceeds only
+  // when the on-disk record is unambiguous — >1 surviving candidate = refuse
+  // (fail closed, never render an arbitrary digest; same rule as the boot
+  // loader); the anchor's integrity/contentHash re-verify below remains the
+  // backstop for the single survivor.
+  if (anchor.digest) {
+    candidates = candidates.filter((r) => r.declaredDigest === anchor.digest);
+    if (candidates.length === 0) return null;
+  } else if (candidates.length > 1) {
+    return null;
+  }
 
   const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;
   const classifyTrust = deps.classifyTrust ?? classifyExtensionTrust;

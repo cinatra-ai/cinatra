@@ -302,32 +302,32 @@ describe("verifyRequiredInProdInstalled — version mismatch reporting", () => {
     expect(mocked).not.toHaveBeenCalled();
   });
 
-  // Static-bundle ANCHOR rows (bundled-in-image provenance, see
-  // static-bundle-anchor.ts) record the bundled version at seed time, so a
+  // Static-bundle ANCHOR rows (typed `type:"bundled"` provenance, cinatra#792;
+  // see static-bundle-anchor.ts) record the bundled version at seed time, so a
   // pinned required entry is verified against it like a registry version —
   // NOT treated as an unverifiable non-registry source.
-  function anchorRow(packageName: string, hash: string, status: "active" | "locked" = "locked") {
+  function anchorRow(packageName: string, version: string, status: "active" | "locked" = "locked") {
     return {
       packageName,
       status,
       source: {
-        type: "local",
-        path: `static-bundle:${packageName}`,
-        resolvedCommitOrTreeHash: hash,
+        type: "bundled",
+        packageName,
+        version,
       },
     } as never;
   }
 
   it("a static-bundle anchor with an in-range bundled version satisfies the pin", async () => {
     primeRequired(["@cinatra-ai/a@^0.1.0"]);
-    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "bundled@0.1.2")] as never);
+    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "0.1.2")] as never);
     const res = await verifyRequiredInProdInstalled();
     expect(res.ok).toBe(true);
   });
 
   it("a static-bundle anchor with an out-of-range bundled version is a mismatch", async () => {
     primeRequired(["@cinatra-ai/a@^0.1.0"]);
-    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "bundled@0.2.0")] as never);
+    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "0.2.0")] as never);
     const res = await verifyRequiredInProdInstalled();
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -337,9 +337,31 @@ describe("verifyRequiredInProdInstalled — version mismatch reporting", () => {
     }
   });
 
-  it("a static-bundle anchor WITHOUT a parseable bundled version fails closed (mismatch)", async () => {
+  it("a RETIRED stringly `static-bundle:` local row fails closed (mismatch — clean cutover, no legacy shims)", async () => {
     primeRequired(["@cinatra-ai/a@^0.1.0"]);
-    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "not-a-version")] as never);
+    mocked.mockResolvedValueOnce([
+      {
+        packageName: "@cinatra-ai/a",
+        status: "locked",
+        source: {
+          type: "local",
+          path: "static-bundle:@cinatra-ai/a",
+          resolvedCommitOrTreeHash: "bundled@0.1.2",
+        },
+      } as never,
+    ] as never);
+    const res = await verifyRequiredInProdInstalled();
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.mismatched).toEqual([
+        { packageName: "@cinatra-ai/a", requiredRange: "^0.1.0", installedVersion: null },
+      ]);
+    }
+  });
+
+  it("a static-bundle anchor WITHOUT a version fails closed (mismatch)", async () => {
+    primeRequired(["@cinatra-ai/a@^0.1.0"]);
+    mocked.mockResolvedValueOnce([anchorRow("@cinatra-ai/a", "")] as never);
     const res = await verifyRequiredInProdInstalled();
     expect(res.ok).toBe(false);
     if (!res.ok) {

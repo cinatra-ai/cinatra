@@ -386,8 +386,7 @@ ANCHOR_COUNTS=$(docker exec "$PG" psql -U postgres -d postgres -tA -F ' ' -c "
          count(*) FILTER (WHERE status IN ('active','locked'))
   FROM cinatra.installed_extension
   WHERE owner_level = 'platform'
-    AND source->>'type' = 'local'
-    AND source->>'path' LIKE 'static-bundle:%';
+    AND source->>'type' = 'bundled';
 ")
 read -r ANCHORS REQUIRED_ANCHORS LIVE_ANCHORS <<<"$ANCHOR_COUNTS"
 echo "    anchors=${ANCHORS} required_in_prod=${REQUIRED_ANCHORS} live=${LIVE_ANCHORS}"
@@ -417,8 +416,7 @@ DB_REQUIRED=$(docker exec "$PG" psql -U postgres -d postgres -tA -c "
   SELECT package_name FROM cinatra.installed_extension
   WHERE owner_level = 'platform'
     AND required_in_prod
-    AND source->>'type' = 'local'
-    AND source->>'path' LIKE 'static-bundle:%'
+    AND source->>'type' = 'bundled'
   ORDER BY package_name;
 ")
 if [ "$DECLARED_REQUIRED" != "$DB_REQUIRED" ]; then

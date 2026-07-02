@@ -88,6 +88,8 @@ function sourceBadge(type: ExtensionSourceType): LifecycleBadgeDescriptor {
       return { key: "source", label: "GitHub", variant: "outline" };
     case "local":
       return { key: "source", label: "Local", variant: "outline" };
+    case "bundled":
+      return { key: "source", label: "Bundled", variant: "outline" };
   }
 }
 
@@ -107,6 +109,8 @@ function sourceVersion(ext: InstalledExtension): string | null {
   if (ext.source.type === "local") {
     return `dev / ${ext.source.resolvedCommitOrTreeHash.slice(0, 7)}`;
   }
+  // A bundled (image-compiled) anchor row carries the bundled version directly.
+  if (ext.source.type === "bundled") return `v${ext.source.version}`;
   return null;
 }
 
@@ -173,6 +177,7 @@ export function matchesLifecycleFilter(
       ext.source.type === "verdaccio" ? ext.source.version : "",
       ext.source.type === "github" ? `${ext.source.repo} ${ext.source.ref}` : "",
       ext.source.type === "local" ? ext.source.path : "",
+      ext.source.type === "bundled" ? ext.source.version : "",
     ]
       .join(" ")
       .toLowerCase();

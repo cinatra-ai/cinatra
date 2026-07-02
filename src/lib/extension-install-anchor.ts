@@ -18,6 +18,13 @@ import type { InstallTrustAnchor } from "@/lib/extension-package-store";
 /** A minimal view of the canonical install row the resolver needs. */
 export type InstallAnchorRow = {
   status: string;
+  /**
+   * The canonical row's extension KIND (cinatra#792) — surfaced on the resolved
+   * anchor so the loader can bind it to the store record's PATH kind
+   * (`<root>/<kind>/<slug>/<digest>`), fail-closed on a mismatch. Optional so
+   * pure unit tests can omit it (treated as unbound — no kind assertion).
+   */
+  kind?: string;
   source: {
     type?: string;
     registryUrl?: string;
@@ -28,6 +35,8 @@ export type InstallAnchorRow = {
     signature?: string;
     /** The recorded materialization-plan closureHash (cinatra#181), if the package carried a plan. */
     closureHash?: string;
+    /** The DB-authoritative active tarball digest (cinatra#792), if recorded. */
+    activeDigest?: string;
   } | null;
 };
 
@@ -55,6 +64,51 @@ export type ResolveInstallAnchorDeps = {
 
 /** Integrity values that mean "not materialized through the real pipeline". */
 const PLACEHOLDER_INTEGRITY = new Set(["", "dispatcher-install", "pending-resolution", "latest", "HEAD"]);
+
+/**
+ * The ACTIVE-DIGEST SELECTOR (cinatra#792) — the single, shared, JOURNAL-GATED
+ * rule for which store digest an install row pins. Used by the anchor resolver
+ * (boot/hot-activate trust gate) AND the boot rematerialization sweep, so the
+ * two can never rebuild/select different digests.
+ *
+ * Selection order:
+ *  - row `source.activeDigest` present AND equal to the FINALIZED install-op
+ *    journal digest → that digest (the DB is authoritative, journal-confirmed);
+ *  - row `source.activeDigest` absent → the journal digest alone (legacy rows;
+ *    may be null = unbound);
+ *  - row `source.activeDigest` present but the journal digest is missing or
+ *    different → FAIL CLOSED (`ok:false`). A crash between the provenance
+ *    write and the journal finalize (or a torn rollback) can never leave the
+ *    row's field outranking the journal — the journal remains the primary
+ *    trust gate, the row field is a cross-checked binding on top of it.
+ *
+ * The plain-text `current` store file is deliberately NOT an input here: it is
+ * a write-only mirror/ops hint (the writable store must never select what gets
+ * imported).
+ */
+export function selectActiveDigest(input: {
+  /** The canonical row's `source.activeDigest`, if recorded. */
+  activeDigest: string | null | undefined;
+  /** The FINALIZED install-op journal's recorded digest, if any. */
+  journalDigest: string | null | undefined;
+}): { ok: true; digest: string | null } | { ok: false; reason: string } {
+  const rowDigest = input.activeDigest ?? null;
+  const journalDigest = input.journalDigest ?? null;
+  if (rowDigest === null) return { ok: true, digest: journalDigest };
+  if (journalDigest === null) {
+    return {
+      ok: false,
+      reason: `row activeDigest ${rowDigest} has no finalized journal digest to confirm it — fail closed`,
+    };
+  }
+  if (rowDigest !== journalDigest) {
+    return {
+      ok: false,
+      reason: `row activeDigest ${rowDigest} != finalized journal digest ${journalDigest} — fail closed`,
+    };
+  }
+  return { ok: true, digest: rowDigest };
+}
 
 /**
  * Pick the SINGLE live canonical row for an exact (package, org) scope, or null
@@ -134,11 +188,21 @@ export async function resolveInstallAnchor(
   // → refused, even if provenance happened to land. No journal row → refuse.
   const op = await deps.readInstallOp?.(packageName, deps.orgId ?? null);
   if (!op || op.phase !== "finalized") return null;
-  // cinatra#158: the finalized op's recorded tarball digest binds the anchor to
-  // the on-disk store dir (<pkg>@<ver>/<digest>). Surfaced below; the loader
-  // asserts record.declaredDigest === anchor.digest so an OLD-finalized-op +
-  // NEW-source residue (a crash mid durable-restore) fails closed.
-  const anchorDigest = op.digest ?? null;
+  // cinatra#158/#792: the anchor digest is the JOURNAL-GATED selection over the
+  // row's DB-authoritative `source.activeDigest` and the finalized op's recorded
+  // tarball digest (`selectActiveDigest` — the shared selector the boot sweep
+  // uses too). A row digest the journal does not confirm FAILS CLOSED (a crash
+  // between the provenance write and the journal finalize can never let the row
+  // outrank the journal). The selected digest binds the anchor to the on-disk
+  // store dir (<kind>/<slug>/<digest>): the loader asserts
+  // record.declaredDigest === anchor.digest so an OLD-finalized-op + NEW-source
+  // residue (a crash mid durable-restore) fails closed.
+  const selection = selectActiveDigest({
+    activeDigest: row.source.activeDigest ?? null,
+    journalDigest: op.digest ?? null,
+  });
+  if (!selection.ok) return null;
+  const anchorDigest = selection.digest;
 
   const grant = await deps.readGrant(packageName, deps.orgId ?? null);
   // Reject a fallback grant: an org-scoped install must NOT inherit the global
@@ -159,9 +223,13 @@ export async function resolveInstallAnchor(
     approvedPorts: portsApproved ? grantForScope!.approvedPorts : [],
     version: row.source.version ?? null,
     signature: row.source.signature ?? null,
-    // cinatra#158: the finalized journal op's tarball digest — the loader binds
-    // it to the on-disk store dir digest (fail-closed on mismatch).
+    // cinatra#158/#792: the journal-gated active digest — the loader binds it
+    // to the on-disk store dir digest (fail-closed on mismatch).
     digest: anchorDigest,
+    // cinatra#792: the canonical row's KIND — the loader binds it to the store
+    // record's PATH kind (fail-closed on mismatch). Unbound when the row view
+    // omits it (pure unit tests).
+    kind: row.kind ?? null,
     // cinatra#181: the recorded closureHash rides the anchor into the boot/
     // activation v2 signature verdict. The recorded SIGNATURE authenticates it:
     // a tampered hash fails v2 verification, and a NULLED hash flips the
@@ -227,7 +295,9 @@ export async function makeDefaultInstallAnchorResolver(
         // platform-global mode `oid` is the DERIVED org of the single live row, so
         // this still resolves exactly that one row.
         const active = pickSingleActiveRow(rows, oid);
-        return active ? { status: active.status, source: active.source as InstallAnchorRow["source"] } : null;
+        return active
+          ? { status: active.status, kind: active.kind, source: active.source as InstallAnchorRow["source"] }
+          : null;
       },
       readGrant: async (pkg, oid) => {
         const g = await readGrant({ packageName: pkg, orgId: oid });

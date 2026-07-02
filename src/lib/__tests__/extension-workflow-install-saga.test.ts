@@ -371,6 +371,63 @@ describe("installWorkflowExtensionSaga — inverse-order compensating rollback",
   });
 });
 
+describe("installWorkflowExtensionSaga — activeDigest outcome seam (cinatra#792)", () => {
+  it("the forward provenance write binds mat.digest as the row's activeDigest", async () => {
+    const provenance: Array<Record<string, unknown>> = [];
+    const h = makeHarness({
+      recordProvenance: async (p) => {
+        provenance.push(p as unknown as Record<string, unknown>);
+      },
+    });
+    const res = await installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps);
+    expect(res.status).toBe("installed");
+    expect(provenance).toHaveLength(1);
+    expect(provenance[0]).toMatchObject({ digest: "dgst" }); // the harness materialize digest
+  });
+
+  it("FINALIZE-TIME CROSS-CHECK: a row digest that does not read back as the journaled digest refuses to finalize", async () => {
+    const h = makeHarness({
+      readActiveDigest: async () => "some-other-digest",
+    });
+    await expect(
+      installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow(/does not match this install's journaled digest/);
+    expect(h.events).not.toContain("finalize");
+    expect(h.events).toContain("fail");
+    expect(h.events).toContain("phase:rolled_back");
+  });
+
+  it("a failed UPDATE re-pins the prior source's activeDigest through the provenance restore", async () => {
+    const provenance: Array<Record<string, unknown>> = [];
+    const h = makeHarness({
+      readCurrentSource: async () => ({
+        registryUrl: "https://registry.cinatra.ai",
+        version: "0.9.0",
+        integrity: "sha512-old",
+        contentHash: "ch-old",
+        activeDigest: "old-digest",
+      }),
+      recordProvenance: async (p) => {
+        provenance.push(p as unknown as Record<string, unknown>);
+      },
+      // the finalize-seam edge write throws AFTER recordProvenance overwrote
+      // the row → the catch must restore the prior source incl. its digest
+      persistDependencyEdges: async () => {
+        throw new Error("edge write failed");
+      },
+      readDependencyEdges: async () => [],
+    });
+    // seed the prior FINALIZED install (makes this attempt an UPDATE)
+    h.seedOp(TRUSTED_PKG, "org-1", "op-old", "finalized");
+    await expect(
+      installWorkflowExtensionSaga({ packageName: TRUSTED_PKG, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow("edge write failed");
+    // forward write bound the NEW digest; the restore re-pinned the OLD one
+    expect(provenance.at(0)).toMatchObject({ digest: "dgst" });
+    expect(provenance.at(-1)).toMatchObject({ version: "0.9.0", digest: "old-digest" });
+  });
+});
+
 describe("installWorkflowExtensionSaga — idempotent finalize", () => {
   it("short-circuits an already-finalized op for the SAME artifact (no writes, no provenance)", async () => {
     const h = makeHarness();

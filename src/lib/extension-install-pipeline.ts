@@ -89,7 +89,30 @@ export type InstallPipelineDeps = {
     signature?: string | null;
     /** The verified materialization-plan closureHash (cinatra#181), if the package carried a plan. */
     closureHash?: string | null;
+    /**
+     * The store tarball digest to bind as the row's DB-authoritative
+     * `source.activeDigest` (cinatra#792) — `mat.digest` on the forward path,
+     * the CAPTURED prior digest on a durable-rollback re-record. null/undefined
+     * = no digest recorded (legacy prior sources) → selection falls back to
+     * the journal digest at read time. The default writer also mirrors the
+     * digest into the plain-text `current` store file (best-effort — the
+     * mirror is an ops/GC hint, never a selector).
+     */
+    digest?: string | null;
+    /** Store-root override threaded from the install input (the `current` mirror's root). */
+    storeRoot?: string;
   }) => Promise<void>;
+  /**
+   * FINALIZE-TIME CROSS-CHECK basis (cinatra#792): read back the canonical
+   * row's `source.activeDigest` for the (package, org) AFTER `recordProvenance`
+   * so the pipeline can assert row digest == journal digest BEFORE
+   * `finalizeInstallOp` — a torn/clobbered provenance write is refused instead
+   * of finalized (the throw routes into the existing restore path). Optional so
+   * existing unit tests can omit it (then no cross-check runs — the read-time
+   * journal gate in `selectActiveDigest` remains the backstop); the default
+   * factory always wires it.
+   */
+  readActiveDigest?: (packageName: string, orgId: string | null) => Promise<string | null>;
   /** Record the pending host-port grant request. */
   recordRequestedGrant: (input: { packageName: string; orgId: string | null; requestedPorts: string[] }) => Promise<void>;
   /** Approve a grant (auto-approve path for a `trusted-signed` package). requestedPorts is the mandatory subset basis. */
@@ -198,6 +221,8 @@ export type InstallPipelineDeps = {
     attestedSha256?: string;
     signature?: string | null;
     closureHash?: string | null;
+    /** The prior install's DB-authoritative digest (cinatra#792) — re-pinned on rollback. */
+    activeDigest?: string;
   } | null>;
   /**
    * Capture the CURRENT canonical row's persisted dependency edges for the
@@ -825,7 +850,31 @@ export async function installExtensionFromRegistry(
       ...(sha256 ? { attestedSha256: sha256 } : {}),
       ...(signature ? { signature } : {}),
       ...(closureHash ? { closureHash } : {}),
+      // cinatra#792: bind the DB-authoritative active digest at the outcome
+      // seam — the SAME `mat.digest` `beginInstallOp` journaled above, so the
+      // finalized journal digest confirms it at read time (selectActiveDigest).
+      digest: mat.digest,
+      ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
     });
+
+    // FINALIZE-TIME CROSS-CHECK (cinatra#792): the row's just-written
+    // `source.activeDigest` must equal the digest this op journaled, or we
+    // refuse to finalize (a torn `sourceSwitch` write, or a concurrent writer
+    // clobbering the row mid-install, must not be promoted to the anchor). The
+    // throw routes into the existing catch: the NEW op is terminalized and an
+    // update's captured prior state is restored. Read-time selection
+    // (`selectActiveDigest`) remains the enforcement backstop for anything
+    // this in-flight check cannot see.
+    if (deps.readActiveDigest) {
+      const rowDigest = await deps.readActiveDigest(input.packageName, input.orgId);
+      if (rowDigest !== mat.digest) {
+        throw new Error(
+          `install of ${input.packageName}@${resolvedVersion}: canonical row activeDigest ` +
+            `${rowDigest ?? "(absent)"} does not match this install's journaled digest ${mat.digest} ` +
+            `after recordProvenance — refusing to finalize (torn/clobbered provenance write).`,
+        );
+      }
+    }
 
     // EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
     // manifest's dependency edges (read EARLY above, fail-loud) land on the
@@ -937,6 +986,13 @@ export async function installExtensionFromRegistry(
             // cinatra#181: the prior install's closureHash MUST ride every restore —
             // sourceSwitchExtension replaces the WHOLE source object.
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
+            // cinatra#792: re-pin the OLD digest (row `activeDigest` + the
+            // `current` mirror). A legacy prior source without a recorded
+            // activeDigest falls back to the OLD finalized journal digest —
+            // the same value read-time selection would pick — so the mirror
+            // never stays pointed at the failed NEW digest.
+            digest: priorSource.activeDigest ?? priorOp?.digest ?? null,
+            ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
           });
         } catch (restoreErr) {
           emitDurableRestoreFailure(deps, {
@@ -1032,6 +1088,10 @@ export async function installExtensionFromRegistry(
             ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
             ...(priorSource.signature ? { signature: priorSource.signature } : {}),
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
+            // cinatra#792: re-pin the OLD digest (row `activeDigest` + the
+            // `current` mirror; journal-digest fallback for legacy sources).
+            digest: priorSource.activeDigest ?? priorOp?.digest ?? null,
+            ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
           });
         } catch (e) {
           recordFailure("provenance", e);
@@ -1226,9 +1286,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
   const { materializePackageToStore } = await import("@/lib/extension-package-store");
   const { recordRequestedGrant, approveGrant, readGrantForScope, restoreGrant } = await import("@/lib/extension-host-port-grants");
   const { beginInstallOp, advanceInstallOpPhase, finalizeInstallOp, readInstallOp } = await import("@/lib/extension-install-ops");
-  const { readInstalledExtensionsByPackageName } = await import("@cinatra-ai/extensions/canonical-store");
-  const { sourceSwitchExtension } = await import("@cinatra-ai/extensions/lifecycle-primitive");
-  const { pickSingleActiveRow } = await import("@/lib/extension-install-anchor");
+  const { makeCanonicalRowInstallDeps } = await import("@/lib/extension-install-canonical-row-deps");
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import("@/lib/gatekept-install");
 
   // Gatekept install: when ON, resolveIntegrity + materialize fetch
@@ -1332,24 +1390,6 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
       return edges;
     },
-    // EDGE PERSISTENCE at the finalize seam: the sanctioned canonical writer,
-    // bound to the SAME single (package, org) row the provenance write resolved.
-    persistDependencyEdges: async (p) => {
-      const rows = await readInstalledExtensionsByPackageName(p.packageName);
-      const target = pickSingleActiveRow(rows, p.orgId);
-      if (!target) {
-        throw new Error(
-          `persistDependencyEdges: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
-        );
-      }
-      const { recordExtensionDependencies } = await import(
-        "@cinatra-ai/extensions/lifecycle-primitive"
-      );
-      await recordExtensionDependencies(target.id, p.dependencies, {
-        actor: { source: "runtime-installer" },
-        reason: `manifest dependency edges @ install`,
-      });
-    },
     // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
     // canonical snapshot, scoped to the install's org.
     assertForwardInstallClosure: async (p) => {
@@ -1362,45 +1402,16 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         organizationId: p.orgId,
       });
     },
-    recordProvenance: async (p) => {
-      // The ONLY sanctioned provenance writer is sourceSwitchExtension (it
-      // re-validates the source then writes via the lifecycle path). Resolve the
-      // canonical row for the SAME (package, org) scope the journal + grant use,
-      // so a multi-org package never records one org's source against another
-      // org's finalized journal/grant (the trust gate must resolve ONE row).
-      const rows = await readInstalledExtensionsByPackageName(p.packageName);
-      // Exactly ONE active row must match this (package, org) scope; 0 or >1
-      // (ambiguous owner scope) fails closed — provenance must bind the single row
-      // the anchor will later resolve, never an arbitrary owner's install.
-      const target = pickSingleActiveRow(rows, p.orgId);
-      if (!target) {
-        throw new Error(
-          `recordProvenance: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
-        );
-      }
-      // Gatekept install: provenance records the FINAL
-      // `registry.cinatra.ai` identity + the verified SRI, NEVER the broker URL.
-      // The broker is a delivery mechanism; recording its URL as the package
-      // origin would corrupt the trust anchor (the loader classifies trust on
-      // the registry URL). When OFF, `p.registryUrl` is already the real
-      // registry, so this is a no-op substitution.
-      const provenanceRegistryUrl = isGatekeptInstallEnabled() ? finalRegistryUrl : p.registryUrl;
-      await sourceSwitchExtension(
-        target.id,
-        {
-          type: "verdaccio",
-          registryUrl: provenanceRegistryUrl,
-          packageName: p.packageName,
-          version: p.version,
-          integrity: p.integrity,
-          contentHash: p.contentHash,
-          ...(p.attestedSha256 ? { attestedSha256: p.attestedSha256 } : {}),
-          ...(p.signature ? { signature: p.signature } : {}),
-          ...(p.closureHash ? { closureHash: p.closureHash } : {}),
-        },
-        { actor: { source: "runtime-installer" }, reason: `runtime install provenance @ ${p.version}` },
-      );
-    },
+    // CANONICAL-ROW deps (extracted vertical slice — file-size ratchet):
+    // recordProvenance (outcome-seam source write + `current` mirror, #792),
+    // readActiveDigest (finalize cross-check basis, #792), readCurrentSource /
+    // readCurrentDependencies (rollback captures), persistDependencyEdges
+    // (finalize-seam edge write, #180). Gatekept install: provenance records
+    // the FINAL registry identity, NEVER the broker URL (the loader classifies
+    // trust on the recorded registry URL).
+    ...makeCanonicalRowInstallDeps({
+      provenanceRegistryUrl: (requestUrl) => (isGatekeptInstallEnabled() ? finalRegistryUrl : requestUrl),
+    }),
     applyMigrations: async (i) => {
       const { applyExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
       await applyExtensionMigrationsFromStore({
@@ -1460,41 +1471,6 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         requestedPortsHash: i.requestedPortsHash,
         approvedBy: i.approvedBy,
       }).then(() => undefined),
-    // CAPTURE: read the CURRENT canonical verdaccio source for the EXACT
-    // (package, org) scope the journal + grant use — captured BEFORE recordProvenance
-    // overwrites it, so the post-commit rollback can re-record the OLD source.
-    readCurrentSource: async (packageName, orgId) => {
-      const rows = await readInstalledExtensionsByPackageName(packageName);
-      const target = pickSingleActiveRow(rows, orgId);
-      const src = target?.source;
-      if (!src || (src as { type?: string }).type !== "verdaccio") return null;
-      const v = src as {
-        registryUrl: string;
-        version: string;
-        integrity: string;
-        contentHash?: string;
-        attestedSha256?: string;
-        signature?: string;
-        closureHash?: string;
-      };
-      return {
-        registryUrl: v.registryUrl,
-        version: v.version,
-        integrity: v.integrity,
-        ...(v.contentHash ? { contentHash: v.contentHash } : {}),
-        ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
-        ...(v.signature ? { signature: v.signature } : {}),
-        ...(v.closureHash ? { closureHash: v.closureHash } : {}),
-      };
-    },
-    // CAPTURE (#180): the prior canonical row's persisted dependency edges —
-    // restored by both unwind paths when an UPDATE fails after the finalize
-    // seam overwrote them with the new manifest's edges.
-    readCurrentDependencies: async (packageName, orgId) => {
-      const rows = await readInstalledExtensionsByPackageName(packageName);
-      const target = pickSingleActiveRow(rows, orgId);
-      return target ? target.dependencies : null;
-    },
     beginInstallOp: (b) => beginInstallOp(b).then(() => undefined),
     advanceInstallOpPhase: (a) => advanceInstallOpPhase(a).then(() => undefined),
     // cinatra#158: the SUPERSESSION seam — atomic demote-OLD + promote-NEW.

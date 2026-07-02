@@ -170,6 +170,14 @@ export type InstallTrustAnchor = {
    * integrity/contentHash re-verify remains the backstop).
    */
   digest?: string | null;
+  /**
+   * The canonical install row's extension KIND (cinatra#792). The V2 store is
+   * kind-segregated (`<root>/<kind>/<slug>/<digest>`), so the loader binds this
+   * to the discovered record's PATH kind — a record whose on-disk placement
+   * contradicts the canonical row is refused (fail closed). null/undefined =
+   * unbound (legacy resolvers / pure unit tests) → no kind assertion.
+   */
+  kind?: string | null;
 };
 
 /** Default fetch — lazily imports the registries package (pacote lives there). */

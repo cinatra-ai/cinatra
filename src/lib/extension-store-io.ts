@@ -219,6 +219,43 @@ export async function promoteCurrent(
   }
 }
 
+/**
+ * BEST-EFFORT `current` mirror write at the provenance OUTCOME seam
+ * (cinatra#792): every `source.activeDigest` DB write mirrors the digest into
+ * the plain-text `current` file (a forward install points it at NEW; a durable
+ * rollback's provenance re-record re-points it at OLD). Never throws — the
+ * mirror is an ops/GC hint, never a selector or trust input, so a failed
+ * mirror write must not fail an otherwise-committed install (or a rollback).
+ * No-ops when `digest` is absent (legacy prior sources with no journal digest
+ * either — nothing coherent to mirror) or `kind` is not a store kind.
+ */
+export async function mirrorCurrentDigestBestEffort(input: {
+  /** Override the data root (default: resolveExtensionDataRoot()). */
+  dataRoot?: string;
+  kind: string;
+  packageName: string;
+  digest: string | null | undefined;
+}): Promise<void> {
+  if (!input.digest) return;
+  if (!isExtensionStoreKind(input.kind)) {
+    console.warn(
+      `[extension-store] not mirroring 'current' for ${input.packageName}: ` +
+        `${JSON.stringify(input.kind)} is not a store kind`,
+    );
+    return;
+  }
+  try {
+    const root =
+      input.dataRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
+    await promoteCurrent(root, input.kind, input.packageName, input.digest);
+  } catch (err) {
+    console.warn(
+      `[extension-store] 'current' mirror write failed for ${input.packageName} (non-fatal — ` +
+        `the DB anchor owns selection): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 /** Read the `current` mirror's digest, or null (missing/garbage — never a throw). */
 export async function readCurrentDigest(
   dataRoot: string,
