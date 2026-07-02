@@ -20,9 +20,8 @@ import "server-only";
 // store path to the verified tarball, the content hash detects on-disk
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import {
   classifyServerEntryArtifact,
   resolveDeclaredServerEntry,
@@ -47,6 +46,11 @@ import {
   type ExtensionStoreKind,
   type StoreSidecar,
 } from "@/lib/extension-package-store-core";
+import {
+  assertNoUnsafeEntries,
+  atomicReplaceDir,
+  pathExists,
+} from "@/lib/fs-safety";
 import {
   planRootDependencyNames,
   type MaterializationPlan,
@@ -589,15 +593,6 @@ export async function readStoreSidecar(storeDir: string): Promise<StoreSidecar |
 // fs helpers
 // ---------------------------------------------------------------------------
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Top-level bundled module names under a `node_modules/` dir (scope-aware). */
 async function readPresentNodeModules(nmDir: string): Promise<Set<string>> {
   const out = new Set<string>();
@@ -621,26 +616,6 @@ async function readPresentNodeModules(nmDir: string): Promise<Set<string>> {
     }
   }
   return out;
-}
-
-/**
- * Reject symlinks / hardlinked-out / special files anywhere under `dir`. tar
- * already strips `..` + absolute paths, but a bundled SYMLINK would let a
- * `file://` import (which follows links) and the content hash escape the
- * integrity-verified package dir, so we refuse any non-regular-file/non-dir.
- */
-async function assertNoUnsafeEntries(dir: string): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  for (const e of entries) {
-    if (e.isSymbolicLink()) {
-      throw new Error(`[package-store] refusing extracted symlink "${e.name}" (escape vector)`);
-    }
-    if (e.isDirectory()) {
-      await assertNoUnsafeEntries(path.join(dir, e.name));
-    } else if (!e.isFile()) {
-      throw new Error(`[package-store] refusing non-regular file "${e.name}" in extracted package`);
-    }
-  }
 }
 
 /**
@@ -1051,88 +1026,6 @@ async function resolveSelfPackageImport(
   return null;
 }
 
-/**
- * Recursively compare two directory trees by their relative file-path sets (a
- * stronger post-copy verify than a top-level child count). Throws on any mismatch.
- */
-async function assertDirTreesMatch(a: string, b: string): Promise<void> {
-  const collect = async (root: string): Promise<Set<string>> => {
-    const out = new Set<string>();
-    const walk = async (dir: string, rel: string): Promise<void> => {
-      for (const ent of await readdir(dir, { withFileTypes: true })) {
-        const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-        if (ent.isDirectory()) {
-          await walk(path.join(dir, ent.name), childRel);
-        } else {
-          out.add(childRel);
-        }
-      }
-    };
-    await walk(root, "");
-    return out;
-  };
-  const [aset, bset] = await Promise.all([collect(a), collect(b)]);
-  if (aset.size !== bset.size) {
-    throw new Error(`EXDEV copy verify failed: source has ${aset.size} files, target has ${bset.size}`);
-  }
-  for (const rel of aset) {
-    if (!bset.has(rel)) throw new Error(`EXDEV copy verify failed: target is missing ${rel}`);
-  }
-}
-
-/**
- * Atomically replace `targetDir` with `sourceDir` via rename. If a prior dir
- * exists, it is renamed aside first and restored on failure (mirrors the agent
- * materializer's temp-sibling-rename + rollback chain).
- *
- * cinatra#158 EXDEV FALLBACK (defense-in-depth — the primary fix stages the source
- * on the target's filesystem). If `rename(sourceDir, targetDir)` throws EXDEV (a
- * cross-filesystem move on a container+volume topology), fall back to: recursive
- * COPY into a SAME-PARENT staging dir (`${targetDir}.staging-<rand>`, guaranteed
- * intra-fs with `targetDir`), recursively VERIFY the copied tree, then an atomic
- * intra-fs `rename(staging, targetDir)`, then remove the original source. We NEVER
- * copy straight into `targetDir` (a crash mid-copy would expose a partial target);
- * the verified staging dir is swapped in atomically. The prior-backup rename
- * (`targetDir` → `${targetDir}.old`) is always same-parent → never EXDEV.
- * Mirrors `packages/skills/src/relocate-worker.ts:249`.
- */
-async function atomicReplaceDir(sourceDir: string, targetDir: string): Promise<void> {
-  const suffix = randomBytes(4).toString("hex");
-  let priorBackup: string | null = null;
-  if (await pathExists(targetDir)) {
-    priorBackup = `${targetDir}.old-${suffix}`;
-    await rename(targetDir, priorBackup);
-  }
-  try {
-    try {
-      await rename(sourceDir, targetDir);
-    } catch (renameErr) {
-      if ((renameErr as NodeJS.ErrnoException).code !== "EXDEV") throw renameErr;
-      // Cross-filesystem: copy → verify → atomic intra-fs swap → drop source.
-      const staging = `${targetDir}.staging-${suffix}`;
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-      try {
-        await cp(sourceDir, staging, { recursive: true, preserveTimestamps: true });
-        await assertDirTreesMatch(sourceDir, staging);
-        await rename(staging, targetDir); // same parent → intra-fs, atomic.
-      } catch (copyErr) {
-        await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-        throw copyErr;
-      }
-      await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
-    }
-  } catch (error) {
-    if (priorBackup) {
-      await rename(priorBackup, targetDir).catch((restoreErr) => {
-        console.error(
-          `[package-store] CRITICAL: failed to restore ${priorBackup} -> ${targetDir} after rename failure:`,
-          restoreErr,
-        );
-      });
-    }
-    throw error;
-  }
-  if (priorBackup) {
-    await rm(priorBackup, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
+// The recursive tree-verify + EXDEV-safe atomic replace-dir swap now live in the
+// consolidated `@/lib/fs-safety` module (cinatra#798); `atomicReplaceDir` is
+// imported at the top of this file.
