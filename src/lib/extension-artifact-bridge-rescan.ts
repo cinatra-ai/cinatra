@@ -139,12 +139,21 @@ export async function rescanArtifactBridgeFromStore(
   for (const rec of records) {
     digestCountByName.set(rec.packageName, (digestCountByName.get(rec.packageName) ?? 0) + 1);
   }
-  let boundDigestFor: ((packageName: string) => Promise<string | null>) | null = null;
+  let boundAnchorFor:
+    | ((packageName: string) => Promise<{ digest: string | null; kind: string | null } | null>)
+    | null = null;
   if ([...digestCountByName.values()].some((n) => n > 1)) {
     try {
       const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
       const resolveAnchor = await makeDefaultInstallAnchorResolver();
-      boundDigestFor = async (packageName: string) => (await resolveAnchor(packageName))?.digest ?? null;
+      const memo = new Map<string, { digest: string | null; kind: string | null } | null>();
+      boundAnchorFor = async (packageName: string) => {
+        if (memo.has(packageName)) return memo.get(packageName) ?? null;
+        const anchor = await resolveAnchor(packageName);
+        const bound = anchor ? { digest: anchor.digest ?? null, kind: anchor.kind ?? null } : null;
+        memo.set(packageName, bound);
+        return bound;
+      };
     } catch (err) {
       console.warn(
         "[artifact-bridge-rescan] anchor resolver unavailable — skipping multi-digest packages:",
@@ -156,12 +165,28 @@ export async function rescanArtifactBridgeFromStore(
   for (const rec of records) {
     if (opts.onlyPackage && rec.packageName !== opts.onlyPackage) continue;
     if ((digestCountByName.get(rec.packageName) ?? 0) > 1) {
-      const bound = boundDigestFor ? await boundDigestFor(rec.packageName) : null;
+      const anchor = boundAnchorFor ? await boundAnchorFor(rec.packageName) : null;
+      const bound = anchor?.digest ?? null;
       if (!bound || rec.declaredDigest !== bound) {
         console.warn(
           `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
             `multiple store digests on disk and this one is not the anchor-bound digest ` +
             `(${bound ?? "unbound"}) — fail closed`,
+        );
+        continue;
+      }
+      // cinatra#792 — ANCHOR KIND BINDING (same rule as the boot loader): the
+      // canonical row's kind must agree with the record's PATH-derived kind —
+      // the same package/digest materialized under a DIFFERENT kind dir than
+      // the one the row governs must never register an object type (fail
+      // closed). Unbound (null) anchor kind = no assertion (legacy resolvers).
+      // The single-digest path stays anchor-free on purpose: it keeps the
+      // ungoverned (no-row) bundled/disk allowance (CG-1).
+      if (anchor?.kind != null && anchor.kind !== rec.kind) {
+        console.warn(
+          `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
+            `canonical row kind ${JSON.stringify(anchor.kind)} contradicts the store path kind ` +
+            `"${rec.kind}" — fail closed`,
         );
         continue;
       }

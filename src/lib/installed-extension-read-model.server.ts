@@ -255,13 +255,27 @@ export async function buildInstalledExtensionReadModel(
     const anchor = await resolveTrustAnchor(packageName);
 
     // cinatra#792: with multi-digest retention (#796) several digests of one
-    // package may legitimately be on disk — evaluate the descriptive trust
-    // verdict against the ANCHOR-BOUND record (the digest the DB pins), never
-    // an arbitrary first match. A digest-unbound (legacy) anchor keeps the
-    // first-record behavior (its integrity re-verify is the backstop).
-    const record =
-      (anchor?.digest ? candidates.find((r) => r.declaredDigest === anchor.digest) : candidates[0]) ??
-      null;
+    // package may legitimately be on disk — evaluate the trust verdict against
+    // the ANCHOR-BOUND record (the digest the DB pins), never an arbitrary
+    // first match; this verdict feeds runtime gates (cube serving), not just
+    // display. Same rules as the boot loader: the canonical row's kind (riding
+    // the anchor) must agree with a record's PATH-derived kind (unbound when
+    // either side carries no kind — legacy resolvers / injected test deps); a
+    // digest-BOUND anchor selects exactly its record; a digest-UNBOUND anchor
+    // proceeds only when the on-disk record is unambiguous (>1 = no verdict,
+    // fail closed).
+    const kindBound =
+      anchor?.kind != null
+        ? candidates.filter((r) => {
+            const recKind = (r as { kind?: string }).kind;
+            return recKind === undefined || recKind === anchor.kind;
+          })
+        : candidates;
+    const record = anchor?.digest
+      ? (kindBound.find((r) => r.declaredDigest === anchor.digest) ?? null)
+      : kindBound.length === 1
+        ? kindBound[0]
+        : null;
 
     if (record && anchor) {
       const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;

@@ -18,6 +18,19 @@ vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: writeAllowedMock,
 }));
 
+// cinatra#792 — the multi-digest narrowing path resolves the trusted install
+// anchor (digest + canonical-row kind). Single-digest packages never hit this
+// (the ungoverned CG-1 allowance keeps them anchor-free), so the pre-existing
+// tests are unaffected by this mock.
+const { anchorMock } = vi.hoisted(() => ({
+  anchorMock: vi.fn(
+    async (): Promise<{ digest: string | null; kind?: string | null } | null> => null,
+  ),
+}));
+vi.mock("@/lib/extension-install-anchor", () => ({
+  makeDefaultInstallAnchorResolver: async () => anchorMock,
+}));
+
 import { objectTypeRegistry } from "@cinatra-ai/objects";
 import { rescanArtifactBridgeFromStore } from "@/lib/extension-artifact-bridge-rescan";
 
@@ -55,6 +68,7 @@ describe("rescanArtifactBridgeFromStore (cinatra#661)", () => {
     storeRoot = mkdtempSync(path.join(tmpdir(), "artifact-store-"));
     objectTypeRegistry._clearForTests();
     writeAllowedMock.mockReset().mockResolvedValue(true);
+    anchorMock.mockReset().mockResolvedValue(null);
   });
   afterEach(() => {
     rmSync(storeRoot, { recursive: true, force: true });
@@ -119,5 +133,70 @@ describe("rescanArtifactBridgeFromStore (cinatra#661)", () => {
     await rescanArtifactBridgeFromStore({ storeRoot });
     const typeId = "@cinatra-ai/store-thing-artifact:artifact";
     expect(objectTypeRegistry.listArtifacts().filter((d) => d.type === typeId)).toHaveLength(1);
+  });
+});
+
+// cinatra#792 — multi-digest narrowing + anchor kind binding: with retention
+// (#796) several digests of one package may be on disk; only the anchor-bound
+// digest may register, and the canonical row's kind must agree with the
+// record's path kind (fail closed on everything else).
+describe("rescanArtifactBridgeFromStore — cinatra#792 anchor narrowing", () => {
+  let storeRoot: string;
+  const PKG = "@cinatra-ai/multi-artifact";
+  const TYPE_ID = `${PKG}:artifact`;
+  const DIG_A = "a1".padEnd(64, "0");
+  const DIG_B = "b2".padEnd(64, "0");
+
+  function artifactPkgWithMime(name: string, mime: string): Record<string, unknown> {
+    return {
+      name,
+      version: "0.1.0",
+      cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: [mime] } } } },
+    };
+  }
+
+  beforeEach(() => {
+    storeRoot = mkdtempSync(path.join(tmpdir(), "artifact-store-792-"));
+    objectTypeRegistry._clearForTests();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
+    anchorMock.mockReset().mockResolvedValue(null);
+    // Two digests of the SAME package on disk (a retained prior + the active).
+    writeStorePackage(storeRoot, "m", DIG_A, artifactPkgWithMime(PKG, "text/markdown"));
+    writeStorePackage(storeRoot, "m", DIG_B, artifactPkgWithMime(PKG, "text/plain"));
+  });
+  afterEach(() => {
+    rmSync(storeRoot, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("registers ONLY the anchor-bound digest (never the retained prior)", async () => {
+    anchorMock.mockResolvedValue({ digest: DIG_A, kind: "artifact" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([PKG]); // exactly once — DIG_B skipped
+    const def = objectTypeRegistry.resolve(TYPE_ID) as {
+      isArtifact?: { accepts?: { file?: { mimeTypes?: string[] } } };
+    } | null;
+    expect(def?.isArtifact?.accepts?.file?.mimeTypes).toEqual(["text/markdown"]);
+  });
+
+  it("FAIL-CLOSED: the canonical row kind contradicts the store path kind → nothing registers", async () => {
+    anchorMock.mockResolvedValue({ digest: DIG_A, kind: "connector" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+
+  it("FAIL-CLOSED: a digest-unbound anchor with >1 digest on disk → nothing registers", async () => {
+    anchorMock.mockResolvedValue({ digest: null, kind: "artifact" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+
+  it("FAIL-CLOSED: no anchor at all with >1 digest on disk → nothing registers", async () => {
+    anchorMock.mockResolvedValue(null);
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
   });
 });

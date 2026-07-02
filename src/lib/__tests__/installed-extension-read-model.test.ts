@@ -170,3 +170,66 @@ describe("buildInstalledExtensionReadModel — actor-scoped status derivation", 
     expect(rm.trust?.tier).toBe("trusted-bootstrap");
   });
 });
+
+// cinatra#792 — the read-model's trust verdict binds to the ANCHOR-BOUND record
+// (kind + digest), never an arbitrary first match; an ambiguous store with a
+// digest-unbound anchor yields NO verdict (fail closed). The verdict feeds
+// runtime gates (cube serving), not just display.
+describe("buildInstalledExtensionReadModel — cinatra#792 anchor-bound record selection", () => {
+  const DIG_A = "a1".padEnd(64, "0");
+  const DIG_B = "b2".padEnd(64, "0");
+  const anchor = {
+    integrity: "sha512-x",
+    contentHash: "ch",
+    registryUrl: "https://registry.example",
+    trustDecision: true,
+    version: "1.0.0",
+    signature: null,
+  };
+  const rec = (declaredDigest: string, kind = "connector") =>
+    ({ packageName: "@cinatra-ai/demo-connector", declaredDigest, kind, uiSurface: "schema-config", configSchema: null }) as never;
+
+  it("a digest-BOUND anchor evaluates the verdict against exactly the record it pins", async () => {
+    const verified: string[] = [];
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ status: "active" })],
+      discoverRecords: async () => [rec(DIG_B), rec(DIG_A)],
+      resolveTrustAnchor: async () => ({ ...anchor, kind: "connector", digest: DIG_A }),
+      verifyIntegrity: async (r: { declaredDigest?: string }) => {
+        verified.push(r.declaredDigest ?? "(flat)");
+        return true;
+      },
+      classifyTrust: () => ({ tier: "trusted-bootstrap", trusted: true, reason: "test" }),
+    });
+    expect(rm.sourcePackageStoreRecordPresent).toBe(true);
+    expect(rm.trust?.trusted).toBe(true);
+    expect(verified).toEqual([DIG_A]); // never the retained prior digest
+  });
+
+  it("FAIL-CLOSED: a digest-UNBOUND anchor with >1 on-disk record → no verdict (ambiguous)", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ status: "active" })],
+      discoverRecords: async () => [rec(DIG_A), rec(DIG_B)],
+      resolveTrustAnchor: async () => ({ ...anchor, kind: "connector" }),
+      verifyIntegrity: async () => true,
+      classifyTrust: () => ({ tier: "trusted-bootstrap", trusted: true, reason: "test" }),
+    });
+    expect(rm.sourcePackageStoreRecordPresent).toBe(true); // present on disk...
+    expect(rm.trust).toBeNull(); // ...but no verdict from an ambiguous store
+  });
+
+  it("FAIL-CLOSED: the anchor's canonical-row kind contradicts the record's path kind → no verdict", async () => {
+    const rm = await buildInstalledExtensionReadModel("@cinatra-ai/demo-connector", actor, {
+      ...baseDeps,
+      readRows: async () => [row({ status: "active" })],
+      discoverRecords: async () => [rec(DIG_A, "connector"), rec(DIG_B, "connector")],
+      resolveTrustAnchor: async () => ({ ...anchor, kind: "agent", digest: DIG_A }),
+      verifyIntegrity: async () => true,
+      classifyTrust: () => ({ tier: "trusted-bootstrap", trusted: true, reason: "test" }),
+    });
+    expect(rm.sourcePackageStoreRecordPresent).toBe(true);
+    expect(rm.trust).toBeNull();
+  });
+});
