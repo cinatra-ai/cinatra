@@ -139,7 +139,7 @@ export function assertClosureBootReport(
   const message =
     `[extension-closure] required-extension contract violated at boot:\n  - ` +
     violations.join("\n  - ") +
-    `\n  Remediation: the prod acquisition path owns this set — re-run \`cinatra setup prod\` ` +
+    `\n  Remediation: the prod acquisition path owns this set — re-run \`cinatra instance setup prod\` ` +
     `(or \`cinatra extensions acquire-prod\`) against the committed ` +
     `cinatra-required-extensions.lock.json, or restore the archived/missing required rows. ` +
     `Emergency bypass: CINATRA_DISABLE_REQUIRED_CLOSURE_ASSERT=true.`;
