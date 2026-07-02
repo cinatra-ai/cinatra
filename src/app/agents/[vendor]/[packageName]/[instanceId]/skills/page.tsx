@@ -16,12 +16,11 @@ type Props = {
  * Skills tab.
  *
  * Surfaces the per-run skill ledger (agent_run_skills_used) for the agent
- * instance. snapshotSkillsAtRunStart writes the resolved skill set at run
- * start with invocation_count=0; /api/llm-bridge increments invocation_count
- * on each skill resolution during LLM steps.
+ * instance. The agent-execution worker calls snapshotSkillsAtRunStart at run
+ * start, writing the resolved skill set with invocation_count=0.
  *
- * Shows all skills used in the run, including agent, custom, and third-party
- * skills.
+ * Records the installed catalog skills resolved for the run — the same set the
+ * run's LLM steps receive via the sessionless llm-bridge resolution.
  */
 export default async function AgentPackageInstanceSkillsPage({ params }: Props) {
   const { instanceId } = await params;
@@ -45,9 +44,8 @@ export default async function AgentPackageInstanceSkillsPage({ params }: Props) 
           <CardContent className="flex flex-col gap-3">
             {skills.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Skills will appear here once the run executes its first LLM step.
-                The /api/llm-bridge route writes one row per skill resolved during
-                the run; see <code>src/lib/agent-run-skills-used.ts</code>.
+                Skills resolved for this run are recorded when the run starts
+                executing; see <code>src/lib/agent-run-skills-used.ts</code>.
               </p>
             ) : (
               <ul className="flex flex-col gap-2">
