@@ -17,7 +17,8 @@ per the ratified typography spec, threading the size through the shared
   lg title lane drops to 28px.
 - `src/components/app-shell.tsx` + `src/components/marketplace-detail-header.tsx`:
   consuming sites aligned.
-- `src/app/globals.css`: the page-title token values.
+- `src/app/globals.css`: the stale PageHeader h1 typography comment
+  updated from 38px to 28px.
 - `tests/e2e/design/__screenshots__/design-fixtures-{dark,light}.png`: refreshed
   visual baselines.
 
