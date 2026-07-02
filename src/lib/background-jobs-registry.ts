@@ -69,13 +69,21 @@ export type JobHandler = {
 };
 
 /**
- * Shared recurring-loop helper (cinatra#304).
+ * Shared recurring-loop helper (cinatra#304; error policy hardened cinatra#849).
  *
- * Replaces the 7 hand-rolled copies of the self-rescheduling loop pattern.
- * The ordering is preserved EXACTLY as the old switch arms had it:
- *   1. run the work (`run()`) — this happens for EVERY invocation, including a
- *      legacy/anonymous duplicate, so duplicates still do one unit of work and
- *      then die without rescheduling;
+ * Replaces the 7 hand-rolled copies of the self-rescheduling loop pattern AND
+ * owns the loop's ERROR POLICY centrally:
+ *   1. run the work (`run()`) inside a try/catch — this happens for EVERY
+ *      invocation, including a legacy/anonymous duplicate (one unit of work,
+ *      then it dies without rescheduling). A throw from `run()` — a pre-work
+ *      dynamic-import/registration failure, or any cycle error the handler did
+ *      not swallow — is REPORTED to the error reporter (Sentry) and then
+ *      SWALLOWED so control falls through to the re-delay below. Before
+ *      cinatra#849 `run()` was awaited with NO wrapping try/catch, so a throw
+ *      skipped `moveToDelayed`, the job was marked failed, and with the default
+ *      `attempts: 1` it was NOT retried — the loop silently died until the next
+ *      boot re-seeded it. The re-delay-in-all-cases guarantee now lives HERE, so
+ *      individual recurring handlers no longer wrap their whole cycle.
  *   2. id-guard: if `job.id` is NOT the canonical loop id, RETURN without
  *      rescheduling (drains pre-fix anonymous duplicates down to one loop);
  *   3. re-delay the active canonical job in place via `moveToDelayed` (needs
@@ -86,11 +94,12 @@ export type JobHandler = {
  *      acknowledges the move and does not also try to complete/fail the
  *      now-delayed job.
  *
- * `run()` is invoked WITHOUT a wrapping try/catch: each recurring handler that
- * needs failure tolerance wraps its own work internally (matching the prior
- * per-arm behavior — some arms swallow + log, some let it propagate). This
- * helper only owns the id-guard + reschedule sequence, not the work's error
- * policy.
+ * Reporting is fire-and-forget via a dynamic import of
+ * `@cinatra-ai/errors/server` (mirrors the worker.on("failed") hook and keeps
+ * the errors package off this module's synchronous boot graph). It is naturally
+ * rate-limited by the loop's own re-delay cadence (30s–1w): worker.on("failed")
+ * never fires for a re-delaying loop, so this is the ONLY path that surfaces a
+ * failing cycle to Sentry.
  */
 export async function runRecurringLoop(args: {
   job: Job;
@@ -98,13 +107,33 @@ export async function runRecurringLoop(args: {
   loopJobId: string;
   /** Delay until the next cycle, in milliseconds. */
   delayMs: number;
-  /** Human label for the re-delay-failed warn line (e.g. "litellm-sync"). */
+  /** Human label for the cycle-failed / re-delay-failed log lines. */
   label: string;
-  /** The work to run this cycle. Owns its own error policy. */
+  /** The work to run this cycle. May throw — the helper reports + re-delays. */
   run: () => Promise<void>;
 }): Promise<void> {
   const { job, loopJobId, delayMs, label, run } = args;
-  await run();
+  try {
+    await run();
+  } catch (cycleErr) {
+    // A throw from run() must NOT kill the loop: report it, then fall through
+    // to the re-delay below so the next cycle still runs (cinatra#849). This is
+    // the single choke point that surfaces recurring-loop cycle failures to the
+    // error reporter — worker.on("failed") never fires for them because the job
+    // re-delays instead of failing.
+    console.error(`[${label}] cycle failed:`, cycleErr);
+    void import("@cinatra-ai/errors/server")
+      .then(({ captureBackgroundJobError }) =>
+        captureBackgroundJobError(cycleErr, {
+          jobName: job.name,
+          jobId: job.id,
+          queueName: job.queueName,
+        }),
+      )
+      .catch(() => {
+        // Error reporter unavailable — never let it break the loop.
+      });
+  }
   // Legacy/anonymous duplicate (id !== canonical loop id): run once and do NOT
   // perpetuate. Drains any pre-fix duplicates down to a single loop.
   if (String(job.id ?? "") !== loopJobId) {
@@ -231,13 +260,11 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: ONE_WEEK_MS,
         label: "litellm-sync",
         run: async () => {
-          try {
-            const { runLiteLlmPricingSyncJob } = await import("@cinatra-ai/metric-cost-api");
-            const result = await runLiteLlmPricingSyncJob(job.data as Record<string, never>);
-            console.log("[litellm-sync] BullMQ job complete:", result);
-          } catch (err) {
-            console.error("[litellm-sync] cycle failed:", err);
-          }
+          // Cycle errors propagate to runRecurringLoop, which reports them to
+          // the error reporter and always re-delays (cinatra#849).
+          const { runLiteLlmPricingSyncJob } = await import("@cinatra-ai/metric-cost-api");
+          const result = await runLiteLlmPricingSyncJob(job.data as Record<string, never>);
+          console.log("[litellm-sync] BullMQ job complete:", result);
         },
       });
     },
@@ -254,15 +281,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: ONE_DAY_MS,
         label: "audit-retention",
         run: async () => {
-          try {
-            const { enforceAuditRetention } = await import("@/lib/authz/audit");
-            const result = await enforceAuditRetention();
-            console.log(
-              `[audit-retention] swept: cutoff=${result.cutoffIso} retentionDays=${result.retentionDays} deleted=${result.deleted}`,
-            );
-          } catch (retentionErr) {
-            console.warn("[audit-retention] sweep failed:", retentionErr);
-          }
+          // Cycle errors propagate to runRecurringLoop, which reports them to
+          // the error reporter and always re-delays (cinatra#849).
+          const { enforceAuditRetention } = await import("@/lib/authz/audit");
+          const result = await enforceAuditRetention();
+          console.log(
+            `[audit-retention] swept: cutoff=${result.cutoffIso} retentionDays=${result.retentionDays} deleted=${result.deleted}`,
+          );
         },
       });
     },
@@ -301,17 +326,20 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: THIRTY_SECONDS_MS,
         label: "graphiti-projection-repair",
         run: async () => {
+          // No cycle-level try/catch here (cinatra#849): runRecurringLoop reports
+          // a throw to the error reporter and always re-delays. Both the pre-work
+          // `ensureCrmSyncRegistrations()` / dynamic import AND processProjectionOutbox
+          // now propagate — a load-time import rejection or an outbox failure
+          // surfaces to Sentry and the 30s loop survives, instead of the throw
+          // (formerly outside the inner try) skipping moveToDelayed and silently
+          // killing the loop until the next reboot re-seeded it.
           ensureCrmSyncRegistrations();
           const { processProjectionOutbox } = await import(
             "@cinatra-ai/objects/graphiti-projector"
           );
-          try {
-            const result = await processProjectionOutbox({ batchSize: 20, maxAttempts: 5 });
-            if (result.processed > 0 || result.failed > 0) {
-              console.log("[graphiti-projection-repair] processed:", result);
-            }
-          } catch (err) {
-            console.error("[graphiti-projection-repair] cycle failed:", err);
+          const result = await processProjectionOutbox({ batchSize: 20, maxAttempts: 5 });
+          if (result.processed > 0 || result.failed > 0) {
+            console.log("[graphiti-projection-repair] processed:", result);
           }
         },
       });
@@ -535,74 +563,74 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: FOUR_HOURS_MS,
         label: "artifact-provider-cache-evict",
         run: async () => {
-          try {
-            const { listOrgProvidersWithExpiredCache, evictExpiredProviderFiles } =
-              await import("@/lib/artifacts/provider-file-cache");
-            const { deleteFile } = await import("@cinatra-ai/llm");
-            const pairs = listOrgProvidersWithExpiredCache();
-            // Provider values come from the DB column (plain `text`); narrow to
-            // the known `LlmProvider` literal union before handing them to the
-            // orchestration layer's typed deleteFile. An unknown provider is
-            // benign — just no remote delete; the DB row is still reaped on the
-            // next sweep (note: `evictExpiredProviderFiles` deletes the row
-            // AFTER awaiting `deleteRemote`, so a no-op adapter is the right
-            // fallback).
-            const KNOWN_PROVIDERS = new Set(["openai", "anthropic", "gemini"]);
-            let totalReaped = 0;
-            let totalRemoteDeleteFailures = 0;
-            for (const { orgId, provider } of pairs) {
-              try {
-                const isKnown = KNOWN_PROVIDERS.has(provider);
-                const r = await evictExpiredProviderFiles({
-                  orgId,
-                  provider,
-                  deleteRemote: async (providerFileId) => {
-                    if (!isKnown) return;
-                    await deleteFile({
-                      id: providerFileId,
-                      provider: provider as "openai" | "anthropic" | "gemini",
-                    });
-                  },
-                  limit: 100,
-                });
-                totalReaped += r.reaped;
-                totalRemoteDeleteFailures += r.remoteDeleteFailures;
-              } catch (perPairErr) {
-                // Single tenant/provider failure must not block the rest of the
-                // sweep — log + continue.
-                console.error(
-                  `[artifact-provider-cache-evict] pair ${orgId}/${provider} failed:`,
-                  perPairErr,
-                );
-              }
-            }
-            if (totalReaped > 0) {
-              console.log(
-                `[artifact-provider-cache-evict] reaped ${totalReaped} expired rows across ${pairs.length} (org, provider) pair(s)`,
+          // Cycle errors propagate to runRecurringLoop, which reports them to
+          // the error reporter and always re-delays (cinatra#849). The inner
+          // per-(org, provider) try/catch below still isolates a single tenant's
+          // failure so one bad pair does not abort the whole sweep.
+          const { listOrgProvidersWithExpiredCache, evictExpiredProviderFiles } =
+            await import("@/lib/artifacts/provider-file-cache");
+          const { deleteFile } = await import("@cinatra-ai/llm");
+          const pairs = listOrgProvidersWithExpiredCache();
+          // Provider values come from the DB column (plain `text`); narrow to
+          // the known `LlmProvider` literal union before handing them to the
+          // orchestration layer's typed deleteFile. An unknown provider is
+          // benign — just no remote delete; the DB row is still reaped on the
+          // next sweep (note: `evictExpiredProviderFiles` deletes the row
+          // AFTER awaiting `deleteRemote`, so a no-op adapter is the right
+          // fallback).
+          const KNOWN_PROVIDERS = new Set(["openai", "anthropic", "gemini"]);
+          let totalReaped = 0;
+          let totalRemoteDeleteFailures = 0;
+          for (const { orgId, provider } of pairs) {
+            try {
+              const isKnown = KNOWN_PROVIDERS.has(provider);
+              const r = await evictExpiredProviderFiles({
+                orgId,
+                provider,
+                deleteRemote: async (providerFileId) => {
+                  if (!isKnown) return;
+                  await deleteFile({
+                    id: providerFileId,
+                    provider: provider as "openai" | "anthropic" | "gemini",
+                  });
+                },
+                limit: 100,
+              });
+              totalReaped += r.reaped;
+              totalRemoteDeleteFailures += r.remoteDeleteFailures;
+            } catch (perPairErr) {
+              // Single tenant/provider failure must not block the rest of the
+              // sweep — log + continue.
+              console.error(
+                `[artifact-provider-cache-evict] pair ${orgId}/${provider} failed:`,
+                perPairErr,
               );
             }
-            // Surface a systemic remote-delete failure. If every reaped row's
-            // deleteRemote threw, the DB rows are still gone but the remote
-            // provider files leak. A WARN (not an error throw) keeps the loop
-            // running while making the situation visible to operators.
-            //
-            // KNOWN LIMITATION: the production provider adapters currently
-            // SWALLOW delete errors inside their own `.catch(() => {})` (see
-            // openai.ts:deleteFile, anthropic.ts:deleteFile,
-            // gemini.ts:deleteFile). So a broken provider SDK / expired
-            // credentials path NEVER throws up to the loop here —
-            // `totalRemoteDeleteFailures` stays at zero and this warn never
-            // fires. The instrumentation is ready for a strict-delete refactor
-            // that lets the adapters propagate real errors (only swallowing 404
-            // / already-deleted). Until then, this WARN is a forward-looking
-            // safety net rather than an active observability signal.
-            if (totalRemoteDeleteFailures > 0) {
-              console.warn(
-                `[artifact-provider-cache-evict] ${totalRemoteDeleteFailures} of ${totalReaped} remote deletes FAILED — provider SDK or credentials may be misconfigured; DB rows were still removed`,
-              );
-            }
-          } catch (err) {
-            console.error("[artifact-provider-cache-evict] cycle failed:", err);
+          }
+          if (totalReaped > 0) {
+            console.log(
+              `[artifact-provider-cache-evict] reaped ${totalReaped} expired rows across ${pairs.length} (org, provider) pair(s)`,
+            );
+          }
+          // Surface a systemic remote-delete failure. If every reaped row's
+          // deleteRemote threw, the DB rows are still gone but the remote
+          // provider files leak. A WARN (not an error throw) keeps the loop
+          // running while making the situation visible to operators.
+          //
+          // KNOWN LIMITATION: the production provider adapters currently
+          // SWALLOW delete errors inside their own `.catch(() => {})` (see
+          // openai.ts:deleteFile, anthropic.ts:deleteFile,
+          // gemini.ts:deleteFile). So a broken provider SDK / expired
+          // credentials path NEVER throws up to the loop here —
+          // `totalRemoteDeleteFailures` stays at zero and this warn never
+          // fires. The instrumentation is ready for a strict-delete refactor
+          // that lets the adapters propagate real errors (only swallowing 404
+          // / already-deleted). Until then, this WARN is a forward-looking
+          // safety net rather than an active observability signal.
+          if (totalRemoteDeleteFailures > 0) {
+            console.warn(
+              `[artifact-provider-cache-evict] ${totalRemoteDeleteFailures} of ${totalReaped} remote deletes FAILED — provider SDK or credentials may be misconfigured; DB rows were still removed`,
+            );
           }
         },
       });
@@ -722,10 +750,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         return;
       }
 
-      // Full-sweep mode: run the work inside a try/catch so transient failures
-      // (Verdaccio unreachable, marketplace 500s) log + the canonical loop
-      // still re-delays for the next tick. Without this wrap, an early throw
-      // bypasses moveToDelayed and the loop dies.
+      // Full-sweep mode. Transient failures (Verdaccio unreachable, marketplace
+      // 500s) propagate to runRecurringLoop, which reports them to the error
+      // reporter and always re-delays for the next tick (cinatra#849) — the
+      // re-delay-on-throw guarantee lives in the helper now, not in a per-arm wrap.
       const ONE_HOUR_MS = 60 * 60 * 1000;
       await runRecurringLoop({
         job,
@@ -733,24 +761,20 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: ONE_HOUR_MS,
         label: "marketplace-catalog-sync",
         run: async () => {
-          try {
-            const { buildMarketplaceSyncDeps } = await import("@/lib/marketplace-sync-deps");
-            const deps = await buildMarketplaceSyncDeps({});
-            if (deps === null) {
-              console.warn(
-                "[marketplace-catalog-sync] full sweep skipped: marketplace credential unavailable.",
-              );
-            } else {
-              const { runMarketplaceSync } = await import("@cinatra-ai/marketplace-sync");
-              const summary = await runMarketplaceSync(deps);
-              console.log(
-                `[marketplace-catalog-sync] mode=full synced=${summary.syncedCount} scope-rejected=${summary.scopeRejectedCount} fetch-failed=${summary.fetchFailedCount} map-failed=${summary.mapFailedCount} sync-failed=${summary.syncFailedCount} total=${summary.totalPackages}`,
-              );
-            }
-          } catch (sweepErr) {
+          // Cycle errors propagate to runRecurringLoop (report + always re-delay,
+          // cinatra#849). The credential-unavailable branch returns normally
+          // (warn, no throw) so it is NOT reported as a failure.
+          const { buildMarketplaceSyncDeps } = await import("@/lib/marketplace-sync-deps");
+          const deps = await buildMarketplaceSyncDeps({});
+          if (deps === null) {
             console.warn(
-              "[marketplace-catalog-sync] full sweep failed:",
-              sweepErr instanceof Error ? sweepErr.message : sweepErr,
+              "[marketplace-catalog-sync] full sweep skipped: marketplace credential unavailable.",
+            );
+          } else {
+            const { runMarketplaceSync } = await import("@cinatra-ai/marketplace-sync");
+            const summary = await runMarketplaceSync(deps);
+            console.log(
+              `[marketplace-catalog-sync] mode=full synced=${summary.syncedCount} scope-rejected=${summary.scopeRejectedCount} fetch-failed=${summary.fetchFailedCount} map-failed=${summary.mapFailedCount} sync-failed=${summary.syncFailedCount} total=${summary.totalPackages}`,
             );
           }
         },
@@ -763,10 +787,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // 5-minute sweep that drives `vendor_application_complete_recovery` for
       // namespace-reservation rows stuck in the `applied` state (broker +
       // cap-grant succeeded marketplace-side but the DB flip did not land).
-      // Per-application failures are logged + counted but do not throw — one
-      // bad row must not stop the rest, and the canonical loop must always
-      // re-delay so the perpetual-loop doctrine is preserved (matches the
-      // marketplace-catalog-sync full-sweep mode catch above).
+      // Per-application failures are logged + counted inside the reconcile job
+      // (one bad row must not stop the rest). Any unexpected throw propagates to
+      // runRecurringLoop, which reports it to the error reporter and always
+      // re-delays so the perpetual-loop doctrine is preserved (cinatra#849).
       const FIVE_MINUTES_MS = 5 * 60 * 1000;
       await runRecurringLoop({
         job,
@@ -774,31 +798,27 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: FIVE_MINUTES_MS,
         label: "vendor-application-state-reconcile",
         run: async () => {
-          try {
-            const { buildVendorApplicationReconcileDeps } = await import(
-              "@/lib/marketplace-application-reconcile-deps"
-            );
-            const deps = await buildVendorApplicationReconcileDeps();
-            if (deps === null) {
-              console.warn(
-                "[vendor-application-state-reconcile] sweep skipped: marketplace sync-worker bearer unavailable.",
-              );
-            } else {
-              const { runVendorApplicationStateReconcile } = await import(
-                "@cinatra-ai/marketplace-application-reconcile"
-              );
-              const summary = await runVendorApplicationStateReconcile(deps);
-              if (summary.attempted > 0 || summary.recovered > 0 || summary.failed > 0) {
-                console.log(
-                  `[vendor-application-state-reconcile] attempted=${summary.attempted} recovered=${summary.recovered} failed=${summary.failed}`,
-                );
-              }
-            }
-          } catch (sweepErr) {
+          // Cycle errors propagate to runRecurringLoop (report + always re-delay,
+          // cinatra#849). The bearer-unavailable branch returns normally (warn,
+          // no throw) so it is NOT reported as a failure.
+          const { buildVendorApplicationReconcileDeps } = await import(
+            "@/lib/marketplace-application-reconcile-deps"
+          );
+          const deps = await buildVendorApplicationReconcileDeps();
+          if (deps === null) {
             console.warn(
-              "[vendor-application-state-reconcile] sweep failed:",
-              sweepErr instanceof Error ? sweepErr.message : sweepErr,
+              "[vendor-application-state-reconcile] sweep skipped: marketplace sync-worker bearer unavailable.",
             );
+          } else {
+            const { runVendorApplicationStateReconcile } = await import(
+              "@cinatra-ai/marketplace-application-reconcile"
+            );
+            const summary = await runVendorApplicationStateReconcile(deps);
+            if (summary.attempted > 0 || summary.recovered > 0 || summary.failed > 0) {
+              console.log(
+                `[vendor-application-state-reconcile] attempted=${summary.attempted} recovered=${summary.recovered} failed=${summary.failed}`,
+              );
+            }
           }
         },
       });
@@ -811,10 +831,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // failed / never-synced (cinatra#318). Re-projects the LOCAL trigger
       // (source of truth) outward via the host PM bridge — re-pushing
       // errored/unsynced links and finishing deferred deletes. The worker
-      // never throws (per-row warn-and-skip), but the sweep is still wrapped so
-      // any unexpected throw logs + the canonical loop re-delays (matches the
-      // vendor-application-state-reconcile + marketplace-catalog-sync full-sweep
-      // mode). A PM outage must not poison the queue or alter local schedules.
+      // never throws (per-row warn-and-skip); any unexpected throw propagates to
+      // runRecurringLoop, which reports it to the error reporter and always
+      // re-delays (cinatra#849). A PM outage must not poison the queue or alter
+      // local schedules.
       const TEN_MINUTES_MS = 10 * 60 * 1000;
       await runRecurringLoop({
         job,
@@ -822,24 +842,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         delayMs: TEN_MINUTES_MS,
         label: "pm-schedule-reconcile",
         run: async () => {
-          try {
-            const { buildPmScheduleReconcileDeps } = await import(
-              "@/lib/pm-schedule-reconcile-deps"
-            );
-            const { runPmScheduleReconcile } = await import(
-              "@cinatra-ai/pm-schedule-reconcile"
-            );
-            const deps = buildPmScheduleReconcileDeps();
-            const summary = await runPmScheduleReconcile(deps);
-            if (summary.attempted > 0 || summary.repaired > 0 || summary.failed > 0) {
-              console.log(
-                `[pm-schedule-reconcile] attempted=${summary.attempted} repaired=${summary.repaired} skipped=${summary.skipped} failed=${summary.failed}`,
-              );
-            }
-          } catch (sweepErr) {
-            console.warn(
-              "[pm-schedule-reconcile] sweep failed:",
-              sweepErr instanceof Error ? sweepErr.message : sweepErr,
+          // Cycle errors propagate to runRecurringLoop (report + always re-delay,
+          // cinatra#849).
+          const { buildPmScheduleReconcileDeps } = await import(
+            "@/lib/pm-schedule-reconcile-deps"
+          );
+          const { runPmScheduleReconcile } = await import(
+            "@cinatra-ai/pm-schedule-reconcile"
+          );
+          const deps = buildPmScheduleReconcileDeps();
+          const summary = await runPmScheduleReconcile(deps);
+          if (summary.attempted > 0 || summary.repaired > 0 || summary.failed > 0) {
+            console.log(
+              `[pm-schedule-reconcile] attempted=${summary.attempted} repaired=${summary.repaired} skipped=${summary.skipped} failed=${summary.failed}`,
             );
           }
         },

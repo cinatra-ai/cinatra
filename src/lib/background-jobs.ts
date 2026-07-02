@@ -1,6 +1,5 @@
 import "server-only";
 
-import type { ChildProcess } from "child_process";
 import { Queue, Worker, type JobsOptions, type Job } from "bullmq";
 import IORedis from "ioredis";
 import { readMetadataValueFromDatabase, writeMetadataValueToDatabase } from "@/lib/database";
@@ -44,7 +43,6 @@ type BackgroundJobRuntime = {
   waitUntilReady: Promise<void>;
   workerWaitUntilReady?: Promise<void>;
   abortControllers: Map<string, AbortController>;
-  childProcesses: Map<string, ChildProcess>;
   abortPollers: Map<string, ReturnType<typeof setInterval>>;
   /**
    * Once-per-runtime guard for the boot-time
@@ -271,7 +269,6 @@ function createRuntime() {
     version: RUNTIME_VERSION,
     queue,
     abortControllers: new Map(),
-    childProcesses: new Map(),
     abortPollers: new Map(),
     waitUntilReady: queue.waitUntilReady().then(() => undefined),
   };
@@ -285,7 +282,6 @@ async function closeRuntime(runtime: BackgroundJobRuntime | undefined) {
   }
 
   runtime.abortControllers.clear();
-  runtime.childProcesses.clear();
   for (const poller of runtime.abortPollers.values()) {
     clearInterval(poller);
   }
@@ -338,7 +334,6 @@ function ensureWorker(runtime: BackgroundJobRuntime) {
   worker.on("completed", (job) => {
     const key = String(job.id ?? "");
     runtime.abortControllers.delete(key);
-    runtime.childProcesses.delete(key);
     const poller = runtime.abortPollers.get(key);
     if (poller) {
       clearInterval(poller);
@@ -357,7 +352,6 @@ function ensureWorker(runtime: BackgroundJobRuntime) {
   worker.on("failed", (job, err) => {
     const key = String(job?.id ?? "");
     runtime.abortControllers.delete(key);
-    runtime.childProcesses.delete(key);
     const poller = runtime.abortPollers.get(key);
     if (poller) {
       clearInterval(poller);
@@ -654,59 +648,6 @@ async function resolveImplicitActorContext(): Promise<ActorContext | undefined> 
   }
 }
 
-/**
- * Enqueues a child job linked to the given parent job, then parks the parent
- * in BullMQ's `waiting-children` state so it releases its worker slot.
- * When the child completes (or fails with failParentOnFailure), the parent
- * is automatically re-queued and the worker picks it up again.
- *
- * Returns `true` if the parent was successfully parked (worker slot released).
- * Returns `false` if the child already completed before the parent could park —
- * in this case the caller must NOT return immediately; it should continue to the
- * next step inline so the pipeline is not silently stalled.
- *
- * Use `job.data.step` (or similar) in the parent handler to track which
- * resumption pass is running.
- */
-export async function enqueueChildJob(
-  parentJob: Job,
-  token: string,
-  childName: BackgroundJobName,
-  childData: Record<string, unknown>,
-  options?: { failParentOnFailure?: boolean },
-): Promise<boolean> {
-  const runtime = getRuntime();
-  await runtime.waitUntilReady;
-
-  // Derive queue prefix from BullMQ runtime instead of hardcoding "bull:".
-  // queue.qualifiedName returns `${prefix}:${queueName}` (verified in bullmq@5.71.1 queue-base.js).
-  const qualifiedParentQueue = runtime.queue.qualifiedName;
-
-  const shouldFailParent = options?.failParentOnFailure ?? true;
-
-  await runtime.queue.add(childName, childData, {
-    parent: {
-      id: String(parentJob.id),
-      queue: qualifiedParentQueue,
-    },
-    failParentOnFailure: shouldFailParent,
-    removeOnComplete: 200,
-    removeOnFail: 500,
-    attempts: 1,
-  });
-
-  const moved = await parentJob.moveToWaitingChildren(token);
-  if (!moved) {
-    // Child already completed before the parent could park — the parent remains
-    // active in the current activation. The caller must NOT return here; it
-    // should fall through to the next step so the pipeline is not stalled.
-    console.log(
-      `[background-jobs] enqueueChildJob: child already completed before parent could park (parentId: ${parentJob.id})`,
-    );
-  }
-  return moved;
-}
-
 export async function isBackgroundJobActive(jobId: string): Promise<boolean> {
   const normalizedJobId = jobId.trim();
   if (!normalizedJobId) {
@@ -739,18 +680,9 @@ export async function cancelBackgroundJob(jobId: string) {
     controller.abort();
   }
 
-  const child = runtime.childProcesses.get(normalizedJobId);
-  if (child?.pid) {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // noop
-    }
-  }
-
   const queuedJob = await runtime.queue.getJob(normalizedJobId);
   if (!queuedJob) {
-    return Boolean(controller || child);
+    return Boolean(controller);
   }
 
   const state = await queuedJob.getState();
@@ -850,20 +782,6 @@ export function unregisterBackgroundJobAbortController(jobId: string) {
     runtime.abortPollers.delete(normalizedJobId);
   }
   clearBackgroundJobCancellationRequested(normalizedJobId);
-}
-
-export function registerBackgroundJobChildProcess(jobId: string, child: ChildProcess) {
-  if (!jobId.trim()) {
-    return;
-  }
-  getRuntime().childProcesses.set(jobId, child);
-}
-
-export function unregisterBackgroundJobChildProcess(jobId: string) {
-  if (!jobId.trim()) {
-    return;
-  }
-  getRuntime().childProcesses.delete(jobId);
 }
 
 // ---------------------------------------------------------------------------
