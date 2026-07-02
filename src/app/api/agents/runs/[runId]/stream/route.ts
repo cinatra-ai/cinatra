@@ -1,7 +1,9 @@
 import "server-only";
 
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
-import { readAgentRunById, readRunCoOwners } from "@cinatra-ai/agents";
+import { AuthzError } from "@/lib/authz";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import { readAgentRunById, type ActorRoleHints } from "@cinatra-ai/agents";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 
 // ---------------------------------------------------------------------------
@@ -22,8 +24,9 @@ import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/serve
 //   EventSource automatically with the cached Last-Event-ID.
 //
 // AUTH:
-//   requireAuthSession + per-run ownership check (run.runBy !== actor is
-//   403) — same pattern as GET /api/agents/runs/[runId].
+//   requireAuthSession + enforceRunAccess("read") via readAgentRunById(actor)
+//   (owner / co-owner / same-org / platform-admin; unowned runs require an
+//   org/admin match) — same pattern as GET /api/agents/runs/[runId].
 // ---------------------------------------------------------------------------
 
 type RouteContext = { params: Promise<{ runId: string }> };
@@ -49,16 +52,34 @@ export async function GET(request: Request, context: RouteContext) {
       ? rawLastEventId
       : undefined;
 
-  const run = await readAgentRunById(decodedRunId);
+  // Authorize BEFORE subscribing to the event stream: thread the caller through
+  // readAgentRunById so enforceRunAccess runs the real per-run authorization
+  // (owner / co-owner / same-org / platform-admin). This closes the cross-tenant
+  // gap for unowned (runBy: null) runs, which the previous hand-rolled guard let
+  // through to ALLOW. AuthzError maps to 404 (hidden) / 403 (forbidden).
+  const actor: PrimitiveActorContext = {
+    actorType: "human",
+    source: "route",
+    userId: actorUserId,
+  };
+  const roles: ActorRoleHints = {
+    platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
+    actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
+  };
+
+  let run: Awaited<ReturnType<typeof readAgentRunById>>;
+  try {
+    run = await readAgentRunById(decodedRunId, actor, roles);
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      return new Response(err.statusCode === 404 ? "Not Found" : "Forbidden", {
+        status: err.statusCode,
+      });
+    }
+    throw err;
+  }
   if (!run) {
     return new Response("Not Found", { status: 404 });
-  }
-  if (run.runBy && run.runBy !== actorUserId && !isPlatformAdmin(session)) {
-    const coOwnerRows = await readRunCoOwners(run.id);
-    const isCoOwner = coOwnerRows.some((c) => c.userId === actorUserId);
-    if (!isCoOwner) {
-      return new Response("Forbidden", { status: 403 });
-    }
   }
 
   // When a fresh subscriber connects (no Last-Event-ID) to a run that is

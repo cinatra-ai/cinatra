@@ -136,6 +136,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   },
 
   // --- migratable-request-path: request-time stores/reads, signature is sync ---
+  "src/lib/chat-thread-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "Tenant-scoped by-id reads of the legacy chat_threads JSON sync table (thread payload + team-org membership) that gate the authenticated chat read/write routes. Follows the same synchronous sync-table access pattern as the other chat_threads readers in database.ts; migrates to async typed reads when the legacy JSON sync tables are converted.",
+  },
   "packages/objects/src/graphiti-projector.ts": {
     class: "migratable-request-path",
     justification:

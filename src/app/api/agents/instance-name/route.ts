@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getAuthSession } from "@/lib/auth-session";
 
 /**
  * Deprecated agent package branches have been removed.
@@ -9,6 +10,13 @@ import { NextResponse } from "next/server";
  * agent-builder template lookup remains.
  */
 export async function GET(request: Request) {
+  // The route-guard middleware only checks for a session cookie's presence;
+  // require a validated session in-handler before disclosing template metadata.
+  const session = await getAuthSession();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const { searchParams } = new URL(request.url);
   const agentId = searchParams.get("agentId");
   const instanceId = searchParams.get("instanceId");
