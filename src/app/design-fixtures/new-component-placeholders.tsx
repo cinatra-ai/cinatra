@@ -3,7 +3,7 @@ import { BotIcon, MailIcon, FileTextIcon } from "lucide-react";
 import { StatusPill } from "@/components/ui/status-pill";
 import { BrandMark } from "@/components/brand-mark";
 import { ExtensionCard } from "@/components/extension-card";
-import { SectionHeader, Kicker } from "@cinatra-ai/sdk-ui";
+import { SectionHeader, Kicker } from "@cinatra-ai/sdk-ui/section-header";
 
 import { PrimitiveRow } from "./primitive-row";
 
