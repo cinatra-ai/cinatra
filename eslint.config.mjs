@@ -922,10 +922,13 @@ const eslintConfig = defineConfig([
   },
   // Vendored-primitive dirs inside extensions keep the Layer-5 Radix
   // allowance, plus the `@/*` ban (their imports must stay relative).
+  // Full JS-family coverage — the general extension block above exempts
+  // these dirs entirely, so every extension it covers must be restated
+  // here or it would escape the `@/*` ban.
   {
     files: [
-      "extensions/**/components/ui/**/*.{js,jsx,ts,tsx}",
-      "extensions/**/src/ui/**/*.{js,jsx,ts,tsx}",
+      "extensions/**/components/ui/**/*.{js,jsx,cjs,mjs,ts,tsx,cts,mts}",
+      "extensions/**/src/ui/**/*.{js,jsx,cjs,mjs,ts,tsx,cts,mts}",
     ],
     rules: {
       "no-restricted-imports": [

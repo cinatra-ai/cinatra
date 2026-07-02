@@ -402,10 +402,13 @@ describe("first-party extension import boundary (cinatra#803)", () => {
     "extensions/__eslint-boundary-fixtures__/src/app-alias.fixture.tsx";
   const extVendoredUi =
     "extensions/__eslint-boundary-fixtures__/components/ui/app-alias.fixture.tsx";
+  const extVendoredUiMjs =
+    "extensions/__eslint-boundary-fixtures__/components/ui/app-alias.fixture.mjs";
 
   beforeAll(() => {
     copyFixtureTo("forbidden-extension-app-alias.fixture.tsx", extSrc);
     copyFixtureTo("forbidden-extension-app-alias.fixture.tsx", extVendoredUi);
+    copyFixtureTo("forbidden-extension-app-alias.fixture.mjs", extVendoredUiMjs);
   });
 
   afterAll(() => {
@@ -436,5 +439,10 @@ describe("first-party extension import boundary (cinatra#803)", () => {
       radix,
       `Radix must stay allowed in extension vendored-ui dirs, got: ${JSON.stringify(radix, null, 2)}`,
     ).toEqual([]);
+  });
+
+  it("bans @/* in vendored-ui .mjs files too (full JS-family restatement)", () => {
+    const r = lintFile(path.join(REPO_ROOT, extVendoredUiMjs));
+    expectViolation(r, "app-private modules");
   });
 });
