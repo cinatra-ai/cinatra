@@ -18,4 +18,4 @@ The `BackgroundProcessModal` + `useBackgroundProcessModalSession` pair is the st
 
 ## Exports
 
-All public components and hooks are re-exported from `index.ts`. Add new exports there when adding components to the package.
+Existing public components and hooks are re-exported from `index.ts`. Do NOT add NEW components to the `index.ts` root barrel: the route-graph no-new-rot ratchet (`scripts/audit/route-graph-ratchet.mjs`) locks the reachable-module ceilings of routes that consume the barrel, and ceilings may only shrink — a new root-barrel export grows every consuming route by one module. Give a new component its own subpath export in `package.json` (see `"./section-header"`) and re-export it from `marketplace.ts` when it is consumer-portable.

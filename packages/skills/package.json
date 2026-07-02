@@ -25,6 +25,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
+    "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/extension-types": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",
     "@cinatra-ai/mcp-client": "workspace:*",

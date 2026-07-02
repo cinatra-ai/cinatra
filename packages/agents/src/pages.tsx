@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { Play, Plus } from "lucide-react";
@@ -145,9 +146,9 @@ export async function AgentsPage({ searchParams }: AgentsSearchPageProps) {
                 <CardContent className="p-6">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="font-mono text-xs uppercase tracking-[0.25em] text-muted-foreground">
+                    <Kicker size="sm" tracking="wide">
                       {run.agentType}
-                    </p>
+                    </Kicker>
                     <Link href={run.href} className="mt-2 block text-2xl font-semibold underline-offset-4 hover:underline">
                       {run.name}
                     </Link>
