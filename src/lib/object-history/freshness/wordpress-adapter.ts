@@ -15,6 +15,7 @@ import {
   type FreshnessAdapter,
   type FreshnessState,
 } from "./contract";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   type WordPressInstanceSettings,
   readWordPressInstanceById,
@@ -40,7 +41,11 @@ async function fetchPostStatus(
   const restPath = postType === "page" ? `pages/${remoteId}` : `posts/${remoteId}`;
   const siteUrl = String(instance.siteUrl).replace(/\/$/, "");
   const url = `${siteUrl}/wp-json/wp/v2/${restPath}?context=edit`;
-  const response = await fetch(url, {
+  // Bounded: a hung WordPress endpoint must not pin the remote-freshness/restore
+  // worker path. The timeout signal stays attached to the response, so the
+  // `.json()` body read below is bounded too; any throw is mapped to a
+  // "unknown" freshness verdict by the adapter's outer try/catch.
+  const response = await fetchWithTimeout(url, {
     method: "GET",
     headers: {
       Authorization: auth,

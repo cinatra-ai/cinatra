@@ -1,4 +1,5 @@
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
   ensureNangoIntegration,
@@ -261,7 +262,7 @@ export async function getGitHubAccessToken(input?: {
 
 async function githubApiFetch<T>(pathnameWithQuery: string) {
   const { accessToken } = await getGitHubAccessToken();
-  const response = await fetch(`https://api.github.com${pathnameWithQuery}`, {
+  const response = await fetchWithTimeout(`https://api.github.com${pathnameWithQuery}`, {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${accessToken}`,
