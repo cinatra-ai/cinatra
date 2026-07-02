@@ -77,6 +77,17 @@ export function connectorCanonicalCrumbHref(
 //     rendered as a real link to its canonical subroute (see
 //     `connectorCanonicalCrumbHref`, #422); the vendor level stays a label.
 //   • /configuration/<group> for the grouping segments above.
+//   • /configuration/marketplace/[scope] — the marketplace detail route
+//     resolves only at /configuration/marketplace/[scope]/[name]; the [scope]
+//     (vendor) level is a routing container with no page.tsx, so its crumb
+//     404s if linked (#797). The static depth-3 siblings that DO have pages
+//     (`submissions`, `vendor-applications`) are deny-listed so they stay
+//     navigable.
+export const MARKETPLACE_STATIC_ROUTES = new Set([
+  "submissions",
+  "vendor-applications",
+]);
+
 export function isPagelessContainerCrumb(segments: string[], i: number): boolean {
   const depth = i + 1; // number of path segments up to and including this crumb
   if (segments[0] === "connectors" && (depth === 2 || depth === 3)) return true;
@@ -84,6 +95,14 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
     segments[0] === "configuration" &&
     depth === 2 &&
     PAGELESS_CONFIG_GROUPS.has(segments[1])
+  ) {
+    return true;
+  }
+  if (
+    segments[0] === "configuration" &&
+    segments[1] === "marketplace" &&
+    depth === 3 &&
+    !MARKETPLACE_STATIC_ROUTES.has(segments[2])
   ) {
     return true;
   }
