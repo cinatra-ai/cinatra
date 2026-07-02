@@ -380,7 +380,12 @@ describe.skipIf(!hasDb)("fresh prod DB — seeding creates ONLY the shrunk requi
     for (const r of requiredRows) {
       // prod coercion: required-in-prod can never start unlocked
       expect({ pkg: r.package_name, status: r.status }).toEqual({ pkg: r.package_name, status: "locked" });
-      expect((r.source as { path?: string }).path).toBe(`static-bundle:${r.package_name}`);
+      // cinatra#792: the seeder writes the TYPED bundled discriminant — the
+      // stringly `static-bundle:<name>` path encoding is retired.
+      const src = r.source as { type?: string; packageName?: string; path?: string };
+      expect(src.type).toBe("bundled");
+      expect(src.packageName).toBe(r.package_name);
+      expect(src.path).toBeUndefined();
     }
     // nothing beyond the declared set + the pre-existing optional row
     expect(res.rows).toHaveLength(requiredNames.length + 1);
