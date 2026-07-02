@@ -27,6 +27,7 @@ import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
 import {
   emptyRatingSummary,
+  safeHttpUrl,
   type MarketplaceDetailLoadResult,
   type MarketplaceDetailView,
 } from "@/lib/marketplace-detail-view";
@@ -189,7 +190,10 @@ function toDetailView(
     readmeMarkdown: detail.readmeMarkdown ?? null,
     longDescription: detail.longDescription ?? null,
     description: detail.description ?? null,
-    iconUrl: detail.iconUrl ?? detail.iconAssetUrl ?? null,
+    // Scheme-guard the icon fallback: detail.iconUrl is sanitized upstream but
+    // detail.iconAssetUrl is a raw passthrough, so a non-http(s) asset URL would
+    // otherwise reach the modal's <img src>. safeHttpUrl drops it to null.
+    iconUrl: safeHttpUrl(detail.iconUrl ?? detail.iconAssetUrl),
     ratingSummary: detail.ratingSummary ?? emptyRatingSummary(),
     reviews: detail.reviews ?? [],
     vendor: detail.vendor ?? null,

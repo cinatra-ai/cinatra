@@ -222,6 +222,53 @@ describe("loadPublicMarketplaceDetail", () => {
     expect(res.detail.ratingSummary.total).toBe(2);
     expect(res.detail.reviews).toHaveLength(1);
     expect(res.detail.vendor?.storeUrl).toBe("https://marketplace.cinatra.ai/store/weatherworks/");
+    expect(res.detail.iconUrl).toBe("https://cdn.example/i.png");
+  });
+
+  it("scheme-guards the icon fallback: a non-http(s) iconAssetUrl is dropped to null (never reaches <img src>)", async () => {
+    // iconUrl is sanitized upstream, but iconAssetUrl is a raw passthrough; the
+    // projection must drop a non-http(s) fallback so it cannot reach the modal.
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      iconUrl: null,
+      iconAssetUrl: "javascript:alert(document.cookie)",
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.iconUrl).toBeNull();
+  });
+
+  it("keeps a valid http(s) iconAssetUrl when the sanitized iconUrl is absent", async () => {
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      iconUrl: null,
+      iconAssetUrl: "https://cdn.example/asset.png",
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.iconUrl).toBe("https://cdn.example/asset.png");
   });
 
   it("returns not_found for a malformed scoped name without hitting the marketplace", async () => {

@@ -46,6 +46,7 @@ import {
   reviewInitials,
   formatInstallations,
   resolveModalInstallState,
+  safeHttpUrl,
   type MarketplaceDetailView,
   type MarketplaceDetailReview,
   type ShareNetwork,
@@ -217,7 +218,10 @@ function ModalMessage({
 }
 
 function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: MarketplaceDetailView }) {
-  const iconUrl = detail.iconUrl ?? card.iconUrl ?? card.vendorLogoUrl ?? null;
+  // detail.iconUrl is scheme-guarded at the projection, but the card fallbacks
+  // (iconUrl / vendorLogoUrl) come from the browse card model and are NOT
+  // scheme-checked — guard the resolved URL so only an http(s) src reaches <img>.
+  const iconUrl = safeHttpUrl(detail.iconUrl ?? card.iconUrl ?? card.vendorLogoUrl);
   const reviewCount = detail.reviews.length;
   const shareLinks = buildShareLinks(detail.permalink);
 

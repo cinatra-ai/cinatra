@@ -7,6 +7,7 @@ import {
   ratingBars,
   resolveModalInstallState,
   reviewInitials,
+  safeHttpUrl,
   type MarketplaceDetailRatingSummary,
 } from "@/lib/marketplace-detail-view";
 
@@ -41,6 +42,27 @@ describe("buildShareLinks", () => {
     expect(buildShareLinks("   ")).toEqual([]);
     expect(buildShareLinks("javascript:alert(1)")).toEqual([]);
     expect(buildShareLinks("ftp://host/x")).toEqual([]);
+  });
+});
+
+describe("safeHttpUrl", () => {
+  it("passes through http(s) URLs unchanged", () => {
+    expect(safeHttpUrl("https://cdn.example/i.png")).toBe("https://cdn.example/i.png");
+    expect(safeHttpUrl("http://cdn.example/i.png")).toBe("http://cdn.example/i.png");
+  });
+
+  it("drops non-http(s), relative, empty, and null values to null", () => {
+    // The icon fallback chain (iconAssetUrl / card icon+vendor-logo) is not
+    // scheme-checked upstream, so these must never reach an <img src>/href.
+    expect(safeHttpUrl("javascript:alert(1)")).toBeNull();
+    expect(safeHttpUrl("data:text/html;base64,PHN2Zz4=")).toBeNull();
+    expect(safeHttpUrl("ftp://host/x")).toBeNull();
+    expect(safeHttpUrl("/relative/path.png")).toBeNull();
+    expect(safeHttpUrl("not a url")).toBeNull();
+    expect(safeHttpUrl("")).toBeNull();
+    expect(safeHttpUrl("   ")).toBeNull();
+    expect(safeHttpUrl(null)).toBeNull();
+    expect(safeHttpUrl(undefined)).toBeNull();
   });
 });
 

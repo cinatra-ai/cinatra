@@ -85,6 +85,27 @@ export function emptyRatingSummary(): MarketplaceDetailRatingSummary {
 }
 
 /**
+ * Return `value` iff it is an http(s) URL, else null — the single scheme guard
+ * for every URL the modal RENDERS as an `src`/`href`. It covers the hero-icon
+ * fallback chain in particular: `ExtensionDetail.iconAssetUrl` and the browse
+ * card's `iconUrl`/`vendorLogoUrl` are NOT themselves scheme-checked, so a
+ * non-http(s) value (`javascript:`, `data:`, a relative string, …) from the
+ * marketplace payload or a card fallback is dropped to null here before it can
+ * reach the DOM. Mirrors the permalink scheme check in {@link buildShareLinks}.
+ */
+export function safeHttpUrl(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || value.trim() === "") {
+    return null;
+  }
+  try {
+    const { protocol } = new URL(value);
+    return protocol === "http:" || protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The six visual footer states of the install CTA (design spec §IV), resolved
  * from the card's existing 4-state CTA plus the local ABI compat verdict. The
  * "incompatible" state ONLY overrides a not-installed listing whose declared ABI
