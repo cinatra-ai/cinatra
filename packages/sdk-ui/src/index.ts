@@ -1,6 +1,7 @@
 // Cinatra design-system page chrome + canonical patterns.
 export { Main } from "./main";
 export { PageHeader } from "./page-header";
+
 export type { PageHeaderSize, PageHeaderTone } from "./page-header";
 export { PageContent } from "./page-content";
 export { StatusPill } from "./status-pill";

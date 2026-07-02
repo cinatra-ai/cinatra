@@ -142,4 +142,4 @@ export {
   InMemoryTaskStore,
   JsonRpcTransportHandler,
 } from "@a2a-js/sdk/server";
-export { getOrAddWayflowGateIndex, resolveRunIdByWayflowTaskId } from "./event-log";
+export { getOrAddWayflowGateIndex, getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, resolveRunIdByWayflowTaskId } from "./event-log";

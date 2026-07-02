@@ -105,7 +105,7 @@ function registerOneArtifactDir(dir: string): boolean {
  * Register exactly ONE artifact-extension package dir (its `package.json` is
  * directly at `dir`). Used by the production package-store rescan
  * (`extension-artifact-bridge-rescan.ts`), where each materialized store record
- * IS the package dir (`/data/extensions/packages/<pkg>/<digest>/`), so the
+ * IS the package dir (`<dataRoot>/<kind>/<slug>/<digest>/`, cinatra#791), so the
  * `<root>/*-artifact` scan layout of `registerArtifactExtensions` does not
  * apply. Reuses the SAME manifest validation + provenance threading as the
  * bundled scan — never imports or executes the package's code (reads

@@ -34,7 +34,8 @@ export function userStoreMountCheckPhases(): BootPhase[] {
         if (!inProdMode()) {
           return { skipped: "dev uses a local non-durable store" };
         }
-        const { USER_STORE_ROOT } = await import("@/lib/required-extension-materialize");
+        const { resolveUserStoreRoot } = await import("@/lib/required-extension-materialize");
+        const USER_STORE_ROOT = resolveUserStoreRoot();
 
         const exists = existsSync(USER_STORE_ROOT);
         let writable = false;

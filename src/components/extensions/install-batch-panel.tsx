@@ -110,7 +110,7 @@ function InstallBatchCard({ batch }: { batch: InstallBatch }) {
             </code>
             <span className="text-xs text-muted-foreground">v{row.version}</span>
             {row.isRoot && (
-              <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+              <span className="text-[10px] uppercase tracking-kicker-wide text-muted-foreground">
                 root
               </span>
             )}

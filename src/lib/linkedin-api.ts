@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
   deleteNangoConnection,
@@ -208,7 +209,7 @@ async function fetchLinkedInJson<T>(url: string, accessToken: string) {
       method: "GET",
     },
   });
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: buildLinkedInHeaders(accessToken),
     cache: "no-store",
   });
@@ -733,7 +734,7 @@ export async function publishLinkedInPost(input: {
     },
   });
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
       ...buildLinkedInHeaders(accessToken),

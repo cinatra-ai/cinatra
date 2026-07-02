@@ -1,8 +1,9 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { auth } from "@/lib/auth";
-import { betterAuthDb, betterAuthUsers } from "@/lib/better-auth-db";
+import { betterAuthDb, betterAuthMembers, betterAuthUsers } from "@/lib/better-auth-db";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,41 @@ export async function GET() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+  // Tenant-scope the human directory: a caller may only enumerate other HUMAN
+  // users who are co-members of their active organization. Built-in assistant
+  // bots (userType = "assistant", e.g. @cinatra) are platform-global — they
+  // carry no membership row — so they are always included. Fail closed to
+  // assistants-only unless the caller PROVES a current membership row in their
+  // active org (a stale `activeOrganizationId` from a since-revoked membership
+  // must not grant enumeration of that org's users).
+  const activeOrgId = session.session?.activeOrganizationId ?? null;
+  let scopedOrgId: string | null = null;
+  if (activeOrgId) {
+    const callerMembership = await betterAuthDb
+      .select({ userId: betterAuthMembers.userId })
+      .from(betterAuthMembers)
+      .where(
+        and(
+          eq(betterAuthMembers.organizationId, activeOrgId),
+          eq(betterAuthMembers.userId, session.user.id),
+        ),
+      )
+      .limit(1);
+    if (callerMembership.length > 0) scopedOrgId = activeOrgId;
+  }
+  const coOrgMemberIds = scopedOrgId
+    ? betterAuthDb
+        .select({ userId: betterAuthMembers.userId })
+        .from(betterAuthMembers)
+        .where(eq(betterAuthMembers.organizationId, scopedOrgId))
+    : null;
+  const directoryFilter = coOrgMemberIds
+    ? or(
+        eq(betterAuthUsers.userType, "assistant"),
+        inArray(betterAuthUsers.id, coOrgMemberIds),
+      )
+    : eq(betterAuthUsers.userType, "assistant");
+
   const rows = await betterAuthDb
     .select({
       id: betterAuthUsers.id,
@@ -28,7 +64,8 @@ export async function GET() {
       image: betterAuthUsers.image,
       userType: betterAuthUsers.userType,
     })
-    .from(betterAuthUsers);
+    .from(betterAuthUsers)
+    .where(directoryFilter);
 
   const mentionables = rows
     .filter((r) => r.id !== session.user.id) // exclude current user

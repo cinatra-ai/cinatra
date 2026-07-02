@@ -1,5 +1,13 @@
 import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
+import { cva } from "class-variance-authority";
+// cn: intentionally the EXTENDED tailwind-merge from sdk-ui, not "@/lib/utils".
+// The default app cn strips the custom design-token size utilities
+// (`text-page-title-*` / `text-listing-title` / `text-badge-*`) whenever a
+// text-COLOR class follows in the same merge (tailwind-merge classifies
+// unknown `text-*` classes as colors). The app-wide cn fix requires the
+// vendored-primitive refresh cascade (src/lib/utils.ts is a registry source
+// vendored into extension repos), tracked with the arbitrary-value lint gate.
+import { cn } from "@cinatra-ai/sdk-ui/lib/utils";
 import { PageHeaderRule } from "@/components/page-header-rule";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 
@@ -24,10 +32,10 @@ interface PageHeaderProps {
   actions?: ReactNode;
   /**
    * Page-title display scale.
-   *  - "lg" (default) — 38px. Brand-y top-level pages.
-   *  - "md" — 30px. Action-heavy admin / settings / detail subpages with
+   *  - "lg" (default) — 28px. Brand-y top-level pages.
+   *  - "md" — 24px. Action-heavy admin / settings / detail subpages with
    *    long titles, where the lg size crowds the actions slot.
-   *  - "sm" — 24px. Nested sub-screens.
+   *  - "sm" — 20px. Nested sub-screens.
    */
   size?: PageHeaderSize;
   /**
@@ -46,6 +54,30 @@ interface PageHeaderProps {
   divider?: boolean;
   className?: string;
 }
+
+/**
+ * Page-title typography — the spec h1 ramp as named design tokens.
+ *
+ * `text-page-title-{sm,md,lg}` carry their paired line-height (1.05) and
+ * tight display tracking (-0.018em) via the design package's @theme mapping,
+ * so no bracket literals are needed here. A future scale change is a
+ * one-line token edit in `@cinatra-ai/design/tokens.css`.
+ */
+export const pageTitleVariants = cva(
+  "font-display italic font-extrabold text-balance",
+  {
+    variants: {
+      size: {
+        sm: "text-page-title-sm",
+        md: "text-page-title-md",
+        lg: "text-page-title-lg",
+      },
+    },
+    defaultVariants: {
+      size: "lg",
+    },
+  },
+);
 
 export function PageHeader({
   title,
@@ -68,16 +100,13 @@ export function PageHeader({
       <div className="flex items-start justify-between gap-4">
         <div>
           {label && (
-            <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            <p className="font-mono text-xs uppercase tracking-page-label text-muted-foreground">
               {label}
             </p>
           )}
           <h1
             className={cn(
-              "font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance",
-              size === "sm" && "text-[24px]",
-              size === "md" && "text-[30px]",
-              size === "lg" && "text-[38px]",
+              pageTitleVariants({ size }),
               size === "lg" && !label && "-mt-2",
               tone === "mustard" && "text-brand-mustard",
               tone === "ink" && "text-foreground",

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { ChevronLeft } from "lucide-react";
 import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
@@ -241,7 +242,7 @@ export async function SkillsPage({ searchParams }: SkillsPageProps) {
           <section className="grid gap-4">
             {filtered.map((skill) => (
               <Card key={skill.id} className="border-line bg-surface backdrop-blur-none p-6">
-                <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted-foreground">Skill</p>
+                <Kicker size="sm" tracking="wide">Skill</Kicker>
                 <h2 className="mt-2 text-xl font-semibold">
                   <Link href={`/skills/${encodeURIComponent(skill.id)}`} className="underline-offset-4 hover:underline">
                     {skill.name}

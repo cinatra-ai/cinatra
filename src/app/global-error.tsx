@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import * as Sentry from "@sentry/nextjs";
 
 import { Button } from "@/components/ui/button";
+import { shouldExposeErrorDetails } from "@/lib/client-trust";
 
 /**
  * Global error boundary for the root layout.
@@ -31,6 +32,12 @@ export default function GlobalError({
     }
   }, [error]);
 
+  // In production, internal error details (name / message / stack) can leak
+  // file paths and application logic to end users, so they are suppressed and
+  // only the opaque digest is shown. Developers still get full details in
+  // non-production builds.
+  const showErrorDetails = shouldExposeErrorDetails(process.env.NODE_ENV);
+
   return (
     <html>
       <body
@@ -56,39 +63,43 @@ export default function GlobalError({
           <p style={{ color: "#a3a3a3", marginBottom: "1.5rem" }}>
             An unexpected error occurred while rendering the application.
           </p>
-          <div
-            style={{
-              background: "#1a1a1a",
-              border: "1px solid #333",
-              borderRadius: "8px",
-              padding: "1rem",
-              marginBottom: "1.5rem",
-              fontFamily: "monospace",
-              fontSize: "0.875rem",
-            }}
-          >
-            <div style={{ color: "#ef4444", marginBottom: "0.5rem" }}>
-              {error?.name ?? "Error"}: {error?.message ?? "Unknown error"}
+          {(showErrorDetails || error?.digest) && (
+            <div
+              style={{
+                background: "#1a1a1a",
+                border: "1px solid #333",
+                borderRadius: "8px",
+                padding: "1rem",
+                marginBottom: "1.5rem",
+                fontFamily: "monospace",
+                fontSize: "0.875rem",
+              }}
+            >
+              {showErrorDetails && (
+                <div style={{ color: "#ef4444", marginBottom: "0.5rem" }}>
+                  {error?.name ?? "Error"}: {error?.message ?? "Unknown error"}
+                </div>
+              )}
+              {error?.digest && (
+                <div style={{ color: "#737373" }}>
+                  Digest: {error.digest}
+                </div>
+              )}
+              {showErrorDetails && error?.stack && (
+                <pre
+                  style={{
+                    color: "#a3a3a3",
+                    marginTop: "0.75rem",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  {error.stack}
+                </pre>
+              )}
             </div>
-            {error?.digest && (
-              <div style={{ color: "#737373" }}>
-                Digest: {error.digest}
-              </div>
-            )}
-            {error?.stack && (
-              <pre
-                style={{
-                  color: "#a3a3a3",
-                  marginTop: "0.75rem",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                  fontSize: "0.75rem",
-                }}
-              >
-                {error.stack}
-              </pre>
-            )}
-          </div>
+          )}
           <Button
             type="button"
             onClick={reset}

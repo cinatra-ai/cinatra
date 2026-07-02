@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./marketplace": "./src/marketplace.ts",
+    "./section-header": "./src/section-header.tsx",
     "./nango": "./src/nango.ts",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/extension-accent": "./src/lib/extension-accent.ts"

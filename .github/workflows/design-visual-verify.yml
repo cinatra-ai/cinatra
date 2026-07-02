@@ -88,6 +88,10 @@ jobs:
       # server starts cleanly under CI's stricter env-check.
       SUPABASE_DB_URL: postgresql://placeholder:placeholder@127.0.0.1:65535/placeholder
       BETTER_AUTH_SECRET: design-visual-verify-placeholder-secret-not-used-by-static-route
+      # required-env-preflight (app-boot deploy-robustness) refuses to boot
+      # without an encryption key; the /design-fixtures route never touches
+      # secret storage. Same 64-zero placeholder dashboard-live-verify uses.
+      CINATRA_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       BETTER_AUTH_URL: http://localhost:3101
       NEXT_PUBLIC_BETTER_AUTH_URL: http://localhost:3101
       NEXT_PUBLIC_APP_URL: http://localhost:3101
@@ -177,7 +181,11 @@ jobs:
 
       - name: Wait for /design-fixtures readiness
         run: |
-          for i in $(seq 1 60); do
+          # Boot-time extension-lifecycle sweeps (static-bundle anchors, store
+          # rematerialize, closure gate) each fail fast against the placeholder
+          # DB but there are dozens of them; first serve can exceed the old
+          # 2-minute window. 8 minutes covers the observed fail-open boot.
+          for i in $(seq 1 240); do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${E2E_DESIGN_PORT}/design-fixtures" --max-time 5 2>/dev/null || echo 000)
             if [ "$code" = "200" ]; then echo "ready after ${i} polls"; exit 0; fi
             sleep 2

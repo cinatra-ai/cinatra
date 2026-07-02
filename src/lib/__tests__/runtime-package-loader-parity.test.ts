@@ -7,15 +7,15 @@ import * as tar from "tar";
 import {
   runRuntimePackageActivation,
   runStaticBundleActivation,
-  discoverPackageStoreRecords,
   recordFromManifest,
   type PackageStoreFs,
 } from "@cinatra-ai/sdk-extensions";
+import { discoverStoreRecordsV2 } from "@/lib/extension-store-io";
 import {
   STORE_SIDECAR_FILENAME,
   contentHashOfEntries,
   sriForBytes,
-  storePackageDir,
+  storeDigestDirV2,
   tarballDigestSegment,
   type ContentHashEntry,
 } from "@/lib/extension-package-store-core";
@@ -105,10 +105,11 @@ describe("RuntimePackageLoader materialize → discover → verify (the loader c
     const storeRoot = path.join(workDir, "store-1");
     const result = await materializeInto(storeRoot);
     expect(result.reused).toBe(false);
-    expect(result.storeDir).toContain("cinatra-ai__parity-fixture@0.0.1");
+    expect(result.storeDir).toContain(path.join("connector", "@cinatra-ai", "parity-fixture"));
+    expect(result.kind).toBe("connector");
     expect(result.contentHash).toMatch(/^[a-f0-9]{128}$/);
 
-    const records = await discoverPackageStoreRecords(storeRoot, realFs);
+    const records = await discoverStoreRecordsV2(storeRoot, realFs);
     expect(records).toHaveLength(1);
     expect(records[0].packageName).toBe(PKG);
     expect(records[0].declaredDigest).toBe(result.digest);
@@ -141,7 +142,7 @@ describe("RuntimePackageLoader materialize → discover → verify (the loader c
   it("verifyIntegrity returns FALSE after on-disk tampering + on a missing tarball (fail closed)", async () => {
     const storeRoot = path.join(workDir, "store-tamper");
     const result = await materializeInto(storeRoot);
-    const records = await discoverPackageStoreRecords(storeRoot, realFs);
+    const records = await discoverStoreRecordsV2(storeRoot, realFs);
     const anchor = { trustedIntegrity: result.integrity, trustedContentHash: result.contentHash };
     expect(await verifyMaterializedPackageIntegrity(records[0], anchor)).toBe(true);
 
@@ -680,14 +681,17 @@ describe("dual-loader PARITY: runtime record + activation == static (the loader-
   it("the runtime-discovered record matches recordFromManifest, and both drivers activate identically", async () => {
     const storeRoot = path.join(workDir, "store-parity");
     await materializeInto(storeRoot);
-    const records = await discoverPackageStoreRecords(storeRoot, realFs);
+    const records = await discoverStoreRecordsV2(storeRoot, realFs);
     const runtimeRec = records[0];
 
     // The SAME normalizer the loaders share, applied to the materialized
     // package.json, must reproduce the discovered record's normalized fields.
     const pkgJsonText = await readFile(path.join(runtimeRec.storeDir, "package.json"), "utf8");
     const reNormalized = recordFromManifest(runtimeRec.storeDir, pkgJsonText, runtimeRec.declaredDigest);
-    expect(reNormalized).toEqual(runtimeRec);
+    // The V2 record is the sdk record + the path-derived `kind` (cinatra#791).
+    const sdkShapedRec: Record<string, unknown> = { ...runtimeRec };
+    delete sdkShapedRec.kind;
+    expect(reNormalized).toEqual(sdkShapedRec);
     expect(runtimeRec.serverEntry).toBe("./register.mjs");
     expect(runtimeRec.requestedHostPorts).toEqual([]);
     expect(runtimeRec.sdkAbiRange).toBe("^2");
@@ -696,6 +700,7 @@ describe("dual-loader PARITY: runtime record + activation == static (the loader-
     const runtimeRecorded: string[] = [];
     const runtimeResults = await runRuntimePackageActivation(storeRoot, {
       fs: realFs,
+      records,
       importModule: (p) => import(pathToFileURL(p).href),
       makeContext: ((name: string) => ({ logger: { info: () => runtimeRecorded.push(name) } }) as never),
       verifyIntegrity: async () => true,
@@ -760,7 +765,7 @@ describe("exports-key + built artifact is a FIRST-CLASS store citizen (the cinat
 
     // The runtime-discovered record resolves the SAME exports target the
     // materializer accepted — the shared-resolver agreement, observable.
-    const records = await discoverPackageStoreRecords(storeRoot, realFs);
+    const records = await discoverStoreRecordsV2(storeRoot, realFs);
     expect(records).toHaveLength(1);
     expect(records[0].serverEntry).toBe("./register");
     expect(records[0].serverEntryRel).toBe("./dist/register.mjs");
@@ -810,7 +815,10 @@ describe("legacy-store defense (store dirs written by OLDER installers — fail 
     }));
     const contentHash = contentHashOfEntries(entries);
 
-    const targetDir = storePackageDir(opts.storeRoot, opts.packageName, VERSION, digest);
+    // V2 layout (cinatra#791): kind-segregated, content-addressed. These legacy
+    // fixtures simulate legacy CONTENT (source-mirror entries) at the current
+    // layout — old-LAYOUT dirs are invisible to discovery by design.
+    const targetDir = storeDigestDirV2(opts.storeRoot, "connector", opts.packageName, digest);
     for (const [rel, contents] of Object.entries(allFiles)) {
       const abs = path.join(targetDir, rel);
       await mkdir(path.dirname(abs), { recursive: true });

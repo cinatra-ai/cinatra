@@ -38,8 +38,6 @@ import {
 } from "@cinatra-ai/extensions/canonical-store";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
 import {
-  discoverPackageStoreRecords,
-  DEFAULT_PACKAGE_STORE_PATH,
   type PackageStoreFs,
   type PackageStoreRecord,
 } from "@cinatra-ai/sdk-extensions";
@@ -239,9 +237,11 @@ export async function buildInstalledExtensionReadModel(
   let trust: TrustVerdict | null = null;
   let signatureVerified: boolean | null = null;
   try {
-    const storeRoot = deps.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+    const storeRoot =
+      deps.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
     const discover =
-      deps.discoverRecords ?? ((root: string) => discoverPackageStoreRecords(root, realStoreFs));
+      deps.discoverRecords ??
+      (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
     const records = await discover(storeRoot);
     const record = records.find((r) => r.packageName === packageName) ?? null;
     sourcePackageStoreRecordPresent = record !== null;

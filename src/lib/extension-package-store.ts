@@ -8,21 +8,21 @@ import "server-only";
 //   1. fetch the EXACT tarball bytes (default: pacote via @cinatra-ai/registries);
 //   2. verify SRI over those bytes BEFORE anything is written;
 //   3. extract into a TEMP dir (no lifecycle scripts ever — the security-hardening rule);
-//   4. validate it is a Cinatra extension + the bundled-deps gate;
+//   4. validate it is a Cinatra extension (identity-bound name+version, resolved
+//      kind) + the bundled-deps gate;
 //   5. compute a content hash + write the `.cinatra-store.json` sidecar;
-//   6. atomically rename TEMP -> `<storeRoot>/<pkg@ver>/<digest>/` and persist
-//      the verified tarball alongside as `<digest>.tgz` for boot re-verify.
+//   6. atomically rename TEMP -> `<dataRoot>/<kind>/<slug>/<digest>/` (cinatra#791
+//      V2 layout) and persist the verified tarball alongside as `<digest>.tgz`
+//      for boot re-verify.
 //
 // `verifyMaterializedPackageIntegrity` is the loader's `verifyIntegrity` hook:
 // it re-verifies on every boot — the declared digest binds the
 // store path to the verified tarball, the content hash detects on-disk
 // tampering, and the persisted tarball is re-checked against its recorded SRI.
 
-import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
 import {
-  DEFAULT_PACKAGE_STORE_PATH,
   classifyServerEntryArtifact,
   resolveDeclaredServerEntry,
   resolveExportsSubpath,
@@ -31,17 +31,26 @@ import {
 import {
   HOST_PROVIDED_PACKAGES,
   STORE_SIDECAR_FILENAME,
+  STORE_STAGING_DIRNAME,
   basePackageOfSpecifier,
   contentHashOfEntries,
+  isExtensionStoreKind,
   parseModuleImports,
   scanHostPeerValueImports,
   sriMatches,
-  storePackageDir,
+  storeDigestDirV2,
+  storeTarballPathV2,
   tarballDigestSegment,
   validateBundledDependencies,
   type ContentHashEntry,
+  type ExtensionStoreKind,
   type StoreSidecar,
 } from "@/lib/extension-package-store-core";
+import {
+  assertNoUnsafeEntries,
+  atomicReplaceDir,
+  pathExists,
+} from "@/lib/fs-safety";
 import {
   planRootDependencyNames,
   type MaterializationPlan,
@@ -66,8 +75,19 @@ export type MaterializeInput = {
   expectedIntegrity: string;
   /** Registry the tarball was resolved from — persisted for boot-time trust. */
   registryUrl?: string;
-  /** Override the store root (default `/data/extensions/packages`). */
+  /**
+   * Override the extension DATA ROOT (default: `resolveExtensionDataRoot()` —
+   * env `CINATRA_EXTENSION_DATA_ROOT` > DB metadata > `/data/extensions`). The
+   * package materializes under `<root>/<kind>/<slug>/<digest>/` (cinatra#791).
+   */
   storeRoot?: string;
+  /**
+   * The kind the CALLER expects to materialize (from the install request /
+   * canonical row). Authoritative when set: the extracted manifest's
+   * `cinatra.kind`, when present, must MATCH it (fail-closed). When omitted,
+   * the manifest's declared kind is required — there is no silent default.
+   */
+  expectedKind?: ExtensionStoreKind;
   /**
    * The PARSED + VALIDATED signed materialization plan (cinatra#181), when
    * the package declares a library-dependency closure. The pipeline parses
@@ -93,6 +113,8 @@ export type MaterializedPackage = {
   version: string;
   storeDir: string;
   digest: string;
+  /** The store kind the package materialized under (`<root>/<kind>/...`). */
+  kind: ExtensionStoreKind;
   integrity: string;
   /**
    * Content hash of the materialized dir, computed at install time when the
@@ -137,7 +159,7 @@ export type InstallTrustAnchor = {
   closureHash?: string | null;
   /**
    * The tarball DIGEST the FINALIZED install-op journal recorded for this anchor
-   * (cinatra#158). The on-disk store dir is `<pkg>@<ver>/<digest>`, so the loader
+   * (cinatra#158). The on-disk store dir is `<kind>/<slug>/<digest>`, so the loader
    * binds the journal anchor to the actual bytes by asserting
    * `record.declaredDigest === anchor.digest` — fail-closed on a mismatch. This
    * closes the append-only residue where an OLD `finalized` journal op could
@@ -176,7 +198,8 @@ export async function materializePackageToStore(
 ): Promise<MaterializedPackage> {
   const fetchTarball = deps.fetchTarball ?? defaultFetchTarball;
   const now = deps.now ?? (() => new Date().toISOString());
-  const storeRoot = input.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+  const dataRoot =
+    input.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
 
   // cinatra#181 — library-dependency-closure threading preconditions. The plan
   // (when present) must arrive WITH the pipeline-verified closureHash, and its
@@ -217,91 +240,23 @@ export async function materializePackageToStore(
   }
 
   const digest = tarballDigestSegment(bytes);
-  const targetDir = storePackageDir(storeRoot, input.packageName, input.version, digest);
-  const targetTarball = `${targetDir}.tgz`;
-
-  // Idempotency: if already materialized + integrity-valid, reuse it. The
-  // expected anchor here is the freshly-fetched, SRI-verified tarball we just
-  // downloaded (authoritative), not the in-store sidecar.
-  if (await pathExists(path.join(targetDir, "package.json"))) {
-    const ok = await verifyMaterializedPackageIntegrity(
-      {
-        packageName: input.packageName,
-        serverEntry: null,
-        requestedHostPorts: [],
-        storeDir: targetDir,
-        declaredDigest: digest,
-      },
-      { trustedIntegrity: input.expectedIntegrity },
-    );
-    const existingSidecar = ok ? await readStoreSidecar(targetDir) : null;
-    if (ok && existingSidecar) {
-      // The built-artifacts-only gate (step 4.6 below) applies to the REUSE
-      // path too (codex AB-r1 finding 2): an integrity-valid same-digest dir
-      // written by a PRE-CONTRACT installer must not be accepted as a
-      // successful materialization — re-installing a source-mirror package
-      // must refuse loudly, not silently reuse the old dir. An unreadable
-      // manifest falls through to remove + re-materialize (where the fresh
-      // extract re-runs full validation over the same bytes).
-      const existingPkgRaw = await readFile(path.join(targetDir, "package.json"), "utf8").catch(() => null);
-      let existingPkg: Record<string, unknown> | null = null;
-      if (existingPkgRaw) {
-        try {
-          existingPkg = JSON.parse(existingPkgRaw) as Record<string, unknown>;
-        } catch {
-          existingPkg = null;
-        }
-      }
-      if (existingPkg) {
-        await assertServerEntryIsBuiltArtifact(targetDir, existingPkg, input.packageName);
-        // cinatra#181 REUSE closure check — FAIL-LOUD, NON-DESTRUCTIVE (codex
-        // round-0 finding 3): a signed plan is IMMUTABLE per (name, version,
-        // integrity), so a same-digest dir whose recorded closureHash differs
-        // from the expected plan's (or is absent when a plan is expected, or
-        // present when none is) is refused with operator remediation — NEVER
-        // silently reused and NEVER automatically removed (the dir may be a
-        // live finalized install; store identity is <pkg>@<ver>/<digest>).
-        const recordedClosureHash = existingSidecar.closureHash ?? null;
-        if (recordedClosureHash !== expectedClosureHash) {
-          throw new Error(
-            `[package-store] ${input.packageName}@${input.version}: an integrity-valid store dir for this ` +
-              `exact tarball digest exists, but its recorded closureHash ` +
-              `(${recordedClosureHash ?? "absent"}) does not match the expected plan's ` +
-              `(${expectedClosureHash ?? "absent"}). A signed plan is immutable per (name, version, ` +
-              `integrity) — this dir was materialized under a different/absent plan (possibly by a ` +
-              `pre-closure installer, possibly tampering). Refusing to reuse AND refusing to delete a ` +
-              `possibly-live install: an operator must uninstall the package (or remove ${targetDir} ` +
-              `after confirming it is not live) before re-installing.`,
-          );
-        }
-        return {
-          packageName: input.packageName,
-          version: input.version,
-          storeDir: targetDir,
-          digest,
-          integrity,
-          contentHash: existingSidecar.contentHash,
-          reused: true,
-        };
-      }
-    }
-    // Present but invalid → remove + re-materialize.
-    await rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
-    await rm(targetTarball, { force: true }).catch(() => undefined);
-  }
 
   // 3. extract into a temp dir (strip the npm `package/` prefix). No scripts.
-  // cinatra#158 EXDEV FIX: stage on the SAME FILESYSTEM as `targetDir`, NOT under
-  // `os.tmpdir()`. On the typical container topology `storeRoot` (e.g. the `/data`
+  // cinatra#158 EXDEV FIX: stage on the SAME FILESYSTEM as the target, NOT under
+  // `os.tmpdir()`. On the typical container topology the data root (e.g. the `/data`
   // volume) and `os.tmpdir()` are on DIFFERENT filesystems, so the publish-time
   // `rename(extractDir, targetDir)` would throw EXDEV (a hazard CI never exercises
-  // because CI runs both on one fs). We stage in a dedicated `.staging` SIBLING of
-  // `storeRoot` (same parent dir → same fs as the target, but OUTSIDE the scanned
-  // store tree, so `discoverPackageStoreRecords` never mistakes a half-extracted
-  // staging dir for a materialized package). The publish rename is then
+  // because CI runs both on one fs). We stage in the dedicated `<root>/.staging`
+  // dot-dir (same fs as every target, but INVISIBLE to the V2 discovery walk,
+  // which enumerates only the known kind dirs — so a half-extracted staging dir
+  // is never mistaken for a materialized package). The publish rename is then
   // intra-filesystem (atomic); `atomicReplaceDir` additionally carries an EXDEV
   // copy-fallback as defense-in-depth.
-  const stagingRoot = path.join(path.dirname(storeRoot), ".cinatra-ext-staging");
+  //
+  // NOTE (cinatra#791): the digest-reuse check moved AFTER extraction + gates —
+  // the target dir is kind-segregated (`<root>/<kind>/<slug>/<digest>`) and the
+  // kind comes from the caller/manifest, which is only bindable post-extract.
+  const stagingRoot = path.join(dataRoot, STORE_STAGING_DIRNAME);
   await mkdir(stagingRoot, { recursive: true });
   const tmpRoot = await mkdtemp(path.join(stagingRoot, "materialize-"));
   const extractDir = path.join(tmpRoot, "pkg");
@@ -340,6 +295,47 @@ export async function materializePackageToStore(
     if (!pkgJson.cinatra || typeof pkgJson.cinatra !== "object") {
       throw new Error(`[package-store] ${input.packageName}: not a Cinatra extension (no cinatra manifest block)`);
     }
+
+    // 4.1 IDENTITY BINDING (cinatra#791): the version left the store path (the
+    // digest content-addresses), so the extracted manifest's name+version MUST
+    // equal the requested install — fail-closed BEFORE any slug/kind/path/
+    // sidecar derivation. A tarball claiming a different identity than the one
+    // resolved+verified for must never land under the requested slug.
+    const manifestName = typeof pkgJson.name === "string" ? pkgJson.name : null;
+    const manifestVersion = typeof pkgJson.version === "string" ? pkgJson.version : null;
+    if (manifestName !== input.packageName || manifestVersion !== input.version) {
+      throw new Error(
+        `[package-store] ${input.packageName}@${input.version}: the extracted package.json identifies as ` +
+          `${manifestName ?? "(no name)"}@${manifestVersion ?? "(no version)"} — the materialized manifest ` +
+          `must bind the exact requested install; refusing.`,
+      );
+    }
+
+    // 4.2 KIND RESOLUTION (cinatra#791): the caller-threaded `expectedKind` is
+    // authoritative; the manifest's `cinatra.kind`, when present, must MATCH it.
+    // Without a caller kind the manifest kind is REQUIRED — no silent default.
+    const declaredKindRaw = (pkgJson.cinatra as Record<string, unknown>).kind;
+    const declaredKind = typeof declaredKindRaw === "string" ? declaredKindRaw : undefined;
+    if (declaredKind !== undefined && !isExtensionStoreKind(declaredKind)) {
+      throw new Error(
+        `[package-store] ${input.packageName}: manifest cinatra.kind ${JSON.stringify(declaredKind)} is not ` +
+          `a known extension kind; refusing.`,
+      );
+    }
+    if (input.expectedKind && declaredKind && declaredKind !== input.expectedKind) {
+      throw new Error(
+        `[package-store] ${input.packageName}: manifest cinatra.kind "${declaredKind}" contradicts the ` +
+          `caller's expected kind "${input.expectedKind}"; refusing.`,
+      );
+    }
+    const kind: ExtensionStoreKind | undefined = input.expectedKind ?? declaredKind;
+    if (!kind) {
+      throw new Error(
+        `[package-store] ${input.packageName}: no extension kind — the manifest declares no cinatra.kind ` +
+          `and the caller supplied no expectedKind; the kind-segregated store cannot place it; refusing.`,
+      );
+    }
+
     const present = await readPresentNodeModules(path.join(extractDir, "node_modules"));
     const planRootDeps = plan ? planRootDependencyNames(plan) : null;
     const depVerdict = validateBundledDependencies(pkgJson, present, planRootDeps);
@@ -423,6 +419,66 @@ export async function materializePackageToStore(
       });
     }
 
+    // 4.9 target paths (V2 layout, cinatra#791) + POST-GATES digest reuse.
+    // Idempotency: if already materialized + integrity-valid, reuse it. The
+    // expected anchor here is the freshly-fetched, SRI-verified tarball we just
+    // downloaded (authoritative), not the in-store sidecar. The reuse check runs
+    // AFTER every install gate executed over the staged extract of the SAME
+    // bytes (same digest ⇒ same content), so a same-digest dir written by a
+    // PRE-CONTRACT installer can never bypass a gate via reuse — and a VALID
+    // existing content-addressed dir is REUSED, never replaced (no missing-dir
+    // window for a possibly-live install).
+    const targetDir = storeDigestDirV2(dataRoot, kind, input.packageName, digest);
+    const targetTarball = storeTarballPathV2(dataRoot, kind, input.packageName, digest);
+    if (await pathExists(path.join(targetDir, "package.json"))) {
+      const ok = await verifyMaterializedPackageIntegrity(
+        {
+          packageName: input.packageName,
+          serverEntry: null,
+          requestedHostPorts: [],
+          storeDir: targetDir,
+          declaredDigest: digest,
+        },
+        { trustedIntegrity: input.expectedIntegrity },
+      );
+      const existingSidecar = ok ? await readStoreSidecar(targetDir) : null;
+      if (ok && existingSidecar) {
+        // cinatra#181 REUSE closure check — FAIL-LOUD, NON-DESTRUCTIVE (codex
+        // round-0 finding 3): a signed plan is IMMUTABLE per (name, version,
+        // integrity), so a same-digest dir whose recorded closureHash differs
+        // from the expected plan's (or is absent when a plan is expected, or
+        // present when none is) is refused with operator remediation — NEVER
+        // silently reused and NEVER automatically removed (the dir may be a
+        // live finalized install; store identity is <kind>/<slug>/<digest>).
+        const recordedClosureHash = existingSidecar.closureHash ?? null;
+        if (recordedClosureHash !== expectedClosureHash) {
+          throw new Error(
+            `[package-store] ${input.packageName}@${input.version}: an integrity-valid store dir for this ` +
+              `exact tarball digest exists, but its recorded closureHash ` +
+              `(${recordedClosureHash ?? "absent"}) does not match the expected plan's ` +
+              `(${expectedClosureHash ?? "absent"}). A signed plan is immutable per (name, version, ` +
+              `integrity) — this dir was materialized under a different/absent plan (possibly by a ` +
+              `pre-closure installer, possibly tampering). Refusing to reuse AND refusing to delete a ` +
+              `possibly-live install: an operator must uninstall the package (or remove ${targetDir} ` +
+              `after confirming it is not live) before re-installing.`,
+          );
+        }
+        return {
+          packageName: input.packageName,
+          version: input.version,
+          storeDir: targetDir,
+          digest,
+          kind,
+          integrity,
+          contentHash: existingSidecar.contentHash,
+          reused: true,
+        };
+      }
+      // Present but invalid → remove + re-publish from the verified staging.
+      await rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(targetTarball, { force: true }).catch(() => undefined);
+    }
+
     // 5. content hash (excludes the sidecar we are about to write) + sidecar.
     const entries = await collectFileEntries(extractDir, [STORE_SIDECAR_FILENAME]);
     const contentHash = contentHashOfEntries(entries);
@@ -455,6 +511,7 @@ export async function materializePackageToStore(
       version: input.version,
       storeDir: targetDir,
       digest,
+      kind,
       integrity,
       contentHash,
       reused: false,
@@ -536,15 +593,6 @@ export async function readStoreSidecar(storeDir: string): Promise<StoreSidecar |
 // fs helpers
 // ---------------------------------------------------------------------------
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Top-level bundled module names under a `node_modules/` dir (scope-aware). */
 async function readPresentNodeModules(nmDir: string): Promise<Set<string>> {
   const out = new Set<string>();
@@ -568,26 +616,6 @@ async function readPresentNodeModules(nmDir: string): Promise<Set<string>> {
     }
   }
   return out;
-}
-
-/**
- * Reject symlinks / hardlinked-out / special files anywhere under `dir`. tar
- * already strips `..` + absolute paths, but a bundled SYMLINK would let a
- * `file://` import (which follows links) and the content hash escape the
- * integrity-verified package dir, so we refuse any non-regular-file/non-dir.
- */
-async function assertNoUnsafeEntries(dir: string): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  for (const e of entries) {
-    if (e.isSymbolicLink()) {
-      throw new Error(`[package-store] refusing extracted symlink "${e.name}" (escape vector)`);
-    }
-    if (e.isDirectory()) {
-      await assertNoUnsafeEntries(path.join(dir, e.name));
-    } else if (!e.isFile()) {
-      throw new Error(`[package-store] refusing non-regular file "${e.name}" in extracted package`);
-    }
-  }
 }
 
 /**
@@ -998,88 +1026,6 @@ async function resolveSelfPackageImport(
   return null;
 }
 
-/**
- * Recursively compare two directory trees by their relative file-path sets (a
- * stronger post-copy verify than a top-level child count). Throws on any mismatch.
- */
-async function assertDirTreesMatch(a: string, b: string): Promise<void> {
-  const collect = async (root: string): Promise<Set<string>> => {
-    const out = new Set<string>();
-    const walk = async (dir: string, rel: string): Promise<void> => {
-      for (const ent of await readdir(dir, { withFileTypes: true })) {
-        const childRel = rel ? `${rel}/${ent.name}` : ent.name;
-        if (ent.isDirectory()) {
-          await walk(path.join(dir, ent.name), childRel);
-        } else {
-          out.add(childRel);
-        }
-      }
-    };
-    await walk(root, "");
-    return out;
-  };
-  const [aset, bset] = await Promise.all([collect(a), collect(b)]);
-  if (aset.size !== bset.size) {
-    throw new Error(`EXDEV copy verify failed: source has ${aset.size} files, target has ${bset.size}`);
-  }
-  for (const rel of aset) {
-    if (!bset.has(rel)) throw new Error(`EXDEV copy verify failed: target is missing ${rel}`);
-  }
-}
-
-/**
- * Atomically replace `targetDir` with `sourceDir` via rename. If a prior dir
- * exists, it is renamed aside first and restored on failure (mirrors the agent
- * materializer's temp-sibling-rename + rollback chain).
- *
- * cinatra#158 EXDEV FALLBACK (defense-in-depth — the primary fix stages the source
- * on the target's filesystem). If `rename(sourceDir, targetDir)` throws EXDEV (a
- * cross-filesystem move on a container+volume topology), fall back to: recursive
- * COPY into a SAME-PARENT staging dir (`${targetDir}.staging-<rand>`, guaranteed
- * intra-fs with `targetDir`), recursively VERIFY the copied tree, then an atomic
- * intra-fs `rename(staging, targetDir)`, then remove the original source. We NEVER
- * copy straight into `targetDir` (a crash mid-copy would expose a partial target);
- * the verified staging dir is swapped in atomically. The prior-backup rename
- * (`targetDir` → `${targetDir}.old`) is always same-parent → never EXDEV.
- * Mirrors `packages/skills/src/relocate-worker.ts:249`.
- */
-async function atomicReplaceDir(sourceDir: string, targetDir: string): Promise<void> {
-  const suffix = randomBytes(4).toString("hex");
-  let priorBackup: string | null = null;
-  if (await pathExists(targetDir)) {
-    priorBackup = `${targetDir}.old-${suffix}`;
-    await rename(targetDir, priorBackup);
-  }
-  try {
-    try {
-      await rename(sourceDir, targetDir);
-    } catch (renameErr) {
-      if ((renameErr as NodeJS.ErrnoException).code !== "EXDEV") throw renameErr;
-      // Cross-filesystem: copy → verify → atomic intra-fs swap → drop source.
-      const staging = `${targetDir}.staging-${suffix}`;
-      await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-      try {
-        await cp(sourceDir, staging, { recursive: true, preserveTimestamps: true });
-        await assertDirTreesMatch(sourceDir, staging);
-        await rename(staging, targetDir); // same parent → intra-fs, atomic.
-      } catch (copyErr) {
-        await rm(staging, { recursive: true, force: true }).catch(() => undefined);
-        throw copyErr;
-      }
-      await rm(sourceDir, { recursive: true, force: true }).catch(() => undefined);
-    }
-  } catch (error) {
-    if (priorBackup) {
-      await rename(priorBackup, targetDir).catch((restoreErr) => {
-        console.error(
-          `[package-store] CRITICAL: failed to restore ${priorBackup} -> ${targetDir} after rename failure:`,
-          restoreErr,
-        );
-      });
-    }
-    throw error;
-  }
-  if (priorBackup) {
-    await rm(priorBackup, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
+// The recursive tree-verify + EXDEV-safe atomic replace-dir swap now live in the
+// consolidated `@/lib/fs-safety` module (cinatra#798); `atomicReplaceDir` is
+// imported at the top of this file.

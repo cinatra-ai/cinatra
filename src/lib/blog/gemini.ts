@@ -2,6 +2,8 @@ import "server-only";
 
 import { resolveDefaultImageAdapter } from "@cinatra-ai/llm";
 
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
+
 type CompanyStyleReference = {
   pageTitle?: string;
   metaDescription?: string;
@@ -45,7 +47,11 @@ function extractVisibleTextSample(html: string) {
 
 async function readCompanyStyleReference(companyUrl: string): Promise<CompanyStyleReference> {
   try {
-    const response = await fetch(companyUrl, {
+    // Bounded: this runs on the BullMQ image-regeneration worker path and fetches
+    // an arbitrary company URL. A hung remote must not pin the worker slot. The
+    // timeout stays attached to the response, so the `.text()` read below is
+    // bounded too; any throw already degrades to `{}` via the surrounding catch.
+    const response = await fetchWithTimeout(companyUrl, {
       headers: {
         "user-agent": "Cinatra Blog Image Generator/1.0",
         accept: "text/html,application/xhtml+xml",

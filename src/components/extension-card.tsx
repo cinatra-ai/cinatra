@@ -1,6 +1,13 @@
 import * as React from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+// cn: intentionally the EXTENDED tailwind-merge from sdk-ui, not "@/lib/utils".
+// The default app cn strips the custom design-token size utilities
+// (`text-page-title-*` / `text-listing-title` / `text-badge-*`) whenever a
+// text-COLOR class follows in the same merge (tailwind-merge classifies
+// unknown `text-*` classes as colors). The app-wide cn fix requires the
+// vendored-primitive refresh cascade (src/lib/utils.ts is a registry source
+// vendored into extension repos), tracked with the arbitrary-value lint gate.
+import { cn } from "@cinatra-ai/sdk-ui/lib/utils";
 import {
   ACCENT_PALETTE,
   type ExtensionAccent,
@@ -289,7 +296,7 @@ function ExtensionCardListingBanner({
       <div
         data-slot="extension-card-name"
         className={cn(
-          "line-clamp-3 min-w-0 font-display text-[18px] font-extrabold italic leading-[1.12] tracking-[-0.012em]",
+          "line-clamp-3 min-w-0 font-display text-listing-title font-extrabold italic",
           // Reserve room for the top-right badge overlay so a long, line-clamped
           // name never runs underneath the badges.
           badges && "pr-20",
@@ -312,7 +319,7 @@ function Indicator({
   spinning,
 }: { label: string; dotColour: string; spinning?: boolean }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-surface-strong px-2.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-foreground shadow-sm">
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-surface-strong px-2.5 py-0.5 text-badge-2xs font-bold uppercase text-foreground shadow-sm">
       {spinning ? (
         <svg
           viewBox="0 0 24 24"

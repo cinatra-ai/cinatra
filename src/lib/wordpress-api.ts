@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import path from "node:path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
   deleteNangoConnection,
@@ -359,7 +360,7 @@ export async function validateWordPressInstanceConnection(input: {
       username: input.username,
     },
   });
-  const userResponse = await fetch(buildRESTEndpoint(siteUrl, "/users/me", new URLSearchParams({ context: "edit" })), {
+  const userResponse = await fetchWithTimeout(buildRESTEndpoint(siteUrl, "/users/me", new URLSearchParams({ context: "edit" })), {
     method: "GET",
     headers: {
       Authorization: authHeader,
@@ -412,7 +413,7 @@ export async function validateWordPressInstanceConnection(input: {
       siteUrl,
     },
   });
-  const settingsResponse = await fetch(buildRESTEndpoint(siteUrl, "/settings", settingsParams), {
+  const settingsResponse = await fetchWithTimeout(buildRESTEndpoint(siteUrl, "/settings", settingsParams), {
     method: "GET",
     headers: {
       Authorization: authHeader,
@@ -781,7 +782,7 @@ export async function readLatestPublishedWordPressPost(instance: WordPressInstan
       username: auth.username,
     },
   });
-  const response = await fetch(buildRESTEndpoint(instance.siteUrl, "/posts", params), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(instance.siteUrl, "/posts", params), {
     method: "GET",
     headers: {
       Authorization: auth.authHeader,
@@ -855,7 +856,7 @@ export async function listPublishedWordPressPosts(
       limit,
     },
   });
-  const response = await fetch(buildRESTEndpoint(instance.siteUrl, "/posts", params), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(instance.siteUrl, "/posts", params), {
     method: "GET",
     headers: {
       Authorization: auth.authHeader,
@@ -937,7 +938,7 @@ export async function createWordPressDraft(input: {
       body: createPayload,
     },
   });
-  const response = await fetch(buildRESTEndpoint(input.instance.siteUrl, "/posts"), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(input.instance.siteUrl, "/posts"), {
     method: "POST",
     headers: {
       Authorization: auth.authHeader,
@@ -984,7 +985,7 @@ export async function readWordPressPostStatus(input: {
     },
   });
 
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     buildRESTEndpoint(input.instance.siteUrl, `/posts/${input.wordpressPostId}`, new URLSearchParams({ context: "edit" })),
     {
       method: "GET",
@@ -1043,7 +1044,7 @@ export async function deleteWordPressPost(input: {
     },
   });
 
-  const response = await fetch(buildRESTEndpoint(input.instance.siteUrl, `/posts/${input.wordpressPostId}`), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(input.instance.siteUrl, `/posts/${input.wordpressPostId}`), {
     method: "DELETE",
     headers: {
       Authorization: auth.authHeader,
@@ -1092,7 +1093,7 @@ export async function updateWordPressDraftMeta(input: {
     },
   });
 
-  const response = await fetch(buildRESTEndpoint(input.instance.siteUrl, `/posts/${input.wordpressPostId}`), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(input.instance.siteUrl, `/posts/${input.wordpressPostId}`), {
     method: "POST",
     headers: {
       Authorization: auth.authHeader,
@@ -1176,7 +1177,7 @@ export async function updateWordPressPost(input: {
     },
   });
 
-  const response = await fetch(buildRESTEndpoint(input.instance.siteUrl, restPath), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(input.instance.siteUrl, restPath), {
     method: "POST",
     headers: {
       Authorization: auth.authHeader,
@@ -1223,7 +1224,7 @@ export async function readWordPressPost(input: {
   const restPath = input.postType === "page"
     ? `/pages/${input.wordpressPostId}`
     : `/posts/${input.wordpressPostId}`;
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     buildRESTEndpoint(input.instance.siteUrl, restPath, new URLSearchParams({ context: "edit" })),
     {
       method: "GET",
@@ -1293,7 +1294,7 @@ export async function uploadWordPressMedia(input: {
       mimeType: input.imageMimeType,
     },
   });
-  const response = await fetch(buildRESTEndpoint(input.instance.siteUrl, "/media"), {
+  const response = await fetchWithTimeout(buildRESTEndpoint(input.instance.siteUrl, "/media"), {
     method: "POST",
     headers: {
       Authorization: auth.authHeader,
@@ -1395,7 +1396,7 @@ export async function listWordPressWebhookSubscriptions(
   instance: Pick<WordPressInstanceSettings, "siteUrl" | "username" | "applicationPassword">,
 ): Promise<WordPressWebhookSubscription[]> {
   const endpoint = buildCinatraWebhooksEndpoint(instance.siteUrl);
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "GET",
     headers: {
       Authorization: buildDirectBasicAuthHeader(instance),
@@ -1435,7 +1436,7 @@ export async function registerWordPressWebhookSubscription(
   },
 ): Promise<WordPressWebhookSubscription> {
   const endpoint = buildCinatraWebhooksEndpoint(instance.siteUrl);
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
       Authorization: buildDirectBasicAuthHeader(instance),
@@ -1476,7 +1477,7 @@ export async function deleteWordPressWebhookSubscription(
   subscriptionId: string,
 ): Promise<void> {
   const endpoint = buildCinatraWebhooksEndpoint(instance.siteUrl, subscriptionId);
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: "DELETE",
     headers: {
       Authorization: buildDirectBasicAuthHeader(instance),

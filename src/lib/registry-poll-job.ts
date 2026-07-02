@@ -17,6 +17,7 @@ import "server-only";
 // -----------------------------------------------------------------------------
 
 import { BACKGROUND_JOB_NAMES, enqueueBackgroundJob } from "@/lib/background-jobs";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   readInstanceIdentity,
   writeInstanceIdentity,
@@ -202,7 +203,7 @@ export async function runRegistryPollJob(
   // GET the registry. Treat thrown network errors as 5xx for backoff.
   let res: Response;
   try {
-    res = await fetch(`${REMOTE_REGISTRY_URL}/api/register/${payload.requestId}`, {
+    res = await fetchWithTimeout(`${REMOTE_REGISTRY_URL}/api/register/${payload.requestId}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${requestSecret}` },
     });

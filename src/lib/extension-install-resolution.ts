@@ -14,8 +14,6 @@ import "server-only";
 // wrapper around the canonical install store.
 
 import {
-  discoverPackageStoreRecords,
-  DEFAULT_PACKAGE_STORE_PATH,
   type PackageStoreFs,
   type PackageStoreRecord,
 } from "@cinatra-ai/sdk-extensions";
@@ -306,9 +304,11 @@ async function resolveTrustedRuntimeStoreRecord(
 
   // (c) discover the materialized store records for this package (ALL candidate
   // digests, not just the first).
-  const storeRoot = deps.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+  const storeRoot =
+    deps.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const discover =
-    deps.discoverRecords ?? ((root: string) => discoverPackageStoreRecords(root, realStoreFs));
+    deps.discoverRecords ??
+    (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
   const records = await discover(storeRoot);
   const candidates = records.filter((r) => r.packageName === packageName);
   if (candidates.length === 0) return null;

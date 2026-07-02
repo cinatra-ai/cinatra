@@ -1,13 +1,20 @@
 import * as React from "react";
 import { cva } from "class-variance-authority";
-import { cn } from "@/lib/utils";
+// cn: intentionally the EXTENDED tailwind-merge from sdk-ui, not "@/lib/utils".
+// The default app cn strips the custom design-token size utilities
+// (`text-page-title-*` / `text-listing-title` / `text-badge-*`) whenever a
+// text-COLOR class follows in the same merge (tailwind-merge classifies
+// unknown `text-*` classes as colors). The app-wide cn fix requires the
+// vendored-primitive refresh cascade (src/lib/utils.ts is a registry source
+// vendored into extension repos), tracked with the arbitrary-value lint gate.
+import { cn } from "@cinatra-ai/sdk-ui/lib/utils";
 
 // scope-color tokens should move to CSS variables.
 // Palette maps the skills package level badge colors to the canonical 5-level model.
 // This is the ONLY file in the codebase allowed to use these raw Tailwind palette classes
 // for ownership-level encoding — all call sites MUST consume <ScopeBadge> rather than re-applying.
 export const scopeBadgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em]",
+  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-badge-xs font-semibold uppercase tracking-[0.15em]",
   {
     variants: {
       level: {

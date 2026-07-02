@@ -18,15 +18,19 @@ const runRuntimePackageActivation =
   vi.fn<(...args: unknown[]) => Promise<ActivationResult[]>>();
 
 vi.mock("@cinatra-ai/sdk-extensions", () => ({
-  DEFAULT_PACKAGE_STORE_PATH: "/data/extensions/packages",
-  discoverPackageStoreRecords: (...args: unknown[]) =>
-    discoverPackageStoreRecords(...(args as [])),
   runRuntimePackageActivation: (...args: unknown[]) =>
     runRuntimePackageActivation(...args),
   // Real predicate shape (#118): none of these fixture records declare host
   // migrations, so the loader's bootstrap-with-migrations refusal stays empty.
   recordDeclaresHostMigrations: (rec: { migrationsDir?: string; legacyMigrationsDeclared?: boolean }) =>
     typeof rec.migrationsDir === "string" || rec.legacyMigrationsDeclared === true,
+}));
+
+// cinatra#791: the loader now discovers via the host-side V2 store IO.
+vi.mock("@/lib/extension-store-io", () => ({
+  discoverStoreRecordsV2: (...args: unknown[]) =>
+    discoverPackageStoreRecords(...(args as [])),
+  realStoreFs: {},
 }));
 
 // Host-side static deps the loader imports — stubbed so no DB / fs / registries

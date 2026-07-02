@@ -944,23 +944,23 @@ export async function RegistryEntryDetailSections({
         <h2 className="text-sm font-semibold text-foreground mb-3">Extension Details</h2>
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Package</p>
+            <p className="text-xs font-medium uppercase tracking-kicker-wide text-muted-foreground">Package</p>
             <p className="mt-1 font-mono text-sm text-foreground">{entry.packageName}</p>
           </div>
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Version</p>
+            <p className="text-xs font-medium uppercase tracking-kicker-wide text-muted-foreground">Version</p>
             <p className="mt-1 font-mono text-sm text-foreground">v{entry.packageVersion}</p>
           </div>
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Published</p>
+            <p className="text-xs font-medium uppercase tracking-kicker-wide text-muted-foreground">Published</p>
             <p className="mt-1 text-sm text-foreground">{formatDate(entry.publishedAt)}</p>
           </div>
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Registry</p>
+            <p className="text-xs font-medium uppercase tracking-kicker-wide text-muted-foreground">Registry</p>
             <p className="mt-1 text-sm text-foreground">{entry.registryUrl}</p>
           </div>
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">Risk Level</p>
+            <p className="text-xs font-medium uppercase tracking-kicker-wide text-muted-foreground">Risk Level</p>
             <p className="mt-1 text-sm text-foreground">
               {/* Shared semantic badge — the catalog list view renders the
                   SAME component, so list and detail presentation never drift. */}

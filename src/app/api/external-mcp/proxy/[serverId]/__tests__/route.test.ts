@@ -260,3 +260,40 @@ describe("external MCP proxy — Layer-B catalog allowlist retained", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 });
+
+describe("external MCP proxy — bounded upstream, failures map to JSON-RPC errors", () => {
+  it("maps an upstream connection failure to a JSON-RPC error (-32603)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const res = await POST(rpcRequest(execToolCall) as never, ctx());
+    const json = (await res.json()) as { error?: { code: number; message: string } };
+    expect(json.error?.code).toBe(-32603);
+    expect(json.error?.message).toContain("upstream MCP fetch failed");
+  });
+
+  it("maps an upstream body-read failure (mid-stream timeout) to a JSON-RPC error, not an unhandled throw", async () => {
+    // The upstream returns headers, then the body read aborts (the slow-trickle
+    // vector). The body read now sits inside the same try/catch as the fetch, so
+    // it must surface as a JSON-RPC error rather than throwing out of the route.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({
+            status: 200,
+            headers: new Headers({ "content-type": "application/json" }),
+            text: async () => {
+              throw new DOMException("The operation timed out", "TimeoutError");
+            },
+          }) as unknown as Response,
+      ),
+    );
+    const res = await POST(rpcRequest(execToolCall) as never, ctx());
+    const json = (await res.json()) as { error?: { code: number } };
+    expect(json.error?.code).toBe(-32603);
+  });
+});

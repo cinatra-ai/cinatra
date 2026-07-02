@@ -528,16 +528,26 @@ export function createTriggerEmailSendUseCases(
     },
 
     async runInitialSendWorker(_input, _actor) {
-      // The synchronous send path makes the worker a no-op. If we
-      // re-introduce BullMQ background sending, this is
-      // where the worker entry point lives.
-      throw new Error("runInitialSendWorker is a no-op under the synchronous send path.");
+      // RETIRED under the synchronous send path (the BullMQ background worker no
+      // longer exists). Return a typed not_supported result instead of throwing
+      // so an MCP caller receives a structured response, not an exception. If
+      // BullMQ background sending is ever re-introduced, the worker entry point
+      // lives here.
+      return {
+        ok: false as const,
+        status: "not_supported" as const,
+        reason: "The initial-send worker is retired under the synchronous send path.",
+      };
     },
 
     async processDueFollowUps(_input, _actor) {
-      // Follow-up scheduling is a separate concern and is not part of
-      // the synchronous initial-send path.
-      throw new Error("processDueFollowUps is not implemented under the synchronous send path.");
+      // RETIRED under the synchronous send path (follow-up scheduling ran on the
+      // removed BullMQ worker). Return a typed not_supported result, not a throw.
+      return {
+        ok: false as const,
+        status: "not_supported" as const,
+        reason: "Due follow-up processing is not implemented under the synchronous send path.",
+      };
     },
   };
 }
