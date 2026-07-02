@@ -14,6 +14,7 @@ import {
   readAllHitlPromptsForRun,
 } from "./store";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   setRunTriggerForActor,
   deleteRunTriggerForActor,
@@ -538,6 +539,7 @@ export async function buildSubmissionMapByStepIndex(
     gateCount?: number;
     hitlOwnedBy?: string;
     xRenderer?: string;
+    firesRendererGate?: boolean;
   }>,
   hitlSteps: ReadonlyArray<{ index: number; stepNumber: number }>,
 ): Promise<SubmissionMapEntries> {
@@ -597,13 +599,14 @@ export async function buildSubmissionMapByStepIndex(
   const prompts = allPrompts.filter((p) => !isContextSubmission(p.submittedValues));
 
   // Align this filter with the canonical hitlSteps predicate in
-  // instance-screens.tsx (xRenderer-only). Write paths only fire on
-  // user-visible HITL gates (i.e. steps with an xRenderer), so widening here
-  // would advance the promptCursor for steps that hitlSteps does NOT include,
-  // silently shifting every subsequent mapping by one slot. Keeping both
-  // filters identical guarantees the gateCount cursor and the stepper-index
-  // lookup stay in lockstep.
-  const gatedSteps = policySteps.filter((s) => Boolean(s.xRenderer));
+  // instance-screens.tsx via the shared stepFiresRendererGate helper. Write
+  // paths only fire on user-visible HITL gates (steps with an xRenderer that
+  // are NOT #839 metadata-only phantom gateSteps), so widening here would
+  // advance the promptCursor for steps that hitlSteps does NOT include,
+  // silently shifting every subsequent mapping by one slot. Keeping all three
+  // renderer-gate walks identical guarantees the gateCount cursor and the
+  // stepper-index lookup stay in lockstep.
+  const gatedSteps = policySteps.filter(stepFiresRendererGate);
 
   const entries: SubmissionMapEntries = [];
   let promptCursor = 0;

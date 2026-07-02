@@ -12,6 +12,7 @@ import { readAgentTemplateBySlug, readAgentRunById, readAgentRunMessages, readAg
 import { randomUUID } from "node:crypto";
 import { resolveEffectivePolicy, buildScopeReason } from "./auth-policy";
 import type { ActorRoleHints } from "./auth-policy";
+import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -181,10 +182,15 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     Object.prototype.hasOwnProperty.call(inputParams, f),
   );
 
-  // Only HITL steps (requiresApproval === true) appear in the stepper.
+  // Only real HITL renderer gates appear in the stepper — steps with an
+  // xRenderer that are NOT #839 metadata-only phantom gateSteps (a FlowNode
+  // review gateStep whose subflow fires no runtime pause). Shared predicate
+  // keeps this walk in lockstep with the live resolver (execution.ts) and the
+  // replay submission map (run-actions.ts); a mismatch shifts every prompt→step
+  // mapping by one slot.
   const policySteps = template.approvalPolicy?.steps ?? [];
   const hitlSteps = policySteps
-    .filter((s) => !!(s as { xRenderer?: string }).xRenderer)
+    .filter((s) => stepFiresRendererGate(s as { xRenderer?: string; firesRendererGate?: boolean }))
     .map((s, i) => ({
       index: i + 1,
       stepNumber: s.stepNumber,
@@ -236,7 +242,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       ? await buildSubmissionMapByStepIndex(
           run.id,
           template.packageName,
-          policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string }>,
+          policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>,
           hitlSteps.map((h) => ({ index: h.index, stepNumber: h.stepNumber })),
         )
       : [];
@@ -318,7 +324,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   templateId={template.id}
                   templateName={template.name}
                   submissionMap={submissionMap}
-                  policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string }>}
+                  policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>}
                 />
               ) : (
                 <SetupCompletionWatcher
