@@ -18,6 +18,11 @@ The handler map covers: `email_outreach_send_test_start`, `email_outreach_send_i
 `email_outreach_send_initial_status`, `email_outreach_send_initial_cancel`, and the internal
 `email_outreach_system_jobs_initial_send_run` and `email_outreach_system_process_due_follow_ups`.
 
+> The two internal `email_outreach_system_*` job primitives are **retired** under the synchronous
+> send path (the BullMQ background-worker architecture they drove no longer exists). Their tool
+> names still resolve, but the host implementation returns a typed `TriggerEmailSendNotSupported`
+> (`{ ok: false, status: "not_supported", reason }`) result rather than throwing.
+
 ## Usage
 
 ```ts

@@ -37,6 +37,16 @@ type DefaultProvidersCardProps = {
   agentCreationProvider: string | null;
   agentCreationModel: string | null;
   /**
+   * Whether the agent-creation readiness pin is active
+   * (`isAgentCreationPinActive()`). It is hardcoded `false` today, so the
+   * "Agent creation (preview)" row and its form fields stay HIDDEN — the pin
+   * gates an inert subsystem and no live LLM call consumes the persisted
+   * `agent_creation_*` settings. When the readiness gate flips, the row and its
+   * write path light up together. Optional + default-off so existing callers /
+   * tests that omit it keep the safe hidden behavior.
+   */
+  agentCreationPinActive?: boolean;
+  /**
    * The admin opt-in for uploading catalog skills to Anthropic Custom Skills.
    * DEFAULT OFF. Anthropic Custom Skills are NOT ZDR-eligible — see the
    * always-visible non-ZDR warning rendered alongside the toggle. This gates
@@ -57,6 +67,7 @@ export function DefaultProvidersCard({
   agentCreationOpenaiModels,
   agentCreationProvider,
   agentCreationModel,
+  agentCreationPinActive = false,
   anthropicSkillSyncEnabled,
 }: DefaultProvidersCardProps) {
   // LLM provider — Anthropic deactivated; to re-enable: add anthropicConnected back to the array and add SelectItem below
@@ -107,9 +118,14 @@ export function DefaultProvidersCard({
     formData.set("defaultProvider", llmValue);
     formData.set("imageProvider", imageValue);
     formData.set("classificationModel", classifModel);
-    // Per-purpose agent-creation override.
-    formData.set("agentCreationLlmProvider", acProvider);
-    if (acModel) formData.set("agentCreationModel", acModel);
+    // Per-purpose agent-creation override. Only submit these fields when the
+    // readiness pin is active — the row is hidden while it is inert, and the
+    // server action ignores them anyway, but not sending them keeps the hidden
+    // surface from persisting a value no live LLM call consumes.
+    if (agentCreationPinActive) {
+      formData.set("agentCreationLlmProvider", acProvider);
+      if (acModel) formData.set("agentCreationModel", acModel);
+    }
     // ALWAYS an explicit string so the action can
     // distinguish on/off from a legacy caller that never sent the field.
     formData.set("anthropicSkillSyncEnabled", skillSyncEnabled ? "true" : "false");
@@ -183,56 +199,64 @@ export function DefaultProvidersCard({
         </Select>
       </div>
 
-      <Separator className="my-4" />
+      {/* Row 4: Agent creation (preview) — HIDDEN while the readiness pin is
+          inert. `isAgentCreationPinActive()` is hardcoded false today, so this
+          per-purpose Anthropic selection (wired to `agent_creation_*` settings
+          that NO live LLM call consumes) is not rendered at all: operators must
+          not see a control that silently does nothing. The row and its write
+          path (gated on the same flag in handleSave + campaigns/actions.ts)
+          light up together when the readiness gate flips. It NEVER changes the
+          global default (Row 1 stays OpenAI). */}
+      {agentCreationPinActive && (
+        <>
+          <Separator className="my-4" />
 
-      {/* Row 4: Agent creation (preview).
-          The per-purpose Anthropic selection surface. Selecting Anthropic here
-          is a genuine per-purpose override wired to `agent_creation_*` settings
-          — it NEVER changes the global default (Row 1 stays OpenAI). */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-foreground">Agent creation</p>
-            <p className="text-xs text-muted-foreground">
-              Per-purpose override. Takes effect after Anthropic skill governance
-              and sync are configured. Does not change the global default.
-            </p>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Agent creation</p>
+                <p className="text-xs text-muted-foreground">
+                  Per-purpose override. Takes effect after Anthropic skill governance
+                  and sync are configured. Does not change the global default.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={acProvider}
+                  onValueChange={(v) => {
+                    setAcProvider(v);
+                    setAcModel(
+                      v === "anthropic"
+                        ? (anthropicModels[0] ?? "")
+                        : (agentCreationOpenaiModels[0] ?? ""),
+                    );
+                  }}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                    {anthropicConnected && (
+                      <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                <Select value={acModel} onValueChange={setAcModel}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="Default model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {acModelOptions.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Select
-              value={acProvider}
-              onValueChange={(v) => {
-                setAcProvider(v);
-                setAcModel(
-                  v === "anthropic"
-                    ? (anthropicModels[0] ?? "")
-                    : (agentCreationOpenaiModels[0] ?? ""),
-                );
-              }}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                {anthropicConnected && (
-                  <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-            <Select value={acModel} onValueChange={setAcModel}>
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Default model" />
-              </SelectTrigger>
-              <SelectContent>
-                {acModelOptions.map((m) => (
-                  <SelectItem key={m} value={m}>{m}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       <Separator className="my-4" />
 

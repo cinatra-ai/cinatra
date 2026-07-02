@@ -8,7 +8,7 @@ import { Main } from "@/components/layout/main";
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { Label } from "@/components/ui/label";
-import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase } from "@/lib/database";
+import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, readAnthropicSkillSyncEnabledFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -331,6 +331,11 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                   agentCreationOpenaiModels={["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5", "gpt-5-mini"]}
                   agentCreationProvider={readAgentCreationLlmProviderFromDatabase()}
                   agentCreationModel={readAgentCreationModelFromDatabase()}
+                  // The per-purpose agent-creation override is an inert subsystem
+                  // (isAgentCreationPinActive() is hardcoded false). Hide its admin
+                  // inputs until the readiness gate flips so operators cannot set a
+                  // value that no live LLM call consumes.
+                  agentCreationPinActive={isAgentCreationPinActive()}
                   anthropicSkillSyncEnabled={readAnthropicSkillSyncEnabledFromDatabase()}
                 />
               </CardContent>
