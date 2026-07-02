@@ -160,7 +160,41 @@ describe("materializePackageToStore — step 4.7 plan execution", () => {
     expect(second.storeDir).toBe(first.storeDir);
   });
 
-  it("REUSE mismatch FAILS LOUD and NON-DESTRUCTIVELY: a same-digest dir materialized under a DIFFERENT/ABSENT plan is refused, never deleted, never silently reused", async () => {
+  it("REUSE mismatch FAILS LOUD and NON-DESTRUCTIVELY: a same-digest dir materialized under a DIFFERENT plan is refused, never deleted, never silently reused", async () => {
+    // cinatra#791 NOTE: the reuse check now runs AFTER the install gates, so a
+    // plan/manifest disagreement is refused by the reconcile gate BEFORE reuse
+    // (see the "plan-vs-manifest reconcile refusals stay loud" case below). The
+    // reuse closureHash check remains load-bearing for the case the gates CAN'T
+    // catch: the SAME tarball digest materialized under a DIFFERENT (still
+    // manifest-consistent) plan — e.g. a plan pinning different node bytes.
+    const leftPadV1 = await leftPadBytes();
+    const leftPadV2 = await makeTarball(
+      { name: "left-pad", version: "1.3.0" },
+      { "index.js": "module.exports = function leftPad(s){return String(s)};\n" },
+    );
+    const ext = await makeClosureExtension();
+    const planA = makePlanFor(EXT, VER, leftPadV1);
+    const planB = makePlanFor(EXT, VER, leftPadV2);
+    expect(planB.closureHash).not.toBe(planA.closureHash);
+
+    const storeRoot = await tempDir("store-");
+    const underPlanA = await materializePackageToStore(
+      { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot, plan: planA.plan, expectedClosureHash: planA.closureHash },
+      { fetchTarball: fetchFor(ext, leftPadV1) },
+    );
+    expect(underPlanA.reused).toBe(false);
+    // Same tarball digest, DIFFERENT plan → FAIL-LOUD refusal at the reuse check…
+    await expect(
+      materializePackageToStore(
+        { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot, plan: planB.plan, expectedClosureHash: planB.closureHash },
+        { fetchTarball: fetchFor(ext, leftPadV2) },
+      ),
+    ).rejects.toThrow(/does not match the expected plan/);
+    // …and the possibly-live dir was NOT destroyed (non-destructive).
+    expect(existsSync(path.join(underPlanA.storeDir, "package.json"))).toBe(true);
+  });
+
+  it("plan-vs-manifest reconcile refusals stay loud + non-destructive under the post-extract gate order (cinatra#791)", async () => {
     const leftPad = await leftPadBytes();
     // An extension whose manifest carries NO unbundled deps, so it ALSO
     // materializes plan-less (simulating a pre-closure installer's dir).
@@ -174,17 +208,20 @@ describe("materializePackageToStore — step 4.7 plan execution", () => {
       { fetchTarball: fetchFor(ext, leftPad) },
     );
     expect(planless.reused).toBe(false);
-    // Same digest, but NOW a plan is expected → FAIL-LOUD refusal…
+    // Same digest, but NOW a plan is expected: the plan/manifest reconcile gate
+    // (which runs BEFORE the reuse check) refuses loudly.
     const { plan, closureHash } = makePlanFor(EXT, VER, leftPad);
     await expect(
       materializePackageToStore(
         { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext), storeRoot, plan, expectedClosureHash: closureHash },
         { fetchTarball: fetchFor(ext, leftPad) },
       ),
-    ).rejects.toThrow(/does not match the expected plan/);
+    ).rejects.toThrow(/plan and manifest must reconcile/);
     // …and the possibly-live dir was NOT destroyed (non-destructive).
     expect(existsSync(path.join(planless.storeDir, "package.json"))).toBe(true);
-    // The inverse direction (dir HAS a closureHash, caller expects none) also fails loud.
+    // The inverse direction (dir HAS a closureHash, caller expects none): the
+    // closure package's unbundled dep is no longer covered without the plan, so
+    // the bundled-deps gate refuses loudly — again BEFORE anything is deleted.
     const ext2 = await makeClosureExtension();
     const storeRoot2 = await tempDir("store-");
     const withPlan = await materializePackageToStore(
@@ -197,7 +234,7 @@ describe("materializePackageToStore — step 4.7 plan execution", () => {
         { packageName: EXT, version: VER, expectedIntegrity: sriForBytes(ext2), storeRoot: storeRoot2 },
         { fetchTarball: fetchFor(ext2, leftPad) },
       ),
-    ).rejects.toThrow(/does not match the expected plan/);
+    ).rejects.toThrow(/neither bundled in the tarball\s+nor covered by a signed materialization plan|nor covered by a signed/);
     expect(existsSync(path.join(withPlan.storeDir, "node_modules/left-pad/index.js"))).toBe(true);
   });
 

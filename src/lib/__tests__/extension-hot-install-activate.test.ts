@@ -546,7 +546,8 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
     // dir first). Exercise the pure driver directly over the real discovered
     // records (integrity verified true here — the duplicate-name gate, not
     // integrity, is what must refuse).
-    const { runRuntimePackageActivation, discoverPackageStoreRecords } = await import("@cinatra-ai/sdk-extensions");
+    const { runRuntimePackageActivation } = await import("@cinatra-ai/sdk-extensions");
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
     const driverFs = {
       exists: async (p: string) => pathExists(p),
       isDirectory: async (p: string) => {
@@ -559,7 +560,7 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
       readdir: (p: string) => readdir(p),
       readFile: (p: string) => readFile(p, "utf8"),
     };
-    const discovered = await discoverPackageStoreRecords(storeRoot, driverFs);
+    const discovered = await discoverStoreRecordsV2(storeRoot, driverFs);
     expect(discovered.filter((r) => r.packageName === PKG), "two records for one name").toHaveLength(2);
     const dupResults = await runRuntimePackageActivation(storeRoot, {
       fs: driverFs,
@@ -1242,51 +1243,44 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
-/** Find any `.cinatra-quarantine` subtree dirs under the store root (Design B). A
- *  successful GC / restore must leave NONE behind. */
+/** Find any `.cinatra-quarantine` subtree dirs ANYWHERE under the store root
+ *  (Design B; V2 layout puts them at `<root>/<kind>/<slug>/.cinatra-quarantine`,
+ *  a recursive walk keeps the assertion layout-proof). A successful GC /
+ *  restore must leave NONE behind. */
 async function findQuarantineDirs(storeRoot: string): Promise<string[]> {
   const out: string[] = [];
-  let pkgDirs: string[];
-  try {
-    pkgDirs = await readdir(storeRoot);
-  } catch {
-    return [];
-  }
-  for (const pkgDir of pkgDirs) {
-    const qRoot = path.join(storeRoot, pkgDir, ".cinatra-quarantine");
-    if (await pathExists(qRoot)) {
-      try {
-        const subs = await readdir(qRoot);
-        for (const s of subs) out.push(path.join(qRoot, s));
-      } catch {
-        /* skip */
+  async function walk(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const abs = path.join(dir, e.name);
+      if (e.name === ".cinatra-quarantine") {
+        try {
+          for (const s of await readdir(abs)) out.push(path.join(abs, s));
+        } catch {
+          /* skip */
+        }
+        continue;
       }
+      await walk(abs);
     }
   }
+  await walk(storeRoot);
   return out;
 }
 
-/** The materialize layout is `<root>/<pkg@ver>/<digest>/` — return the digest
- *  subdirs that currently hold a package.json (i.e. live materialized records). */
+/** The V2 materialize layout is `<root>/<kind>/<slug>/<digest>/` (cinatra#791) —
+ *  return the digest subdirs that currently hold a package.json (i.e. live
+ *  materialized records), via the same host-side discovery the loader uses. */
 async function readStoreDigestDirs(storeRoot: string): Promise<string[]> {
-  const out: string[] = [];
-  let pkgDirs: string[];
-  try {
-    pkgDirs = await readdir(storeRoot);
-  } catch {
-    return [];
-  }
-  for (const pkgDir of pkgDirs) {
-    const abs = path.join(storeRoot, pkgDir);
-    if (!(await stat(abs)).isDirectory()) continue;
-    for (const sub of await readdir(abs)) {
-      const subAbs = path.join(abs, sub);
-      if ((await stat(subAbs)).isDirectory() && (await pathExists(path.join(subAbs, "package.json")))) {
-        out.push(subAbs);
-      }
-    }
-  }
-  return out;
+  const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+  const records = await discoverStoreRecordsV2(storeRoot);
+  return records.map((r) => r.storeDir);
 }
 
 // ===========================================================================

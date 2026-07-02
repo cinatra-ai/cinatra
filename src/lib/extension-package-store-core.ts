@@ -35,76 +35,10 @@ import ts from "typescript";
 // Store path layout
 // ---------------------------------------------------------------------------
 
-/**
- * Map a package name to a single, filesystem-safe directory segment. A scoped
- * name (`@scope/name`) would otherwise inject a `/` into the path and break the
- * loader's two-level `<pkgDir>/<digest>/` discovery, so the leading `@` is
- * dropped and the scope separator becomes `__`. The package identity the loader
- * actually trusts is read from the materialized `package.json`, not from this
- * label — this only needs to be unique-per-package and path-safe.
- */
-export function storePackageDirName(packageName: string, version: string): string {
-  const safeName = sanitizeStoreSegment(packageName);
-  const safeVersion = sanitizeStoreSegment(version);
-  // A short hash of the CANONICAL package name guarantees uniqueness even when
-  // two distinct names sanitize to the same label (e.g. `@a/b` vs `a__b` both
-  // -> `a__b`). The digest subdir disambiguates content; this disambiguates the
-  // parent label.
-  const nameHash = createHash("sha256").update(packageName).digest("hex").slice(0, 10);
-  return `${safeName}@${safeVersion}__${nameHash}`;
-}
-
-/**
- * Sanitize one path segment: strip a leading `@`, replace scope/path separators
- * with `__`, and reject anything that could escape the store root. Throws on a
- * traversal attempt (`..`, absolute, NUL) rather than silently rewriting it.
- */
-export function sanitizeStoreSegment(input: string): string {
-  if (!input || typeof input !== "string") {
-    throw new Error(`[package-store] invalid store segment: ${JSON.stringify(input)}`);
-  }
-  if (input.includes("\0")) {
-    throw new Error(`[package-store] NUL byte in store segment`);
-  }
-  const cleaned = input.replace(/^@/, "").replace(/\//g, "__");
-  // After normalization, only [A-Za-z0-9._-] (plus the `__` scope marker) are
-  // allowed. A `..` segment or any other char is a hard refusal.
-  if (cleaned.split("__").some((seg) => seg === ".." || seg === ".")) {
-    throw new Error(`[package-store] refusing traversal-unsafe segment: ${input}`);
-  }
-  if (!/^[A-Za-z0-9._-]+$/.test(cleaned.replace(/__/g, ""))) {
-    throw new Error(`[package-store] unsafe characters in store segment: ${input}`);
-  }
-  return cleaned;
-}
-
-/**
- * Compute the absolute store directory for a materialized package:
- *   `<storeRoot>/<sanitized pkg@ver>/<digest>/`
- * `digest` is the hex tarball digest (see `tarballDigestSegment`).
- */
-export function storePackageDir(
-  storeRoot: string,
-  packageName: string,
-  version: string,
-  digest: string,
-): string {
-  const dirName = storePackageDirName(packageName, version);
-  const safeDigest = sanitizeStoreSegment(digest);
-  return joinPosix(storeRoot, dirName, safeDigest);
-}
-
-/** The sibling path holding the verified original tarball, for boot re-verify. */
-export function storeTarballPath(
-  storeRoot: string,
-  packageName: string,
-  version: string,
-  digest: string,
-): string {
-  const dirName = storePackageDirName(packageName, version);
-  const safeDigest = sanitizeStoreSegment(digest);
-  return joinPosix(storeRoot, dirName, `${safeDigest}.tgz`);
-}
+// (cinatra#791) The V1 `<pkg@ver__hash>/<digest>` layout helpers
+// (storePackageDirName / sanitizeStoreSegment / storePackageDir /
+// storeTarballPath) are RETIRED — the V2 kind-segregated layout below is the
+// only store grammar (clean cutover, no back-compat).
 
 function joinPosix(...parts: string[]): string {
   return parts
@@ -622,3 +556,132 @@ export type StoreSidecar = {
   /** ISO timestamp (host-supplied, not from the package). */
   materializedAt: string;
 };
+
+// ---------------------------------------------------------------------------
+// V2 content-addressed store layout (cinatra#790/#791)
+// ---------------------------------------------------------------------------
+//
+// One configurable data root, kind-segregated, content-addressed:
+//
+//   <root>/<kind>/<slug>/<digest>/           payload (package.json at top)
+//   <root>/<kind>/<slug>/<digest>.tgz        verified tarball (boot re-verify)
+//   <root>/<kind>/<slug>/<digest>/.cinatra-store.json   sidecar
+//   <root>/<kind>/<slug>/current             plain-text active digest (MIRROR /
+//                                            ops+GC hint ONLY — never a boot
+//                                            selector or trust input)
+//   <root>/.staging/                         same-fs staging (invisible to discovery)
+//
+// `slug` is the npm package name VERBATIM as path segments (`@scope/name` →
+// `@scope/` + `name/`; unscoped → one segment). The npm name grammar is the
+// only sanitizer: names are validated and REJECTED on any deviation, never
+// rewritten (the `@` prefix disambiguates scope dirs from unscoped package
+// dirs during discovery, mirroring node_modules). `digest` stays the full hex
+// sha512 of the exact tarball bytes (`tarballDigestSegment`). Version is NOT
+// in the path — the digest content-addresses; the materializer binds the
+// extracted manifest's name+version to the requested install instead.
+
+/** The extension kinds the store segregates by (== the installed_extension DDL enum). */
+export const EXTENSION_STORE_KINDS = [
+  "agent",
+  "connector",
+  "artifact",
+  "skill",
+  "workflow",
+] as const;
+
+export type ExtensionStoreKind = (typeof EXTENSION_STORE_KINDS)[number];
+
+export function isExtensionStoreKind(value: unknown): value is ExtensionStoreKind {
+  return typeof value === "string" && (EXTENSION_STORE_KINDS as readonly string[]).includes(value);
+}
+
+/** Same-filesystem staging dir under the data root (dot-dir → invisible to discovery). */
+export const STORE_STAGING_DIRNAME = ".staging";
+
+/** The plain-text active-digest mirror filename inside a slug dir. */
+export const STORE_CURRENT_FILENAME = "current";
+
+// The npm package-name grammar (modern names; legacy uppercase names are NOT
+// extensions and are refused). Segments cannot start with `.` or `_`, so a
+// validated name can never traverse (`..`) or collide with the dot-prefixed
+// staging/sidecar entries; `/` appears only as the single scope separator.
+const NPM_NAME_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+
+/**
+ * Validate an npm package name for use as a V2 store slug. Throws on anything
+ * outside the modern npm name grammar — validate-and-reject, never rewrite.
+ */
+export function assertValidStorePackageName(packageName: string): void {
+  if (
+    typeof packageName !== "string" ||
+    packageName.length === 0 ||
+    packageName.length > 214 ||
+    !NPM_NAME_RE.test(packageName)
+  ) {
+    throw new Error(
+      `[package-store] invalid extension package name for the store slug: ${JSON.stringify(packageName)}`,
+    );
+  }
+}
+
+/** The slug path segments for a package name: `@scope/name` → ["@scope","name"]. */
+export function storeSlugSegments(packageName: string): string[] {
+  assertValidStorePackageName(packageName);
+  return packageName.split("/");
+}
+
+/** True when `segment` is a well-formed hex tarball-digest path segment. */
+export function isStoreDigestSegment(segment: string): boolean {
+  return /^[0-9a-f]{64,128}$/.test(segment);
+}
+
+function assertStoreDigestSegment(digest: string): void {
+  if (!isStoreDigestSegment(digest)) {
+    throw new Error(`[package-store] invalid store digest segment: ${JSON.stringify(digest)}`);
+  }
+}
+
+/** `<root>/<kind>/<slug>/` — the per-package dir holding digest dirs + `current`. */
+export function storeSlugDirV2(dataRoot: string, kind: ExtensionStoreKind, packageName: string): string {
+  return joinPosix(dataRoot, kind, ...storeSlugSegments(packageName));
+}
+
+/** `<root>/<kind>/<slug>/<digest>/` — the materialized payload dir. */
+export function storeDigestDirV2(
+  dataRoot: string,
+  kind: ExtensionStoreKind,
+  packageName: string,
+  digest: string,
+): string {
+  assertStoreDigestSegment(digest);
+  return joinPosix(storeSlugDirV2(dataRoot, kind, packageName), digest);
+}
+
+/** `<root>/<kind>/<slug>/<digest>.tgz` — the verified-tarball sibling. */
+export function storeTarballPathV2(
+  dataRoot: string,
+  kind: ExtensionStoreKind,
+  packageName: string,
+  digest: string,
+): string {
+  return `${storeDigestDirV2(dataRoot, kind, packageName, digest)}.tgz`;
+}
+
+/** `<root>/<kind>/<slug>/current` — the plain-text active-digest mirror. */
+export function currentFilePathV2(
+  dataRoot: string,
+  kind: ExtensionStoreKind,
+  packageName: string,
+): string {
+  return joinPosix(storeSlugDirV2(dataRoot, kind, packageName), STORE_CURRENT_FILENAME);
+}
+
+/**
+ * Parse a `current` file's raw text → the digest it names, or null when the
+ * content is not a well-formed digest segment (empty/garbage → null, never a
+ * throw — the file is a mirror, not a trust input).
+ */
+export function parseCurrentFileText(raw: string): string | null {
+  const trimmed = raw.trim();
+  return isStoreDigestSegment(trimmed) ? trimmed : null;
+}
