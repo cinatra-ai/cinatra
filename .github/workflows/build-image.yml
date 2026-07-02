@@ -2210,6 +2210,10 @@ jobs:
     environment: release-approval
     permissions:
       contents: read
+      # `imagetools inspect` below reads the PRIVATE release image from GHCR to
+      # confirm it resolves before dispatching the deploy; that read requires
+      # `packages: read` (the anonymous fetch 401s on the private package).
+      packages: read
     steps:
       # Release clearance gate (machine assertion, fail-closed) — see the note on
       # publish-release-image. Independently re-checked here so the outward deploy
@@ -2238,6 +2242,19 @@ jobs:
             exit 1
           fi
           echo "::notice::Release clearance confirmed for '$TAG'."
+
+      # Authenticate to GHCR so the `imagetools inspect` guard below can resolve
+      # the PRIVATE release image (ghcr.io/cinatra-ai/cinatra). Without this the
+      # anonymous fetch 401s and the job dies BEFORE dispatching the deploy — the
+      # prior-milestone prod-deploy defect. Mirrors the Login to GHCR step in
+      # publish-release-image; GITHUB_TOKEN has packages:read for this repo's own
+      # package.
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trigger prod deploy in ops
         env:
