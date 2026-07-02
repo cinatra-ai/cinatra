@@ -25,6 +25,10 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { MarketplaceMcpError, type MarketplaceMcpClient } from "./client";
 import type {
   ExtensionVisibility,
+  MarketplaceDetailBadge,
+  MarketplaceRatingSummary,
+  MarketplaceReview,
+  MarketplaceVendorRef,
   MarketplaceExtensionGetInput,
   MarketplaceExtensionGetOutput,
   MarketplaceExtensionGetWire,
@@ -516,7 +520,98 @@ function mapExtensionGetWire(
     versionHistory,
     sdkAbiRange: wire.sdk_abi_range ?? wire.sdkAbiRange ?? null,
     bannerUrl: wire.banner_url ?? wire.bannerUrl ?? null,
+    // In-app extension-detail modal contract. Every field defaults safely so an
+    // older payload (which omits them) still maps to a valid ExtensionDetail.
+    displayName: normDetailString(wire.display_name) ?? normDetailString(wire.name),
+    kindLabel: normDetailString(wire.kind_label),
+    commerceBadge: mapDetailBadge(wire.badge),
+    freshnessAt: normDetailString(wire.freshness_at),
+    installCount: normDetailCount(wire.install_count),
+    permalink: normDetailString(wire.permalink),
+    iconUrl: safeDetailHttpUrl(wire.icon_url?.url),
+    ratingSummary: mapDetailRatingSummary(wire.rating_summary),
+    reviews: mapDetailReviews(wire.reviews),
+    vendor: mapDetailVendor(wire.vendor),
   };
+}
+
+// --- In-app detail-modal wire normalizers (pure, defensive) ------------------
+// The public REST detail is our own endpoint, but the mapper stays defensive so
+// a malformed/partial payload degrades to safe defaults rather than crashing the
+// modal. NONE of these ever surface a field the contract redacts.
+
+function normDetailString(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+function normDetailCount(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null;
+}
+
+function safeDetailHttpUrl(v: unknown): string | null {
+  if (typeof v !== "string" || v.trim() === "") return null;
+  try {
+    const protocol = new URL(v).protocol;
+    return protocol === "http:" || protocol === "https:" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function mapDetailBadge(b: MarketplaceExtensionGetWire["badge"]): MarketplaceDetailBadge | null {
+  if (!b || typeof b !== "object") return null;
+  const text = normDetailString(b.text);
+  if (text === null) return null;
+  return { text, variant: normDetailString(b.variant) ?? "", license: normDetailString(b.license) };
+}
+
+function mapDetailRatingSummary(
+  s: MarketplaceExtensionGetWire["rating_summary"],
+): MarketplaceRatingSummary | null {
+  if (!s || typeof s !== "object") return null;
+  const rawCounts = s.counts && typeof s.counts === "object" ? s.counts : {};
+  const counts = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } as MarketplaceRatingSummary["counts"];
+  for (const star of ["1", "2", "3", "4", "5"] as const) {
+    const n = (rawCounts as Record<string, number>)[star];
+    counts[star] = typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  }
+  const averageRaw =
+    typeof s.average === "number" && Number.isFinite(s.average) && s.average >= 0 ? s.average : 0;
+  // Cap to the 0..5 star scale so a malformed payload can never paint a garbage
+  // average (the star row clamps too, but the numeric label reads this directly).
+  const average = Math.min(5, averageRaw);
+  const total = typeof s.total === "number" && Number.isFinite(s.total) && s.total >= 0 ? Math.floor(s.total) : 0;
+  return { average, total, counts };
+}
+
+function mapDetailReviews(list: MarketplaceExtensionGetWire["reviews"]): MarketplaceReview[] {
+  if (!Array.isArray(list)) return [];
+  const out: MarketplaceReview[] = [];
+  for (const r of list) {
+    if (!r || typeof r !== "object") continue;
+    const rating =
+      typeof r.rating === "number" && Number.isFinite(r.rating)
+        ? Math.min(5, Math.max(0, Math.floor(r.rating)))
+        : 0;
+    if (rating < 1 || rating > 5) continue;
+    out.push({
+      author: normDetailString(r.author) ?? "Anonymous",
+      verifiedOwner: r.verified_owner === true,
+      date: normDetailString(r.date),
+      rating,
+      text: typeof r.text === "string" ? r.text : "",
+    });
+  }
+  return out;
+}
+
+function mapDetailVendor(v: MarketplaceExtensionGetWire["vendor"]): MarketplaceVendorRef | null {
+  if (!v || typeof v !== "object") return null;
+  const name = normDetailString(v.name) ?? "";
+  const slug = normDetailString(v.slug) ?? "";
+  const storeUrl = safeDetailHttpUrl(v.store_url);
+  if (name === "" && slug === "" && storeUrl === null) return null;
+  return { name, slug, storeUrl };
 }
 
 /** Methods whose backing marketplace ability does not exist yet. */
