@@ -37,6 +37,16 @@ type DefaultProvidersCardProps = {
   agentCreationProvider: string | null;
   agentCreationModel: string | null;
   /**
+   * Whether the agent-creation readiness pin is active
+   * (`isAgentCreationPinActive()`). It is hardcoded `false` today, so the
+   * "Agent creation (preview)" row and its form fields stay HIDDEN — the pin
+   * gates an inert subsystem and no live LLM call consumes the persisted
+   * `agent_creation_*` settings. When the readiness gate flips, the row and its
+   * write path light up together. Optional + default-off so existing callers /
+   * tests that omit it keep the safe hidden behavior.
+   */
+  agentCreationPinActive?: boolean;
+  /**
    * The admin opt-in for uploading catalog skills to Anthropic Custom Skills.
    * DEFAULT OFF. Anthropic Custom Skills are NOT ZDR-eligible — see the
    * always-visible non-ZDR warning rendered alongside the toggle. This gates
@@ -57,6 +67,7 @@ export function DefaultProvidersCard({
   agentCreationOpenaiModels,
   agentCreationProvider,
   agentCreationModel,
+  agentCreationPinActive = false,
   anthropicSkillSyncEnabled,
 }: DefaultProvidersCardProps) {
   // LLM provider — Anthropic deactivated; to re-enable: add anthropicConnected back to the array and add SelectItem below
@@ -107,9 +118,14 @@ export function DefaultProvidersCard({
     formData.set("defaultProvider", llmValue);
     formData.set("imageProvider", imageValue);
     formData.set("classificationModel", classifModel);
-    // Per-purpose agent-creation override.
-    formData.set("agentCreationLlmProvider", acProvider);
-    if (acModel) formData.set("agentCreationModel", acModel);
+    // Per-purpose agent-creation override. Only submit these fields when the
+    // readiness pin is active — the row is hidden while it is inert, and the
+    // server action ignores them anyway, but not sending them keeps the hidden
+    // surface from persisting a value no live LLM call consumes.
+    if (agentCreationPinActive) {
+      formData.set("agentCreationLlmProvider", acProvider);
+      if (acModel) formData.set("agentCreationModel", acModel);
+    }
     // ALWAYS an explicit string so the action can
     // distinguish on/off from a legacy caller that never sent the field.
     formData.set("anthropicSkillSyncEnabled", skillSyncEnabled ? "true" : "false");

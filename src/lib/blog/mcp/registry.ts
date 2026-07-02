@@ -31,11 +31,11 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     inputSchema: schemas.projectIdSchema,
   },
   "blog_project_create": {
-    description: "Create a new blog project and start idea generation from transcripts.",
+    description: "Retired: returns a not_supported result. Use the blog pipeline agent's idea_flow to create a project and generate ideas.",
     inputSchema: schemas.createProjectSchema,
   },
   "blog_post_ideas_generate_start": {
-    description: "Start generating blog post ideas from the project's linked transcripts.",
+    description: "Retired: returns a not_supported result. Use the blog pipeline agent's idea_flow to generate blog post ideas.",
     inputSchema: schemas.createProjectSchema,
   },
   "blog_post_ideas_generate_cancel": {
@@ -101,7 +101,7 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
     inputSchema: schemas.projectIdSchema,
   },
   "blog_media_image_save": {
-    description: "Save the generated hero image to the media library.",
+    description: "Retired: returns a not_supported result. Blog images are canonical blog image artifacts, reachable through /artifacts.",
     inputSchema: schemas.saveImageToMediaSchema,
   },
   "blog_media_list": {

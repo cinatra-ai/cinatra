@@ -13,13 +13,25 @@ export type AsyncOperationState = {
   resultSummary?: string;
 };
 
+// The two `email_outreach_system_*` job primitives are retired under the
+// synchronous send path (the BullMQ background-worker architecture they drove no
+// longer exists). They stay in the contract so their MCP tool names still
+// resolve, but an implementation MUST return this typed not_supported result
+// rather than throwing when invoked — no agent-facing MCP tool should throw
+// instead of returning a typed unsupported result.
+export type TriggerEmailSendNotSupported = {
+  ok: false;
+  status: "not_supported";
+  reason: string;
+};
+
 export type TriggerEmailSendUseCases = {
   sendTestEmail(input: { campaignId: string; recipientEmail: string; selectionMode: "random_initial" | "specific_initial" | "all_initial"; specificInitialDraftIds?: string[]; specificFollowUpDraftIds?: string[] }, actor: PrimitiveActorContext): Promise<Record<string, unknown>>;
   startInitialSend(input: { serviceId: string; campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   getInitialSendStatus(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   cancelInitialSend(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
-  runInitialSendWorker(input: { serviceId: string; campaignId: string; jobId: string }, actor: PrimitiveActorContext): Promise<{ ok: true; jobId: string }>;
-  processDueFollowUps(input: { campaignId?: string }, actor: PrimitiveActorContext): Promise<{ ok: true }>;
+  runInitialSendWorker(input: { serviceId: string; campaignId: string; jobId: string }, actor: PrimitiveActorContext): Promise<{ ok: true; jobId: string } | TriggerEmailSendNotSupported>;
+  processDueFollowUps(input: { campaignId?: string }, actor: PrimitiveActorContext): Promise<{ ok: true } | TriggerEmailSendNotSupported>;
 };
 
 export function createTriggerEmailSendHandlers(useCases: TriggerEmailSendUseCases) {
