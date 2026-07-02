@@ -92,7 +92,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { getOrAddWayflowGateIndex } from "@cinatra-ai/a2a";
+import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
 // host-side caller injects the live `email-send` providers so sender-alias
@@ -235,6 +235,31 @@ export function stripCinatraEndNodeOutputMessages(
 // idx=0 for every resume and the setup-form to re-appear instead of advancing.
 // ---------------------------------------------------------------------------
 
+// #824: does the active interrupt's parsed output carry the FULL context-selector
+// signature? That exact shape (slotMeta.{slotId,resolutionMode} + candidates[] +
+// selectedRefs[]) is emitted ONLY by the context-selection-agent's
+// emit_context_payload node, so it unambiguously identifies a context gate at
+// runtime — the "describe the actual gate that paused" signal. Renderer
+// resolution for context gates is driven by this shape, NOT by the policy gate
+// index (context steps carry no xRenderer, so an index-based mapping misroutes
+// them to the next xRenderer-bearing step). Shape-only, no substring/package
+// reliance. A hypothetical false match would merely render a selection UI.
+function isContextSelectorInterruptPayload(
+  parsed: Record<string, unknown>,
+): boolean {
+  const slotMeta = parsed["slotMeta"] as
+    | { slotId?: unknown; resolutionMode?: unknown }
+    | undefined;
+  return (
+    !!slotMeta &&
+    typeof slotMeta === "object" &&
+    typeof slotMeta.slotId === "string" &&
+    typeof slotMeta.resolutionMode === "string" &&
+    Array.isArray(parsed["candidates"]) &&
+    Array.isArray(parsed["selectedRefs"])
+  );
+}
+
 async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
@@ -279,7 +304,10 @@ async function resolveWayflowXRenderer(
 
   // Redis-backed index: survives hot-reloads and restarts unlike a module-level
   // Map that can reset between the BullMQ dispatch and server-action approval.
-  const idx = await getOrAddWayflowGateIndex(runId, taskId);
+  // #824: index into the RENDERER-gate sequence (excludes context-selection
+  // gates, which are resolved by payload shape and never consume a policy slot),
+  // so this stays aligned with `childSteps` even when context gates interleave.
+  const idx = await getOrAddWayflowRendererGateIndex(runId, taskId);
 
   // gateCount tells the resolver how many orchestrator-level input-required events
   // a single approval step spans.
@@ -414,21 +442,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
     console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
-    // Resolve the xRenderer + stepNumber from the template's approvalPolicy so
-    // each child HITL step shows its custom renderer and the stepper advances.
-    let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
-    let wayflowStepNumber: number | null = null;
-    let wayflowSchema: Record<string, unknown> | null = null;
-    try {
-      const tmpl = await readAgentTemplateById(run.templateId);
-      const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
-        stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>;
-      }>;
-      ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema } =
-        await resolveWayflowXRenderer(runId, task.id, policySteps));
-    } catch {
-      // non-fatal — fallback renderer is acceptable
-    }
     // HITL renderers resolve campaignId via context.runId (passed
     // at agentic-run-panel.tsx:378) and a typed-object lookup. We no longer
     // enrich the HITL SSE payload with a precomputed campaignId.
@@ -480,6 +493,41 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         return {};
       }
     })();
+    // Resolve the xRenderer + stepNumber. #824: a context-selection child gate
+    // carries NO xRenderer in the compiled approvalPolicy (it is compiled
+    // requiresApproval:false because interactive-vs-autonomous is a RUNTIME
+    // decision), yet it fires a real HITL interrupt. An index-based mapping over
+    // xRenderer-bearing policy steps therefore misroutes the context gate to the
+    // next such step (e.g. reviewer-agent:output) — dumping the raw context
+    // envelope — AND drifts every later gate. So:
+    //   • Context gate (detected by the unambiguous payload SIGNATURE): resolve
+    //     the context-selector renderer directly, and record the task→run map
+    //     WITHOUT consuming a renderer-gate index slot — keeping the context
+    //     gate transparent so later xRenderer-bearing gates stay aligned.
+    //   • Otherwise: resolve via the approvalPolicy, indexed by the
+    //     RENDERER-gate sequence (getOrAddWayflowRendererGateIndex, which
+    //     excludes context gates).
+    // Does not touch the registry, the renderer, or the /api/context-finalize
+    // envelope contract.
+    let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+    let wayflowStepNumber: number | null = null;
+    let wayflowSchema: Record<string, unknown> | null = null;
+    try {
+      if (isContextSelectorInterruptPayload(spreadFromOutput)) {
+        wayflowXRenderer =
+          resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+        await rememberWayflowGateTask(runId, task.id);
+      } else {
+        const tmpl = await readAgentTemplateById(run.templateId);
+        const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
+          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>;
+        }>;
+        ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema } =
+          await resolveWayflowXRenderer(runId, task.id, policySteps));
+      }
+    } catch {
+      // non-fatal — fallback renderer is acceptable
+    }
     const enrichedValues: Record<string, unknown> = {
       ...(run.inputParams ?? {}),
       ...spreadFromOutput,

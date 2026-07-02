@@ -382,6 +382,52 @@ export async function getOrAddWayflowGateIndex(
 }
 
 /**
+ * #824: record a WayFlow gate task WITHOUT assigning it a renderer-gate index.
+ * Keeps the all-gate list (`cinatra:wayflow:gates:<runId>`) + the task→run
+ * reverse-map complete for EVERY gate (so `resolveRunIdByWayflowTaskId` still
+ * resolves context gates), but does not advance the renderer-gate sequence.
+ * Used for context-selection gates, whose renderer is resolved by payload shape
+ * (not by policy index), so they must be transparent to the renderer index that
+ * maps xRenderer-bearing policy steps to gate events.
+ */
+export async function rememberWayflowGateTask(
+  runId: string,
+  taskId: string,
+): Promise<void> {
+  const key = `cinatra:wayflow:gates:${runId}`;
+  const r = getPublisher();
+  await r.set(`cinatra:wayflow:task-run:${taskId}`, runId, "EX", GATE_SEQUENCE_TTL_S);
+  const list = (await r.lrange(key, 0, -1)) as string[];
+  if (list.indexOf(taskId) !== -1) return;
+  await r.rpush(key, taskId);
+  await r.expire(key, GATE_SEQUENCE_TTL_S);
+}
+
+/**
+ * #824: index into the RENDERER-gate sequence — the ordered set of gates that
+ * consume an xRenderer-bearing approvalPolicy step. Context-selection gates are
+ * excluded (they call `rememberWayflowGateTask` only), so this index stays
+ * aligned with `resolveWayflowXRenderer`'s `childSteps` list even when context
+ * gates interleave. Mirrors `getOrAddWayflowGateIndex` but on a separate list
+ * (`cinatra:wayflow:renderer-gates:<runId>`); also keeps the all-gate list +
+ * reverse-map current via `rememberWayflowGateTask`.
+ */
+export async function getOrAddWayflowRendererGateIndex(
+  runId: string,
+  taskId: string,
+): Promise<number> {
+  await rememberWayflowGateTask(runId, taskId);
+  const key = `cinatra:wayflow:renderer-gates:${runId}`;
+  const r = getPublisher();
+  const list = (await r.lrange(key, 0, -1)) as string[];
+  const existing = list.indexOf(taskId);
+  if (existing !== -1) return existing;
+  await r.rpush(key, taskId);
+  await r.expire(key, GATE_SEQUENCE_TTL_S);
+  return list.length; // new renderer-gate index = old list length
+}
+
+/**
  * Reverse lookup: WayFlow task id → agent run id.
  *
  * Backs the multi-gate resume path: when `readAgentRunByTaskId` misses

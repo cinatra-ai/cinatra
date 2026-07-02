@@ -568,7 +568,33 @@ export async function buildSubmissionMapByStepIndex(
   const run = await readAgentRunById(runId, actor).catch(() => null);
   if (!run) return [];
 
-  const prompts = await readAllHitlPromptsForRun(runId, agentId); // capturedAt asc
+  const allPrompts = await readAllHitlPromptsForRun(runId, agentId); // capturedAt asc
+  // #824: context-selection gate approvals are persisted as prompt rows, but a
+  // context step carries NO xRenderer so `gatedSteps` (below) excludes it. If we
+  // kept those rows the promptCursor would advance for a step the walk never
+  // visits, shifting every subsequent prompt→step mapping by one. Drop context
+  // submissions here — mirrors the interrupt-side shape detection in execution.ts
+  // (a context submission's userResponse is the {slotId,resolutionMode,selectedRefs}
+  // envelope; some paths spread the raw context values instead). Shape-only.
+  const isContextSubmission = (v: Record<string, unknown> | null): boolean => {
+    if (!v) return false;
+    const ur = v["userResponse"];
+    if (typeof ur === "string") {
+      try {
+        const p = JSON.parse(ur) as Record<string, unknown>;
+        return (
+          typeof p?.["slotId"] === "string" &&
+          typeof p?.["resolutionMode"] === "string" &&
+          Array.isArray(p?.["selectedRefs"])
+        );
+      } catch {
+        return false;
+      }
+    }
+    const slotMeta = v["slotMeta"] as { slotId?: unknown } | undefined;
+    return typeof slotMeta?.slotId === "string" && Array.isArray(v["selectedRefs"]);
+  };
+  const prompts = allPrompts.filter((p) => !isContextSubmission(p.submittedValues));
 
   // Align this filter with the canonical hitlSteps predicate in
   // instance-screens.tsx (xRenderer-only). Write paths only fire on
