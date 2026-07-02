@@ -128,7 +128,7 @@ function PaginatedTable({
       {shouldPaginate ? (
         <div
           data-slot="table-pagination"
-          className="flex flex-col gap-2 border-t border-line px-3 py-2 font-mono text-micro text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-2 border-t border-line px-3 py-2 font-mono text-[11px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between"
         >
           <span aria-live="polite">
             {firstRow}–{lastRow} of {rowCount}

@@ -77,12 +77,11 @@
   --kicker-tracking: 0.18em;
   --kicker-tracking-wide: 0.2em;
   --page-label-tracking: 0.3em;
-  /* Badge / chip / micro type. --badge-tracking pairs with the 2xs chip
-     size through the @theme mapping. */
+  /* Badge / chip type. --badge-tracking pairs with the 2xs chip size
+     through the @theme mapping. */
   --badge-text-xs: 10px;
   --badge-text-2xs: 9.5px;
   --badge-tracking: 0.14em;
-  --micro-text: 11px;
 
   /* shadcn/ui compatibility — mapped from cinatra design tokens */
   --card: var(--surface);

@@ -19,7 +19,6 @@ const twMerge = extendTailwindMerge({
         "text-listing-title",
         "text-badge-xs",
         "text-badge-2xs",
-        "text-micro",
       ],
       tracking: [
         "tracking-title-tight",

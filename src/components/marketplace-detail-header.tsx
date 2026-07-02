@@ -2,7 +2,14 @@ import Link from "next/link";
 import { format, formatDistanceToNow } from "date-fns";
 
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+// cn: intentionally the EXTENDED tailwind-merge from sdk-ui, not "@/lib/utils".
+// The default app cn strips the custom design-token size utilities
+// (`text-page-title-*` / `text-listing-title` / `text-badge-*`) whenever a
+// text-COLOR class follows in the same merge (tailwind-merge classifies
+// unknown `text-*` classes as colors). The app-wide cn fix requires the
+// vendored-primitive refresh cascade (src/lib/utils.ts is a registry source
+// vendored into extension repos), tracked with the arbitrary-value lint gate.
+import { cn } from "@cinatra-ai/sdk-ui/lib/utils";
 import { PageHeaderRule } from "@/components/page-header-rule";
 import { PageHeaderTitleSync } from "@/components/page-header-title-sync";
 import {
