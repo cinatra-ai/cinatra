@@ -300,3 +300,114 @@ export function buildSelectionRows(input: {
     selectionMode: input.selectionMode,
   }));
 }
+
+// ---------------------------------------------------------------------------
+// #822/#825 — compiled-workflow slot binding.
+//
+// An orchestrator agent composes context-using child agents. At
+// /api/context-resolve callback time there is no execution-state signal for
+// WHICH child is active (children run inside the parent's WayFlow on a
+// shared, run-scoped auth), so the trusted slot source is derived from the
+// STRUCTURE of the run package's own installed OAS instead.
+//
+// Ground truth (verified against blog-pipeline-agent's compiled cinatra/oas.json):
+// an orchestrator's installed OAS inlines each composed child's
+// context-resolution FlowNode carrying `metadata.cinatra.purpose ===
+// "author-placed-context-resolution-for-<slotId>"` INSIDE the child's subflow
+// DEFINITION (a Flow with an `id`), while the child's package identity lives on
+// the REFERENCING FlowNode (`subflow.$component_ref === <definition id>` plus
+// `metadata.cinatra.packageName`). Ownership therefore needs a two-pass join
+// over `$component_ref`, not a nearest-enclosing-metadata walk (which would
+// silently mis-resolve on the real shape).
+// ---------------------------------------------------------------------------
+
+const CONTEXT_RESOLUTION_PURPOSE_PREFIX = "author-placed-context-resolution-for-";
+
+function metadataCinatra(
+  node: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const meta = node["metadata"];
+  if (typeof meta !== "object" || meta === null) return null;
+  const cin = (meta as Record<string, unknown>)["cinatra"];
+  return typeof cin === "object" && cin !== null
+    ? (cin as Record<string, unknown>)
+    : null;
+}
+
+/** A Flow definition owns child components — it carries an `id` plus flow
+ *  structure. The walk tracks the nearest enclosing one so a marker can be
+ *  attributed to the subflow DEFINITION that contains it. */
+function isFlowDefinition(node: Record<string, unknown>): boolean {
+  return (
+    typeof node["id"] === "string" &&
+    (typeof node["$referenced_components"] === "object" ||
+      typeof node["start_node"] === "string" ||
+      Array.isArray(node["nodes"]))
+  );
+}
+
+/** Which child package does an ORCHESTRATOR'S OWN installed OAS bind to a
+ *  context slot?
+ *
+ *  Single recursive pass that collects both halves of a join:
+ *   - the Flow definition ids whose subtree carries the author-placed
+ *     context-resolution marker for `slotId`, and
+ *   - the `metadata.cinatra.packageName` of every FlowNode that references a
+ *     definition via `subflow.$component_ref`.
+ *  The slot's owner is the package that references a marked definition.
+ *
+ *  Fail-closed contract — returns null when the slot is unbound in this
+ *  workflow, the enclosing definition has no package-named referencer (e.g. a
+ *  marker sitting in the orchestrator's own root flow), or more than one
+ *  DISTINCT package ends up bound to the same slotId (ambiguity is never
+ *  trusted). Only an EXACT, unambiguous single owner is returned. */
+export function findBoundChildPackageForSlot(
+  oas: Record<string, unknown>,
+  slotId: string,
+): string | null {
+  const marker = `${CONTEXT_RESOLUTION_PURPOSE_PREFIX}${slotId}`;
+  const markedDefinitionIds = new Set<string>();
+  const packageByDefinitionId = new Map<string, Set<string>>();
+
+  const walk = (node: unknown, enclosingDefinitionId: string | null): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, enclosingDefinitionId);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    const rec = node as Record<string, unknown>;
+    const cin = metadataCinatra(rec);
+
+    if (cin?.["purpose"] === marker && enclosingDefinitionId) {
+      markedDefinitionIds.add(enclosingDefinitionId);
+    }
+
+    const subflow = rec["subflow"];
+    const componentRef =
+      typeof subflow === "object" && subflow !== null
+        ? (subflow as Record<string, unknown>)["$component_ref"]
+        : null;
+    if (
+      typeof componentRef === "string" &&
+      typeof cin?.["packageName"] === "string"
+    ) {
+      const set = packageByDefinitionId.get(componentRef) ?? new Set<string>();
+      set.add(cin["packageName"] as string);
+      packageByDefinitionId.set(componentRef, set);
+    }
+
+    const nextDefinitionId = isFlowDefinition(rec)
+      ? (rec["id"] as string)
+      : enclosingDefinitionId;
+    for (const value of Object.values(rec)) walk(value, nextDefinitionId);
+  };
+
+  walk(oas, null);
+
+  const owners = new Set<string>();
+  for (const defId of markedDefinitionIds) {
+    for (const pkg of packageByDefinitionId.get(defId) ?? []) owners.add(pkg);
+  }
+  if (owners.size !== 1) return null;
+  return [...owners][0] ?? null;
+}

@@ -63,6 +63,7 @@ describe("/api/context-resolve response shape", () => {
       actor: { sub: "user-1", organizationId: "org-1" },
       projectId: undefined,
       trustedPackageName: "@cinatra-ai/blog-draft-writer-agent",
+      trustedSlotPackageName: "@cinatra-ai/blog-draft-writer-agent",
     });
   });
 

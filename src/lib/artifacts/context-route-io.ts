@@ -24,6 +24,7 @@ import { resolveContextSlot } from "./context-resolver";
 import { getInstalledExtensionDescriptors } from "./context-mcp";
 import {
   ContextRouteError,
+  findBoundChildPackageForSlot,
   normalizeProjectId,
   type ContextCandidate,
 } from "./context-route-support";
@@ -94,9 +95,15 @@ export type DerivedContext = {
   actor: ActorContext;
   run: AgentRunRecord;
   projectId: string | undefined;
-  /** The trusted package name (from the run's template, NOT the body). All
-   *  downstream slot loading MUST use this, never the caller-supplied value. */
+  /** The run's TEMPLATE package (server-derived, NOT the body). The trust root
+   *  for actor + audit-store scoping. */
   trustedPackageName: string;
+  /** The verified OWNER of the requested slot: the run package for a leaf run,
+   *  or — for an orchestrator resolving a composed child's slot — the child
+   *  package that the run package's own installed OAS binds to this slotId.
+   *  ALL slot loading MUST use this (never the caller-supplied value); it is
+   *  only ever the run package or an execution-structure-verified child. */
+  trustedSlotPackageName: string;
 };
 
 /** Authorize the request, resolve the parent run (preferring the auth-injected
@@ -106,7 +113,12 @@ export type DerivedContext = {
  *  any failure. */
 export async function deriveContextRouteContext(
   req: Request,
-  body: { parentRunId: string; parentPackageName: string; projectId?: unknown },
+  body: {
+    parentRunId: string;
+    parentPackageName: string;
+    slotId: string;
+    projectId?: unknown;
+  },
 ): Promise<DerivedContext> {
   // 1. Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   if (!isAuthorizedBridgeRequest(req)) {
@@ -161,11 +173,9 @@ export async function deriveContextRouteContext(
       "parent run has no org/runBy — refusing unscoped context resolution",
     );
   }
-  // 3. Forged-body defense: derive the ALLOW-SET of trusted package names from
-  //    the run's TEMPLATE (server-side; AgentRunRecord carries no packageName),
-  //    then require the caller-supplied parentPackageName to be a member. A
-  //    missing run package fails closed. The chosen package selects the trusted
-  //    OAS slot + accepted-extension set downstream.
+  // 3. Forged-body defense. The RUN's TEMPLATE package is the trust root
+  //    (server-derived; an AgentRunRecord carries no packageName). A missing
+  //    run package fails closed.
   const template = await readAgentTemplateById(run.templateId);
   const runPackageName = template?.packageName ?? null;
   if (!runPackageName) {
@@ -176,29 +186,46 @@ export async function deriveContextRouteContext(
     );
   }
   // #822: an orchestrator run resolves context slots that belong to a CHILD
-  // agent it composes; that child calls context-resolve with its OWN package
-  // (the slot's owner), not the run package. Accept parentPackageName when it is
-  // the run package OR a package the run's template legitimately declares in
-  // agentDependencies (its composed children), then trust THAT package as the
-  // slot source. The allow-set is derived server-side from the run template, so
-  // the forged-body defense holds — an arbitrary/undeclared package is still
-  // rejected. Exact membership only: no wildcard/substring/scope-prefix/semver.
-  // NOTE: this trusts any DECLARED dependency, not proof of the exact executing
-  // child node; tightening to the compiled childAgent packageName is a follow-up
-  // (compiled templates do not reliably carry childAgent.packageName yet).
-  const declaredDeps = new Set(Object.keys(template?.agentDependencies ?? {}));
-  if (
-    body.parentPackageName !== runPackageName &&
-    !declaredDeps.has(body.parentPackageName)
-  ) {
-    throw new ContextRouteError(
-      403,
-      "package_mismatch",
-      `parentPackageName '${body.parentPackageName}' is neither the run package '${runPackageName}' nor a declared agent dependency`,
-    );
+  // agent it composes; that child's inlined subflow calls context-resolve with
+  // its OWN package (the slot's owner), not the run package. Accept a non-run
+  // package ONLY when the run package's OWN installed OAS binds THIS slotId to
+  // exactly that package — i.e. the author-placed context-resolution subflow
+  // inlined by the composition names it (see findBoundChildPackageForSlot).
+  // This is an execution-STRUCTURE binding, not a declared-deps allow-list, and
+  // it fails closed on: an undeclared/arbitrary package, a declared package that
+  // is not context-composed in THIS workflow, a MISMATCHED (package, slot) pair
+  // (the claimed package is not slotId's bound owner), and an unbound/ambiguous
+  // slot — all 403. The verified owner is the slot source; the run package stays
+  // the trust root for actor + audit-store scoping (a run's composed slotIds are
+  // compiler-distinct, so the run-package-scoped selection key does not collide).
+  //
+  // KNOWN RESIDUAL (cinatra#907, architectural — needs a WayFlow change, out of
+  // scope here): the run shares one bridge auth with no per-child identity
+  // signal, so this seam can prove structural (package, slot) consistency but not
+  // WHICH child is calling — a caller with the run's auth can resolve ANY
+  // structurally-bound (package, slot) in the run (e.g. one composed child
+  // reading a sibling's slot). That stays within the run user's OWN artifact
+  // visibility (actor scoping is on the run user, never the package) and the
+  // endpoint is internal — a defense-in-depth gap among cooperating co-authored
+  // children, not a cross-user/org/project escalation.
+  let trustedSlotPackageName = runPackageName;
+  if (body.parentPackageName !== runPackageName) {
+    const runOas = await readInstalledOas(runPackageName);
+    const boundChildPackage = runOas
+      ? findBoundChildPackageForSlot(runOas, body.slotId)
+      : null;
+    if (!boundChildPackage || boundChildPackage !== body.parentPackageName) {
+      throw new ContextRouteError(
+        403,
+        "package_mismatch",
+        `parentPackageName '${body.parentPackageName}' is not the package bound to slot '${body.slotId}' by run package '${runPackageName}'`,
+      );
+    }
+    trustedSlotPackageName = boundChildPackage;
   }
-  // Downstream slot loading MUST use this validated value, never the raw body.
-  const trustedPackageName = body.parentPackageName;
+  // Actor + audit-store scoping stays on the RUN package; slot loading uses the
+  // verified owner (trustedSlotPackageName), never the raw body.
+  const trustedPackageName = runPackageName;
   // 4. Build the run-user actor with team + project visibility (canonical
   //    agent-run actor pattern; mirrors packages/agents mcp/handlers.ts).
   //    resolveAgentRunMcpActor returns null for a non-member/demoted run user
@@ -239,7 +266,7 @@ export async function deriveContextRouteContext(
   const projectId =
     normalizeProjectId(run.projectId) ?? normalizeProjectId(body.projectId);
 
-  return { actor, run, projectId, trustedPackageName };
+  return { actor, run, projectId, trustedPackageName, trustedSlotPackageName };
 }
 
 /** Resolve candidates for a slot via the existing resolver + server-side
