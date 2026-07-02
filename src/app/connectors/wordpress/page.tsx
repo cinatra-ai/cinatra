@@ -84,7 +84,7 @@ export default async function WordPressPage() {
                   <div>
                     <h3 className="text-lg font-semibold text-foreground">{instance.name}</h3>
                     <p className="mt-2 text-sm text-muted-foreground">{instance.siteUrl}</p>
-                    <p className="mt-1 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                    <p className="mt-1 text-xs uppercase tracking-kicker-wide text-muted-foreground">
                       Username: {instance.username}
                     </p>
                   </div>
@@ -118,7 +118,7 @@ export default async function WordPressPage() {
                   <Input type="hidden" name="instanceId" value={instance.id} />
                   <label
                     htmlFor={`blogConnectorId-${instance.id}`}
-                    className="text-xs uppercase tracking-[0.2em] text-muted-foreground"
+                    className="text-xs uppercase tracking-kicker-wide text-muted-foreground"
                   >
                     Blog connector
                   </label>

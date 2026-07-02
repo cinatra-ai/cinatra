@@ -26,8 +26,8 @@ describe("ScopeBadge component contract", () => {
     expect(src).toMatch(/cva\(/);
   });
 
-  it("uses cn from @/lib/utils", () => {
-    expect(src).toMatch(/from "@\/lib\/utils"/);
+  it("uses the extended cn from @cinatra-ai/sdk-ui (custom size tokens survive tailwind-merge)", () => {
+    expect(src).toMatch(/from "@cinatra-ai\/sdk-ui\/lib\/utils"/);
     expect(src).toMatch(/\bcn\(/);
   });
 
@@ -68,7 +68,7 @@ describe("ScopeBadge component contract", () => {
     expect(src).toMatch(/rounded-full/);
     expect(src).toMatch(/px-2\.5/);
     expect(src).toMatch(/py-0\.5/);
-    expect(src).toMatch(/text-\[10px\]/);
+    expect(src).toMatch(/text-badge-xs/); // 10px badge size via the named design token
     expect(src).toMatch(/font-semibold/);
     expect(src).toMatch(/uppercase/);
     expect(src).toMatch(/tracking-\[0\.15em\]/);
