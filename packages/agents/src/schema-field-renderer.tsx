@@ -45,6 +45,15 @@ type Props = {
 function isLikelyMultiline(schema: Record<string, unknown>): boolean {
   const explicit = (schema as { ["x-multiline"]?: boolean })["x-multiline"];
   if (typeof explicit === "boolean") return explicit;
+  // `format: "multiline"` is the OAS-authorable spelling of the same hint.
+  // Both inputSchema pipelines (oas-compiler.ts step 7 and
+  // input-schema-resolver.ts deriveFullSchemaFromOas) propagate `format`
+  // verbatim from StartNode inputs, so an extension OAS can opt a prose
+  // field (e.g. blog-pipeline-agent's `brief`) into textarea rendering
+  // without new plumbing. Unrecognized formats are inert everywhere else:
+  // the uri/email branches below match exact values and jsonSchemaToZod
+  // ignores `format` entirely.
+  if ((schema as { format?: string }).format === "multiline") return true;
   const description = (schema as { description?: string }).description ?? "";
   return description.length > 80;
 }
