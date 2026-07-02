@@ -190,7 +190,7 @@ export function MarketplaceDetailHeader({
         </div>
         <h1
           className={cn(
-            "relative font-display text-[30px] font-extrabold italic leading-[1.05] tracking-[-0.018em] text-balance",
+            "relative font-display text-[24px] font-extrabold italic leading-[1.05] tracking-[-0.018em] text-balance",
             // Over a banner image the name sits on the `foreground`-token scrim
             // — use the contrasting `background` token (no raw palette) so it
             // reads against the scrim in both themes.

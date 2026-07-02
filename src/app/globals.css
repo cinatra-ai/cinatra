@@ -185,7 +185,7 @@
 
 /* Heading font.
    h1 is intentionally excluded: PageHeader's h1 className owns page-title
-   typography end-to-end (Archivo italic 800 38px), and the global font-family
+   typography end-to-end (Archivo italic 800 28px), and the global font-family
    rule would otherwise win on specificity (0,1,1) over the utility class
    chain. h2 and h3 continue to inherit Archivo via this rule. */
 .cinatra h2,
