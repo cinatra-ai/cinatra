@@ -298,10 +298,11 @@ const APP_ALIAS_BAN = [
 // the `text-[` chunk).
 const TYPE_BAN_SPECS = [
   {
-    // `(color:)?` — Tailwind's type-hint prefix must not become a bypass
-    // (`bg-[color:#fff]` is as arbitrary as `bg-[#fff]`).
+    // Two alternatives after `-[`: a `color:` type hint (whatever the value
+    // — `bg-[color:var(--brand)]` self-declares as a color and must not be
+    // a bypass) OR a raw color value (`#…` / a color function).
     pattern:
-      "(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(color:)?(#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()",
+      "(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(color:|#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()",
     message:
       "Arbitrary color value in a class string — use the semantic color tokens (text-foreground, bg-surface, text-muted-foreground, border-line, …) from @cinatra-ai/design.",
   },

@@ -329,13 +329,14 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
     expectTypeBan(r, "Arbitrary text-[…] font size");
   });
 
-  it("flags color: type-hint arbitrary colors — bg-[color:#…] is not a bypass", () => {
+  it("flags color: type-hint arbitrary colors — bg-[color:…] is not a bypass", () => {
     const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
     const colorBans = typeBanMessages(r).filter((m) =>
       m.message.includes("Arbitrary color value"),
     );
-    // `bg-[color:#ff0000]` and `border-[color:rgb(255,0,0)]` both fire.
-    expect(colorBans.length).toBeGreaterThanOrEqual(2);
+    // `bg-[color:#ff0000]`, `border-[color:rgb(255,0,0)]`, and the
+    // hint-with-var form `ring-[color:var(--brand)]` all fire.
+    expect(colorBans.length).toBeGreaterThanOrEqual(3);
   });
 
   it("flags dark: overrides behind variant chains — dark:hover:focus:/dark:data-[…]: are not bypasses", () => {
