@@ -40,6 +40,20 @@ import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
 } from "@/lib/extension-capabilities-registry";
+// The host-internal SYSTEM capability id(s) — fenced behind the `/internal`
+// subpath (host modules are the sanctioned value-importer; see
+// packages/sdk-extensions/src/internal.ts). Used to build
+// RESERVED_SYSTEM_CAPABILITIES below.
+import { NANGO_SYSTEM_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
+// The FIRST-PARTY host-build extension set — the packages COMPILED INTO the host
+// image (static bundle). Pure DATA (the connector `import()`s are lazy `load()`
+// thunks in GENERATED_EXTENSION_SERVER_ENTRIES, not this map), so importing it is
+// boot-safe and pulls no connector onto the boot path. Membership is the
+// host-owned, build-time first-party trust root that keys reserved-capability
+// access (a package compiled into the host is first-party regardless of whether
+// it activates via the static bundle OR the runtime package store — cinatra#161
+// republishes first-party connectors through the store).
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
   registerExtensionSetupSurface,
   registerExtensionSettingsSurface,
@@ -129,11 +143,86 @@ function bindProviderIdentity(
   return { ...provider, packageName };
 }
 
+/**
+ * Whether `packageName` is a FIRST-PARTY extension — one COMPILED INTO the host
+ * build (a key of `STATIC_EXTENSION_MANIFEST`). This is a build-time trust root
+ * (a third party cannot inject itself into the host image, and the marketplace
+ * publish gate reserves the first-party package names), NOT a vendor/scope
+ * heuristic. It holds regardless of the activation LOADER: a first-party
+ * connector activates the same whether via the static bundle OR the runtime
+ * package store (cinatra#161 republishes first-party connectors through the
+ * store, and the runtime loader's own trust classification gates the source),
+ * so keying on the package identity — not the loader — is what preserves
+ * first-party behavior while fencing arbitrary third-party marketplace code.
+ */
+function isFirstPartyPackage(packageName: string): boolean {
+  return Object.prototype.hasOwnProperty.call(STATIC_EXTENSION_MANIFEST, packageName);
+}
+
+/**
+ * Host-internal SYSTEM capability ids that expose RAW tenant credentials and are
+ * published for HOST + FIRST-PARTY consumption ONLY. `nango-system` carries
+ * `getNangoCredentials(providerConfigKey, connectionId)` — a connectionId-
+ * addressed credential reader with NO per-tenant binding — so an ungated
+ * in-process connector holding this surface can read ANY stored connection's
+ * credentials.
+ *
+ * Fail-closed at the extension-facing `ctx.capabilities` port for a NON-first-
+ * party (third-party marketplace) extension: RESOLVE → `[]` (the connector never
+ * obtains the credential surface) and REGISTER → throw (a third-party digest
+ * cannot POISON the id with a shadow provider the host might resolve). FIRST-
+ * PARTY connectors (which legitimately register/resolve `nango-system` — e.g.
+ * the nango gateway registers it and apollo/gmail/anthropic/… resolve it to
+ * build their deps) and HOST-INTERNAL resolution (`@/lib/nango-system.ts` via
+ * `resolveCapabilityProviders`, which does NOT go through this port) are
+ * UNAFFECTED.
+ *
+ * Extensible: add other host-consumed raw-credential system ids here. The
+ * forward design (issue-tracked) is a host-owned, per-package explicit GRANT so
+ * a specific third-party connector can be re-permitted a specific reserved
+ * capability without re-opening the surface to arbitrary marketplace code.
+ */
+const RESERVED_SYSTEM_CAPABILITIES: ReadonlySet<string> = new Set<string>([NANGO_SYSTEM_CAPABILITY]);
+
+/** True when `capability` is a host-internal system credential surface that a
+ * NON-first-party extension may neither resolve nor register through the
+ * `ctx.capabilities` port. First-party packages are never denied. */
+function isReservedSystemCapabilityDeniedFor(
+  packageName: string,
+  capability: string,
+): boolean {
+  return RESERVED_SYSTEM_CAPABILITIES.has(capability) && !isFirstPartyPackage(packageName);
+}
+
+/** Fail-loud denial for a non-first-party attempt to REGISTER a reserved system
+ * capability (anti-poisoning: the shadow provider never enters the registry). */
+function denyReservedSystemCapabilityRegister(packageName: string, capability: string): never {
+  throw new Error(
+    `[capabilities] "${packageName}" (not a first-party host-build extension) may not register ` +
+      `the host-internal system capability "${capability}" via the extension port — it is a ` +
+      `host/first-party credential surface.`,
+  );
+}
+
 function makeCapabilities(packageName: string): ExtensionHostContext["capabilities"] {
   return {
-    registerProvider: (capability, provider) =>
-      registerCapabilityProvider(capability, bindProviderIdentity(packageName, provider)),
-    resolveProviders: (capability) => resolveCapabilityProviders(capability),
+    registerProvider: (capability, provider) => {
+      if (isReservedSystemCapabilityDeniedFor(packageName, capability)) {
+        denyReservedSystemCapabilityRegister(packageName, capability);
+      }
+      registerCapabilityProvider(capability, bindProviderIdentity(packageName, provider));
+    },
+    resolveProviders: (capability) => {
+      if (isReservedSystemCapabilityDeniedFor(packageName, capability)) {
+        console.warn(
+          `[capabilities] "${packageName}" (not a first-party host-build extension) attempted to ` +
+            `resolve the host-internal system capability "${capability}" via the extension port — ` +
+            `DENIED (returning []). This surface exposes raw tenant credentials and is host/first-party only.`,
+        );
+        return [];
+      }
+      return resolveCapabilityProviders(capability);
+    },
   };
 }
 
@@ -659,19 +748,28 @@ export function createExtensionProbeHostContext(
       // digest must not pass the hot-update pre-verify by claiming another
       // package's identity or the reserved host namespace, and the recorder must
       // reflect the FORCED (authoritative) identity the real activation would
-      // register — so apply the same bind+reservation as the live port.
+      // register — so apply the same bind+reservation as the live port. The
+      // reserved-system-capability guard applies identically (a non-first-party
+      // digest must not pass pre-verify by registering a shadow `nango-system`).
+      if (isReservedSystemCapabilityDeniedFor(packageName, capability)) {
+        denyReservedSystemCapabilityRegister(packageName, capability);
+      }
       recorder.capabilityProviders.push({
         capability,
         provider: bindProviderIdentity(packageName, provider),
       });
     },
     // READS stay REAL (matching the probe contract: read ports are real, only
-    // registration sinks are inert). A register(ctx) that resolves a host
-    // service capability at activation — e.g. the email/blog facades fail loud
-    // when their `@cinatra-ai/host:*` routing service is absent — must see the
-    // same live providers the real activation would, or the hot-update
-    // pre-verify would falsely reject a valid digest with `register-threw`.
-    resolveProviders: (capability) => resolveCapabilityProviders(capability),
+    // registration sinks are inert) — EXCEPT a reserved system credential
+    // capability is fail-closed for a non-first-party package exactly as on the
+    // live port, so the pre-verify cannot resolve a surface the real activation
+    // would deny. A register(ctx) that resolves a legitimate host service
+    // capability (e.g. the email/blog facades' `@cinatra-ai/host:*` routing)
+    // still sees the same live providers the real activation would.
+    resolveProviders: (capability) => {
+      if (isReservedSystemCapabilityDeniedFor(packageName, capability)) return [];
+      return resolveCapabilityProviders(capability);
+    },
   };
   const probeObjects: ExtensionHostContext["objects"] = granted.has("objects")
     ? {
