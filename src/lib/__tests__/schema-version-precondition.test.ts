@@ -87,7 +87,7 @@ describe("evaluateSchemaVersion", () => {
       expect(v.message).toMatch(/BEHIND/);
       expect(v.message).toMatch(/core__0001/);
       expect(v.message).toMatch(/core__0003/);
-      expect(v.message).toMatch(/cinatra db migrate/);
+      expect(v.message).toMatch(/cinatra instance db migrate/);
     }
   });
 

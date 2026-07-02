@@ -272,8 +272,8 @@ importers:
         specifier: ^4.11.3
         version: 4.11.3(playwright-core@1.61.0)
       '@cinatra-ai/cinatra':
-        specifier: 0.1.6
-        version: 0.1.6(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+        specifier: 0.1.7
+        version: 0.1.7(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@playwright/test':
         specifier: ^1.61.0
         version: 1.61.0
@@ -1116,21 +1116,9 @@ importers:
       '@openai/agents':
         specifier: ^0.11.4
         version: 0.11.8(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      class-variance-authority:
-        specifier: ^0.7.1
-        version: 0.7.1
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
       openai:
         specifier: ^6.38.0
         version: 6.43.0(ws@8.21.0)(zod@4.4.3)
-      radix-ui:
-        specifier: ^1.4.3
-        version: 1.6.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      tailwind-merge:
-        specifier: ^3.5.0
-        version: 3.6.0
     devDependencies:
       '@typescript-eslint/parser':
         specifier: 8.61.0
@@ -2424,8 +2412,8 @@ packages:
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
-  '@cinatra-ai/cinatra@0.1.6':
-    resolution: {integrity: sha512-JYTk7cJ+EgcOet4BpfezI5jsR1reBWgIa7g8gampFYAHGC30QIKRmf/K+lazP2ubIQOn1Yo11YVNSLmN1MgzPA==}
+  '@cinatra-ai/cinatra@0.1.7':
+    resolution: {integrity: sha512-A7RPFqGIkL8MhR4r9Z+H/eLZPXcfTatPVsrCH2vd2DeWMMRuz56IyZwe+F3voirwd7+EZ0ztbV+VjE03e34jKQ==}
     engines: {node: '>=24'}
     hasBin: true
 
@@ -10551,7 +10539,7 @@ snapshots:
 
   '@chevrotain/types@11.1.2': {}
 
-  '@cinatra-ai/cinatra@0.1.6(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+  '@cinatra-ai/cinatra@0.1.7(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       pacote: 21.5.1

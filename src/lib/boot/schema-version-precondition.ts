@@ -86,7 +86,7 @@ export function evaluateSchemaVersion(
     const shippedLabel = `${CORE_MIGRATION_NAMESPACE}${String(shippedMax).padStart(4, "0")}`;
     const message =
       `[schema-version-precondition] the runtime DB core schema is BEHIND this image: applied ` +
-      `${appliedLabel} but this image requires ${shippedLabel}. Run \`cinatra db migrate\` against ` +
+      `${appliedLabel} but this image requires ${shippedLabel}. Run \`cinatra instance db migrate\` against ` +
       `this database, or roll the image back to one that matches the schema. Refusing to boot against ` +
       `a schema too old for required-extension activation (a downstream query would otherwise fail cryptically).`;
     return { kind: "behind", appliedMax, shippedMax, message };

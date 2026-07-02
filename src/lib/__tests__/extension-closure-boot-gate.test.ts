@@ -155,7 +155,7 @@ describe("assertClosureBootReport (prod-throw vs dev-advisory)", () => {
       expect.unreachable("should have thrown");
     } catch (e) {
       const msg = (e as Error).message;
-      expect(msg).toContain("cinatra setup prod");
+      expect(msg).toContain("cinatra instance setup prod");
       expect(msg).toContain("CINATRA_DISABLE_REQUIRED_CLOSURE_ASSERT");
     }
   });
