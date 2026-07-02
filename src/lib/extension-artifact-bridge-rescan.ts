@@ -200,14 +200,15 @@ export async function rescanArtifactBridgeFromStore(
         continue;
       }
     } else if (await hasLiveInstallRow(rec.packageName)) {
-      // Single-digest, resolver returned NO anchor, BUT a live canonical row
-      // exists → the anchor was REFUSED (activeDigest/journal mismatch or
-      // ambiguous scope), not absent. `null` from the resolver conflates
-      // "no row" with "row present but refused"; a live row disambiguates it.
-      // Never register an unpinned digest for a package the DB governs — fail
-      // closed. (No live row → genuinely ungoverned bundled/disk artifact →
-      // CG-1 allowance, handled by the recordIsArtifactKind/write-allow gates
-      // below.)
+      // Single-digest, resolver returned NO anchor. `null` from the resolver
+      // conflates "no row" with "row present but REFUSED" (activeDigest/journal
+      // mismatch or ambiguous scope); the live-row probe disambiguates it and
+      // FAILS CLOSED on its own read error (returns true) so an unreadable store
+      // can never be misread as ungoverned. A true result here = a governed
+      // package whose anchor was refused OR an unprovable store → never register
+      // an unpinned digest. (Only a PROVEN-absent live row falls through to the
+      // CG-1 ungoverned bundled/disk allowance via the recordIsArtifactKind /
+      // write-allow gates below.)
       console.warn(
         `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
           `a live canonical row exists but its trusted anchor could not be resolved ` +

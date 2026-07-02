@@ -125,16 +125,20 @@ export async function isArtifactExtensionWriteAllowed(
  *     (refused: activeDigest/journal mismatch, ambiguous multi-org scope, or a
  *     row governing a different kind) → must fail closed, never register an
  *     unpinned digest.
- * A read error returns `false` (matching this module's fail-closed convention);
- * the rescan's downstream `isArtifactExtensionWriteAllowed` gate — which also
- * fail-closes `false` on a read error — is the backstop that skips the record.
+ * A read error returns `true` — the discriminator FAILS CLOSED. An unreadable
+ * canonical store cannot PROVE the package is ungoverned, so the CG-1 allowance
+ * is withheld and the rescan skips the record (the ungoverned allowance is
+ * granted only on a PROVEN-absent row). This does NOT rely on the downstream
+ * `isArtifactExtensionWriteAllowed` gate failing on the same read — the two
+ * reads are independent, so a status read that transiently succeeds must not be
+ * able to re-open the allowance. The next rescan retries once the store reads.
  */
 export async function hasLiveInstallRow(packageName: string): Promise<boolean> {
   try {
     const rows = await readInstalledExtensionsByPackageName(packageName);
     return rows.some((r) => r.status === "active" || r.status === "locked");
   } catch {
-    return false;
+    return true; // fail-closed: cannot prove ungoverned ⇒ withhold the CG-1 allowance.
   }
 }
 
