@@ -39,4 +39,18 @@ export type SecurityContext = {
   readonly visibleProjectIds?: readonly string[];
   readonly visibleTeamIds?: readonly string[];
   readonly visibleArtifactIds?: readonly string[];
+  /**
+   * Whether the caller is a platform admin. The `llm_usage` cube reads this
+   * as its SOLE visibility gate: `usage_events` carries no per-org owner
+   * column, so cost/usage data is platform-wide operational data visible
+   * only to platform admins. The cube fails closed (zero rows) whenever the
+   * flag is missing or not exactly `true`.
+   *
+   * The host decorates the SecurityContext with this flag at every
+   * transport boundary: the HTTP cubejs route via `isPlatformAdmin(session)`
+   * and the MCP cube tools via a DB role lookup keyed on the actor's userId
+   * (the MCP identity chain carries only userId/orgId, never a role).
+   * Optional because cubes other than `llm_usage` never read it.
+   */
+  readonly isPlatformAdmin?: boolean;
 };

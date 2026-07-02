@@ -1,4 +1,5 @@
 import "server-only";
+import { getPooledDb } from "@/lib/db/pooled";
 
 // Install-BATCH ledger store (#180 PR-2).
 //
@@ -100,32 +101,11 @@ export type InstallBatchOpsDeps = {
   schema?: string;
 };
 
-declare global {
-  var __cinatraInstallBatchOpsPool: import("pg").Pool | undefined;
-}
-
-let poolInstance: import("pg").Pool | undefined;
+// Lazy pool over the shared pool (@/lib/db/pooled, #303): created on first use,
+// idle-error-listened, dev-cached. Kept async-returning so existing `await
+// getPool()` call sites are unchanged.
 async function getPool(): Promise<import("pg").Pool> {
-  if (poolInstance) return poolInstance;
-  if (globalThis.__cinatraInstallBatchOpsPool) {
-    return (poolInstance = globalThis.__cinatraInstallBatchOpsPool);
-  }
-  const connectionString = process.env.SUPABASE_DB_URL;
-  if (!connectionString) {
-    throw new Error("SUPABASE_DB_URL is required for @/lib/extension-install-batch-ops");
-  }
-  const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString });
-  if (!pool.listenerCount("error")) {
-    pool.on("error", (err) => {
-      console.error("[extension-install-batch-ops] pg pool idle client error:", err.message);
-    });
-  }
-  poolInstance = pool;
-  if (process.env.NODE_ENV !== "production") {
-    globalThis.__cinatraInstallBatchOpsPool = pool;
-  }
-  return pool;
+  return getPooledDb({ name: "extension-install-batch-ops" });
 }
 
 async function defaultQuery<T = unknown>(

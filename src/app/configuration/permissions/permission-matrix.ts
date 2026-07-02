@@ -113,6 +113,8 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   "settings.read": "View administration settings",
   "settings.update": "Update administration settings",
   "audit.read": "View audit log",
+  "operations.read": "View operator console",
+  "operations.execute": "Run operator actions",
   // Extended permission catalog.
   "artifact.read": "View artifacts",
   "artifact.list": "List artifacts",
@@ -236,6 +238,8 @@ export const PERMISSION_SHORT_LABELS: Record<Permission, string> = {
   "settings.read": "View",
   "settings.update": "Edit",
   "audit.read": "Audit",
+  "operations.read": "Ops",
+  "operations.execute": "Run ops",
   // Short labels for the matrix cells.
   "artifact.read": "View",
   "artifact.list": "List",
@@ -472,6 +476,9 @@ export const PERMISSIONS_BY_CATEGORY: Record<PermissionCategory, ReadonlyArray<P
     "settings.read",
     "settings.update",
     "audit.read",
+    // Operator console — platform-level, granted only to platform_admin.
+    "operations.read",
+    "operations.execute",
   ],
 };
 

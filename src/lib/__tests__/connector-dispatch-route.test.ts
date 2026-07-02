@@ -4,7 +4,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
-import { getConnectorRegistryEntryBySlug } from "@/lib/connectors-registry.server";
+import {
+  getConnectorRegistryEntryBySlug,
+  connectorRequiresSetupPageLoader,
+} from "@/lib/connectors-registry.server";
 
 // enforceConnectorPolicy resolves the canonical connector access FIRST. With no
 // DB in this unit test the canonical read would fail closed
@@ -45,7 +48,16 @@ describe("dispatch route invariants", () => {
       expect(entry, `entry for ${d.slug}`).toBeDefined();
       expect(entry?.packageId).toBe(d.packageId);
       expect(entry?.setupSubroute).toBe("setup");
-      expect(typeof entry?.loadSetupPage).toBe("function");
+      // A bundled-react connector carries a React setup-page LOADER (function); a
+      // schema-config connector (cinatra#658 — e.g. the external-MCP connector
+      // after its pin bump) ships NO React page, so `loadSetupPage` is `null` and
+      // the host renders its declared `configSchema` instead. Assert per the
+      // connector's declared surface, not a blanket "always a function".
+      if (connectorRequiresSetupPageLoader(d.packageId)) {
+        expect(typeof entry?.loadSetupPage, `loader for ${d.slug}`).toBe("function");
+      } else {
+        expect(entry?.loadSetupPage, `schema-config ${d.slug} has no loader`).toBeNull();
+      }
     }
   });
 

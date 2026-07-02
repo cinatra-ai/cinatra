@@ -2,5 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "local>cinatra-ai/.github:renovate-config"
+  ],
+  "packageRules": [
+    {
+      "description": "GitHub Actions are owned by Dependabot here (.github/dependabot.yml), which understands this repo's SHA-pin + version-comment shape and keeps both halves in lockstep; the actions-pinned-gate enforces it. The org Renovate preset (config:recommended) would otherwise enable Renovate's github-actions manager too, double-managing actions. Disable it so Dependabot stays the sole owner; Renovate owns npm currency (dependency dashboard).",
+      "matchManagers": ["github-actions"],
+      "enabled": false
+    }
   ]
 }

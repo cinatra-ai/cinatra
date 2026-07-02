@@ -26,4 +26,4 @@ concurrency:
 jobs:
   rename-gate:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
-    uses: cinatra-ai/ci/.github/workflows/wp-drupal-rename-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v1.0.0-next.4c903fe
+    uses: cinatra-ai/ci/.github/workflows/wp-drupal-rename-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v1.0.0-next.4c903fe

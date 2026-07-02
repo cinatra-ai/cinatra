@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { LinkIcon } from "lucide-react";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -16,6 +18,7 @@ import { createAuthClient as createServerAuthClient } from "better-auth/client";
 import {
   buildMcpAuthPlugins,
   DEFAULT_MCP_SCOPES,
+  CLI_SCOPES,
   type McpAuthPlugins,
   type McpAuthPluginsOptions,
 } from "./auth-plugins";
@@ -23,8 +26,14 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { NextResponse } from "next/server";
-import { McpServer, WebStandardStreamableHTTPServerTransport, type ReadResourceCallback, type ReadResourceTemplateCallback, type ResourceMetadata, type ResourceTemplate } from "@modelcontextprotocol/server";
+import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
+import {
+  createMcpRuntimeServer,
+  type McpRuntimeToolServer,
+} from "./runtime-server";
+import { mcpRequestContextStorage, type DelegatedMcpActor } from "./request-context";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
+import { replaceOriginInValue } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
 import { McpAuthUiProvider } from "./components/mcp-auth-ui-provider";
 import { McpClientDetailManager, McpClientsDashboard, type OAuthClientRecord } from "./components/mcp-client-manager";
@@ -42,6 +51,7 @@ import {
   urlRequestHost,
 } from "./dev-admin-bypass";
 import { PageHeader } from "@/components/page-header";
+import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 import { getLlmMcpCredentials, getLlmMcpAccessStatus, writeLlmMcpCredentials, LLM_BLOCKED_TOOL_PATTERNS, getLocalMcpServerUrl, getPublicMcpServerUrl, getTrustedTokenOrigins } from "./llm-credentials";
 import { z } from "zod";
 
@@ -61,30 +71,6 @@ type SessionLike = {
   };
 } & Record<string, unknown>;
 
-export type ScreenDescriptor = {
-  readonly screen_id: string;
-  readonly url_pattern: string;
-  readonly required_args: readonly string[];
-  readonly capabilities: readonly string[];
-  readonly title: string;
-  readonly module: string;
-};
-
-export type NavigationTarget = {
-  readonly screen_id: string;
-  readonly url: string;
-  readonly capabilities: readonly string[];
-  readonly requires: Readonly<Record<string, string>>;
-};
-
-export type McpRuntimeToolServer = {
-  registerTool: InstanceType<typeof McpServer>["registerTool"];
-  registerResource(name: string, uri: string, config: ResourceMetadata, cb: ReadResourceCallback): void;
-  registerResource(name: string, template: ResourceTemplate, config: ResourceMetadata, cb: ReadResourceTemplateCallback): void;
-  registerPrompt: InstanceType<typeof McpServer>["registerPrompt"];
-  registerScreen(descriptor: ScreenDescriptor): void;
-};
-
 export type CreateMcpServerAuthPluginsOptions = {
   authBasePath?: string;
   mcpBasePath?: string;
@@ -93,6 +79,28 @@ export type CreateMcpServerAuthPluginsOptions = {
   /** OAuth machine-flow pages (auth / account / consent) advertised to external MCP clients. */
   handshakeBasePath?: string;
   scopes?: readonly string[];
+  /**
+   * Additional base path(s) whose `<origin>/<path>` URLs (local + public)
+   * become valid token audiences alongside the MCP base path. The CLI control-plane model adds
+   * `/api/cli` so an authorize with `resource=<origin>/api/cli` mints a JWT
+   * bound to `aud=<origin>/api/cli` — a DEDICATED audience the CLI verifier
+   * pins (reciprocal isolation from the `/api/mcp` audience).
+   */
+  extraAudienceBasePaths?: readonly string[];
+  /**
+   * Scopes EXCLUDED from the DCR default-scope set. A client that does not
+   * EXPLICITLY request these never silently receives them (the CLI control-plane model keeps the
+   * `cli:*` scopes out of DCR defaults). When omitted, the DCR default is the
+   * full `scopes` list (today's behaviour).
+   */
+  clientRegistrationDefaultScopes?: readonly string[];
+  /**
+   * Scopes a DCR client MAY request at registration. The CLI control-plane model keeps `cli:*`
+   * here (so the first-party CLI can register with them) — the real authority
+   * boundary is the verified-subject platform-admin gate, not this list.
+   * When omitted, defaults to the full `scopes` list (today's behaviour).
+   */
+  clientRegistrationAllowedScopes?: readonly string[];
 };
 
 export type CreateMcpServerMountOptions = {
@@ -144,36 +152,6 @@ export type CreateMcpServerMountOptions = {
     expectedIssuer: string;
   }) => DelegatedMcpActor | null | Promise<DelegatedMcpActor | null>;
 };
-
-/**
- * Discriminated union of the two delegated MCP actor flavors.
- *
- * - `chat`: a human chat user calling via OpenAI's hosted MCP relay. The
- *   transport applies the chat tool-policy allowlist
- *   (`isDelegatedChatMcpToolAllowed`) — read + discovery + dispatch only.
- * - `agent_run`: an agent dispatched by the chat, running its work via the
- *   bridge → orchestration → cinatra-mcp tool. The transport leaves the
- *   tool policy UNRESTRICTED because the dispatched agent's job is to
- *   perform REAL operations (the dispatcher's design intent). Per-handler
- *   authz still gates mutations.
- *
- * Existing callers that only read `userId`, `orgId`, `platformRole` are
- * union-compatible; discriminating callsites must check `actor.delegation`.
- */
-export type DelegatedMcpActor =
-  | {
-      delegation: "chat";
-      userId: string;
-      orgId: string | null;
-      platformRole: "platform_admin" | "member";
-    }
-  | {
-      delegation: "agent_run";
-      userId: string;
-      orgId: string;
-      runId: string;
-      platformRole: "platform_admin" | "member";
-    };
 
 export type McpServerSettings = {
   publicBaseUrl: string | null;
@@ -426,38 +404,6 @@ function emitDevTrustedHostsWarningOnce(): void {
   );
 }
 
-function replaceOriginInString(value: string, sourceOrigin: string, targetOrigin: string) {
-  let nextValue = value;
-
-  if (sourceOrigin !== targetOrigin) {
-    nextValue = nextValue.replaceAll(sourceOrigin, targetOrigin);
-  }
-
-  return nextValue
-    .replaceAll("http://localhost:3000", targetOrigin)
-    .replaceAll("https://localhost:3000", targetOrigin)
-    .replaceAll("http://127.0.0.1:3000", targetOrigin)
-    .replaceAll("https://127.0.0.1:3000", targetOrigin);
-}
-
-function replaceOriginInValue(value: unknown, sourceOrigin: string, targetOrigin: string): unknown {
-  if (typeof value === "string") {
-    return replaceOriginInString(value, sourceOrigin, targetOrigin);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => replaceOriginInValue(entry, sourceOrigin, targetOrigin));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, replaceOriginInValue(entry, sourceOrigin, targetOrigin)]),
-    );
-  }
-
-  return value;
-}
-
 async function rewriteJsonOriginResponse(input: {
   request: Request;
   response: Response;
@@ -656,107 +602,6 @@ async function verifyMcpAccessToken(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Read by tool registries (e.g. chat registry, objects layer) to build the actor
- * context. Includes `runId`, `agentId`, `packageVersion`, and `agentSpecVersion`
- * so the objects layer's `getActorExt` can stamp full agent run-context
- * provenance on every saved object. The values are forwarded by `/api/llm-bridge`
- * as `X-Cinatra-*` headers and extracted in the transport handler below.
- */
-export type McpRequestContext = {
-  clientId?: string;
-  orgId?: string | null;
-  userId?: string | null;
-  runId?: string;
-  agentId?: string;
-  packageVersion?: string;
-  agentSpecVersion?: string;
-  /**
-   * Derived from the better-auth session role at the transport boundary.
-   * When `"platform_admin"`, agent-side registries stamp the
-   * platform_admin hint on the actor envelope so admin-gated handlers can
-   * authorise the call without re-reading cookies. Set to `"member"` when a
-   * session is present but the user is not admin; left undefined for
-   * cookieless transports (Bearer-only Claude Code, A2A) — those continue
-   * to fall back to the existing session lookup, which returns null in
-   * those contexts and correctly denies elevation.
-   */
-  platformRole?: "platform_admin" | "member";
-  /**
-   * The caller's role in the active organization (`orgId` above), resolved
-   * ONCE at transport context-build time from the better-auth membership row
-   * for the (resolved orgId, resolved userId) pair — owner → `"org_owner"`,
-   * admin → `"org_admin"`, member → `"member"` (same mapping as
-   * `cachedResolveOrgRole` in src/lib/auth-session.ts). Left undefined when
-   * either id is missing, the membership row does not exist, or the lookup
-   * fails — downstream gates keep their existing on-demand
-   * `resolveOrgRoleForUser` fallback, so absence never widens access.
-   *
-   * Trust boundary: only the transport handler writes this field, after the
-   * request has been authenticated (cookie session, delegated OBO token, or
-   * dev-bypass identity). Coherent with `orgId`/`userId` in the same store
-   * frame by construction; consumers must not pair it with an orgId from any
-   * other source.
-   */
-  orgRole?: "org_owner" | "org_admin" | "member";
-  /**
-   * Set when the request authenticated via a chat-delegated on-behalf-of token.
-   * `delegatedRestricted` gates the call-time tool guard
-   * in `createMcpRuntimeServer` (defense-in-depth on top of registration-time
-   * filtering). `delegatedActor` carries the resolved human chat user.
-   */
-  delegatedActor?: DelegatedMcpActor | null;
-  delegatedRestricted?: boolean;
-  /**
-   * A2A actor context injected by src/app/api/a2a/route.ts after
-   * `verifyA2AAccessToken` succeeds. Trust boundary: only the A2A route
-   * handler may write this field (see auth-policy.ts:15 trust-boundary note).
-   * When present, registry.ts builds actorType:"a2a" with the scopes/teams/projects
-   * from the originating user's verified token, not the bot's model identity.
-   */
-  a2aActorContext?: {
-    userId?: string;
-    orgId?: string | null;
-    tokenScopes?: string[];
-    teamIds?: string[];
-    projectIds?: string[];
-    // Propagate the canonical project-grant axis alongside the binary
-    // `projectIds`. Carrier shape includes grants so every forwarder
-    // (packages/agents/src/mcp/registry.ts, src/lib/artifacts/mcp.ts) sees and
-    // can forward them; `projectIds` stays for back-compat consumers
-    // (auth-policy.ts binary shortcuts at :198 / :490-491). Trust boundary:
-    // both fields are ONLY written by src/app/api/a2a/route.ts after
-    // verifyA2AAccessToken succeeds.
-    projectGrants?: Array<{
-      projectId: string;
-      effectiveRole: "read" | "write" | "admin" | "owner";
-      accessSource: "owner" | "user" | "team" | "organization" | "workspace";
-    }>;
-    clientId?: string;
-  } | null;
-  /**
-   * Project inheritance frame for the lifetime of a single MCP call OR an
-   * agent run. Two distinct producers:
-   *
-   *   1. Transport-boundary set: the chat surface attaches `projectId` for
-   *      a chat-driven invocation BEFORE the request hits `agent_run`. The
-   *      MCP `agent_run` handler reads this to populate
-   *      `CreateAgentRunInput.projectId` so the run row is tagged at insert.
-   *
-   *   2. Run-worker entry set: `runAgentBuilderExecutionJob` reads
-   *      `run.projectId` from the DB row and wraps the execution body in
-   *      `mcpRequestContextStorage.run({ ..., projectContext: { projectId } })`.
-   *      Every artifact/object write inside the run reads this frame and
-   *      inherits the projectId on its row; substrate-excluded types stay NULL.
-   *
-   * `null` projectId means an ambient (non-project) execution — writes do
-   * NOT auto-tag.
-   */
-  projectContext?: { projectId: string | null };
-};
-
-export const mcpRequestContextStorage = new AsyncLocalStorage<McpRequestContext>();
-
-/**
  * Decode the `sub` claim from a Bearer JWT without verifying the signature.
  * For client_credentials tokens issued by Better Auth's oauth-provider, `sub`
  * is the OAuth client_id. Used only for actor-context injection — the token
@@ -782,182 +627,6 @@ function decodeJwtClientId(authorizationHeader: string | null): string | undefin
   } catch {
     return undefined;
   }
-}
-
-function registerPlaceholderCapabilities(server: InstanceType<typeof McpServer>) {
-  void server;
-  // Placeholder for future tools/resources/prompts registration.
-}
-
-async function createMcpRuntimeServer(input: {
-  name: string;
-  version: string;
-  registerCapabilities?: (server: McpRuntimeToolServer) => void | Promise<void>;
-  instructions?: string;
-  experimental?: Record<string, object>;
-  /**
-   * When set to "delegated-chat", the runtime server only registers tools
-   * the delegated-chat policy allows (so `tools/list` never
-   * advertises a denied tool and `tools/call` can't resolve one). Allowed
-   * tools are additionally wrapped with a defense-in-depth handler guard
-   * that re-checks `mcpRequestContextStorage.delegatedRestricted` at call
-   * time. "unrestricted" (default) registers everything as before.
-   */
-  toolPolicyMode?: "unrestricted" | "delegated-chat";
-}) {
-  const server = new McpServer(
-    {
-      name: input.name,
-      version: input.version,
-    },
-    { instructions: input.instructions },
-  );
-
-  // Registration-time tool filter + call-time guard for delegated-chat
-  // requests. A fresh runtime server is built per request
-  // (see transportHandler), so when the request is delegated we simply skip
-  // registering denied tools — that filters `tools/list` AND makes
-  // `tools/call` unable to resolve them. The handler guard is belt-and-
-  // braces in case a tool slips the registration filter.
-  //
-  // Every wrapped tool also runs the registry-driven deny-by-default check.
-  // Per-primitive `status` in
-  // src/lib/authz/inventory-augment.ts controls strict vs. shadow:
-  //   - status === "enforced": throw a 403 on deny.
-  //   - status === "partial" / "unenforced": emit audit, allow through.
-  // Primitives move to "enforced" only after their consumers are validated.
-  // The delegated-chat carve-out (`workflow_draft_create` /_update)
-  // short-circuits via the typed CarveOut entry.
-  const policyMode = input.toolPolicyMode ?? "unrestricted";
-  const policedRegisterTool: InstanceType<typeof McpServer>["registerTool"] = ((
-    name: string,
-    config: unknown,
-    cb: (...cbArgs: unknown[]) => unknown,
-  ) => {
-    if (policyMode === "delegated-chat" && !isDelegatedChatMcpToolAllowed(name)) {
-      // Not registered: invisible to tools/list, unresolvable by tools/call.
-      return undefined as never;
-    }
-    return (
-      server.registerTool as unknown as (
-        n: string,
-        c: unknown,
-        h: (...a: unknown[]) => unknown,
-      ) => unknown
-    )(name, config, async (...cbArgs: unknown[]) => {
-      const ctx = mcpRequestContextStorage.getStore();
-      if (ctx?.delegatedRestricted && !isDelegatedChatMcpToolAllowed(name)) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Tool ${name} is not available to delegated chat MCP requests.`,
-            },
-          ],
-          isError: true,
-        };
-      }
-      // Boundary enforcement.
-      // We avoid pulling the authz module into the per-tool hot path until the
-      // wrapper runs the first call, so cold-boot cost stays outside this
-      // closure. Any failure of the boundary check (failed import, runtime
-      // exception, etc.) MUST fail closed — never fall through to the user
-      // handler.
-      try {
-        const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-        const decision = await enforceMcpBoundary({
-          primitiveName: name,
-          ctx,
-          delegatedRestricted: !!ctx?.delegatedRestricted,
-        });
-        if (!decision.allowed && decision.shouldBlock) {
-          return {
-            content: [
-              { type: "text", text: `Authorization denied for ${name}: ${decision.reason}` },
-            ],
-            isError: true,
-          };
-        }
-      } catch (err) {
-        // Fail-closed. The boundary is the deny-by-default backstop; we
-        // never allow a tool call to slip through on import / runtime
-        // failure of the kernel.
-        if (process.env.NODE_ENV !== "production") {
-          console.warn(`[mcp-boundary] enforcement error on ${name}:`, err);
-        }
-        return {
-          content: [
-            { type: "text", text: `Authorization unavailable for ${name}: boundary_error` },
-          ],
-          isError: true,
-        };
-      }
-      // Re-enter the ALS frame around the user handler. The outer
-      // mcpRequestContextStorage.run wrapper at the transport entry (line
-      // 1384) populates `ctx`, but the await boundaries inside this wrapper
-      // (boundary import + enforceMcpBoundary) can drop the ALS frame on
-      // some runtimes — observed live as `dashboards_cube_load` raising
-      // "missing user/organization identity in MCP request context" while
-      // sibling reads succeed. Minimal,
-      // null-safe: if no ctx was captured, the bare callback runs (matches
-      // the behavior for unauthenticated dev probes).
-      return ctx ? mcpRequestContextStorage.run(ctx, () => cb(...cbArgs)) : cb(...cbArgs);
-    });
-  }) as InstanceType<typeof McpServer>["registerTool"];
-
-  // Capability merge order. Must be called BEFORE server.connect(transport);
-  // the vendored SDK throws SdkErrorCode.AlreadyConnected once a transport is attached
-  // (vendor/.../index.mjs:651). Done here, immediately after construction, so the
-  // experimental block is merged into capabilities before any registerCapabilities
-  // callback or connect attempt.
-  if (input.experimental) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    server.server.registerCapabilities({ experimental: input.experimental as any });
-  }
-
-  const screenRegistry = new Map<string, ScreenDescriptor>();
-  const toolServer: McpRuntimeToolServer = {
-    // Policed registerTool for the delegated-chat allowlist.
-    registerTool: policedRegisterTool,
-    registerResource: server.registerResource.bind(server) as InstanceType<typeof McpServer>["registerResource"],
-    registerPrompt: server.registerPrompt.bind(server),
-    registerScreen(descriptor) {
-      if (screenRegistry.has(descriptor.screen_id)) {
-        throw new Error(`Screen "${descriptor.screen_id}" is already registered.`);
-      }
-      screenRegistry.set(descriptor.screen_id, descriptor);
-    },
-  };
-
-  registerPlaceholderCapabilities(server);
-  await input.registerCapabilities?.(toolServer);
-
-  policedRegisterTool(
-    "system_screen_lookup",
-    {
-      title: "Screen lookup",
-      description:
-        "Returns registered screens by screen_id or module name. Call with no arguments to list all known screens.",
-      inputSchema: z.object({
-        screen_id: z.string().optional(),
-        module: z.string().optional(),
-      }),
-    },
-    async (lookupInput) => {
-      const entries = [...screenRegistry.values()];
-      const filtered = lookupInput.screen_id
-        ? entries.filter((s) => s.screen_id === lookupInput.screen_id)
-        : lookupInput.module
-          ? entries.filter((s) => s.module === lookupInput.module)
-          : entries;
-      return {
-        content: [{ type: "text", text: JSON.stringify(filtered) }],
-        structuredContent: { screens: filtered },
-      };
-    },
-  );
-
-  return server;
 }
 
 async function fetchOAuthClients(auth: BetterAuthLike) {
@@ -1136,9 +805,28 @@ function OverviewLink(props: {
 export {
   buildMcpAuthPlugins,
   DEFAULT_MCP_SCOPES,
+  CLI_SCOPES,
   type McpAuthPlugins,
   type McpAuthPluginsOptions,
 };
+
+// Facade re-exports for the split runtime/request-context modules.
+// Public consumers keep importing these from `@cinatra-ai/mcp-server`; the
+// facade re-exports DOWNWARD only (no subpath, no `Symbol.for` backing). The
+// runtime types (`McpRuntimeToolServer`/`ScreenDescriptor`) are consumed by
+// every per-package MCP registry, and `mcpRequestContextStorage` /
+// `McpRequestContext` / `DelegatedMcpActor` by the app + agent layers.
+export {
+  createMcpRuntimeServer,
+  type McpRuntimeToolServer,
+  type NavigationTarget,
+  type ScreenDescriptor,
+} from "./runtime-server";
+export {
+  mcpRequestContextStorage,
+  type DelegatedMcpActor,
+  type McpRequestContext,
+} from "./request-context";
 
 // The delegated-chat tool allowlist predicate — re-exported so in-process
 // primitive invokers (e.g. the host self-MCP `ctx.mcp.callPrimitive`) can apply
@@ -1163,6 +851,36 @@ export function createMcpServerAuthPlugins(
   const publicMcpUrl = getPublicMcpServerUrl();
   const validAudiences = publicMcpUrl ? [localMcpUrl, publicMcpUrl] : [localMcpUrl];
 
+  // CLI control-plane: extend validAudiences with `<origin><extraBasePath>` for each
+  // configured extra base path (e.g. /api/cli), on BOTH the local and public
+  // origins, so an authorize with `resource=<origin>/api/cli` mints a JWT
+  // bound to that dedicated audience. The MCP audiences are unchanged — each
+  // verifier still pins its OWN audience (reciprocal isolation).
+  const extraBasePaths = (options.extraAudienceBasePaths ?? []).map((p) =>
+    normalizePath(p, p),
+  );
+  if (extraBasePaths.length > 0) {
+    const origins: string[] = [];
+    try {
+      origins.push(new URL(localMcpUrl).origin);
+    } catch {
+      /* malformed local URL — skip */
+    }
+    if (publicMcpUrl) {
+      try {
+        origins.push(new URL(publicMcpUrl).origin);
+      } catch {
+        /* malformed public URL — skip */
+      }
+    }
+    for (const origin of origins) {
+      for (const basePath of extraBasePaths) {
+        const audience = `${origin}${basePath}`;
+        if (!validAudiences.includes(audience)) validAudiences.push(audience);
+      }
+    }
+  }
+
   const urls = buildMcpHandshakeUrls(handshakeBasePath);
   return buildMcpAuthPlugins({
     validAudiences,
@@ -1170,6 +888,12 @@ export function createMcpServerAuthPlugins(
     loginPage: urls.loginPage,
     consentPage: urls.consentPage,
     signupPage: urls.signupPage,
+    ...(options.clientRegistrationDefaultScopes
+      ? { clientRegistrationDefaultScopes: options.clientRegistrationDefaultScopes }
+      : {}),
+    ...(options.clientRegistrationAllowedScopes
+      ? { clientRegistrationAllowedScopes: options.clientRegistrationAllowedScopes }
+      : {}),
   });
 }
 
@@ -1687,7 +1411,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
                   {configuredProviders.length > 0 && (
                     <form action={`${adminBasePath}/connectivity-check`} method="POST" className="flex items-center gap-2">
                       {configuredProviders.length > 1 && (
-                        <select
+                        <NativeSelect
                           name="provider"
                           defaultValue={checkedProvider ?? configuredProviders[0] ?? ""}
                           disabled={!settings.publicBaseUrl}
@@ -1696,10 +1420,10 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
                           {configuredProviders.map((p) => (
                             <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
                           ))}
-                        </select>
+                        </NativeSelect>
                       )}
                       {configuredProviders.length === 1 && (
-                        <input type="hidden" name="provider" value={configuredProviders[0]} />
+                        <Input type="hidden" name="provider" value={configuredProviders[0]} />
                       )}
                       <Button
                         type="submit"
@@ -1830,7 +1554,13 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
               queryString={queryString}
             />
 
-            <AuthView path={path} />
+            {/* cinatra#484: keep the better-auth-ui password show/hide toggle out
+                of the field→field Tab flow and correctly announced to assistive
+                tech (it ships no tabIndex / accessible name and offers no
+                override hook). Mirrors the primary sign-up form fix. */}
+            <PasswordToggleA11y>
+              <AuthView path={path} />
+            </PasswordToggleA11y>
             </CardContent>
           </Card>
         </div>

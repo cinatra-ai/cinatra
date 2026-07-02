@@ -1,0 +1,19 @@
+{
+  "note": "Workspace dependency-cycle baseline (no-new-rot ratchet). Each entry is a known package dependency cycle (a strongly-connected set of first-party workspace packages). These are CURRENT tolerated cycles; the gate fails on any NEW cycle and on baseline growth. The cycle key is the sorted SCC member set, so identity is traversal-order-independent. Regenerate with `node scripts/audit/workspace-dep-cycles.mjs --write-baseline` — every entry should only ever be REMOVED (break the cycle via a one-directional `*-contracts` package), never added.",
+  "cycles": [
+    {
+      "key": "@cinatra-ai/a2a <-> @cinatra-ai/agents",
+      "members": [
+        "@cinatra-ai/a2a",
+        "@cinatra-ai/agents"
+      ]
+    },
+    {
+      "key": "@cinatra-ai/llm <-> @cinatra-ai/skills",
+      "members": [
+        "@cinatra-ai/llm",
+        "@cinatra-ai/skills"
+      ]
+    }
+  ]
+}

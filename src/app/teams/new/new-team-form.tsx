@@ -50,7 +50,7 @@ export function NewTeamForm({ organizations, initialError }: NewTeamFormProps) {
 
         <Field>
           <FieldLabel htmlFor="organizationId">Organization</FieldLabel>
-          <input type="hidden" id="organizationId" name="organizationId" value={organizationId} />
+          <Input type="hidden" id="organizationId" name="organizationId" value={organizationId} />
           <Select value={organizationId} onValueChange={setOrganizationId} required>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select an organization" />

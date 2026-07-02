@@ -17,6 +17,7 @@ const {
   buildPortsMock,
   assertSemanticTypeMock,
   lazyRegisterMock,
+  writeAllowedMock,
 } = vi.hoisted(() => ({
   runPgMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
   buildPortsMock: vi.fn(),
   assertSemanticTypeMock: vi.fn(),
   lazyRegisterMock: vi.fn(),
+  writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
 }));
 
 vi.mock("@/lib/postgres-sync", () => ({
@@ -60,6 +62,11 @@ vi.mock("../semantic-assertion-store", () => ({
 }));
 vi.mock("@/lib/extensions-dev-watcher", () => ({
   registerArtifactExtensionSkillsForPackage: lazyRegisterMock,
+}));
+// CG-4 (cinatra#661): matcher candidates are filtered through the install-active
+// write gate. Mock it; default allow, override per test.
+vi.mock("../artifact-extension-access", () => ({
+  isArtifactExtensionWriteAllowed: writeAllowedMock,
 }));
 
 import {
@@ -156,6 +163,7 @@ describe("runArtifactMatch", () => {
     buildPortsMock.mockReset();
     assertSemanticTypeMock.mockReset();
     lazyRegisterMock.mockReset();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
     buildPortsMock.mockReturnValue({});
     parseFrontmatterMock.mockImplementation((c: string) => ({ body: c }));
   });
@@ -244,6 +252,22 @@ describe("runArtifactMatch", () => {
       assertedBy: "matcher",
       confidence: 0.9,
     });
+  });
+
+  it("CG-4: an archived-install candidate is dropped → no LLM call, no matcher assert", async () => {
+    stageAuthoritative({
+      digest: "sha", mime: "application/pdf", storage_key: "k", origin_kind: "upload",
+    });
+    listArtifactsMock.mockReturnValue([
+      artifactDef({ pkg: "@v/pdf-artifact", matcherSkillId: "s1" }),
+    ]);
+    resolveRuntimeMock.mockResolvedValue({ provider: "openai", connection: {} });
+    // The candidate's canonical install row is archived → write not allowed.
+    writeAllowedMock.mockResolvedValue(false);
+    await runArtifactMatch(PAYLOAD, { actorContext: ACTOR });
+    // Gated out BEFORE any LLM scoring or assertion.
+    expect(runLlmMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
   });
 
   it("malformed / out-of-range LLM response → skip (strict parse)", async () => {

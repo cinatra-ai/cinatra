@@ -16,6 +16,39 @@ import {
   resolveExtensionTypeId,
   resolveExtensionPackageForLifecycle,
 } from "./utils";
+import {
+  classifyMarketplaceFailure,
+  type MarketplaceFailureCategory,
+  type MarketplaceInstallActionResult,
+} from "./screens/marketplace-failure-copy";
+
+// ---------------------------------------------------------------------------
+// Operator-side failure logging (cinatra#685). The end user only ever sees a
+// category-derived, NON-technical message; the FULL technical error must stay
+// available to operators. install-batch already console.error/warn the
+// underlying detail; the dispatch boundary logs once more with a stable
+// `[marketplace-install]` tag + the classified category so an operator can
+// correlate "the user saw category X" with the raw cause in the same logs.
+// Defined here (not exported) — a "use server" module may only EXPORT async
+// functions, but a private sync helper is fine.
+function logMarketplaceFailureForOperator(
+  operation: string,
+  packageName: string,
+  category: MarketplaceFailureCategory,
+  err: unknown,
+): void {
+  // Use a CONSTANT format string with %s placeholders and pass the dynamic
+  // values (incl. the user-controlled packageName) as separate arguments — never
+  // interpolate user input into the format-string position, which console.error
+  // would interpret for %-directives (CWE-134 externally-controlled format string).
+  console.error(
+    "[marketplace-install] %s failed for %s (category=%s):",
+    operation,
+    packageName,
+    category,
+    err instanceof Error ? (err.stack ?? err.message) : String(err),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Extension-local server actions dispatch through the extensionRegistry
@@ -34,7 +67,7 @@ export async function installExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
   "use server";
   await requireAdminSession();
   try {
@@ -52,9 +85,14 @@ export async function installExtensionPackage(
     await installExtensionWithDependencies({ packageName, version: packageVersion, actor });
     return { success: true };
   } catch (err) {
+    // Classify from the REAL error object here, BEFORE it is stringified — this
+    // is the only place that still has the `cause` chain / MarketplaceMcpError
+    // `responseBody` + `httpStatus` the taxonomy classifier reads (cinatra#685).
+    const failureCategory = classifyMarketplaceFailure(err);
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      failureCategory,
     };
   }
 }
@@ -63,7 +101,7 @@ export async function updateExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
   "use server";
   await requireAdminSession();
   try {
@@ -75,9 +113,12 @@ export async function updateExtensionPackage(
     );
     return { success: true };
   } catch (err) {
+    // Classify from the real error before stringification (cinatra#685).
+    const failureCategory = classifyMarketplaceFailure(err);
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      failureCategory,
     };
   }
 }
@@ -135,7 +176,7 @@ export async function archiveExtensionPackage(
 export async function restoreExtensionPackage(
   packageName: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
   "use server";
   await requireAdminSession();
   try {
@@ -148,9 +189,14 @@ export async function restoreExtensionPackage(
     );
     return { success: true };
   } catch (err) {
+    // Restore is DB-only (no marketplace round-trip) so this almost always
+    // classifies as `unrecoverable`; route it through the same channel anyway so
+    // the client form has one uniform failure path (cinatra#685).
+    const failureCategory = classifyMarketplaceFailure(err);
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      failureCategory,
     };
   }
 }
@@ -259,7 +305,7 @@ export async function forceDeleteExtensionPackage(
 export async function installExtensionPackageFormAction(input: {
   packageName: string;
   packageVersion: string;
-}): Promise<void> {
+}): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
   const actor: Actor = {
@@ -272,7 +318,13 @@ export async function installExtensionPackageFormAction(input: {
   };
   const result = await installExtensionPackage(input.packageName, input.packageVersion, actor);
   if (!result.success) {
-    throw new Error(result.error ?? "Installation failed");
+    // cinatra#685: RETURN the classified category instead of throwing. A thrown
+    // server-action message is masked in production (digest only) so it cannot
+    // carry the cause to the client; a returned value is delivered intact. The
+    // raw technical error stays operator-side (logs), never in the user toast.
+    const category = result.failureCategory ?? "unrecoverable";
+    logMarketplaceFailureForOperator("install", input.packageName, category, result.error);
+    return { ok: false, category };
   }
   redirect("/configuration/extensions");
 }
@@ -280,7 +332,7 @@ export async function installExtensionPackageFormAction(input: {
 export async function updateExtensionPackageFormAction(input: {
   packageName: string;
   packageVersion: string;
-}): Promise<void> {
+}): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
   const actor: Actor = {
@@ -293,7 +345,10 @@ export async function updateExtensionPackageFormAction(input: {
   };
   const result = await updateExtensionPackage(input.packageName, input.packageVersion, actor);
   if (!result.success) {
-    throw new Error(result.error ?? "Update failed");
+    // cinatra#685: return the classified category (see install action note).
+    const category = result.failureCategory ?? "unrecoverable";
+    logMarketplaceFailureForOperator("update", input.packageName, category, result.error);
+    return { ok: false, category };
   }
   redirect("/configuration/extensions");
 }
@@ -358,7 +413,7 @@ export async function archiveExtensionPackageFormAction(input: {
 
 export async function restoreExtensionPackageFormAction(input: {
   packageName: string;
-}): Promise<void> {
+}): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
   const actor: Actor = {
@@ -371,7 +426,10 @@ export async function restoreExtensionPackageFormAction(input: {
   };
   const result = await restoreExtensionPackage(input.packageName, actor);
   if (!result.success) {
-    throw new Error(result.error ?? "Restore failed");
+    // cinatra#685: return the classified category (see install action note).
+    const category = result.failureCategory ?? "unrecoverable";
+    logMarketplaceFailureForOperator("restore", input.packageName, category, result.error);
+    return { ok: false, category };
   }
   // revalidatePath is unnecessary because redirect re-renders the destination.
   redirect("/configuration/extensions");

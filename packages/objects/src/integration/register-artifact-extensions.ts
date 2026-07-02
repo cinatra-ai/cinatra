@@ -70,23 +70,50 @@ function registerOneArtifactDir(dir: string): boolean {
     return false;
   }
   const descriptor: SemanticArtifactManifest = parsed.manifest;
-  objectTypeRegistry.register({
-    // Namespaced id `@scope/pkg:artifact` (matches OBJECT_TYPE_NAMESPACE_RE).
-    type: `${pkg.name}:artifact`,
-    category: "report",
-    schema: z.record(z.string(), z.unknown()),
-    lifecycle: {
-      sources: ["agent", "user", "import"],
-      mutableBy: ["agent", "user"],
+  objectTypeRegistry.register(
+    {
+      // Namespaced id `@scope/pkg:artifact` (matches OBJECT_TYPE_NAMESPACE_RE).
+      type: `${pkg.name}:artifact`,
+      category: "report",
+      schema: z.record(z.string(), z.unknown()),
+      lifecycle: {
+        sources: ["agent", "user", "import"],
+        mutableBy: ["agent", "user"],
+      },
+      renderers: {
+        listRow: GenericObjectListRow,
+        card: GenericObjectCard,
+        detail: GenericObjectDetail,
+      },
+      isArtifact: descriptor,
     },
-    renderers: {
-      listRow: GenericObjectListRow,
-      card: GenericObjectCard,
-      detail: GenericObjectDetail,
-    },
-    isArtifact: descriptor,
-  });
+    // PROVENANCE (cinatra#661): record the owning package so the runtime
+    // teardown hook (`teardownExtensionCapabilities` → `removeByPackage`) can
+    // deregister exactly this bridge-registered artifact type on
+    // archive/uninstall. WITHOUT this arg the provenance index never recorded
+    // the type, so `removeByPackage` was a no-op for every bridge-registered
+    // artifact type — the teardown blocker. The HOST built-in artifact types
+    // (`@cinatra-ai/artifact:object`, `@cinatra-ai/artifacts:artifact-ref`)
+    // register in `register-all-object-types.ts` WITHOUT a package name, so
+    // they stay provenance-less and are NEVER reaped by `removeByPackage`.
+    pkg.name,
+  );
   return true;
+}
+
+/**
+ * Register exactly ONE artifact-extension package dir (its `package.json` is
+ * directly at `dir`). Used by the production package-store rescan
+ * (`extension-artifact-bridge-rescan.ts`), where each materialized store record
+ * IS the package dir (`/data/extensions/packages/<pkg>/<digest>/`), so the
+ * `<root>/*-artifact` scan layout of `registerArtifactExtensions` does not
+ * apply. Reuses the SAME manifest validation + provenance threading as the
+ * bundled scan — never imports or executes the package's code (reads
+ * `package.json` only). Returns true iff a valid `kind:"artifact"` package was
+ * registered.
+ */
+export function registerArtifactExtensionDir(dir: string): boolean {
+  return registerOneArtifactDir(dir);
 }
 
 function scanDirForArtifacts(dir: string): number {

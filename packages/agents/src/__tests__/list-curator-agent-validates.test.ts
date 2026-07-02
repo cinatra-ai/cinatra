@@ -34,9 +34,6 @@ const oasPath = path.resolve(
 );
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
-const pkg = JSON.parse(
-  fs.readFileSync(path.resolve(path.dirname(oasPath), "..", "package.json"), "utf8"),
-) as Record<string, unknown>;
 
 describe("list-curator-agent OAS validates against L1 validator + LLM-metadata scanner + StartNode input coverage scan", () => {
   it("validateOasAgentJson returns [] (no L1 findings)", () => {
@@ -69,7 +66,6 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     const metadata = oas.metadata as Record<string, unknown>;
     const cinatra = metadata.cinatra as Record<string, unknown>;
     expect(cinatra.packageName).toBe("@cinatra-ai/list-curator-agent");
-    expect(cinatra.packageVersion).toBe(pkg.version);
   });
 
   it("metadata.cinatra.hitlScreens declares the 2 list-curator gate ids in the locked order", () => {

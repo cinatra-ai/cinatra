@@ -302,6 +302,79 @@ describe("tree hashing", () => {
     expect(computeTreeSha256FromDir(dir)).toBe(archiveHash);
   });
 
+  it("re-verify succeeds when pnpm has added a node_modules directory with symlinks inside the acquired tree", async () => {
+    // pnpm adds `node_modules/<scope>/<pkg>` as a workspace symlink after
+    // `pnpm install`; `computeTreeSha256FromDir` must skip the entire
+    // `node_modules/` subtree so the re-verify hash matches the tarball hash
+    // (cinatra-cli#74 regression).
+    const gz = await goodArchive({
+      extra: [{ path: `sample-connector-${SHA_A}/src/index.ts`, body: "export const y = 2;\n" }],
+    });
+    const { records } = await inspect(gz);
+    const archiveHash = foldTreeHash(records);
+
+    const dir = scratch();
+    // Reproduce the on-disk layout that the acquisition + pnpm-install creates.
+    writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@scope/sample-connector", version: "0.1.0" }));
+    writeFileSync(path.join(dir, "index.ts"), "export const x = 1;\n");
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src/index.ts"), "export const y = 2;\n");
+    writeFileSync(path.join(dir, ACQUISITION_MARKER_FILENAME), "{}");
+    // Simulate what pnpm adds: node_modules with a workspace symlink inside.
+    const nmScope = path.join(dir, "node_modules", "@cinatra-ai");
+    mkdirSync(nmScope, { recursive: true });
+    const { symlinkSync } = await import("node:fs");
+    symlinkSync("../../../../packages/sdk-extensions", path.join(nmScope, "sdk-extensions"));
+
+    // Before the fix this threw "unexpected non-regular entry … node_modules/…"
+    expect(computeTreeSha256FromDir(dir)).toBe(archiveHash);
+  });
+
+  it("re-verify succeeds when the node_modules install root itself is a symlink (pnpm hoisted layout)", async () => {
+    // cinatra#735: pnpm's nested/hoisted workspace layout can land the
+    // `node_modules` install root itself as a SYMLINK (e.g. pointing into
+    // `.pnpm`). `dirent.isDirectory()` is false for that, so a name-only skip
+    // nested under an isDirectory() branch missed it and failed closed with
+    // "unexpected non-regular entry … node_modules/@cinatra-ai/sdk-extensions".
+    const gz = await goodArchive({
+      extra: [{ path: `sample-connector-${SHA_A}/src/index.ts`, body: "export const y = 2;\n" }],
+    });
+    const { records } = await inspect(gz);
+    const archiveHash = foldTreeHash(records);
+
+    const dir = scratch();
+    writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@scope/sample-connector", version: "0.1.0" }));
+    writeFileSync(path.join(dir, "index.ts"), "export const x = 1;\n");
+    mkdirSync(path.join(dir, "src"), { recursive: true });
+    writeFileSync(path.join(dir, "src/index.ts"), "export const y = 2;\n");
+    writeFileSync(path.join(dir, ACQUISITION_MARKER_FILENAME), "{}");
+    // Build the symlink target OUTSIDE the acquired dir (a real node_modules
+    // tree elsewhere) and link the package's `node_modules` to it — what
+    // pnpm's hoisted layout produces. The skip must short-circuit BEFORE the
+    // walk follows the symlink, so the target's contents are never hashed.
+    const { symlinkSync } = await import("node:fs");
+    const nmTarget = scratch();
+    const nmTargetScope = path.join(nmTarget, "@cinatra-ai");
+    mkdirSync(nmTargetScope, { recursive: true });
+    symlinkSync("../../../../packages/sdk-extensions", path.join(nmTargetScope, "sdk-extensions"));
+    // node_modules itself is a symlink -> isDirectory() is false.
+    symlinkSync(nmTarget, path.join(dir, "node_modules"));
+
+    expect(computeTreeSha256FromDir(dir)).toBe(archiveHash);
+  });
+
+  it("still throws on a symlink outside node_modules in the acquired tree", async () => {
+    // The node_modules skip must not widen the guard: a symlink anywhere else
+    // in the acquired tree is still a hard error (integrity invariant).
+    const { symlinkSync } = await import("node:fs");
+    const dir = scratch();
+    writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@scope/sample-connector", version: "0.1.0" }));
+    writeFileSync(path.join(dir, "index.ts"), "export const x = 1;\n");
+    // A stray symlink directly in the package root (not under node_modules).
+    symlinkSync("/etc/passwd", path.join(dir, "evil-link"));
+    expect(() => computeTreeSha256FromDir(dir)).toThrow(/unexpected non-regular entry/);
+  });
+
   it("gunzipBounded rejects output over the bound", async () => {
     const big = gzipSync(Buffer.alloc(4096));
     await expect(gunzipBounded(big, 1024)).rejects.toThrow(/exceeds/);

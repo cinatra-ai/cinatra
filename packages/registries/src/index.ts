@@ -12,7 +12,17 @@ export {
   FIRST_PARTY_PACKAGE_SCOPE,
   vendorScopeOfPackage,
   dependencyScopePrefixesFor,
+  // Canonical `@vendor/name` → {vendor, name} splitter (first `/` only; never
+  // splits the scope on `-`). The single source of truth for vendor/name
+  // decomposition across the agent-create + on-disk writers (cinatra#537).
+  parsePackageId,
+  // Shared filesystem-safe single-segment guard for every `<vendor>/<name>`
+  // disk-join site (cinatra#537 hardening — rejects `..`, separators, control
+  // chars, leading-`~`, drive-like).
+  isSafePathSegment,
+  assertSafePathSegment,
 } from "./scope";
+export type { PackageId } from "./scope";
 
 export {
   PluginDependencyCycleError,
@@ -43,6 +53,7 @@ export {
   getAgentPackage,
   getPublishedExtensionKind,
   extractAgentPackage,
+  readAgentPayloadFromExtractedPackage,
   cleanupExtractedAgentPackage,
   // Fail-fast DI guard helper. Re-exported so packages/agents
   // can use the same helper without duplicating the body.

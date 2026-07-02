@@ -314,6 +314,32 @@ async function runArtifactMatchImpl(
         : DEFAULT_MATCHER_CONFIDENCE_THRESHOLD;
     candidates.push({ extPackageName, matcherSkillId, threshold });
   }
+
+  // CG-4 (cinatra#661) — install-active write gate on the ACTOR-LESS matcher.
+  // The candidate set above is built purely from `objectTypeRegistry
+  // .listArtifacts()` (in-memory registry membership). The registry is NOT the
+  // only authz: a registered-but-archived type (a stale process whose teardown
+  // never fired, or a disk descriptor lingering past an archive) could otherwise
+  // receive a `matcher`-asserted semantic type. Drop any candidate whose
+  // canonical install row is archived/absent-and-governed — DB-status-driven, so
+  // it holds even in a process that never received the in-memory teardown.
+  // Ungoverned (no-row) bundled/disk artifact types stay matchable (CG-1).
+  const { isArtifactExtensionWriteAllowed } = await import(
+    "./artifact-extension-access"
+  );
+  const allowedFlags = await Promise.all(
+    candidates.map((c) => isArtifactExtensionWriteAllowed(c.extPackageName, payload.orgId)),
+  );
+  const gatedCandidates = candidates.filter((_, i) => allowedFlags[i]);
+  const droppedCount = candidates.length - gatedCandidates.length;
+  if (droppedCount > 0) {
+    console.info(
+      `[artifact-matcher] ${droppedCount} candidate(s) dropped (install archived/absent) for ${payload.artifactId}`,
+    );
+  }
+  candidates.length = 0;
+  candidates.push(...gatedCandidates);
+
   if (candidates.length === 0) {
     console.info(
       `[artifact-matcher] no MIME-matching matcher extensions for ${authoritative.mime} (${payload.artifactId}) — default-floor stands`,

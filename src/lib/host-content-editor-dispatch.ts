@@ -9,7 +9,7 @@ import {
   readLatestAgentVersionIdForTemplate,
   transitionRunStatus,
 } from "@cinatra-ai/agents";
-import { resolveSingleTenantContentEditorIdentity } from "@/lib/content-editor-run-identity";
+import { resolveContentEditorIdentityForInstance } from "@/lib/content-editor-run-identity";
 
 // Host-side A2A blocking-dispatch helper shared by the Drupal + WordPress
 // content-editor connectors. The non-SDK runtime edges — `@cinatra-ai/llm`
@@ -29,8 +29,10 @@ import { resolveSingleTenantContentEditorIdentity } from "@/lib/content-editor-r
 // the worker (packages/agents/src/execution.ts), this host-initiated dispatch has
 // NO session. To authorize the downstream `/api/mcp` CMS write through the REAL
 // agent-run OBO path (NOT the dev-admin bypass), we pre-create a real `agent_run`
-// row bound to a concrete {orgId, runBy} (resolved single-tenant; see
-// content-editor-run-identity.ts) and inject `cinatra_run_id: run.id` into the
+// row bound to a concrete {orgId, runBy} (resolved PER-INSTALL from the
+// connector config's persisted install→org binding, origin-authoritative —
+// cinatra#274 — falling back to single-tenant; see content-editor-run-identity.ts)
+// and inject `cinatra_run_id: run.id` into the
 // A2A message text. The agent_loader.py alias (cinatra_run_id → agent_run_id)
 // plus each agent's OAS DataFlowEdge forward that id into the `/api/llm-bridge`
 // ApiNode body as `agent_run_id`; the bridge resolves the run and mints the OBO
@@ -69,6 +71,44 @@ export type ContentEditorDispatchInput = {
    * production OBO path requires the up-to-date connectors that pass it.
    */
   packageName?: string;
+  /**
+   * Multi-tenant install→org resolution anchors (cinatra#274). Supplied by the
+   * widget-stream route so the OBO identity binds to THIS install's persisted
+   * {orgId, runBy} rather than the single-tenant default:
+   *   • instancesConfigKey — `connector_config` key holding the install rows
+   *     ("wordpress" | "drupal"), from the widget-stream agent's `auth`.
+   *   • origin — the token-bound, SERVER-VERIFIED site origin (authoritative).
+   *   • instanceId — the client-supplied (sanitized) instance id; used ONLY to
+   *     disambiguate among origin-matched rows, never to outrank the origin.
+   * All OPTIONAL: the connector-side `deps.dispatchContentEditor` path carries
+   * no install context, so it omits these and keeps single-tenant behavior.
+   */
+  instancesConfigKey?: string;
+  origin?: string | null;
+  instanceId?: string | null;
+  /**
+   * cinatra#408 — EXPLICIT per-user OBO identity override (the interactive
+   * widget path). When present, the install/single-tenant identity resolver is
+   * SKIPPED ENTIRELY and the carrier `agent_run` is created with exactly this
+   * `{runBy, orgId, sourceType}`. The stream route builds this from a validated
+   * `cwu_` user token AFTER all fail-closed checks (token consume, origin/org/
+   * instance agreement, live membership), so `runBy` is the authenticated END
+   * USER, never the install's configured service identity.
+   *
+   * There is NO anonymous fallback when an override is present: a bad override
+   * is a server bug, not a license to downgrade to site identity. (The route
+   * guarantees a present override is fully validated; an unresolvable template
+   * still throws rather than silently dropping to anonymous.)
+   *
+   * `sourceType` is pinned to `"public_site_widget"` so the downstream bridge
+   * resolver suppresses the platform-admin bypass for ONLY this path.
+   */
+  actorOverride?: {
+    runBy: string;
+    orgId: string;
+    instanceId: string;
+    sourceType: "public_site_widget";
+  };
 };
 
 /**
@@ -110,7 +150,61 @@ async function prepareDispatch(
       : JSON.stringify(input.payload);
 
   if (!payloadObject) {
+    // cinatra#408 — when a validated per-user override is present we must NOT
+    // dispatch anonymously (that would silently downgrade the authenticated
+    // user to a no-identity write the boundary then denies, masking a server
+    // bug). A non-object payload here is a programming error on the override
+    // path; surface it loudly instead of a silent anonymous fallback.
+    if (input.actorOverride) {
+      throw new Error(
+        "[content-editor-dispatch] actorOverride present but payload is not an injectable object; " +
+          "refusing anonymous fallback for a per-user widget dispatch.",
+      );
+    }
     return { text: anonymousText, runId: null };
+  }
+
+  // cinatra#408 — EXPLICIT per-user identity override (interactive widget path).
+  // The stream route has already fail-closed-validated the `cwu_` user token,
+  // the two-token origin/org/instance agreement, and live org membership BEFORE
+  // calling here, so we trust this `{runBy, orgId}` and create the carrier run
+  // directly — SKIPPING `resolveContentEditorIdentityForInstance` (and its
+  // single-tenant / install-admin fallback) entirely. No anonymous fallback.
+  if (input.actorOverride) {
+    if (!input.packageName) {
+      // The widget path always supplies packageName (the relay's package); its
+      // absence is a wiring bug, not a back-compat case — fail loudly.
+      throw new Error(
+        "[content-editor-dispatch] actorOverride present without packageName; " +
+          "cannot resolve the agent template for a per-user widget dispatch.",
+      );
+    }
+    const template = await readAgentTemplateByPackageName(input.packageName);
+    if (!template) {
+      throw new Error(
+        `[content-editor-dispatch] actorOverride present but no agent template installed for ${input.packageName}; ` +
+          "refusing anonymous fallback for a per-user widget dispatch.",
+      );
+    }
+    const latestVersionId =
+      (await readLatestAgentVersionIdForTemplate(template.id)) ?? undefined;
+    const overrideRunId = `run_${randomUUID()}`;
+    const overrideRun = await createAgentRun({
+      id: overrideRunId,
+      templateId: template.id,
+      versionId: latestVersionId,
+      inputParams: payloadObject,
+      runBy: input.actorOverride.runBy,
+      orgId: input.actorOverride.orgId,
+      // The discriminator the bridge resolver keys on to suppress the
+      // platform-admin bypass for ONLY this per-user widget path (cinatra#408).
+      sourceType: input.actorOverride.sourceType,
+    });
+    const overrideText = JSON.stringify({
+      ...payloadObject,
+      cinatra_run_id: overrideRun.id,
+    });
+    return { text: overrideText, runId: overrideRun.id };
   }
 
   // A connector release predating cinatra#246 omits packageName. Without it we
@@ -124,11 +218,19 @@ async function prepareDispatch(
     return { text: anonymousText, runId: null };
   }
 
-  // Resolve the single-tenant OBO identity + the agent template row.
-  const identity = await resolveSingleTenantContentEditorIdentity();
+  // Resolve the OBO identity: PREFER this install's persisted {orgId, runBy}
+  // (cinatra#274), origin-authoritative; FALL BACK to single-tenant when the
+  // install has no binding (pre-#274 rows) or no match. The single-tenant
+  // fallback lives inside the per-instance resolver, so this one call covers
+  // both. A null result (neither available) → anonymous dispatch.
+  const identity = await resolveContentEditorIdentityForInstance({
+    instancesConfigKey: input.instancesConfigKey ?? "",
+    origin: input.origin,
+    instanceId: input.instanceId,
+  });
   if (!identity) {
     console.warn(
-      `[content-editor-dispatch] no single-tenant identity resolved for ${input.packageName}; ` +
+      `[content-editor-dispatch] no content-editor identity resolved for ${input.packageName}; ` +
         `dispatching anonymously (CMS write will fail closed at the MCP boundary).`,
     );
     return { text: anonymousText, runId: null };

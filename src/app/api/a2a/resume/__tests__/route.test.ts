@@ -39,6 +39,7 @@ vi.mock("server-only", () => ({}));
 import { POST, OPTIONS } from "../route";
 import { verifyA2AAccessToken } from "@/lib/a2a-auth";
 import { approveReviewTaskInternal } from "@cinatra-ai/agents";
+import { AuthzError } from "@/lib/authz/errors";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +60,23 @@ function makeReq(
 }
 
 function authOk(subject = "user-123") {
+  // The route now REQUIRES a verified actorContext (so the run-access gate has
+  // a principal). Provide a realistic ServiceAccount context.
+  (verifyA2AAccessToken as ReturnType<typeof vi.fn>).mockResolvedValue({
+    ok: true,
+    subject,
+    actorContext: {
+      principalType: "ServiceAccount",
+      principalId: subject,
+      organizationId: "org-1",
+      authSource: "a2a",
+      tokenScopes: ["run.approveHitl"],
+    },
+  });
+}
+
+// A valid token CLASS but no resolved actorContext — the route must fail closed.
+function authOkNoCtx(subject = "svc-noctx") {
   (verifyA2AAccessToken as ReturnType<typeof vi.fn>).mockResolvedValue({
     ok: true,
     subject,
@@ -127,7 +145,7 @@ describe("POST /api/a2a/resume", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 200 { ok: true } on successful approval", async () => {
+  it("returns 200 { ok: true } on successful approval (threads verified actorContext)", async () => {
     authOk("user-abc");
     (approveReviewTaskInternal as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     const req = makeReq({ reviewTaskId: "rt1", values: { decision: "approve" } });
@@ -135,7 +153,59 @@ describe("POST /api/a2a/resume", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.ok).toBe(true);
-    expect(approveReviewTaskInternal).toHaveBeenCalledWith("rt1", "user-abc", { decision: "approve" });
+    // The verified actorContext is threaded as the trailing args so the helper
+    // enforces run-access before mutating. The
+    // narrow adapter preserves the ServiceAccount classification (actorType
+    // "model", NOT a bare "a2a" that would reclassify to ExternalA2AAgent).
+    expect(approveReviewTaskInternal).toHaveBeenCalledWith(
+      "rt1",
+      "user-abc",
+      { decision: "approve" },
+      undefined,
+      undefined,
+      expect.objectContaining({
+        actorType: "model",
+        source: "a2a",
+        userId: "user-abc",
+        orgId: "org-1",
+        tokenScopes: ["run.approveHitl"],
+      }),
+      expect.objectContaining({ actorOrganizationId: "org-1" }),
+    );
+  });
+
+  // --- A2A bridge run-binding regressions ----------------------------------
+
+  it("returns 401 when the verified token carries no actorContext (cannot bind authority)", async () => {
+    authOkNoCtx("svc-1");
+    const req = makeReq({ reviewTaskId: "setup-run-1" });
+    const res = await POST(req);
+    expect(res.status).toBe(401);
+    expect(approveReviewTaskInternal).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when the helper denies run-access (cross-actor wayflow/setup)", async () => {
+    authOk("svc-other-org");
+    (approveReviewTaskInternal as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new AuthzError({ statusCode: 403, reason: "forbidden", message: "Run access denied." }),
+    );
+    const req = makeReq({ reviewTaskId: "setup-someone-elses-run" });
+    const res = await POST(req);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe("forbidden");
+  });
+
+  it("returns 404 (no existence leak) when the helper hides a foreign run", async () => {
+    authOk("svc-1");
+    (approveReviewTaskInternal as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." }),
+    );
+    const req = makeReq({ reviewTaskId: "setup-foreign-run" });
+    const res = await POST(req);
+    expect(res.status).toBe(404);
+    const json = await res.json();
+    expect(json.error).toBe("Review task not found or already resolved");
   });
 
   it("returns 404 when approveReviewTaskInternal throws 'not found'", async () => {

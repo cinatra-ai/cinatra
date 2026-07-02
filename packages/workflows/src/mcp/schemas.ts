@@ -23,7 +23,7 @@ export const WORKFLOW_TOOL_META: Record<string, ToolMeta> = {
   },
   workflow_template_instantiate: {
     description:
-      "Instantiate a template into a new DRAFT workflow: fills typed placeholders from `inputs`, sets the target date/timezone, snapshots the template version, and re-authorizes referenced agents/approvers. Returns the draft id + a Gantt deep link. Proposal-only.",
+      "Instantiate a template into a new DRAFT workflow: fills typed placeholders from `inputs`, sets the target date/timezone, snapshots the template version, and re-authorizes referenced agents/approvers. Returns the draft id + a workflow deep link. Proposal-only.",
     inputSchema: z.object({
       templateId: z.string(),
       name: z.string().optional(),
@@ -37,7 +37,7 @@ export const WORKFLOW_TOOL_META: Record<string, ToolMeta> = {
   },
   workflow_draft_create: {
     description:
-      "Create a new DRAFT workflow from a spec (name, release {at,tz}, tasks[]). Validates + enforces resource limits + rejects trigger-bundling; fails closed with structured errors. Returns the draft id + Gantt deep link. Proposal-only — cannot start/approve.",
+      "Create a new DRAFT workflow from a spec (name, release {at,tz}, tasks[]). Validates + enforces resource limits + rejects trigger-bundling; fails closed with structured errors. Returns the draft id + workflow deep link. Proposal-only — cannot start/approve.",
     inputSchema: z.object({ spec: specInput }),
   },
   workflow_draft_update: {
@@ -65,7 +65,7 @@ export const WORKFLOW_TOOL_META: Record<string, ToolMeta> = {
   },
   workflow_preview: {
     description:
-      "Preview a spec (or an existing workflow by id): returns validation + the resolved timeline + a Gantt deep link. Read-only — the handoff point to the Gantt management surface.",
+      "Preview a spec (or an existing workflow by id): returns validation + the resolved timeline + a workflow deep link. Read-only — the handoff point to the workflow management surface.",
     inputSchema: z.object({ spec: specInput.optional(), workflowId: z.string().optional() }),
   },
   workflow_status_get: {
@@ -79,12 +79,12 @@ export const WORKFLOW_TOOL_META: Record<string, ToolMeta> = {
   },
   workflow_artifacts_list: {
     description:
-      "List the artifact representations produced by a workflow (optionally scoped to one task). Used by the Gantt task-detail sheet to render produced drafts/images inline. Read-only.",
+      "List the artifact representations produced by a workflow (optionally scoped to one task). Used by the task-detail sheet to render produced drafts/images inline. Read-only.",
     inputSchema: z.object({ workflowId: z.string(), taskId: z.string().optional() }),
   },
   workflow_cascade_preview: {
     description:
-      "Preview the cascade of moving a workflow's target date: returns the per-task due-date changes for UNPINNED relative tasks (pinned/absolute tasks excluded). Read-only — the Gantt uses this before committing a target-date drag.",
+      "Preview the cascade of moving a workflow's target date: returns the per-task due-date changes for UNPINNED relative tasks (pinned/absolute tasks excluded). Read-only — the target-date control uses this before committing a target-date change.",
     inputSchema: z.object({ workflowId: z.string(), targetAt: z.string() }),
   },
   workflow_copy: {

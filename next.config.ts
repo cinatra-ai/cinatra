@@ -174,7 +174,8 @@ const nextConfig: NextConfig = {
     // migration modules at runtime via `await import(\`file://...\`)` over
     // migrations/core/ — that dynamic import must stay native Node, never
     // bundled. Output tracing still copies the package into the standalone
-    // image (it is statically imported via @cinatra-ai/cli/core-migrations).
+    // image (it is statically imported via @cinatra-ai/migrations, which the
+    // host pulls in through src/lib/core-migrations.ts).
     "node-pg-migrate",
   ],
   transpilePackages: [
@@ -188,6 +189,7 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/extensions",
     "@cinatra-ai/agents",
     "@cinatra-ai/notifications",
+    "@cinatra-ai/webhooks",
     "@cinatra-ai/errors",
     "@cinatra-ai/connectors",
     "@cinatra-ai/connectors-catalog",
@@ -229,6 +231,17 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     return [
+      // The native /workflows browse/list/overview page was removed
+      // (cinatra#609) — workflow overview/tracking now lives in Plane. Old
+      // index bookmarks land on the projects surface (the neutral, always-
+      // available PM destination) instead of a dead 404. EXACT match only: the
+      // per-workflow detail/run + approvals route (`/workflows/:workflowId`)
+      // is KEPT and must stay reachable, so it is intentionally NOT matched.
+      {
+        source: "/workflows",
+        destination: "/projects",
+        permanent: false,
+      },
       {
         source: "/campaign-types",
         destination: "/agents/run",

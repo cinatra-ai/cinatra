@@ -94,6 +94,7 @@ const MEMBERS = [
 const OUT_OF_SCOPE = [
   "DB-tier + unit + browser e2e + schema-migration + node --test gates → push-event `build-image` CI",
   "operator previous-release upgrade proof → scripts/ci/upgrade-proof.sh (closeout W3, #74)",
+  "per-service works-after functional proof (Redis/BullMQ, Nango, Neo4j+Graphiti, Wayflow, Verdaccio, Postgres data-survival) → scripts/ci/works-after-proof.sh + .github/workflows/works-after-proof.yml (cinatra#352; needs Docker, gates env-app/stack majors)",
 ];
 
 console.log("== Closeout verification suite (closeout W3, cinatra#75) ==");

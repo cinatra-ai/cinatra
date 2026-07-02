@@ -4,12 +4,15 @@
 // package.json `version` to the canonical v0.1.0 standard (a NON-publishing
 // normalization pass).
 //
-// This tool edits the `version` field in `package.json` AND — for agent
-// extensions — the self-describing `metadata.cinatra.packageVersion` in
-// `cinatra/oas.json`, keeping the two in lock-step (a per-agent `*-agent-validates`
-// test asserts they match; bumping only package.json drifts them apart). It works
-// on each repo's default branch (read → sync the out-of-sync file(s) → commit only
-// what changed → optional push). It is *non-publishing by construction*:
+// This tool edits the `version` field in `package.json`. The canonical version
+// is `package.json#version`. Agent OAS files no longer carry a self-describing
+// `metadata.cinatra.packageVersion` (it was redundant — the loader reads the
+// sibling `package.json` only). For LEGACY compatibility, if an agent's
+// `cinatra/oas.json` still carries the field, this tool re-syncs it to the
+// target so it does not drift; but its ABSENCE is fully expected and is NOT an
+// error. It works on each repo's default branch (read → sync the out-of-sync
+// file(s) → commit only what changed → optional push). It is *non-publishing by
+// construction*:
 //   • It NEVER creates a git tag.
 //   • It NEVER creates a GitHub Release.
 //   • It NEVER calls the marketplace / registry / Verdaccio.
@@ -38,10 +41,11 @@ import { resolve as resolvePath } from "node:path";
 
 export const TARGET_VERSION = "0.1.0";
 export const VENDOR = "cinatra-ai";
-// The agent OAS carries a self-describing version (consumed standalone by the host
-// registry + marketplace), kept in lock-step with package.json by the per-agent
-// `*-agent-validates` test. Normalizing package.json WITHOUT this drifts the two
-// apart, so this tool syncs both. Path is relative to the repo root.
+// Some agent OAS files may still carry a LEGACY self-describing
+// `metadata.cinatra.packageVersion`. It is redundant (canonical version is
+// package.json#version), but when present this tool keeps it in sync with
+// package.json so it does not drift into misleading provenance. A missing field
+// is the expected post-cleanup state. Path is relative to the repo root.
 export const OAS_REL_PATH = "cinatra/oas.json";
 
 // --- pure helpers (unit-tested; no I/O) -------------------------------------
@@ -265,15 +269,17 @@ export async function normalizeRepos(toBump, { apply, push, target, ops, log = (
       }
 
       // cinatra/oas.json — present ONLY for agents. Read defensively: the real
-      // fs.readFile throws ENOENT when absent (a non-agent — fine). A missing OR
-      // field-less/unscopable OAS on an `agent` is malformed → fail closed (never a
-      // silent skip that would leave the agent's consistency test red).
+      // fs.readFile throws ENOENT when absent (a non-agent — fine). An UNPARSEABLE
+      // or unscopable OAS on an `agent` is malformed → fail closed. A LEGACY
+      // `metadata.cinatra.packageVersion` is re-synced when present, but its
+      // ABSENCE is the expected post-cleanup state and is a clean skip (the field
+      // is redundant — canonical version is package.json#version).
       const oasPath = `${dir}/${OAS_REL_PATH}`;
       let oasText;
       try { oasText = await ops.readFile(oasPath); } catch { oasText = undefined; }
       if (typeof oasText === "string") {
         const res = setOasPackageVersion(oasText, target);
-        if (!res.ok || (res.reason === "no-packageVersion" && kind === "agent")) {
+        if (!res.ok) {
           throw new Error(`${OAS_REL_PATH} could not be normalized safely (${res.reason || "unscoped"}) — fix manually`);
         }
         if (res.changed) {
@@ -347,18 +353,30 @@ async function fetchRepoVersions(only) {
       version = null; // unreadable package.json → surfaced as unreadable below
     }
     // OAS version: only AGENTS carry cinatra/oas.json. `oasVersion: undefined` means
-    // "no OAS info" (a non-agent — fine). For an agent, a missing or field-less OAS
-    // is malformed and must be surfaced, not collapsed to clean.
+    // "no OAS version to sync" — fine for a non-agent AND for an agent whose OAS no
+    // longer carries the (now-redundant, optional) metadata.cinatra.packageVersion.
+    // A present LEGACY field is surfaced so it can be re-synced. Two failure modes
+    // are STILL surfaced as unreadable for an agent: a totally MISSING OAS FILE, and
+    // a present-but-UNPARSEABLE OAS (genuine malformation — never collapse it to
+    // "clean" just because there is no readable packageVersion field).
     let oasVersion; // undefined by default
     let oasUnreadable = false;
     let oasText = null;
     try { oasText = ghFile(name, OAS_REL_PATH); } catch { oasText = null; }
     if (oasText != null) {
-      const v = readOasPackageVersion(oasText);
-      if (v == null) {
-        if (kind === "agent") oasUnreadable = true; // present but no usable packageVersion
+      let oasParsedOk = true;
+      try { JSON.parse(oasText); } catch { oasParsedOk = false; }
+      if (!oasParsedOk) {
+        // Unparseable OAS on an agent is malformed → surface, never treat as clean.
+        if (kind === "agent") oasUnreadable = true;
       } else {
-        oasVersion = v;
+        const v = readOasPackageVersion(oasText);
+        // v == null on a PARSEABLE OAS ⇒ no metadata.cinatra.packageVersion
+        // (expected post-cleanup) — nothing to sync; leave oasVersion undefined.
+        // Only a present field is tracked for re-sync.
+        if (v != null) {
+          oasVersion = v;
+        }
       }
     } else if (kind === "agent") {
       oasUnreadable = true; // an agent with NO OAS at all is malformed

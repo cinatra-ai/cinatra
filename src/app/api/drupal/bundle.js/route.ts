@@ -3,10 +3,44 @@
 //          container (panel+pill stacked), top-left corner drag to resize both at once.
 //
 // Logo paths sourced from src/lib/cinatra-brand.ts — the single source of truth.
+//
+// ============================================================================
+// @deprecated — DEAD/LEGACY ROUTE (cinatra#411). DO NOT extend; scheduled for removal.
+// ----------------------------------------------------------------------------
+// This route is the PRE-Option-A artifact. The shipped, canonical widget source
+// is now the VENDORED copy in the Drupal module repo:
+//     cinatra-ai/drupal-module/js/cinatra-widget.js
+// (mirror of cinatra-ai/wordpress-plugin/assets/cinatra-widget.js, which is
+// authored first). Every install attaches that LOCAL vendored copy — the module
+// never remote-loads executable JS from a Cinatra instance (Drupal's
+// WidgetGateTest asserts the page never references /api/drupal/bundle.js).
+// Nothing executes THIS route; the app does not self-embed it.
+//
+// The vendored copy is far ahead of this file: the long-lived `apiKey` is
+// removed from the browser, a same-origin token broker mints a short-lived
+// origin/aud/scope-bound token, capability/contract-version negotiation is a
+// hard prerequisite, and the stream is Bearer-authenticated with that
+// short-lived token (NOT the raw apiKey this route still uses).
+//
+// DISPOSITION (cinatra#411): deprecate-in-place NOW; REMOVE in a dedicated
+// post-epic cleanup PR with sign-off. The raw-Bearer-<apiKey> auth below is
+// left FROZEN on purpose — touching a dead route's auth is needless risk and
+// would mis-signal that it is still a live login surface.
+//
+// #410's login UI must be authored into the VENDORED copy above (WP first, then
+// mirrored to Drupal) — NEVER into this dead path. See the source-of-truth
+// contract: cinatra docs/widget-source-of-truth.md.
+// ============================================================================
 
 import { CINATRA_LOGO, CINATRA_THEME } from "@/lib/cinatra-brand";
 
 export async function GET() {
+  // Deprecation breadcrumb (cinatra#411): a static, non-secret one-liner so an
+  // operator who sees this route hit knows it is the retired pre-Option-A path.
+  // No request headers / config / token / apiKey are logged.
+  console.warn(
+    "[deprecated] GET /api/drupal/bundle.js served — retired pre-Option-A widget route, superseded by the vendored cinatra-ai/drupal-module/js/cinatra-widget.js (cinatra#411).",
+  );
   const widgetIIFE = `(function () {
   // ---------------------------------------------------------------------------
   // Bootstrap

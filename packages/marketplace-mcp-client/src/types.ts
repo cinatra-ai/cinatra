@@ -108,6 +108,21 @@ export interface ExtensionDetail extends ExtensionCard {
   marketplaceAssets: MarketplaceAsset[];
   license: string | null;
   versionHistory: Array<{ version: string; releasedAt: string; state: PackageVersionState }>;
+  /**
+   * The extension's declared host/SDK ABI range (`cinatra.sdkAbiRange`), surfaced
+   * so the detail header can render the in-instance 3-state compatibility badge
+   * for a NOT-installed listing without a registry read. OPTIONAL/null when the
+   * extension declares none (badge → neutral "Unknown", never green). The
+   * http-client mapper defaults it to null so legacy fixtures stay valid.
+   */
+  sdkAbiRange?: string | null;
+  /**
+   * Sanitized hosted URL for the detail-page hero **banner** image (à la a
+   * WordPress plugin banner), or null. OPTIONAL — absent until the marketplace
+   * asset-upload field ships, so the detail header falls back to the coloured
+   * accent panel. Never a raw SVG blob (the marketplace rasterizes/sanitizes).
+   */
+  bannerUrl?: string | null;
 }
 
 export interface MarketplaceExtensionGetInput {
@@ -148,6 +163,12 @@ export interface MarketplaceExtensionGetWire {
     releasedAt?: string;
     state: PackageVersionState;
   }> | null;
+  /** Declared host/SDK ABI range (`cinatra.sdkAbiRange`); optional/null. */
+  sdk_abi_range?: string | null;
+  sdkAbiRange?: string | null;
+  /** Sanitized hosted detail-banner URL; optional/null. */
+  banner_url?: string | null;
+  bannerUrl?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +215,34 @@ export interface MarketplaceCatalogEntry {
   /** Allowlisted vendor-logo key (gmail/slack/…) or null — never raw SVG. */
   vendor_logo_key: string | null;
   permalink: string;
+  /**
+   * Total install count for the listing, or null/absent when the marketplace
+   * does not yet track it. OPTIONAL — older marketplace builds (and the public
+   * catalog before the install-count field ships) omit it entirely, so the
+   * cinatra-side mapper must tolerate a missing field.
+   */
+  install_count?: number | null;
+  /**
+   * Sanitized hosted URL for the extension's own square icon (never a raw SVG
+   * blob — the marketplace rasterizes/sanitizes before exposing). OPTIONAL;
+   * absent until the asset-upload field ships, so the card falls back to the
+   * vendor logo and then the kind emblem.
+   */
+  icon_url?: string | null;
+  /**
+   * Sanitized hosted URL for the vendor's brand logo (never a raw SVG blob).
+   * OPTIONAL; the older catalog exposes only `vendor_logo_key`, so this is the
+   * second link in the card's icon fallback chain.
+   */
+  vendor_logo_url?: string | null;
+  /**
+   * The extension's declared host/SDK ABI range (`cinatra.sdkAbiRange`, e.g.
+   * "^2"), surfaced so a NOT-installed listing can be evaluated for the
+   * in-instance compatibility badge without a registry read. OPTIONAL/null when
+   * the extension declares none — the badge then renders the neutral "Unknown"
+   * state, never green.
+   */
+  sdk_abi_range?: string | null;
 }
 
 export interface MarketplaceExtensionListInput {

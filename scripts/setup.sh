@@ -87,20 +87,32 @@ if [ ! -f .env.local ]; then
 
   # Generate a random auth secret.
   SECRET=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p -c 64 | head -1)
+  # Generate the WayFlow bridge shared secret. The wayflow container
+  # authenticates EVERY callback to /api/llm-bridge with this value
+  # (X-Cinatra-Bridge-Token); when it is empty the bridge returns 403, the
+  # agent produces no text, and the interactive widget content-edit surfaces
+  # "(no response)". .env.example ships it COMMENTED (`# CINATRA_BRIDGE_TOKEN=`),
+  # so a fresh dev env would otherwise have no token and `npm run services`
+  # (which now hard-fails on a missing token via gen-wayflow-env.mjs
+  # --require-bridge-token) would abort. Mint it here, like BETTER_AUTH_SECRET.
+  BRIDGE_TOKEN=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32 | head -1)
   # Replace by KEY, not by placeholder text: .env.example ships an empty
   # `BETTER_AUTH_SECRET=` line (no placeholder), so the old
   # `s/replace-with-a-random-32-byte-hex-secret/.../` substitution was a no-op
   # and left the secret blank — `setup:dev` then aborts with "Missing
   # BETTER_AUTH_SECRET". Anchoring on the key works whether the value is empty
-  # or a placeholder.
+  # or a placeholder. The bridge token line ships COMMENTED, so its substitution
+  # anchors on the commented form and rewrites it to an active assignment.
   if [ "$(uname)" = "Darwin" ]; then
     sed -i '' "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i '' "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
+    sed -i '' "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
   else
     sed -i "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
+    sed -i "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
   fi
-  info ".env.local created with a random BETTER_AUTH_SECRET and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
+  info ".env.local created with a random BETTER_AUTH_SECRET, CINATRA_BRIDGE_TOKEN, and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
 else
   # If the user picked a mode that differs from what's in .env.local, refuse
   # to silently mutate the file — surface the conflict so they can resolve it.
@@ -146,8 +158,17 @@ if [ "$RESOLVED_MODE" != "production" ]; then
   # the clone-back) ever runs (cinatra#109/#110). The sync script is
   # deliberately pre-install-safe (node builtins + git only); CI runs the same
   # script before its own install for the same reason.
-  info "Cloning companion extension repos (pre-install)..."
-  node scripts/ci/sync-dev-extensions.mjs
+  #
+  # `--pinned` (cinatra#489): check each companion repo out DETACHED at the sha
+  # committed in cinatra-required-extensions.lock.json / cinatra-dev-extensions.lock.json,
+  # the same refs the committed pnpm-lock.yaml + src/lib/generated/* maps were
+  # built against, so a fresh `make setup` ends with a CLEAN git tree. Without it
+  # the clone-back tracked floating `main` HEADs that can drift ahead of the
+  # committed lockfile, leaving a fresh install with a dirty tree (lockfile + maps
+  # silently mutated by the unfrozen `pnpm install` below). The floating-HEAD
+  # canary stays an explicit opt-in (the CI clone-extensions action's `head` mode).
+  info "Cloning companion extension repos (pre-install, pinned to the committed lock shas)..."
+  node scripts/ci/sync-dev-extensions.mjs --pinned
 fi
 
 info "Installing dependencies..."
@@ -155,21 +176,65 @@ pnpm install
 
 if [ "$RESOLVED_MODE" = "production" ]; then
   # Production extension acquisition: the first `pnpm install` above provided
-  # the root `tar` dependency + the runnable CLI; this step downloads the
+  # the root `tar` dependency + the published `cinatra` CLI (@cinatra-ai/cinatra,
+  # a pinned devDependency) at node_modules/.bin/cinatra; this step downloads the
   # required-extension set pinned + integrity-verified from the committed
   # cinatra-required-extensions.lock.json (no git/gh binary needed), and the
   # second `pnpm install` links the acquired packages into the workspace.
   # Fails loud (set -e) on any network / 404 / integrity error. The acquisition
   # inside `pnpm setup:prod` then re-verifies as an idempotent no-op.
   info "Acquiring required extensions (pinned + integrity-verified)..."
-  node packages/cli/bin/cinatra.mjs extensions acquire-prod
+  pnpm exec cinatra extensions acquire-prod
   info "Linking acquired extensions into the workspace..."
   pnpm install
   info "Running Cinatra production setup..."
   pnpm setup:prod
 else
   info "Running Cinatra dev setup..."
-  pnpm setup:dev
+  # cinatra#674 — NON-FATAL pre-wizard advisory guard.
+  #
+  # `cinatra dev setup dev` does its real, must-succeed work (DB provisioning,
+  # core + extension migrations, Better Auth bootstrap, dev-app clone-back)
+  # BEFORE it prints "Cinatra dev setup complete." — every one of those steps
+  # THROWS on failure, which rejects the CLI promise and exits non-zero WITHOUT
+  # ever printing the completion marker. AFTER the marker the CLI runs only
+  # advisory, post-boot self-checks (the content-editor `doctor` chain — e.g.
+  # "LLM MCP access — no public MCP URL", which is UNSATISFIABLE on a clean
+  # local install until the app is up and a public MCP URL is configured — plus
+  # dev-app presence and the local-registry seed). Those NEVER throw; they only
+  # set the CLI's `process.exitCode = 1`. The net effect is a process that
+  # finished setup successfully yet exits non-zero — which, under this script's
+  # `set -euo pipefail`, would abort `make setup` before "Setup complete!" even
+  # though the app boots fine and the wizard works.
+  #
+  # So: capture setup's exit code WITHOUT letting `set -e` abort, and treat a
+  # non-zero exit as a REAL failure ONLY when the completion marker is absent
+  # (DB / migration / acquisition / Better-Auth error → fail loud). When the
+  # marker IS present the must-succeed work completed; the remaining non-zero is
+  # one of the CLI's OWN deliberately "loud-but-non-fatal" post-marker steps
+  # (the advisory `doctor` chain, or a dev-app / extension-sync / local-registry
+  # warning) — every one of those streams its own loud `⚠` line to the terminal
+  # via `tee`, so nothing is HIDDEN; we mirror the CLI's own fatal/non-fatal
+  # boundary and continue rather than abort `make setup`. `tee` keeps the live
+  # output streaming; `${PIPESTATUS[0]}` reads pnpm's exit code, not tee's.
+  # Anchor the marker grep to the EXACT completion line so unrelated output can
+  # never spoof it. A signal exit (>=128, e.g. Ctrl-C) is always a real abort.
+  SETUP_DEV_LOG=$(mktemp -t cinatra-setup-dev.XXXXXX)
+  # shellcheck disable=SC2064
+  trap "rm -f '$SETUP_DEV_LOG'" EXIT
+  set +e
+  pnpm setup:dev 2>&1 | tee "$SETUP_DEV_LOG"
+  SETUP_DEV_STATUS=${PIPESTATUS[0]}
+  set -e
+  if [ "$SETUP_DEV_STATUS" -ne 0 ]; then
+    if [ "$SETUP_DEV_STATUS" -lt 128 ] && grep -qx 'Cinatra dev setup complete.' "$SETUP_DEV_LOG"; then
+      warn "Dev setup COMPLETED but reported a non-zero status (exit $SETUP_DEV_STATUS) from a post-completion advisory check — e.g. the pre-wizard 'LLM MCP access' doctor assertion (unsatisfiable until the app is up and a public MCP URL is configured), or a loud-but-non-fatal dev-app / extension-sync / local-registry warning printed above. The app still boots and the setup wizard works; continuing. Re-run \`cinatra doctor\` once the app is up for the authoritative post-boot gate, and address any \`⚠\` lines above."
+    else
+      rm -f "$SETUP_DEV_LOG"; trap - EXIT
+      error "Cinatra dev setup FAILED (exit $SETUP_DEV_STATUS) before completing — a real provisioning error (database, migrations, Better Auth, or extension acquisition) or an interrupt. See the output above. Setup did NOT complete."
+    fi
+  fi
+  rm -f "$SETUP_DEV_LOG"; trap - EXIT
 fi
 
 # The OpenAI shell sandbox image builds from whichever extension ships a

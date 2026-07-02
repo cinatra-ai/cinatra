@@ -22,10 +22,7 @@ import "server-only";
 import { eq, max, sql, and } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
-import {
-  CURRENT_CONFIG_VERSION,
-  parseDashboardConfig,
-} from "./store/dashboard-config";
+import { CURRENT_CONFIG_VERSION } from "./store/dashboard-config";
 import type { DashboardActor } from "./permissions";
 import { resolveDashboardAccess } from "./permissions";
 import {
@@ -140,31 +137,31 @@ async function writeAudit(
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Validate a dashboard config against its `configVersion` (cinatra#326 §3a).
+ * Validate a dashboard config against its `configVersion`.
  *
- * Dispatches on the version discriminator:
- *   - apiVersion 1.2 → the SAME registry-backed validator the extension-install
- *     materializer uses (`assertConfigV12`), which (post-#325) accepts the
- *     `analytics` portlet kind. This is where a wrapped operator/agent dashboard
- *     gets its deep per-kind validation.
- *   - 1.0.0 / 1.1.0 → the existing legacy `parseDashboardConfig` (UNCHANGED;
- *     kept until the legacy path is removed in cinatra#329). `parseDashboardConfig`
- *     is deliberately NOT widened to know apiVersion 1.2 — the mutation service is
- *     the dispatcher, the legacy parser stays legacy-only.
+ * Post-cinatra#329 there is ONE format: apiVersion 1.2, validated by the SAME
+ * registry-backed validator the extension-install materializer uses
+ * (`assertConfigV12`), which accepts the `analytics` portlet kind. This is where
+ * a wrapped operator/agent dashboard gets its deep per-kind validation.
+ *
+ * The legacy 1.0.0/1.1.0 parse path was removed with the migration of all
+ * pre-existing rows (cinatra#327); a write that explicitly requests a legacy
+ * version is now rejected (the intended tightening — first-party actions already
+ * emit apiVersion 1.2, so only an MCP caller sending a legacy version now fails).
  */
 async function validateConfig(
   config: unknown,
   configVersion: string,
 ): Promise<unknown> {
-  if (configVersion === DASHBOARD_CONFIG_V12_VERSION) {
-    // assertConfigV12 already throws DashboardConfigInvalidError on failure.
-    return assertConfigV12(config);
+  if (configVersion !== DASHBOARD_CONFIG_V12_VERSION) {
+    throw new DashboardConfigInvalidError(
+      `Unsupported config_version "${configVersion}". ` +
+        `The only supported version is the apiVersion 1.2 envelope ` +
+        `(${DASHBOARD_CONFIG_V12_VERSION}).`,
+    );
   }
-  try {
-    return parseDashboardConfig(configVersion, config);
-  } catch (err) {
-    throw new DashboardConfigInvalidError(err);
-  }
+  // assertConfigV12 already throws DashboardConfigInvalidError on failure.
+  return assertConfigV12(config);
 }
 
 /**
@@ -188,7 +185,8 @@ async function validateConfig(
  *      `configVersion`) → normalize the EXISTING config to the target version
  *      so the row can never be relabeled apiVersion 1.2 while still holding a
  *      bare legacy body.
- *   4. Non-apiVersion-1.2 target → pass the config through (legacy create/update).
+ *   4. Non-apiVersion-1.2 target → rejected by `validateConfig` (the legacy
+ *      1.0.0/1.1.0 write path was removed in cinatra#329).
  *
  * Always validates the resolved config under the resolved version before
  * returning, so an invalid wrap/body fails closed.
@@ -216,7 +214,8 @@ async function normalizeConfigForWrite(opts: {
     : opts.requestedVersion;
 
   if (effectiveVersion !== DASHBOARD_CONFIG_V12_VERSION) {
-    // Rule 4: legacy target — pass through (validated below).
+    // Rule 4: legacy target — rejected (the legacy write path was removed in
+    // cinatra#329; validateConfig throws DashboardConfigInvalidError).
     const config = opts.hasConfig ? opts.config : opts.existingConfig;
     await validateConfig(config, effectiveVersion);
     return { config, configVersion: effectiveVersion };

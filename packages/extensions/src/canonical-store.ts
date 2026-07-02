@@ -170,6 +170,36 @@ export async function readInstalledExtensionsByPackageName(
 }
 
 /**
+ * Batch reader: all canonical install rows for a SET of package names, grouped by
+ * package name, in ONE query. Used by the connector-card index (cinatra#658) to
+ * resolve the actor-scoped installed set without firing one read per catalog
+ * entry (codex-converged: a single consistent read, not N reads + N outage logs).
+ * A package name absent from the result has no rows (the caller treats that as
+ * the bundled fallback). Returns the full canonical rows so the caller can apply
+ * the SAME pure scope/status predicate (`pickActiveInstallId` /
+ * `isInstallRowAddressableByActor`) the per-package path uses.
+ */
+export async function readInstalledExtensionsByPackageNames(
+  packageNames: readonly string[],
+): Promise<Map<string, InstalledExtension[]>> {
+  const out = new Map<string, InstalledExtension[]>();
+  if (packageNames.length === 0) return out;
+  const db = await getDb();
+  const { inArray } = await import("drizzle-orm");
+  const rows = await db
+    .select()
+    .from(installedExtensionTable)
+    .where(inArray(installedExtensionTable.packageName, [...packageNames]));
+  for (const row of rows) {
+    const canonical = rowToCanonical(row);
+    const bucket = out.get(canonical.packageName);
+    if (bucket) bucket.push(canonical);
+    else out.set(canonical.packageName, [canonical]);
+  }
+  return out;
+}
+
+/**
  * Package-name effective-status reader (fail-safe aggregate).
  *
  * Used by `checkDependents` (uninstall-blocking) where only the package name is

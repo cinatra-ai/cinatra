@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { setDefaultProvidersAction } from "@/app/campaigns/actions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -235,48 +236,69 @@ export function DefaultProvidersCard({
 
       <Separator className="my-4" />
 
-      {/* Anthropic skill-upload governance.
+      {/* Anthropic skill-upload governance (cinatra#613).
+          Anthropic-specific config only makes sense once the Anthropic
+          connector is set up, so this section is gated on `anthropicConnected`.
+          That flag derives from durable connector setup state (a saved Nango
+          connection), NOT a live healthcheck — a momentary Anthropic outage
+          will not make the section vanish.
+
           The opt-in defaults OFF and gates EVERY skill sync code path.
           The non-ZDR warning is ALWAYS rendered (visible even before opt-in)
           so the operator gives informed consent before enabling. */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="max-w-xl">
-            <Label
-              htmlFor="anthropic-skill-sync-enabled"
-              className="text-sm font-medium text-foreground"
-            >
-              Upload skill content to Anthropic
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              Sync catalog skills to Anthropic Custom Skills so Anthropic-pinned
-              agents can use them. Default off. Individual skills are excluded
-              unless explicitly allowed per skill.
-            </p>
+      {anthropicConnected ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-xl">
+              <Label
+                htmlFor="anthropic-skill-sync-enabled"
+                className="text-sm font-medium text-foreground"
+              >
+                Upload skill content to Anthropic
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Sync catalog skills to Anthropic Custom Skills so Anthropic-pinned
+                agents can use them. Default off. Individual skills are excluded
+                unless explicitly allowed per skill.
+              </p>
+            </div>
+            <Switch
+              id="anthropic-skill-sync-enabled"
+              checked={skillSyncEnabled}
+              onCheckedChange={setSkillSyncEnabled}
+              aria-label="Enable Anthropic skill upload"
+            />
           </div>
-          <Switch
-            id="anthropic-skill-sync-enabled"
-            checked={skillSyncEnabled}
-            onCheckedChange={setSkillSyncEnabled}
-            aria-label="Enable Anthropic skill upload"
-          />
-        </div>
 
-        <Alert variant="warning" className="rounded-control">
-          <TriangleAlert className="h-4 w-4" />
-          <AlertTitle>Data residency — not ZDR-eligible</AlertTitle>
-          <AlertDescription>
-            Anthropic Custom Skills are <strong>not ZDR-eligible</strong>.
-            Enabling this uploads skill bodies <strong>and their bundled
-            directories</strong> off this instance to Anthropic Custom Skills
-            (workspace / API-key-wide), where Anthropic <strong>retains</strong>{" "}
-            them. This is materially different from OpenAI&apos;s local-shell
-            skill read, where skill content never leaves the instance. Only
-            skills explicitly allowed per skill are uploaded; all others stay
-            local even when this is on.
-          </AlertDescription>
-        </Alert>
-      </div>
+          <Alert variant="warning" className="rounded-control">
+            <TriangleAlert className="h-4 w-4" />
+            <AlertTitle>Data residency — not ZDR-eligible</AlertTitle>
+            <AlertDescription>
+              Anthropic Custom Skills are <strong>not ZDR-eligible</strong>.
+              Enabling this uploads skill bodies <strong>and their bundled
+              directories</strong> off this instance to Anthropic Custom Skills
+              (workspace / API-key-wide), where Anthropic <strong>retains</strong>{" "}
+              them. This is materially different from OpenAI&apos;s local-shell
+              skill read, where skill content never leaves the instance. Only
+              skills explicitly allowed per skill are uploaded; all others stay
+              local even when this is on.
+            </AlertDescription>
+          </Alert>
+        </div>
+      ) : (
+        // Connector not set up: hide the full Anthropic governance section but
+        // keep a discoverable connect affordance (cinatra#613 acceptance).
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm text-muted-foreground">
+            Connect Anthropic to configure Claude-powered agents and skill upload.
+          </p>
+          <Button asChild variant="outline">
+            <Link href="/connectors/cinatra-ai/anthropic-connector/setup">
+              Connect Anthropic
+            </Link>
+          </Button>
+        </div>
+      )}
 
       {/* Single save button — hidden when both selects are locked */}
       {!bothLocked && (

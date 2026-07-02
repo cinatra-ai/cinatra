@@ -9,13 +9,20 @@
 
 import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
+import type { ConsumedPrimitive } from "./consumes";
 
 /**
- * UI hot-pluggability classification:
- *  - `schema-config`: the extension declares its config as DATA; the host
- *    renders a generic schema-driven form → hot-pluggable.
- *  - `bundled-react`: bespoke custom setup-page React → NOT hot-pluggable under
- *    App Router (RSC client chunks are build-known); ships in the base image.
+ * UI hot-pluggability classification (narrowed per cinatra#782 — the connector
+ * itself hot-installs + server-activates in BOTH cases; this classifies only the
+ * CONFIG UI surface):
+ *  - `schema-config`: the extension declares its config as DATA; the host renders
+ *    a generic schema-driven form from that data → the config UI is fully
+ *    hot-configurable at runtime (no rebuild).
+ *  - `bundled-react`: the extension ships a bespoke custom setup-page React
+ *    component. Only that custom config PAGE is base-image-bound — its RSC client
+ *    chunks are build-known, so it resolves solely from the base image and the
+ *    installer surfaces a "requires rebuild" state for it (see
+ *    `requiresRebuildState`). The connector still hot-installs + activates.
  */
 export const UI_SURFACE_KINDS = ["schema-config", "bundled-react"] as const;
 export type UiSurfaceKind = (typeof UI_SURFACE_KINDS)[number];
@@ -46,7 +53,7 @@ export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
 
 /**
  * Self-declared connector vendor identity (#12 connector vendor-identity
- * end-state, eng#159 / owner ruling eng#183 decision 2).
+ * end-state; vendor identity is self-declared per the nango-system-contract ruling).
  *
  * Vendor identity lives WITH the connector — a `kind:"connector"` extension
  * declares its own vendor key + display name here, in its own manifest. The SDK
@@ -54,8 +61,8 @@ export type ExtensionResolution = (typeof EXTENSION_RESOLUTIONS)[number];
  * marketplace); the `key` is the OPEN `ConnectorVendorKey` SHAPE (any string,
  * not a frozen union). Authoritative validation — key SHAPE conformance,
  * name/key ownership + uniqueness across the catalog, and provider mapping —
- * is performed at the MARKETPLACE PUBLISH GATE (the `cinatra-ai/marketplace`
- * repo), never in the SDK and never at the host loader (which has no
+ * is performed at the MARKETPLACE PUBLISH GATE (the Cinatra marketplace
+ * service), never in the SDK and never at the host loader (which has no
  * cross-connector roster to check against).
  */
 export type ConnectorVendorIdentity = {
@@ -138,6 +145,18 @@ export type CinatraManifest = {
   // ---- dependency graph (canonical) ----
   /** Canonical cross-kind dependency edges. */
   dependencies?: ExtensionDependency[];
+
+  /**
+   * Structured declared-CONSUMED primitives (engineering#422). The machine-
+   * readable used-primitive set the closure VALIDATOR resolves (primitive →
+   * owning package via the ownership registry) and diffs against
+   * `dependencies` to catch UNDER-declaration — an extension that uses a
+   * cross-extension primitive it never declared an edge for. Additive; absent
+   * means "not yet adopted" (the validator falls back to no structured-usage
+   * signal for that package, never an under-declaration claim). See
+   * `./consumes`.
+   */
+  consumes?: ConsumedPrimitive[];
 
   // ---- legacy dependency shims (normalized into `dependencies`) ----
   /** @deprecated agent→agent map; normalized into `dependencies`. */

@@ -268,6 +268,8 @@ describe("workflow install saga × materialization plan (the SECOND install path
       recordProvenance: async (i) => {
         calls.provenance.push(i);
       },
+      registerRuntimeContributions: async () => undefined,
+      unregisterRuntimeContributions: async () => undefined,
       archiveDashboards: async () => undefined,
       deleteWorkflowTemplate: async () => ({ deleted: true }),
     };

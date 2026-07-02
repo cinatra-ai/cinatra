@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { requireAdminSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
-import { getEffectiveViewerScope } from "@/lib/marketplace-credentials";
+import { getEffectiveViewerScope, hasConsumerOrVendorMarketplaceToken } from "@/lib/marketplace-credentials";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
 import { buildTabs, resolveEnvTab } from "./environment-tabs";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
@@ -32,6 +32,11 @@ import { BecomeAVendorCard } from "./become-a-vendor-card";
 import { VendorApplicationStatusCard } from "./vendor-application-status-card";
 import { InstanceSaveButton } from "./instance-save-button";
 import { getMarketplaceTermsAcceptance } from "@/lib/marketplace-terms";
+
+/** Normalize a possibly-array search param to its first string value. */
+function firstSearchParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Environment" };
@@ -53,7 +58,7 @@ export default async function EnvironmentSettingsPage({
   const { tab, requestedConnections } = resolveEnvTab(rawTab, tabs);
   const activeContent =
     tab === "instance" ? (
-      await InstanceTabContent()
+      await InstanceTabContent({ error: params.error, saved: params.saved })
     ) : tab === "registries" ? (
       <RegistriesTabContent params={params} defaultContactEmail={session.user.email ?? null} />
     ) : (
@@ -160,7 +165,15 @@ function ModeTabContent({
   );
 }
 
-async function InstanceTabContent() {
+async function InstanceTabContent({
+  error,
+  saved,
+}: {
+  error?: string | string[] | undefined;
+  saved?: string | string[] | undefined;
+} = {}) {
+  const errorMessage = firstSearchParam(error);
+  const savedMessage = firstSearchParam(saved);
   const identity = readInstanceIdentity();
 
   if (!identity) {
@@ -207,6 +220,21 @@ async function InstanceTabContent() {
   return (
     <NamespaceValidationProvider initialValue={identity.instanceNamespace}>
       <ReconciliationMount />
+      {/* Surface the post-action redirect result (cinatra#357). A failed Save
+          redirects back with ?error=<msg>; without rendering it the form just
+          shows the old values again and the failure looks like a silent revert.
+          Rendered server-side (no client island) so it survives a refresh. */}
+      {errorMessage ? (
+        <Alert variant="destructive" className="rounded-panel">
+          <AlertTitle>Could not save instance changes</AlertTitle>
+          <AlertDescription className="break-words">{errorMessage}</AlertDescription>
+        </Alert>
+      ) : savedMessage ? (
+        <Alert variant="success" className="rounded-panel">
+          <AlertTitle>Instance saved</AlertTitle>
+          <AlertDescription>Your instance identity changes have been saved.</AlertDescription>
+        </Alert>
+      ) : null}
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
@@ -330,18 +358,42 @@ async function RegistriesTabContent({
   const vendorState = identity.vendorState;
   const showBecomeAVendor =
     vendorState === undefined || vendorState === "none" || vendorState === "rejected";
+  // Gate the apply form on an unwired instance: with no marketplace bearer the
+  // apply call to cm can only fail (Unauthorized), and the persist-first marker
+  // would strand as a false "applied" with no recovery (cinatra#434). Mirror the
+  // publish card's unwired handling instead of presenting a doomed apply path.
+  // Only resolve credentials when the apply form would actually be shown:
+  // hasConsumerOrVendorMarketplaceToken rethrows non-credential (e.g. crypto)
+  // failures, so calling it for applied/approved states could hard-fail the
+  // whole registries tab over a token we never read here.
+  const marketplaceWired = showBecomeAVendor
+    ? hasConsumerOrVendorMarketplaceToken(identity)
+    : false;
 
   return (
     <div className="flex flex-col gap-6">
       <MarketplaceConnectionCard identity={identity} catalogCount={catalogCount} />
       {showBecomeAVendor ? (
-        <BecomeAVendorCard
-          identity={identity}
-          termsVersion={termsAcceptance.termsVersion}
-          termsDigest={termsAcceptance.termsDigest}
-          termsUrl={termsAcceptance.termsUrl}
-          priorRejectionReason={null}
-        />
+        marketplaceWired ? (
+          <BecomeAVendorCard
+            identity={identity}
+            termsVersion={termsAcceptance.termsVersion}
+            termsDigest={termsAcceptance.termsDigest}
+            termsUrl={termsAcceptance.termsUrl}
+            priorRejectionReason={null}
+          />
+        ) : (
+          <Card className="border-line bg-surface backdrop-blur-none">
+            <CardHeader>
+              <CardTitle>Become a vendor</CardTitle>
+              <CardDescription>
+                The marketplace is not yet wired on this instance. An operator must set{" "}
+                <code className="font-mono">MARKETPLACE_INSTANCE_TOKEN</code> (the bearer issued for
+                this instance&rsquo;s marketplace account) before you can apply as a vendor.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )
       ) : null}
       {vendorState === "applied" ? <VendorApplicationStatusCard identity={identity} /> : null}
       {vendorState === "approved" ? <MarketplacePublishCard /> : null}

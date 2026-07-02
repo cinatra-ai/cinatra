@@ -40,10 +40,37 @@ mkdirSync(outsideDir, { recursive: true });
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
-vi.mock("@cinatra-ai/registries", () => ({
-  extractExtensionPackage: vi.fn(),
-  loadVerdaccioConfig: vi.fn(),
-}));
+// vitest HOISTS this `vi.mock` above all top-level statements, so the factory
+// MUST be self-contained — `isSafeSeg` is defined inside the factory scope (a
+// top-level helper would be referenced before initialization).
+vi.mock("@cinatra-ai/registries", () => {
+  const isSafeSeg = (s: unknown): boolean =>
+    typeof s === "string" && s !== "." && s !== ".." &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s);
+  return {
+    extractExtensionPackage: vi.fn(),
+    loadVerdaccioConfig: vi.fn(),
+    // skills-store imports parsePackageId + the safe-segment guard for the
+    // cinatra#537 agent vendor/name split; provide real-shaped impls so any
+    // incidental call works.
+    parsePackageId: (name: string) => {
+      if (typeof name !== "string") return null;
+      const t = name.trim();
+      if (!t) return null;
+      if (!t.startsWith("@")) return isSafeSeg(t) ? { vendor: null, name: t } : null;
+      const i = t.indexOf("/");
+      if (i <= 1) return null;
+      const v = t.slice(1, i);
+      const n = t.slice(i + 1);
+      if (n.length === 0) return null;
+      return isSafeSeg(v) && isSafeSeg(n) ? { vendor: v, name: n } : null;
+    },
+    isSafePathSegment: isSafeSeg,
+    assertSafePathSegment: (s: unknown, label = "path segment"): void => {
+      if (!isSafeSeg(s)) throw new Error(`unsafe ${label}: ${JSON.stringify(s)}`);
+    },
+  };
+});
 
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: vi.fn(() => ({

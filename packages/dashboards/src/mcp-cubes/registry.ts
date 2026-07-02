@@ -21,11 +21,11 @@ import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { createDashboardCubeMcpHandlers } from "./handlers";
 import { getMcpCubeTools } from "./cubes-singleton";
 import {
-  buildSecurityContextFromIdentity,
-  buildSecurityContextWithAccessibleOrgIds,
-} from "../auth/security-context";
-import { listAccessibleOrgIdsForUser } from "@/lib/better-auth-db";
+  listAccessibleOrgIdsForUser,
+  readUserIsPlatformAdmin,
+} from "@/lib/better-auth-db";
 import { resolveDashboardCubeIdentity } from "./handlers";
+import { buildDashboardCubeMcpSecurityContext } from "./security-context";
 
 // Object-valued (not string-valued) so scripts/build-authz-inventory.mjs
 // picks the primitive names up via the TOOL_META_KEY regex (which expects
@@ -71,13 +71,16 @@ export function registerDashboardCubePrimitives(server: McpRuntimeToolServer): v
           "dashboards_cube_*: missing user/organization identity in MCP request context",
         );
       }
-      // Widen accessibleOrgIds to every org the user belongs to.
-      // drizzle-cube's getSecurityContext accepts a Promise; the
-      // membership query runs inside the same ALS context as identity
-      // resolution.
-      const sc = await buildSecurityContextWithAccessibleOrgIds(
+      // Widen accessibleOrgIds to every org the user belongs to AND
+      // decorate isPlatformAdmin (DB role lookup) for the llm_usage cube
+      // gate. Uses the SAME shared helper as handlers.ts so this second
+      // closure site can never drift from the first. drizzle-cube's
+      // getSecurityContext accepts a Promise; the membership + role queries
+      // run inside the same ALS context as identity resolution.
+      const sc = await buildDashboardCubeMcpSecurityContext(
         identity,
         listAccessibleOrgIdsForUser,
+        readUserIsPlatformAdmin,
       );
       if (!sc) {
         throw new Error(

@@ -33,7 +33,10 @@ export type QueryEndpointError = {
     | "unsupported_query_feature"
     | "cube_id_required"
     | "cube_id_ambiguous"
-    | "batch_too_large";
+    | "batch_too_large"
+    // cinatra#660 — runtime-cube serve-gate (CG-5) fail-closed codes.
+    | "cube_not_active"
+    | "cube_untrusted";
   readonly details?: Readonly<Record<string, unknown>>;
 };
 // The endpoint clamps Query.limit silently to QUERY_ENDPOINT_LIMITS.maxRows

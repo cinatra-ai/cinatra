@@ -401,7 +401,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // WORKFLOW declarative package-authoring (SDK-P5, eng#167).
+  // WORKFLOW declarative package-authoring (SDK-P5).
   //
   // These author a workflow EXTENSION PACKAGE (a `cinatra.kind: "workflow"`
   // package with a `cinatra/workflow.bpmn` definition), published to the
@@ -409,11 +409,11 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   // `workflow_template_*` runtime tools (the @cinatra-ai/workflows MCP surface)
   // which create/edit a workflow DRAFT or INSTANCE (rows in the `workflow`
   // table). Package vs draft: a package is reusable, versioned, and shippable;
-  // a draft is one operator's concrete planned-run on the Gantt. ADMIN-ONLY.
+  // a draft is one operator's concrete planned run. ADMIN-ONLY.
   // ----------------------------------------------------------------------
   "workflow_source_write": {
     description:
-      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a WORKFLOW EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"workflow\"), cinatra/workflow.bpmn (the declarative BPMN definition), and an optional skills/<packageSlug>/SKILL.md. DISTINCT from workflow_draft_create / workflow_template_instantiate, which author a workflow DRAFT/INSTANCE row (a planned run on the Gantt) — NOT a reusable package. Validates the BPMN before writing (fails closed on a structurally-invalid workflow) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: workflow_source_write → workflow_source_validate → workflow_source_compile → workflow_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
+      "ADMIN-ONLY (platform_admin). Live source mutation: scaffold + write a WORKFLOW EXTENSION PACKAGE to extensions/cinatra-ai/<packageSlug>/ — package.json (cinatra.kind is normalized to \"workflow\"), cinatra/workflow.bpmn (the declarative BPMN definition), and an optional skills/<packageSlug>/SKILL.md. DISTINCT from workflow_draft_create / workflow_template_instantiate, which author a workflow DRAFT/INSTANCE row (a planned run) — NOT a reusable package. Validates the BPMN before writing (fails closed on a structurally-invalid workflow) and normalizes package.json#name to @<vendorName>/<packageSlug>. Source-authoring pipeline step 1 of 4: workflow_source_write → workflow_source_validate → workflow_source_compile → workflow_source_publish. Non-admin invocations are rejected by the delegated-chat tool policy and the handler's admin gate.",
     inputSchema: z.object({
       packageSlug: z
         .string()
@@ -467,7 +467,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // ARTIFACT declarative package-authoring (SDK-P5, eng#167).
+  // ARTIFACT declarative package-authoring (SDK-P5).
   //
   // These author an artifact EXTENSION PACKAGE (a `cinatra.kind: "artifact"`
   // package whose `cinatra.artifact` block is a SEMANTIC artifact manifest —
@@ -530,7 +530,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
     }),
   },
   // ----------------------------------------------------------------------
-  // SKILL declarative package-authoring (SDK-P5, eng#167).
+  // SKILL declarative package-authoring (SDK-P5).
   //
   // These author a skill EXTENSION PACKAGE (a `cinatra.kind: "skill"` package
   // whose `cinatra.capabilities` map binds stable capability keys to co-located
@@ -736,12 +736,15 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_creation_request_propose": {
     description:
-      "NON-ADMIN proposal entry for the agent-creation approval workflow. Captures the agent " +
+      "Chat authoring entry for the agent-creation workflow. Captures the agent " +
       "OAS + package.json + SKILL.md as an isolated agent_creation_request row at status 'proposed' " +
-      "and runs the existing agent_creation_review to populate review_report. NEVER calls live " +
-      "agent_source_* tools or touches agent_templates. An admin reviews + approves at " +
-      "/configuration/agents/approvals; only on approval does the existing gated publish run " +
-      "(private-scoped, under the admin's actor frame).",
+      "and runs the existing agent_creation_review to populate review_report. For a NON-ADMIN author " +
+      "the proposal NEVER calls live agent_source_* tools or touches agent_templates and queues at " +
+      "'proposed'; an admin then reviews + approves at /configuration/agents/approvals, where the gated " +
+      "publish runs (private-scoped, under the admin's actor frame). For a platform_admin author the " +
+      "documented 'instant grant' fires: the proposal is immediately auto-approved + published under the " +
+      "admin actor via that same gated pipeline (no manual approval step) — only platform_admin reaches " +
+      "the publish path here.",
     inputSchema: z
       .object({
         packageSlug: z.string().describe("On-disk slug (no path separators)."),

@@ -38,8 +38,10 @@ import { execSync } from "node:child_process";
 
 export const INDEX_REL = "packages/sdk-extensions/src/index.ts";
 
-// The 20 known host-internal capability-id constants (the fence's explicit
-// contract). Listed so the gate names them precisely when one leaks back.
+// The known host-internal capability-id constants (the fence's explicit
+// contract). Listed so the gate names them precisely when one leaks back. Any
+// FUTURE id is also caught fail-closed by CAPABILITY_IDENT_RE below — this list
+// is for precise messaging, not the detection set.
 export const FENCED_CONSTANTS = Object.freeze([
   "HOST_CONNECTOR_SERVICE_CAPABILITIES",
   "NANGO_CONNECTION_SAVED_CAPABILITY",
@@ -47,6 +49,7 @@ export const FENCED_CONSTANTS = Object.freeze([
   "LLM_TOOLBOX_CAPABILITY",
   "SOCIAL_POST_CAPABILITY",
   "CRM_PROVIDER_CAPABILITY",
+  "PM_PROVIDER_CAPABILITY",
   "EMAIL_SEND_CAPABILITY",
   "OBJECT_TYPE_REGISTRAR_CAPABILITY",
   "CRM_SYNC_BOOTSTRAP_CAPABILITY",

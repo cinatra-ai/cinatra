@@ -183,7 +183,7 @@ async function loadOnePackage(
         // licenseAcknowledged: a live edit to a first-party GPL agent must
         // hot-reload without the copyleft gate (only HONORED for verified
         // first-party in-tree agents — see ensureAgentPackageFromGitFile).
-        await ensureAgentPackageFromGitFile({ agentJsonPath: oasPath, licenseAcknowledged: true });
+        await ensureAgentPackageFromGitFile({ oasSourcePath: oasPath, licenseAcknowledged: true });
         agentChanged = true;
       } catch (err) {
         console.warn(

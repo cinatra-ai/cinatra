@@ -129,7 +129,7 @@ describe("MarketplaceDetailHeader", () => {
     expect(html).not.toContain("MIT");
   });
 
-  it("omits freshness and version when absent", () => {
+  it("omits freshness and version when absent, but still renders the meta row (compat badge)", () => {
     const html = renderToStaticMarkup(
       <MarketplaceDetailHeader
         {...baseProps}
@@ -140,6 +140,70 @@ describe("MarketplaceDetailHeader", () => {
     );
     expect(html).not.toContain("Updated ");
     expect(html).not.toContain("Version ");
-    expect(html).not.toContain('data-slot="marketplace-detail-meta"');
+    // The meta row now always renders because it carries the 3-state compat
+    // badge — with no declared sdkAbiRange the badge reads the neutral "Unknown".
+    expect(html).toContain('data-slot="marketplace-detail-meta"');
+    expect(html).toContain('data-slot="extension-compat-badge"');
+    expect(html).toContain('data-compat-state="unknown"');
+    expect(html).toContain("Unknown");
+  });
+
+  it("renders the Compatible (green/success) badge for a satisfied declared range", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange="^2" />,
+    );
+    expect(html).toContain('data-compat-state="compatible"');
+    expect(html).toContain("Compatible");
+    expect(html).toContain('data-variant="success"');
+  });
+
+  it("renders the Incompatible (destructive) badge for an unsatisfied declared range", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange="^99" />,
+    );
+    expect(html).toContain('data-compat-state="incompatible"');
+    expect(html).toContain("Incompatible");
+    expect(html).toContain('data-variant="destructive"');
+  });
+
+  it("NEVER renders green (success) for an undeclared range — neutral Unknown only", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader {...baseProps} sdkAbiRange={null} />,
+    );
+    expect(html).toContain('data-compat-state="unknown"');
+    expect(html).not.toContain('data-variant="success"');
+  });
+
+  it("renders the hosted banner image (with a scrim) when a banner URL is present", () => {
+    const html = renderToStaticMarkup(
+      <MarketplaceDetailHeader
+        {...baseProps}
+        bannerUrl="https://assets.example/banner.png"
+      />,
+    );
+    expect(html).toContain('data-has-banner="true"');
+    expect(html).toContain('data-slot="marketplace-detail-banner"');
+    expect(html).toContain('src="https://assets.example/banner.png"');
+    // The banner is DECORATIVE (empty alt) — the H1 name carries the label, so
+    // a screen reader never announces the image. Lock this in.
+    expect(html).toContain('alt=""');
+    // The legibility scrim must render over the banner so the emblem/badge/name
+    // stay readable against an arbitrary image.
+    expect(html).toContain("bg-foreground/55");
+    // The hero still carries the name + emblem over the banner.
+    expect(html).toContain("Acme Widget");
+  });
+
+  it("falls back to the accent panel (no banner image) when the banner URL is absent or blank", () => {
+    for (const bannerUrl of [null, undefined, "   "] as const) {
+      const html = renderToStaticMarkup(
+        <MarketplaceDetailHeader {...baseProps} bannerUrl={bannerUrl} />,
+      );
+      expect(html).toContain('data-has-banner="false"');
+      expect(html).not.toContain('data-slot="marketplace-detail-banner"');
+      // The accent hero still renders the name.
+      expect(html).toContain('data-slot="marketplace-detail-hero"');
+      expect(html).toContain("Acme Widget");
+    }
   });
 });

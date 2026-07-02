@@ -15,8 +15,16 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DefaultProvidersCard } from "@/app/configuration/llm/_default-llm-select";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
-import { ExternalMcpSettingsPage } from "@/lib/external-mcp-settings-page";
+import { redirect } from "next/navigation";
+import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { ConnectorSettingsDialog } from "@/components/connector-settings-dialog";
 import { readOpenAIConnection, type OpenAIConnection } from "@/lib/openai-connection-store";
 // Connector status reads, model lists, and settings components resolve through
@@ -125,7 +133,7 @@ async function OpenAIModalContent() {
       <NangoManagedApiCard
         connectorKey="openai"
         title="OpenAI API"
-        description="Connect OpenAI through Nango for Cinatra's model-backed workflows."
+        description="Connect your OpenAI account to power Cinatra's AI features."
         badge={isConnected ? "Connected" : hasNangoConnection ? "API key provided" : "Setup required"}
         isConnected={hasNangoConnection || isConnected}
         usesConnectUI={true}
@@ -137,7 +145,7 @@ async function OpenAIModalContent() {
         naked
       >
         <form action={saveOpenAIConnectionAction} className="mt-5 grid items-start gap-4 border-t border-line pt-5 sm:grid-cols-2">
-          <input type="hidden" name="redirectTo" value="/configuration/llm?modal=openai" />
+          <Input type="hidden" name="redirectTo" value="/configuration/llm?modal=openai" />
           <Field>
             <FieldLabel>Project ID</FieldLabel>
             <Input name="projectId" defaultValue={connection?.projectId ?? ""} />
@@ -148,33 +156,41 @@ async function OpenAIModalContent() {
           </Field>
           <Field>
             <FieldLabel>Service tier</FieldLabel>
-            <select
+            <Select
               name="serviceTier"
               defaultValue={connection?.serviceTier ?? defaultServiceTier}
-              className="rounded-control border border-line bg-surface-strong px-4 py-3"
             >
-              {openai.OPENAI_SERVICE_TIER_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full rounded-control border border-line bg-surface-strong px-4 py-3">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {openai.OPENAI_SERVICE_TIER_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field>
             <FieldLabel>Default model</FieldLabel>
             {availableModels.length > 0 ? (
               <>
-                <select
+                <Select
                   name="defaultModel"
                   defaultValue={connection?.defaultModel && selectableModels.has(connection.defaultModel) ? connection.defaultModel : DEFAULT_OPENAI_MODEL_ID}
-                  className="rounded-control border border-line bg-surface-strong px-4 py-3"
                 >
-                  {availableModels.map((model) => (
-                    <option key={model} value={model} disabled={!selectableModels.has(model)}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="w-full rounded-control border border-line bg-surface-strong px-4 py-3">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((model) => (
+                      <SelectItem key={model} value={model} disabled={!selectableModels.has(model)}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </>
             ) : (
               <>
@@ -187,14 +203,18 @@ async function OpenAIModalContent() {
           </Field>
           <Field>
             <FieldLabel>Prompt caching</FieldLabel>
-            <select
+            <Select
               name="promptCachingEnabled"
               defaultValue={promptCachingEnabled ? "on" : "off"}
-              className="rounded-control border border-line bg-surface-strong px-4 py-3"
             >
-              <option value="on">Enabled</option>
-              <option value="off">Disabled</option>
-            </select>
+              <SelectTrigger className="w-full rounded-control border border-line bg-surface-strong px-4 py-3">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="on">Enabled</SelectItem>
+                <SelectItem value="off">Disabled</SelectItem>
+              </SelectContent>
+            </Select>
           </Field>
           <div className="sm:col-span-2 flex justify-end">
             <Button type="submit">Save</Button>
@@ -260,6 +280,18 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
         : "openai";
 
   const modal = pickSearchParam(resolvedSearchParams.modal);
+
+  // External-MCP config carved out into the "MCP Servers" connector (cinatra#612):
+  // its UI now lives on the connector's setup page. The legacy
+  // `/configuration/llm?modal=external-mcp` deep link redirects there (mirrors
+  // src/app/configuration/llm/[apiSlug]/page.tsx). The host-owned
+  // external_mcp_servers registry + create/delete actions stay HOST-side; the
+  // connector reaches them through the @cinatra-ai/host:external-mcp-registry
+  // capability.
+  if (modal === "external-mcp") {
+    const href = getConnectorSetupHref("mcp-server-connector");
+    redirect(href ?? "/connectors");
+  }
 
   // Settings components resolve through the generated settings-page loader map
   // only when their modal is requested.
@@ -332,9 +364,6 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
         </ConnectorSettingsDialog>
       ) : null}
 
-      {modal === "external-mcp" ? (
-        <ExternalMcpSettingsPage searchParams={searchParams} />
-      ) : null}
     </>
   );
 }

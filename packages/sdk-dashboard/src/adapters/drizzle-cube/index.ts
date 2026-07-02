@@ -6,13 +6,13 @@
  * (see eslint.config.mjs) with regression tests in
  * src/__tests__/eslint-boundary.test.ts.
  */
-export { defineCinatraCube, type CinatraCubeBuild } from "./define-cube";
+export { defineCinatraCube, aliasCinatraCube, type CinatraCubeBuild } from "./define-cube";
 export {
   createDrizzleCubeAdapter,
   type AdapterHandle,
   type DrizzleCubeAdapterOptions,
 } from "./create-adapter";
-export type { RegisteredCube } from "./types";
+export type { RegisteredCube, CinatraCubeBuildSql } from "./types";
 
 // System cubes. Each factory takes the host's Drizzle table reference;
 // sdk-dashboard never imports the host schema directly.
@@ -49,6 +49,12 @@ export {
   type ObjectsTable,
   type CreateArtifactsCubeOptions,
 } from "./cubes/artifacts";
+export {
+  createLlmUsageCube,
+  LLM_USAGE_CUBE_DESCRIPTOR,
+  type UsageEventsTable,
+  type CreateLlmUsageCubeOptions,
+} from "./cubes/llm-usage";
 
 // MCP bridge — wraps `drizzle-cube/mcp`'s `getCubeTools` into Cinatra-typed
 // `{ definitions, handle }` so the Cinatra MCP server registry can host

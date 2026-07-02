@@ -38,6 +38,7 @@ import {
 import { NavGroup } from "@/components/nav-group";
 import { NavUser } from "@/components/nav-user";
 import { type NavItem } from "@/components/layout-types";
+import { ANALYTICS_CATEGORIES, ANALYTICS_CATEGORY_PATHS } from "@/lib/section-nav";
 
 // ---------- sidebar data (mirrors shadcn-admin's sidebar-data.ts pattern) ----------
 
@@ -80,14 +81,6 @@ function buildAdminGroup(opts: SidebarOpts): { title: string; items: NavItem[] }
   };
 }
 
-// Workflows is its own top-level item (directly below Intelligence), not a
-// member of any group.
-const WORKFLOWS_NAV_ITEM: NavItem = {
-  title: "Workflows",
-  url: "/workflows",
-  icon: domainIcons.workflows,
-};
-
 function buildSidebarData(_opts: SidebarOpts) {
   const groups: { title: string; items: NavItem[] }[] = [];
 
@@ -120,10 +113,16 @@ function buildSidebarData(_opts: SidebarOpts) {
       {
         title: "Analytics",
         icon: domainIcons.metrics,
-        items: [
-          { title: "LLM", url: "/analytics/llm" },
-          { title: "API", url: "/analytics/api" },
-        ],
+        // Sidebar lists Analytics CATEGORIES (#617), not the content tabs — for
+        // now just "LLM". The category stays active across all of its tabs
+        // (Costs / Usage / API Requests) via activePaths; the in-page tabs
+        // (Costs|Usage|API Requests) still render from ANALYTICS_NAV in
+        // MetricApiNav. The old "API" sidebar entry is dropped.
+        items: ANALYTICS_CATEGORIES.map((cat) => ({
+          title: cat.label,
+          url: cat.href,
+          activePaths: [...(ANALYTICS_CATEGORY_PATHS[cat.key] ?? [])],
+        })),
       },
     ] as NavItem[],
   });
@@ -136,6 +135,8 @@ function buildSidebarData(_opts: SidebarOpts) {
       // direct link.
       { title: "Skills", url: "/skills", icon: domainIcons.skills },
       { title: "Connectors", url: "/connectors", icon: domainIcons.connectors },
+      // Webhooks moved under Configuration (cinatra#696) — see the Webhooks
+      // card on /configuration → /configuration/webhooks.
     ] as NavItem[],
   });
 
@@ -308,7 +309,6 @@ export function AppSidebar({
         items: (adminGroupRaw.items as NavItem[]).filter((item) => !hidden.has(item.title)),
       }
     : null;
-  const showWorkflows = !hidden.has(WORKFLOWS_NAV_ITEM.title);
   const navGroups = buildSidebarData({ isAdmin, pendingApprovalsTotal })
     .map((group) => ({
       ...group,
@@ -354,8 +354,10 @@ export function AppSidebar({
           ]}
           className="py-0"
         />
-        {/* Workflows is its own top-level item, directly below Intelligence. */}
-        {showWorkflows ? <NavGroup items={[WORKFLOWS_NAV_ITEM]} className="py-0" /> : null}
+        {/* The "Workflows" browse nav item was removed (cinatra#609) — workflow
+            overview/tracking now lives in Plane. The native workflow engine,
+            approvals, and the per-workflow detail/run page remain (reached via
+            chat creation, deep-links, and the Approvals surface). */}
         {/* "Agent Setup" link to /chat/copilot retired together with the legacy
             page. Inline agent dispatch + HITL now happen in the main /chat
             surface via InlineAgentRunCard. */}

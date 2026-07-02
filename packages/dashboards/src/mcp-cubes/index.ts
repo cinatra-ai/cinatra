@@ -18,4 +18,8 @@ export function createDashboardCubesMcpModule() {
 
 export { registerDashboardCubePrimitives } from "./registry";
 export { createDashboardCubeMcpHandlers, resolveDashboardCubeIdentity } from "./handlers";
-export { __resetMcpCubeToolsForTests, getMcpCubeTools } from "./cubes-singleton";
+export {
+  __resetMcpCubeToolsForTests,
+  getMcpCubeTools,
+  clearMcpCubeToolsForReconcile,
+} from "./cubes-singleton";

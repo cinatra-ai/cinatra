@@ -166,14 +166,30 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     // rebalance). `buildAssertSemanticTypeQueries` throws synchronously
     // on it, which must NEVER fail artifact creation.
     const seen = new Set<string>();
-    const produces: string[] = [];
+    const candidateProduces: string[] = [];
     for (const r of refs) {
       const ext = r.extension;
       if (!ext || seen.has(ext)) continue;
       if (ext === DEFAULT_ARTIFACT_EXTENSION) continue;
       seen.add(ext);
-      produces.push(ext);
+      candidateProduces.push(ext);
     }
+
+    // CG-4 (cinatra#661) — install-active write gate on the ACTOR-LESS
+    // deterministic producer path. The producing agent's declared `produces`
+    // artifact-extension ids are the highest-precedence (`assertedBy:"agent"`)
+    // type assertions; a `produces` entry referencing a DELETIBLED/archived
+    // artifact extension must NOT be written onto the artifact. Drop any whose
+    // canonical install row is archived/absent-and-governed (DB-status-driven,
+    // process-independent). Ungoverned (no-row) bundled artifact types stay
+    // assertable (CG-1). Degrade to no producer assertions on any read error.
+    const { isArtifactExtensionWriteAllowed } = await import(
+      "./artifact-extension-access"
+    );
+    const allowed = await Promise.all(
+      candidateProduces.map((ext) => isArtifactExtensionWriteAllowed(ext, input.orgId)),
+    );
+    const produces = candidateProduces.filter((_, i) => allowed[i]);
     return { validatedRunId, produces };
   } catch (err) {
     console.warn(

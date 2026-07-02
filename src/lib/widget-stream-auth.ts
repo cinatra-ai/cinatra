@@ -88,6 +88,22 @@ function normalizeStoredSiteUrl(value: string): string {
 const forCompare = (v: string) => v.replace(/\/+$/, "").toLowerCase();
 
 /**
+ * Does a server-verified request `origin` (always `scheme://host[:port]`) match
+ * a stored instance `siteUrl`? Uses the SAME normalization the configured-origin
+ * authorization primitive (`isConfiguredOrigin`) applies, so per-install identity
+ * resolution (cinatra#274) and origin authorization never diverge. Empty/invalid
+ * inputs never match.
+ */
+export function originMatchesSiteUrl(
+  origin: string | null | undefined,
+  siteUrl: string | null | undefined,
+): boolean {
+  const want = forCompare(String(origin ?? "").trim());
+  const have = forCompare(normalizeStoredSiteUrl(String(siteUrl ?? "").trim()));
+  return want.length > 0 && have.length > 0 && want === have;
+}
+
+/**
  * Is `origin` the site origin of a VALID configured instance under the
  * declared `instancesConfigKey` (all `requiredInstanceFields` non-empty)?
  *
@@ -195,10 +211,28 @@ export function resolveWidgetStreamOrigin(
  * origin (e.g. a server-internal self-check) must pass
  * `enforcePairedOrigin: false` EXPLICITLY. On success, bumps lastUsedAt.
  *
- * Returns the matched siteId on success or null on any failure (unknown site,
- * revoked, hash mismatch, origin mismatch/missing). Never accepts the legacy
- * shared apiKey and never accepts a non-cnx_ bearer.
+ * Returns the matched site binding on success or null on any failure (unknown
+ * site, revoked, hash mismatch, origin mismatch/missing). Never accepts the
+ * legacy shared apiKey and never accepts a non-cnx_ bearer.
+ *
+ * ROTATION TOCTOU (codex merge-time finding, #407): the returned binding —
+ * including `credentialVersion`, `orgId`, and `widgetOrigin` — is taken from
+ * the SAME row whose `credential_hash` this function just constant-time-matched
+ * against the presented credential. Callers MUST derive the credential
+ * generation from THIS result, never from a second `getActiveConnectSiteById`
+ * read: a `cnx_` rotation bumps `credential_version` WITHOUT revoking the row,
+ * so a fresh read could hand an OLD credential the NEW version. Binding the
+ * version to the hash-checked row makes the version authoritative for the
+ * credential that actually authenticated.
  */
+export type ValidatedConnectCredential = {
+  siteId: string;
+  client: string;
+  orgId: string | null;
+  widgetOrigin: string;
+  credentialVersion: number;
+};
+
 export function validateConnectServerCredential(input: {
   credential: string;
   requestOrigin?: string | null;
@@ -208,7 +242,7 @@ export function validateConnectServerCredential(input: {
   // (codex adversarial High): a valid Drupal cnx_ must NEVER authorize a
   // WordPress agent and vice-versa. Omit only for client-agnostic callers.
   expectedClient?: string | null;
-}): { siteId: string; client: string } | null {
+}): ValidatedConnectCredential | null {
   const credential = input.credential;
   if (!credential) return null;
   const m = CNX_PREFIX_RE.exec(credential);
@@ -244,7 +278,17 @@ export function validateConnectServerCredential(input: {
   } catch {
     /* best-effort */
   }
-  return { siteId, client: site.client };
+  // Return the binding fields from THIS hash-checked row (codex #407 TOCTOU
+  // fix): `credentialVersion`/`orgId`/`widgetOrigin` are bound to the credential
+  // that just matched `credential_hash`, so a caller pinning the version never
+  // inherits a concurrently-rotated row's newer version.
+  return {
+    siteId,
+    client: site.client,
+    orgId: site.orgId,
+    widgetOrigin: site.widgetOrigin,
+    credentialVersion: site.credentialVersion,
+  };
 }
 
 /**
@@ -329,12 +373,19 @@ export function buildWidgetStreamCorsHeaders(allowedOrigin: string): Record<stri
   return {
     "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    // `X-Cinatra-Widget-User-Token` is the per-user identity proof the widget
+    // sends ALONGSIDE the site `Authorization` token (cinatra#408 dual-token).
+    // A cross-origin browser fetch may only send a custom request header named
+    // here, so the preflight must allow it for the per-user login path to work.
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Cinatra-Widget-User-Token",
     "Access-Control-Allow-Credentials": "false",
     // The local widget reads `Deprecation`/`Sunset` (emitted on the legacy
-    // long-lived path) to surface a one-line admin notice — a cross-origin
-    // browser fetch can only read response headers named here (cinatra#220).
-    "Access-Control-Expose-Headers": "Deprecation, Sunset",
+    // long-lived path) to surface a one-line admin notice, and
+    // `X-Cinatra-Widget-Auth` (emitted on a fail-closed per-user 401, cinatra#408)
+    // to distinguish "re-login required" from a generic error and swap back to
+    // the login window — a cross-origin browser fetch can only READ response
+    // headers named here (cinatra#220).
+    "Access-Control-Expose-Headers": "Deprecation, Sunset, X-Cinatra-Widget-Auth",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };

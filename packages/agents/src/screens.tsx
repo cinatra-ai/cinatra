@@ -54,6 +54,7 @@ import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
 import { Tabs, TabsContent, TabsList, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { ImportAgentForm } from "./import-form";
 import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
 // InstallScopeDialog + server-side picker target builder.
@@ -79,6 +80,11 @@ import { and, eq, inArray, or } from "drizzle-orm";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Normalize a possibly-array search param to its first string value. */
+function pickSearchParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 /**
  * Risk-class badge palette — 4-tier visual distinction.
@@ -158,6 +164,29 @@ function isRegistryPackageNotFound(error: unknown): boolean {
   return code === "E404" || status === 404;
 }
 
+/**
+ * True when the agent-detail read failed because the gatekept install-authorize
+ * call was denied — either a marketplace transport/auth denial
+ * (`MarketplaceMcpError`, e.g. surfaced as HTTP 502) or a local
+ * credential-resolution failure (`VendorCredentialsMissingError`, which also
+ * covers the corrupt-consumer-attachment case). cinatra #627: these degrade the
+ * detail page to a READ-ONLY listing rather than crashing into the generic
+ * Application Error page.
+ *
+ * Detection is by ERROR CLASS, NOT by HTTP status — the denial surfaces as a
+ * `MarketplaceMcpError` regardless of the upstream status, so status-keying
+ * would miss it (per the codex review on the issue). We match on the stable
+ * `error.name` so this stays decoupled from both the vendored marketplace MCP
+ * client package (import-banned in NEW call sites) and the server-only
+ * `@/lib/gatekept-install` module graph (kept out of the static import set so
+ * screens.tsx test-loads without the MCP/http client). The class `name` is set
+ * in each constructor and survives subclassing/serialization.
+ */
+function isInstallAuthorizeDegradeError(error: unknown): boolean {
+  const name = (error as { name?: unknown } | null)?.name;
+  return name === "MarketplaceMcpError" || name === "VendorCredentialsMissingError";
+}
+
 function formatDate(date: Date | string | null | undefined): string {
   if (!date) return "—";
   try {
@@ -220,7 +249,7 @@ export async function AgentApprovalInboxBody({
     riskClass: string;      // repurposed: status as risk pill
     itemCount: number;      // repurposed: rejection-cycle count or 0
     status: string;
-    expiresAt: Date;        // repurposed: created_at
+    createdAt: Date;        // when the creation request was filed
   };
   let tasks: ApprovalInboxTask[] = [];
   if (orgId) {
@@ -242,7 +271,7 @@ export async function AgentApprovalInboxBody({
       riskClass: r.status === "proposed" ? "medium" : r.status === "rejected" ? "high" : "low",
       itemCount: r.rejectionReason ? 1 : 0,
       status: r.status,
-      expiresAt: new Date(r.createdAt),
+      createdAt: new Date(r.createdAt),
     }));
   }
 
@@ -289,7 +318,7 @@ export async function AgentApprovalInboxBody({
                   <TableHead>Risk</TableHead>
                   <TableHead>Items</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Deadline</TableHead>
+                  <TableHead>Requested</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -316,7 +345,7 @@ export async function AgentApprovalInboxBody({
                       <Badge variant="outline">{task.status}</Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {formatDistanceToNow(new Date(task.expiresAt), { addSuffix: true })}
+                      {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true })}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -333,7 +362,17 @@ export async function AgentApprovalInboxBody({
 // AgentApprovalDetailScreen
 // ---------------------------------------------------------------------------
 
-export async function AgentApprovalDetailScreen({ id }: { id: string }) {
+export async function AgentApprovalDetailScreen({
+  id,
+  error,
+  status,
+}: {
+  id: string;
+  /** `?error=` from a failed approve/reject/retry redirect (cinatra#391). */
+  error?: string | string[] | undefined;
+  /** `?status=` from a successful approve/reject/retry redirect. */
+  status?: string | string[] | undefined;
+}) {
   await requireAdminSession();
   const session = await getAuthSession();
   const orgId = session?.session?.activeOrganizationId ?? null;
@@ -371,6 +410,20 @@ export async function AgentApprovalDetailScreen({ id }: { id: string }) {
   }
   const isPending = req.status === "proposed";
 
+  // Post-decision redirect result (cinatra#391). A failed approve/reject/retry
+  // redirects back here with ?error=<msg>; a successful one with ?status=<state>.
+  // Without rendering them the page just reloads unchanged and a failure looks
+  // like a silent no-op. Rendered server-side (no client island) so it survives
+  // the redirect/refresh. Mirrors the Instance-tab fix in cinatra#357.
+  const errorMessage = pickSearchParam(error);
+  const statusMessage = pickSearchParam(status);
+  const successCopy: Record<string, string> = {
+    approved: "The proposal was approved and published (private-scoped).",
+    rejected: "The proposal was rejected; the author can edit and resubmit.",
+    published: "The held proposal was re-published.",
+  };
+  const successMessage = statusMessage ? successCopy[statusMessage] : undefined;
+
   // Lazy import the server-action module — it lives in the host app and the
   // package can't import directly without a circular dep at the type layer.
   // Render a plain HTML form that POSTs to the server actions (Next App Router
@@ -387,6 +440,18 @@ export async function AgentApprovalDetailScreen({ id }: { id: string }) {
         description={`Proposal from ${req.authorId} — status ${req.status}`}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {errorMessage ? (
+          <Alert variant="destructive" className="rounded-panel" role="alert">
+            <TriangleAlert className="h-4 w-4 shrink-0" />
+            <AlertTitle>Decision failed</AlertTitle>
+            <AlertDescription className="break-words">{errorMessage}</AlertDescription>
+          </Alert>
+        ) : successMessage ? (
+          <Alert variant="success" className="rounded-panel" role="status">
+            <AlertTitle>Decision recorded</AlertTitle>
+            <AlertDescription>{successMessage}</AlertDescription>
+          </Alert>
+        ) : null}
         <div className="soft-panel rounded-card px-6 py-4">
           <div className="text-xs text-muted-foreground font-mono">request {req.id}</div>
           <div className="text-xs text-muted-foreground font-mono">snapshotHash {req.snapshotHash.slice(0, 16)}…</div>
@@ -520,6 +585,59 @@ export async function resolveDetailReadConfig(
 }
 
 // ---------------------------------------------------------------------------
+// RegistryEntryDegradedSections
+//
+// cinatra #627 degrade path: the agent-detail manifest read needs a gatekept
+// install-authorize grant (`resolveGatekeptInstallConfig`). When that authorize
+// call is DENIED — a marketplace `MarketplaceMcpError` (e.g. HTTP 502) or a
+// local `VendorCredentialsMissingError` / corrupt consumer-attachment — there
+// is no `entry` manifest to render the admin metadata or install controls from.
+// Rather than re-throwing (which crashes the whole route into the generic
+// Application Error page), the detail body degrades to a READ-ONLY listing: the
+// route still owns the marketplace hero (name/kind/license/version), this
+// renders the marketplace-sourced README primary body plus a clear
+// "install unavailable" notice, and NO install/update/uninstall controls (the
+// authorize grant they depend on is exactly what is unavailable).
+// ---------------------------------------------------------------------------
+
+function RegistryEntryDegradedSections({
+  packageName,
+  readmeMarkdown,
+}: {
+  packageName: string;
+  readmeMarkdown?: string | null;
+}) {
+  return (
+    <>
+      {/* PRIMARY BODY — the marketplace-sourced README, the SAME field the route
+          threads in on the healthy path. Empty/absent → no section (no empty
+          pane), exactly as the healthy detail body behaves. */}
+      <MarketplaceReadmeMarkdownSection markdown={readmeMarkdown} />
+
+      <Alert variant="warning">
+        <TriangleAlert />
+        <AlertTitle>Install unavailable</AlertTitle>
+        <AlertDescription>
+          <p>
+            This extension can be viewed but not installed right now — the
+            marketplace install authorization for{" "}
+            <span className="font-mono">{packageName}</span> could not be
+            obtained. The listing below is read-only; install, update, and
+            uninstall controls are disabled until the authorization succeeds.
+          </p>
+          <p>
+            This is usually a transient or operator-side configuration issue
+            (the instance&rsquo;s marketplace install credential). Try again
+            shortly; if it persists, ask an operator to check the instance&rsquo;s
+            marketplace connection.
+          </p>
+        </AlertDescription>
+      </Alert>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // RegistryEntryDetailSections
 //
 // The agent-specific BODY of the marketplace detail view. The page shell —
@@ -583,6 +701,49 @@ export async function RegistryEntryDetailSections({
   } catch (error) {
     if (isRegistryPackageNotFound(error)) {
       notFound();
+    }
+    // cinatra #627: a gatekept install-authorize denial (a marketplace
+    // `MarketplaceMcpError` — e.g. HTTP 502 — OR a local
+    // `VendorCredentialsMissingError` / corrupt-attachment) must NOT crash the
+    // route into the generic Application Error page. Degrade to a READ-ONLY
+    // listing: the route still renders the marketplace hero + README; here we
+    // render an "install unavailable" notice with the install controls
+    // suppressed, and emit a diagnostic naming WHICH credential source was in
+    // play so the next such failure is diagnosable.
+    if (isInstallAuthorizeDegradeError(error)) {
+      // Source label is a non-secret classifier (never a token value) of which
+      // marketplace bearer the authorize call would have drawn from. Dynamically
+      // imported to keep the host server-only credential modules out of the
+      // static import graph (mirrors the `@/lib/gatekept-install` pattern); any
+      // failure to derive it must not re-break the degrade path, so it defaults
+      // to "unknown".
+      let credentialSource = "unknown";
+      try {
+        const [{ describeMarketplaceTokenSource }, { readInstanceIdentity }] =
+          await Promise.all([
+            import("@/lib/marketplace-credentials"),
+            import("@/lib/instance-identity-store"),
+          ]);
+        credentialSource = describeMarketplaceTokenSource(readInstanceIdentity());
+      } catch (diagErr) {
+        console.warn(
+          "[registry-detail] could not derive marketplace credential source for the install-authorize degrade diagnostic:",
+          diagErr instanceof Error ? diagErr.message : diagErr,
+        );
+      }
+      console.warn(
+        "[registry-detail] install-authorize failed for %s — degrading to a read-only listing (install disabled). errorClass=%s credentialSource=%s message=%s",
+        packageName,
+        (error as { name?: string })?.name ?? "unknown",
+        credentialSource,
+        error instanceof Error ? error.message : String(error),
+      );
+      return (
+        <RegistryEntryDegradedSections
+          packageName={packageName}
+          readmeMarkdown={readmeMarkdown}
+        />
+      );
     }
     throw error;
   }

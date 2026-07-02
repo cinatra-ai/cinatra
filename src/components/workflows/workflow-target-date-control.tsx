@@ -2,10 +2,11 @@
 
 // Target-date edit control. The workflow's anchor date (stored internally as
 // `target_at_utc`) is the fixed point every relative task schedules against; it
-// is generic - a product release, a launch, a hearing, an event. Vanilla SVAR
-// has no draggable date marker (a PRO feature), so it is edited here in the
-// page chrome (NOT on the Gantt surface) via the existing rescheduleAction ->
-// rescheduleWorkflow (draft-only CAS). Shown only when the workflow is editable.
+// is generic - a product release, a launch, a hearing, an event. It is edited
+// here in the page chrome via the existing rescheduleAction -> rescheduleWorkflow
+// (draft/paused-only CAS) and surfaces a per-task cascade preview before commit.
+// This is the EXECUTION-timing editor that survives the Gantt removal (#321) —
+// it drives when the workflow runs, not a chart. Shown only when editable.
 
 import { useEffect, useState, useTransition } from "react";
 import { CalendarIcon } from "lucide-react";
@@ -28,8 +29,7 @@ type Props = {
   /** Pre-bound to workflowId: (newTargetAt, expectedLockVersion) => result. */
   action: (newTargetAt: string, expectedLockVersion: number) => Promise<RescheduleResult>;
   /** Pre-bound to workflowId: previews the per-task due-date cascade for a
-   *  proposed anchor move BEFORE commit . Vanilla SVAR has no
-   *  draggable release marker, so the cascade is previewed here in the control. */
+   *  proposed anchor move BEFORE commit, surfaced inline in this control. */
   previewCascade?: (newTargetAtUtc: string) => Promise<CascadePreviewResult | null>;
   /** Workflow release/anchor timezone (IANA) for localized diff dates. */
   displayTz?: string;

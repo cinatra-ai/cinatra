@@ -21,13 +21,17 @@ import {
   getLlmProviderSurface,
   requireLlmProviderSurface,
 } from "@/lib/llm-provider-surfaces";
-import { requireAuthSession, requireAdminSession } from "@/lib/auth-session";
+import { requireAuthSession, requireAdminSession, isPlatformAdmin, getActorContext } from "@/lib/auth-session";
+import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
 import {
-  upsertExternalMcpServer,
-  deleteExternalMcpServer,
-  getExternalMcpServerById,
+  getExternalMcpServerByIdFresh,
+  insertExternalMcpServerStrict,
+  updateExternalMcpServerGuarded,
+  deleteExternalMcpServerGuarded,
+  ExternalMcpServerWriteConflictError,
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
+import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 import { randomUUID } from "node:crypto";
 import { saveEmailSystemDevelopmentSettings } from "@/lib/email-system";
 import { saveDevExtensionsSettings } from "@/lib/dev-extensions";
@@ -48,7 +52,6 @@ import {
   saveWordPressInstance,
 } from "@/lib/wordpress-api";
 import {
-  writeDefaultLlmProviderToDatabase,
   writeDefaultImageProviderToDatabase,
   writeObjectsClassificationModelToDatabase,
   writeConnectorConfigToDatabase,
@@ -184,8 +187,13 @@ export async function setAnthropicMcpModeAction(_formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function setDefaultLlmProviderAction(formData: FormData) {
-  const provider = z.string().min(1).parse(formData.get("provider"));
-  writeDefaultLlmProviderToDatabase(provider);
+  // Global default LLM provider is platform-level. Route through the shared
+  // chokepoint: platform-admin authority + strict-before-mutation audit + the
+  // authoritative {openai,gemini} sink. (Previously this action wrote with no
+  // authority check and no audit — the operator-mutation chokepoint closes that gap.)
+  const provider = z.enum(["openai", "gemini"]).parse(formData.get("provider"));
+  const actor = await getActorContext();
+  await updateDefaultLlmProvider({ actor, provider });
   redirect("/configuration/llm");
 }
 
@@ -227,9 +235,12 @@ export async function setDefaultProvidersAction(formData: FormData) {
 
   if (llmProvider) {
     // Chokepoint refuses anything outside {openai,gemini}; explicit guard kept
-    // for reader clarity (the sink is still authoritative).
+    // for reader clarity (the sink is still authoritative). The shared
+    // `updateDefaultLlmProvider` adds the strict-before-mutation audit and a
+    // defense-in-depth platform-admin re-check on top of `requireAdminSession`.
     if (llmProvider === "openai" || llmProvider === "gemini") {
-      writeDefaultLlmProviderToDatabase(llmProvider);
+      const actor = await getActorContext();
+      await updateDefaultLlmProvider({ actor, provider: llmProvider });
     }
   }
   if (imageProvider) {
@@ -387,6 +398,13 @@ const wordpressSchema = z.object({
 });
 
 export async function saveWordPressInstanceAction(formData: FormData) {
+  // Admin gate + identity capture in one step. The configuring admin's
+  // {orgId, runBy} is persisted as the install→org binding (cinatra#274) so a
+  // host-initiated content-editor write for THIS install executes as the
+  // admin's org/user instead of the single-tenant default.
+  const session = await requireAdminSession();
+  const orgId = session.session?.activeOrganizationId?.trim() || undefined;
+  const runBy = session.user.id?.trim() || undefined;
   const parsed = wordpressSchema.parse({
     id: (formData.get("id") as string | null) ?? undefined,
     siteUrl: formData.get("siteUrl"),
@@ -400,6 +418,8 @@ export async function saveWordPressInstanceAction(formData: FormData) {
     username: parsed.username,
     applicationPassword: parsed.applicationPassword,
     blogConnectorId: parsed.blogConnectorId,
+    orgId,
+    runBy,
   });
   redirect("/configuration/llm");
 }
@@ -435,6 +455,16 @@ export async function setWordPressBlogConnectorAction(formData: FormData) {
 // External MCP servers
 // ---------------------------------------------------------------------------
 
+// The external-MCP management UI moved to the "MCP Servers" connector's setup
+// page (cinatra#612). These host actions still OWN the admin-authorization
+// boundary + the post-write redirect; they redirect back to the connector
+// setup page (where the saved/deleted banner renders) instead of the retired
+// /configuration/llm modal. Falls back to /configuration/llm if the connector
+// is somehow absent from the catalog.
+function externalMcpRedirectBase(): string {
+  return getConnectorSetupHref("mcp-server-connector") ?? "/configuration/llm";
+}
+
 const externalMcpSchema = z.object({
   id: z.string().optional(),
   label: z.string().min(1),
@@ -450,28 +480,124 @@ export async function createExternalMcpServerAction(formData: FormData) {
     scope: (formData.get("scope") as string | null) ?? "global",
   });
   const scope: ExternalMcpServerScope = parsed.scope === "user" ? "user" : "global";
-  const session = scope === "user" ? await requireAuthSession() : null;
-  upsertExternalMcpServer({
-    id: parsed.id?.trim() || randomUUID(),
+
+  // Authorization boundary. Global external MCP rows are injected into every LLM call's
+  // MCP toolbox with `requireApproval: "never"` — a global write is a
+  // platform-wide trust mutation and MUST require platform admin. The default
+  // scope is "global", so the unauthenticated/non-admin default path is
+  // admin-gated. User-scoped rows only require an authenticated actor, and are
+  // bound to that actor's own userId.
+  const session =
+    scope === "user" ? await requireAuthSession() : await requireAdminSession();
+
+  // ID-overwrite guard. An attacker-supplied existing `id` must not let a
+  // user-scoped write overwrite a global row (or another user's row). Re-derive
+  // the authority required from the EXISTING row's scope/owner, not just the
+  // requested scope, and deny cross-actor / cross-scope id reuse.
+  //
+  // TOCTOU hardening (Refs cinatra#658): the authorization read is FRESH
+  // (`getExternalMcpServerByIdFresh` — bypasses the 30s in-process TTL cache that
+  // `getExternalMcpServerById` serves from, which could otherwise return a row
+  // whose scope/owner changed on another worker), and the write is CONDITIONAL on
+  // the row STILL matching the witnessed scope+owner
+  // (`updateExternalMcpServerGuarded` for an existing row;
+  // `insertExternalMcpServerStrict` for a new id, which never clobbers a
+  // concurrently-created row). A race that flips the row under the actor is
+  // refused (fail-closed) rather than applied.
+  const requestedId = parsed.id?.trim() || undefined;
+  let guard: { scope: ExternalMcpServerScope; userId: string | null } | undefined;
+  let preservedUserId: string | null | undefined;
+  if (requestedId) {
+    const existing = getExternalMcpServerByIdFresh(requestedId);
+    if (existing) {
+      if (existing.scope === "global") {
+        // Touching an existing global row always requires platform admin,
+        // regardless of the scope the caller requested.
+        await requireAdminSession();
+      } else {
+        // Non-global existing row: owner (same userId) or platform admin only.
+        const actorIsAdmin = isPlatformAdmin(session);
+        const actorOwnsRow =
+          existing.userId !== null && existing.userId === session.user.id;
+        if (!actorIsAdmin && !actorOwnsRow) {
+          redirect("/not-authorized");
+        }
+        // A non-admin must not re-scope an existing user row to global.
+        if (scope === "global" && !actorIsAdmin) {
+          redirect("/not-authorized");
+        }
+        // Preserve the existing owner of a user row on overwrite — an admin edit
+        // must never silently reassign ownership to the admin (mirrors the
+        // connector-setup handler's `preservedUserId`).
+        if (existing.scope === "user" && scope === "user") {
+          preservedUserId = existing.userId;
+        }
+      }
+      // The compare-and-write guard is the WITNESSED existing scope+owner.
+      guard = { scope: existing.scope, userId: existing.userId };
+    }
+  }
+
+  const row = {
+    id: requestedId || randomUUID(),
     label: parsed.label,
     serverUrl: parsed.serverUrl,
     scope,
     nangoConnectionId: null,
     orgId: null,
-    userId: session?.user.id ?? null,
+    userId: scope === "user" ? preservedUserId ?? session.user.id : null,
     enabled: true,
-  });
-  redirect("/configuration/llm");
+  };
+  try {
+    if (guard) {
+      updateExternalMcpServerGuarded(row, guard);
+    } else {
+      insertExternalMcpServerStrict(row);
+    }
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed under the authorized operation (TOCTOU race) → deny.
+      redirect("/not-authorized");
+    }
+    throw err;
+  }
+  redirect(`${externalMcpRedirectBase()}?saved=1`);
 }
 
 export async function deleteExternalMcpServerAction(formData: FormData) {
   const id = z.string().min(1).parse(formData.get("id"));
-  const server = getExternalMcpServerById(id);
+  // Authorization boundary. The delete path had NO authz guard at all. Require platform admin to delete
+  // a global row, and owner-or-admin for a user-scoped row. Fail closed.
+  //
+  // TOCTOU hardening (Refs cinatra#658): authorize against a FRESH read (not the
+  // 30s TTL cache) and delete CONDITIONALLY on the witnessed scope+owner so a row
+  // promoted/re-owned between read and delete fails closed instead of being
+  // deleted under the actor's stale view.
+  const session = await requireAuthSession();
+  const server = getExternalMcpServerByIdFresh(id);
   if (!server) {
-    redirect("/configuration/llm");
+    redirect(externalMcpRedirectBase());
   }
-  deleteExternalMcpServer(id);
-  redirect("/configuration/llm");
+  if (server.scope === "global") {
+    await requireAdminSession();
+  } else {
+    const actorIsAdmin = isPlatformAdmin(session);
+    const actorOwnsRow =
+      server.userId !== null && server.userId === session.user.id;
+    if (!actorIsAdmin && !actorOwnsRow) {
+      redirect("/not-authorized");
+    }
+  }
+  try {
+    deleteExternalMcpServerGuarded(id, { scope: server.scope, userId: server.userId });
+  } catch (err) {
+    if (err instanceof ExternalMcpServerWriteConflictError) {
+      // The row changed/vanished under the authorized delete (TOCTOU race) → deny.
+      redirect("/not-authorized");
+    }
+    throw err;
+  }
+  redirect(`${externalMcpRedirectBase()}?deleted=1`);
 }
 
 // GitHub connection actions are connector-owned (@cinatra-ai/github-connector/actions),

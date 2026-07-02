@@ -15,6 +15,11 @@ import {
   basePackageOf,
   SDK_PACKAGES,
 } from "../inventory.mjs";
+// These live `buildInventory()` calls scan the SHARED `extensions/` tree. The
+// import-ban gate tests that prove the gate detects a scratch `@/` edge now write
+// that fixture into a PRIVATE per-test clone (CINATRA_INVENTORY_EXT_ROOT) instead
+// of the shared tree, so these scans can never observe a transient edge — no
+// cross-file lock is required (cinatra#380).
 
 // The import-ban gate's declared-cross-extension carve-out is only safe if a
 // dependency must carry the FULL valid ExtensionDependency shape to count as

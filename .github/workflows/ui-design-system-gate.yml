@@ -1,7 +1,7 @@
 name: ui-design-system-gate
 
 # Thin caller for the org-wide shadcn design-system gate
-# (cinatra-ai/cinatra-engineering#62). The preset's import/raw-JSX blocks are
+# (org shadcn design-system gate). The preset's import/raw-JSX blocks are
 # integrated into this repo's own eslint.config.mjs (Layers 1, 4, 4b, 5 + the
 # raw-JSX warn block — see PR #44); the gate installs deps and runs ESLint
 # against that config. The inputs mirror the in-repo carve-outs:
@@ -33,11 +33,11 @@ permissions:
 
 jobs:
   ui-design-system-gate:
-    uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@7e6e94c95390c73a252a2cf40a643b5033f93ff0 # v0.1.0
+    uses: cinatra-ai/ci/.github/workflows/ui-design-system-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.1
     with:
       ui_globs: "**/components/ui/**,**/src/ui/**"
       drizzle_cube_globs: "packages/dashboards/src/components/**"
-      strictness: warn
+      strictness: error
       lint_command: |
         REPORT="${RUNNER_TEMP:-/tmp}/ui-design-system-report.json"
         npx eslint . --no-inline-config -f json -o "$REPORT" || true

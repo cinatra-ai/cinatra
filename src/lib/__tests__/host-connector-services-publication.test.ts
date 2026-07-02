@@ -58,6 +58,26 @@ vi.mock("@/lib/external-mcp-registry", () => ({
     return "bearer-jwt";
   },
 }));
+// mcp-server-connector setup-page surface (cinatra#612): the host binds the
+// create/delete server actions, the viewer-context resolver, the Nango
+// readiness flag, and the private-URL guard into the external-mcp-registry
+// service. Stub the heavy "use server" actions module + the auth/nango edges so
+// the boot-time auto-run completes in a unit context.
+const extMcpActionCalls: Record<string, FormData[]> = { create: [], delete: [] };
+vi.mock("@/app/campaigns/actions", () => ({
+  createExternalMcpServerAction: async (fd: FormData) => {
+    extMcpActionCalls.create.push(fd);
+  },
+  deleteExternalMcpServerAction: async (fd: FormData) => {
+    extMcpActionCalls.delete.push(fd);
+  },
+}));
+vi.mock("@/lib/auth-session", () => ({
+  requireAuthSession: async () => ({ user: { id: "viewer-1", role: "user,admin" } }),
+  isPlatformAdmin: (s: { user?: { role?: string | null } } | null | undefined) =>
+    String(s?.user?.role ?? "").split(",").map((v) => v.trim()).includes("admin"),
+}));
+vi.mock("@/lib/nango-system", () => ({ getNangoStatus: () => ({ status: "connected" }) }));
 vi.mock("@/lib/instance-secrets", () => ({ encryptSecret: (v: string) => v, decryptSecret: (v: string) => v }));
 vi.mock("@/lib/mcp-self-client", () => ({ buildAppMcpSelfClientHeaders: () => ({}) }));
 vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => null }));
@@ -334,6 +354,7 @@ import {
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
+  type HostInstanceWriteAuthorityService,
   type HostWordPressWidgetAuthService,
   type HostExternalMcpRegistryService,
   type HostGitHubConnectionService,
@@ -502,6 +523,11 @@ describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", 
     expect(typeof drupal.resolveServerUrl).toBe("function");
     expect(typeof drupal.isPrivateUrl).toBe("function");
 
+    // Actor-scoped lister is bound; with the mocked-empty instance settings it
+    // resolves to [] (fail-closed short-circuit before any actor/authority resolution).
+    expect(typeof drupal.listAuthorizedInstances).toBe("function");
+    await expect(drupal.listAuthorizedInstances!()).resolves.toEqual([]);
+
     // getAPIStatus — the connector's drupal_status primitive read.
     await expect(drupal.getAPIStatus()).resolves.toEqual({ instanceCount: 0, instances: [] });
 
@@ -550,6 +576,11 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
     expect(typeof wordpress.resolveServerUrl).toBe("function");
     expect(typeof wordpress.isPrivateUrl).toBe("function");
     expect(typeof wordpress.deleteInstance).toBe("function");
+
+    // Actor-scoped lister is bound; with the mocked-empty instance settings it
+    // resolves to [] (fail-closed short-circuit before any actor/authority resolution).
+    expect(typeof wordpress.listAuthorizedInstances).toBe("function");
+    await expect(wordpress.listAuthorizedInstances!()).resolves.toEqual([]);
 
     // getAPIStatus — the connector's wordpress_status primitive read (SYNC).
     expect(wordpress.getAPIStatus()).toEqual({
@@ -700,11 +731,47 @@ describe("wordpress connection-admin + content + widget-auth services (cinatra#1
   });
 });
 
+describe("per-user/per-instance write authority service (cinatra#409)", () => {
+  it("publishes @cinatra-ai/host:instance-write-authority with a HOST-BOUND selectForConnector guard", () => {
+    expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority).toBe(
+      "@cinatra-ai/host:instance-write-authority",
+    );
+    const authority = resolveSingle<HostInstanceWriteAuthorityService>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.instanceWriteAuthority,
+    );
+    // The two CMS content connectors bind their own static KIND → a guard. The
+    // host maps the kind to BOTH the package id and the instance reader.
+    const wp = authority.selectForConnector("wordpress");
+    const drupal = authority.selectForConnector("drupal");
+    expect(typeof wp.requireWrite).toBe("function");
+    expect(typeof drupal.requireWrite).toBe("function");
+    // An unknown connector kind THROWS host-side — the package whose policy is
+    // evaluated and the instance reader can never be arbitrary caller input
+    // (codex must-fix). A package id passed where a KIND is expected is unknown.
+    // The contract type is the closed union `"wordpress" | "drupal"`; cast to
+    // exercise the RUNTIME guard against an off-union string.
+    const selectAny = authority.selectForConnector as (kind: string) => unknown;
+    expect(() => selectAny("@attacker/evil")).toThrow();
+    expect(() => selectAny("@cinatra-ai/wordpress-mcp-connector")).toThrow();
+  });
+});
+
 describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
   // Grant-drift coverage: one assertion row per NEW/EXTENDED service MEMBER —
   // the publication test pins the full member set, not just the service id.
   it("extends @cinatra-ai/host:external-mcp-registry with the read + bearer-mint surface (every member bound)", async () => {
-    const registry = resolveSingle<HostExternalMcpRegistryService>(
+    // The host extends the published service with the mcp-server-connector
+    // setup-page surface (cinatra#612) via a host-LOCAL type (not the SDK
+    // contract — the connector resolves these members structurally). Type the
+    // resolved registry with that extended shape so the new members typecheck.
+    type ExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
+      createServerAction(formData: FormData): Promise<void>;
+      deleteServerAction(formData: FormData): Promise<void>;
+      resolveViewerContext(): Promise<{ isAdmin: boolean; userId: string }>;
+      isConnectionServiceReady(): boolean;
+      isPrivateUrl(serverUrl: string): boolean;
+    };
+    const registry = resolveSingle<ExternalMcpRegistrySetupSurface>(
       HOST_CONNECTOR_SERVICE_CAPABILITIES.externalMcpRegistry,
     );
     // Pre-H4 WRITER members survive unchanged.
@@ -723,6 +790,30 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     // the contract's TRUST note documents this posture).
     await expect(registry.resolveBearer(EXT_MCP_ROW)).resolves.toBe("bearer-jwt");
     expect(extMcpCalls.resolveBearer.at(-1)).toEqual([EXT_MCP_ROW]);
+
+    // --- mcp-server-connector setup-page surface (cinatra#612) -------------
+    // The carved "MCP Servers" connector binds these into its deps slot. The
+    // create/delete WRITE actions delegate to the host server actions (which
+    // own the admin-authorization boundary + redirect) — bound, never
+    // reimplemented here.
+    const createFd = new FormData();
+    await registry.createServerAction(createFd);
+    expect(extMcpActionCalls.create.at(-1)).toBe(createFd);
+    const deleteFd = new FormData();
+    await registry.deleteServerAction(deleteFd);
+    expect(extMcpActionCalls.delete.at(-1)).toBe(deleteFd);
+
+    // resolveViewerContext — admin flag + user id from the auth session.
+    await expect(registry.resolveViewerContext()).resolves.toEqual({
+      isAdmin: true,
+      userId: "viewer-1",
+    });
+
+    // isConnectionServiceReady — Nango readiness for the API-key advisory.
+    expect(registry.isConnectionServiceReady()).toBe(true);
+
+    // isPrivateUrl — the LLM-reachability guard (mocked false here).
+    expect(registry.isPrivateUrl("https://mcp.example.com")).toBe(false);
   });
 
   it("publishes @cinatra-ai/host:github-connection with the full connection-admin member set", async () => {

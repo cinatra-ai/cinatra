@@ -91,6 +91,23 @@ test.describe("RBAC — nav visibility + access clarity + role gate", () => {
     await expect(sidebar.getByText("Analytics", { exact: true })).toHaveCount(0);
   });
 
+  test("Webhooks is not a left-sidebar nav entry (moved under Configuration, cinatra#696)", async ({ page }) => {
+    // The Tools → Webhooks registry moved under Configuration — it is no longer
+    // a sidebar entry for any actor; the page lives at /configuration/webhooks.
+    await page.goto("/desk", { waitUntil: "domcontentloaded" });
+    await waitForHydration(page);
+    const sidebar = page.getByRole("navigation");
+    await expect(sidebar.getByText("Webhooks", { exact: true })).toHaveCount(0);
+  });
+
+  test("non-admin is denied the Webhooks registry page (cinatra#342, relocated #696)", async ({ page }) => {
+    // The page re-enforces with requireAdminSession() at its new location.
+    // Mirror the Access Control denial assertion above.
+    const res = await page.goto("/configuration/webhooks", { waitUntil: "domcontentloaded" });
+    expect(res?.status() === 403 || res?.status() === 200).toBeTruthy();
+    await expect(page.getByText("No webhooks registered yet")).toHaveCount(0);
+  });
+
   test("project permissions surface shows the ownership/access clarity note", async ({ page }) => {
     await page.goto(`/projects/${SEED.projectId}/permissions`, { waitUntil: "domcontentloaded" });
     await waitForHydration(page);

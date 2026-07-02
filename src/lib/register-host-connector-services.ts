@@ -41,6 +41,22 @@ import {
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
 } from "@/lib/external-mcp-registry";
+// External-MCP setup-page surface for @cinatra-ai/mcp-server-connector
+// (cinatra#612): the carved "MCP Servers" connector binds these into its own
+// deps slot at activation. The create/delete WRITE actions own the
+// admin-authorization boundary + the post-write redirect — the connector
+// reimplements NO auth; it submits FormData to these opaque server actions.
+//
+// `@/app/campaigns/actions` is imported LAZILY (the `skillsCatalog` precedent
+// below): that "use server" module carries a heavy nango/wordpress/llm edge
+// graph, and a STATIC import here would drag it onto the synchronous boot path
+// AND into every unit test whose module graph reaches this host binder (e.g.
+// packages/agents store helpers), forcing those tests to mock host campaign
+// internals they have no business knowing. The actions are only INVOKED at
+// form-submit time (never at register()), so the lazy `import()` keeps the
+// action's "use server" identity while loading it on first use.
+import { requireAuthSession, isPlatformAdmin } from "@/lib/auth-session";
+import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
 import { buildAppMcpSelfClientHeaders } from "@/lib/mcp-self-client";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -56,6 +72,7 @@ import {
   type HostDrupalWidgetAuthService,
   type HostWordPressMcpService,
   type HostWordPressContentService,
+  type HostInstanceWriteAuthorityService,
   type HostWordPressWidgetAuthService,
   type WordPressInstanceRowShape,
   type HostExternalMcpRegistryService,
@@ -90,6 +107,17 @@ import {
 // content-editor connectors). Carries the @cinatra-ai/llm + @cinatra-ai/a2a
 // runtime edges host-side so neither connector imports them.
 import { dispatchContentEditorViaA2A } from "./host-content-editor-dispatch";
+// Per-user / per-connector-instance WRITE authority for the CMS content path
+// (cinatra#409): the host-owned authority the wordpress/drupal content-editor
+// connectors call before EVERY write primitive. It resolves the TRUSTED user
+// actor host-side (never from connector input), fails closed on no actor, and
+// delegates to the existing per-instance connector-authority policy. The
+// package whose policy is evaluated is host-bound (allowlist-validated in
+// `selectForPackage`) — never caller-supplied.
+import {
+  createInstanceListAuthority,
+  createInstanceWriteAuthorityService,
+} from "./connector-instance-write-authority";
 // WordPress instance settings + hard-delete + LinkedIn account
 // materialization for the nango connection-save flow — published as the
 // BLOCKING `nango-connection-materializer` capability and the
@@ -189,6 +217,29 @@ let _registered = false;
  * the capability registry. Not an extension package name (reserved host id). */
 const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
 
+// Host-LOCAL extension of the SDK `HostExternalMcpRegistryService` for the
+// "MCP Servers" connector setup-page surface (cinatra#612). Kept host-side
+// (NOT in the SDK contract) because the connector resolves these members
+// STRUCTURALLY through `@cinatra-ai/host:external-mcp-registry` and never
+// imports the SDK type — its own `deps.ts` declares a local structural shape.
+// The members extend the published service additively; existing SDK-typed
+// consumers (the twenty transport's read/bearer surface) are unaffected.
+type HostExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
+  /** The host server action the add-form submits to (create/upsert). Owns the
+   * admin-authorization boundary + redirect host-side. */
+  createServerAction(formData: FormData): Promise<void>;
+  /** The host server action the per-row delete button submits to. Owns the
+   * authorization boundary + redirect host-side. */
+  deleteServerAction(formData: FormData): Promise<void>;
+  /** Resolve the current viewer (platform-admin flag + user id) for the
+   * setup page's visibility scoping. */
+  resolveViewerContext(): Promise<{ isAdmin: boolean; userId: string }>;
+  /** Is the host connection (Nango) service configured for API-key storage? */
+  isConnectionServiceReady(): boolean;
+  /** Is the given server URL private/non-public (not LLM-reachable)? */
+  isPrivateUrl(serverUrl: string): boolean;
+};
+
 /**
  * Publish the per-concern host connector services into the capability
  * registry. A serverEntry transport's `register(ctx)` resolves exactly the
@@ -285,7 +336,34 @@ export function registerHostConnectorServices(): void {
     getServerById: getExternalMcpServerById,
     listServers: listExternalMcpServers,
     resolveBearer: resolveExternalMcpServerBearer,
-  } satisfies HostExternalMcpRegistryService);
+    // --- mcp-server-connector setup-page surface (cinatra#612) --------------
+    // The carved "MCP Servers" connector binds these into its deps slot. The
+    // WRITE actions own the admin-authorization boundary + redirect host-side
+    // (src/app/campaigns/actions.ts) — the connector reimplements NO auth.
+    // Lazy `import()` (see the module-head note): the "use server" actions load
+    // on first form-submit, never at boot/test-collection. The connector's
+    // `register(ctx)` already wraps these in `(fd) => registry().…(fd)`
+    // closures, so the indirection is transparent to `<form action={…}>`.
+    createServerAction: async (formData: FormData) => {
+      const { createExternalMcpServerAction } = await import("@/app/campaigns/actions");
+      return createExternalMcpServerAction(formData);
+    },
+    deleteServerAction: async (formData: FormData) => {
+      const { deleteExternalMcpServerAction } = await import("@/app/campaigns/actions");
+      return deleteExternalMcpServerAction(formData);
+    },
+    // Resolve the viewer (platform-admin flag + user id) for visibility
+    // scoping. Mirrors the derivation the host external-MCP page carried —
+    // `requireAuthSession` redirects an unauthenticated viewer to sign-in.
+    resolveViewerContext: async () => {
+      const session = await requireAuthSession();
+      return { isAdmin: isPlatformAdmin(session), userId: session.user.id };
+    },
+    // Nango readiness for the API-key field advisory copy.
+    isConnectionServiceReady: () => getNangoStatus().status === "connected",
+    // Private-URL guard (LLM providers cannot reach localhost/private IPs).
+    isPrivateUrl,
+  } satisfies HostExternalMcpRegistrySetupSurface);
 
   register(svc.mcpSelfClient, { buildHeaders: buildAppMcpSelfClientHeaders });
 
@@ -330,8 +408,25 @@ export function registerHostConnectorServices(): void {
     dispatch: dispatchContentEditorViaA2A,
   } satisfies HostContentEditorDispatchService);
 
+  // Actor-scoped instance LIST filters — the read-boundary twin of the
+  // instance-write-authority `requireWrite` gate, reusing the IDENTICAL
+  // machinery (trusted-actor resolution from the MCP/llm frame,
+  // live-membership reverify with deny-no-row, sanitized decisionActor,
+  // per-instance org-binding + connector-package `use` gate).
+  // Returns ONLY the trusted actor's authorized instances, [] fail-closed when
+  // no actor/membership resolves. Bound host-side to the connector KIND (never
+  // caller input) so the package policy + instance reader are host-controlled.
+  const filterAuthorizedDrupalInstances = createInstanceListAuthority("drupal");
+  const filterAuthorizedWordPressInstances = createInstanceListAuthority("wordpress");
+
   register(svc.drupalMcp, {
     listInstances: () => getDrupalAPISettings().instances,
+    // ACTOR-SCOPED lister for the external-MCP toolbox-injection path. The host
+    // resolves the trusted actor from the MCP request frame and returns ONLY
+    // that actor's org-entitled instances; [] fail-closed when no actor resolves.
+    // The connector toolbox uses THIS, never the global unscoped `listInstances`.
+    listAuthorizedInstances: () =>
+      filterAuthorizedDrupalInstances(getDrupalAPISettings().instances),
     probe: probeDrupalMcp,
     resolveServerUrl: resolveDrupalMcpServerUrl,
     isPrivateUrl,
@@ -355,6 +450,13 @@ export function registerHostConnectorServices(): void {
 
   register(svc.wordpressMcp, {
     listInstances: () => getWordPressAPISettings().instances,
+    // ACTOR-SCOPED lister, published symmetrically with the Drupal service (the
+    // WordPress connector toolbox is already fail-closed via the per-instance
+    // `instance-write-authority` gate; this is the additive single-call lister
+    // a future toolbox revision can adopt). Same trusted-actor +
+    // membership-reverify + per-instance gate.
+    listAuthorizedInstances: () =>
+      filterAuthorizedWordPressInstances(getWordPressAPISettings().instances),
     probeAdapter: probeWordPressInstanceMcpAdapter,
     resolveServerUrl: resolveWordPressMcpFallbackEndpoint,
     isPrivateUrl,
@@ -430,6 +532,22 @@ export function registerHostConnectorServices(): void {
         fields: input.fields,
       }),
   } satisfies HostWordPressContentService);
+
+  // Per-user / per-connector-instance WRITE authority (cinatra#409). The
+  // wordpress/drupal content-editor MCP connectors resolve this service and
+  // call `selectForConnector(<their kind>).requireWrite(...)` at the TOP of
+  // every write primitive (after schema-parse + instance resolve, before any
+  // host content writer). The host resolves the TRUSTED user actor from the
+  // active MCP/llm/cookie frame (NEVER connector input), DENIES fail-closed when
+  // no userId+orgId resolve, then enforces TWO host-side gates keyed on the
+  // trusted actor's org: (1) PER-INSTANCE — resolves the instance row host-side
+  // and asserts its persisted org binding (cinatra#274) == the actor's org, so a
+  // forged instanceId (same-org-mismatch or different-org) is DENIED and an
+  // unknown/unbound row is DENIED fail-closed; (2) CONNECTOR-PACKAGE — the
+  // existing `requireConnectorAuthority` policy (emits a `connector_instance`
+  // audit row). `selectForConnector` maps the connector KIND to BOTH the package
+  // id and the instance reader host-side — neither is ever caller-supplied.
+  register(svc.instanceWriteAuthority, createInstanceWriteAuthorityService() satisfies HostInstanceWriteAuthorityService);
 
   // Widget auth-config storage for the wordpress assistant widget (cinatra#172
   // Stage H3): `generate` MINTS+PERSISTS a fresh key + webhook secret

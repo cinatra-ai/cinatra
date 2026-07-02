@@ -5,7 +5,7 @@
  * Scans the repo for imports from `@cinatra-ai/marketplace-mcp-client` (the
  * vendored copy at `packages/marketplace-mcp-client/`). The plan is to swap
  * every import over to the published `@cinatra-ai/marketplace-mcp-contract`
- * package (in the marketplace repo) and delete the vendored copy.
+ * package (published by the Cinatra marketplace service) and delete the vendored copy.
  * That swap is gated on the operator publishing the contract package.
  *
  * Until the publish lands, the current import sites listed in CURRENT_ALLOWLIST
@@ -90,6 +90,12 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // Workspace / build wire-up that declares the package by name.
   "next.config.ts",
   "tsconfig.json",
+  // Manifest that is the generated source of truth for the tsconfig path
+  // aliases + next.config package lists above — it carries the same
+  // `@cinatra-ai/marketplace-mcp-client` path-alias declarations (NOT imports)
+  // that tsconfig.json/next.config.ts do. Same swap-PR migration story: when the
+  // vendored package is deleted, those alias entries leave the manifest too.
+  "config/build-config.manifest.json",
   // Vendor-application lifecycle consumers. Same swap-PR migration story:
   // the vendored package is the only typed surface for the new
   // vendor_application_* wrapper methods + instance_attach_self until the
@@ -109,6 +115,13 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // stubbed. Test-only mock, not new production coupling; moves to the contract
   // import alongside actions.ts when the swap lands.
   "src/lib/__tests__/rename-instance-namespace-action.test.ts",
+  // Regression test for cinatra#396 (offline local namespace rename). Mirrors
+  // actions.ts's existing (allowlisted) vendored import to exercise the rename
+  // gate's MarketplaceMcpError-vs-transport-error discrimination; its vi.mock of
+  // `@cinatra-ai/marketplace-mcp-client/http-client` stubs the vendor-status
+  // probe. Test-only, not new production coupling; moves to the contract import
+  // alongside actions.ts when the swap lands.
+  "src/lib/__tests__/namespace-rename-offline-override.test.ts",
   "src/app/configuration/marketplace/vendor-applications/actions.ts",
   "src/app/configuration/marketplace/vendor-applications/admin-action-buttons.tsx",
   "src/app/configuration/marketplace/vendor-applications/page.tsx",

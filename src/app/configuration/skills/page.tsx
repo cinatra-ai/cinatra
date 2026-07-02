@@ -71,7 +71,6 @@ export default async function SettingsSkillsPage({ searchParams }: Props) {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        label="Administration"
         title="Skills"
         description="Configure local storage, GitHub sync, autosave, and the sandboxed shell runtime for skill execution."
         divider={false}
@@ -381,8 +380,8 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
                           <div className="flex flex-shrink-0 items-center gap-2">
                             <MatchesRowAction agentId={packageId} skillId={assignment.skillId} />
                             <RemoveMatchForm>
-                              <input type="hidden" name="agentId" value={agent.id} />
-                              <input type="hidden" name="skillId" value={assignment.skillId} />
+                              <Input type="hidden" name="agentId" value={agent.id} />
+                              <Input type="hidden" name="skillId" value={assignment.skillId} />
                               <Button type="submit" variant="outline" size="sm">
                                 Remove
                               </Button>

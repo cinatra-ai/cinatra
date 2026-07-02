@@ -1,6 +1,10 @@
 // Pure Node.js module — no "use server". Safe to import from instrumentation.node.ts.
-// Reads a system-provided agent ZIP from data/downloads/, injects packageName/packageVersion
-// into agent.json, and upserts the template via importAgentTemplate.
+// Reads a system-provided agent ZIP from data/downloads/, injects the
+// packageName/packageVersion via a synthetic sibling package.json (NOT into
+// agent.json — the compiler reads identity from the sibling package.json), and
+// upserts the template via importAgentTemplate. The git-file loader
+// (ensureAgentPackageFromGitFile) resolves the version solely from the sibling
+// package.json#version.
 
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -96,15 +100,15 @@ export async function ensureAgentPackage(opts: {
 // ---------------------------------------------------------------------------
 // Sibling package.json fallback
 // ---------------------------------------------------------------------------
-// When agents/<slug>/cinatra/agent.json lacks top-level metadata.cinatra.packageName,
+// When agents/<slug>/cinatra/oas.json lacks top-level metadata.cinatra.packageName,
 // derive packageName/packageVersion from the workspace package.json one level up
 // (agents/<slug>/package.json). That file is the source of truth for workspace
 // packages and already carries the canonical @cinatra/<slug> name.
 async function readSiblingPackageJsonIdentity(
-  agentJsonPath: string,
+  oasSourcePath: string,
 ): Promise<{ name?: string; version?: string; description?: string; license?: string; agentDependencies?: Record<string, string>; type?: string } | null> {
   try {
-    const pkgPath = join(dirname(agentJsonPath), "..", "package.json");
+    const pkgPath = join(dirname(oasSourcePath), "..", "package.json");
     const raw = await readFile(pkgPath, "utf8");
     const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown; description?: unknown; license?: unknown; cinatra?: unknown };
     const name = typeof parsed.name === "string" && parsed.name ? parsed.name : undefined;
@@ -129,14 +133,14 @@ async function readSiblingPackageJsonIdentity(
 // ---------------------------------------------------------------------------
 // ensureAgentPackageFromGitFile — load a git-native agent JSON into the DB
 // ---------------------------------------------------------------------------
-// Reads an agents/<slug>/cinatra/agent.json file (canonical; legacy
+// Reads an agents/<slug>/cinatra/oas.json file (canonical; legacy
 // flat agents/<slug>/agent.json also supported — callers resolve the path)
 // directly from the repo, builds an in-memory ZIP envelope, and upserts via
 // importAgentTemplate. This git-native path keeps the DB as a derived cache
 // of the files committed under agents/.
 
 export async function ensureAgentPackageFromGitFile(opts: {
-  agentJsonPath: string;
+  oasSourcePath: string;
   // First-party in-tree git-file loads (dev-boot scan, hot-reload watcher,
   // cinatra setup) pass true: the operator owns these agents, so a copyleft
   // (GPL) license needs no interactive acknowledgement. Defaults false. NOTE:
@@ -145,28 +149,32 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // still fires, so the auto-ack cannot leak to third-party agents.
   licenseAcknowledged?: boolean;
 }): Promise<{ templateId: string; upserted: boolean; skipped: boolean }> {
-  const raw = await readFile(opts.agentJsonPath, "utf8");
+  const raw = await readFile(opts.oasSourcePath, "utf8");
   const content = JSON.parse(raw) as {
     name?: string;
     description?: string;
-    metadata?: { cinatra?: { packageName?: string; packageVersion?: string; agentDependencies?: Record<string, string> } };
+    metadata?: { cinatra?: { packageName?: string; agentDependencies?: Record<string, string> } };
     [key: string]: unknown;
   };
 
   const cinatraPackageName = content.metadata?.cinatra?.packageName;
-  const cinatraPackageVersion = content.metadata?.cinatra?.packageVersion;
 
-  // Fall back to sibling package.json for identity fields
-  // (packageName / packageVersion) and presentation fields (description,
-  // agentDependencies) that live in package.json, not agent.json.
-  const sibling = await readSiblingPackageJsonIdentity(opts.agentJsonPath);
+  // Fall back to sibling package.json for the packageName and presentation
+  // fields (description, agentDependencies) that live in package.json, not
+  // the OAS source.
+  const sibling = await readSiblingPackageJsonIdentity(opts.oasSourcePath);
   const packageName: string | undefined = cinatraPackageName ?? sibling?.name;
-  const packageVersion: string | undefined = cinatraPackageVersion ?? sibling?.version;
+  // Version resolves SOLELY from the sibling package.json#version — the
+  // canonical source. We intentionally do NOT read metadata.cinatra.packageVersion
+  // from the OAS: that copy is a non-typed passthrough kept (if at all) only for
+  // provenance, and reading it first risked OAS<->package.json drift that could
+  // make the version-skip guard below short-circuit a re-import of bumped code.
+  const packageVersion: string | undefined = sibling?.version;
 
   if (!packageName) {
     console.warn(
       // Startup filesystem extension loader has no request context; prefix is part of the unified [cinatra:extensions:<kind>] scheme.
-      `[cinatra:extensions:agent] skipped: no packageName in ${opts.agentJsonPath}`,
+      `[cinatra:extensions:agent] skipped: no packageName in ${opts.oasSourcePath}`,
     );
     return { templateId: "", upserted: false, skipped: true };
   }
@@ -177,7 +185,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // callers handle skipped) rather than register a colliding identity.
   if (isReservedWorkspaceSlug(packageName)) {
     console.warn(
-      `[cinatra:extensions:agent] skipped: "${packageName}" collides with a reserved workspace package slug (${opts.agentJsonPath})`,
+      `[cinatra:extensions:agent] skipped: "${packageName}" collides with a reserved workspace package slug (${opts.oasSourcePath})`,
     );
     return { templateId: "", upserted: false, skipped: true };
   }
@@ -252,7 +260,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
   for (const licenseFile of ["LICENSE", "LICENSE.md", "COPYING", ".spdx"]) {
     try {
       const licenseContent = await readFile(
-        join(dirname(opts.agentJsonPath), "..", licenseFile),
+        join(dirname(opts.oasSourcePath), "..", licenseFile),
         "utf8",
       );
       licenseEntries.push({ name: licenseFile, content: licenseContent });
@@ -260,7 +268,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
       // try sibling-dir variant (flat layout: agent.json next to LICENSE)
       try {
         const licenseContent = await readFile(
-          join(dirname(opts.agentJsonPath), licenseFile),
+          join(dirname(opts.oasSourcePath), licenseFile),
           "utf8",
         );
         licenseEntries.push({ name: licenseFile, content: licenseContent });
@@ -285,7 +293,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // the auto-ack can't leak to it even if a caller passes true.
   const isFirstPartyInTree =
     packageName.startsWith("@cinatra-ai/") &&
-    opts.agentJsonPath.replace(/\\/g, "/").includes("/extensions/cinatra-ai/");
+    opts.oasSourcePath.replace(/\\/g, "/").includes("/extensions/cinatra-ai/");
   const result = await importAgentTemplateCore(zipBase64, undefined, {
     redirect: false,
     status: "published",

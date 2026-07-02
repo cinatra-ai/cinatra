@@ -181,6 +181,17 @@ jobs:
       # at `src/lib/setup-wizard.ts`; also set by `build-image.yml`'s
       # RBAC + Workflows e2e jobs.
       CINATRA_E2E_SETUP_BYPASS: "true"
+      # Dev-mode boot: this smoke runs a STANDALONE repo build (`pnpm build` +
+      # `node server.js`), NOT the Docker image, so it never bakes the
+      # required-extension OAS seed (only the Dockerfile runs
+      # build-required-oas-seed.mjs). Without this, the required-extension-
+      # materialize boot phase (added in #786) runs fail-closed and aborts boot
+      # on the absent seed. Dev mode makes seed-absence the intended non-prod
+      # no-op — the correct owner for prod materialization is build-image.yml's
+      # prod-boot e2e, not this /agents dashboard-render smoke. Mirrors the
+      # `CINATRA_RUNTIME_MODE: development` on build-image.yml's RBAC/dashboards
+      # e2e jobs.
+      CINATRA_RUNTIME_MODE: development
       E2E_PORT: "3100"
       E2E_USER_EMAIL: option-a-test@local.test
       E2E_USER_PASSWORD: OptionATest2026!
@@ -202,7 +213,7 @@ jobs:
       # ----- real smoke path: everything below is gated on dashboards==true -----
       - name: Checkout
         if: ${{ needs.detect.outputs.run_real == 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # The real smoke runs untrusted fork-PR code (a fork PR touching a
           # dashboard path takes this branch). Don't leave the ephemeral
@@ -212,7 +223,7 @@ jobs:
 
       - name: Setup pnpm
         if: ${{ needs.detect.outputs.run_real == 'true' }}
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Setup Node
         if: ${{ needs.detect.outputs.run_real == 'true' }}
@@ -235,7 +246,7 @@ jobs:
       # by the most-recent matching restore-key. Mirrors build-image.yml's e2e jobs.
       - name: Cache Next.js build cache
         if: ${{ needs.detect.outputs.run_real == 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .next/cache
           key: nextjs-prod-dashboard-e2e-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
@@ -255,7 +266,7 @@ jobs:
       # on warm runs (same pattern as the build-image.yml e2e jobs).
       - name: Cache Playwright browsers
         if: ${{ needs.detect.outputs.run_real == 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}

@@ -27,6 +27,11 @@ type NangoUserConnectButtonProps = {
   nangoFrontendConfig?: NangoFrontendConfig;
   className?: string;
   prerequisiteErrorMessage?: string;
+  // Disable the button when a precondition is unmet (e.g. a required OAuth
+  // client is not configured yet). Mirrors tailscale-connect-form's
+  // `disabled={isPending || !canSubmit}` — pair with guidance text explaining
+  // what to do. Always OR-ed with the internal pending state.
+  disabled?: boolean;
   onError?: (message: string) => void;
   onClickOverride?: () => void | Promise<void>;
 };
@@ -35,6 +40,28 @@ type NangoUserConnectState = {
   pending: boolean;
   openConnection: () => Promise<void>;
 };
+
+// A Nango Connect "error" event carries the provider's raw OAuth error. The most
+// common actionable class is a redirect_uri mismatch — the provider rejects the
+// callback because it is not in the app's registered redirect-URL allow-list.
+// Detect that class and APPEND actionable guidance while PRESERVING the raw
+// provider message (which usually names the exact redirect_uri Nango sent). We do
+// NOT reconstruct the URI here: a connector's nangoFrontendConfig.baseURL is the
+// Connect-UI origin, not the OAuth callback server, so deriving it would echo the
+// wrong value (#761). The connector setup page is the canonical place to read the
+// exact "Authorized redirect URI" to register. Any other error passes through
+// unchanged (falling back to a generic message when empty). Kept INLINE in this
+// module (not a separate file) so it adds no node to the route-import graph the
+// dev-perf ratchet tracks; it imports nothing, so it is unit-testable directly.
+export function describeNangoConnectError(rawMessage: string | undefined | null): string {
+  const message = rawMessage?.trim() || "Authorization failed.";
+  // Accept redirect/callback × uri/url (and _, space, - separators): providers
+  // word this as redirect_uri (OAuth spec), "redirect URL", or "callback URL".
+  const mentionsRedirectUri = /(redirect|callback)[\s_-]?ur[il]/i.test(message);
+  const looksLikeMismatch = /match|registered|allow|whitelist|invalid/i.test(message);
+  if (!mentionsRedirectUri || !looksLikeMismatch) return message;
+  return `${message} — the OAuth redirect URI sent to the provider is not in its registered allow-list. Copy the “Authorized redirect URI” shown on this connector's setup page and add it to the provider app's OAuth redirect-URL settings exactly (no trailing slash), then reconnect.`;
+}
 
 function useNangoUserConnect({
   connectorKey,
@@ -111,7 +138,7 @@ function useNangoUserConnect({
 
           if (event.type === "error") {
             setPending(false);
-            onError?.(event.payload.errorMessage || "Authorization failed.");
+            onError?.(describeNangoConnectError(event.payload.errorMessage));
           }
 
           if (event.type === "close") {
@@ -162,6 +189,7 @@ export function NangoUserConnectButton({
   nangoFrontendConfig,
   className,
   prerequisiteErrorMessage,
+  disabled = false,
   onError,
   onClickOverride,
 }: NangoUserConnectButtonProps) {
@@ -187,7 +215,7 @@ export function NangoUserConnectButton({
         }
         void openConnection();
       }}
-      disabled={pending}
+      disabled={pending || disabled}
       className={className}
     >
       {pending ? "Opening..." : connected ? reconnectLabel : connectLabel}
@@ -208,7 +236,7 @@ export function NangoUserConnectButton({
 
 type NangoUserConnectCardProps = Pick<
   NangoUserConnectButtonProps,
-  "connectorKey" | "reconnectConnectionId" | "connected" | "nangoFrontendConfig" | "prerequisiteErrorMessage"
+  "connectorKey" | "reconnectConnectionId" | "connected" | "nangoFrontendConfig" | "prerequisiteErrorMessage" | "disabled"
 > & {
   title: string;
   icon: ReactNode;
@@ -223,6 +251,7 @@ export function NangoUserConnectCard({
   connected = false,
   nangoFrontendConfig,
   prerequisiteErrorMessage,
+  disabled = false,
   title,
   subtitle,
   icon,
@@ -249,7 +278,7 @@ export function NangoUserConnectCard({
         }
         void openConnection();
       }}
-      disabled={pending}
+      disabled={pending || disabled}
       className={
         className ??
         "group flex h-full w-full flex-col justify-between rounded-card border border-line bg-surface-strong p-6 text-left transition hover:border-primary hover:shadow-strong disabled:cursor-wait disabled:opacity-80 h-auto items-stretch whitespace-normal"

@@ -48,7 +48,7 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   listInstalledExtensions: vi.fn(async () => []),
 }));
 
-vi.mock("@cinatra-ai/registries", () => ({
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); },
   ensureConfig: (c: unknown) => c ?? { registryUrl: "https://registry.cinatra.ai", packageScope: "@cinatra-ai", token: "t", uiUrl: null },
   extractAgentPackage: async () => ({
     packageName: "@cinatra-ai/pkg",
@@ -75,7 +75,6 @@ vi.mock("@cinatra-ai/registries", () => ({
 
 vi.mock("../verdaccio/package-contract", () => ({
   agentPackageManifestSchema: { parse: (x: unknown) => x },
-  agentPackagePayloadSchema: { parse: (x: unknown) => x },
   CINATRA_AGENT_PACKAGE_TYPE: "agent-package",
   CINATRA_AGENT_MANIFEST_VERSION: "1",
 }));
@@ -107,8 +106,34 @@ vi.mock("../store", () => ({
   createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
 }));
 
+// the install path now seeds the agent_templates row by
+// compiling cinatra/oas.json (buildAgentTemplateInstallSeed). The seed builder
+// requires a successful compile, so this fixture returns a minimal-but-valid
+// CompiledAgentOas. (registerDeclaredObjectTypes also calls the compiler; the
+// empty producesObjectTypes keeps it a no-op.)
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: async () => ({ ok: false, error: "fixture: no oas.json" }),
+  compileOasAgentJson: async () => ({
+    ok: true,
+    value: {
+      approvalPolicy: { steps: [] },
+      inputSchema: { type: "object", properties: {} },
+      outputSchema: null,
+      prompt: null,
+      packageName: "@cinatra-ai/pkg",
+      packageVersion: "1.0.0",
+      agentDependencies: {},
+      type: "leaf",
+      compiledPlan: [],
+      hitlScreens: [],
+      llmConfig: null,
+      toolboxes: [],
+      agentSpecVersion: "26.1.0",
+      producesObjectTypes: [],
+      triggerMode: "full",
+      gatedSteps: [],
+      cinatraConfig: null,
+    },
+  }),
 }));
 vi.mock("@cinatra-ai/objects/auto-registrar", () => ({ ensureDynamicObjectType: async () => ({}) }));
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { has: () => false } }));

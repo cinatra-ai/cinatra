@@ -7,6 +7,6 @@
   "types": "./src/index.ts",
   "dependencies": {
     "@cinatra-ai/google-oauth-connection": "workspace:*",
-    "pg": "^8.21.0"
+    "pg": "^8.22.0"
   }
 }

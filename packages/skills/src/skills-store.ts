@@ -7,6 +7,24 @@ import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
+import { assertSafePathSegment } from "@cinatra-ai/registries";
+// Agent-bound skill identity / path derivation (cinatra#537) — extracted to a
+// sibling module to keep this file under the file-size ratchet (behavior
+// identical). The shared `parsePackageId`/`isSafePathSegment` guard lives inside
+// those helpers; only `assertSafePathSegment` is still called directly here (the
+// belt-and-suspenders join guard in getSkillDiskDir).
+import {
+  deriveAgentBindingVendorPackage,
+  deriveAgentDiskVendorPackage,
+  deriveAgentStoragePathFromPackageName,
+  parseFrontmatter,
+  slugify,
+} from "./agent-skill-paths";
+// NOTE (cinatra#537): the shared `isSafePathSegment`/`assertSafePathSegment`
+// guard in @cinatra-ai/registries now rejects leading-"@" segments directly, so
+// a single shared guard covers the `~agents/<vendor>/<package>` joins below — no
+// local "@"-specific wrapper is needed (a valid on-disk segment is always
+// post-parse and never starts with "@").
 
 // Auto-sync the configured GitHub repository once per process lifetime.
 // After the first call (success or failure), the flag stays true so subsequent
@@ -135,13 +153,14 @@ export function deriveContextFromLegacy(
         agent_template_id: null,
       };
     case "agent": {
-      // Try to split packageSlug at the first dash to derive vendor/package.
-      // Callers should pass explicit context with agent_template_id to satisfy
-      // the bidirectional CHECK constraint; the bridge fallback uses
-      // binding_scope='owner' for safety.
-      const dashIdx = packageSlug.indexOf("-");
-      const vendor = dashIdx > 0 ? packageSlug.slice(0, dashIdx) : null;
-      const pkg = dashIdx > 0 ? packageSlug.slice(dashIdx + 1) : packageSlug;
+      // Derive vendor/package via the canonical splitter (cinatra#537): split on
+      // the FIRST `/` ONLY, never on `-`; a parsePackageId-rejected @-scoped id
+      // fails closed to vendor=null (no binding). Logic lives in
+      // ./agent-skill-paths (extracted to keep this file under the size ratchet;
+      // behavior identical). Callers should pass explicit context with
+      // agent_template_id to satisfy the bidirectional CHECK constraint; the
+      // bridge fallback uses binding_scope='owner' for safety.
+      const { vendor, pkg } = deriveAgentBindingVendorPackage(packageSlug);
       return {
         ...base,
         owner_scope: "workspace",
@@ -250,14 +269,6 @@ export type PersistedSkill = {
    */
   allowAnthropicUpload?: boolean;
 };
-
-function slugify(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
 
 const SKILL_LEVELS: SkillLevel[] = ["personal", "team", "organization", "workspace", "project", "system", "agent"];
 
@@ -370,21 +381,20 @@ function getSkillDiskDir(
       // (the LOCAL_USER_ID sentinel).
       return path.join(root, "personal", ownerUserId ?? "local-user", skillSlug);
     case "agent": {
-      // packageSlug may be npm-scoped ("cinatra/email-test-delivery-agent")
-      // or flat ("cinatra-email-test-delivery-agent"). Prefer the npm-scoped
-      // shape; for flat slugs, fall back to splitting at the
-      // FIRST dash. Result: workspace/~agents/<vendor>/<package>/<skill>/
-      let vendor = "unknown";
-      let pkg = packageSlug;
-      if (packageSlug.includes("/")) {
-        const ix = packageSlug.indexOf("/");
-        vendor = packageSlug.slice(0, ix);
-        pkg = packageSlug.slice(ix + 1);
-      } else if (packageSlug.includes("-")) {
-        const ix = packageSlug.indexOf("-");
-        vendor = packageSlug.slice(0, ix);
-        pkg = packageSlug.slice(ix + 1);
-      }
+      // Disk layout: workspace/~agents/<vendor>/<package>/<skill>/. The
+      // (vendor, pkg) split is the canonical splitter (cinatra#537): FIRST `/`
+      // only, never `-`; a parsePackageId-rejected @-scoped id THROWS (fail
+      // closed — must not land as a literal "@.." segment, not even under
+      // "unknown"). Logic lives in ./agent-skill-paths (extracted to keep this
+      // file under the size ratchet; behavior identical).
+      const { vendor, pkg } = deriveAgentDiskVendorPackage(packageSlug);
+      // Belt-and-suspenders: every joined segment MUST be a single safe path
+      // segment. The shared `assertSafePathSegment` rejects separators/`..`/
+      // control chars/leading-`~`/leading-`@`, so neither a multi-segment `pkg`
+      // ("vendor/foo/bar") nor a leaked literal "@.." segment can reach path.join.
+      assertSafePathSegment(vendor, "agent skill vendor");
+      assertSafePathSegment(pkg, "agent skill package");
+      assertSafePathSegment(skillSlug, "agent skill slug");
       return path.join(root, "workspace", "~agents", vendor, pkg, skillSlug);
     }
     case "system":
@@ -406,54 +416,19 @@ function getSkillDiskDir(
   }
 }
 
-function parseFrontmatter(content: string) {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!match) {
-    return { attributes: {} as Record<string, string>, body: content };
-  }
-
-  const attributes: Record<string, string> = {};
-  let lastKey: string | null = null;
-  const listAccumulatorByKey: Record<string, string[]> = {};
-
-  for (const rawLine of match[1].split("\n")) {
-    // Detect YAML block-sequence continuation lines (`  - <value>`)
-    // before trimming, so the leading whitespace signals list membership.
-    const blockSequenceContinuation = /^[ \t]+-[ \t]+/.test(rawLine);
-    if (blockSequenceContinuation && lastKey !== null) {
-      const itemValue = rawLine.replace(/^[ \t]+-[ \t]+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!listAccumulatorByKey[lastKey]) {
-        listAccumulatorByKey[lastKey] = [];
-      }
-      listAccumulatorByKey[lastKey].push(itemValue);
-      continue;
-    }
-
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    const separatorIndex = line.indexOf(":");
-    if (separatorIndex < 0) {
-      lastKey = line;
-      attributes[line] = "";
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const value = line.slice(separatorIndex + 1).trim().replace(/^["']|["']$/g, "");
-    lastKey = key;
-    attributes[key] = value;
-  }
-
-  // Serialize collected lists as JSON strings so the Record<string, string> type is preserved.
-  for (const [key, items] of Object.entries(listAccumulatorByKey)) {
-    attributes[key] = JSON.stringify(items);
-  }
-
-  return {
-    attributes,
-    body: content.slice(match[0].length),
-  };
+/**
+ * Test-only seam for {@link getSkillDiskDir} (cinatra#537 path-safety). The
+ * function is internal; this thin export lets the unit test exercise the REAL
+ * agent-case disk-path derivation (fail-closed on malformed scoped ids) without
+ * widening the production API surface beyond a `__`-prefixed test hook.
+ */
+export function __getSkillDiskDirForTest(
+  type: SkillLevel,
+  packageSlug: string,
+  skillSlug: string,
+  ownerUserId?: string,
+): string {
+  return getSkillDiskDir(type, packageSlug, skillSlug, ownerUserId);
 }
 
 function readPluginManifestLevel(packageRootPath: string): SkillLevel | undefined {
@@ -1200,9 +1175,24 @@ export async function upsertSkill(input: {
   // provided (e.g. `cinatra-ai/assistant-skills`), else fall back to the
   // packageName-slugified flat slug. The DB packageId/packageRecord still
   // use the flat `packageSlug` so existing catalog keys stay stable.
+  //
+  // cinatra#537: for AGENT-bound skills the disk layout is
+  // `~agents/<vendor>/<package>/<skill>/`. Deriving that split from the FLAT
+  // slugified `packageSlug` (e.g. "marcushorndt-local-page-summarizer-agent")
+  // is impossible without mis-cutting the scope on a hyphen. So when the caller
+  // didn't pass an explicit storagePackagePath, derive a canonical
+  // `<vendor>/<package>` from the REAL `input.packageName` via parsePackageId
+  // (split on the FIRST `/` only; never on `-`). This makes
+  // "@marcushorndt-local/page-summarizer-agent" land at
+  // `~agents/marcushorndt-local/page-summarizer-agent/` — consistent with the
+  // extensions/<vendor>/<slug>/ writer and the package.json#name.
+  let agentStoragePath: string | undefined;
+  if (input.type === "agent" && !input.storagePackagePath) {
+    agentStoragePath = deriveAgentStoragePathFromPackageName(input.packageName);
+  }
   const skillDiskDir = getSkillDiskDir(
     input.type,
-    input.storagePackagePath ?? packageSlug,
+    input.storagePackagePath ?? agentStoragePath ?? packageSlug,
     skillSlug,
     input.ownerUserId,
   );
@@ -1223,7 +1213,11 @@ export async function upsertSkill(input: {
   //      writes must land in the canonical store — this prevents a crafted
   //      segment from resolving into the sibling legacy root for a cross-root
   //      clobber.
-  for (const segment of [input.storagePackagePath ?? packageSlug, skillSlug, input.ownerUserId ?? ""]) {
+  // Validate the SAME package-path segment that actually feeds getSkillDiskDir
+  // (the explicit storagePackagePath, the cinatra#537 agent vendor/package
+  // derivation, or the flat packageSlug), so a stray `..` can never escape via
+  // any of the three sources.
+  for (const segment of [input.storagePackagePath ?? agentStoragePath ?? packageSlug, skillSlug, input.ownerUserId ?? ""]) {
     if (segment.split(/[/\\]/).some((part) => part === ".." || part === ".")) {
       throw new Error("Refusing to write a skill to a path containing a traversal segment.");
     }
@@ -2053,9 +2047,7 @@ export async function deleteAgentSkillsForSlugs(
     return { deletedIds: [] };
   }
 
-  const slugify = (value: string) =>
-    value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-
+  // Uses the shared `slugify` imported from ./agent-skill-paths (same impl).
   const slugifiedSet = new Set(safeSlugs.map((s) => slugify(s)));
   const idPrefixes = Array.from(slugifiedSet).map((s) => `custom:${s}:`);
 

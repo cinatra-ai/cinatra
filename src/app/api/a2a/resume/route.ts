@@ -5,6 +5,11 @@ import { z } from "zod";
 import { verifyA2AAccessToken } from "@/lib/a2a-auth";
 import { corsHeaders } from "@/lib/a2a-cors";
 import { approveReviewTaskInternal } from "@cinatra-ai/agents";
+import { AuthzError } from "@/lib/authz/errors";
+import {
+  primitiveActorFromVerifiedA2A,
+  type ActorRoleHints,
+} from "@/lib/authz/build-actor-context";
 
 // ---------------------------------------------------------------------------
 // POST /api/a2a/resume
@@ -74,24 +79,68 @@ export async function POST(req: Request): Promise<Response> {
 
   const { reviewTaskId, values } = parsed.data;
   const actorId = authed.subject;
-  // Capture the verified ActorContext, including tokenScopes from the JWT scope
-  // claim intersected with the service-account ceiling. approveReviewTaskInternal
-  // does not yet accept an ActorContext parameter; once it does, this captured
-  // value can flow through to enforceRunAccess for run.approveHitl unchanged.
-  // Without the capture site, the propagation chain has no local home and a
-  // future refactor would need to reverify the token. Reading authed.actorContext
-  // here also typechecks that the field exists on successful authentication.
-  void authed.actorContext;
+  // The A2A Bearer authenticates only the caller CLASS — it does NOT prove this
+  // principal may approve THIS reviewTaskId's
+  // run. Thread the verified ActorContext into approveReviewTaskInternal, which
+  // now resolves reviewTaskId -> run and enforces `run.approveHitl` BEFORE any
+  // mutation / sendTask / enqueue. Without a verified actorContext we cannot
+  // bind authority, so fail closed (401) rather than reaching the
+  // (previously auth-neutral) helper with a caller-chosen task id.
+  const verified = authed.actorContext;
+  if (!verified) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json", ...cors },
+    });
+  }
+  // Narrow adapter preserves the verified principal type (ServiceAccount stays
+  // ServiceAccount, not ExternalA2AAgent) and carries tokenScopes + org. The
+  // run's access policy — NOT the caller-supplied subject — is the authority.
+  const actorContext = primitiveActorFromVerifiedA2A(verified);
+  // Pass the verified org as an explicit role hint so enforceRunAccess derives
+  // the actor's org from the TOKEN, never from run.orgId (which would weaken the
+  // cross-org guard for a foreign caller).
+  const roleHints: ActorRoleHints | undefined =
+    verified.organizationId !== undefined
+      ? { actorOrganizationId: verified.organizationId }
+      : undefined;
 
   try {
     // Pass `values` through so structured reviewer decisions are stored in the
-    // audit event payload for auditability.
-    await approveReviewTaskInternal(reviewTaskId, actorId, values);
+    // audit event payload for auditability. The trailing actorContext + role
+    // hints make the helper enforce run-access before any state change.
+    await approveReviewTaskInternal(
+      reviewTaskId,
+      actorId,
+      values,
+      undefined,
+      undefined,
+      actorContext,
+      roleHints,
+    );
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json", ...cors },
     });
   } catch (err) {
+    // Run-access denial -> map AuthzError to the route's contract without
+    // leaking run existence: a hidden run stays 404 "not found"-shaped; a
+    // forbidden run is 403.
+    if (err instanceof AuthzError) {
+      const status = err.statusCode === 404 ? 404 : 403;
+      return new Response(
+        JSON.stringify({
+          error:
+            status === 404
+              ? "Review task not found or already resolved"
+              : "forbidden",
+        }),
+        {
+          status,
+          headers: { "Content-Type": "application/json", ...cors },
+        },
+      );
+    }
     const message = err instanceof Error ? err.message : "Internal server error";
 
     if (

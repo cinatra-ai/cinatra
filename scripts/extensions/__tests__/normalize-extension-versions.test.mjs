@@ -361,6 +361,35 @@ describe("normalizeRepos", () => {
     expect(res[0].error).toMatch(/could not be normalized safely/);
   });
 
+  it("agent OAS present WITHOUT metadata.cinatra.packageVersion is a clean skip — commits ONLY package.json (field is redundant, not required)", async () => {
+    // Post-cleanup contract: agent OAS no longer carries metadata.cinatra.packageVersion.
+    // The normalizer must NOT error on its absence; it bumps package.json and leaves the OAS untouched.
+    const calls = [];
+    const files = new Map();
+    const ops = {
+      run: (tool, args, opts = {}) => {
+        (opts.assert || (() => {}))(tool, args);
+        calls.push([tool, ...args]);
+        if (tool === "gh" && args[1] === "clone") {
+          const dir = args[3];
+          files.set(`${dir}/package.json`, JSON.stringify({ name: "@cinatra-ai/a", version: "1.0.0", cinatra: { kind: "agent" } }));
+          // OAS with metadata.cinatra but NO packageVersion (the new normal).
+          files.set(`${dir}/${OAS_REL_PATH}`, JSON.stringify({ agentspec_version: "26.1.0", component_type: "Flow", metadata: { cinatra: { packageName: "@cinatra-ai/a" } } }));
+        }
+        return Promise.resolve({ stdout: "" });
+      },
+      readFile: (p) => Promise.resolve(files.get(p)),
+      writeFile: (p, t) => { files.set(p, t); return Promise.resolve(); },
+      mkdtemp: () => Promise.resolve("/tmp/vnorm-agent-nooasver"),
+    };
+    const res = await normalizeRepos([{ name: "a", from: "1.0.0" }], { apply: true, push: false, target: "0.1.0", ops });
+    expect(res[0].action).toBe("committed (not pushed)"); // NOT "error"
+    expect(res[0].files).toEqual(["package.json"]); // OAS untouched (no field to sync)
+    expect(JSON.parse(files.get("/tmp/vnorm-agent-nooasver/package.json")).version).toBe("0.1.0");
+    // OAS left byte-identical (no packageVersion injected).
+    expect(JSON.parse(files.get(`/tmp/vnorm-agent-nooasver/${OAS_REL_PATH}`)).metadata.cinatra.packageVersion).toBeUndefined();
+  });
+
   it("non-agent with a REAL fs-style readFile (throws ENOENT for missing OAS) commits package.json only", async () => {
     // Reproduces the back-compat trap: real fs.readFile rejects on a missing file.
     const calls = [];

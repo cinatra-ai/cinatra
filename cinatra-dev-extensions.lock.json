@@ -250,7 +250,12 @@
     {
       "packageName": "@cinatra-ai/mcp-client-connector",
       "repo": "cinatra-ai/mcp-client-registry-connector",
-      "resolvedSha": "685433e372ea501d0470b41285f28b9e95a8f197"
+      "resolvedSha": "18d10f7002108d7986a143700d95b77801cd8556"
+    },
+    {
+      "packageName": "@cinatra-ai/mcp-server-connector",
+      "repo": "cinatra-ai/mcp-server-connector",
+      "resolvedSha": "a3475e230d7fdda2fb81bd0a2bbdb5e4ad588398"
     },
     {
       "packageName": "@cinatra-ai/media-feed-lister-agent",
@@ -268,9 +273,9 @@
       "resolvedSha": "09bbc57f112d91590690f3bccd22dfc3ad69ebde"
     },
     {
-      "packageName": "@cinatra-ai/openai-connector",
-      "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "42416cef2175dbfaa234e5308a3716ea8239c6a5"
+      "packageName": "@cinatra-ai/plane-connector",
+      "repo": "cinatra-ai/plane-connector",
+      "resolvedSha": "56b21dd115e04216118dcc692b14090ba5066ac0"
     },
     {
       "packageName": "@cinatra-ai/product-portfolio-artifact",
@@ -320,7 +325,7 @@
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "88ded33c430c3d815c2c54992164fbf991d16ec4"
+      "resolvedSha": "8f23d08eac5f0dd773f062c308614de480867400"
     },
     {
       "packageName": "@cinatra-ai/trigger-agent",

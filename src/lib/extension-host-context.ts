@@ -212,6 +212,13 @@ function makeNango(): ExtensionHostContext["nango"] {
         connectorKey as Parameters<typeof listSavedNangoConnections>[0],
       );
     },
+    // Canonical OAuth callback URL (post-2.2.0 additive, optional on the port).
+    // Delegates to the single canonical host helper so connector setup pages echo
+    // the exact `redirect_uri` Nango sends — no connector-side normalization.
+    getNangoOAuthCallbackUrl: async () => {
+      const { getNangoOAuthCallbackUrl } = await import("@/lib/nango-system");
+      return getNangoOAuthCallbackUrl();
+    },
   };
 }
 

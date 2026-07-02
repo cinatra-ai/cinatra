@@ -46,10 +46,11 @@ describe("service-accounts — source assertions", () => {
     expect(SOURCE).toContain('import "server-only"');
   });
 
-  it("uses module-local Drizzle pool — does NOT import any getDb global", () => {
+  it("uses the shared pooled-DB scaffold — does NOT import any getDb global", () => {
     expect(SOURCE).not.toMatch(/from "@\/lib\/database"/);
     expect(SOURCE).not.toMatch(/\bgetDb\b/);
-    expect(SOURCE).toContain("__cinatraServiceAccountsPool");
+    expect(SOURCE).toContain('from "@/lib/db/pooled"');
+    expect(SOURCE).toContain('getPooledDb({ name: "service-accounts" })');
     expect(SOURCE).toContain("export const serviceAccountsPool");
     expect(SOURCE).toContain("export const serviceAccountsDb");
   });
@@ -85,9 +86,12 @@ describe("service-accounts — source assertions", () => {
     expect(SOURCE).toContain("service_accounts");
   });
 
-  it("caches Pool on globalThis and attaches an idempotent error listener (matches projects-store)", () => {
-    expect(SOURCE).toContain('listenerCount("error")');
-    expect(SOURCE).toContain('on("error"');
+  it("delegates lazy pooling + idle-error listener to the shared scaffold (#303)", () => {
+    // The lazy pool + idempotent idle-error listener now live in @/lib/db/pooled
+    // (covered by src/lib/db/__tests__/pooled.test.ts). This store delegates
+    // rather than hand-rolling the boilerplate.
+    expect(SOURCE).toContain('getPooledDb({ name: "service-accounts" })');
+    expect(SOURCE).not.toContain("new Pool(");
   });
 
   it("imports the shared OAuth-client helper from @/lib/better-auth-oauth-client (single source of truth)", () => {

@@ -3,12 +3,16 @@ import "server-only";
 import { and, eq, sql, type SQL } from "drizzle-orm";
 
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { db } from "./db";
 import { agentRuns } from "./schema";
+import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
+import type { AgentAuthPolicy } from "./auth-policy-types";
 import {
   readAgentRunById,
   readAgentRunByTaskId,
   readAgentTemplateById,
+  readRunCoOwners,
   writeHitlPrompt,
 } from "./store";
 import {
@@ -16,6 +20,19 @@ import {
   createWayflowFetch,
   resolveWayflowUrl,
 } from "./wayflow-url";
+
+// Reserved approval-ENVELOPE keys the approval UI stamps on top of the user's
+// actual setup-field values when "Approve" is clicked (orchestrator-stepper-
+// panel.tsx:1125 / agentic-run-panel.tsx). They are approval bookkeeping —
+// never agent inputs — so they are NOT declared in any template inputSchema and
+// must be stripped before the grouped-form allowlist check and the inputParams
+// merge. Mirrors the INTERNAL_KEYS set those renderers use. (#554)
+const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
+  "approved",
+  "approvedAt",
+  "stepNumber",
+  "approvalNote",
+]);
 
 // ---------------------------------------------------------------------------
 // Auth-neutral review task approval helper.
@@ -29,7 +46,17 @@ import {
 //     `verifyA2AAccessToken` before calling here).
 //
 // The caller is ALWAYS responsible for verifying that the actor is authorized
-// to approve the task before invoking this function.
+// to approve the task before invoking this function — EXCEPT that callers which
+// only authenticate the caller CLASS and cannot pre-resolve reviewTaskId -> run
+// themselves (the /api/a2a/resume route, authenticated by an A2A Bearer token)
+// MUST pass their verified `actorContext`. When `actorContext` is supplied this
+// helper resolves the run for the reviewTaskId and enforces `run.approveHitl`
+// access BEFORE any state-changing write, on BOTH the setup-* and wayflow-*
+// branches: a caller-class-authenticated principal must not borrow another
+// run's authority by selecting its task id.
+// Callers that already gated the run (the admin-session `approveReviewTask`
+// server action; the MCP agent_run_resume handler, both behind
+// enforceRunAccess) omit `actorContext` and the gate is a no-op.
 //
 // On the setup-* path, the inputParams merge and the status transition back
 // to "queued" are combined into a SINGLE compare-and-swap UPDATE on the
@@ -56,6 +83,15 @@ import {
  *                       agent_runs.inputParams atomically with the approval.
  * @param fieldName    - Optional. When set, single-field path: only the named
  *                       key from `values` is merged into inputParams.
+ * @param schemaSnapshot - Optional snapshot persisted on the wayflow- path.
+ * @param actorContext - Optional VERIFIED actor. When supplied, the helper
+ *                       enforces `run.approveHitl` against the resolved run
+ *                       BEFORE mutating; pass it ONLY from caller-class-only
+ *                       authenticated entry points (the A2A resume route) that
+ *                       have NOT already authorized the run. Omit it when the
+ *                       caller already enforced run access itself.
+ * @param roleHints    - Optional role hints forwarded to enforceRunAccess so
+ *                       the actor's org is taken from the token (not run.orgId).
  */
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
@@ -63,7 +99,45 @@ export async function approveReviewTaskInternal(
   values?: unknown,
   fieldName?: string,
   schemaSnapshot?: Record<string, unknown> | null,
+  actorContext?: PrimitiveActorContext,
+  roleHints?: ActorRoleHints,
 ): Promise<void> {
+  // When an `actorContext` is supplied the helper
+  // is reached from a caller-class-only authenticated entry point (the A2A
+  // resume route), so it OWNS the run-access gate. Resolve the run's co-owners +
+  // effective policy and enforce `approveHitl`, denying cross-actor / no-row
+  // BEFORE any state-changing write. A null run becomes a 404-shaped AuthzError
+  // so a caller cannot probe foreign run/task ids via the error text. No-op when
+  // `actorContext` is undefined (the caller already authorized).
+  const enforceApproveAccess = async (run: {
+    id: string;
+    runBy: string | null;
+    orgId: string | null;
+    authPolicy: AgentAuthPolicy | null;
+    templateId: string;
+  } | null): Promise<void> => {
+    if (!actorContext) return;
+    const coOwnerRows = run ? await readRunCoOwners(run.id) : [];
+    const template = run?.templateId
+      ? await readAgentTemplateById(run.templateId)
+      : null;
+    const effectivePolicy = run?.authPolicy ?? template?.agentAuthPolicy ?? null;
+    await enforceRunAccess(
+      run
+        ? {
+            id: run.id,
+            runBy: run.runBy,
+            orgId: run.orgId,
+            effectivePolicy,
+            coOwnerUserIds: coOwnerRows.map((r) => r.userId),
+          }
+        : null,
+      actorContext,
+      "approveHitl",
+      roleHints,
+    );
+  };
+
   // ---------------------------------------------------------------------------
   // Synthetic setup-{runId} path for setup interrupt loop approvals.
   //
@@ -82,6 +156,11 @@ export async function approveReviewTaskInternal(
     // writeHitlPrompt is not called on this path (schema replay is a WayFlow-gate-only feature).
     const runId = reviewTaskId.slice("setup-".length);
     const run = await readAgentRunById(runId);
+    // Gate the resolved run BEFORE any existence-revealing error or the
+    // inputParams CAS / status->queued /
+    // enqueue. A null run throws a 404-shaped AuthzError so a caller-class
+    // principal cannot probe foreign setup-<runId> ids via the error text.
+    await enforceApproveAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] run ${runId} not found (setup path)`);
     }
@@ -122,27 +201,43 @@ export async function approveReviewTaskInternal(
         }
         inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || jsonb_build_object(${fieldName}::text, ${serializedValue}::jsonb)`;
       } else if (values !== null && typeof values === "object" && !Array.isArray(values)) {
-        // Grouped-form path: merge all keys from values object.
-        // Validate submitted keys against inputSchema.properties allowlist.
-        const serialized = JSON.stringify(values);
-        if (serialized.length > 65_536) {
-          throw new Error(
-            `[approveReviewTaskInternal] values payload too large (${serialized.length} bytes)`,
-          );
-        }
-        const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
-        const allowedKeys = template?.inputSchema?.properties
-          ? Object.keys(template.inputSchema.properties as Record<string, unknown>)
-          : null;
-        if (allowedKeys !== null) {
-          const unknownKeys = Object.keys(values as object).filter((k) => !allowedKeys.includes(k));
-          if (unknownKeys.length > 0) {
+        // Grouped-form path: merge the submitted setup-field values into
+        // inputParams. The approval UI wraps those fields in an approval
+        // envelope, adding reserved metadata keys (approved/approvedAt/…) that
+        // are NOT declared in the template inputSchema. Strip them BEFORE the
+        // allowlist check and the merge so (a) a plain "Approve" with no setup
+        // fields (envelope-only) does not 500 with "values contain keys not
+        // declared in inputSchema" (#554), and (b) the envelope metadata never
+        // leaks into agent_runs.inputParams.
+        const fieldValues = Object.fromEntries(
+          Object.entries(values as Record<string, unknown>).filter(
+            ([k]) => !RESERVED_APPROVAL_ENVELOPE_KEYS.has(k),
+          ),
+        );
+
+        // Envelope-only approval: nothing left to merge after stripping — fall
+        // through to the plain status->queued CAS, same as values === undefined.
+        if (Object.keys(fieldValues).length > 0) {
+          const serialized = JSON.stringify(fieldValues);
+          if (serialized.length > 65_536) {
             throw new Error(
-              `Setup approval rejected: values contain keys not declared in inputSchema: ${unknownKeys.join(", ")}`,
+              `[approveReviewTaskInternal] values payload too large (${serialized.length} bytes)`,
             );
           }
+          const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+          const allowedKeys = template?.inputSchema?.properties
+            ? Object.keys(template.inputSchema.properties as Record<string, unknown>)
+            : null;
+          if (allowedKeys !== null) {
+            const unknownKeys = Object.keys(fieldValues).filter((k) => !allowedKeys.includes(k));
+            if (unknownKeys.length > 0) {
+              throw new Error(
+                `Setup approval rejected: values contain keys not declared in inputSchema: ${unknownKeys.join(", ")}`,
+              );
+            }
+          }
+          inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }
-        inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
       }
     }
 
@@ -238,6 +333,12 @@ export async function approveReviewTaskInternal(
         }
       }
     }
+    // Gate the resolved run BEFORE the existence error and BEFORE
+    // writeHitlPrompt / sendTask / status transition, so a
+    // caller-class principal cannot borrow another run's authority by selecting
+    // its wayflow-<taskId>. A null run throws a 404-shaped AuthzError (no
+    // existence leak).
+    await enforceApproveAccess(run);
     if (!run) {
       throw new Error(`[approveReviewTaskInternal] no agent_run found for a2aTaskId=${taskId}`);
     }

@@ -67,7 +67,7 @@ describe("use-ag-ui-run-stream — empty-string xRenderer fallback guard", () =>
 
   it("the fallback ID is referenced in the INTERRUPT case handler (via the centralized constant)", () => {
     // The normalization must produce the canonical fallback id. Since the id is
-    // now centralized in ./agent-builder-ids (cinatra-engineering#155), the
+    // now centralized in ./agent-builder-ids (identity-surface ruling), the
     // handler references the imported SCHEMA_FIELD_FALLBACK_RENDERER_ID constant
     // rather than the inline literal — accept either form so the test pins the
     // BEHAVIOR (fallback normalization), not a particular spelling.

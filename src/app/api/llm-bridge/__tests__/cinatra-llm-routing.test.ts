@@ -119,6 +119,50 @@ vi.mock("@cinatra-ai/agents", async () => {
       .optional(),
     LLM_PROVIDERS: ["openai", "anthropic", "gemini"] as const,
     LLM_CAPABILITIES: ["media_input", "function_tools", "native_mcp"] as const,
+    // Pure capability-matrix helpers — mirror llm-provider-policy.ts exactly so
+    // the route's capability gate + actionable 503 message behave identically.
+    canProviderSatisfyCapability: (provider: string, capability: string): boolean => {
+      switch (capability) {
+        case "media_input":
+          return provider === "gemini";
+        case "function_tools":
+          return provider === "openai" || provider === "anthropic" || provider === "gemini";
+        case "native_mcp":
+          return provider === "openai" || provider === "anthropic";
+        default:
+          return false;
+      }
+    },
+    describeCapabilityRequirement: (
+      capability: string,
+      opts?: { incompatibleProvider?: string },
+    ): string => {
+      const providers = (["openai", "anthropic", "gemini"] as const).filter((p) => {
+        switch (capability) {
+          case "media_input":
+            return p === "gemini";
+          case "function_tools":
+            return true;
+          case "native_mcp":
+            return p === "openai" || p === "anthropic";
+          default:
+            return false;
+        }
+      });
+      const options = providers.join(", ");
+      if (opts?.incompatibleProvider) {
+        return (
+          `This agent requires the "${capability}" LLM capability, but the active ` +
+          `provider "${opts.incompatibleProvider}" cannot satisfy it. Install and ` +
+          `configure an LLM connector for one of these providers instead: ${options}.`
+        );
+      }
+      return (
+        `This agent requires the "${capability}" LLM capability, but no installed ` +
+        `and configured LLM provider supports it. Install and configure an LLM ` +
+        `connector for one of these providers: ${options}.`
+      );
+    },
     ALLOWED_MODEL_IDS: {
       openai: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"],
       anthropic: [
@@ -263,6 +307,12 @@ describe("/api/llm-bridge cinatra_llm routing", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.error).toBe("capability_unsatisfiable");
     expect(body.code).toBe("CAPABILITY_UNSATISFIABLE");
+    // Actionable guidance reaches the run via the WayFlow task-failure text.
+    // gemini is the preferred provider but its adapter is unavailable → falls
+    // to capability-routing which finds no satisfying adapter (Branch B).
+    expect(typeof body.message).toBe("string");
+    expect(body.message).toContain("media_input");
+    expect(body.message).toContain("gemini");
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
@@ -283,6 +333,10 @@ describe("/api/llm-bridge cinatra_llm routing", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.error).toBe("capability_unsatisfiable");
     expect(body.capability).toBe("media_input");
+    // Branch B (no compatible adapter) actionable message names the provider.
+    expect(body.message).toContain("media_input");
+    expect(body.message).toContain("gemini");
+    expect(body.message).toContain("no installed");
   });
 
   // -------------------------------------------------------------------------
@@ -307,6 +361,13 @@ describe("/api/llm-bridge cinatra_llm routing", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.error).toBe("capability_unsatisfiable");
     expect(body.capability).toBe("native_mcp");
+    // Branch A (honored provider cannot satisfy capability) names the active
+    // provider in the actionable message + the satisfying connectors.
+    expect(body.effectiveProvider).toBe("gemini");
+    expect(body.message).toContain("native_mcp");
+    expect(body.message).toContain('provider "gemini" cannot satisfy');
+    expect(body.message).toContain("openai");
+    expect(body.message).toContain("anthropic");
   });
 
   // -------------------------------------------------------------------------

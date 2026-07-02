@@ -398,7 +398,7 @@ def _patch_api_call_step_bridge_token() -> None:
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
-        # headers. setdefault preserves any agent.json-declared headers and
+        # headers. setdefault preserves any OAS-declared headers and
         # adds ours.
         request.setdefault("headers", {})
         request["headers"]["X-Cinatra-Bridge-Token"] = token
@@ -413,6 +413,15 @@ def _patch_api_call_step_bridge_token() -> None:
             "llm-bridge" in _ctx_url
             or "context-resolve" in _ctx_url
             or "context-finalize" in _ctx_url
+            # The bridge callbacks below derive actor authority
+            # from a body-selected agent_run_id. Inject the auth-path context id
+            # so the server can bind that id to the run actually executing this
+            # callback (it fails closed when the header is absent). The header is
+            # set from a per-task ContextVar and is NOT writable by the OAS
+            # author, so it is a trustworthy "which run is running" statement.
+            or "/agents/passthrough" in _ctx_url
+            or "/auditor/run-skills" in _ctx_url
+            or "/auditor/apply" in _ctx_url
         ):
             request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
         # ApiNode timeout policy — aligned for batch LLM workloads.
@@ -430,7 +439,51 @@ def _patch_api_call_step_bridge_token() -> None:
         # declare it explicitly on the ApiNode in the OAS — `setdefault`
         # honors any caller-declared timeout.
         request.setdefault("timeout", _DEFAULT_APINODE_TIMEOUT_SECONDS)
-        return await _original(self, request)
+        resp = await _original(self, request)
+
+        # Actionable capability errors (engineering#417).
+        #
+        # When an agent needs an LLM capability (e.g. media_input → gemini)
+        # that no installed+configured connector provides, /api/llm-bridge
+        # returns HTTP 503 with body {code:"CAPABILITY_UNSATISFIABLE",
+        # message:"<actionable sentence>", ...}. WayFlow's ApiCallStep would
+        # otherwise surface that as the raw, buried failure text
+        # "error executing POST request to .../api/llm-bridge: 503, {<json>}".
+        # Pre-empt it here with a clean RuntimeError carrying ONLY the
+        # actionable message, so the run's RUN_ERROR (packages/agents/src/
+        # execution.ts reads task.status.message.parts[0].text) tells the user
+        # exactly which connector to install/configure instead of a generic
+        # "WayFlow task failed".
+        #
+        # Strictly scoped + defensive: ONLY for the bridge URL + that exact
+        # code; any non-503 status, non-bridge URL, missing attr, or parse
+        # failure falls through to `return resp` unchanged (WayFlow then
+        # applies its own non-success handling exactly as before). The
+        # `_original` retry loop has already run, so raising here is correct.
+        if (
+            "/api/llm-bridge" in _ctx_url
+            and getattr(resp, "status_code", None) == 503
+        ):
+            try:
+                _body = resp.json()
+            except Exception:  # noqa: BLE001 — any decode/parse error → fall through
+                _body = None
+            if (
+                isinstance(_body, dict)
+                and _body.get("code") == "CAPABILITY_UNSATISFIABLE"
+            ):
+                _msg = _body.get("message")
+                raise RuntimeError(
+                    _msg
+                    if isinstance(_msg, str) and _msg
+                    else (
+                        "This agent requires an LLM capability that no installed "
+                        "and configured connector provides. Install and configure "
+                        "the required LLM connector, then re-run."
+                    )
+                )
+
+        return resp
 
     _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
     _patched.__wrapped__ = _original  # type: ignore[attr-defined]
@@ -2980,7 +3033,7 @@ def build_parent_app(agents_dir: Path) -> Starlette:
 
     if A2AServer is None or AgentSpecLoader is None:
         raise RuntimeError(
-            "wayflowcore is not available; install wayflowcore[a2a]==26.1.1"
+            "wayflowcore is not available; install wayflowcore[a2a]==26.1.2"
         )
 
     base_url = os.environ.get(
@@ -3061,7 +3114,48 @@ def build_parent_app(agents_dir: Path) -> Starlette:
 # ---------------------------------------------------------------------------
 
 
+def _preflight_bridge_token() -> None:
+    """Fail LOUD at boot when CINATRA_BRIDGE_TOKEN is missing/whitespace-only.
+
+    The runtime authenticates EVERY callback to the host `/api/llm-bridge` with
+    this shared secret (X-Cinatra-Bridge-Token; see
+    _patch_api_call_step_bridge_token). When it is empty the bridge returns 403,
+    the agent produces no text, and the interactive widget content-edit surfaces
+    "(no response)" with no obvious cause. Historically the loader only WARNED
+    and kept serving, so the misconfiguration was invisible until a user hit it.
+
+    Exiting non-zero here turns that silent, downstream 403 into an immediate,
+    actionable boot failure (and a restart-loop the operator will notice). The
+    container env is supplied by docker/wayflow/.wayflow.env (generated from
+    .env.local by scripts/gen-wayflow-env.mjs); the per-clone path injects it via
+    the spawned-process env (docker/wayflow/compose.clone.template.yml).
+
+    Opt out with CINATRA_ALLOW_NO_BRIDGE_TOKEN=1 for the rare harness that runs
+    the loader with no host bridge (e.g. an isolated mount/health test).
+    """
+    if os.environ.get("CINATRA_ALLOW_NO_BRIDGE_TOKEN") == "1":
+        return
+    token = (os.environ.get("CINATRA_BRIDGE_TOKEN") or "").strip()
+    if token:
+        return
+    import sys
+
+    print(
+        "[agent_loader] FATAL: CINATRA_BRIDGE_TOKEN is unset or empty. The "
+        "runtime cannot authenticate its callback to /api/llm-bridge; the bridge "
+        'would return 403 and every agent reply would be empty ("(no response)" '
+        "in the widget). Refusing to start. Set CINATRA_BRIDGE_TOKEN (the dev "
+        "setup mints one in .env.local; `npm run services` propagates it via "
+        "docker/wayflow/.wayflow.env). To bypass for an isolated test harness, "
+        "set CINATRA_ALLOW_NO_BRIDGE_TOKEN=1.",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(1)
+
+
 def main() -> None:
+    _preflight_bridge_token()
     agents_dir = Path(os.environ.get("CINATRA_AGENTS_DIR", "/agents"))
     parent_app = build_parent_app(agents_dir)
     host = os.environ.get("HOST", "0.0.0.0")

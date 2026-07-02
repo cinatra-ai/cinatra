@@ -31,6 +31,8 @@ import {
   TERMINAL_RUN_STATUSES,
   type AgentRunStatus,
 } from "@cinatra-ai/agents";
+import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
+import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import type {
   Executor,
@@ -58,6 +60,33 @@ async function resolveTemplate(ref: AgentRefLike) {
 }
 
 /**
+ * RUNTIME-LIFECYCLE GATE (cinatra#659, fail-CLOSED on runtime archive). True iff
+ * the agent the `agent_task` references is runnable per the canonical
+ * `installed_extension` source of truth: a disabled/uninstalled (archived) agent
+ * must NOT be dispatched even though its `agent_templates` row still exists.
+ * CG-1: a template with NO canonical row (legacy/bundled/ungoverned) or a `null`
+ * packageName is ALLOWED (the bundled floor — same rule the skills + agent_run
+ * gates use). Fail-OPEN on a canonical-store outage (never block a workflow on a
+ * degraded status store; the executor's tenancy/ownership gates are the real authz
+ * boundary). Reuses the SAME pure gate as `agent_run` / the picker / `agent_list`.
+ */
+async function agentTemplateRuntimeRunnable(packageName: string | null | undefined): Promise<boolean> {
+  if (packageName == null) return true; // CG-1: untracked legacy/bundled template
+  let status: "active" | "archived" | undefined;
+  try {
+    status = (await readEffectiveStatusByPackageNames([packageName])).get(packageName);
+  } catch (err) {
+    // Canonical-store outage → fail-OPEN (never invent an archive).
+    console.warn(
+      `[workflow-agent-executor] effective-status read failed for "${packageName}" — treating as runnable (fail-open):`,
+      err instanceof Error ? err.message : err,
+    );
+    return true;
+  }
+  return isAgentRuntimeRunnable({ packageName, effectiveStatus: status });
+}
+
+/**
  * Agent re-auth probe. True iff the referenced agent resolves to a template
  * available in `orgId`, using the SAME resolution + tenancy gate the agent_task
  * executor enforces at dispatch — so a workflow can never start (or be
@@ -72,6 +101,9 @@ export async function workflowAgentRefAvailable(agentRef: unknown, orgId: string
   // Tenancy: a null-origin (public) template is allowed in any org; otherwise it
   // MUST belong to the workflow's org (mirrors the executor's AGENT_CROSS_ORG gate).
   if (template.orgId !== null && template.orgId !== orgId) return false;
+  // Runtime-lifecycle gate (cinatra#659): a workflow must not START / be
+  // instantiated referencing a disabled/uninstalled agent.
+  if (!(await agentTemplateRuntimeRunnable(template.packageName))) return false;
   return true;
 }
 
@@ -111,6 +143,22 @@ export function buildWorkflowAgentTaskExecutor(): Executor {
           error: {
             code: "AGENT_CROSS_ORG",
             message: `agent_task ${task.key}: agent ${template.id} is not available in org ${prov.orgId}`,
+          },
+        };
+      }
+
+      // Runtime-lifecycle gate (cinatra#659), fail-CLOSED on runtime archive —
+      // defense-in-depth. `workflowAgentRefAvailable` already gates START/
+      // instantiate, but an instance instantiated while the agent was live can
+      // reach dispatch AFTER the agent is disabled/uninstalled. Refuse dispatch
+      // of an archived agent here too. CG-1: a no-row/null-package template is
+      // allowed (the bundled floor); fail-OPEN on a status-store outage.
+      if (!(await agentTemplateRuntimeRunnable(template.packageName))) {
+        return {
+          status: "failed",
+          error: {
+            code: "AGENT_NOT_INSTALLED",
+            message: `agent_task ${task.key}: agent ${template.id} is disabled or uninstalled (no active install)`,
           },
         };
       }

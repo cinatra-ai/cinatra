@@ -12,9 +12,11 @@
 //      instance's own publish target (see extension-trust-config.ts). An
 //      instance-local / private-Verdaccio host is simply absent → denied;
 //   4. EITHER a cryptographic signature verified against a host-trusted key
-//      (`trusted-signed` — the vendor-agnostic root), OR — during the
-//      pre-signature transition — `allowMarketplaceBootstrapTrust` is on and no
-//      signature is present (`trusted-bootstrap`, Window-1 parity).
+//      (`trusted-signed` — the vendor-agnostic root), OR — ONLY when the operator
+//      has explicitly opted in via `allowMarketplaceBootstrapTrust`
+//      (CINATRA_EXTENSION_ALLOW_UNSIGNED_BOOTSTRAP=true) — an unsigned package
+//      (`trusted-bootstrap`, transition/dev only). Default (no opt-in): unsigned
+//      marketplace code stays untrusted and is NOT imported in-process.
 //
 // A signed marketplace artifact verified against a host-configured key is NOT
 // untrusted code — the signature is the boundary that lets ANY marketplace vendor

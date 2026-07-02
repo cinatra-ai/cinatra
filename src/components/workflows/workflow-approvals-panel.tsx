@@ -1,7 +1,7 @@
 "use client";
 
 // Pending-approval review panel for a workflow.
-// Renders inline above the Gantt on the workflow detail page. Each pending
+// Renders inline above the task list on the workflow detail page. Each pending
 // approval shows the task it gates + Approve / Reject buttons. Reject opens a
 // dialog with an optional reason field. The server action re-checks canManage
 // and CAS-guards on status='pending'.

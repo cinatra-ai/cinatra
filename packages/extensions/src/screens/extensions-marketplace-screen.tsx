@@ -14,6 +14,11 @@ import {
   restoreExtensionPackageFormAction,
 } from "../actions";
 import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
+import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
+import {
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "./marketplace-failure-copy";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
 import { Star } from "lucide-react";
@@ -25,6 +30,7 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ExtensionCard } from "@/components/extension-card";
+import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { cn } from "@/lib/utils";
 import { readRegistryPolicy } from "../registry-policy";
@@ -69,6 +75,29 @@ function freshnessLabel(freshnessAt: string | null): string | null {
   const d = new Date(freshnessAt);
   if (isNaN(d.getTime())) return null;
   return `Updated ${formatDistanceToNow(d, { addSuffix: true })}`;
+}
+
+/**
+ * Compact install-count label for the meta row (design spec §IV: "2.1k
+ * installations"). A null/absent count (older marketplace builds omit the
+ * field) renders no line. Singular/plural agree; thousands collapse to a "k"
+ * suffix (one decimal, trailing-zero trimmed: 2100 → "2.1k", 2000 → "2k").
+ */
+function installCountLabel(count: number | null): string | null {
+  if (count === null) return null;
+  if (count < 1000) {
+    return `${count} ${count === 1 ? "installation" : "installations"}`;
+  }
+  const thousands = count / 1000;
+  // One decimal, but drop a trailing ".0" (2000 → "2k", 2150 → "2.2k").
+  const rounded = Math.round(thousands * 10) / 10;
+  const text = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+  return `${text}k installations`;
+}
+
+/** First non-null link of the icon fallback chain: icon → vendor logo. */
+function resolveCardIconUrl(card: MarketplaceCardData): string | null {
+  return card.iconUrl ?? card.vendorLogoUrl ?? null;
 }
 
 export async function ExtensionsMarketplaceScreen({
@@ -131,17 +160,27 @@ export async function ExtensionsMarketplaceScreen({
     });
 
     const freshness = freshnessLabel(card.freshnessAt);
+    const installs = installCountLabel(card.installCount);
 
     const node = (
       <ExtensionCard
+        variant="listing"
         name={card.displayName}
         accentColor={deriveExtensionAccent(card.packageName)}
         emblem={extensionKindEmblem(card.kindSlug)}
+        iconUrl={resolveCardIconUrl(card)}
         description={card.description}
         meta={
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             {card.rating && <RatingRow rating={card.rating} />}
-            {freshness && <span>{freshness}</span>}
+            {installs && <span>{installs}</span>}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {/* 3-state in-instance ABI compatibility verdict, derived locally
+                  from the catalog's declared sdkAbiRange (absent → neutral
+                  "Unknown", never green). */}
+              <ExtensionCompatBadge sdkAbiRange={card.sdkAbiRange} />
+              {freshness && <span>{freshness}</span>}
+            </div>
           </div>
         }
         badges={
@@ -154,9 +193,20 @@ export async function ExtensionsMarketplaceScreen({
           <div className="flex items-center gap-2">
             {cta.state === "restore" ? (
               // Restore re-activates an already-installed (archived) template — DB-only.
-              <form action={restoreAction} className="flex-1">
-                <Button type="submit" size="sm" variant="outline" className="w-full">Restore</Button>
-              </form>
+              // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
+              // The category→copy map keeps the toast actionable + non-technical (#685);
+              // restore rarely yields a marketplace category, so it usually lands on
+              // the non-technical "unrecoverable"/default "try again" copy.
+              <MarketplaceInstallForm
+                action={restoreAction}
+                failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
+                defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
+                className="flex-1"
+              >
+                <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…" className="w-full">
+                  Restore
+                </MarketplaceInstallSubmit>
+              </MarketplaceInstallForm>
             ) : cta.state === "install" ? (
               // Install fetches the tarball from the registry — a live CTA only
               // when the registry is connected; otherwise a disabled button so
@@ -166,9 +216,20 @@ export async function ExtensionsMarketplaceScreen({
                   Install Now
                 </Button>
               ) : (
-                <form action={installAction} className="flex-1">
-                  <Button type="submit" size="sm" className="w-full">Install Now</Button>
-                </form>
+                // A failed install toasts instead of crashing the route (#356). The
+                // message is now classified per the merged install-failure taxonomy
+                // (marketplace#152) into actionable, NON-technical end-user copy —
+                // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
+                <MarketplaceInstallForm
+                  action={installAction}
+                  failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+                  className="flex-1"
+                >
+                  <MarketplaceInstallSubmit pendingLabel="Installing…" className="w-full">
+                    Install Now
+                  </MarketplaceInstallSubmit>
+                </MarketplaceInstallForm>
               )
             ) : cta.state === "update" ? (
               cta.disabled ? (
@@ -176,9 +237,16 @@ export async function ExtensionsMarketplaceScreen({
                   Update Now
                 </Button>
               ) : (
-                <form action={updateAction} className="flex-1">
-                  <Button type="submit" size="sm" className="w-full">Update Now</Button>
-                </form>
+                <MarketplaceInstallForm
+                  action={updateAction}
+                  failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
+                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
+                  className="flex-1"
+                >
+                  <MarketplaceInstallSubmit pendingLabel="Updating…" className="w-full">
+                    Update Now
+                  </MarketplaceInstallSubmit>
+                </MarketplaceInstallForm>
               )
             ) : (
               <Button size="sm" variant="secondary" disabled className="w-full flex-1">Installed</Button>
@@ -219,9 +287,17 @@ export async function ExtensionsMarketplaceScreen({
         {!registryConnected && (
           <Alert variant="info">
             <AlertTitle>Installing requires the package registry</AlertTitle>
-            <AlertDescription>
-              You can browse the catalog, but installing an extension needs the package registry
-              connected. Connect it in registry settings to enable Install.
+            <AlertDescription className="flex flex-col items-start gap-3">
+              <span>
+                Browsing the marketplace catalog works without any setup — these listings come
+                straight from the storefront. Installing an extension is what needs the package
+                registry connected. Connect it in registry settings to enable Install.
+              </span>
+              {/* Root-relative link → resolves to this instance's own origin (never a hardcoded
+                  host); points at the registries tab on /configuration/environment. */}
+              <Button asChild size="sm" variant="outline">
+                <Link href="/configuration/environment?tab=registries">Registry settings</Link>
+              </Button>
             </AlertDescription>
           </Alert>
         )}

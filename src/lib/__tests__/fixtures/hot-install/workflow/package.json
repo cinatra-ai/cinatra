@@ -1,0 +1,10 @@
+{
+  "name": "@cinatra-ai/workflow-canary",
+  "version": "1.0.0",
+  "cinatra": {
+    "formatVersion": 2,
+    "kind": "workflow",
+    "serverEntry": "./register.mjs",
+    "sdkAbiRange": "^2"
+  }
+}

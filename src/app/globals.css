@@ -771,9 +771,3 @@ textarea:focus::placeholder {
   height: calc(100svh - var(--banner-height, 0px)) !important;
 }
 
-
-/* SVAR Gantt — all SVAR-scoped override rules now live in the single home
-   `src/components/workflows/gantt-overrides.css`, imported by
-   `workflow-gantt-section.tsx`. The token-consistency gate
-   (`scripts/audit/gantt-css-tokens.mjs`) keys off that file being the single
-   home — do NOT reintroduce SVAR-scoped overrides into this file. */

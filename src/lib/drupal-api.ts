@@ -31,6 +31,20 @@ export type DrupalInstanceSettings = {
   lastValidatedAt?: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Multi-tenant install→org binding (cinatra#274). Captured from the
+   * configuring admin's session at save time:
+   *   • orgId — the admin's active organization id,
+   *   • runBy — the admin's user id (the OBO write actor for this install).
+   * Resolved by `resolveContentEditorIdentityForInstance` so a host-initiated
+   * content-editor write executes as THIS install's org/user instead of the
+   * single-tenant default. Persisted as part of the drupal connector_config
+   * JSON blob — no schema migration. Undefined on rows saved before this
+   * change (pre-binding) and on the session-less local-dev persist — the
+   * resolver then falls back to single-tenant identity.
+   */
+  orgId?: string;
+  runBy?: string;
 };
 
 export type DrupalAPISettings = {
@@ -83,6 +97,9 @@ export function getDrupalAPISettings(): DrupalAPISettings {
               typeof instance.updatedAt === "string"
                 ? instance.updatedAt
                 : new Date().toISOString(),
+            // Optional multi-tenant install→org binding (cinatra#274).
+            orgId: typeof instance.orgId === "string" ? instance.orgId.trim() || undefined : undefined,
+            runBy: typeof instance.runBy === "string" ? instance.runBy.trim() || undefined : undefined,
           }))
           // Require `nangoConnectionId` so only Nango-backed instances are
           // returned. Rows without a Nango pointer cannot be used for
@@ -103,7 +120,52 @@ export type SaveDrupalInstanceInput = {
    *   preserved and only the name/URL changes.
    */
   mcpApiKey?: string;
+  /**
+   * Multi-tenant install→org binding (cinatra#274). The Drupal save action
+   * lives in the `@cinatra-ai/drupal-mcp-connector` extension (a manage-gated
+   * "use server" action), which exposes no session object — so to avoid a
+   * cross-repo SDK-contract edit these fields are OPTIONAL. When the caller
+   * does not pass them, `saveDrupalInstance` captures the configuring admin's
+   * {orgId, runBy} IN-REPO from the current request session
+   * (`resolveActorBindingFromSession`), and leaves the binding untouched when
+   * there is no session (e.g. local-dev / dev-auto-setup). Preserved on
+   * edit-without-binding; never overwritten with undefined.
+   */
+  orgId?: string;
+  runBy?: string;
 };
+
+/**
+ * Capture the {orgId, runBy} install→org binding (cinatra#274) from the current
+ * request's admin session, IN-REPO, without forcing a cross-repo SDK-contract
+ * change on the connector save action.
+ *
+ * - Returns `undefined` (no binding) unless BOTH the active organization id and
+ *   the user id resolve — never half a binding.
+ * - NEVER throws or redirects: a session-less call path (local-dev /
+ *   dev-auto-setup, or a request with no cookies) simply yields `undefined`, so
+ *   the row keeps whatever binding it already had and the resolver falls back to
+ *   single-tenant identity. This is intentionally read-only — it does not gate
+ *   the save (the connector's `requireExtensionAction("manage")` already did).
+ * - Lazy-imports `@/lib/auth-session` so this module does not pull the auth /
+ *   Better Auth boot graph into callers that never save.
+ */
+async function resolveActorBindingFromSession(): Promise<
+  { orgId: string; runBy: string } | undefined
+> {
+  try {
+    const { getAuthSession } = await import("@/lib/auth-session");
+    const session = await getAuthSession();
+    const orgId = session?.session?.activeOrganizationId?.trim() || "";
+    const runBy = session?.user?.id?.trim() || "";
+    if (!orgId || !runBy) return undefined;
+    return { orgId, runBy };
+  } catch {
+    // No request context / headers unavailable / no session — leave the binding
+    // untouched and fall back to single-tenant identity at resolve time.
+    return undefined;
+  }
+}
 
 /**
  * Save flow:
@@ -166,6 +228,19 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
     }
   }
 
+  // Multi-tenant install→org binding (cinatra#274). Prefer an explicitly
+  // supplied {orgId, runBy}; otherwise capture it from the configuring admin's
+  // session in-repo. A resolved binding never overwrites an existing one with
+  // undefined (edit-without-session preserves the prior binding); a brand-new
+  // row with no session simply has no binding (resolver falls back to
+  // single-tenant).
+  const sessionBinding =
+    input.orgId?.trim() && input.runBy?.trim()
+      ? { orgId: input.orgId.trim(), runBy: input.runBy.trim() }
+      : await resolveActorBindingFromSession();
+  const nextOrgId = sessionBinding?.orgId ?? existing?.orgId;
+  const nextRunBy = sessionBinding?.runBy ?? existing?.runBy;
+
   const next: DrupalInstanceSettings = existing
     ? {
         ...existing,
@@ -174,6 +249,8 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
         nangoConnectionId: connectionId,
         providerConfigKey,
         updatedAt: now,
+        orgId: nextOrgId,
+        runBy: nextRunBy,
       }
     : {
         id,
@@ -183,6 +260,8 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
         providerConfigKey,
         createdAt: now,
         updatedAt: now,
+        orgId: nextOrgId,
+        runBy: nextRunBy,
       };
 
   const remaining = current.instances.filter((i) => i.id !== next.id);
@@ -300,6 +379,10 @@ export async function persistLocalDevDrupalInstanceUnvalidated(input: {
     // lastValidatedAt intentionally omitted — this row was NOT validated.
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    // Preserve any existing multi-tenant install→org binding (cinatra#274).
+    // This local-dev persist has no session, so it never sets a new binding.
+    orgId: existing?.orgId,
+    runBy: existing?.runBy,
   };
 
   const remaining = current.instances.filter((i) => i.id !== next.id && i.siteUrl !== next.siteUrl);

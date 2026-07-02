@@ -54,7 +54,7 @@ export type SubAgentNodeData = {
   /**
    * Deferred — populated once scheduler windows are persisted. Current
    * renderers ignore this field; it exists so scheduler support can add a
-   * Gantt column without a type migration on downstream consumers.
+   * schedule column without a type migration on downstream consumers.
    */
   scheduledAt?: Date | null;
   readinessHint: string | null;

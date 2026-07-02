@@ -3,7 +3,7 @@ import { pushSkillStoreToGitHub } from "@cinatra-ai/skills";
 
 // Defense in depth on this destructive endpoint.
 //
-// The route remains accessible because `packages/cli/src/index.mjs`
+// The route remains accessible because the published @cinatra-ai/cinatra CLI's
 // `cinatra skills reset-repo --yes` POSTs here from the operator's local
 // shell. The in-app caller was removed; the only remaining caller is the
 // CLI's loopback fetch.

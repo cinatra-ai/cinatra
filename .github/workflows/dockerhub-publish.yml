@@ -1,0 +1,230 @@
+name: Mirror image to Docker Hub
+
+# Decoupled public-distribution mirror (cinatra-engineering #53).
+#
+# build-image.yml is the SOLE builder/publisher of the canonical runtime image
+# to ghcr.io/<owner>/<repo>. This workflow NEVER builds — it only MIRRORS an
+# already-published GHCR image to the public Docker Hub repo
+# docker.io/cinatra/cinatra, so a `docker pull cinatra/cinatra:<version>` works
+# without a GHCR login. Keeping the mirror in its own file means a change here
+# can never disturb the four REQUIRED status checks that build-image.yml owns.
+#
+# How it runs:
+#   - completion of "Build and publish image" (build-image.yml) for a `v*` tag
+#     -> auto-mirror that release once the build SUCCEEDED (VERSION = the tag).
+#     This is a `workflow_run` dependency, NOT a parallel `push: tags` trigger:
+#     the mirror starts only AFTER the canonical builder finishes, so it never
+#     races the build and never gives up on a slow build (cinatra#676 — the old
+#     fixed-timeout GHCR wait expired on builds longer than ~10min and failed
+#     the mirror even though the image landed moments later).
+#   - workflow_dispatch    -> one-off / backfill mirror of an existing GHCR tag
+#                             (VERSION = the required `version` input).
+#
+# How it mirrors (multi-arch preserving): `docker buildx imagetools create`
+# copies the source manifest LIST verbatim to the new refs — every arch (the
+# amd64/arm64 children of the GHCR manifest list) is referenced, not flattened.
+# It is a registry-to-registry manifest copy: no full image pull, no rebuild,
+# so the bytes pushed to Docker Hub are bit-identical to what GHCR serves.
+#
+# Secrets (provisioned on the public repo — see .github/secrets-required.txt):
+#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN — push to the `cinatra` Docker Hub org.
+# GHCR is read with the workflow's GITHUB_TOKEN (packages: read).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'GHCR release tag to mirror to Docker Hub. Must already exist on GHCR.'
+        required: true
+        type: string
+  # Run AFTER the canonical builder ("Build and publish image" = build-image.yml's
+  # `name:`) reports completion. The job-level `if` below gates on the upstream run
+  # having SUCCEEDED and having been a `v*` tag push — so a branch push to main, a
+  # PR, a merge_group, or a dispatch run of build-image (none of which publish a
+  # release tag worth mirroring) is filtered out. `workflow_run` always runs from
+  # the default branch ref; the triggering tag is read from
+  # github.event.workflow_run.head_branch (NOT github.ref_name, which is `main`).
+  workflow_run:
+    workflows: ["Build and publish image"]
+    types: [completed]
+
+# Read-only on the repo + GHCR packages. The token only PULLS the source
+# manifest from GHCR; the push target is Docker Hub (separate creds below).
+permissions:
+  contents: read
+  packages: read
+
+# Key on the resolved release tag, not github.ref. On a `workflow_run` event
+# github.ref is the default branch (main), so keying on it would collapse every
+# release mirror into one group; key on the upstream tag (head_branch) instead,
+# falling back to the dispatch input / github.ref for a backfill.
+concurrency:
+  group: dockerhub-mirror-${{ github.event.workflow_run.head_branch || inputs.version || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror GHCR image to Docker Hub
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Gate the public Docker Hub mirror publish behind the org-wide
+    # `release-approval` Environment. Pushing the image to the public
+    # docker.io/cinatra/cinatra repo is a publish of a user-consumable artifact,
+    # so it must pause for an owner approval. The protected Environment is
+    # provisioned in this repo (required reviewer, prevent_self_review=false,
+    # can_admins_bypass=false); a referenced-but-unprovisioned Environment
+    # auto-creates UNPROTECTED, so the line and the provisioning ship together.
+    environment: release-approval
+    # Run only when:
+    #   - this is the canonical repo (a fork / non-canonical clone must never
+    #     publish to the public Docker Hub org); AND
+    #   - a manual backfill dispatch, OR the upstream builder SUCCEEDED for a
+    #     `v*` TAG push. For a tag-triggered build-image run, the resulting
+    #     workflow_run carries event=='push' and head_branch == the tag name
+    #     (e.g. 'v0.1.5'); build-image also runs on main-branch push / PR /
+    #     merge_group / dispatch, which are excluded here (head_branch 'main' or
+    #     a PR/feature branch fails the `startsWith(..., 'v')` tag guard). The
+    #     strict regex allow-list in "Resolve VERSION" is the final backstop.
+    if: >-
+      github.repository == 'cinatra-ai/cinatra'
+      && (
+        github.event_name == 'workflow_dispatch'
+        || (
+          github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && startsWith(github.event.workflow_run.head_branch, 'v')
+        )
+      )
+    steps:
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR (source, read-only)
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub (destination)
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve VERSION
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          # The upstream builder's triggering ref. On a `v*` tag push this is the
+          # tag name; we MUST read it from the workflow_run payload, not
+          # github.ref_name (which is the default branch on a workflow_run event).
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            # workflow_run event: the upstream "Build and publish image" run was
+            # triggered by the pushed tag; its name is head_branch (the job `if`
+            # already gated event=='push' + a 'v'-prefixed ref).
+            VERSION="$WORKFLOW_RUN_HEAD_BRANCH"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "::error::Empty VERSION — cannot resolve a tag to mirror." >&2
+            exit 1
+          fi
+          # Strict allow-list on the tag we will mirror. It MUST start with 'v'
+          # followed by a digit and contain only Docker-tag-safe characters
+          # ([A-Za-z0-9._-]). This rejects:
+          #   - a dispatch typo'd / hand-typed 'latest', whitespace, or a slash/
+          #     colon that could escape the ref or write an unintended repo/tag;
+          #   - a non-tag upstream ref (e.g. 'main') that somehow reached here;
+          #   - any value that could inject a second line into $GITHUB_OUTPUT.
+          # The same shape is what build-image.yml ever pushes to GHCR, so a
+          # legitimate tag always passes.
+          if ! [[ "$VERSION" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::VERSION '${VERSION}' is not an allowed tag (must match ^v[0-9][A-Za-z0-9._-]*$). Refusing to mirror." >&2
+            exit 1
+          fi
+          # Docker enforces a 128-char tag limit; reject early with a clear
+          # message rather than failing opaquely at mirror time.
+          if [ "${#VERSION}" -gt 128 ]; then
+            echo "::error::VERSION is ${#VERSION} chars — exceeds the 128-char Docker tag limit." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # latest-policy (first guard): only a clean SEMVER release tag is even a
+          # CANDIDATE to move the public ':latest' pointer. A marker/checkpoint or
+          # pre-release tag (e.g. a 'v-pre-...' checkpoint or an '-rc' pre-release)
+          # mirrors under its own tag but must NOT clobber 'latest'. Regex mirrors
+          # build-image.yml's deploy-dispatch gate (vMAJOR.MINOR(.PATCH), no
+          # pre-release suffix). A SECOND guard in the mirror step then confirms
+          # this version is the one GHCR currently serves as ':latest', so an
+          # older-version dispatch/rerun never moves Docker Hub 'latest' backward.
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VERSION '${VERSION}' is not a clean semver release tag — mirroring the version tag only, leaving 'latest' untouched."
+          fi
+
+      - name: Mirror GHCR -> Docker Hub (manifest copy, multi-arch preserved)
+        env:
+          SRC: ghcr.io/${{ github.repository }}
+          DST: docker.io/cinatra/cinatra
+          VERSION: ${{ steps.ver.outputs.version }}
+          IS_RELEASE: ${{ steps.ver.outputs.is_release }}
+        run: |
+          set -euo pipefail
+          # Source-availability check. This workflow now runs only AFTER the
+          # canonical builder (build-image.yml) reports a SUCCESSFUL completion
+          # (workflow_run + conclusion==success), so the GHCR source image is
+          # already published — the old ~10-minute builder-race wait is obsolete
+          # (cinatra#676). A short bounded retry remains only to absorb GHCR
+          # registry/manifest read propagation right after publish, not to wait
+          # on the build. A workflow_dispatch backfill points at an already-
+          # published tag, so it resolves on the first try.
+          tries=0
+          max_tries=12   # 12 x 10s = up to 2 minutes of propagation slack
+          until docker buildx imagetools inspect "${SRC}:${VERSION}" >/dev/null 2>&1; do
+            tries=$((tries + 1))
+            if [ "$tries" -ge "$max_tries" ]; then
+              echo "::error::Source image ${SRC}:${VERSION} not found on GHCR after waiting — nothing to mirror." >&2
+              exit 1
+            fi
+            echo "Source ${SRC}:${VERSION} not yet readable on GHCR (attempt ${tries}/${max_tries}); manifest may still be propagating. Waiting 10s…"
+            sleep 10
+          done
+
+          # latest-policy (second guard): even for a clean semver release tag,
+          # only move Docker Hub ':latest' if GHCR currently serves THIS version
+          # as ':latest'. This pins the public latest to whatever the canonical
+          # GHCR latest is, so an out-of-order dispatch or a rerun of an OLDER
+          # release tag mirrors its own version tag but never drags 'latest'
+          # backward. Compare manifest digests (works for multi-arch indexes).
+          move_latest=false
+          if [ "$IS_RELEASE" = "true" ]; then
+            ver_digest="$(docker buildx imagetools inspect "${SRC}:${VERSION}" --format '{{json .Manifest.Digest}}' 2>/dev/null || true)"
+            latest_digest="$(docker buildx imagetools inspect "${SRC}:latest" --format '{{json .Manifest.Digest}}' 2>/dev/null || true)"
+            if [ -n "$ver_digest" ] && [ "$ver_digest" = "$latest_digest" ]; then
+              move_latest=true
+            else
+              echo "::notice::GHCR ${SRC}:latest does not point at ${VERSION} (or has no latest) — mirroring the version tag only, leaving Docker Hub 'latest' untouched."
+            fi
+          fi
+
+          if [ "$move_latest" = "true" ]; then
+            echo "Mirroring ${SRC}:${VERSION} -> ${DST}:${VERSION} and ${DST}:latest"
+            docker buildx imagetools create \
+              --tag "${DST}:${VERSION}" \
+              --tag "${DST}:latest" \
+              "${SRC}:${VERSION}"
+          else
+            echo "Mirroring ${SRC}:${VERSION} -> ${DST}:${VERSION} (latest untouched)"
+            docker buildx imagetools create \
+              --tag "${DST}:${VERSION}" \
+              "${SRC}:${VERSION}"
+          fi
+          echo "Mirror complete. Destination manifest:"
+          docker buildx imagetools inspect "${DST}:${VERSION}"

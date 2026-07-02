@@ -16,9 +16,9 @@ first-party packages, and the gates are pinned so none ever can again.
 
 What the lexeme gates do NOT cover is the **identity surface**: the parallel
 slug / route / env-var / capability-id strings by which producer and consumer
-match each other BY NAME. The owner ruled (cinatra-engineering#155, eng#168(c)
+match each other BY NAME. The owner ruled (the identity-surface ruling,
 "the middle path") that the unavoidable identity references are a documented
-**exempt class** (see [Identity-surface exempt class](#identity-surface-exempt-class-cinatra-engineering155)
+**exempt class** (see [Identity-surface exempt class](#identity-surface-exempt-class)
 below), and that the two genuinely DANGEROUS identity-coupling kinds are FIXED
 and guarded by the stateless `identity-coupling-gate.mjs`. So the strict
 statements in this document are precise under the lexeme reading and are
@@ -39,7 +39,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 distinct from the baseline, which is pinned EMPTY since the flip — cinatra#36).
 `host-peer-value-import-ban.mjs` holds every serverEntry graph at 0 host-peer
 value imports (SDK peers stay type-only). `identity-coupling-gate.mjs` is the
-NEW (cinatra-engineering#155) identity-surface guard — it pins extension
+NEW identity-surface guard — it pins extension
 IDENTITY where the others pin only the lexeme; see the dedicated section below.
 
 ## Enforcement model — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
@@ -156,12 +156,12 @@ Permanently exempt are ONLY:
 No facades, no inventories, no dev-name lists are exempt — they are counted
 (`mechanical`) and hard-fail if they ever reappear.
 
-## Identity-surface exempt class (cinatra-engineering#155)
+## Identity-surface exempt class
 
 The lexeme gates above pin a concrete extension package NAME / path. They do
 NOT see the parallel **identity surface** — the slug / route / env-var /
 capability-id strings by which a producer and a consumer match each other by
-name. The owner ruled (eng#168(c), "the middle path") that the unavoidable
+name. The owner ruled (the identity-surface ruling, "the middle path") that the unavoidable
 identity references are SANCTIONED and that only the genuinely dangerous kinds
 get fixed + guarded. The **sanctioned (exempt) identity surfaces** are:
 

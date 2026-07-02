@@ -7,7 +7,6 @@
   "types": "./src/index.ts",
   "dependencies": {
     "@cinatra-ai/sdk-dashboard": "workspace:*",
-    "@iconify/react": "^6.0.2",
     "@nivo/heatmap": "^0.99.0",
     "@radix-ui/react-focus-scope": "^1.1.10",
     "@tanstack/react-query": "^5.101.0",
@@ -17,7 +16,6 @@
     "elkjs": "^0.11.1",
     "react-grid-layout": "^2.2.3",
     "react-is": "^19.2.7",
-    "react-resizable": "^4.0.1",
     "recharts": "^3.8.1"
   },
   "scripts": {

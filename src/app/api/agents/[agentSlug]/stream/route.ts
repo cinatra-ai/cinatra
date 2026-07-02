@@ -13,8 +13,34 @@ import {
 import {
   consumeWidgetStreamToken,
   isLongLivedTokenPathEnabled,
+  normalizeOriginStrict,
 } from "@/lib/widget-token-broker";
+import {
+  consumeUserWidgetToken,
+  resolveCanonicalInstanceForOrigin,
+  type UserTokenClaims,
+} from "@/lib/widget-user-auth";
+import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { validateAuthInitRequest } from "@/lib/wp-drupal-contract";
+
+// cinatra#408 — per-user widget identity proof header (the "dual token"). The
+// site `cit_` transport token stays on `Authorization`; this carries the
+// short-lived `cwu_` user token minted by the hosted /widget-auth PKCE login.
+const USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
+// Emitted on a fail-closed per-user 401 so the cross-origin widget can tell
+// "re-login required" from a generic error and swap back to the login window.
+// Exposed via Access-Control-Expose-Headers (buildWidgetStreamCorsHeaders).
+const WIDGET_AUTH_REQUIRED_HEADER = "X-Cinatra-Widget-Auth";
+
+// cinatra#408 — the validated per-user OBO override threaded into the dispatch
+// (skips the install/single-tenant resolver entirely; runBy = the END USER).
+type WidgetUserActorOverride = {
+  runBy: string;
+  orgId: string;
+  instanceId: string;
+  sourceType: "public_site_widget";
+};
 
 // Sunset date advertised on the deprecated long-lived path (RFC 1123). The
 // legacy path serves only un-upgraded field installs; once a plugin/module
@@ -113,6 +139,13 @@ export async function POST(
   const auth = request.headers.get("Authorization");
   const bearer = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : "";
 
+  // Token-bound, SERVER-VERIFIED site origin for the install→org binding
+  // resolution (cinatra#274). It is set from the AUTHORITATIVE source per path
+  // (the short-lived token's bound origin; the legacy path's configured-origin
+  // match) — NEVER from the raw request Origin header alone. A request-body
+  // instanceId is forgeable, so this verified origin is what binds identity.
+  let verifiedOrigin: string | null = null;
+
   // Discriminate by Bearer prefix.
   if (bearer.startsWith(SHORT_LIVED_TOKEN_PREFIX)) {
     // ----- SHORT-LIVED PATH (preferred). The token is authoritative: it binds
@@ -129,6 +162,9 @@ export async function POST(
       console.warn(`[agent-stream:${agentSlug}] short-lived token rejected:`, consumed.reason);
       return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders });
     }
+    // The consume path re-checked this origin against the stored row AND the
+    // live configured-instance list — authoritative.
+    verifiedOrigin = consumed.origin;
   } else {
     // ----- LEGACY LONG-LIVED PATH (back-compat, DEPRECATED). The browser holds
     // the long-lived integration key directly. Retain the configured-origin
@@ -155,6 +191,113 @@ export async function POST(
     );
     corsHeaders.Deprecation = "true";
     corsHeaders.Sunset = LONG_LIVED_SUNSET;
+    // The legacy path has no token-bound origin; `allowedOrigin` is the request
+    // Origin AFTER it matched a configured instance's siteUrl
+    // (resolveWidgetStreamOrigin), so it is a server-validated origin suitable
+    // for install→org binding resolution (cinatra#274).
+    verifiedOrigin = allowedOrigin;
+  }
+
+  // -------------------------------------------------------------------------
+  // cinatra#408 — DUAL-TOKEN per-user validation (FAIL-CLOSED BY DEFAULT).
+  //
+  // The widget sends the site `cit_` token on Authorization (verified above)
+  // PLUS a per-user `cwu_` token on `X-Cinatra-Widget-User-Token`. When that
+  // user token is present we run the per-user OBO path: consume + verify it,
+  // require the two tokens AGREE (same site origin / agent / instance), re-check
+  // live org membership, and build an EXPLICIT actor override whose runBy is the
+  // authenticated END USER. ANY failure denies (401) with no fallback to the
+  // install/single-tenant/anonymous identity — and creates NO carrier run.
+  //
+  // EVERY request that reaches THIS route is the interactive `public_site_widget`
+  // surface (a browser widget relaying a CMS edit to a content-editor agent). So
+  // the per-user token is REQUIRED BY DEFAULT here: a missing/absent token is a
+  // fail-closed 401 re-login. This is a SECURITY DEFAULT, not an opt-in — a
+  // production manifest entry that simply OMITS the flag still enforces, so the
+  // confused-deputy bypass (omit the user token → fall back to the install/site
+  // identity) cannot exist. The ONLY way to permit a token-less dispatch is an
+  // EXPLICIT, audited `requireUserToken: false` in the entry's declared auth
+  // policy (carried verbatim into the generated manifest, so any opt-out is
+  // visible + reviewable). The headless content-editor path (cinatra#405) is
+  // UNAFFECTED — it never reaches this route; it calls dispatchContentEditorViaA2A
+  // directly via the host `contentEditorDispatch` service with no actorOverride.
+  // -------------------------------------------------------------------------
+  const userTokenHeader = request.headers.get(USER_TOKEN_HEADER)?.trim() ?? "";
+  const userTokenPresent = userTokenHeader.length > 0;
+  // FAIL-CLOSED BY DEFAULT: enforce unless the entry EXPLICITLY opts out with
+  // `requireUserToken: false`. Absent (undefined) or true → enforce.
+  const requireUserToken = entry.auth.requireUserToken !== false;
+
+  // The single generic deny — never leaks WHICH check failed to the browser
+  // (a scrubbed, reason-coded audit line is emitted server-side instead).
+  const denyUserAuth = (reason: string): NextResponse => {
+    emitWidgetAuthAudit("stream_user_token_rejected", {
+      agentSlug,
+      siteOrigin: verifiedOrigin,
+      reason,
+      ip: request.headers.get("x-forwarded-for"),
+      ua: request.headers.get("user-agent"),
+    });
+    return new NextResponse("Unauthorized (widget login required)", {
+      status: 401,
+      headers: { ...corsHeaders, [WIDGET_AUTH_REQUIRED_HEADER]: "required" },
+    });
+  };
+
+  if (requireUserToken && !userTokenPresent) {
+    return denyUserAuth("user_token_required");
+  }
+
+  // Per-user claims, resolved before run creation (instance binding is finalized
+  // after the body is parsed, below). Null when no user token is present.
+  let userClaims: UserTokenClaims | null = null;
+
+  if (userTokenPresent) {
+    const consumed = consumeUserWidgetToken({
+      token: userTokenHeader,
+      agentSlug,
+      routePath: `/api/agents/${agentSlug}/stream`,
+      // Raw Origin: consumeUserWidgetToken strict-normalizes and compares it to
+      // the token-bound siteOrigin (origin_mismatch on divergence).
+      requestOrigin,
+    });
+    if (!consumed.ok) {
+      return denyUserAuth(consumed.reason);
+    }
+    const claims = consumed.claims;
+
+    // TWO-TOKEN AGREEMENT — origin: the cit_-derived verifiedOrigin MUST equal
+    // the cwu_-bound siteOrigin, so a valid user token for site A cannot ride on
+    // a site token for site B (even if the browser spoofs its Origin to match A,
+    // which consume already checks against the cwu_ binding). agent agreement is
+    // intrinsic (consume gated agent_slug + aud == this route path).
+    if (normalizeOriginStrict(verifiedOrigin) !== normalizeOriginStrict(claims.siteOrigin)) {
+      return denyUserAuth("origin_disagreement");
+    }
+
+    // ORG agreement (defense-in-depth): re-derive the canonical instance for the
+    // VERIFIED origin via the strict resolver (NOT the single-tenant-fallback
+    // resolver) and assert it agrees with the token's server-derived instanceId.
+    // Zero/multiple origin-matched rows, or a divergent id → deny. This also
+    // re-pins the write target to the verified origin's single canonical row.
+    const reResolvedInstance = resolveCanonicalInstanceForOrigin({
+      instancesConfigKey: entry.auth.instancesConfigKey,
+      origin: verifiedOrigin ?? "",
+      claimedInstanceId: claims.instanceId,
+    });
+    if (!reResolvedInstance || reResolvedInstance !== claims.instanceId) {
+      return denyUserAuth("instance_binding_failed");
+    }
+
+    // MEMBERSHIP re-check BEFORE any run creation (up-front gate; the mint-time
+    // resolveAgentRunMcpActor re-checks live too, defense-in-depth). A non-member
+    // (or demoted-between-mint-and-now) user is denied — no run created.
+    const role = await resolveOrgRoleForUser(claims.orgId, claims.userId);
+    if (!role) {
+      return denyUserAuth("not_org_member");
+    }
+
+    userClaims = claims;
   }
 
   let body: StreamRequestBody;
@@ -181,6 +324,42 @@ export async function POST(
   }
 
   const context = body.context ?? {};
+
+  // cinatra#408 — finalize the per-user instance binding + actor override. The
+  // write-target instance is SERVER-DERIVED from the user token's claims (pinned
+  // at init by the strict canonical resolver), NOT the forgeable body field. A
+  // body.context.instanceId that DISAGREES with the token's instanceId is
+  // suspicious → fail closed (do not silently override). All of this is BEFORE
+  // dispatch, so a denied per-user request creates NO carrier run.
+  let widgetActorOverride: WidgetUserActorOverride | null = null;
+  if (userClaims) {
+    const bodyInstanceId =
+      typeof context.instanceId === "string" ? context.instanceId.trim() : "";
+    if (bodyInstanceId && bodyInstanceId !== userClaims.instanceId) {
+      return denyUserAuth("instance_mismatch");
+    }
+    widgetActorOverride = {
+      runBy: userClaims.userId,
+      orgId: userClaims.orgId,
+      instanceId: userClaims.instanceId,
+      sourceType: "public_site_widget",
+    };
+    // Records the AUTHORIZATION decision (all fail-closed checks passed → a
+    // per-user OBO override was minted), NOT that the downstream A2A dispatch
+    // succeeded. The carrier agent_run's own queued→running→completed/failed
+    // lifecycle (host-content-editor-dispatch.ts) is the run-outcome trail; the
+    // accept here precedes dispatch by design, so its name avoids implying
+    // success (codex round-0 nit).
+    emitWidgetAuthAudit("stream_user_dispatch_authorized", {
+      actor: userClaims.userId,
+      orgId: userClaims.orgId,
+      siteId: userClaims.siteId,
+      client: userClaims.client,
+      agentSlug,
+      siteOrigin: userClaims.siteOrigin,
+      instanceId: userClaims.instanceId,
+    });
+  }
 
   // Resolve the relay target (content-editor agent A2A URL + package name) for
   // this slug. A widget-stream agent with no relay configured is a wiring error
@@ -216,6 +395,13 @@ export async function POST(
     payload[field.key] =
       typeof value === "string" ? safe(value, field.maxLength) : value;
   }
+  // cinatra#408 — on the per-user path the write-target instance is the
+  // SERVER-DERIVED token instanceId (already asserted == any present body value
+  // above). Pin it into the payload so the agent edits the bound instance, never
+  // a forgeable body field, regardless of what the client sent.
+  if (widgetActorOverride) {
+    payload.instanceId = widgetActorOverride.instanceId;
+  }
 
   const encoder = new TextEncoder();
 
@@ -235,6 +421,17 @@ export async function POST(
           payload,
           timeoutMs: 300_000, // aligned with the /chat blocking budget
           packageName: relay.agentPackageName,
+          // Multi-tenant install→org binding anchors (cinatra#274). The
+          // verified origin is authoritative; the client-supplied instanceId
+          // only disambiguates among origin-matched rows. On the per-user path
+          // (cinatra#408) the explicit actorOverride SHORT-CIRCUITS this
+          // resolver entirely — runBy is the authenticated end user, never the
+          // install's service identity, and there is no anonymous fallback.
+          instancesConfigKey: entry.auth.instancesConfigKey,
+          origin: verifiedOrigin,
+          instanceId:
+            typeof context.instanceId === "string" ? context.instanceId : null,
+          actorOverride: widgetActorOverride ?? undefined,
         });
 
         // Parse the agent's reply. A structured `{ postId|nodeId, changes[] }`

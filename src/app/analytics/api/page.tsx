@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MetricsTracesScreen } from "@cinatra-ai/metric-cost-api";
 import { MetricApiNav } from "@/components/metric-api-nav";
+import { analyticsTabDescription } from "@/lib/section-nav";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "API Requests | Cinatra" };
@@ -18,21 +19,26 @@ export default async function MetricsTracesPage({
   const params = await (searchParams ??
     Promise.resolve({} as Record<string, string | string[] | undefined>));
   const runId = typeof params.runId === "string" ? params.runId : undefined;
+  const str = (v: string | string[] | undefined) =>
+    typeof v === "string" ? v : undefined;
+  const from = str(params.from);
+  const to = str(params.to);
+  const service = str(params.service);
 
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="API Requests"
+        title="LLM"
         description={
           runId
             ? `API request trace for agent run ${runId}`
-            : "API request traces and span-level execution visibility for agents"
+            : analyticsTabDescription("traces")
         }
         divider={false}
       />
       <MetricApiNav activeTab="traces" />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <MetricsTracesScreen runId={runId} />
+        <MetricsTracesScreen runId={runId} from={from} to={to} service={service} />
       </PageContent>
     </Main>
   );

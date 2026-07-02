@@ -1345,6 +1345,24 @@ END $$` },
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_triggers_released_at_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (released_at)` },
+    // agent_run_pm_links: schedule↔PM-task sync link table (cinatra#317). One
+    // row per schedule-defining trigger mirrored to an external PM provider
+    // (Plane). Keyed by run_id (one-to-one with the trigger). A link table, not
+    // columns on agent_run_triggers, so a PM outage / absent provider leaves the
+    // trigger untouched. external_task_id/synced_at are null until the first
+    // successful push; sync_error holds the last fail-open error (null=healthy);
+    // version is the optimistic-concurrency counter for the reconcile loop.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      provider text NOT NULL,
+      external_task_id text,
+      synced_at timestamptz,
+      sync_error text,
+      version integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
     // agent_run_trigger_waits: in-flight WayFlow run
     // paused at a TriggerWaitNode. Distinct from agent_run_triggers (run-start
     // gate). PK is (run_id, node_id) to support multiple TriggerWaitNodes per
@@ -3522,20 +3540,17 @@ END $$` },
         FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_project_slug_move()`,
     },
 
-    // 2.5 agent_templates.(owner_level, owner_id) →
-    //     <owner-prefix>/~agents/<package_name>
-
-    // Authoritative full path is written at enqueue time:
-    // includes vendor/package via agent_templates.package_name (which holds
-    // the full vendor-namespaced name, e.g. "cinatra/email-test-delivery-agent").
-    // The worker physically moves the entire ~agents/<package_name>/ subtree
-    // (containing all bundled + user-authored skills).
+    // 2.5 agent_templates.(owner_level, owner_id) → <owner-prefix>/~agents/<vendor>/<package>.
+    // Path derived at enqueue from package_name (npm, e.g. "@cinatra-ai/auditor-agent"); on-disk
+    // store is UNSCOPED so "@<scope>/" is stripped (agentPackageNameToPath; cinatra#550). Quoted
+    // $fn$ (not $body$) so agent-owner-move-scope-strip.test.ts slices the body to the "$body$" end.
     {
-      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $body$
+      text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".enqueue_agent_owner_move() RETURNS trigger LANGUAGE plpgsql AS $fn$
         DECLARE
           new_id text;
           old_prefix text;
           new_prefix text;
+          pkg_path text;
           old_p text;
           new_p text;
         BEGIN
@@ -3548,9 +3563,11 @@ END $$` },
             IF NEW.package_name IS NULL OR NEW.package_name = '' THEN
               RAISE EXCEPTION 'enqueue_agent_owner_move: template % has no package_name', NEW.id;
             END IF;
+            -- Strip leading npm "@<scope>/" to match the unscoped on-disk layout (cinatra#550).
+            pkg_path := regexp_replace(NEW.package_name, '^@([^/]+)/(.+)$', '\\1/\\2');
             new_id := 'reloc_' || gen_random_uuid()::text;
-            old_p := old_prefix || '/~agents/' || NEW.package_name;
-            new_p := new_prefix || '/~agents/' || NEW.package_name;
+            old_p := old_prefix || '/~agents/' || pkg_path;
+            new_p := new_prefix || '/~agents/' || pkg_path;
             INSERT INTO "${schemaName.replaceAll('"', '""')}"."path_relocations"
               (id, subject_kind, subject_id, old_slug, new_slug, old_path, new_path, status)
             VALUES (new_id, 'agent_template', NEW.id,
@@ -3561,7 +3578,8 @@ END $$` },
           END IF;
           RETURN NEW;
         END;
-        $body$`,
+        $fn$
+        -- $body$ shape-test slice terminator (cinatra#550)`,
     },
     { text: `DROP TRIGGER IF EXISTS agent_owner_move_trg ON "${schemaName.replaceAll('"', '""')}"."agent_templates"` },
     {
@@ -4066,6 +4084,85 @@ END $$` },
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
     // -----------------------------------------------------------------------
+    // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
+    //
+    // Three short-lived, single-use-discipline tables for the per-user widget
+    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST (only sha256 of
+    // each code/token is stored). Dedicated tables (NOT TTL-cached
+    // connector_config JSON) so the single-use consume is an atomic
+    // UPDATE/DELETE...RETURNING free of read-modify-write races. Each carries an
+    // expires_at index driving the on-write sweep (no external cron). The full
+    // engine + the security rationale live in src/lib/widget-user-auth.ts.
+    //
+    // Table 1 — auth transactions. Created by the site-token-authenticated init
+    // route; pins the SERVER-VERIFIED context {site_id, client, org_id,
+    // site_origin, agent_slug, instance_id} + the widget's PKCE code_challenge +
+    // single-use state. consumed_at marks single-use (set when the code issues).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (
+      txn_id         uuid PRIMARY KEY,
+      site_id        uuid NOT NULL,
+      client         text NOT NULL,
+      org_id         text NOT NULL,
+      site_origin    text NOT NULL,
+      agent_slug     text NOT NULL,
+      instance_id    text NOT NULL,
+      code_challenge text NOT NULL,
+      state          text NOT NULL,
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      expires_at     timestamptz NOT NULL,
+      consumed_at    timestamptz
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` },
+    // Table 2 — user authorization codes. Issued by the hosted page after the
+    // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
+    // (which is postMessage'd to the verified opener origin and never stored).
+    // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (
+      code_hash      text PRIMARY KEY,
+      user_id        text NOT NULL,
+      site_id        uuid NOT NULL,
+      client         text NOT NULL,
+      org_id         text NOT NULL,
+      site_origin    text NOT NULL,
+      agent_slug     text NOT NULL,
+      instance_id    text NOT NULL,
+      code_challenge text NOT NULL,
+      created_at     timestamptz NOT NULL DEFAULT now(),
+      expires_at     timestamptz NOT NULL
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` },
+    // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
+    // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
+    // is stored. Multi-use within TTL; instant revoke via row delete or the live
+    // connect-site re-check (see consumeUserWidgetToken). NO refresh token.
+    //
+    // `credential_version` pins the `connect_sites` credential generation the
+    // token was minted against (rotation binding, mirroring the site-scoped
+    // broker's `token_key_fingerprint` re-check in widget-token-broker.ts:384).
+    // A reconnect ROTATES the same active site row (bumping credential_version)
+    // WITHOUT revoking it, so the live org/origin re-check alone would let an
+    // outstanding `cwu_` survive a rotation for its full TTL. Re-checking this
+    // version at consume kills outstanding user tokens the instant the site
+    // credential is rotated.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (
+      token_hash         text PRIMARY KEY,
+      jti                text NOT NULL,
+      user_id            text NOT NULL,
+      site_id            uuid NOT NULL,
+      client             text NOT NULL,
+      org_id             text NOT NULL,
+      site_origin        text NOT NULL,
+      agent_slug         text NOT NULL,
+      instance_id        text NOT NULL,
+      credential_version integer NOT NULL,
+      aud                text NOT NULL,
+      iss                text NOT NULL,
+      scope              text NOT NULL,
+      expires_at         timestamptz NOT NULL,
+      created_at         timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_user_tokens_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (expires_at)` },
+    // -----------------------------------------------------------------------
     // cinatra#221 "Connect with Cinatra" provisioning tables.
     //
     // Dedicated tables (NOT TTL-cached connector_config JSON) so single-use
@@ -4124,6 +4221,76 @@ END $$` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS connect_sites_active_uniq ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id, client, widget_origin) NULLS NOT DISTINCT WHERE revoked_at IS NULL` },
     { text: `CREATE INDEX IF NOT EXISTS connect_sites_org_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (org_id) WHERE revoked_at IS NULL` },
     { text: `CREATE INDEX IF NOT EXISTS connect_sites_active_origin_idx ON "${schemaName.replaceAll('"', '""')}"."connect_sites" (widget_origin) WHERE revoked_at IS NULL` },
+    // webhook_idempotency: leased dedupe ledger for the generic inbound-webhook
+    // route (cinatra#340). One row per (scope, site_id, message_id); the route
+    // CLAIMS (atomic UPSERT) before dispatch and FINALIZES (attempt-fenced)
+    // after. All three key columns NOT NULL (a nullable unique-key column would
+    // admit duplicate NULL rows → broken idempotency). site_id uuid (the
+    // connect_sites.site_id identity space). Migration parity: core__0008.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_idempotency" (
+      id            bigserial PRIMARY KEY,
+      scope         text NOT NULL,
+      site_id       uuid NOT NULL,
+      message_id    text NOT NULL,
+      status        text NOT NULL DEFAULT 'processing',
+      lease_until   timestamptz,
+      attempt_count integer NOT NULL DEFAULT 1,
+      received_at   timestamptz NOT NULL DEFAULT now(),
+      finalized_at  timestamptz
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_idempotency" (scope, site_id, message_id)` },
+    // webhook_secret_bindings: per-(vendor,slug,hook,site) Standard-Webhooks
+    // secret material, ENCRYPTED via the host secretsCodec (ciphertext+iv, NOT a
+    // ref), with the bounded dual-secret rotation window (previous_* until
+    // previous_expires_at). Resolved by the server-issued opaque binding_id
+    // (NEVER the payload). Partial-unique active-row index enforces at most one
+    // active binding per tuple. legacy_enabled flags the #343 legacy bridge; the
+    // legacy_secret_ciphertext/iv columns store its shared HMAC secret ENCRYPTED
+    // (host secretsCodec blob, AAD field "legacy"), null for a Standard-Webhooks
+    // binding. site_id uuid. Migration parity: core__0009 + core__0011.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (
+      binding_id                 text PRIMARY KEY,
+      vendor                     text NOT NULL,
+      slug                       text NOT NULL,
+      hook                       text NOT NULL,
+      site_id                    uuid NOT NULL,
+      current_secret_ciphertext  text NOT NULL,
+      current_secret_iv          text NOT NULL,
+      previous_secret_ciphertext text,
+      previous_secret_iv         text,
+      previous_expires_at        timestamptz,
+      rotated_at                 timestamptz,
+      legacy_enabled             boolean NOT NULL DEFAULT false,
+      legacy_secret_ciphertext   text,
+      legacy_secret_iv           text,
+      revoked_at                 timestamptz,
+      created_at                 timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS webhook_secret_bindings_site_idx ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (site_id)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_secret_bindings_active_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_secret_bindings" (vendor, slug, hook, site_id) WHERE revoked_at IS NULL` },
+    // webhook_outbound_dead_letter: the DURABLE dead-letter record for the
+    // host-owned OUTBOUND delivery engine (cinatra#341). The
+    // WEBHOOK_OUTBOUND_DELIVERY dispatcher arm writes one row on a `permanent`
+    // classification OR exhausted `attempts` on a `retryable` result — the
+    // durability the pre-#341 fire-and-forget assistant-webhook path lacked.
+    // payload_digest is a sha256 hex (NEVER the raw payload/secret); target_url
+    // is stored origin+pathname only (query + userinfo stripped). The UNIQUE
+    // (event_kind, message_id) index makes the writer's ON CONFLICT DO NOTHING
+    // insert idempotent. Migration parity: core__0010.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (
+      id             bigserial PRIMARY KEY,
+      event_kind     text NOT NULL,
+      message_id     text NOT NULL,
+      target_url     text NOT NULL,
+      payload_digest text NOT NULL,
+      attempts       integer NOT NULL DEFAULT 1,
+      last_status    integer,
+      last_error     text,
+      failed_at      timestamptz NOT NULL DEFAULT now(),
+      created_at     timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS webhook_outbound_dead_letter_key_uniq ON "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (event_kind, message_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS webhook_outbound_dead_letter_failed_at_idx ON "${schemaName.replaceAll('"', '""')}"."webhook_outbound_dead_letter" (failed_at)` },
   ];
 
   // Fresh-schema ordering invariant. On a populated DB every object already
@@ -4178,6 +4345,27 @@ export function buildWriteMetadataQuery(schemaName: string, key: string, value: 
 export function buildDeleteMetadataQuery(schemaName: string, key: string): QueryInput {
   const table = `"${schemaName.replaceAll('"', '""')}"."metadata"`;
   return { text: `DELETE FROM ${table} WHERE key = $1`, values: [key] };
+}
+
+// Atomic compare-and-swap on a metadata row's value. Updates `key`'s value to
+// `newValue` ONLY when the currently-stored value is BYTE-EQUAL to
+// `expectedValue`, returning the key of the affected row (empty result when the
+// row changed under us). Used by the connector-config seal-on-read migration so
+// a concurrent rotation between the read snapshot and the migration write cannot
+// be clobbered by the stale re-sealed snapshot (no row-lock / read-modify-write
+// race). The comparison is against the exact stored `value` string for byte
+// accuracy.
+export function buildCompareAndSwapMetadataQuery(
+  schemaName: string,
+  key: string,
+  newValue: string,
+  expectedValue: string,
+): QueryInput {
+  const table = `"${schemaName.replaceAll('"', '""')}"."metadata"`;
+  return {
+    text: `UPDATE ${table} SET value = $1 WHERE key = $2 AND value = $3 RETURNING key`,
+    values: [newValue, key, expectedValue],
+  };
 }
 
 // Physically REMOVE every metadata row whose key starts with `prefix`. LIKE

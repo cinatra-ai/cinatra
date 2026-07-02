@@ -36,11 +36,15 @@ const administrationSections = [
     ],
   },
   {
-    title: "LLM",
-    description: "Model defaults and LLM integration settings.",
+    // Titled "AI Providers" (not "LLM") so a first-time user looking for where
+    // to set their OpenAI API key finds it without knowing it's modeled as a
+    // connector (#501). The OpenAI key form is linked directly.
+    title: "AI Providers",
+    description: "Set your OpenAI (or other AI provider) API key and model defaults.",
     href: "/configuration/llm",
     icon: domainIcons.llm,
     links: [
+      { label: "OpenAI API key", href: "/configuration/llm?modal=openai" },
       { label: "Model defaults", href: "/configuration/llm" },
       { label: "OpenAI API skills", href: "/configuration/llm/openai-skills" },
     ],
@@ -64,6 +68,23 @@ const administrationSections = [
       { label: "Installed", href: "/configuration/extensions" },
       { label: "Archived", href: "/configuration/extensions?tab=archived" },
       { label: "Upload", href: "/configuration/extensions/upload" },
+    ],
+  },
+  {
+    // Inbound webhooks are extension-authored (declared via cinatra.webhooks);
+    // this moved out of the left sidebar into Configuration (cinatra#696). The
+    // card title + "Manage" CTA both target the registry, so the inner link
+    // points at the authoring guide rather than re-linking the registry.
+    title: "Webhooks",
+    description:
+      "Inbound webhooks declared by extensions, served by the generic webhook facility.",
+    href: "/configuration/webhooks",
+    icon: domainIcons.webhooks,
+    links: [
+      {
+        label: "Authoring guide",
+        href: "https://github.com/cinatra-ai/cinatra/blob/main/docs/webhooks/authoring-inbound-webhooks.md",
+      },
     ],
   },
   {
@@ -117,7 +138,9 @@ const administrationSections = [
     icon: domainIcons.workflows,
     links: [
       { label: "Approvals", href: "/configuration/approvals" },
-      { label: "All workflows", href: "/workflows" },
+      // The "All workflows" browse link was removed (cinatra#609) — workflow
+      // overview/tracking lives in Plane now. Workflow execution + approvals
+      // remain native (Approvals above; per-workflow detail via deep-links).
     ],
   },
   {
@@ -157,7 +180,8 @@ const administrationSections = [
     href: "/configuration/telemetry",
     icon: domainIcons.telemetry,
     links: [
-      { label: "Telemetry", href: "/configuration/telemetry" },
+      // The "Telemetry" inner link was removed (cinatra#697) — it duplicated
+      // the card title + "Manage" CTA. Logs remains as the one distinct target.
       { label: "Logs", href: "/configuration/telemetry?tab=logs" },
     ],
   },
@@ -192,8 +216,8 @@ export default async function AdministrationPage() {
               <CardHeader>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-3">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-card border border-line bg-surface-muted text-muted-foreground">
-                      <section.icon />
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-control border border-line bg-surface-strong text-foreground">
+                      <section.icon className="size-5" />
                     </div>
                     <CardTitle>{section.title}</CardTitle>
                   </div>

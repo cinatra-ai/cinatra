@@ -9,6 +9,7 @@ import {
 import { encryptSecret } from "@/lib/instance-secrets";
 import {
   VendorCredentialsMissingError,
+  describeMarketplaceTokenSource,
   resolveConsumerOrVendorMarketplaceToken,
   resolveMarketplaceSyncWorkerToken,
 } from "@/lib/marketplace-credentials";
@@ -218,6 +219,107 @@ describe("resolveConsumerOrVendorMarketplaceToken", () => {
     }
     expect(thrown).toBeDefined();
     expect(thrown).not.toBeInstanceOf(VendorCredentialsMissingError);
+  });
+});
+
+describe("describeMarketplaceTokenSource (cinatra #627 diagnostic)", () => {
+  // The diagnostic must MIRROR resolveConsumerOrVendorMarketplaceToken's
+  // resolution order without ever decrypting or returning a token value — it
+  // classifies WHICH source would be used so a degraded detail page can log it.
+  it("reports env-instance-token when the env override is set (wins over an attachment)", () => {
+    process.env.MARKETPLACE_INSTANCE_TOKEN = "  env-bearer  ";
+    const enc = encryptSecret("consumer-bearer", CONSUMER_MARKETPLACE_TOKEN_AAD);
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "u",
+        verdaccioUsername: "v",
+        marketplaceTokenCiphertext: enc.ciphertext,
+        marketplaceTokenIv: enc.iv,
+        marketplaceTokenAlgo: "aes-256-gcm",
+        verdaccioReadTokenCiphertext: "v-ct",
+        verdaccioReadTokenIv: "v-iv",
+        verdaccioReadTokenAlgo: "aes-256-gcm",
+      },
+    };
+    expect(describeMarketplaceTokenSource(identity)).toBe("env-instance-token");
+  });
+
+  it("reports consumer-attachment when a well-formed attachment is present", () => {
+    const enc = encryptSecret("consumer-bearer", CONSUMER_MARKETPLACE_TOKEN_AAD);
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "u",
+        verdaccioUsername: "v",
+        marketplaceTokenCiphertext: enc.ciphertext,
+        marketplaceTokenIv: enc.iv,
+        marketplaceTokenAlgo: "aes-256-gcm",
+        verdaccioReadTokenCiphertext: "v-ct",
+        verdaccioReadTokenIv: "v-iv",
+        verdaccioReadTokenAlgo: "aes-256-gcm",
+      },
+    };
+    expect(describeMarketplaceTokenSource(identity)).toBe("consumer-attachment");
+  });
+
+  it("reports consumer-attachment-corrupted for a present-but-broken attachment (NEVER vendor)", () => {
+    const vendorEnc = encryptSecret("vendor-bearer", "vendor.token");
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      // Valid vendor token present, but the corrupt consumer attachment wins
+      // the classification (no silent fall-through — same as the resolver).
+      tokenCiphertext: vendorEnc.ciphertext,
+      tokenIv: vendorEnc.iv,
+      consumerAttachment: {
+        instanceIdAtAttach: "11111111-1111-4111-8111-111111111111",
+        attachedAt: "2026-05-27T00:00:00.000Z",
+        lastRefreshedAt: "2026-05-27T00:00:00.000Z",
+        marketplaceUsername: "u",
+        verdaccioUsername: "v",
+        marketplaceTokenCiphertext: "",
+        marketplaceTokenIv: "iv-base64",
+        marketplaceTokenAlgo: "aes-256-gcm",
+        verdaccioReadTokenCiphertext: "v-ct",
+        verdaccioReadTokenIv: "v-iv",
+        verdaccioReadTokenAlgo: "aes-256-gcm",
+      },
+    };
+    expect(describeMarketplaceTokenSource(identity)).toBe("consumer-attachment-corrupted");
+  });
+
+  it("reports vendor-token when only the legacy vendor slot is populated", () => {
+    const enc = encryptSecret("vendor-bearer", "vendor.token");
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      tokenCiphertext: enc.ciphertext,
+      tokenIv: enc.iv,
+    };
+    expect(describeMarketplaceTokenSource(identity)).toBe("vendor-token");
+  });
+
+  it("reports none for a null identity and for a bare identity with no sources", () => {
+    expect(describeMarketplaceTokenSource(null)).toBe("none");
+    expect(describeMarketplaceTokenSource(BARE_IDENTITY)).toBe("none");
+  });
+
+  it("never returns a token value — only a non-secret source label", () => {
+    const secret = "super-secret-bearer-value";
+    const enc = encryptSecret(secret, "vendor.token");
+    const identity: InstanceIdentity = {
+      ...BARE_IDENTITY,
+      tokenCiphertext: enc.ciphertext,
+      tokenIv: enc.iv,
+    };
+    const label = describeMarketplaceTokenSource(identity);
+    expect(label).toBe("vendor-token");
+    expect(label).not.toContain(secret);
   });
 });
 

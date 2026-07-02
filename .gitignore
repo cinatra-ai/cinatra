@@ -24,6 +24,11 @@ yarn-error.log*
 .env*
 !.env.example
 *.pem
+# Narrow, generated WayFlow container env (host secrets the wayflow service
+# needs: CINATRA_BRIDGE_TOKEN / OPENAI_API_KEY / WAYFLOW_BASE_URL). Synced from
+# .env.local by scripts/gen-wayflow-env.mjs on every `npm run services`. The
+# `.env*` glob above does NOT match this name, so it is listed explicitly.
+docker/wayflow/.wayflow.env
 
 # --- OS / misc ---
 .DS_Store

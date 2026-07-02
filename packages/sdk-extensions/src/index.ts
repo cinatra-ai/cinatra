@@ -20,7 +20,7 @@ export { HOST_PORT_NAMES } from "./host-context";
 // addressing constants, so they belong on the public root (and do not trip the
 // public-surface ban, which targets `*_CAPABILITY` / `*_CAPABILITY_ID` only).
 export { HOST_PORT_TIERS, HOST_PORT_TIER, RESERVED_HOST_PORTS } from "./host-context";
-// ABI-evolution policy (eng#159 #13): minimum-minor ABI semantics + a
+// ABI-evolution policy: minimum-minor ABI semantics + a
 // least-privilege grant-typed ctx. Both are TYPE-LEVEL + ADDITIVE (no ABI bump):
 // `AbiScopedNangoPort<Range>` makes the 2.2-added nango getters required at a
 // `>= 2.2` declared floor; `GrantedHostContext<Ports, Range>` exposes only the
@@ -57,7 +57,7 @@ export type {
   AmbientHostPort,
 } from "./host-context";
 
-// Author-facing local test harness (cinatra-engineering#163, SDK-P1). The
+// Author-facing local test harness (SDK-P1). The
 // runtime impl is the dependency-free ./test-host-context.mjs (shared with the
 // release-tooling validator / canary). Also reachable via the
 // `@cinatra-ai/sdk-extensions/test-host-context` subpath.
@@ -165,6 +165,25 @@ export {
 } from "./crm-request-actor-contract";
 export type { CrmRequestActor, CrmRequestActorResolver } from "./crm-request-actor-contract";
 
+// PM (project-management) connector→SDK decouple (cinatra#317): provider-agnostic
+// PM contract types + the host-shared provider registry, so the host PM bridge
+// and PM provider extensions (plane-connector) depend only on the SDK, not on
+// each other. Same shape as the CRM provider registry above.
+export type {
+  PmConnector,
+  PmConnectorId,
+  PmTriggerTask,
+  PmTaskRef,
+  PmTaskState,
+} from "./pm-connector-contract";
+export {
+  registerPmProvider,
+  lookupPmProvider,
+  listPmProviders,
+  setPmProviderExternalResolver,
+  _resetPmProviderRegistry,
+} from "./pm-provider-registry-contract";
+
 export {
   setExtensionConnectorConfigStore,
   getExtensionConnectorConfig,
@@ -216,6 +235,15 @@ export type {
   ExtensionDependency,
   LegacyDependencySources,
 } from "./dependencies";
+
+// `cinatra.consumes` contract (engineering#422). Only the TYPE is re-exported
+// from the barrel (erased at build → no runtime module added to any host
+// route's reachable graph; route-graph ratchet stays flat). The VALUE helpers
+// (`parseConsumedPrimitives`, `validateConsumedPrimitiveShape`,
+// `ConsumesManifestError`) live in `./consumes` and are imported DIRECTLY by
+// the install/manifest path + the CI closure gate/sweep — pulling them through
+// the barrel would grow every barrel-importing route's first-party graph.
+export type { ConsumedPrimitive } from "./consumes";
 
 export type PluginPropertyValue = string | number | boolean | null;
 
@@ -387,6 +415,8 @@ export type {
   HostDrupalWidgetAuthService,
   HostWordPressMcpService,
   HostWordPressContentService,
+  HostInstanceWriteAuthorityService,
+  InstanceWriteConnectorKind,
   HostWordPressWidgetAuthService,
   WordPressInstanceRowShape,
   HostGitHubConnectionService,

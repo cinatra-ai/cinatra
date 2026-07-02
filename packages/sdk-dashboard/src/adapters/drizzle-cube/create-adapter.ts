@@ -121,6 +121,10 @@ function toDcSecurityContext(ctx: SecurityContext): DCSecurityContext {
     visibleProjectIds: ctx.visibleProjectIds,
     visibleTeamIds: ctx.visibleTeamIds,
     visibleArtifactIds: ctx.visibleArtifactIds,
+    // Platform-admin flag for the llm_usage cube's fail-closed visibility
+    // gate. WITHOUT this hand-whitelist entry the cube would always read
+    // `undefined` and surface zero rows even to a platform admin.
+    isPlatformAdmin: ctx.isPlatformAdmin,
   };
 }
 

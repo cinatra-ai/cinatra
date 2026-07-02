@@ -57,8 +57,13 @@ import {
   type SecurityContext,
 } from "@cinatra-ai/sdk-dashboard";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, getActorContext, isPlatformAdmin } from "@/lib/auth-session";
 import { listAccessibleOrgIdsForUser } from "@/lib/better-auth-db";
+import type { ActorContext } from "@/lib/authz/actor-context";
+import {
+  assertRuntimeCubeServeable,
+  filterCubeIdsForActor,
+} from "@/lib/dashboards/runtime-cube-serve-host";
 import {
   buildSecurityContextWithVisibility,
   DASHBOARD_VISIBILITY_RESOLVERS,
@@ -96,11 +101,17 @@ async function resolveSecurityContext(): Promise<SecurityContext | null> {
   // resolver delegates to the canonical scope helpers so the cube layer
   // never re-implements sealed-room / project_access / ownership-tier
   // authz. Resolver failures fail closed per-field.
-  return buildSecurityContextWithVisibility(
+  const ctx = await buildSecurityContextWithVisibility(
     { userId: session.user.id, organizationId },
     listAccessibleOrgIdsForUser,
     DASHBOARD_VISIBILITY_RESOLVERS,
   );
+  if (!ctx) return null;
+  // Decorate with the platform-admin flag the `llm_usage` cube reads as its
+  // fail-closed visibility gate. The session is already in hand, so this is
+  // a pure comma-split role check — no extra query. The `isPlatformAdmin`
+  // helper reuses the canonical role-parsing used across the app.
+  return { ...ctx, isPlatformAdmin: isPlatformAdmin(session) };
 }
 
 function clampQuery<T extends { limit?: number }>(q: T): T & { limit: number } {
@@ -135,6 +146,7 @@ async function runWithTimeout<T>(
 async function executeWireQuery(
   wireQuery: CubeJsWireQuery,
   ctx: SecurityContext,
+  actor: ActorContext | null,
 ):
   | Promise<
       | { ok: true; result: QueryResult; cubeId: string }
@@ -173,6 +185,19 @@ async function executeWireQuery(
       ok: false,
       status: 400,
       body: { error: resolved.code, code: resolved.code, details: resolved.details },
+    };
+  }
+  // CG-5 (cinatra#660): for a RUNTIME cube, assert the contributing extension is
+  // install-active for the actor AND trusted. ADDITIVE over the drizzle-cube
+  // tenant predicate (which still applies below for both bundled & runtime
+  // cubes). `resolveAndValidateCubeId` already rejected multi-cube queries, so
+  // gating the single resolved cube id covers every cube the query touches.
+  const serveVerdict = await assertRuntimeCubeServeable(resolved.cubeId, actor);
+  if (!serveVerdict.ok) {
+    return {
+      ok: false,
+      status: 403,
+      body: { error: serveVerdict.reason, code: serveVerdict.code },
     };
   }
   const adapter = getAdapter();
@@ -237,10 +262,15 @@ export async function GET(
   if (!ctx) {
     return errorResponse(401, { error: "Unauthorized", code: "unauthorized" });
   }
+  // Kernel ActorContext for the CG-5 runtime-cube serve-gate (cinatra#660). Null
+  // is treated as "no addressable install" for runtime cubes (fail-closed).
+  const actor = (await getActorContext()) ?? null;
 
   if (endpoint[0] === "meta") {
     const adapter = getAdapter();
-    const cubeIds = adapter.listCubeIds();
+    // CG-5 catalog filter: a runtime cube the actor cannot serve must not even
+    // appear in /meta (prevents leaking another org's runtime-cube existence).
+    const cubeIds = await filterCubeIdsForActor(adapter.listCubeIds(), actor);
     const descriptors = await Promise.all(cubeIds.map((id) => adapter.getCubeMeta(id, ctx)));
     return NextResponse.json(toCubeMeta(descriptors));
   }
@@ -263,7 +293,7 @@ export async function GET(
         code: "body_parse_failed",
       });
     }
-    const exec = await executeWireQuery(wire, ctx);
+    const exec = await executeWireQuery(wire, ctx, actor);
     if (!exec.ok) return errorResponse(exec.status, exec.body);
     const humanizedResult = { ...exec.result, rows: humanizeAgentRunsRows(exec.result.rows) };
     return NextResponse.json(toCubeJsLoadResponse(humanizedResult, wire));
@@ -297,6 +327,8 @@ export async function POST(
   if (!ctx) {
     return errorResponse(401, { error: "Unauthorized", code: "unauthorized" });
   }
+  // Kernel ActorContext for the CG-5 runtime-cube serve-gate (cinatra#660).
+  const actor = (await getActorContext()) ?? null;
 
   // ─── Body size caps ───
   const contentLengthHeader = Number(req.headers.get("content-length") ?? "0");
@@ -386,7 +418,7 @@ export async function POST(
         code: "body_parse_failed",
       });
     }
-    const exec = await executeWireQuery(wire, ctx);
+    const exec = await executeWireQuery(wire, ctx, actor);
     if (!exec.ok) return errorResponse(exec.status, exec.body);
     const humanizedResult = { ...exec.result, rows: humanizeAgentRunsRows(exec.result.rows) };
     return NextResponse.json(toCubeJsLoadResponse(humanizedResult, wire));
@@ -412,7 +444,7 @@ export async function POST(
     // failures are envelope-level only.
     const results: CubeJsBatchResultItem[] = [];
     for (const wire of queries) {
-      const exec = await executeWireQuery(wire, ctx);
+      const exec = await executeWireQuery(wire, ctx, actor);
       if (exec.ok) {
         results.push({
           success: true,

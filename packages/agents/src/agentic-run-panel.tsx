@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import {
+  linkifyErrorText,
+  isOpenAiKeyError,
+  LLM_PROVIDER_SETTINGS_HREF,
+  isMcpUnreachableError,
+  MCP_CONFIG_HREF,
+} from "./agent-error-display";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
@@ -86,6 +94,16 @@ type AgenticRunPanelProps = {
     gate: ChatGateDescriptor | null,
     instanceId: string,
   ) => void;
+  // Render surface discriminator. The sticky bottom-of-page field-assist
+  // conversation (HitlConversationPanel) belongs to the /agents/* run-detail
+  // UI only. In chat (InlineAgentRunCard) the panel is mounted inline and the
+  // user drives an open HITL gate through the normal chat composer via
+  // onActiveGateChange — the field-assist prompt there only duplicates the
+  // composer and, because each inline card portals its OWN PromptField into the
+  // shared <main>, N concurrent pending HITLs stack N prompts (cinatra#767).
+  // Default "agent-detail" keeps the prompt under /agents/*; "chat" suppresses
+  // the whole HitlConversationPanel.
+  surface?: "chat" | "agent-detail";
 };
 
 export type ChatGateField = {
@@ -227,6 +245,7 @@ export function AgenticRunPanel({
   templateId,
   initialStreamedText,
   onActiveGateChange,
+  surface = "agent-detail",
 }: AgenticRunPanelProps) {
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
@@ -908,6 +927,34 @@ export function AgenticRunPanel({
                 const isGroupedSetup =
                   effectiveHitlContext.xRenderer === GROUPED_SETUP_FORM_RENDERER_ID ||
                   effectiveHitlContext.xRenderer.startsWith(`${GROUPED_SETUP_FORM_RENDERER_ID}:`);
+                // Chat-surface step-0 input gate (engineering#416). A `setup-`
+                // reviewTaskId is the STRUCTURAL identity of the StartNode
+                // step-0 input gate: oas-compiler hardcodes it
+                // `{stepNumber:0, riskClass:"read_only", skipLlm:true}` and the
+                // setup-interrupt loop in execution.ts is the ONLY emitter of
+                // synthetic `setup-<runId>` ids — it pauses purely to COLLECT
+                // missing inputs, never as a side-effect checkpoint (the real
+                // side-effect gates run through inferStepSideEffects /
+                // SIDE_EFFECT_PATTERNS with their own non-`setup-` ids). So
+                // `setup-` ⇔ "step-0 read_only, !inferStepSideEffects" without
+                // any drift-prone riskClass string match. In chat the human
+                // supplies the inputs inline — that IS the approval — so the
+                // per-field renderer's own "Continue" button is a redundant
+                // second click ON TOP of the inline input form (and the chat
+                // composer also drives the gate via gate.submit). Suppress it
+                // for the chat surface only via hideSubmit; the field still
+                // submits on Enter and through the composer. Strictly scoped to
+                // surface==="chat": /agents/* run-detail (default
+                // "agent-detail") keeps its explicit Continue. Grouped-setup
+                // and mid-run gates are untouched (they own their own single
+                // submit / Continue). A non-`setup-` side-effect gate never
+                // reaches this branch as a setup gate, so it always still
+                // prompts.
+                const isChatSetupGate =
+                  surface === "chat" &&
+                  effectiveHitlContext.reviewTaskId.startsWith("setup-");
+                const hideSetupSubmitInChat =
+                  isChatSetupGate && !isMidRunHitl && !isGroupedSetup;
                 return (
                   <>
                     <RendererComponent
@@ -915,6 +962,7 @@ export function AgenticRunPanel({
                       fieldName="hitl-field"
                       schema={hitlRendererEntry.fieldSchema}
                       value={{ ...effectiveHitlContext.currentValues, ...bufferedHitlValue }}
+                      hideSubmit={hideSetupSubmitInChat}
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to approveReviewTask
                         // for grouped-setup immediate-submit, then setState for the visual update.
@@ -1007,9 +1055,9 @@ export function AgenticRunPanel({
               Run paused — awaiting human approval before continuing.
             </span>
             <Button asChild variant="outline" size="sm">
-              <a href={`/configuration/agents/approvals?runId=${encodeURIComponent(runId)}`}>
+              <Link href={`/configuration/agents/approvals?runId=${encodeURIComponent(runId)}`}>
                 Review approval
-              </a>
+              </Link>
             </Button>
           </div>
         </>
@@ -1018,23 +1066,60 @@ export function AgenticRunPanel({
       {traceId ? (
         <div className="flex items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <a
+            <Link
               href={`/analytics/api?runId=${encodeURIComponent(runId)}`}
               target="_blank"
               rel="noreferrer"
             >
               View trace
-            </a>
+            </Link>
           </Button>
         </div>
       ) : null}
 
       {error && status === "failed" && (
-        <div className="rounded-control border border-line bg-surface-muted px-4 py-3">
+        <div className="rounded-control border border-line bg-surface-muted px-4 py-3 max-w-full overflow-hidden">
           <div className="text-xs font-medium text-muted-foreground mb-1">Error</div>
+          {/* Long unbreakable tokens (e.g. masked sk-proj-… keys) overflowed the
+              panel; constrain the container (max-w-full overflow-hidden) and keep
+              break-all wrapping. Linkify provider URLs in the message so they are
+              actionable, and link to the in-app key settings. (#498) */}
           <pre className="text-xs text-foreground whitespace-pre-wrap break-all">
-            {error}
+            {linkifyErrorText(error).map((seg, i) =>
+              seg.kind === "link" ? (
+                <Link
+                  key={i}
+                  href={seg.href}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="underline underline-offset-2"
+                >
+                  {seg.value}
+                </Link>
+              ) : (
+                <span key={i}>{seg.value}</span>
+              ),
+            )}
           </pre>
+          {isOpenAiKeyError(error) && (
+            <Link
+              href={LLM_PROVIDER_SETTINGS_HREF}
+              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+            >
+              Update your OpenAI API key →
+            </Link>
+          )}
+          {/* Hosted-MCP 424: the provider could not reach this instance's public
+              MCP URL to load the cinatra toolbox. Link to the MCP config so the
+              user can fix the public URL / tunnel. (#500) */}
+          {isMcpUnreachableError(error) && !isOpenAiKeyError(error) && (
+            <Link
+              href={MCP_CONFIG_HREF}
+              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+            >
+              Check your MCP server configuration →
+            </Link>
+          )}
         </div>
       )}
 
@@ -1106,7 +1191,7 @@ export function AgenticRunPanel({
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={isPendingApproval && !!effectiveHitlContext?.xRenderer && !!templateId && !!portalTarget}
+      visible={surface !== "chat" && isPendingApproval && !!effectiveHitlContext?.xRenderer && !!templateId && !!portalTarget}
       conversation={conversation}
       promptPending={promptPending}
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}

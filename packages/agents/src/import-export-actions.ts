@@ -66,6 +66,10 @@ export type LocalAgentTemplateSeed = {
    */
   agentDependencies?: Record<string, string>; // @cinatra/* dep ranges; undefined when manifest had no value
   type?: "leaf" | "proxy" | "orchestrator" | "parallel" | "supervisor" | "iterative" | "flow" | "node"; // defaults to "leaf" if omitted
+  // Namespaced x-renderer IDs the agent declares as HITL states. Threaded into
+  // createAgentTemplate so a fresh registry install seeds hitlScreens with the
+  // same value the upsert branch writes (parity across fresh / upsert / race).
+  hitlScreens?: string[];
   lgGraphCode?: string | null;
   lgGraphId?: string | null;
   executionProvider?: "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default";
@@ -154,6 +158,7 @@ export async function createLocalAgentTemplateVersion(input: {
     packageName: input.seed.packageName,
     packageVersion: input.seed.packageVersion,
     agentDependencies: input.seed.agentDependencies,
+    hitlScreens: input.seed.hitlScreens,
     type: input.seed.type, // serializer defaults to "leaf" when undefined
     lgGraphCode: input.seed.lgGraphCode ?? null,
     lgGraphId: input.seed.lgGraphId ?? null,

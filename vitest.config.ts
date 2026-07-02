@@ -273,19 +273,44 @@ export default defineConfig({
       // Vendor Anthropic skills fetcher safety tests (spawn-based; no network;
       // CI-postinstall env safety).
       "scripts/__tests__/**/*.test.{ts,mjs}",
-      // CLI dev-marketplace plugin sync (dependency-injected git; no real git).
+      // Monorepo-owned dev/CI extension tooling (cinatra#402 P2): dev-extension
+      // sync + prod-extension acquisition helpers (dependency-injected git/IO;
+      // no real git/network). The user-facing CLI now ships externally as
+      // @cinatra-ai/cinatra and is tested in the cinatra-ai/cinatra-cli repo.
       "packages/cli/src/__tests__/**/*.test.{ts,mjs}",
+      // Schema-migration runner contract (cinatra#403: relocated from
+      // packages/cli to the internal @cinatra-ai/migrations package; pure
+      // filename/sequence preflight + assertion helpers, no DB).
+      "packages/migrations/src/**/__tests__/**/*.test.{ts,mjs}",
       // SDK ABI contract: dependency-normalization shim (pure; no IO).
       "packages/sdk-extensions/src/**/__tests__/**/*.test.{ts,tsx}",
       // SDK Nango connect surfaces: orphaned Connect UI cleanup contract (#48)
       // (source-text + module-load smoke; vitest env is node — no DOM render).
       "packages/sdk-ui/src/**/__tests__/**/*.test.{ts,tsx}",
+      // Connectors grid design-system contract (#604/#605/#606): source-text
+      // assertions on the toggle-group spec, plug-status icon, and mustard mark
+      // (vitest env is node — no DOM render).
+      "packages/connectors/src/**/__tests__/**/*.test.{ts,tsx}",
       // Extension inventory + dependency-graph generator (pure; reads repo).
       "scripts/extensions/__tests__/**/*.test.{ts,mjs}",
       // CI clone-back pinning helpers (pure cores; dependency-injected IO).
       "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
+      // Manifest-driven build-config generator: renders the tsconfig path
+      // aliases + next.config package lists from one manifest and gates
+      // byte-exact drift. Pure renderers + CLI --check (no DB/network).
+      "scripts/config/__tests__/**/*.test.{ts,mjs}",
+      // Runtime dashboard cube/portlet registries (cinatra#660 / PR-7). Pure
+      // unit tests over the runtime-cube registry, the CG-5 serve-gate decision,
+      // the runtime portlet-kind registry, and the host-cube alias helper. No
+      // DB/DOM — gated by the root suite (the rest of packages/dashboards stays
+      // pinned in build-image.yml). Added by precise path (not whole-dir) so the
+      // jsdom/DB dashboards tests are NOT pulled into the node root run.
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-registry.test.ts",
+      "packages/dashboards/src/cubes/__tests__/runtime-cube-serve-gate.test.ts",
+      "packages/dashboards/src/__tests__/runtime-portlet-kind.test.ts",
+      "packages/sdk-dashboard/src/adapters/drizzle-cube/__tests__/alias-cube.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a
@@ -298,16 +323,21 @@ export default defineConfig({
       // node:test runner files (vitest reports "No test suite found"); each is
       // run via `node --test` by its own dedicated workflow or step
       // (gatekept-install-no-direct-registry, actions-pin-gate,
-      // workspace-phantom-deps, crm-pointer-gate, schema-migration-gate,
+      // workspace-phantom-deps, workspace-dep-cycles, file-size-ratchet,
+      // route-graph-ratchet, crm-pointer-gate, schema-migration-gate,
       // sdk-abi-readme-gate), NOT as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
+      "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
+      "scripts/audit/__tests__/file-size-ratchet.test.mjs",
+      "scripts/audit/__tests__/route-graph-ratchet.test.mjs",
       "scripts/audit/__tests__/manifest-resolve.test.mjs",
       "scripts/audit/__tests__/crm-pointer-gate.test.mjs",
       "scripts/audit/__tests__/schema-migration-gate.test.mjs",
       "scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs",
       "scripts/audit/__tests__/sdk-public-surface-ban.test.mjs",
+      "scripts/audit/__tests__/skill-frontmatter-gate.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
       // Mirrors the `*.integration.test.ts` exclusion above. Lifted when

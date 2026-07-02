@@ -7,7 +7,7 @@ import "server-only";
 // package-relative directory of STANDARD node-pg-migrate ESM modules named
 // `ext_<scope>_<pkg>__NNNN_<short-description>.mjs` (the per-source namespace
 // for the shared `pgmigrations` ledger). The HOST runs them through
-// `runNamespacedMigrations` (`@cinatra-ai/cli/core-migrations`): dedicated
+// `runNamespacedMigrations` (`@cinatra-ai/migrations`): dedicated
 // short-lived pg client, the database-global `cinatra-schema-init` advisory
 // lock, `noLock`, `checkOrder: false` — exactly the core runner's options, so
 // core and extension migrations can never drift apart.
@@ -33,7 +33,7 @@ import {
   extensionMigrationNamespace,
   runNamespacedMigrations,
   validateNamespacedMigrationsDir,
-} from "@cinatra-ai/cli/core-migrations";
+} from "@cinatra-ai/migrations";
 import { recordDeclaresHostMigrations } from "@cinatra-ai/sdk-extensions";
 
 const DEFAULT_SCHEMA = "cinatra";

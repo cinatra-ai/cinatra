@@ -1,0 +1,170 @@
+{
+  "component_type": "Flow",
+  "id": "works-after-echo-works-after-echo",
+  "name": "works-after-echo",
+  "description": "Deterministic no-LLM echo flow for the works-after wayflow proof.",
+  "metadata": {
+    "cinatra": {
+      "packageName": "@cinatra-works-after/echo-proof",
+      "packageVersion": "0.0.0"
+    }
+  },
+  "inputs": [
+    {
+      "description": "The nonce to echo back.",
+      "title": "echo_nonce",
+      "type": "string"
+    }
+  ],
+  "outputs": [
+    {
+      "description": "The echoed nonce output.",
+      "title": "echo_nonce",
+      "type": "string"
+    }
+  ],
+  "start_node": {
+    "$component_ref": "works-after-echo-start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "works-after-echo-start"
+    },
+    {
+      "$component_ref": "works-after-echo-echo"
+    },
+    {
+      "$component_ref": "works-after-echo-end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "works-after-echo-start->echo",
+      "name": "start->echo",
+      "description": null,
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "works-after-echo-start"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "works-after-echo-echo"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "works-after-echo-echo->end",
+      "name": "echo->end",
+      "description": null,
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "works-after-echo-echo"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "works-after-echo-end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "id": "works-after-echo-nonce:start->echo",
+      "name": "nonce:start->echo",
+      "description": null,
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "works-after-echo-start"
+      },
+      "source_output": "echo_nonce",
+      "destination_node": {
+        "$component_ref": "works-after-echo-echo"
+      },
+      "destination_input": "echo_nonce"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "id": "works-after-echo-nonce:start->end",
+      "name": "nonce:start->end",
+      "description": null,
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "works-after-echo-start"
+      },
+      "source_output": "echo_nonce",
+      "destination_node": {
+        "$component_ref": "works-after-echo-end"
+      },
+      "destination_input": "echo_nonce"
+    }
+  ],
+  "$referenced_components": {
+    "works-after-echo-start": {
+      "component_type": "StartNode",
+      "id": "works-after-echo-start",
+      "name": "start",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The nonce to echo back.",
+          "title": "echo_nonce",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The nonce to echo back.",
+          "title": "echo_nonce",
+          "type": "string"
+        }
+      ],
+      "branches": [
+        "next"
+      ]
+    },
+    "works-after-echo-echo": {
+      "component_type": "OutputMessageNode",
+      "id": "works-after-echo-echo",
+      "name": "echo",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "title": "echo_nonce",
+          "type": "string"
+        }
+      ],
+      "outputs": [],
+      "branches": [
+        "next"
+      ],
+      "message": "works-after echo: {{echo_nonce}}"
+    },
+    "works-after-echo-end": {
+      "component_type": "EndNode",
+      "id": "works-after-echo-end",
+      "name": "end",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The echoed nonce output.",
+          "title": "echo_nonce",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The echoed nonce output.",
+          "title": "echo_nonce",
+          "type": "string"
+        }
+      ],
+      "branches": [],
+      "branch_name": "next"
+    }
+  },
+  "agentspec_version": "25.4.1"
+}

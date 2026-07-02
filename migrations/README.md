@@ -33,8 +33,9 @@ Cinatra talks to PostgreSQL raw via `pg`. Two mechanisms evolve the schema:
   without executing — because the bootstrap produces the current,
   post-migration shape on fresh databases.
 - **Ops / rollback**: `pnpm db:migrate` / `pnpm db:migrate:down` (or
-  `node packages/cli/bin/cinatra.mjs db migrate [--down] [--count=N]`, which
-  also works inside the production image via `docker exec`). `--down` calls
+  `cinatra db migrate [--down] [--count=N]` from a checkout; inside the
+  production image, `node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs
+  db migrate ...` via `docker exec`). `--down` calls
   the migration's `down()` and pops its ledger row; it refuses to run if the
   newest ledger rows belong to another source (see "One ledger" below). For a
   NON-core source, `cinatra db migrate --down --dir <abs> --namespace <ns>`
@@ -96,7 +97,7 @@ typed schema (the "Pre-structured-column schema detection and cleanup" block in
 milestones simply bump `PREV_IMAGE` to the prior published tag and re-run.
 
 The runner (single implementation:
-[`packages/cli/src/core-migrations.mjs`](../packages/cli/src/core-migrations.mjs))
+[`packages/migrations/src/core-migrations.mjs`](../packages/migrations/src/core-migrations.mjs))
 drives node-pg-migrate's programmatic `runner()` on a dedicated short-lived
 `pg` client created inside the call — never a top-level pool — and serializes
 under the same database-global advisory lock the bootstrap DDL and the

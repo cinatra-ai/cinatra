@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-install-path": "./src/agent-install-path.ts",
+    "./runtime-install-gate": "./src/runtime-install-gate.ts",
     "./extension-handler": "./src/extension-handler.ts",
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",
     "./package-contract": "./src/verdaccio/package-contract.ts",
@@ -24,6 +25,8 @@
     "./schema": "./src/schema.ts",
     "./auditor-apply": "./src/auditor-apply.ts",
     "./db": "./src/db.ts",
+    "./pm-link-store": "./src/pm-link-store.ts",
+    "./trigger-store": "./src/trigger-store.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts"

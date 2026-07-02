@@ -40,6 +40,18 @@ vi.mock("../verdaccio/client", () => ({
   publishAgentPackageFromGitDir: mockPublishAgentPackageFromGitDir,
 }));
 
+// Mock the instance-identity store so the on-disk path resolvers'
+// vendor-segment derivation (cinatra#537 — resolveAgentJsonPathForRead /
+// safeVendorSegmentsForRead now call readInstanceIdentity) never reaches the
+// REAL @/lib/database, which would block on a synchronous Postgres worker
+// (Atomics.wait, ~30s/call) with no DB reachable. Returning null = "identity
+// unset", so the resolvers fall back to the first-party "cinatra-ai" vendor
+// segment — exactly the layout this test's writeOasFixture writes to.
+vi.mock("@/lib/instance-identity-store", () => ({
+  readInstanceIdentity: vi.fn(() => null),
+  markFirstPublishedIfCurrentScope: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock the rest of the transitive chain (same surface as the handler test).
 // ---------------------------------------------------------------------------
@@ -48,7 +60,7 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   readLocalPackageSkillContent: vi.fn(),
 }));
-vi.mock("@cinatra-ai/registries", () => ({ listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("@cinatra-ai/objects", () => ({
   createDeterministicObjectsClient: vi.fn(() => ({})),
 }));

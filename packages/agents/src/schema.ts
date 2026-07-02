@@ -411,6 +411,40 @@ export const agentRunTriggers = cinatraSchema.table("agent_run_triggers", {
 }));
 
 // ---------------------------------------------------------------------------
+// agent_run_pm_links — schedule↔PM-task sync link table (cinatra#317).
+// ---------------------------------------------------------------------------
+// One row per schedule-DEFINING trigger that has been mirrored to an external
+// project-management provider (Plane today). Keyed by run_id (one-to-one with
+// the trigger, which is itself one-to-one with the top-level agent_run), so the
+// PM mirror tracks the schedule definition, NOT the recurring child runs.
+//
+// Deliberately a LINK TABLE (issue #317 "prefer a link table over columns on
+// agent_run_triggers"): a Plane outage / missing provider leaves the trigger
+// untouched — the absence of a link row is the natural "not mirrored" state and
+// the trigger lifecycle never blocks on PM. external_task_id is nullable so a
+// failed first push still records the attempt (provider + sync_error) without a
+// task id. sync_error holds the last fail-open error text (null = healthy).
+// version is an optimistic-concurrency counter for the reconcile loop (#318).
+//
+// FK on run_id → agent_runs.id ON DELETE CASCADE: deleting a run tears down its
+// trigger AND its PM link row together (the external task cleanup is the
+// connector's job via deleteTriggerTask, invoked from the trigger lifecycle).
+// ---------------------------------------------------------------------------
+
+export const agentRunPmLinks = cinatraSchema.table("agent_run_pm_links", {
+  runId:         text("run_id").primaryKey().references(() => agentRuns.id, { onDelete: "cascade" }),
+  provider:      text("provider").notNull(), // PM provider id, e.g. 'plane'
+  externalTaskId: text("external_task_id"),  // provider work-item id; null until first successful push
+  syncedAt:      timestamp("synced_at", { withTimezone: true }), // last successful mirror; null until first success
+  syncError:     text("sync_error"),         // last fail-open error text; null = healthy
+  version:       integer("version").notNull().default(0), // optimistic-concurrency counter (reconcile #318)
+  createdAt:     timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:     timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  providerIdx: index("agent_run_pm_links_provider_idx").on(t.provider),
+}));
+
+// ---------------------------------------------------------------------------
 // run_co_owners — per-run sharing join table.
 // Composite PK (run_id, user_id) is the natural uniqueness AND lookup index.
 // FK on run_id with ON DELETE CASCADE ensures rows are removed when the

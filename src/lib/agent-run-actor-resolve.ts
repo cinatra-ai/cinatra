@@ -37,30 +37,56 @@ function rolesIncludeAdmin(roleField: string | null | undefined): boolean {
     .includes("admin");
 }
 
+// cinatra#408 — run source types whose actor must NEVER resolve to
+// `platform_admin`. The public-site widget path carries a logged-in END USER's
+// identity (`runBy = userId`); a platform admin who is ALSO a widget user must
+// be gated by their per-user/per-connector rights (cinatra#409), NOT waved
+// through by the platform-admin immediate-allow at the MCP boundary
+// (mcp-boundary.ts:207). Suppressing the bypass HERE — at the single mint-time
+// resolver — means the actor never carries `platform_admin` for this path, so
+// the boundary's immediate-allow is never reached (resolver-only suppression,
+// codex-converged O2; the load-bearing proof is the end-to-end actor assertion).
+const PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES = new Set<string>(["public_site_widget"]);
+
 /**
  * Live-resolve the AgentRunMcpActor for a (runBy, orgId, runId) triple.
  *
  * Returns:
  * - actor with `platformRole: "platform_admin"` when the user row carries
- *   the admin role (irrespective of membership)
+ *   the admin role (irrespective of membership) — UNLESS `sourceType` is in
+ *   `PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES` (the public-site widget path),
+ *   in which case the admin short-circuit is suppressed and resolution falls
+ *   through to the live `member`-row check (cinatra#408)
  * - actor with `platformRole: "member"` when a `public.member` row exists
  *   for (userId = runBy, organizationId = orgId)
  * - `null` otherwise (caller falls back to the machine token; boundary
- *   denies with `not_org_member` — never elevates)
+ *   denies with `not_org_member` — never elevates). For a suppressed source
+ *   type, an admin who is NOT a live org member also resolves to `null` →
+ *   denied (never an elevation).
  */
 export async function resolveAgentRunMcpActor(input: {
   runId: string;
   runBy: string;
   orgId: string;
+  /**
+   * The carrier run's `source_type`. When it is a platform-admin-suppressed
+   * source (`public_site_widget`), the `platform_admin` short-circuit is
+   * skipped so a widget user can never resolve to `platform_admin` (cinatra#408).
+   * Absent / any other value → unchanged behavior.
+   */
+  sourceType?: string | null;
 }): Promise<AgentRunMcpActor | null> {
   if (!input.runBy || !input.orgId || !input.runId) return null;
+  const suppressPlatformAdmin =
+    typeof input.sourceType === "string" &&
+    PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES.has(input.sourceType);
   const [userRow] = await betterAuthDb
     .select({ id: betterAuthUsers.id, role: betterAuthUsers.role })
     .from(betterAuthUsers)
     .where(eq(betterAuthUsers.id, input.runBy))
     .limit(1);
   if (!userRow) return null;
-  if (rolesIncludeAdmin(userRow.role)) {
+  if (!suppressPlatformAdmin && rolesIncludeAdmin(userRow.role)) {
     return {
       delegation: "agent_run",
       userId: input.runBy,

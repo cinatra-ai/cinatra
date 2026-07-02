@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { Eye, Pencil, Trash2, UserRoundCog } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -91,7 +92,7 @@ export function UserActions(props: {
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <form action={deleteUserAction}>
-                <input type="hidden" name="userId" value={props.userId} />
+                <Input type="hidden" name="userId" value={props.userId} />
                 <AlertDialogAction type="submit">Delete user</AlertDialogAction>
               </form>
             </AlertDialogFooter>

@@ -14,17 +14,13 @@ import { getAuthSession } from "@/lib/auth-session";
 import { buildSecurityContextFromSession } from "../auth/security-context";
 
 import { dashboards, getDashboardsDb } from "../store/db";
-import {
-  parseDashboardConfig,
-  type DashboardConfigV1_1,
-} from "../store/dashboard-config";
+import { type DashboardConfigV1_1 } from "../store/dashboard-config";
 import { readDcConfigFromRow } from "../v12-envelope";
 import {
   ORGANIZATIONS_DEFAULT_CONFIG,
   buildOrganizationsDashboardId,
 } from "../components/seed-configs/organizations-default";
-import { DashboardGridContainer } from "../components/dashboard-grid-container";
-import { DashboardsClientShell } from "../components/dashboards-client-shell";
+import { EmbeddedDrizzleCubeDashboardGrid } from "../components/embedded-drizzle-cube-dashboard-grid";
 import { saveOrganizationsDashboardAction } from "../actions";
 
 async function loadOrganizationsConfig(
@@ -46,9 +42,11 @@ async function loadOrganizationsConfig(
     )
     .limit(1);
   // Unwrap the apiVersion 1.2 analytics envelope back to the bare drizzle-cube
-  // config the grid mounts (legacy rows parse via the dispatcher; absent/corrupt
-  // → seed). The screen stays on the legacy grid (#328 switches it to PortletHost).
-  return readDcConfigFromRow(rows[0], ORGANIZATIONS_DEFAULT_CONFIG, parseDashboardConfig);
+  // config the grid mounts (an absent/corrupt/non-1.2 row falls back to the
+  // seed; the legacy 1.0/1.1 read path was removed in cinatra#329 after the
+  // migration). #328 renders via EmbeddedDrizzleCubeDashboardGrid (the PortletHost grid
+  // renderer); the data shape stays the bare DC config the view mounts.
+  return readDcConfigFromRow(rows[0], ORGANIZATIONS_DEFAULT_CONFIG);
 }
 
 export async function OrganizationsDashboardPage() {
@@ -75,13 +73,12 @@ export async function OrganizationsDashboardPage() {
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
-        <DashboardsClientShell dashboardModes={["grid", "rows"]}>
-          <DashboardGridContainer
-            initialConfig={initialConfig}
-            editable
-            onSave={saveOrganizationsDashboardAction}
-          />
-        </DashboardsClientShell>
+        <EmbeddedDrizzleCubeDashboardGrid
+          dashboard={initialConfig}
+          editable
+          onSave={saveOrganizationsDashboardAction}
+          dashboardModes={["grid", "rows"]}
+        />
       </PageContent>
     </Main>
   );

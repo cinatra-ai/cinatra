@@ -54,6 +54,17 @@ export function getMcpCubeTools(opts: McpCubeToolsOptions): CinatraCubeMcpTools 
   return tools;
 }
 
+/**
+ * Clear ONLY the MCP cube-tools bridge so the next `getMcpCubeTools` rebuilds it
+ * against a freshly-rebuilt platform. Called on a runtime-cube reconcile AFTER
+ * the platform singleton is cleared — without this, the MCP transport would keep
+ * a stale bridge bound to the OLD `SemanticLayerCompiler` (and thus the old cube
+ * list). Does NOT touch the platform (the reconcile orchestrator owns that).
+ */
+export function clearMcpCubeToolsForReconcile(): void {
+  globalThis.__cinatraDashboardsMcpCubeTools = undefined;
+}
+
 /** Test-only — clear the global singletons so a fresh build is forced. */
 export function __resetMcpCubeToolsForTests(): void {
   globalThis.__cinatraDashboardsMcpCubeTools = undefined;

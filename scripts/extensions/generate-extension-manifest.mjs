@@ -464,8 +464,423 @@ export function validateWidgetStreamDeclaration(pkgName, ws) {
     ) {
       errors.push(`${at}.auth.requiredInstanceFields: must be an array of non-empty strings`);
     }
+    // cinatra#408 — optional per-agent "require user token" flag. Absent is
+    // valid (defaults to ENFORCE on the public_site_widget surface); when
+    // present it MUST be a boolean. An explicit `false` is the audited opt-out.
+    if ("requireUserToken" in ws.auth && typeof ws.auth.requireUserToken !== "boolean") {
+      errors.push(`${at}.auth.requireUserToken: must be a boolean when present`);
+    }
   }
   return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Inbound-webhook declaration (`cinatra.webhooks`, cinatra#340).
+//
+// A connector OPTS IN to receiving webhooks by declaring `cinatra.webhooks` in
+// its package.json:
+//   - `hooks`        — non-empty array of declared hooks; each:
+//       - `id`          — kebab-case hook id (the `<hook>` URL segment)
+//       - `handler`     — package-relative subpath (e.g. "./src/webhooks/post")
+//                         whose module exports the named `factory`
+//       - `factory`     — the named export the host invokes (a function)
+//       - `label`       — optional human label (#342 registry UI); derived from
+//                         the id when absent
+//       - `rejectStatus`— optional 4xx (400-499) the route returns for a
+//                         `rejected` outcome (default 204)
+//       - `schemaVersion`— optional declared payload schema version (carried as
+//                         metadata; integer >= 1 when present)
+// FAIL-CLOSED: a malformed declaration, a duplicate hook id within the package,
+// a missing handler subpath, or a missing/non-function factory is a generation
+// error — a silently dropped hook would 404 a live webhook, and an over-emitted
+// one would dispatch to a non-existent handler.
+// ---------------------------------------------------------------------------
+const WEBHOOK_HOOK_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const WEBHOOK_FACTORY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const WEBHOOK_HANDLER_SUBPATH_RE = /^\.\/[A-Za-z0-9._/-]+$/;
+
+export function validateWebhooksDeclaration(pkgName, w) {
+  const errors = [];
+  const at = `${pkgName} cinatra.webhooks`;
+  if (!isObj(w)) return [`${at}: must be an object`];
+  if (!Array.isArray(w.hooks) || w.hooks.length === 0) {
+    return [`${at}.hooks: must be a non-empty array`];
+  }
+  const seen = new Set();
+  w.hooks.forEach((h, i) => {
+    const hat = `${at}.hooks[${i}]`;
+    if (!isObj(h)) {
+      errors.push(`${hat}: must be an object`);
+      return;
+    }
+    if (typeof h.id !== "string" || !WEBHOOK_HOOK_ID_RE.test(h.id)) {
+      errors.push(`${hat}.id: must be a kebab-case hook id`);
+    } else if (seen.has(h.id)) {
+      errors.push(`${hat}.id: duplicate hook id "${h.id}" within ${pkgName}`);
+    } else {
+      seen.add(h.id);
+    }
+    if (typeof h.handler !== "string" || !WEBHOOK_HANDLER_SUBPATH_RE.test(h.handler)) {
+      errors.push(`${hat}.handler: must be a package-relative subpath (e.g. "./src/webhooks/post")`);
+    }
+    if (typeof h.factory !== "string" || !WEBHOOK_FACTORY_RE.test(h.factory)) {
+      errors.push(`${hat}.factory: must be a non-empty identifier`);
+    }
+    if (h.label !== undefined && (typeof h.label !== "string" || !h.label.trim())) {
+      errors.push(`${hat}.label: must be a non-empty string when present`);
+    }
+    if (h.rejectStatus !== undefined) {
+      if (!Number.isInteger(h.rejectStatus) || h.rejectStatus < 400 || h.rejectStatus > 499) {
+        errors.push(`${hat}.rejectStatus: must be an integer 400-499 when present`);
+      }
+    }
+    if (h.schemaVersion !== undefined) {
+      if (!Number.isInteger(h.schemaVersion) || h.schemaVersion < 1) {
+        errors.push(`${hat}.schemaVersion: must be a positive integer when present`);
+      }
+    }
+  });
+  return errors;
+}
+
+// Source-level assertion that a webhook handler module exports the named
+// `factory` as a CALLABLE function. The generator never transpiles/imports the
+// TS, so callability is proven structurally and FAIL-CLOSED:
+//   - `export function NAME(`            / `export async function NAME(`
+//   - `export const NAME = (...) =>`     (arrow, incl. async / typed / bare /
+//                                          extra-parenthesized params)
+//   - `export const NAME = function`     / `export const NAME = async function`
+//   - `export const NAME: Type = (` / `= async (` / `= function`
+// REJECTED: a non-function `export const NAME = 5`, OR a lookalike that only
+// appears inside a comment / string / template / regex literal. Two defences
+// stack: (1) those literals are STRIPPED first (the stripper is FAIL-CLOSED-
+// biased: an ambiguous `/` after `)`/`]`/`}` is treated as a regex and stripped,
+// since over-stripping only risks a false-REJECT — the safe direction — while
+// under-stripping could risk a false-PASS), and (2) the `export` keyword must
+// sit at STATEMENT POSITION (start of source or right after `;`/`{`/`}`/newline).
+// This is a source-level structural gate, not a full JS parser; its purpose is
+// to catch HONEST author mistakes (typo'd / non-function factory) fail-closed.
+// A pathological false-PASS (a real export absent but a lookalike hidden in an
+// exotic literal the stripper still missed) is additionally backstopped at
+// RUNTIME: the generated dynamic import resolves `NAME` to `undefined` and
+// buildWebhookHandler fails loud — so the connector author gains nothing.
+
+// cinatra#344 — `cinatra.streams` declaration. A connector OPTS IN to the
+// host-owned generic stream route by declaring a STREAM with a neutral handler
+// factory (built on @cinatra-ai/streams). STAGED: the relay / run-stream
+// migration is NOT declared here yet — no extension declares cinatra.streams on
+// day one, so the generated map is `{}` and the route is INERT (every request
+// 404s), exactly like cinatra.webhooks was at #340.
+const STREAM_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+const STREAM_HANDLER_SUBPATH_RE = /^\.\/[A-Za-z0-9._/-]+$/;
+const STREAM_FACTORY_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+export function validateStreamsDeclaration(pkgName, decl) {
+  const errors = [];
+  const at = `${pkgName} cinatra.streams`;
+  if (!isObj(decl)) return [`${at}: must be an object`];
+  if (!Array.isArray(decl.streams) || decl.streams.length === 0) {
+    return [`${at}.streams: must be a non-empty array`];
+  }
+  const seen = new Set();
+  decl.streams.forEach((s, i) => {
+    const sat = `${at}.streams[${i}]`;
+    if (!isObj(s)) {
+      errors.push(`${sat}: must be an object`);
+      return;
+    }
+    if (typeof s.streamSlug !== "string" || !STREAM_SLUG_RE.test(s.streamSlug)) {
+      errors.push(`${sat}.streamSlug: must be a kebab-case slug`);
+    } else if (seen.has(s.streamSlug)) {
+      errors.push(`${sat}.streamSlug: duplicate slug "${s.streamSlug}" within ${pkgName}`);
+    } else {
+      seen.add(s.streamSlug);
+    }
+    if (typeof s.label !== "string" || !s.label.trim()) {
+      errors.push(`${sat}.label: must be a non-empty string`);
+    }
+    if (typeof s.handler !== "string" || !STREAM_HANDLER_SUBPATH_RE.test(s.handler)) {
+      errors.push(`${sat}.handler: must be a package-relative subpath (e.g. "./src/streams/run")`);
+    }
+    if (typeof s.factory !== "string" || !STREAM_FACTORY_RE.test(s.factory)) {
+      errors.push(`${sat}.factory: must be a non-empty identifier`);
+    }
+    if (s.resume !== undefined && typeof s.resume !== "boolean") {
+      errors.push(`${sat}.resume: must be a boolean when present`);
+    }
+  });
+  return errors;
+}
+
+export function webhookHandlerExportsFactory(source, factory) {
+  const cleaned = stripCommentsAndStrings(source);
+  const name = factory.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Statement-position prefix: BOS or after `;`/`{`/`}`/newline, then optional
+  // whitespace. (Captured so we can re-test successive candidates.)
+  const stmt = `(?:^|[;{}\\n])\\s*`;
+  // `export [async] function NAME(` or `<` (generic) at statement position.
+  const fnDecl = new RegExp(`${stmt}export\\s+(?:async\\s+)?function\\s+${name}\\s*[(<]`);
+  if (fnDecl.test(cleaned)) return true;
+  // `export const NAME[: Type] = <function form>` at statement position, where
+  // the function form is `[async] function …` OR an arrow whose head is an
+  // IDENTIFIER param (`x =>`) or a balanced `(...)` param list (possibly with a
+  // default containing nested `()`), optionally wrapped in extra parens.
+  const head = new RegExp(`${stmt}export\\s+const\\s+${name}\\b[^=;]*=\\s*`, "g");
+  head.lastIndex = 0;
+  let m;
+  while ((m = head.exec(cleaned)) !== null) {
+    // Re-arm lastIndex by one so overlapping statement separators still match
+    // the next candidate on a subsequent iteration.
+    head.lastIndex = m.index + 1;
+    let i = m.index + m[0].length;
+    let rest = cleaned.slice(i);
+    // `[async] function …` form.
+    if (/^async\s+function\b/.test(rest) || /^function\b/.test(rest)) return true;
+    // Arrow form. Optional `async`.
+    const asyncM = /^async\s+/.exec(rest);
+    if (asyncM) {
+      i += asyncM[0].length;
+      rest = cleaned.slice(i);
+    }
+    // Peel leading `(` WRAPPER parens (e.g. `((deps) => …)`): a leading `(` is a
+    // wrapper iff it is NOT itself the start of an arrow param head. Stop as
+    // soon as the remaining text IS an arrow paren head (or anything else).
+    while (rest[0] === "(" && !isArrowParenHead(rest)) {
+      i += 1;
+      rest = cleaned.slice(i);
+    }
+    // Bare identifier arrow head: `x =>` (no parens).
+    if (/^[A-Za-z_$][A-Za-z0-9_$]*\s*=>/.test(rest)) return true;
+    // Optional `<generics>` (angle-bracket BALANCED, so nested generics like
+    // `<T extends Record<string, unknown>>` are skipped whole) then `(...)`.
+    if (rest[0] === "<") {
+      const gclose = matchBalancedAngle(cleaned, i);
+      if (gclose >= 0) {
+        i = gclose;
+        const ws = /^\s*/.exec(cleaned.slice(i));
+        i += ws[0].length;
+        rest = cleaned.slice(i);
+      }
+    }
+    if (rest[0] !== "(") continue;
+    const close = matchBalancedParen(cleaned, i);
+    if (close < 0) continue;
+    // After the params: optional `: ReturnType` then the `=>` arrow token.
+    if (/^\s*(?::[^=]*?)?=>/.test(cleaned.slice(close))) return true;
+  }
+  return false;
+}
+
+// True when `rest` begins with a balanced `(...)` param list immediately
+// followed (modulo a `: ret` annotation) by `=>`.
+function isArrowParenHead(rest) {
+  if (rest[0] !== "(") return false;
+  const close = matchBalancedParen(rest, 0);
+  if (close < 0) return false;
+  return /^\s*(?::[^=]*?)?=>/.test(rest.slice(close));
+}
+
+// Index just past the `)` that balances the `(` at `open`, or -1 if unbalanced.
+function matchBalancedParen(s, open) {
+  let depth = 0;
+  for (let j = open; j < s.length; j++) {
+    if (s[j] === "(") depth++;
+    else if (s[j] === ")") {
+      depth--;
+      if (depth === 0) return j + 1;
+    }
+  }
+  return -1;
+}
+
+// Index just past the `>` that balances the `<` at `open` (a generic param
+// list), or -1 if unbalanced. Only used immediately after `export const NAME =`,
+// where a `<` is a generic, not a comparison.
+function matchBalancedAngle(s, open) {
+  let depth = 0;
+  for (let j = open; j < s.length; j++) {
+    if (s[j] === "<") depth++;
+    else if (s[j] === ">") {
+      depth--;
+      if (depth === 0) return j + 1;
+    }
+  }
+  return -1;
+}
+
+// Strip line comments, block comments, string literals, regex literals, and the
+// LITERAL TEXT of template literals (recursing into `${ … }` interpolations,
+// whose embedded strings are themselves stripped) from JS/TS source — so a
+// structural source-level gate cannot be satisfied by a name that only appears
+// in a comment, a string, a regex, or a template-literal text/nested string.
+// Conservative + FAIL-CLOSED: replaces every stripped span with a single space
+// (never merges adjacent tokens) and KEEPS the code inside `${ … }` (real
+// expressions) for re-scanning. Not a full parser, but it removes every place an
+// `export …` lookalike can hide.
+function stripCommentsAndStrings(source) {
+  let out = "";
+  let i = 0;
+  const n = source.length;
+  // Track the previous two significant chars to disambiguate a `/` that begins
+  // a regex literal from a division operator (incl. division after a postfix
+  // `++`/`--`, where the immediate prev char is `+`/`-` but it is NOT a regex
+  // context). `prevWord` is the most recent identifier/keyword token — a regex
+  // can also start right after a keyword like `return`/`typeof`/`case`/etc.
+  let prevSignificant = "";
+  let prevSignificant2 = "";
+  let prevWord = "";
+  // Keywords after which a `/` begins a REGEX literal (expression position),
+  // not division. (An identifier/`)`/`]`/literal before `/` means division.)
+  const REGEX_PREV_KEYWORDS = new Set([
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "throw", "do", "else", "yield", "await", "case", "default",
+  ]);
+  while (i < n) {
+    const c = source[i];
+    const c2 = source[i + 1];
+    // Line comment.
+    if (c === "/" && c2 === "/") {
+      i += 2;
+      while (i < n && source[i] !== "\n") i++;
+      out += " ";
+      continue;
+    }
+    // Block comment.
+    if (c === "/" && c2 === "*") {
+      i += 2;
+      while (i < n && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      out += " ";
+      continue;
+    }
+    // Regex literal — only where a regex can legally START: after an operator /
+    // opening bracket / separator, or at the start of input (prevSignificant
+    // empty). A postfix `++`/`--` (prev two chars both `+` or both `-`) is NOT a
+    // regex context — the following `/` is division. Otherwise `/` is division
+    // and falls through to be kept verbatim.
+    const postfixIncDec =
+      (prevSignificant === "+" && prevSignificant2 === "+") ||
+      (prevSignificant === "-" && prevSignificant2 === "-");
+    // A regex starts here if: BOS, OR after regex-context punctuation, OR the
+    // immediately-preceding token is a regex-context keyword (return, typeof,…).
+    // When the prev significant char is a word char, a regex can only follow if
+    // that word is one of REGEX_PREV_KEYWORDS (else it's an identifier → div).
+    const prevIsWordChar = /[A-Za-z0-9_$]/.test(prevSignificant);
+    // NOTE on `)` `]` `}`: these are genuinely ambiguous (a `/` after them can be
+    // division — `(a)/b` — OR a regex — `if (c) /re/`). For this FAIL-CLOSED gate
+    // we treat them as regex-start, i.e. we STRIP the `/…/` span. Over-stripping a
+    // real division can only cause a false-REJECT (the safe direction); leaving a
+    // regex body un-stripped could cause a false-PASS (the unsafe direction), so
+    // we bias to stripping. A handler-factory module dividing right after `)`/`]`
+    // /`}` and then `export`ing on the same logical line is not a real shape.
+    const regexCanStart =
+      prevSignificant === "" ||
+      (prevIsWordChar
+        ? REGEX_PREV_KEYWORDS.has(prevWord)
+        : /[([{,;:=!&|?+\-*%<>~^)\]}]/.test(prevSignificant));
+    if (c === "/" && !postfixIncDec && regexCanStart) {
+      i++;
+      let inClass = false;
+      while (i < n) {
+        const r = source[i];
+        if (r === "\\") {
+          i += 2;
+          continue;
+        }
+        if (r === "[") inClass = true;
+        else if (r === "]") inClass = false;
+        else if (r === "/" && !inClass) {
+          i++;
+          break;
+        } else if (r === "\n") break; // unterminated — bail (treat as not-regex)
+        i++;
+      }
+      // Skip trailing flags.
+      while (i < n && /[a-z]/i.test(source[i])) i++;
+      out += " ";
+      prevSignificant2 = prevSignificant;
+      prevSignificant = "/";
+      prevWord = "";
+      continue;
+    }
+    // Plain string literal.
+    if (c === '"' || c === "'") {
+      const quote = c;
+      i++;
+      while (i < n) {
+        if (source[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (source[i] === quote) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      out += " ";
+      prevSignificant2 = prevSignificant;
+      prevSignificant = quote;
+      prevWord = "";
+      continue;
+    }
+    // Template literal — strip text spans, recurse into `${ … }` expressions.
+    if (c === "`") {
+      i++;
+      out += " ";
+      while (i < n) {
+        if (source[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (source[i] === "`") {
+          i++;
+          break;
+        }
+        if (source[i] === "$" && source[i + 1] === "{") {
+          // Capture the balanced `${ … }` expression and re-strip it (a nested
+          // template string inside it is handled by the recursion).
+          let depth = 0;
+          let j = i + 1;
+          for (; j < n; j++) {
+            if (source[j] === "{") depth++;
+            else if (source[j] === "}") {
+              depth--;
+              if (depth === 0) {
+                j++;
+                break;
+              }
+            }
+          }
+          out += " " + stripCommentsAndStrings(source.slice(i + 2, j - 1)) + " ";
+          i = j;
+          continue;
+        }
+        i++; // ordinary template text char — dropped.
+      }
+      prevSignificant2 = prevSignificant;
+      prevSignificant = "`";
+      prevWord = "";
+      continue;
+    }
+    out += c;
+    if (!/\s/.test(c)) {
+      prevSignificant2 = prevSignificant;
+      prevSignificant = c;
+      // Maintain the trailing word token: extend on a word char, else reset.
+      prevWord = /[A-Za-z0-9_$]/.test(c) ? prevWord + c : "";
+    }
+    i++;
+  }
+  return out;
+}
+
+// Derive a default human label from a kebab-case hook id (title-case words).
+function deriveWebhookLabel(id) {
+  return id
+    .split("-")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
 
 // A plain-JS shape validator that MIRRORS the authoritative TS parser
@@ -491,17 +906,82 @@ const SCHEMA_CONFIG_FIELD_KINDS = new Set([
   "status-probe",
   "copyable-credential",
   "named-action",
+  // cinatra#658 (PR-4) extended vocabulary.
+  "select",
+  "record-list",
+  "banner",
+  "advisory",
+  // cinatra#782 field-kind expansion (openai): action-sourced select options,
+  // boolean toggles, numeric inputs, free-form string lists.
+  "dynamic-select-options",
+  "boolean",
+  "number",
+  "free-list",
+]);
+// Exact per-kind key allowlists — mirror src/lib/extension-schema-config.ts so a
+// smuggled executable/HTML carrier key is REJECTED at generation too (fail-closed
+// pure-data invariant). Keep these in lockstep with the TS parser.
+const SCHEMA_CONFIG_FIELD_KEYS = {
+  text: new Set(["kind", "key", "label", "placeholder", "required", "description"]),
+  secret: new Set(["kind", "key", "label", "required", "description"]),
+  "nango-connect": new Set(["kind", "label", "providerConfigKey", "description"]),
+  "repeatable-list": new Set(["kind", "key", "label", "itemLabel", "itemFields", "description"]),
+  "status-probe": new Set(["kind", "label", "actionId", "description"]),
+  "copyable-credential": new Set(["kind", "key", "label", "description"]),
+  "named-action": new Set(["kind", "label", "actionId", "confirm", "description"]),
+  select: new Set(["kind", "key", "label", "options", "defaultValue", "description"]),
+  "record-list": new Set([
+    "kind", "label", "listActionId", "deleteActionId", "emptyState",
+    "itemTitleKey", "itemSubtitleKey", "itemBadges", "description",
+  ]),
+  banner: new Set(["kind", "label", "variants"]),
+  advisory: new Set(["kind", "label", "tone", "probeActionId", "whenReady", "whenNotReady", "description"]),
+  "dynamic-select-options": new Set([
+    "kind", "key", "label", "optionsAction", "defaultValue", "placeholder", "description",
+  ]),
+  boolean: new Set(["kind", "key", "label", "defaultValue", "description"]),
+  number: new Set([
+    "kind", "key", "label", "min", "max", "step", "defaultValue", "placeholder", "required", "description",
+  ]),
+  "free-list": new Set(["kind", "key", "label", "itemLabel", "placeholder", "description"]),
+};
+const SCHEMA_CONFIG_ROOT_KEYS = new Set(["title", "description", "fields"]);
+const SCHEMA_CONFIG_BADGE_VARIANTS = new Set([
+  "outline", "secondary", "destructive", "success", "warning", "info", "ghost", "muted",
+]);
+const SCHEMA_CONFIG_BANNER_TONES = new Set([
+  "default", "destructive", "warning", "success", "info",
 ]);
 function nonEmptyStr(v) {
   return typeof v === "string" && v.length > 0;
 }
+function finiteNum(v) {
+  return typeof v === "number" && Number.isFinite(v);
+}
+function rejectUnknownConfigKeys(raw, allowed, at, errors) {
+  let ok = true;
+  for (const k of Object.keys(raw)) {
+    if (!allowed.has(k)) {
+      errors.push(`${at}: unexpected key ${JSON.stringify(k)}`);
+      ok = false;
+    }
+  }
+  return ok;
+}
 function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
+  const allowed = SCHEMA_CONFIG_FIELD_KEYS[kind];
+  if (allowed && !rejectUnknownConfigKeys(raw, allowed, at, errors)) {
+    return;
+  }
   if (!nonEmptyStr(raw.label)) {
     errors.push(`${at}: missing "label"`);
     return;
   }
   const needsKey =
-    kind === "text" || kind === "secret" || kind === "copyable-credential" || kind === "repeatable-list";
+    kind === "text" || kind === "secret" || kind === "copyable-credential" ||
+    kind === "repeatable-list" || kind === "select" ||
+    kind === "dynamic-select-options" || kind === "boolean" ||
+    kind === "number" || kind === "free-list";
   if (needsKey) {
     if (!nonEmptyStr(raw.key) || !SCHEMA_CONFIG_KEY_RE.test(raw.key)) {
       errors.push(`${at}: invalid or missing "key"`);
@@ -535,13 +1015,119 @@ function validateConfigSchemaField(kind, raw, at, errors, seenKeys) {
       validateConfigSchemaField(item.kind, item, itemAt, errors, itemSeen);
     });
   }
+  if (kind === "select") {
+    const options = raw.options;
+    if (!Array.isArray(options) || options.length === 0) {
+      errors.push(`${at}: select requires a non-empty "options"`);
+      return;
+    }
+    const seenValues = new Set();
+    options.forEach((opt, j) => {
+      const optAt = `${at}.options[${j}]`;
+      if (!isObj(opt) || !rejectUnknownConfigKeys(opt, new Set(["value", "label", "adminOnly"]), optAt, errors)) {
+        if (isObj(opt)) return;
+        errors.push(`${optAt}: must be an object`);
+        return;
+      }
+      if (!nonEmptyStr(opt.value) || !nonEmptyStr(opt.label)) {
+        errors.push(`${optAt}: requires string "value" and "label"`);
+        return;
+      }
+      seenValues.add(opt.value);
+    });
+    if (nonEmptyStr(raw.defaultValue) && !seenValues.has(raw.defaultValue)) {
+      errors.push(`${at}: defaultValue is not one of "options"`);
+    }
+  }
+  if (kind === "record-list") {
+    if (!nonEmptyStr(raw.listActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.listActionId)) {
+      errors.push(`${at}: record-list requires a valid "listActionId"`);
+    }
+    if (raw.deleteActionId !== undefined && (!nonEmptyStr(raw.deleteActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.deleteActionId))) {
+      errors.push(`${at}: record-list "deleteActionId" must be a valid action id`);
+    }
+    if (!nonEmptyStr(raw.emptyState)) errors.push(`${at}: record-list requires "emptyState"`);
+    if (!nonEmptyStr(raw.itemTitleKey)) errors.push(`${at}: record-list requires "itemTitleKey"`);
+    const badges = raw.itemBadges;
+    if (!Array.isArray(badges)) {
+      errors.push(`${at}: record-list requires an "itemBadges" array`);
+    } else {
+      badges.forEach((b, j) => {
+        const bAt = `${at}.itemBadges[${j}]`;
+        if (!isObj(b) || !rejectUnknownConfigKeys(b, new Set(["key", "label", "variant"]), bAt, errors)) {
+          if (isObj(b)) return;
+          errors.push(`${bAt}: must be an object`);
+          return;
+        }
+        if (!nonEmptyStr(b.key) || !nonEmptyStr(b.label)) errors.push(`${bAt}: requires "key" and "label"`);
+        if (!nonEmptyStr(b.variant) || !SCHEMA_CONFIG_BADGE_VARIANTS.has(b.variant)) {
+          errors.push(`${bAt}: invalid badge variant ${JSON.stringify(b.variant)}`);
+        }
+      });
+    }
+  }
+  if (kind === "banner") {
+    const variants = raw.variants;
+    if (!Array.isArray(variants) || variants.length === 0) {
+      errors.push(`${at}: banner requires a non-empty "variants"`);
+    } else {
+      variants.forEach((v, j) => {
+        const vAt = `${at}.variants[${j}]`;
+        if (!isObj(v) || !rejectUnknownConfigKeys(v, new Set(["name", "tone", "message"]), vAt, errors)) {
+          if (isObj(v)) return;
+          errors.push(`${vAt}: must be an object`);
+          return;
+        }
+        if (!nonEmptyStr(v.name) || !SCHEMA_CONFIG_KEY_RE.test(v.name)) errors.push(`${vAt}: requires a valid "name"`);
+        if (!nonEmptyStr(v.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(v.tone)) errors.push(`${vAt}: invalid tone`);
+        if (!nonEmptyStr(v.message)) errors.push(`${vAt}: requires a "message"`);
+      });
+    }
+  }
+  if (kind === "advisory") {
+    if (!nonEmptyStr(raw.probeActionId) || !SCHEMA_CONFIG_KEY_RE.test(raw.probeActionId)) {
+      errors.push(`${at}: advisory requires a valid "probeActionId"`);
+    }
+    if (!nonEmptyStr(raw.tone) || !SCHEMA_CONFIG_BANNER_TONES.has(raw.tone)) errors.push(`${at}: advisory requires a valid "tone"`);
+    if (!nonEmptyStr(raw.whenReady) || !nonEmptyStr(raw.whenNotReady)) errors.push(`${at}: advisory requires "whenReady" and "whenNotReady"`);
+  }
+  if (kind === "dynamic-select-options") {
+    if (!nonEmptyStr(raw.optionsAction) || !SCHEMA_CONFIG_KEY_RE.test(raw.optionsAction)) {
+      errors.push(`${at}: dynamic-select-options requires a valid "optionsAction"`);
+    }
+  }
+  if (kind === "boolean") {
+    if (raw.defaultValue !== undefined && typeof raw.defaultValue !== "boolean") {
+      errors.push(`${at}: boolean "defaultValue" must be a boolean`);
+    }
+  }
+  if (kind === "number") {
+    for (const prop of ["min", "max", "step", "defaultValue"]) {
+      if (raw[prop] !== undefined && !finiteNum(raw[prop])) {
+        errors.push(`${at}: number "${prop}" must be a finite number`);
+      }
+    }
+    if (finiteNum(raw.step) && raw.step <= 0) errors.push(`${at}: number "step" must be greater than 0`);
+    if (finiteNum(raw.min) && finiteNum(raw.max) && raw.min > raw.max) {
+      errors.push(`${at}: number "min" must be <= "max"`);
+    }
+    if (
+      finiteNum(raw.defaultValue) &&
+      ((finiteNum(raw.min) && raw.defaultValue < raw.min) || (finiteNum(raw.max) && raw.defaultValue > raw.max))
+    ) {
+      errors.push(`${at}: number "defaultValue" is outside [min, max]`);
+    }
+  }
+  // free-list: only key + label (both already validated above); no extra rules.
 }
 export function validateConfigSchema(raw) {
   if (!isObj(raw)) return ["configSchema must be an object"];
-  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
-    return ["configSchema.fields must be a non-empty array"];
-  }
   const errors = [];
+  rejectUnknownConfigKeys(raw, SCHEMA_CONFIG_ROOT_KEYS, "configSchema", errors);
+  if (!Array.isArray(raw.fields) || raw.fields.length === 0) {
+    errors.push("configSchema.fields must be a non-empty array");
+    return errors;
+  }
   const seenKeys = new Set();
   raw.fields.forEach((field, i) => {
     const at = `fields[${i}]`;
@@ -850,6 +1436,14 @@ export async function buildManifest() {
           tokenConfigKey: ws.auth.tokenConfigKey,
           instancesConfigKey: ws.auth.instancesConfigKey,
           requiredInstanceFields: [...ws.auth.requiredInstanceFields],
+          // cinatra#408 — carry the optional flag through ONLY when explicitly
+          // declared, so the generated literal stays minimal. The route enforces
+          // BY DEFAULT (absent === ENFORCE for the public_site_widget surface);
+          // an explicit `false` is the only opt-out and is preserved verbatim
+          // here so it stays visible + auditable in the generated manifest.
+          ...(typeof ws.auth.requireUserToken === "boolean"
+            ? { requireUserToken: ws.auth.requireUserToken }
+            : {}),
         },
       };
     })
@@ -864,6 +1458,175 @@ export async function buildManifest() {
       );
     }
     widgetSlugOwners.set(w.agentSlug, w.packageName);
+  }
+
+  // Inbound webhooks (`cinatra.webhooks`, cinatra#340): a connector OPTS IN by
+  // declaring its hooks. Each hook becomes a generated registry entry keyed
+  // "<vendor>/<slug>/<hook>" — the host's generic /webhook route resolves it
+  // WITHOUT importing a connector package or branching on vendor/slug. Segment
+  // derivation is FAIL-CLOSED (per design §4): <vendor> = npm scope, <slug> =
+  // npm package name, both required to be kebab/alnum; the handler subpath must
+  // resolve to a real file exporting the named factory. A duplicate
+  // (vendor,slug,hook) across packages is a generation error.
+  const WEBHOOK_SEGMENT_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+  const webhookHooks = records
+    .filter((r) => r.kind === "connector")
+    .flatMap((r) => {
+      const decl = readCinatraManifest(r.sourceDir).webhooks;
+      if (decl === undefined) return [];
+      const errors = validateWebhooksDeclaration(r.packageName, decl);
+      if (errors.length > 0) {
+        throw new Error(
+          `[extension-manifest] invalid webhooks declaration:\n  - ${errors.join("\n  - ")}`,
+        );
+      }
+      // FAIL-CLOSED segment derivation from the npm package name.
+      const m = /^@([^/]+)\/([^/]+)$/.exec(r.packageName);
+      if (!m || !WEBHOOK_SEGMENT_RE.test(m[1]) || !WEBHOOK_SEGMENT_RE.test(m[2])) {
+        throw new Error(
+          `[extension-manifest] ${r.packageName} declares cinatra.webhooks but its package name does not ` +
+            `derive a kebab-case @<vendor>/<slug> pair (no silent remap)`,
+        );
+      }
+      const vendor = m[1];
+      const slug = m[2];
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      return decl.hooks.map((h) => {
+        // The handler subpath must resolve to a real file AND be importable
+        // (tsconfig path alias or a package.json exports entry) so the generated
+        // literal import succeeds at runtime.
+        const handlerRel = h.handler.replace(/^\.\//, "");
+        const handlerPath = join(r.sourceDir, handlerRel);
+        const candidates = [handlerPath, `${handlerPath}.ts`, `${handlerPath}.tsx`];
+        const resolved = candidates.find((p) => fileExists(p));
+        if (!resolved) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.webhooks hook "${h.id}" handler "${h.handler}" ` +
+              `does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+          );
+        }
+        // The import specifier the host dynamic-imports — the subpath (minus a
+        // .ts/.tsx extension) under the package name. It MUST be resolvable
+        // (tsconfig alias or package exports) or the literal import fails.
+        const importSubpath = handlerRel.replace(/\.(ts|tsx)$/, "");
+        const specifier = `${r.packageName}/${importSubpath}`;
+        const exportsKey = `./${importSubpath}`;
+        const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.webhooks hook "${h.id}" subpath "${specifier}" is not ` +
+              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+              `the generated literal import would fail at runtime`,
+          );
+        }
+        // Assert the named factory is actually an exported function.
+        const handlerSource = readFileSync(join(REPO_ROOT, resolved), "utf8");
+        if (!webhookHandlerExportsFactory(handlerSource, h.factory)) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.webhooks hook "${h.id}": handler module "${resolved}" ` +
+              `exports no "${h.factory}" function (declared factory must be an exported function)`,
+          );
+        }
+        return {
+          vendor,
+          slug,
+          hook: h.id,
+          scope: `${vendor}/${slug}/${h.id}`,
+          packageName: r.packageName,
+          specifier,
+          factory: h.factory,
+          label: typeof h.label === "string" && h.label.trim() ? h.label.trim() : deriveWebhookLabel(h.id),
+          ...(Number.isInteger(h.rejectStatus) ? { rejectStatus: h.rejectStatus } : {}),
+          ...(Number.isInteger(h.schemaVersion) ? { schemaVersion: h.schemaVersion } : {}),
+          resolution: r.resolution,
+        };
+      });
+    })
+    .sort((a, b) => a.scope.localeCompare(b.scope));
+  // Cross-package duplicate gate: at most one owner per (vendor,slug,hook).
+  const webhookScopeOwners = new Map();
+  for (const h of webhookHooks) {
+    const owner = webhookScopeOwners.get(h.scope);
+    if (owner) {
+      throw new Error(
+        `[extension-manifest] duplicate webhook hook "${h.scope}" (${owner} and ${h.packageName})`,
+      );
+    }
+    webhookScopeOwners.set(h.scope, h.packageName);
+  }
+
+  // cinatra.streams declarations (cinatra#344): the host-owned generic stream
+  // route resolves a stream slug from the generated map; it never names a
+  // connector package. STAGED + INERT until an extension declares — the map is
+  // `{}` on day one. Mirrors the webhookHooks collection: validate fail-closed,
+  // assert the handler subpath resolves (tsconfig alias OR package.json
+  // exports) AND exports the named factory, dedup by slug.
+  const streamDeclarations = records
+    .filter((r) => r.kind === "connector")
+    .flatMap((r) => {
+      const decl = readCinatraManifest(r.sourceDir).streams;
+      if (decl === undefined) return [];
+      const errors = validateStreamsDeclaration(r.packageName, decl);
+      if (errors.length > 0) {
+        throw new Error(
+          `[extension-manifest] invalid streams declaration:\n  - ${errors.join("\n  - ")}`,
+        );
+      }
+      const pkgJson = JSON.parse(readFileSync(join(REPO_ROOT, r.sourceDir, "package.json"), "utf8"));
+      return decl.streams.map((s) => {
+        // The handler subpath must resolve to a real file AND be importable
+        // (tsconfig path alias or a package.json exports entry) so the generated
+        // literal import succeeds at runtime.
+        const handlerRel = s.handler.replace(/^\.\//, "");
+        const handlerPath = join(r.sourceDir, handlerRel);
+        const candidates = [handlerPath, `${handlerPath}.ts`, `${handlerPath}.tsx`];
+        const resolved = candidates.find((p) => fileExists(p));
+        if (!resolved) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}" handler "${s.handler}" ` +
+              `does not resolve to a file (looked for ${candidates.map((c) => relative(REPO_ROOT, c)).join(", ")})`,
+          );
+        }
+        const importSubpath = handlerRel.replace(/\.(ts|tsx)$/, "");
+        const specifier = `${r.packageName}/${importSubpath}`;
+        const exportsKey = `./${importSubpath}`;
+        const hasExportsEntry = isObj(pkgJson.exports) && exportsKey in pkgJson.exports;
+        if (!tsconfigText.includes(JSON.stringify(specifier)) && !hasExportsEntry) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}" subpath "${specifier}" is not ` +
+              `resolvable (no tsconfig.json path alias and no package.json exports["${exportsKey}"]) — ` +
+              `the generated literal import would fail at runtime`,
+          );
+        }
+        const handlerSource = readFileSync(join(REPO_ROOT, resolved), "utf8");
+        if (!webhookHandlerExportsFactory(handlerSource, s.factory)) {
+          throw new Error(
+            `[extension-manifest] ${r.packageName} cinatra.streams "${s.streamSlug}": handler module "${resolved}" ` +
+              `exports no "${s.factory}" function (declared factory must be an exported function)`,
+          );
+        }
+        return {
+          streamSlug: s.streamSlug,
+          packageName: r.packageName,
+          specifier,
+          factory: s.factory,
+          label: s.label.trim(),
+          ...(typeof s.resume === "boolean" ? { resume: s.resume } : {}),
+          resolution: r.resolution,
+        };
+      });
+    })
+    .sort((a, b) => a.streamSlug.localeCompare(b.streamSlug));
+  // Cross-package duplicate gate: at most one owner per stream slug.
+  const streamSlugOwners = new Map();
+  for (const s of streamDeclarations) {
+    const owner = streamSlugOwners.get(s.streamSlug);
+    if (owner) {
+      throw new Error(
+        `[extension-manifest] duplicate stream slug "${s.streamSlug}" (${owner} and ${s.packageName})`,
+      );
+    }
+    streamSlugOwners.set(s.streamSlug, s.packageName);
   }
 
   // Chat-widget modules: an extension OPTS IN to the chat widget/wizard surface
@@ -975,6 +1738,8 @@ export async function buildManifest() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    webhookHooks,
+    streamDeclarations,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -1206,6 +1971,11 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `  tokenConfigKey: string;\n` +
     `  instancesConfigKey: string;\n` +
     `  requiredInstanceFields: string[];\n` +
+    `  // cinatra#408 — the stream route REQUIRES a per-user cwu_ token BY DEFAULT\n` +
+    `  // (a missing token is a fail-closed 401 re-login). This is the security\n` +
+    `  // default for the interactive public_site_widget surface: an absent flag\n` +
+    `  // (undefined) ENFORCES. Only an EXPLICIT \`false\` opts out (audited).\n` +
+    `  requireUserToken?: boolean;\n` +
     `};\n` +
     `export type GeneratedWidgetStreamAgentEntry = {\n` +
     `  resolution: ExtensionResolution;\n` +
@@ -1272,6 +2042,213 @@ function emitWidgetStreamPublicPaths(widgetStreamAgents) {
     `${capabilityBody}\n];\n`  );
 }
 
+// Inbound-webhook handler dispatch map (cinatra#340): "<vendor>/<slug>/<hook>"
+// → { resolution, literal dynamic-import loader of the connector's handler
+// module, factory export name, declared metadata }. SEPARATE server-only file
+// (mirrors the rest of the generated server maps) consumed by
+// src/lib/webhook-registry.server.ts — the host's generic /webhook route
+// resolves a hook from this map; it never names a connector package or branches
+// on vendor/slug. INERT until #343 (no extension declares cinatra.webhooks yet,
+// so the map is {} and every /webhook request 404s safely). Same literal-
+// specifier rule the other loader maps use (Turbopack only bundles literal
+// dynamic imports), with the same per-entry resolution classification (pinned
+// by the generated guarded-optional-loaders test).
+function emitWebhooksServer(webhookHooks) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = webhookHooks
+    .map((h) => {
+      const meta = {
+        packageName: h.packageName,
+        factory: h.factory,
+        vendor: h.vendor,
+        slug: h.slug,
+        hook: h.hook,
+        label: h.label,
+        ...(Number.isInteger(h.rejectStatus) ? { rejectStatus: h.rejectStatus } : {}),
+        ...(Number.isInteger(h.schemaVersion) ? { schemaVersion: h.schemaVersion } : {}),
+      };
+      const metaJson = JSON.stringify(meta).slice(1, -1);
+      const spec = h.specifier;
+      const load =
+        h.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`
+          : `() => import(${JSON.stringify(spec)})`;
+      return `  ${JSON.stringify(h.scope)}: { resolution: ${JSON.stringify(h.resolution)}, load: ${load}, ${metaJson} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// "<vendor>/<slug>/<hook>" → inbound-webhook handler entry. The route\n` +
+    `// resolves the hook generically (it never names a connector package);\n` +
+    `// rejectStatus (when declared) overrides the default 204 for a \`rejected\`\n` +
+    `// handler outcome.\n` +
+    `export type GeneratedWebhookHandlerEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  packageName: string;\n` +
+    `  factory: string;\n` +
+    `  vendor: string;\n` +
+    `  slug: string;\n` +
+    `  hook: string;\n` +
+    `  label: string;\n` +
+    `  rejectStatus?: number;\n` +
+    `  schemaVersion?: number;\n` +
+    `};\n\n` +
+    `export const GENERATED_WEBHOOK_HANDLERS: Record<string, GeneratedWebhookHandlerEntry> = {\n` +
+    `${body}\n};\n`
+  );
+}
+
+// Neutral stream handler dispatch map (cinatra#344): streamSlug → { resolution,
+// literal dynamic-import loader of the connector's stream handler module, the
+// factory export name, declared metadata }. SEPARATE server-only file (mirrors
+// the other generated server maps) consumed by src/lib/stream-registry.server.ts
+// — the host's generic /api/streams/<slug> route resolves a stream from this map
+// generically; it never names a connector package. INERT until an extension
+// declares cinatra.streams (the map is {} and every request 404s safely). Same
+// literal-specifier rule the other loader maps use (Turbopack only bundles
+// literal dynamic imports), with the same per-entry resolution classification.
+function emitStreamsServer(streamDeclarations) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = streamDeclarations
+    .map((s) => {
+      const meta = {
+        packageName: s.packageName,
+        factory: s.factory,
+        streamSlug: s.streamSlug,
+        label: s.label,
+        ...(typeof s.resume === "boolean" ? { resume: s.resume } : {}),
+      };
+      const metaJson = JSON.stringify(meta).slice(1, -1);
+      const spec = s.specifier;
+      const load =
+        s.resolution === "guardedOptional"
+          ? `guardedExtensionImport(${JSON.stringify(spec)}, () => import(${JSON.stringify(spec)}))`
+          : `() => import(${JSON.stringify(spec)})`;
+      return `  ${JSON.stringify(s.streamSlug)}: { resolution: ${JSON.stringify(s.resolution)}, load: ${load}, ${metaJson} },`;
+    })
+    .join("\n");
+  return (
+    `${HEADER(script)}import "server-only";\n` +
+    guardImportFor(body) +
+    `import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";\n\n` +
+    `// streamSlug → neutral stream handler entry. The host's generic\n` +
+    `// /api/streams/<slug> route resolves the stream generically (it never names\n` +
+    `// a connector package); \`resume\` (when declared) opts the stream into the\n` +
+    `// resumable-SSE primitive's Last-Event-ID resume.\n` +
+    `export type GeneratedStreamEntry = {\n` +
+    `  resolution: ExtensionResolution;\n` +
+    `  load: () => Promise<unknown>;\n` +
+    `  packageName: string;\n` +
+    `  factory: string;\n` +
+    `  streamSlug: string;\n` +
+    `  label: string;\n` +
+    `  resume?: boolean;\n` +
+    `};\n\n` +
+    `export const GENERATED_STREAM_DECLARATIONS: Record<string, GeneratedStreamEntry> = {\n` +
+    `${body}\n};\n`
+  );
+}
+
+// Slug-only public-path list for the generic stream route (cinatra#344). SEPARATE
+// generated file with ZERO imports and no package identifiers (proxy-bundle-safe
+// like the widget paths file). This is the auth-exemption SOURCE for the generic
+// /api/streams/<slug> route — one exact path per declared stream.
+//
+// STAGED WIRING: the auth-route-guard consumption of this list ships in the
+// follow-on that actually migrates a stream onto the package (see #344 scope
+// note). It is SAFE to ship this list unconsumed now because the map is EMPTY on
+// day one (no extension declares cinatra.streams), so there is no public stream
+// path and the route requires a session for everything; the guard edit (a
+// configured high-risk path) is deferred to the PR that first declares a stream,
+// which is exactly when an exact-match exemption becomes load-bearing.
+function emitStreamPublicPaths(streamDeclarations) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = streamDeclarations
+    .map((s) => `  ${JSON.stringify(`/api/streams/${s.streamSlug}`)},`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Declared stream public paths (one per cinatra.streams declaration,\n` +
+    `// cinatra#344). Slug-only data — NO imports, NO package identifiers\n` +
+    `// (proxy-bundle safe). This is the auth-exemption SOURCE for the generic\n` +
+    `// /api/streams/<slug> route; the auth-route-guard consumption is STAGED (it\n` +
+    `// ships with the first stream declaration — see #344 scope). Empty + inert\n` +
+    `// on day one (no extension declares cinatra.streams).\n` +
+    `export const GENERATED_STREAM_PUBLIC_PATHS: readonly string[] = [\n` +
+    `${body}\n];\n`
+  );
+}
+
+// Slug-only public-path PREFIX list for the generic webhook route (cinatra#340).
+// SEPARATE generated file with ZERO imports and no package identifiers — it is
+// the registry/UI source of truth for the declared "/webhook/<vendor>/<slug>/
+// <hook>" prefixes (one per hook). NOTE: this is NOT the auth-exemption list —
+// the auth-route-guard exempts the whole "/webhook" namespace by a single
+// static prefix (the route owns the declared/undeclared 404 verdict). Inert
+// until #343 (empty array until an extension declares cinatra.webhooks).
+function emitWebhookPublicPaths(webhookHooks) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = webhookHooks
+    .map((h) => `  ${JSON.stringify(`/webhook/${h.vendor}/${h.slug}/${h.hook}`)},`)
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Declared inbound-webhook path prefixes (one per cinatra.webhooks hook,\n` +
+    `// cinatra#340). Slug-only data — NO imports, NO package identifiers.\n` +
+    `// This is the registry/UI source of truth + the route's DISPATCH allowlist,\n` +
+    `// NOT the auth-exemption list (auth-route-guard exempts the whole /webhook\n` +
+    `// namespace; the route owns the declared/undeclared 404 verdict). Inert\n` +
+    `// until #343 (empty until an extension declares cinatra.webhooks).\n` +
+    `export const GENERATED_WEBHOOK_PUBLIC_PREFIXES: readonly string[] = [\n` +
+    `${body}\n];\n`
+  );
+}
+
+// Import-free hook metadata for the #342 registry/nav UI (cinatra#340): no
+// loaders (server loaders stay in webhooks.server.ts), just the declared
+// vendor/slug/hook/label per hook. Safe in any bundle (pure data).
+function emitWebhookRegistryMeta(webhookHooks) {
+  const script = "scripts/extensions/generate-extension-manifest.mjs";
+  const body = webhookHooks
+    .map((h) =>
+      `  ${JSON.stringify(
+        {
+          scope: h.scope,
+          vendor: h.vendor,
+          slug: h.slug,
+          hook: h.hook,
+          label: h.label,
+          ...(Number.isInteger(h.rejectStatus) ? { rejectStatus: h.rejectStatus } : {}),
+          ...(Number.isInteger(h.schemaVersion) ? { schemaVersion: h.schemaVersion } : {}),
+        },
+      )},`,
+    )
+    .join("\n");
+  return (
+    `// @generated by ${script} — DO NOT EDIT BY HAND.\n` +
+    `// Regenerate: node ${script}\n` +
+    `// Inbound-webhook registry metadata (one per cinatra.webhooks hook,\n` +
+    `// cinatra#340). Import-free pure data for the #342 registry/nav UI — NO\n` +
+    `// loaders (server loaders live in webhooks.server.ts). Inert until #343.\n` +
+    `export type GeneratedWebhookRegistryMeta = {\n` +
+    `  scope: string;\n` +
+    `  vendor: string;\n` +
+    `  slug: string;\n` +
+    `  hook: string;\n` +
+    `  label: string;\n` +
+    `  rejectStatus?: number;\n` +
+    `  schemaVersion?: number;\n` +
+    `};\n\n` +
+    `export const GENERATED_WEBHOOK_REGISTRY_META: readonly GeneratedWebhookRegistryMeta[] = [\n` +
+    `${body}\n];\n`
+  );
+}
+
 function emitConnectorSetupPages(setupPages, settingsPages, skillsSettingsTabs = []) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const setupBody = setupPages
@@ -1331,6 +2308,8 @@ function emitGuardedOptionalLoadersTest({
   connectorPrimitiveHandlers,
   externalMcpToolboxes,
   widgetStreamAgents,
+  webhookHooks,
+  streamDeclarations,
   chatWidgetModules,
   connectorSetupPages,
   connectorSettingsPages,
@@ -1348,6 +2327,8 @@ function emitGuardedOptionalLoadersTest({
   for (const p of connectorPrimitiveHandlers) expected.push(["GENERATED_CONNECTOR_PRIMITIVE_HANDLERS", p.slug, p.resolution]);
   for (const p of externalMcpToolboxes) expected.push(["GENERATED_EXTERNAL_MCP_TOOLBOXES", p.slug, p.resolution]);
   for (const w of widgetStreamAgents) expected.push(["GENERATED_WIDGET_STREAM_AGENTS", w.agentSlug, w.resolution]);
+  for (const h of webhookHooks) expected.push(["GENERATED_WEBHOOK_HANDLERS", h.scope, h.resolution]);
+  for (const s of streamDeclarations) expected.push(["GENERATED_STREAM_DECLARATIONS", s.streamSlug, s.resolution]);
   for (const p of chatWidgetModules) {
     expected.push(["GENERATED_CHAT_WIDGET_MODULES", p.packageName, p.resolution]);
     expected.push(["GENERATED_CHAT_WIDGET_MANIFEST_MODULES", p.packageName, p.resolution]);
@@ -1379,6 +2360,8 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `} from "../extensions.server";\n` +
+    `import { GENERATED_WEBHOOK_HANDLERS } from "../webhooks.server";\n` +
+    `import { GENERATED_STREAM_DECLARATIONS } from "../streams.server";\n` +
     `import {\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
     `  GENERATED_CONNECTOR_SETTINGS_PAGES,\n` +
@@ -1391,6 +2374,8 @@ function emitGuardedOptionalLoadersTest({
     `  GENERATED_CONNECTOR_PRIMITIVE_HANDLERS,\n` +
     `  GENERATED_EXTERNAL_MCP_TOOLBOXES,\n` +
     `  GENERATED_WIDGET_STREAM_AGENTS,\n` +
+    `  GENERATED_WEBHOOK_HANDLERS,\n` +
+    `  GENERATED_STREAM_DECLARATIONS,\n` +
     `  GENERATED_CHAT_WIDGET_MODULES,\n` +
     `  GENERATED_CHAT_WIDGET_MANIFEST_MODULES,\n` +
     `  GENERATED_CONNECTOR_SETUP_PAGES,\n` +
@@ -1649,6 +2634,11 @@ const OUT_SERVER = generatedOutPath("extensions.server.ts");
 const OUT_SETUP = generatedOutPath("connector-setup-pages.ts");
 const OUT_CLIENT = generatedOutPath("extensions.client.tsx");
 const OUT_WIDGET_PATHS = generatedOutPath("widget-stream-public-paths.ts");
+const OUT_WEBHOOKS_SERVER = generatedOutPath("webhooks.server.ts");
+const OUT_WEBHOOK_PATHS = generatedOutPath("webhook-public-paths.ts");
+const OUT_WEBHOOK_META = generatedOutPath("webhook-registry-meta.ts");
+const OUT_STREAMS_SERVER = generatedOutPath("streams.server.ts");
+const OUT_STREAM_PATHS = generatedOutPath("stream-public-paths.ts");
 const OUT_GUARDED_TEST = generatedOutPath("guarded-optional-loaders.test.ts");
 const OUT_AGENT_BINDINGS = generatedOutPath("agent-bindings.ts");
 const OUT_ARTIFACT_FLOOR = generatedOutPath("artifact-floor.ts");
@@ -1676,6 +2666,8 @@ async function main() {
     connectorPrimitiveHandlers,
     externalMcpToolboxes,
     widgetStreamAgents,
+    webhookHooks,
+    streamDeclarations,
     chatWidgetModules,
     agentFieldRendererBindings,
     agentRoleBindings,
@@ -1687,6 +2679,11 @@ async function main() {
     [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings)],
     [OUT_ARTIFACT_FLOOR, emitArtifactFloor(artifactFloorClaimant)],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
+    [OUT_WEBHOOKS_SERVER, emitWebhooksServer(webhookHooks)],
+    [OUT_WEBHOOK_PATHS, emitWebhookPublicPaths(webhookHooks)],
+    [OUT_WEBHOOK_META, emitWebhookRegistryMeta(webhookHooks)],
+    [OUT_STREAMS_SERVER, emitStreamsServer(streamDeclarations)],
+    [OUT_STREAM_PATHS, emitStreamPublicPaths(streamDeclarations)],
     [
       OUT_GUARDED_TEST,
       emitGuardedOptionalLoadersTest({
@@ -1696,6 +2693,8 @@ async function main() {
         connectorPrimitiveHandlers,
         externalMcpToolboxes,
         widgetStreamAgents,
+        webhookHooks,
+        streamDeclarations,
         chatWidgetModules,
         connectorSetupPages,
         connectorSettingsPages,
@@ -1769,7 +2768,7 @@ async function main() {
     writeFileSync(path, content);
   }
   const parity = await checkParity();
-  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
+  console.log(`[extension-manifest] wrote ${files.length} files (${records.length} extensions, ${connectorSetupPages.length} setup-pages, ${connectorSettingsPages.length} settings-pages, ${widgetStreamAgents.length} widget-stream agents, ${streamDeclarations.length} stream declarations, ${chatWidgetModules.length} chat-widget modules)`);  if (parity.length) {
     console.log("[extension-manifest] PARITY ISSUES:");
     for (const p of parity) console.log("  - " + p);
   } else {

@@ -29,7 +29,8 @@ vi.mock("node:child_process", () => ({
 // `autoSetupLocalDrupal` checks `existsSync(dev/drupal-module/...)`; in the
 // unit sandbox that clone is absent. Force it present so the orchestration
 // tests reach the Nango branch under test (default true; per-test override).
-vi.mock("node:fs", () => ({
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
   existsSync: vi.fn(() => true),
 }));
 

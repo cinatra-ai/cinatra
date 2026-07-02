@@ -23,6 +23,7 @@ import {
 } from "node:crypto";
 
 import { ensureInstanceId } from "@/lib/instance-identity-store";
+import { webhookSecretService } from "@/lib/webhook-secret-service";
 import {
   consumeAuthorizationCode,
   insertAuthorizationCode,
@@ -633,7 +634,23 @@ export type ConnectTokenResponse = {
   webhookSecret: string;
   contractVersion: string;
   capabilities: { tokenBroker: boolean; supportedContractVersions: string[] };
+  // cinatra#343: the per-site inbound-webhook binding id, present ONLY for the
+  // WordPress client (the connector that declares cinatra.webhooks). The plugin
+  // POSTs publish events to
+  // /webhook/cinatra-ai/wordpress-mcp-connector/post-published/<webhookBindingId>
+  // signed with the bespoke `X-Cinatra-Sig-256: sha256=<hmac>` over webhookSecret
+  // (the #343 legacy bridge). Absent for clients with no webhook declaration.
+  webhookBindingId?: string;
 };
+
+// cinatra#343: the WordPress connector's inbound-webhook tuple (it declares
+// cinatra.webhooks with the post-published hook). vendor/slug must match the
+// connector package name (cinatra-ai/wordpress-mcp-connector).
+const WORDPRESS_WEBHOOK_BINDING = {
+  vendor: "cinatra-ai",
+  slug: "wordpress-mcp-connector",
+  hook: "post-published",
+} as const;
 
 /**
  * Consume an authorization_code grant and provision the site. All checks that
@@ -711,6 +728,44 @@ async function provisionFromGrant(input: {
     orgId: input.row.orgId,
   });
 
+  // cinatra#343: mint (or rotate-in-place) the per-site inbound-webhook binding
+  // ONLY for the WordPress client (the connector that declares cinatra.webhooks).
+  // The shared webhookSecret is bridged as the legacy HMAC secret (D3c option A)
+  // so the in-field plugin keeps its `X-Cinatra-Sig-256` signing. upsertLegacy is
+  // tuple-scoped + idempotent across reconnects / credential rotations (a
+  // reconnect re-issues a fresh webhookSecret here; the binding's stored secret
+  // is updated in place, preserving its bindingId so the plugin's inbound URL
+  // stays valid). No binding is minted for any other client.
+  //
+  // BEST-EFFORT, non-fatal: the connect-site credential above is
+  // already committed in its own transaction. A binding-mint failure (transient
+  // DB error / concurrent-insert race) must NOT fail the whole exchange and
+  // strand the client with a rotated-but-unreturned credential — the auth code
+  // is single-use and already consumed. On failure we log and return WITHOUT a
+  // webhookBindingId; the binding is re-minted IDEMPOTENTLY (upsertLegacy
+  // preserves/re-creates the tuple's active binding) on the next reconnect, and
+  // until the generic /webhook path is live the in-field plugin still posts to
+  // the existing /api/webhooks/wordpress route, so no delivery is lost.
+  let webhookBindingId: string | undefined;
+  if (input.row.client === "wordpress") {
+    try {
+      const binding = await webhookSecretService.upsertLegacy({
+        vendor: WORDPRESS_WEBHOOK_BINDING.vendor,
+        slug: WORDPRESS_WEBHOOK_BINDING.slug,
+        hook: WORDPRESS_WEBHOOK_BINDING.hook,
+        siteId: site.siteId,
+        legacySecret: input.webhookSecret,
+      });
+      webhookBindingId = binding.bindingId;
+    } catch (err) {
+      // NEVER log the secret or the binding material — only the failure reason.
+      console.error(
+        "[connect/provisioning] WordPress webhook binding upsert failed (credential still issued; binding re-minted on next reconnect):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   const url = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
   return {
     ok: true,
@@ -726,6 +781,7 @@ async function provisionFromGrant(input: {
         tokenBroker: input.tokenBrokerAvailable,
         supportedContractVersions: [...SUPPORTED_CONTRACT_VERSIONS],
       },
+      ...(webhookBindingId ? { webhookBindingId } : {}),
     },
   };
 }

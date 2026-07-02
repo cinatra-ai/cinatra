@@ -5,12 +5,9 @@ import {
 import {
   buildDeleteAllRowsQuery,
   buildDeleteJsonRowQuery,
-  buildDeleteMetadataByPrefixQuery,
-  buildDeleteMetadataQuery,
   buildDeleteRowsNotInQuery,
   buildInsertJsonRowQuery,
   buildInsertExtensionLifecycleAuditQuery,
-  buildReadMetadataQuery,
   buildSelectJsonRowsQuery,
   buildUpsertJsonRowQuery,
   buildUpsertSkillPackageQuery,
@@ -30,6 +27,21 @@ import type {
 import { shadowUpsertObject } from "./objects-dual-write";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import {
+  canonicalizeSealedFields,
+  hasSecretFields,
+  prepareSealedWrite,
+  unsealSecretFields,
+} from "@/lib/connector-config-secret-fields";
+import {
+  compareAndSwapMetadataValueInternal,
+  deleteMetadataByPrefixInternal,
+  deleteMetadataValueInternal,
+  readMetadataValueInternal,
+  readRawMetadataStringInternal,
+  safeParseJson,
+  writeMetadataValueInternal,
+} from "@/lib/database-metadata";
 
 // Connection/schema primitives + schema init moved to SYNC LEAF modules
 // (cinatra#104): under Turbopack dev this module is an ASYNC module (its
@@ -75,42 +87,15 @@ function getDefaultOpenAIServiceTier() {
 
 
 
-function normalizePersistedString(value: string) {
-  return value
-    .replaceAll("@gtm-central/", "@cinatra/")
-    .replaceAll("@gtm/", "@cinatra/")
-    .replaceAll("GTM Central", "Cinatra")
-    .replaceAll("GTM Center", "Cinatra")
-    .replaceAll("gtm-central/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("gtm/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("cinatra/openai-local-shell:latest", "cinatra/skill-shell:latest")
-    .replaceAll("gtm_central_", "cinatra_")
-    .replaceAll("gtm_center_", "cinatra_")
-    .replaceAll("gtm_central", "cinatra")
-    .replaceAll("gtmcentral.app", "cinatra.app")
-    .replaceAll("gtm.center", "cinatra.app");
-}
-
-function normalizePersistedValue<T>(value: T): T {
-  if (typeof value === "string") {
-    return normalizePersistedString(value) as T;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizePersistedValue(entry)) as T;
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        normalizePersistedString(key),
-        normalizePersistedValue(entry),
-      ]),
-    ) as T;
-  }
-
-  return value;
-}
+// Legacy GTM-era rebrand normalization (`normalizePersistedString` /
+// `normalizePersistedValue`) was removed from the hot core-store read/write
+// path (GTM-normalization removal cleanup). It rewrote pre-rebrand persisted values
+// (`@gtm-central/…`, `GTM Central`, `gtm_central_…`, `gtmcentral.app`, …) to
+// their Cinatra names on every parse and every write — useful during the
+// migration, now dead transitional logic in the generic persistence path. The
+// remaining at-rest tokens are rewritten ONCE by the idempotent data migration
+// `migrations/core/core__0012_drop-gtm-normalization.mjs`; new live writers no
+// longer emit GTM-era values, so the runtime rewrite is no longer needed.
 
 function clonePersistedValue<T>(value: T): T {
   if (value === null || value === undefined) {
@@ -136,54 +121,6 @@ function getConnectorConfigCache() {
   return globalThis.__cinatraConnectorConfigCache;
 }
 
-function safeParseJson<T>(raw: string, fallback: T): T {
-  try {
-    return normalizePersistedValue(JSON.parse(raw) as T);
-  } catch {
-    return normalizePersistedValue(fallback);
-  }
-}
-
-
-function readMetadataValueInternal<T>(key: string, fallback: T): T {
-  ensurePostgresSchema();
-  const [result] = runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildReadMetadataQuery(postgresSchema, key)],
-  });
-
-  const row = result?.rows?.[0] as { value?: string } | undefined;
-  if (!row?.value) {
-    return fallback;
-  }
-
-  return normalizePersistedValue(safeParseJson(row.value, fallback));
-}
-
-function writeMetadataValueInternal(key: string, value: unknown) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildWriteMetadataQuery(postgresSchema, key, JSON.stringify(normalizePersistedValue(value)))],
-  });
-}
-
-function deleteMetadataValueInternal(key: string) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildDeleteMetadataQuery(postgresSchema, key)],
-  });
-}
-
-function deleteMetadataByPrefixInternal(prefix: string) {
-  ensurePostgresSchema();
-  runPostgresQueriesSync({
-    connectionString: getPostgresConnectionString(),
-    queries: [buildDeleteMetadataByPrefixQuery(postgresSchema, prefix)],
-  });
-}
-
 function readJsonRows(tableName: string) {
   ensurePostgresSchema();
   const [result] = runPostgresQueriesSync({
@@ -206,7 +143,7 @@ function replaceJsonRows<T extends { id: string }>(tableName: string, rows: T[])
         tableName as never,
         {
           id: row.id,
-          payload: JSON.stringify(normalizePersistedValue(row)),
+          payload: JSON.stringify(row),
         },
       )),
     ],
@@ -239,18 +176,16 @@ function replaceStartupDatasetInDatabase(dataset: StartupDataset) {
     buildWriteMetadataQuery(
       postgresSchema,
       "startup_dataset_meta",
-      JSON.stringify(
-        normalizePersistedValue({
-          generatedAt: dataset.generatedAt,
-          source: dataset.source,
-          startupCount: dataset.startups.length,
-        }),
-      ),
+      JSON.stringify({
+        generatedAt: dataset.generatedAt,
+        source: dataset.source,
+        startupCount: dataset.startups.length,
+      }),
     ),
     buildDeleteAllRowsQuery(postgresSchema, "startups"),
     ...dataset.startups.map((startup) => buildInsertJsonRowQuery(postgresSchema, "startups", {
       id: startup.id,
-      payload: JSON.stringify(normalizePersistedValue(startup)),
+      payload: JSON.stringify(startup),
     })),
   ]);
 
@@ -369,6 +304,30 @@ export function readMetadataValueFromDatabase<T>(key: string, fallback: T): T {
 
 export function writeMetadataValueToDatabase(key: string, value: unknown) {
   writeMetadataValueInternal(key, value);
+}
+
+// Byte-accurate raw snapshot of a metadata row's stored JSON value (or null).
+// Pair with `compareAndSwapMetadataValueFromDatabase` to perform an atomic
+// read-modify-write: capture the snapshot, derive the next value, and swap only
+// if the row is still byte-equal to the snapshot.
+export function readRawMetadataStringFromDatabase(key: string): string | null {
+  return readRawMetadataStringInternal(key);
+}
+
+// Atomically persist `value` ONLY IF the stored row is still byte-equal to
+// `expectedRaw` (the snapshot from `readRawMetadataStringFromDatabase`). Returns
+// true iff the swap landed; a concurrent write that changed the bytes makes it a
+// no-op (false), so the caller's stale value is never persisted.
+export function compareAndSwapMetadataValueFromDatabase(
+  key: string,
+  value: unknown,
+  expectedRaw: string,
+): boolean {
+  return compareAndSwapMetadataValueInternal(
+    key,
+    JSON.stringify(value),
+    expectedRaw,
+  );
 }
 
 export function readSkillCatalogFromDatabase() {
@@ -597,7 +556,7 @@ export function replaceSkillCatalogInDatabase(input: {
       postgresSchema,
       {
         id: row.id,
-        payload: JSON.stringify(normalizePersistedValue(row)),
+        payload: JSON.stringify(row),
       },
       deriveSkillPackageIdentity(row),
     )),
@@ -607,7 +566,7 @@ export function replaceSkillCatalogInDatabase(input: {
     buildDeleteRowsNotInQuery(postgresSchema, "skill_packages", keptPackageIds),
     ...input.skills.map((row) => buildUpsertJsonRowQuery(postgresSchema, "skills", {
       id: row.id,
-      payload: JSON.stringify(normalizePersistedValue(row)),
+      payload: JSON.stringify(row),
     })),
     buildDeleteRowsNotInQuery(postgresSchema, "skills", keptSkillIds),
   ]);
@@ -651,7 +610,7 @@ export function updateSkillPrefillTextInDatabase(skillId: string, prefillText: s
     queries: [
       buildUpsertJsonRowQuery(postgresSchema, "skills", {
         id: trimmedSkillId,
-        payload: JSON.stringify(normalizePersistedValue(updatedSkill)),
+        payload: JSON.stringify(updatedSkill),
       }),
     ],
   });
@@ -771,20 +730,108 @@ export function readConnectorConfigFromDatabase<T>(connectorId: string, fallback
   const cache = getConnectorConfigCache();
   const cached = cache.get(cacheKey);
 
+  // The cache holds the SEALED value (MF#1): we never cache plaintext
+  // secret fields. Decrypt (unseal) on every return so a cache HIT yields the
+  // same plaintext-field clone a cache MISS does.
   if (cached && cached.expiresAt > Date.now()) {
-    return clonePersistedValue(cached.value as T);
+    return unsealConnectorConfigForReturn(connectorId, clonePersistedValue(cached.value as T));
   }
 
-  const value = readMetadataValueInternal(cacheKey, fallback);
-  cache.set(cacheKey, { value: clonePersistedValue(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
-  return clonePersistedValue(value);
+  if (!hasSecretFields(connectorId)) {
+    // Non-secret keys: cache the value verbatim (existing behavior).
+    const value = readMetadataValueInternal(cacheKey, fallback);
+    cache.set(cacheKey, { value: clonePersistedValue(value), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+    return clonePersistedValue(value);
+  }
+
+  // Capture the RAW stored string once so the seal-on-read migration's
+  // compare-and-swap can be byte-accurate. `value` is parsed from that exact
+  // snapshot.
+  const observedRaw = readRawMetadataStringInternal(cacheKey);
+  const value =
+    observedRaw === null
+      ? (fallback as T)
+      : (safeParseJson(observedRaw, fallback) as T);
+
+  const { value: unsealed, sawLegacyPlaintext } = unsealSecretFields(
+    connectorId,
+    clonePersistedValue(value),
+  );
+
+  // MF#1: the at-rest `value` may contain a LEGACY PLAINTEXT secret. Caching it
+  // verbatim before migration would leave plaintext in-cache for the TTL if the
+  // migration then fails. So defer caching for the legacy case: only cache the
+  // already-sealed at-rest value now (no legacy plaintext present); the legacy
+  // case caches the SEALED row via the migration CAS, or evicts on failure.
+  if (!sawLegacyPlaintext) {
+    // Canonicalize the designated sealed fields before caching so a
+    // sealed-shaped at-rest row carrying sidecar (potentially plaintext)
+    // properties can never seed plaintext into the cache for the TTL (MF#1).
+    const cacheable = canonicalizeSealedFields(connectorId, clonePersistedValue(value));
+    cache.set(cacheKey, { value: cacheable, expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+    return unsealed as T;
+  }
+
+  // Seal-on-read migration (best-effort, non-throwing — MF#5): re-write the row
+  // sealed so the legacy plaintext stops living at rest. Made ATOMIC via a
+  // single conditional UPDATE (MF#3 / concurrency): the sealed value is written
+  // ONLY if the stored row is still byte-equal to `observedRaw`, so a concurrent
+  // newer write (e.g. a rotation) landing between this read and the migration
+  // write is NEVER clobbered by the stale re-sealed snapshot.
+  try {
+    // Seal the legacy plaintext ourselves (no preserve-merge: this is the exact
+    // value we observed). Throws fail-closed if the key is missing/invalid.
+    const sealed = prepareSealedWrite(connectorId, unsealed, value);
+    const sealedRaw = JSON.stringify(sealed);
+    if (observedRaw !== null && compareAndSwapMetadataValueInternal(cacheKey, sealedRaw, observedRaw)) {
+      // Swap landed — cache the SEALED value (never plaintext — MF#1).
+      cache.set(cacheKey, {
+        value: clonePersistedValue(sealed),
+        expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS,
+      });
+    } else {
+      // Row changed under us (CAS no-op) — abandon migration and do NOT cache
+      // plaintext.
+      cache.delete(cacheKey);
+    }
+  } catch (error) {
+    // Migration could not seal (missing/invalid key, DB error). Return the
+    // legacy plaintext for compat, but evict any cache entry so plaintext is
+    // NEVER served from cache (MF#1).
+    cache.delete(cacheKey);
+    console.warn(
+      `[connector-config-secret] seal-on-read migration skipped for ` +
+        `key=connector_config:${connectorId} — ` +
+        `error=${error instanceof Error ? error.name : "unknown"}`,
+    );
+  }
+
+  return unsealed as T;
+}
+
+/** Unseal a cache-HIT clone for return without re-running the migration path. */
+function unsealConnectorConfigForReturn<T>(connectorId: string, value: T): T {
+  if (!hasSecretFields(connectorId)) return value;
+  return unsealSecretFields(connectorId, value).value as T;
 }
 
 export function writeConnectorConfigToDatabase(connectorId: string, value: unknown) {
   const cacheKey = `connector_config:${connectorId}`;
-  const normalizedValue = normalizePersistedValue(value);
-  writeMetadataValueInternal(cacheKey, normalizedValue);
-  getConnectorConfigCache().set(cacheKey, { value: clonePersistedValue(normalizedValue), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
+  let toPersist = value;
+
+  if (hasSecretFields(connectorId)) {
+    // Read the RAW at-rest row so prepareSealedWrite can fall back to an
+    // existing sealed secret when this write omits it (preserve-on-blank-save,
+    // MF#3), then seal the plaintext secret fields (encrypt-on-write, MF#1).
+    // Throws fail-closed if the key is missing/invalid — write does NOT persist
+    // plaintext (MF#5).
+    const currentRaw = readMetadataValueInternal<unknown>(cacheKey, null);
+    toPersist = prepareSealedWrite(connectorId, toPersist, currentRaw) as typeof toPersist;
+  }
+
+  writeMetadataValueInternal(cacheKey, toPersist);
+  // Cache the SEALED value (never plaintext — MF#1).
+  getConnectorConfigCache().set(cacheKey, { value: clonePersistedValue(toPersist), expiresAt: Date.now() + CONNECTOR_CONFIG_CACHE_TTL_MS });
 }
 
 // Physically delete a single connector-config key (true row removal, NOT a
@@ -1169,7 +1216,7 @@ export function upsertChatThreadInDatabase(
   const threadUpsertQuery = inheritance.buildChatThreadUpsertQuery({
     schemaName: postgresSchema,
     threadId: thread.id,
-    payloadJson: JSON.stringify(normalizePersistedValue(thread)),
+    payloadJson: JSON.stringify(thread),
     projectId: projectIdFromPayload,
     createdAt: createdAtFromPayload,
     updatedAt: updatedAtFromPayload,
@@ -1352,7 +1399,7 @@ export function upsertCampaignInDatabase(campaign: Campaign): void {
     connectionString: getPostgresConnectionString(),
     queries: [buildUpsertJsonRowQuery(postgresSchema, "campaigns", {
       id: campaign.id,
-      payload: JSON.stringify(normalizePersistedValue(campaign)),
+      payload: JSON.stringify(campaign),
     })],
   });
 }

@@ -117,7 +117,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -157,10 +157,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -241,11 +241,11 @@ jobs:
         run: echo "Docs-only or draft PR — reporting RBAC authz unit tests as a green stub (the real suite runs on code/mixed PRs)."
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -281,10 +281,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -326,10 +326,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -412,7 +412,7 @@ jobs:
           echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
           exit 1
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Full history so the merge-base diff can resolve origin/<pr.base.ref>.
           fetch-depth: 0
@@ -502,11 +502,11 @@ jobs:
         run: echo "Docs-only or draft PR — reporting Release workflows tests as a green stub (the real suite runs on code/mixed PRs)."
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -577,10 +577,10 @@ jobs:
     env:
       SUPABASE_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -622,10 +622,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -656,10 +656,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -711,7 +711,7 @@ jobs:
           echo "::error::detect job did not succeed (result=${{ needs.detect.result }}); failing this required check rather than passing it silently."
           exit 1
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           # Full history so the touch-ratchet diff in admin-route + other
           # gates run from this job can resolve origin/<pr.base.ref>.
@@ -753,7 +753,7 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -890,7 +890,7 @@ jobs:
       - name: Core -> extension instance-coupling gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-instance-coupling-ban.test.mjs scripts/audit/__tests__/strip-comments.test.mjs scripts/audit/__tests__/extension-reference-classification.test.mjs
 
-      # Identity-surface coupling gate (cinatra-engineering#155, eng#168(c)).
+      # Identity-surface coupling gate (identity-surface ruling).
       # The pinned-empty coupling gates pin a LEXEME (package name / path), not
       # extension IDENTITY. This stateless gate blocks the two DANGEROUS
       # identity-coupling subsets the owner ruling singled out to FIX so they
@@ -913,6 +913,16 @@ jobs:
       # cloned-back extension tree (this job clones it above).
       - name: Generated extension-manifest drift + parity gate (fail-closed)
         run: node scripts/extensions/generate-extension-manifest.mjs --check
+
+      # Build-config consistency check. config/build-config.manifest.json
+      # is the single source of truth for the tsconfig.json @cinatra-ai/* path
+      # aliases AND the next.config.ts serverExternalPackages + transpilePackages
+      # lists. This fails CI when those generated regions no longer match the
+      # manifest (a hand-edit, a stale regeneration, or a manifest change that
+      # was not re-rendered). Manifest-only inputs — does NOT need the cloned-back
+      # extension tree. Regenerate with `node scripts/config/generate-build-config.mjs`.
+      - name: Build-config consistency check (tsconfig + next.config vs manifest, fail-closed)
+        run: node scripts/config/generate-build-config.mjs --check
 
       # Required-extensions coverage gate. The prod base image acquires the
       # bootable set from cinatra-required-extensions.lock.json; this fails CI
@@ -945,6 +955,45 @@ jobs:
 
       - name: Skill-store canonicality gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/skill-canonicality-gate.test.mjs
+
+      # Route-graph ratchet gate (no-new-rot, cinatra#732). The locked
+      # FIXED_ROUTES (dev-perf route set) each carry a committed
+      # reachable-first-party-module-count ceiling in
+      # scripts/audit/route-graph-ratchet.baseline.json; this fails CI when a
+      # tracked route's first-party graph grows BEYOND its ceiling, when a
+      # tracked route has unresolved first-party imports (missingCount > 0 —
+      # fails closed, which is why it runs AFTER clone-extensions so the
+      # companion graph resolves and reproduces the committed counts), and
+      # (via the base-ref ratchet) when the committed baseline RAISES any
+      # ceiling vs the base branch (blocks the regenerate-to-pass bypass).
+      # Same base ref + no-new-rot shape as skill-canonicality / the
+      # extension-import-ban gates above. The bare invocation (no flag) is the
+      # enforce path; --report / --write-baseline are operator-only.
+      - name: Route-graph ratchet gate (no-new-rot)
+        env:
+          # Monotonic ratchet: the committed baseline must not raise any ceiling
+          # vs the base branch. Same base ref the sibling no-new-rot gates use.
+          ROUTE_GRAPH_RATCHET_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/route-graph-ratchet.mjs
+
+      - name: Route-graph ratchet gate tests
+        run: node --test scripts/audit/__tests__/route-graph-ratchet.test.mjs
+
+      # SKILL.md frontmatter validation (cinatra#494) + committed-mirror ban
+      # (cinatra#495). Every host-committed SKILL.md under packages/ + src/ must
+      # pass upstream-standard frontmatter validation (allowed top-level keys:
+      # name, description, license, allowed-tools, metadata, compatibility —
+      # Cinatra-specific keys like match_when live under metadata.*, read by the
+      # Wave-0 dual-read in packages/skills/src/frontmatter.ts). It also fails if
+      # any SKILL.md is committed under data/skill-store/ or extensions/ (both
+      # gitignored, hydrated from canonical source) so a drift-prone runtime
+      # mirror cannot be reintroduced. Dependency-free pure-node so it does not
+      # need the package install.
+      - name: Skill frontmatter + mirror-ban gate
+        run: node scripts/audit/skill-frontmatter-gate.mjs
+
+      - name: Skill frontmatter + mirror-ban gate tests
+        run: node --test scripts/audit/__tests__/skill-frontmatter-gate.test.mjs
 
       # Extension dev-fixtures: every extension declaring `cinatra.devFixtures`
       # must ship a well-formed, declarative fixture file. The dev seeder is
@@ -984,6 +1033,44 @@ jobs:
 
       - name: Workspace phantom-dependency gate tests
         run: node --test scripts/audit/__tests__/workspace-phantom-deps.test.mjs
+
+      # Workspace dependency-cycle gate (no-new-rot ratchet). Builds the directed
+      # first-party dependency graph from each workspace member's package.json
+      # deps, finds every strongly-connected component (Tarjan), and fails on any
+      # cycle whose member-set is not in the committed baseline. The known cycles
+      # are baselined (WARN/ratchet toward zero via one-directional `*-contracts`
+      # extraction); a genuinely NEW cycle fails closed. Cycles force lazy
+      # imports and block clean one-directional build/test ownership.
+      - name: Workspace dependency-cycle gate
+        env:
+          # Also fail if the committed baseline GREW vs the base branch (blocks
+          # the regenerate-to-pass bypass). Same base ref the other no-new-rot
+          # gates use.
+          WORKSPACE_DEP_CYCLES_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/workspace-dep-cycles.mjs
+
+      - name: Workspace dependency-cycle gate tests
+        run: node --test scripts/audit/__tests__/workspace-dep-cycles.test.mjs
+
+      # File-size ratchet gate (no-new-rot ratchet). Pins the current
+      # line count of each tracked architecture-bottleneck file (handlers,
+      # drizzle-store, agents store, chat page, skills store, mcp-server entry,
+      # background-jobs, database, extension-install pipeline, boot
+      # instrumentation) as a per-file ceiling and fails CI when a tracked file
+      # grows BEYOND its ceiling. It forces NO refactor (baselines are the
+      # current sizes); it only prevents the listed hubs from growing further.
+      # The baseline ratchets DOWN as extractions land (thin facades + vertical
+      # slices). File-level sibling of the package-level dependency-cycle ratchet.
+      - name: File-size ratchet gate
+        env:
+          # Also fail if the committed baseline RAISED any ceiling vs the base
+          # branch (blocks the regenerate-to-pass bypass). Same base ref the
+          # other no-new-rot gates use.
+          WORKSPACE_FILE_SIZE_RATCHET_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/file-size-ratchet.mjs
+
+      - name: File-size ratchet gate tests
+        run: node --test scripts/audit/__tests__/file-size-ratchet.test.mjs
 
       # Pinned-test existence gate. `vitest run a b c` treats positionals as
       # FILTERS — a positional that matches zero files is SILENTLY ignored as
@@ -1028,12 +1115,14 @@ jobs:
           packages/sdk-extensions/src
           scripts/extensions/__tests__/inventory.test.mjs
           scripts/extensions/__tests__/generate-extension-manifest.test.mjs
+          scripts/config/__tests__/generate-build-config.test.mjs
           scripts/extensions/__tests__/build-server-entry.test.ts
           scripts/extensions/__tests__/update-dev-extension-lock.test.mjs
           scripts/ci/__tests__/extension-pin-divergence-report.test.mjs
           scripts/extensions/__tests__/strip-comments.test.mjs
           scripts/extensions/__tests__/vendor-extension-primitives.test.mjs
           packages/cli/src/__tests__
+          packages/migrations/src
           src/lib/__tests__/extension-host-context.test.ts
           src/lib/__tests__/extension-mcp-registry.test.ts
           src/app/campaigns/__tests__/linkedin-actions-extension-gate.test.ts
@@ -1119,7 +1208,7 @@ jobs:
       # pinned to sync-and-readback.test.ts only, which silently left newer
       # apollo tests (e.g. the save-apollo-form toast suite from
       # apollo-connector#7) un-enforced by host CI (flagged on
-      # cinatra-engineering#67). Covers the verified write-then-read-back
+      # apollo-connector#7). Covers the verified write-then-read-back
       # security behavior (import WITHOUT connectorKey → forceRefresh readback →
       # compare to the submitted key → saveConnectionRecord only after verify)
       # plus everything added since.
@@ -1401,11 +1490,11 @@ jobs:
         run: echo "Docs-only or draft PR — reporting RBAC browser e2e as a green stub (the real suite runs on code/mixed PRs)."
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -1428,7 +1517,7 @@ jobs:
       # 30-90s per e2e job when warm.
       - name: Cache Playwright browsers
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -1444,7 +1533,7 @@ jobs:
       # when warm.
       - name: Cache Next.js build cache
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .next/cache
           key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
@@ -1665,11 +1754,11 @@ jobs:
         run: echo "Docs-only or draft PR — reporting Workflows browser e2e as a green stub (the real suite runs on code/mixed PRs)."
 
       - if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         if: ${{ needs.detect.outputs.skip != 'true' }}
@@ -1692,7 +1781,7 @@ jobs:
       # 30-90s per e2e job when warm.
       - name: Cache Playwright browsers
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -1708,7 +1797,7 @@ jobs:
       # when warm.
       - name: Cache Next.js build cache
         if: ${{ needs.detect.outputs.skip != 'true' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .next/cache
           key: nextjs-prod-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'next.config.ts') }}-${{ github.sha }}
@@ -1858,7 +1947,7 @@ jobs:
           echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }}. Refusing to build the image."
           exit 1
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # No clone-extensions here: the image build acquires the required-
       # extension set INSIDE `docker build` from the committed
@@ -1873,40 +1962,19 @@ jobs:
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Login to GHCR
-        # Publish allowlist: only `push` (main branch + `v*` tags) and a manual
-        # `workflow_dispatch` log in / publish. PR and merge_group never do, and
-        # any future event type is denied by default (no exclusion list to
-        # maintain).
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=sha,format=long,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # Build → boot-gate → push (issue #81). The image is FIRST built and
-      # loaded into the local docker daemon, then booted by the prod-boot e2e
-      # below; only after that gate passes does the (push-event-only) push step
-      # publish it. This ordering means an unbootable image is never published
-      # to GHCR at all — not even transiently — and every PR / merge-queue
-      # candidate proves the boots-without-private-extensions path before merge.
-      # Two build invocations are NOT two builds: the second runs against the
-      # same buildx builder, so every layer is already in its local cache and
-      # the push step is a pure cache re-export.
+      # Build → boot-gate (issue #81). The image is FIRST built and loaded into
+      # the local docker daemon, then booted by the prod-boot e2e below. This
+      # `build` job is now PUBLISH-FREE: it logs in to nothing and pushes
+      # nothing. It runs on EVERY trigger (PR / merge_group / push / dispatch)
+      # to prove the boots-without-private-extensions path before merge, and its
+      # `cache-to: type=gha,mode=max` below populates the shared gha cache so the
+      # downstream publish jobs re-export from cache instead of rebuilding. The
+      # GHCR push and the prod-deploy dispatch moved OUT of this job (the
+      # build-image e2e-split) — see the `publish-nonrelease-image`,
+      # `publish-release-image`, and `release-dispatch` jobs below. Keeping
+      # build+e2e here ungated means ordinary PR/merge_group/branch builds never
+      # pause for approval; only the release publish + prod-deploy pause behind
+      # the `release-approval` Environment.
       - name: Build image (load for prod-boot e2e)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -1932,55 +2000,277 @@ jobs:
           IMAGE: cinatra-prod-boot-e2e:ci
         run: bash scripts/ci/prod-boot-e2e.sh
 
+  # ---------------------------------------------------------------------------
+  # build-image e2e-split: the GHCR image PUSH and the prod-deploy dispatch
+  # moved OUT of the ungated `build` job into the three jobs below.
+  # `build` (above) still runs the prod-boot e2e on EVERY trigger and is the
+  # merge gate — it just no longer publishes. The publish surfaces are now
+  # split by event so that ONLY the v*-tag release path pauses for owner
+  # approval while ordinary builds (and the routine main-branch `:latest`
+  # publish) stay ungated:
+  #
+  #   publish-nonrelease-image  — UNGATED. push-to-main + workflow_dispatch
+  #     (NON-v*-tag) GHCR publish. Preserves the prior main-branch `:latest`
+  #     publish behavior byte-for-byte; the Docker Hub mirror keys off GHCR
+  #     `:latest`, so this MUST stay ungated.
+  #   publish-release-image     — GATED (environment: release-approval). The
+  #     v*-tag GHCR image publish. A release artifact, so it pauses for the
+  #     owner before it publishes.
+  #   release-dispatch          — GATED (environment: release-approval). Fires
+  #     the cross-repo `cinatra-release-published` repository_dispatch to ops
+  #     that triggers the prod deploy. The real outward release action — paused.
+  #
+  # All three re-export from the gha cache that `build` populated
+  # (cache-to: type=gha,mode=max), so none of them rebuilds the image; they are
+  # pure cache re-exports gated on `needs: build` (so the boot-e2e still gates
+  # every publish). None is a REQUIRED status check — the four required checks
+  # (detect/test/e2e-rbac/workflows-e2e) are untouched, so a PR's mergeability
+  # is unaffected; on a PR/merge_group run all three are skipped by their `if:`.
+  # ---------------------------------------------------------------------------
+
+  # UNGATED non-release publish: main-branch `:latest` + branch/sha tags +
+  # workflow_dispatch image publish. This is the prior `build`-job `Push image`
+  # step's exact event allowlist (`push || workflow_dispatch`) MINUS v*-tag
+  # pushes (those go through the GATED `publish-release-image` below). Splitting
+  # this out keeps the routine main-push `:latest` publish — which the Docker
+  # Hub mirror depends on — running with ZERO behavior change and ZERO approval
+  # pause.
+  publish-nonrelease-image:
+    name: Publish image (non-release)
+    needs: build
+    # Same publish allowlist as the prior in-`build` Push step, EXCLUDING v*
+    # tags (handled by the gated release job). A non-tag push to main, a
+    # non-v* tag push, or a manual workflow_dispatch publishes here, ungated.
+    if: ${{ (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pure cache re-export — `build` populated type=gha,mode=max, so no layer
+      # is rebuilt. Identical build-args (CI=true) to the load build keep the
+      # cache hit total.
       - name: Push image
-        id: build
-        # Publish allowlist (mirrors the GHCR login gate above): only `push`
-        # (main branch + `v*` tags) and a manual `workflow_dispatch` publish.
-        # PR and merge_group runs stop at the boot-gated load build above.
-        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Identical build-args to the load build above — required for the
-          # full builder-local cache hit that makes this a re-export, not a build.
           build-args: |
             CI=true
           cache-from: type=gha
 
-      # Release-gating (Model A): on a v* tag, after the image is pushed AND the
-      # v-prefixed tag is confirmed resolvable in GHCR, tell ops to
-      # deploy it to prod immediately. Triggering from HERE (not release:published)
-      # closes the release-before-image race — the image provably exists first.
-      # GITHUB_TOKEN can't do cross-repo repository_dispatch, so this uses a
-      # scoped fine-grained PAT (resource owner cinatra-ai, repo cinatra-ai/ops,
-      # Contents: write). Prefer the release-specific CINATRA_RELEASE_DISPATCH_TOKEN;
-      # fall back to the legacy CINATRA_OPS_DISPATCH_TOKEN so the rename is
-      # non-breaking until the new secret is provisioned. The release dispatch
-      # token MUST be distinct from the cinatra-ai/docs dispatch PAT (also named
-      # CINATRA_OPS_DISPATCH_TOKEN in ops rotation-matrix.json) — reusing one name
-      # across the docs / marketplace / cinatra-app release sources is a
-      # rotation/revocation footgun. See .github/secrets-required.txt.
+  # GATED v*-tag image publish. The image-publish half of the release path is a
+  # real release artifact, so it pauses behind the `release-approval`
+  # Environment (provisioned in THIS repo: required reviewer @groganz,
+  # prevent_self_review=false, can_admins_bypass=false — same Environment
+  # `create-release` already uses). Exposes the pushed digest as a job output
+  # so the gated `release-dispatch` job can forward it to ops. Repo-name guard
+  # mirrors the dispatch/release jobs: only the canonical repo publishes.
+  publish-release-image:
+    name: Publish image (release)
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ${{ vars.CI_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    environment: release-approval
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # Release clearance gate (machine assertion, fail-closed). A milestone
+      # release only publishes once the org has cleared THIS exact tag: the
+      # org-level Actions variable RELEASE_CLEARED_VERSION must equal the tag being
+      # published. The variable is set by a separate private release-readiness
+      # workflow; this repo only reads that version string. The separate release
+      # deploy master arm, RELEASE_GATING_ENABLED, lives in cinatra-ai/ops and is
+      # read by ops/.github/workflows/deploy-instances.yml after dispatch.
+      #
+      # SCOPE of the exemption (deliberate, not a bypass): a non-semver
+      # checkpoint/marker v-tag (e.g. 'v-pre-extension-system') is a pre-existing,
+      # intentional NON-release artifact — it builds + pushes a GHCR checkpoint
+      # image but cuts no Release and triggers no deploy (see the semver guards in
+      # release-dispatch + create-release). Only a well-formed milestone tag
+      # (vMAJOR.MINOR.PATCH) is a release, so only those are clearance-gated; a
+      # checkpoint tag is neither empty-clearance-bypassing a release nor able to
+      # deploy. Milestone tags fail closed on empty / mismatched clearance.
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to the downstream semver guard used
+          # by release-dispatch / create-release, so any tag those jobs treat as a
+          # release is clearance-gated here too (no narrower-regex bypass). A
+          # non-release checkpoint/marker v-tag is the only exemption.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to publish '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to publish (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Pure cache re-export from `build`'s gha cache (no rebuild). `id: build`
+      # so its digest output feeds `release-dispatch` below.
+      - name: Push image
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CI=true
+          cache-from: type=gha
+
+  # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
+  # release image is pushed AND the v-prefixed tag is confirmed resolvable in
+  # GHCR, tell ops to deploy it to prod. Triggering from HERE (not
+  # release:published) closes the release-before-image race — the image provably
+  # exists first. This is the real outward release action, so it pauses behind
+  # the `release-approval` Environment (the same Environment as the image
+  # publish above; both pause on the SAME owner approval for one tag run).
+  # GITHUB_TOKEN can't do cross-repo repository_dispatch, so this uses a scoped
+  # fine-grained PAT (resource owner cinatra-ai, repo cinatra-ai/ops,
+  # Contents: write). Prefer the release-specific CINATRA_RELEASE_DISPATCH_TOKEN;
+  # fall back to the legacy CINATRA_OPS_DISPATCH_TOKEN so the rename is
+  # non-breaking until the new secret is provisioned. The release dispatch token
+  # MUST be distinct from the cinatra-ai/docs dispatch PAT (also named
+  # CINATRA_OPS_DISPATCH_TOKEN in ops rotation-matrix.json) — reusing one name
+  # across the docs / marketplace / cinatra-app release sources is a
+  # rotation/revocation footgun. See .github/secrets-required.txt.
+  release-dispatch:
+    name: Trigger prod deploy in ops
+    needs: publish-release-image
+    # Repo-name guard: only the canonical repo dispatches a deploy. A fork or
+    # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
+    # lands there.
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release-approval
+    permissions:
+      contents: read
+      # `imagetools inspect` below reads the PRIVATE release image from GHCR to
+      # confirm it resolves before dispatching the deploy; that read requires
+      # `packages: read` (the anonymous fetch 401s on the private package).
+      packages: read
+    steps:
+      # Release clearance gate (machine assertion, fail-closed) — see the note on
+      # publish-release-image. Independently re-checked here so the outward deploy
+      # dispatch can never fire for an uncleared tag even if reached by another
+      # path. Non-semver checkpoint tags are exempt (they never dispatch a deploy
+      # anyway — see the semver guard in the dispatch step below).
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to this job's downstream semver guard
+          # so no tag it treats as a release escapes the clearance check (no
+          # narrower-regex bypass). A non-release checkpoint/marker v-tag is exempt.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to dispatch deploy for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to dispatch deploy (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
+      # Authenticate to GHCR so the `imagetools inspect` guard below can resolve
+      # the PRIVATE release image (ghcr.io/cinatra-ai/cinatra). Without this the
+      # anonymous fetch 401s and the job dies BEFORE dispatching the deploy — the
+      # prior-milestone prod-deploy defect. Mirrors the Login to GHCR step in
+      # publish-release-image; GITHUB_TOKEN has packages:read for this repo's own
+      # package.
+      - name: Login to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Trigger prod deploy in ops
-        # Repo-name guard: only the canonical repo dispatches a deploy. A fork or
-        # any non-canonical clone must NEVER fire a prod deploy even if a v* tag
-        # lands there.
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
         env:
           GH_TOKEN: ${{ secrets.CINATRA_RELEASE_DISPATCH_TOKEN || secrets.CINATRA_OPS_DISPATCH_TOKEN }}
           TAG: ${{ github.ref_name }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ needs.publish-release-image.outputs.digest }}
           SHA: ${{ github.sha }}
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           set -euo pipefail
           # Only SEMVER release tags (vMAJOR.MINOR(.PATCH)) dispatch a deploy.
-          # The `on.push.tags: ['v*']` filter + the step `if:` above admit ANY
+          # The `on.push.tags: ['v*']` filter + the job `if:` above admit ANY
           # v-prefixed tag, so a marker/checkpoint tag (e.g.
           # 'v-pre-extension-system') reaches here. Such tags still BUILD + push
-          # a GHCR checkpoint image (above), but must NOT trigger a deploy.
+          # a GHCR checkpoint image (publish-release-image), but must NOT trigger
+          # a deploy.
           # Regex mirrors ops scripts/deploy-instance.sh — keep in sync.
           if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::notice::Tag '$TAG' is not a semver release tag — skipping prod deploy dispatch (the checkpoint image was still built + pushed to GHCR)."
@@ -2023,10 +2313,10 @@ jobs:
     # Same long-pole budget rationale as `build` (next build dominates).
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Set up Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -2098,9 +2388,12 @@ jobs:
   # Publish a GitHub Release for a semver v* tag with auto-generated notes
   # (merged PRs / commits since the previous tag). A SEPARATE job (least
   # privilege): only this job holds `contents: write`; the heavy build/push
-  # steps stay at the top-level `contents: read`. `needs: build` runs it AFTER
-  # the image build + push + deploy dispatch succeed, so a failed build cuts no
-  # Release and a Release hiccup cannot block the already-dispatched deploy.
+  # steps stay at the top-level `contents: read`. `needs: publish-release-image`
+  # (release-split — was `needs: build`) runs it AFTER the GATED release image
+  # publish succeeds, so a failed/unapproved image publish cuts no Release. Both
+  # this job and `publish-release-image` carry `environment: release-approval`,
+  # so the one owner approval for the tag run releases the image, this Release,
+  # AND the prod-deploy dispatch together.
   # Uses the built-in GITHUB_TOKEN — NO external action, NO extra secret, NO
   # checkout (the gh API needs neither). Guards mirror the deploy dispatch:
   # semver-only (a checkpoint/marker v-tag built a GHCR image but cuts no
@@ -2108,12 +2401,49 @@ jobs:
   # publishes a Release). Idempotent: skips when the Release already exists.
   create-release:
     name: Create GitHub Release
-    needs: build
+    needs: publish-release-image
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra'
     runs-on: ubuntu-latest
+    # Gate the public GitHub Release publish behind the org-wide
+    # `release-approval` Environment. Creating the Release is a real publish
+    # surface, so it must pause for an owner approval before it runs. The
+    # Environment is
+    # provisioned in THIS repo (required reviewer, prevent_self_review=false,
+    # can_admins_bypass=false); without that provisioning a referenced
+    # Environment auto-creates UNPROTECTED and the gate is inert, so the line
+    # and the provisioned Environment ship together.
+    environment: release-approval
     permissions:
       contents: write
     steps:
+      # Release clearance gate (machine assertion, fail-closed) — see the note on
+      # publish-release-image. Independently re-checked so a GitHub Release (a
+      # public release artifact) can never be cut for an uncleared tag. Non-semver
+      # checkpoint tags are exempt (they cut no Release — see the semver guard in
+      # the release step below).
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          # Release-tag test — kept IDENTICAL to this job's downstream semver guard
+          # so no tag it treats as a release escapes the clearance check (no
+          # narrower-regex bypass). A non-release checkpoint/marker v-tag is exempt.
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to create Release for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to create Release (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
       - name: Create GitHub Release (auto-generated notes)
         env:
           GH_TOKEN: ${{ github.token }}

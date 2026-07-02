@@ -19,7 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `next/dynamic(loader)` where the host's loader is
-// `() => import(...).then(m => m.AnalyticsPortletView)` — i.e. the loader
+// `() => import(...).then(m => m.EmbeddedDrizzleCubeDashboardGrid)` — i.e. the loader
 // resolves DIRECTLY to the component (the `.then` already unwraps the named
 // export). The mock mirrors that: await the loader, treat its resolved value as
 // the component, render it once available (deterministic in jsdom; no Suspense).
@@ -45,12 +45,12 @@ vi.mock("next/dynamic", () => ({
 // The app-local analytics re-export → a probe that records the props it received
 // (so we can assert the embedded dashboard config is threaded through).
 const analyticsProbeProps: Array<Record<string, unknown>> = [];
-vi.mock("@/components/dashboards/analytics-portlet-view", () => ({
+vi.mock("@/components/dashboards/embedded-drizzle-cube-dashboard-grid", () => ({
   default: (props: Record<string, unknown>) => {
     analyticsProbeProps.push(props);
     return React.createElement("div", { "data-testid": "analytics-view" });
   },
-  AnalyticsPortletView: (props: Record<string, unknown>) => {
+  EmbeddedDrizzleCubeDashboardGrid: (props: Record<string, unknown>) => {
     analyticsProbeProps.push(props);
     return React.createElement("div", { "data-testid": "analytics-view" });
   },

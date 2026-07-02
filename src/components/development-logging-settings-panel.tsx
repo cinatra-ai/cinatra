@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 
 type DevelopmentLoggingSettingsPanelProps = {
@@ -32,11 +33,10 @@ export function DevelopmentLoggingSettingsPanel({
       <form action={action} className="mt-6 flex flex-col gap-4">
         {providers.map((provider) => (
           <Label key={provider.id} className="flex items-start gap-3 rounded-control border border-line bg-surface-strong px-4 py-4">
-            <input
-              type="checkbox"
+            <Checkbox
               name={`${provider.id}LoggingEnabled`}
               defaultChecked={provider.enabled}
-              className="mt-1 h-4 w-4 rounded border-line text-foreground"
+              className="mt-1"
             />
             <span className="flex flex-col gap-1">
               <span className="text-sm font-semibold text-foreground">{provider.label}</span>

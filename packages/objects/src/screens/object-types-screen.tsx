@@ -63,7 +63,6 @@ export async function ObjectTypesScreen() {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        label="Administration"
         title="Data types"
         description="Static (package-defined) and dynamic (DB-backed) type registry. Approve or archive proposed types from the classifier."
         actions={proposedCount > 0 ? <ProposedCountBadge count={proposedCount} /> : undefined}

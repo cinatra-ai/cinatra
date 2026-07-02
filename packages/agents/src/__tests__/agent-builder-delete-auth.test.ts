@@ -65,7 +65,7 @@ vi.mock("../validate-agent-json", () => ({ validateOasAgentJson: vi.fn() }));
 vi.mock("../oas-compiler", () => ({ compileOasAgentJson: vi.fn() }));
 vi.mock("../verdaccio/client", () => ({ deleteAgentPackageVersion: vi.fn(), deprecateAgentPackageVersion: vi.fn(), publishAgentPackage: vi.fn(), publishAgentPackageFromGitDir: vi.fn() }));
 vi.mock("../install-from-package", () => ({ installAgentFromPackage: vi.fn() }));
-vi.mock("@cinatra-ai/registries", () => ({ listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("../verdaccio/publish-metadata", () => ({ derivePublishMetadataFromSnapshot: vi.fn() }));
 vi.mock("@cinatra-ai/skills", () => ({ upsertSkill: vi.fn(), parseFrontmatter: vi.fn(() => ({ frontmatter: {}, body: "" })) }));
 vi.mock("@cinatra-ai/objects", () => ({ createDeterministicObjectsClient: vi.fn() }));

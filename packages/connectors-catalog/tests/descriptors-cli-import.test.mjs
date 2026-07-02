@@ -1,5 +1,5 @@
 // Plain-Node smoke test — exercises the import path that
-// `packages/cli/src/agents-install.mjs` will use. Runs under vitest but
+// the @cinatra-ai/cinatra CLI's agents-install will use. Runs under vitest but
 // MUST NOT transitively pull anything that requires bundler/Next.js
 // resolution. If this test starts failing because some dependency leaked in,
 // the catalog has been broken by the change you just made.
@@ -27,8 +27,8 @@ const MCP_LESS_CONNECTOR_SLUGS = new Set([
 ]);
 
 describe("connector descriptors (CLI-safe surface)", () => {
-  it("ships the canonical 20-entry catalog", () => {
-    expect(CONNECTOR_DESCRIPTORS).toHaveLength(20);
+  it("ships the canonical 21-entry catalog", () => {
+    expect(CONNECTOR_DESCRIPTORS).toHaveLength(21);
   });
 
   it("every descriptor has the required fields with non-empty values", () => {
@@ -62,10 +62,10 @@ describe("connector descriptors (CLI-safe surface)", () => {
     expect(new Set(slugs).size).toBe(slugs.length);
   });
 
-  it("visibility split matches the dev-fixture expectation (13 admin / 7 workspace)", () => {
+  it("visibility split matches the dev-fixture expectation (14 admin / 7 workspace)", () => {
     const admin = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "admin");
     const workspace = CONNECTOR_DESCRIPTORS.filter((d) => d.defaultVisibility === "workspace");
-    expect(admin).toHaveLength(13);
+    expect(admin).toHaveLength(14);
     expect(workspace).toHaveLength(7);
     // Sanity: the split must account for every descriptor (no third tier).
     expect(admin.length + workspace.length).toBe(CONNECTOR_DESCRIPTORS.length);

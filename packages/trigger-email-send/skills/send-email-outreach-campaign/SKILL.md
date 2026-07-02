@@ -1,9 +1,10 @@
 ---
 name: send-email-outreach-campaign
 description: Use when the task is to prepare, test, schedule, or send a Cinatra Email Outreach campaign, especially the Send emails step, including send readiness, test emails, launch timing, and delivery behavior through connected inboxes.
-match_when:
-  - agent_id: "@cinatra-ai/email-delivery-agent"
-  - agent_id: "@cinatra-ai/email-outreach-agent"
+metadata:
+  match_when:
+    - agent_id: "@cinatra-ai/email-delivery-agent"
+    - agent_id: "@cinatra-ai/email-outreach-agent"
 ---
 
 # Send Email Outreach Campaign

@@ -206,7 +206,7 @@ describe("isDelegatedChatMcpToolAllowed", () => {
     }
   });
 
-  it("denies release-workflow lifecycle tools (start/approve/reject are Gantt/human-only)", () => {
+  it("denies release-workflow lifecycle tools (start/approve/reject are workflow-page/human-only)", () => {
     for (const name of [
       "workflow_start",
       "workflow_approve",

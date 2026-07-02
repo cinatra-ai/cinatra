@@ -1,5 +1,5 @@
 /**
- * SDK-P5 (eng#167) — declarative WORKFLOW package source-authoring + the
+ * SDK-P5 — declarative WORKFLOW package source-authoring + the
  * de-coercion of the agent-only `cinatra.kind` write path.
  *
  * Two cohesive concerns:
@@ -33,7 +33,7 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   readLocalPackageSkillContent: vi.fn(),
 }));
-vi.mock("@cinatra-ai/registries", () => ({ listAgentPackages: vi.fn() }));
+vi.mock("@cinatra-ai/registries", () => ({ isSafePathSegment: (s: unknown): boolean => typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s), assertSafePathSegment: (s: unknown, label = "path segment"): void => { const ok = typeof s === "string" && s !== "." && s !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(s); if (!ok) throw new Error("unsafe " + label + ": " + JSON.stringify(s)); }, listAgentPackages: vi.fn() }));
 vi.mock("@cinatra-ai/objects", () => ({
   createDeterministicObjectsClient: vi.fn(() => ({})),
 }));

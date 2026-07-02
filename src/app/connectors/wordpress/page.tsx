@@ -6,6 +6,8 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import type { ComponentType } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { BlogConnectorSelect } from "./blog-connector-select";
 import { listWordPressInstances, getWordPressAPIStatus } from "@/lib/wordpress-api";
 import { getNangoFrontendConfig, getNangoStatus } from "@/lib/nango-system";
 import { setWordPressBlogConnectorAction } from "@/app/campaigns/actions";
@@ -96,7 +98,7 @@ export default async function WordPressPage() {
                       Open admin
                     </Link>
                     <form action={deleteWordPressInstanceAction}>
-                      <input type="hidden" name="instanceId" value={instance.id} />
+                      <Input type="hidden" name="instanceId" value={instance.id} />
                       <Button
                         type="submit"
                         variant="outline"
@@ -113,25 +115,22 @@ export default async function WordPressPage() {
                   action={setWordPressBlogConnectorAction}
                   className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4"
                 >
-                  <input type="hidden" name="instanceId" value={instance.id} />
+                  <Input type="hidden" name="instanceId" value={instance.id} />
                   <label
                     htmlFor={`blogConnectorId-${instance.id}`}
                     className="text-xs uppercase tracking-[0.2em] text-muted-foreground"
                   >
                     Blog connector
                   </label>
-                  <select
+                  <BlogConnectorSelect
                     id={`blogConnectorId-${instance.id}`}
                     name="blogConnectorId"
                     defaultValue={instance.blogConnectorId ?? "default"}
-                    className="rounded-control border border-line bg-surface-strong px-3 py-2 text-sm text-foreground"
-                  >
-                    {blogConnectors.map((c) => (
-                      <option key={c.connectorId} value={c.connectorId}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+                    options={blogConnectors.map((c) => ({
+                      value: c.connectorId,
+                      label: c.name,
+                    }))}
+                  />
                   <Button
                     type="submit"
                     variant="outline"

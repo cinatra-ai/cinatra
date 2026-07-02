@@ -18,6 +18,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { approveConnectAction, denyConnectAction } from "./actions";
 
 export const metadata: Metadata = { title: "Connect with Cinatra" };
@@ -185,18 +186,18 @@ function HiddenParams({
 }) {
   return (
     <>
-      <input type="hidden" name="client" value={params.client} />
-      <input type="hidden" name="redirect_uri" value={params.redirectUri} />
-      <input type="hidden" name="widget_origin" value={params.widgetOrigin} />
-      <input type="hidden" name="state" value={params.state} />
-      <input type="hidden" name="scope" value={params.scope || CONNECT_SCOPE} />
-      <input type="hidden" name="code_challenge" value={params.codeChallenge} />
-      <input
+      <Input type="hidden" name="client" value={params.client} />
+      <Input type="hidden" name="redirect_uri" value={params.redirectUri} />
+      <Input type="hidden" name="widget_origin" value={params.widgetOrigin} />
+      <Input type="hidden" name="state" value={params.state} />
+      <Input type="hidden" name="scope" value={params.scope || CONNECT_SCOPE} />
+      <Input type="hidden" name="code_challenge" value={params.codeChallenge} />
+      <Input
         type="hidden"
         name="code_challenge_method"
         value={CONNECT_CODE_CHALLENGE_METHOD}
       />
-      <input type="hidden" name="consent_csrf" value={consentCsrf} />
+      <Input type="hidden" name="consent_csrf" value={consentCsrf} />
     </>
   );
 }

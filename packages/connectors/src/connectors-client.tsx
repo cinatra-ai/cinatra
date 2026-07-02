@@ -1,9 +1,11 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, SlidersHorizontal } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug } from "lucide-react";
+import { ConnectorBadge } from "./connector-badge";
 import SiGmail from "@icons-pack/react-simple-icons/icons/SiGmail.mjs";
 import SiGooglecalendar from "@icons-pack/react-simple-icons/icons/SiGooglecalendar.mjs";
 import SiGoogle from "@icons-pack/react-simple-icons/icons/SiGoogle.mjs";
@@ -13,9 +15,9 @@ import SiYoutube from "@icons-pack/react-simple-icons/icons/SiYoutube.mjs";
 import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
 import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
 import SiGithub from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
+import SiPlane from "@icons-pack/react-simple-icons/icons/SiPlane.mjs";
 import { FaLinkedin } from "react-icons/fa6";
 import { Button } from "@/components/ui/button";
-import { StatusPill } from "@/components/ui/status-pill";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -148,16 +150,18 @@ const ICON_BY_SLUG = new Map<string, ReactNode>([
   ["a2a-server-connector", <A2AIcon key="a2a" />],
   ["google-oauth-connector", <SiGoogle key="google-oauth" size={20} color="default" aria-hidden="true" />],
   ["twenty-connector", <TwentyIcon key="twenty" />],
+  ["linkedin-oauth-connector", <FaLinkedin key="linkedin-oauth" size={20} color="#0A66C2" aria-hidden="true" />],
+  ["mcp-server-connector", <McpIcon key="mcp-server" className="h-5 w-5" aria-hidden="true" />],
+  ["plane-connector", <SiPlane key="plane" size={20} color="default" aria-hidden="true" />],
 ]);
 
 function iconForSlug(slug: string): ReactNode {
   const icon = ICON_BY_SLUG.get(slug);
   if (icon) return icon;
-  return (
-    <span className="text-xs text-muted-foreground" aria-hidden="true">
-      ?
-    </span>
-  );
+  // Neutral connector glyph for any slug without a brand mark — degrades
+  // gracefully instead of a bare "?" so newly-added connectors still read as
+  // connectors until their icon is mapped.
+  return <PlugZap className="h-5 w-5 text-muted-foreground" aria-hidden="true" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,31 +184,64 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
     >
       {icon}
       <ArrowLeftRight className="size-4 text-muted-foreground" aria-hidden="true" />
-      <CinatraLogo className="size-5" />
+      {/* Cinatra mark renders in brand mustard (the app-icon treatment) rather
+          than the default ink. `CinatraLogo` fills with currentColor, so the
+          `text-brand-mustard` token is sufficient and stays scoped to the card. */}
+      <CinatraLogo className="size-5 text-brand-mustard" />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Badge
-// ---------------------------------------------------------------------------
-
-function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
-  if (connected) {
-    return <StatusPill status="approved">{label ?? "Connected"}</StatusPill>;
-  }
-  return <StatusPill status="idle">Not connected</StatusPill>;
-}
-
-// ---------------------------------------------------------------------------
 // Main client component
 // ---------------------------------------------------------------------------
+//
+// The per-card connection-status badge is the SHARED `ConnectorBadge`
+// (`./connector-badge`), the same component the host injects into the connector
+// setup-page header — so the card badge and the setup-page badge stay
+// byte-identical.
+
+// localStorage key for the persisted Connected/Available filter selection.
+const FILTER_STORAGE_KEY = "cinatra:connectors:filter";
 
 export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterType, setFilterType] = useState<FilterType>("connected");
   const [sort, setSort] = useState<SortOrder>("asc");
+  const [hydrated, setHydrated] = useState(false);
+
+  // Persist the Connected/Available filter across visits. Read AFTER mount
+  // (not in the useState initializer) so the server-rendered default and the
+  // first client render match — avoids a hydration mismatch — mirroring the
+  // localStorage-after-mount pattern used elsewhere (orchestrator-stepper-panel,
+  // prompt-field). `hydrated` flips only once the stored value has been read.
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(FILTER_STORAGE_KEY);
+      if (stored === "connected" || stored === "available") {
+        setFilterType(stored);
+      }
+    } catch {
+      // Ignore storage access failures and keep the default selection.
+    }
+    setHydrated(true);
+  }, []);
+
+  // The write effect is gated on `hydrated` (a state flag, not a ref) so the
+  // mount-time commit — where `filterType` still holds the SSR default and
+  // `hydrated` is false — cannot clobber a previously stored selection before
+  // the read effect restores it. The state flag closes over the render value,
+  // so even React Strict Mode's double-invoked mount effects both skip the
+  // write. Persistence begins once hydration has committed.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(FILTER_STORAGE_KEY, filterType);
+    } catch {
+      // Ignore storage write failures (e.g. restricted/full storage).
+    }
+  }, [hydrated, filterType]);
 
   const filteredConnectors = [...cards]
     .sort((a, b) => sort === "asc" ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name))
@@ -228,16 +265,41 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
         </ToolbarGroup>
         <ToolbarSeparator />
         <ToolbarGroup>
+          {/* Design-system Toggle / Toggle-group spec (#604): one outer hairline
+              border with hairline dividers between segments, no gaps, 7px radius.
+              The default toggle variant already carries the on-state — indigo
+              soft-tint fill + indigo content (`data-[state=on]:bg-primary/10
+              data-[state=on]:text-primary`); the rest segments are transparent
+              with slate (`text-muted-foreground`) content. We avoid the generic
+              `outline` variant (grey accent fill on a grey ground) and instead
+              compose the spec from tokens here. */}
           <ToggleGroup
             type="single"
-            variant="outline"
             size="sm"
             value={filterType}
             onValueChange={(v) => v && setFilterType(v as FilterType)}
             aria-label="Filter by connection state"
+            className="overflow-hidden rounded-[7px] border border-line [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-line"
           >
-            <ToggleGroupItem value="connected">Connected</ToggleGroupItem>
-            <ToggleGroupItem value="available">Available</ToggleGroupItem>
+            {/* Each item leads with the SAME plug glyph the cards use (#605):
+                connected → PlugZap, disconnected → Unplug. The second item's
+                visible label is "Disconnected" (#683), but its `value` stays
+                "available" so the persisted localStorage key and the filter
+                semantics (`connected` vs `!connected`) are unchanged. */}
+            <ToggleGroupItem
+              value="connected"
+              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+            >
+              <PlugZap data-icon="inline-start" aria-hidden="true" />
+              Connected
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="available"
+              className="rounded-none text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground data-[state=on]:bg-primary/10 data-[state=on]:text-primary"
+            >
+              <Unplug data-icon="inline-start" aria-hidden="true" />
+              Disconnected
+            </ToggleGroupItem>
           </ToggleGroup>
         </ToolbarGroup>
         <ToolbarSeparator />
@@ -269,6 +331,18 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        </ToolbarGroup>
+        {/* Trailing "+ Connector" action (#681): jump to the marketplace
+            pre-filtered to connectors. `?tab=connector` is honoured by the
+            marketplace client (extensions-marketplace-client: searchParams
+            .get("tab") → the "connector" tab). */}
+        <ToolbarGroup>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/configuration/marketplace?tab=connector">
+              <Plus data-icon="inline-start" aria-hidden="true" />
+              Connector
+            </Link>
+          </Button>
         </ToolbarGroup>
       </Toolbar>
 

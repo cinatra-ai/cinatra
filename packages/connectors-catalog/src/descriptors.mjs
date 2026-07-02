@@ -1,5 +1,5 @@
 // CLI-safe connector descriptors. Plain JS, no imports, no transitive Node-only or
-// browser-only deps. Imported by both `packages/cli/` (plain Node, agents-install.mjs)
+// browser-only deps. Imported by both the @cinatra-ai/cinatra CLI (plain Node, agents-install.mjs)
 // and the host server registry (`src/lib/connectors-registry.server.ts`).
 //
 // Catalog layering: this file holds pure data only. Readiness probes + setup-page
@@ -11,7 +11,7 @@
 // package at `extensions/cinatra-ai/<slug>/`. The setup-pages-parity host test fails
 // fast if any descriptor lacks a corresponding setup-page loader.
 //
-// IDENTITY SURFACE (cinatra-engineering#155, eng#168(c) "accept the normal"):
+// IDENTITY SURFACE (identity-surface ruling, "accept the normal"):
 // this file IS the single SANCTIONED hand-maintained slug -> packageId catalog.
 // It is classified `mechanical` in
 // scripts/audit/lib/extension-reference-classification.mjs (a hand catalog, NOT
@@ -33,7 +33,7 @@
  */
 
 // The single org-scope lexeme for first-party connector packages. Named in ONE
-// place (cinatra-engineering#155 identity-surface decoupling) so the `@cinatra-ai`
+// place (identity-surface decoupling) so the `@cinatra-ai`
 // org name is not re-spelled across every derivation; a scope rename touches this
 // constant only.
 export const CONNECTOR_PACKAGE_SCOPE = "@cinatra-ai";
@@ -73,7 +73,7 @@ const RAW_DESCRIPTORS = [
     // Inbound MCP-client connector for Claude Desktop, Claude.ai, ChatGPT,
     // and any MCP-compatible client that connects to Cinatra via OAuth.
     slug: "mcp-client-connector",
-    displayName: "MCP Client",
+    displayName: "MCP Clients",
     defaultVisibility: "workspace",
     mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
@@ -198,6 +198,30 @@ const RAW_DESCRIPTORS = [
     displayName: "Twenty CRM",
     defaultVisibility: "admin",
     mcpPrimitivePrefixes: ["crm_", "twenty_"],
+    setupSubroute: "setup",
+  },
+  // plane-connector is a provider for the provider-agnostic pm-connector
+  // (project-management) facade — the schedule↔PM-task mirror (cinatra#317).
+  // Only the provider appears here; the pm-connector facade is a
+  // dependency, not a setup-discoverable surface (same shape as twenty-connector
+  // above).
+  {
+    slug: "plane-connector",
+    displayName: "Plane",
+    defaultVisibility: "admin",
+    mcpPrimitivePrefixes: ["plane_"],
+    setupSubroute: "setup",
+  },
+  // mcp-server-connector (cinatra#612) carries the carved external-MCP
+  // ("MCP Servers" — the outbound MCP servers Cinatra connects to) management
+  // UI as its setup page. Admin-visibility (global/org/team config). It ships
+  // NO MCP primitives of its own — the registered external servers ARE the MCP;
+  // this connector only manages their host-owned registry rows — so no prefixes.
+  {
+    slug: "mcp-server-connector",
+    displayName: "MCP Servers",
+    defaultVisibility: "admin",
+    mcpPrimitivePrefixes: [],
     setupSubroute: "setup",
   },
 ];

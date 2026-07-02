@@ -128,7 +128,7 @@ function v12AnalyticsEnvelope(dc: unknown): Record<string, unknown> {
 /**
  * Seed (idempotently) one published apiVersion 1.2 analytics dashboard row owned
  * by the test user, so the #326 render smoke can open it at `/dashboards/[id]`
- * and assert it renders through PortletHost → AnalyticsPortletView → the live DC
+ * and assert it renders through PortletHost → EmbeddedDrizzleCubeDashboardGrid → the live DC
  * grid. Direct `pg` INSERT (the dashboards mutation service imports
  * `server-only`, unusable in the Playwright Node setup) — the persisted shape is
  * byte-for-byte what the create/save path writes.

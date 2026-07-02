@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { MetricUsageOverviewScreen } from "@cinatra-ai/metric-usage-api/screens";
 import { MetricApiNav } from "@/components/metric-api-nav";
+import { analyticsTabDescription } from "@/lib/section-nav";
 import Link from "next/link";
 import { Settings2 } from "lucide-react";
 
@@ -23,7 +24,8 @@ export default async function MetricUsageApiPage({
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title="LLM Usage"
+        title="LLM"
+        description={analyticsTabDescription("usage")}
         actions={
           <Link href="/analytics/llm/pricing" aria-label="Pricing administration">
             <Settings2 className="h-5 w-5 text-muted-foreground hover:text-foreground transition" />

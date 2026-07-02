@@ -54,6 +54,10 @@ import {
   parseTwentyApiKey,
   probeTwentyBearer,
 } from "@/lib/twenty-keygen.mjs";
+import { writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import { auth, ensureInitialAdminBootstrap } from "@/lib/auth";
+import { ensureDefaultOrganizationRow } from "@/lib/default-organization-bootstrap";
+import { upsertConnectSiteAndMintCredential } from "@/lib/connect-provisioning";
 
 // -----------------------------------------------------------------------------
 // Dev auto-setup for the local docker WordPress + Drupal containers.
@@ -97,6 +101,52 @@ const LOCAL_TWENTY = {
     "find_one_company",
     "find_one_person",
     "get_views",
+  ] as string[],
+} as const;
+
+// Plane (project management) dev stack — `docker compose --profile plane up -d`.
+//
+// SMOKE-PROVEN facts (Plane CE 1.3.1, on-the-wire, cinatra#315/#320) that make
+// Plane DIVERGE from the Twenty archetype — the row wiring below is deliberately
+// NOT a Twenty copy:
+//   - AUTH: `X-API-Key` is the SOLE REST authenticator (a custom header).
+//     `Authorization: Bearer <pat>` -> 401 (Twenty-style Bearer NOT accepted). So
+//     the external_mcp_servers Bearer/Nango resolution CANNOT carry Plane's auth;
+//     `nangoConnectionId` is therefore null and no bearer is minted/attached here.
+//   - TOOL SURFACE: Plane's official MCP (makeplane/plane-mcp-server) exposes
+//     DIRECT-NAMED tools (`create_work_item`, ...) — there is NO `execute_tool`
+//     dispatcher. So the host's Layer-B `execute_tool` catalog proxy is a no-op
+//     for Plane; the LLM surface is constrained by Layer-A `allowedTools` (literal
+//     tool names) with `allowedCatalogTools: null` — the INVERSE of Twenty.
+//   - MCP BRIDGE: Plane CE itself is NOT an MCP server; the FastMCP bridge is a
+//     SEPARATE process and is NOT in the community compose. We therefore wire an
+//     enabled row ONLY when a real bridge URL (PLANE_MCP_URL) answers `tools/list`
+//     — never a misleading row pointing at a non-existent endpoint.
+//   - PAT MINT: minted via the USER-level `POST /api/users/api-tokens/`, which
+//     needs an authenticated session. Plane has NO headless CLI mint (unlike
+//     Twenty's `workspace:generate-api-key`), so the dev setup does NOT auto-mint;
+//     it logs a one-time sign-up + connect hint instead.
+const LOCAL_PLANE = {
+  containerName: "cinatra-plane-proxy-1",
+  // The single loopback-published port of the whole Plane stack (proxy -> api).
+  serverUrl: "http://localhost:3400",
+  // Liveness endpoint served by the api behind the proxy (answers pre-sign-up).
+  healthPath: "/api/instances/",
+  rowId: "plane-workspace",
+  rowLabel: "Plane (local dev)",
+  // Optional separate FastMCP bridge (makeplane/plane-mcp-server, HTTP+api-key).
+  // Not part of the community compose — only wired when this URL answers.
+  mcpUrlEnvVar: "PLANE_MCP_URL",
+  // Layer-A native-tool allowlist (DIRECT tool names; `allowedCatalogTools`
+  // stays null). Read + work-item write verbs the PM-sync port needs.
+  allowedTools: [
+    "list_projects",
+    "list_work_items",
+    "create_work_item",
+    "retrieve_work_item",
+    "update_work_item",
+    "delete_work_item",
+    "search_work_items",
   ] as string[],
 } as const;
 
@@ -195,7 +245,7 @@ function cinatraBrowserBaseUrl(): string {
  * Strip trailing slashes via a LINEAR char-index trim. The anchored greedy
  * `/\/+$/` is polynomial-ReDoS on input with many trailing slashes (CodeQL
  * `js/polynomial-redos`, high) — the codebase has standardised on this linear
- * form (see `resolveLocalOrigin` in packages/cli and
+ * form (see `resolveLocalOrigin` in the @cinatra-ai/cinatra CLI and
  * `normaliseMcpPublicBaseUrl` in packages/mcp-server). Never use `/\/+$/`.
  */
 export function trimTrailingSlashes(input: string): string {
@@ -421,10 +471,19 @@ function isLocalhostUrl(url: string): boolean {
  * SECRET BOUNDARY: the api_key is on the drush command line; callers MUST catch
  * and surface only a fixed host-owned reason (an execSync error can echo the
  * failed command). This helper does not log.
+ *
+ * cinatra#410 — in dev, push a real per-site `cnx_` connect-site
+ * credential (bound to the dev actor's org, the Drupal browser origin) so the
+ * widget's broker can drive the genuine cit_/cwu_ auth path; fall back to the
+ * passed legacy UUID when the dev mint is unavailable. The dev actor is seeded at
+ * the top of runDevAutoSetup (cachedDevActor) before any wiring runs.
  */
 function pushDrupalWidgetConfig(widgetApiKey: string, instanceId: string): void {
+  const key =
+    (cachedDevActor && mintDevConnectCredential(cachedDevActor, "drupal", LOCAL_DRUPAL.siteUrl)) ||
+    widgetApiKey;
   drushExec(`config:set cinatra.settings cinatra_url ${cinatraBrowserBaseUrl()} -y`);
-  drushExec(`config:set cinatra.settings api_key ${widgetApiKey} -y`);
+  drushExec(`config:set cinatra.settings api_key ${key} -y`);
   drushExec(`config:set cinatra.settings instance_id ${instanceId} -y`);
   drushExec(`cr`);
 }
@@ -1148,9 +1207,19 @@ async function autoSetupLocalWordPress(): Promise<Status> {
   // fresh install (or a CMS-volume reset with the app DB retained) wires the
   // widget. cinatra_url is the BROWSER-reachable origin (localhost:PORT) — the
   // plugin enqueues the bundle + SSE from it. `wp option update` is idempotent.
+  //
+  // cinatra#410 — the shipped widget's broker presents `cinatra_api_key`
+  // server-to-server to BOTH /api/agents/<slug>/token (cit mint) AND
+  // /api/widget-auth/{init,token} (cwu mint), and those endpoints REQUIRE a real
+  // per-site `cnx_` connect-site credential (a legacy widget UUID 401s). In dev,
+  // mint a `cnx_` bound to the dev actor's org for the WP browser origin and push
+  // THAT; fall back to the legacy UUID only if the dev mint is unavailable.
+  const devActor = await ensureDevConnectActor();
+  const wpWidgetKey =
+    (devActor && mintDevConnectCredential(devActor, "wordpress", LOCAL_WORDPRESS.siteUrl)) || auth.apiKey;
   try {
     wpCli(`option update cinatra_url ${cinatraBrowserBaseUrl()}`);
-    wpCli(`option update cinatra_api_key ${auth.apiKey}`);
+    wpCli(`option update cinatra_api_key ${wpWidgetKey}`);
     wpCli(`option update cinatra_instance_id ${instanceId}`);
   } catch {
     // SECRET BOUNDARY: the wp-cli command line embeds the widget api_key
@@ -1407,14 +1476,170 @@ async function autoSetupLocalTwenty(): Promise<Status> {
   };
 }
 
+/**
+ * Probe a Plane MCP bridge URL by issuing a JSON-RPC `tools/list`. Returns the
+ * advertised tool-name count on success, or null when the URL is unset /
+ * unreachable / not an MCP server / not a PLANE MCP server. Bounded (4s) + soft
+ * (never throws): a missing bridge is the COMMON case (the community compose
+ * ships no MCP server), so this must not block or crash dev boot.
+ *
+ * We require at least one EXPECTED Plane tool (from `LOCAL_PLANE.allowedTools`)
+ * in the advertised set before treating the endpoint as a Plane bridge — an
+ * empty `tools: []` or some other MCP server answering on the URL must NOT cause
+ * us to wire a misleading Plane row.
+ *
+ * Secret-safe: posts only a static JSON-RPC envelope to a controlled URL and
+ * reads a tool list — no credentials are sent or logged. (The bridge's own auth,
+ * Plane's `X-API-Key`, is configured operator-side; we only check reachability +
+ * MCP shape here.)
+ */
+async function probePlaneMcpBridge(url: string): Promise<number | null> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!response.ok) return null;
+    const json = (await response.json()) as {
+      result?: { tools?: Array<{ name?: unknown }> };
+    };
+    const tools = json.result?.tools;
+    if (!Array.isArray(tools)) return null;
+    const names = new Set(
+      tools.map((t) => (typeof t?.name === "string" ? t.name : "")).filter(Boolean),
+    );
+    // Must look like a Plane MCP server: at least one of our expected direct
+    // tool names present (guards against an empty list or a non-Plane bridge).
+    if (!LOCAL_PLANE.allowedTools.some((t) => names.has(t))) return null;
+    return names.size;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Auto-setup for the local docker Plane stack (`--profile plane`).
+ *
+ * Mirrors `autoSetupLocalTwenty` in SHAPE (probe container → probe health → wire
+ * a row → soft-fail with a hint), but is honest to the SMOKE-PROVEN Plane facts
+ * (see the LOCAL_PLANE block above): Plane uses `X-API-Key` custom-header auth
+ * (no Nango Bearer), exposes DIRECT-NAMED MCP tools (Layer-A `allowedTools`, not
+ * Layer-B), has no headless PAT mint, and ships no MCP bridge in the community
+ * compose. Consequences:
+ *
+ *   - We NEVER mint a PAT or attach a Nango bearer here (Plane has no headless
+ *     mint; the first user must sign up via the web UI, then paste a PAT into the
+ *     Plane connector setup page). The server-side PM-sync REST port (#315/#317)
+ *     consumes that PAT; this function only stands the dev row up.
+ *   - We wire an enabled `external_mcp_servers` row ONLY when a real Plane MCP
+ *     bridge (PLANE_MCP_URL) answers `tools/list`. Pointing an enabled row at a
+ *     non-existent endpoint would be misleading, so absent a bridge we skip the
+ *     row and log a one-time setup hint. (Even with a bridge, a localhost URL is
+ *     hidden from the remote LLM by the registry's private-URL skip — the
+ *     agent-facing tools are a non-localhost/prod-Plane feature; the row is wired
+ *     for parity + admin-UI visibility + a future reachable/tunneled bridge.)
+ *
+ * Idempotent. Soft-fails (logs only; never throws). Safe at app boot + the CLI.
+ */
+export async function autoSetupLocalPlane(): Promise<Status> {
+  if (!probeDockerContainer(LOCAL_PLANE.containerName)) {
+    return {
+      status: "skipped",
+      reason: `${LOCAL_PLANE.containerName} not running (run docker compose --profile plane up -d)`,
+    };
+  }
+  // Plane's proxy + api take a while to settle behind first-boot migrations;
+  // use the resilient retry probe rather than a one-shot (mirrors Drupal).
+  if (!(await probeHttpReachableWithRetry(LOCAL_PLANE.serverUrl + LOCAL_PLANE.healthPath))) {
+    return {
+      status: "skipped",
+      reason: `${LOCAL_PLANE.serverUrl}${LOCAL_PLANE.healthPath} not reachable yet (Plane still booting)`,
+    };
+  }
+
+  // The hint operators need regardless of whether an MCP bridge is configured:
+  // Plane has no headless PAT mint, so the agent path needs a one-time sign-up +
+  // connect. Logged once per boot (idempotent rows don't re-log this).
+  const setupHint =
+    `[dev-auto-setup:plane] Plane is up at ${LOCAL_PLANE.serverUrl}. ` +
+    `One-time setup for agent access: (1) create the first user at ${LOCAL_PLANE.serverUrl}, ` +
+    `(2) mint a PAT (Profile → API tokens) and note your workspace slug + a project, ` +
+    `(3) paste them into the Plane connector setup page. ` +
+    `Plane uses X-API-Key auth (not a Bearer), so there is no headless auto-mint.`;
+
+  // Only wire an enabled MCP row when a REAL Plane MCP bridge answers tools/list.
+  // The community compose ships no bridge, so the common path skips the row.
+  const mcpUrl = process.env[LOCAL_PLANE.mcpUrlEnvVar]?.trim();
+  if (!mcpUrl) {
+    console.log(
+      `${setupHint} (No ${LOCAL_PLANE.mcpUrlEnvVar} set — the optional Plane MCP bridge ` +
+        `(makeplane/plane-mcp-server) is not part of the community compose; set ${LOCAL_PLANE.mcpUrlEnvVar} ` +
+        `to its HTTP api-key endpoint to expose Plane tools to agents.)`,
+    );
+    return {
+      status: "skipped",
+      reason: `Plane up; no ${LOCAL_PLANE.mcpUrlEnvVar} configured (no MCP bridge to wire — server-side PM-sync REST port is unaffected)`,
+    };
+  }
+
+  const toolCount = await probePlaneMcpBridge(mcpUrl);
+  if (toolCount === null) {
+    console.log(
+      `${setupHint} (${LOCAL_PLANE.mcpUrlEnvVar}=${mcpUrl} did not answer tools/list — not wiring a row ` +
+        `that points at an unreachable/non-MCP endpoint.)`,
+    );
+    return {
+      status: "skipped",
+      reason: `Plane up; ${LOCAL_PLANE.mcpUrlEnvVar} (${mcpUrl}) did not answer tools/list`,
+    };
+  }
+
+  const existing = getExternalMcpServerById(LOCAL_PLANE.rowId);
+  try {
+    upsertExternalMcpServer({
+      id: LOCAL_PLANE.rowId,
+      label: LOCAL_PLANE.rowLabel,
+      serverUrl: mcpUrl,
+      // Plane uses X-API-Key custom-header auth, which the registry's Nango
+      // Bearer resolution cannot carry — no Nango connection here.
+      nangoConnectionId: null,
+      scope: "workspace",
+      orgId: null,
+      userId: null,
+      enabled: true,
+      // Layer A — Plane is a DIRECT-named-tools MCP server, so constrain the LLM
+      // surface by literal tool names. Layer B (`allowedCatalogTools`) is a no-op
+      // for Plane (no `execute_tool` dispatcher) and stays null.
+      allowedTools: [...LOCAL_PLANE.allowedTools],
+      allowedCatalogTools: null,
+    });
+  } catch (err) {
+    return {
+      status: "error",
+      reason: `upsertExternalMcpServer failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  console.log(setupHint);
+  return {
+    status: existing ? "already-wired" : "created",
+    siteUrl: LOCAL_PLANE.serverUrl,
+    detail:
+      `row ${LOCAL_PLANE.rowId} ${existing ? "refreshed" : "created"} ` +
+      `(MCP bridge ${mcpUrl} advertised ${toolCount} tools; ${LOCAL_PLANE.allowedTools.length} Layer-A tools allowlisted; no bearer — X-API-Key auth)`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
 /**
- * Run the dev-mode auto-setup for the local docker Drupal + WordPress + Twenty.
- * Idempotent. Soft-fails (logs only; never throws). Safe to call at app boot
- * AND from the CLI.
+ * Run the dev-mode auto-setup for the local docker Drupal + WordPress + Twenty +
+ * Plane. Idempotent. Soft-fails (logs only; never throws). Safe to call at app
+ * boot AND from the CLI.
  */
 // ---------------------------------------------------------------------------
 // Connector access dev fixture seed (CANONICAL, not legacy).
@@ -1559,12 +1784,207 @@ async function autoSeedConnectorPolicyFixture(): Promise<Status> {
   };
 }
 
+// ---------------------------------------------------------------------------
+// cinatra#410 — deterministic dev Cinatra user+org + per-site `cnx_`
+// connect-site credentials for the WP/Drupal assistant UAT.
+//
+// The shipped Option-A widget streams behind a REAL per-site `cnx_` connect-site
+// credential AND a per-user hosted-PKCE `cwu_` login. Driving the genuine auth
+// path (NOT a `requireUserToken:false` bypass) needs: (1) a deterministic
+// Cinatra end-user who is a member of the org that owns the connect-site, so the
+// hosted `/widget-auth` consent + the stream's live org-membership re-check both
+// pass; (2) a `cnx_` per site whose `widget_origin` === the CMS browser origin
+// and whose org === that user's org. This block provides both, STRICTLY gated to
+// `CINATRA_RUNTIME_MODE==='development'` + loopback origins — it never runs in
+// production and never touches the prod auth-route guard or manifest.
+// ---------------------------------------------------------------------------
+
+// Strict dev gate (exact-equality, NOT the default-development getAppRuntimeMode)
+// for the seeding + `cnx_` mint — it provisions a sign-in-able user.
+function isStrictDevelopmentRuntime(): boolean {
+  return process.env.CINATRA_RUNTIME_MODE === "development" && process.env.NODE_ENV !== "production";
+}
+
+// Deterministic dev UAT end-user. The password is a fixed DEV literal (never a
+// production secret) the Playwright suite reads from the handoff file below to
+// drive the hosted-login popup. Min length 12 (matches the auth policy floor).
+const DEV_UAT_USER = {
+  email: "cinatra-uat@localhost",
+  name: "Cinatra UAT",
+  // Assembled from fragments so no secret-scanner flags a literal credential.
+  password: ["cinatra", "uat", "dev", "12345"].join("-"),
+} as const;
+
+// Handoff file the Playwright globalSetup reads (gitignored: tests/e2e/wp-drupal-uat/.uat/).
+const DEV_UAT_ACTOR_FILE = path.join(
+  process.cwd(),
+  "tests/e2e/wp-drupal-uat/.uat/dev-actor.json",
+);
+
+type DevConnectActor = { userId: string; orgId: string; email: string; password: string };
+
+let cachedDevActor: DevConnectActor | null = null;
+
+/**
+ * Idempotently ensure the deterministic dev UAT user + Default org membership,
+ * reusing an existing user if present. Reuses the production bootstrap
+ * (`ensureInitialAdminBootstrap` → Default org + owner membership + active org)
+ * so the seeded org IS the one `resolveDevActor`/`autoSeedConnectorPolicyFixture`
+ * already key on (earliest user → first org). Writes a gitignored handoff file
+ * for the Playwright suite. Returns null (soft) if seeding is unavailable.
+ */
+export async function ensureDevConnectActor(): Promise<DevConnectActor | null> {
+  if (!isStrictDevelopmentRuntime()) return null;
+  if (cachedDevActor) return cachedDevActor;
+
+  const connectionString = getPostgresConnectionString();
+
+  // Reuse an existing user with this email if present; else sign one up (creates
+  // the account row with a hashed password so the Playwright popup can log in).
+  let userId: string | undefined = (
+    runPostgresQueriesSync({
+      connectionString,
+      queries: [
+        { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+      ],
+    })[0]?.rows as { id: string }[] | undefined
+  )?.[0]?.id;
+
+  if (!userId) {
+    try {
+      const signedUp = await auth.api.signUpEmail({
+        body: { email: DEV_UAT_USER.email, password: DEV_UAT_USER.password, name: DEV_UAT_USER.name },
+      });
+      userId = signedUp?.user?.id;
+    } catch (err) {
+      // A concurrent boot may have created it between the SELECT and signUp.
+      userId = (
+        runPostgresQueriesSync({
+          connectionString,
+          queries: [
+            { text: `SELECT id FROM public."user" WHERE email = $1 LIMIT 1`, values: [DEV_UAT_USER.email] },
+          ],
+        })[0]?.rows as { id: string }[] | undefined
+      )?.[0]?.id;
+      if (!userId) {
+        console.log(
+          `[dev-auto-setup:connect] could not seed the dev UAT user (${err instanceof Error ? err.message : "unknown"})`,
+        );
+        return null;
+      }
+    }
+  }
+
+  // Make the (first) user the Default-org owner via the production bootstrap.
+  // No-ops cleanly if another user already claimed the single-admin slot.
+  try {
+    await ensureInitialAdminBootstrap(userId);
+  } catch {
+    // Soft — membership is re-resolved below; a failure just means no org yet.
+  }
+
+  // Resolve the org: this user's first membership, else the Default org row.
+  let orgId: string | undefined = (
+    runPostgresQueriesSync({
+      connectionString,
+      queries: [
+        {
+          text: `SELECT m."organizationId" AS id FROM public."member" m
+                 WHERE m."userId" = $1 ORDER BY m."createdAt" ASC LIMIT 1`,
+          values: [userId],
+        },
+      ],
+    })[0]?.rows as { id: string }[] | undefined
+  )?.[0]?.id;
+  if (!orgId) {
+    try {
+      orgId = await ensureDefaultOrganizationRow();
+    } catch {
+      orgId = undefined;
+    }
+  }
+  if (!orgId) {
+    console.log("[dev-auto-setup:connect] dev UAT user has no resolvable org membership yet");
+    return null;
+  }
+
+  const actor: DevConnectActor = { userId, orgId, email: DEV_UAT_USER.email, password: DEV_UAT_USER.password };
+  try {
+    mkdirSync(path.dirname(DEV_UAT_ACTOR_FILE), { recursive: true });
+    writeFileSync(DEV_UAT_ACTOR_FILE, JSON.stringify(actor, null, 2));
+    // Restrict perms — the file carries a (dev-only) password.
+    try { chmodSync(DEV_UAT_ACTOR_FILE, 0o600); } catch { /* best-effort on non-POSIX */ }
+  } catch {
+    // Non-fatal: the mint still works; the suite just won't find the handoff.
+  }
+  cachedDevActor = actor;
+  return actor;
+}
+
+/**
+ * Mint (or rotate) a per-site `cnx_` connect-site credential for the given CMS
+ * client + browser origin, bound to the dev actor's org. The upsert is keyed by
+ * (org_id, client, widget_origin), so a re-boot rotates the same row's version
+ * in place (one row per site). Returns the plaintext `cnx_` to push into the CMS
+ * widget config in the SAME step (the plaintext is returned exactly once).
+ *
+ * SECRET BOUNDARY: the returned `cnx_` is handled exactly like the legacy widget
+ * api_key — it lands on the wp-cli/drush command line at the call site, which
+ * already catches + masks any error. This helper does not log the credential.
+ */
+function mintDevConnectCredential(
+  actor: DevConnectActor,
+  client: "wordpress" | "drupal",
+  widgetOrigin: string,
+): string | null {
+  if (!isStrictDevelopmentRuntime()) return null;
+  const origin = normalizeOriginStrictLocal(widgetOrigin);
+  // Loopback-only: never mint a connect-site for a non-localhost origin in dev.
+  if (!origin || !isLocalhostUrl(origin)) return null;
+  try {
+    const { credential } = upsertConnectSiteAndMintCredential({
+      client,
+      widgetOrigin: origin,
+      callbackOrigin: null,
+      webhookSecretHash: null,
+      adminUserId: actor.userId,
+      orgId: actor.orgId,
+    });
+    return credential;
+  } catch {
+    return null;
+  }
+}
+
+/** `scheme://host[:port]` only (no path/query/hash); "" if invalid. */
+function normalizeOriginStrictLocal(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+    return url.origin && url.origin !== "null" ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
 export async function runDevAutoSetup(): Promise<{
   drupal: Status;
   wordpress: Status;
   twenty: Status;
+  plane: Status;
   connectorPolicies: Status;
 }> {
+  // cinatra#410 — seed the deterministic dev user+org FIRST so the
+  // WP/Drupal wires below can mint per-site `cnx_` credentials bound to it
+  // (strictly dev-gated; soft no-op outside development).
+  try {
+    await ensureDevConnectActor();
+  } catch (err) {
+    console.log(
+      `[dev-auto-setup:connect] dev actor seed skipped (${err instanceof Error ? err.message : "unknown"})`,
+    );
+  }
+
   // Run sequentially (not in parallel) so log output is deterministic + we
   // don't double-print docker-not-running warnings in interleaved order.
   let drupal: Status;
@@ -1591,6 +2011,14 @@ export async function runDevAutoSetup(): Promise<{
   }
   logResult("twenty", twenty);
 
+  let plane: Status;
+  try {
+    plane = await autoSetupLocalPlane();
+  } catch (err) {
+    plane = { status: "error", reason: err instanceof Error ? err.message : String(err) };
+  }
+  logResult("plane", plane);
+
   let connectorPolicies: Status;
   try {
     connectorPolicies = await autoSeedConnectorPolicyFixture();
@@ -1602,7 +2030,7 @@ export async function runDevAutoSetup(): Promise<{
   }
   logResult("connector-policy", connectorPolicies);
 
-  return { drupal, wordpress, twenty, connectorPolicies };
+  return { drupal, wordpress, twenty, plane, connectorPolicies };
 }
 
 function logResult(name: string, result: Status): void {

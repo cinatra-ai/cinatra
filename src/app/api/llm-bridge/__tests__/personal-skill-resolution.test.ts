@@ -98,6 +98,51 @@ vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
     readAgentRunByContextId: vi.fn(async () => null),
+    // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
+    // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
+    // actionable 503 message resolve without the heavy real barrel.
+    canProviderSatisfyCapability: (provider: string, capability: string): boolean => {
+      switch (capability) {
+        case "media_input":
+          return provider === "gemini";
+        case "function_tools":
+          return provider === "openai" || provider === "anthropic" || provider === "gemini";
+        case "native_mcp":
+          return provider === "openai" || provider === "anthropic";
+        default:
+          return false;
+      }
+    },
+    describeCapabilityRequirement: (
+      capability: string,
+      opts?: { incompatibleProvider?: string },
+    ): string => {
+      const providers = (["openai", "anthropic", "gemini"] as const).filter((p) => {
+        switch (capability) {
+          case "media_input":
+            return p === "gemini";
+          case "function_tools":
+            return true;
+          case "native_mcp":
+            return p === "openai" || p === "anthropic";
+          default:
+            return false;
+        }
+      });
+      const options = providers.join(", ");
+      if (opts?.incompatibleProvider) {
+        return (
+          `This agent requires the "${capability}" LLM capability, but the active ` +
+          `provider "${opts.incompatibleProvider}" cannot satisfy it. Install and ` +
+          `configure an LLM connector for one of these providers instead: ${options}.`
+        );
+      }
+      return (
+        `This agent requires the "${capability}" LLM capability, but no installed ` +
+        `and configured LLM provider supports it. Install and configure an LLM ` +
+        `connector for one of these providers: ${options}.`
+      );
+    },
     OasCinatraLlmSchema: z
       .object({
         preferredProvider: z.enum(["openai", "anthropic", "gemini"]).optional(),

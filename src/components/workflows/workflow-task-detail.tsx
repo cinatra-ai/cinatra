@@ -17,8 +17,8 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { workflowTaskStatusToPill, type WorkflowTaskStatus } from "@/lib/status-adapter";
 
 // ---------------------------------------------------------------------------
-// Detail panel surfaced when a Gantt bar is clicked. Pure presenter — the
-// page owns `selectedKey` state and feeds the underlying task row through.
+// Detail panel surfaced when a task-list row is clicked. Pure presenter — the
+// list owns `selectedKey` state and feeds the underlying task row through.
 //
 // Linking out: the `agentPackage` string is rendered as text. There is no
 // per-package detail route in this app today, so a deep link would 404. If

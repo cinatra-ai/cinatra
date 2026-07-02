@@ -8,6 +8,8 @@ import { PageContent } from "@/components/page-content";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { ProviderSelect } from "./provider-select";
 import { requireAdminSession } from "@/lib/auth-session";
 import {
   EMAIL_PURPOSES,
@@ -80,28 +82,25 @@ export default async function EmailConnectorsPage(props: { searchParams?: Promis
                   action={setEmailRoutingAction}
                   className="grid items-end gap-3 border-t border-line pt-4 sm:grid-cols-[1fr_auto]"
                 >
-                  <input type="hidden" name="purpose" value={purpose.id} />
+                  <Input type="hidden" name="purpose" value={purpose.id} />
                   <div>
                     <p className="text-sm font-semibold text-foreground">{purpose.label}</p>
                     <p className="mt-1 text-xs text-muted-foreground">{purpose.description}</p>
                     <Field className="mt-3">
                       <FieldLabel>Provider</FieldLabel>
-                      <select
+                      <ProviderSelect
                         name="connectorId"
                         defaultValue={current}
-                        className="rounded-control border border-line bg-surface-strong px-4 py-3"
-                      >
-                        <option value="">
-                          {eligibleProviders.length === 1
+                        placeholder={
+                          eligibleProviders.length === 1
                             ? `Auto (${eligibleProviders[0].name})`
-                            : "Not assigned"}
-                        </option>
-                        {eligibleProviders.map((p) => (
-                          <option key={p.connectorId} value={p.connectorId}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
+                            : "Not assigned"
+                        }
+                        options={eligibleProviders.map((p) => ({
+                          value: p.connectorId,
+                          label: p.name,
+                        }))}
+                      />
                       {eligibleProviders.length === 0 ? (
                         <span className="mt-1 text-xs font-normal text-muted-foreground">
                           No eligible provider is connected yet. Configure one below.

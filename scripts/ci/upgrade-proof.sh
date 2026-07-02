@@ -11,7 +11,7 @@ set -euo pipefail
 # WHY this is the real engineering (not just another boot gate): a fresh
 # database is the easy case — the bootstrap DDL emits the CURRENT shape and
 # the migration chain is LEDGER-FAKED (recorded, never executed; see
-# packages/cli/src/core-migrations.mjs `isFreshCoreSchema`). The path that can
+# packages/migrations/src/core-migrations.mjs `isFreshCoreSchema`). The path that can
 # actually lose user data is the EXISTING deployment: the bootstrap DDL runs
 # additively over real tables and then the migration chain EXECUTES its
 # transformations (drops/renames/retypes/backfills) against rows that already
@@ -72,8 +72,18 @@ set -euo pipefail
 #   SUPABASE_SCHEMA      app schema (default cinatra).
 #
 # The CANDIDATE side runs from the current checkout (this repo): its bootstrap
-# DDL via tsx + its migration runner via `node packages/cli/bin/cinatra.mjs`.
-# Run from the repo root.
+# DDL via tsx + its migration runner via the published `cinatra` CLI resolved
+# from node_modules (@cinatra-ai/cinatra, a pinned devDependency; cinatra#402 P2).
+# Run from the repo root (so node_modules/.bin/cinatra and the migrations/ +
+# packages/migrations checkout sentinel are present).
+#
+# NOTE (cinatra#402 P2 transition): the PREV_IMAGE side below deliberately keeps
+# the legacy `node packages/cli/bin/cinatra.mjs` invocation — older published
+# release images (e.g. 0.1.x) still ship the in-image packages/cli bin and do
+# NOT carry node_modules/@cinatra-ai/cinatra. Only the candidate (current-
+# checkout) side moves to the published CLI. Once a release built FROM this
+# change becomes a PREV_IMAGE, switch that side to
+# `node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod` too.
 
 PREV_IMAGE="${PREV_IMAGE:-}"
 PREV_IMAGE_PLATFORM="${PREV_IMAGE_PLATFORM:-linux/amd64}"
@@ -214,20 +224,16 @@ echo "    seeded ${SEED_COUNT} rows"
 #     (buildCreateStoreSchemaQueries). Additive over the previous tables; adds
 #     the new tables (installed_extension, extension_install_ops, …) the later
 #     migrations operate on. Run from the checkout via tsx.
+# Invoke a REAL on-disk module rather than `node --import tsx -e '<inline>'`:
+# the inline-eval form cannot resolve the NAMED export from the tsx-transformed
+# .ts source on Node 22 (the importer is a virtual `[eval1]` module — tsx throws
+# "does not provide an export named 'buildCreateStoreSchemaQueries'"), so the
+# proof would fail locally on the common LTS while passing on CI's Node 24. A
+# real entry file resolves the export on BOTH Node 22 and 24. See the header of
+# scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs.
 echo "==> [candidate] apply bootstrap DDL (buildCreateStoreSchemaQueries)"
 SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node --import tsx -e '
-    import { Client } from "pg";
-    import { buildCreateStoreSchemaQueries } from "./src/lib/drizzle-store.ts";
-    const schema = process.env.SUPABASE_SCHEMA || "cinatra";
-    const c = new Client({ connectionString: process.env.SUPABASE_DB_URL });
-    await c.connect();
-    const qs = buildCreateStoreSchemaQueries(schema);
-    let applied = 0;
-    try { for (const q of qs) { await c.query(q.text, q.values); applied++; } }
-    finally { await c.end(); }
-    console.log(`    bootstrap DDL applied: ${applied}/${qs.length} statements`);
-  ' \
+  node --import tsx scripts/ci/lib/apply-candidate-bootstrap-ddl.mjs \
   || fail "candidate bootstrap DDL failed against the upgraded database."
 
 # 4b. Candidate core migration chain — the SAME runner production uses
@@ -251,7 +257,7 @@ echo "    pre-migrate core__ ledger: $(printf '%s' "$PRE_LEDGER_CORE" | grep -c 
 
 echo "==> [candidate] run core migration chain (cinatra db migrate)"
 MIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node packages/cli/bin/cinatra.mjs db migrate 2>&1)" \
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance db migrate 2>&1)" \
   || { printf '%s\n' "$MIGRATE_OUT"; fail "candidate core migration chain failed against the upgraded database."; }
 printf '%s\n' "$MIGRATE_OUT"
 
@@ -374,7 +380,7 @@ echo "    data preserved — 3/3 seeded rows survive, every (id, payload) byte-i
 # ── 5c. IDEMPOTENCY ──────────────────────────────────────────────────────────
 echo "==> assert: re-running the candidate chain is a no-op"
 REMIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node packages/cli/bin/cinatra.mjs db migrate 2>&1)"
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance db migrate 2>&1)"
 printf '%s\n' "$REMIGRATE_OUT" | tail -2
 if ! printf '%s' "$REMIGRATE_OUT" | grep -qiE 'No migrations to run|up to date'; then
   fail "re-running the migration chain was NOT a no-op — idempotency broken."

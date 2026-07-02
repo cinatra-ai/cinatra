@@ -16,7 +16,15 @@ vi.mock("../event-log", () => ({
   readRunEvents: vi.fn(),
 }));
 
+// The handler enforces run.read (via the actor-aware
+// readAgentRunById / readAgentRunByTaskId resolver) before any replay. Mock both.
+vi.mock("@cinatra/agent-builder", () => ({
+  readAgentRunById: vi.fn(),
+  readAgentRunByTaskId: vi.fn(),
+}));
+
 import { readRunEvents } from "../event-log";
+import { readAgentRunById, readAgentRunByTaskId } from "@cinatra-ai/agents";
 import { CinatraResubscribeHandler } from "../resubscribe-handler";
 
 // ---------------------------------------------------------------------------
@@ -24,6 +32,51 @@ import { CinatraResubscribeHandler } from "../resubscribe-handler";
 // ---------------------------------------------------------------------------
 
 const mockReadRunEvents = readRunEvents as unknown as ReturnType<typeof vi.fn>;
+const mockReadRunById = readAgentRunById as unknown as ReturnType<typeof vi.fn>;
+const mockReadByTask = readAgentRunByTaskId as unknown as ReturnType<typeof vi.fn>;
+
+// The verified actor is delivered on the SDK call context (the route sets it).
+// This is the iteration-safe path: it survives the lazy SSE generator boundary
+// where the ALS frame is no longer active.
+const CTX = {
+  a2aActorContext: {
+    principalType: "HumanUser",
+    principalId: "owner-1",
+    organizationId: "org-1",
+    authSource: "a2a",
+    policyVersion: "v2",
+  },
+} as never;
+
+class FakeAuthzError extends Error {
+  statusCode: number;
+  reason: string;
+  constructor(statusCode: number, reason: string, message: string) {
+    super(message);
+    this.statusCode = statusCode;
+    this.reason = reason;
+  }
+}
+
+function collectAuthed(
+  handler: CinatraResubscribeHandler,
+  params: { id: string },
+  ctx: never = CTX,
+): Promise<unknown[]> {
+  return (async () => {
+    const results: unknown[] = [];
+    for await (const val of handler.resubscribe(params, ctx)) results.push(val);
+    return results;
+  })();
+}
+
+function firstAuthed(
+  handler: CinatraResubscribeHandler,
+  params: { id: string },
+  ctx: never = CTX,
+): Promise<IteratorResult<unknown>> {
+  return handler.resubscribe(params, ctx).next();
+}
 
 function buildMockAgentCard(streaming: boolean) {
   return {
@@ -80,17 +133,6 @@ function buildHandler(
 }
 
 /**
- * Collect all yielded values from an AsyncGenerator into an array.
- */
-async function collectGen<T>(gen: AsyncGenerator<T>): Promise<T[]> {
-  const results: T[] = [];
-  for await (const val of gen) {
-    results.push(val);
-  }
-  return results;
-}
-
-/**
  * Build a mock AsyncGenerator from an array of items.
  */
 async function* mockAsyncGen<T>(items: T[]): AsyncGenerator<T> {
@@ -103,9 +145,15 @@ async function* mockAsyncGen<T>(items: T[]): AsyncGenerator<T> {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("CinatraResubscribeHandler", () => {
+describe("CinatraResubscribeHandler — actor-bound replay", () => {
   beforeEach(() => {
     mockReadRunEvents.mockReset();
+    mockReadRunById.mockReset();
+    mockReadByTask.mockReset();
+    // Default: id is a run PK — task-id lookup misses, PK existence + the
+    // actor-aware authz re-read both resolve to the same id.
+    mockReadByTask.mockResolvedValue(null);
+    mockReadRunById.mockImplementation(async (id: string) => ({ id }));
   });
 
   it("first event yielded is the current Task from taskStore", async () => {
@@ -113,21 +161,26 @@ describe("CinatraResubscribeHandler", () => {
     const taskStore = buildMockTaskStore(task);
     const handler = buildHandler(buildMockAgentCard(true), taskStore);
 
-    // readRunEvents returns an empty generator — only the initial Task snapshot
-    // should be yielded.
     mockReadRunEvents.mockReturnValue(mockAsyncGen([]));
 
-    const gen = handler.resubscribe({ id: "run-1" });
-    const first = await gen.next();
+    const first = await firstAuthed(handler, { id: "run-1" });
     expect(first.done).toBe(false);
-    // The yielded value must be the Task object from taskStore.
     expect(first.value).toMatchObject({ id: "run-1", kind: "task" });
-    await gen.return(undefined); // clean up
+  });
+
+  it("enforces run.read for the actor BEFORE replay (cross-actor deny -> throws, no readRunEvents)", async () => {
+    const task = buildTask("run-foreign", "working");
+    const taskStore = buildMockTaskStore(task);
+    const handler = buildHandler(buildMockAgentCard(true), taskStore);
+    mockReadRunById.mockRejectedValue(new FakeAuthzError(403, "forbidden", "Run access denied."));
+
+    await expect(firstAuthed(handler, { id: "run-foreign" })).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mockReadRunEvents).not.toHaveBeenCalled();
   });
 
   it("terminal task state yields Task and returns immediately (no replay)", async () => {
-    // For a terminal task, the handler should yield the task snapshot and then
-    // return without ever calling readRunEvents.
     const terminalStates: TaskState[] = ["completed", "failed", "canceled", "rejected"];
 
     for (const state of terminalStates) {
@@ -136,25 +189,26 @@ describe("CinatraResubscribeHandler", () => {
       const taskStore = buildMockTaskStore(task);
       const handler = buildHandler(buildMockAgentCard(true), taskStore);
 
-      const yielded = await collectGen(handler.resubscribe({ id: `run-${state}` }));
+      const yielded = await collectAuthed(handler, { id: `run-${state}` });
 
-      // Should have yielded exactly one item (the Task snapshot) then returned.
       expect(yielded).toHaveLength(1);
       expect((yielded[0] as Task).status.state).toBe(state);
-      // readRunEvents must NOT have been called for terminal tasks.
       expect(mockReadRunEvents).not.toHaveBeenCalled();
     }
   });
 
-  it("lastEventId from ServerCallContext is forwarded to readRunEvents", async () => {
+  it("lastEventId forwarded to readRunEvents — replay keyed on the AUTHORIZED run id", async () => {
     const task = buildTask("run-2", "working");
     const taskStore = buildMockTaskStore(task);
     const handler = buildHandler(buildMockAgentCard(true), taskStore);
 
     mockReadRunEvents.mockReturnValue(mockAsyncGen([]));
 
-    const ctx = { lastEventId: "event-start" } as never;
-    await collectGen(handler.resubscribe({ id: "run-2" }, ctx));
+    const ctx = {
+      lastEventId: "event-start",
+      a2aActorContext: (CTX as unknown as { a2aActorContext: unknown }).a2aActorContext,
+    } as never;
+    await collectAuthed(handler, { id: "run-2" }, ctx);
 
     expect(mockReadRunEvents).toHaveBeenCalledOnce();
     const [calledRunId, calledOpts] = mockReadRunEvents.mock.calls[0] as [
@@ -165,27 +219,25 @@ describe("CinatraResubscribeHandler", () => {
     expect(calledOpts.fromId).toBe("event-start");
   });
 
-  it("missing task throws A2AError.taskNotFound", async () => {
+  it("missing/unauthorized run throws A2AError.taskNotFound (and never replays)", async () => {
     const taskStore = buildMockTaskStore(undefined);
     const handler = buildHandler(buildMockAgentCard(true), taskStore);
+    mockReadRunById.mockResolvedValue(null);
 
-    const gen = handler.resubscribe({ id: "missing-run" });
-    // A2AError has a numeric `code` property — use that instead of instanceof
-    // to avoid importing the runtime class (not resolvable from worktree path).
-    await expect(gen.next()).rejects.toMatchObject({ code: expect.any(Number) });
-    // readRunEvents must not be called when the task is missing.
+    await expect(firstAuthed(handler, { id: "missing-run" })).rejects.toMatchObject({
+      code: expect.any(Number),
+    });
     expect(mockReadRunEvents).not.toHaveBeenCalled();
   });
 
   it("agentCard.capabilities.streaming === false throws unsupportedOperation", async () => {
     const task = buildTask("run-3", "working");
     const taskStore = buildMockTaskStore(task);
-    // streaming=false should cause A2AError before taskStore is even consulted.
     const handler = buildHandler(buildMockAgentCard(false), taskStore);
 
-    const gen = handler.resubscribe({ id: "run-3" });
-    // A2AError has a numeric `code` property.
-    await expect(gen.next()).rejects.toMatchObject({ code: expect.any(Number) });
+    await expect(firstAuthed(handler, { id: "run-3" })).rejects.toMatchObject({
+      code: expect.any(Number),
+    });
     expect(mockReadRunEvents).not.toHaveBeenCalled();
   });
 
@@ -219,7 +271,7 @@ describe("CinatraResubscribeHandler", () => {
     ];
     mockReadRunEvents.mockReturnValue(mockAsyncGen(logEvents));
 
-    const yielded = await collectGen(handler.resubscribe({ id: "run-4" }));
+    const yielded = await collectAuthed(handler, { id: "run-4" });
 
     // First yield: Task snapshot (no eventId on it)
     expect(yielded[0]).toMatchObject({ id: "run-4", kind: "task" });

@@ -3,8 +3,9 @@
 // workflow-status portlet. Read-only status summary in two modes:
 //   - single (workflowId input): the workflow + its tasks, each with a StatusPill.
 //   - list (projectId input): the project's workflows, each with a StatusPill.
-// The full editable Gantt stays on /workflows/[id]. Scope + project-read authz
-// enforced server-side by the loaders.
+// The full workflow management surface (task list + lifecycle + target date)
+// stays on /workflows/[id]. Scope + project-read authz enforced server-side by
+// the loaders.
 import { useEffect, useState, useTransition } from "react";
 import { StatusPill } from "@/components/ui/status-pill";
 import {

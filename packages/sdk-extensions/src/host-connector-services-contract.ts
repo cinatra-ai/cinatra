@@ -76,6 +76,17 @@ export const HOST_CONNECTOR_SERVICE_CAPABILITIES = {
   // id from the connection-focused `wordpress-mcp` service so connection
   // admin and content CRUD never evolve under one id.
   wordpressContent: "@cinatra-ai/host:wordpress-content",
+  // --- per-user / per-connector-instance WRITE authority (cinatra#409) ------
+  // The host-owned authority the WordPress / Drupal content-editor MCP
+  // connectors call before EVERY write primitive. The host resolves the
+  // TRUSTED user actor (mcpRequestContextStorage / llm / cookie frame — NEVER
+  // connector input), DENIES fail-closed when no userId+orgId resolve, and
+  // delegates to the existing per-instance connector-authority policy. The
+  // package id the policy evaluates is a HOST-BOUND constant (the guard the
+  // host publishes per connector is already bound to that connector's own
+  // package id) — never caller-supplied. Distinct from the content/connection
+  // service ids so authz and content CRUD never evolve under one id.
+  instanceWriteAuthority: "@cinatra-ai/host:instance-write-authority",
   // Per-concern widget-auth config surface for the wordpress assistant widget
   // (`@/lib/wordpress-widget-auth` stays host-side).
   wordpressWidgetAuth: "@cinatra-ai/host:wordpress-widget-auth",
@@ -155,6 +166,30 @@ export type HostDrupalMcpService = {
     createdAt?: string;
     updatedAt?: string;
   }>;
+  /**
+   * ACTOR-SCOPED instance lister for the external-MCP toolbox-injection path.
+   * Returns ONLY the Drupal instances the CURRENT TRUSTED actor is authorized
+   * to `use` — the host resolves the trusted actor from the active MCP/llm
+   * request frame (NEVER connector/tool input), RE-VERIFIES live org membership
+   * (deny-no-row), and keeps only rows whose persisted org binding matches the
+   * actor's org AND for which the connector-package `use` policy allows. Returns
+   * `[]` FAIL-CLOSED when no trusted actor / membership resolves (it NEVER
+   * returns the global unscoped `listInstances` set). OPTIONAL on the shape so a
+   * connector compiled against an older contract still type-checks; the connector
+   * toolbox treats this member's absence as deny (injects no tools) —
+   * pure-additive, fail-closed on both skew directions. */
+  listAuthorizedInstances?(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      siteUrl: string;
+      nangoConnectionId: string;
+      providerConfigKey: string;
+      lastValidatedAt?: string;
+      createdAt?: string;
+      updatedAt?: string;
+    }>
+  >;
   probe(
     siteUrl: string,
     authHeader: string,
@@ -249,6 +284,22 @@ export type WordPressInstanceRowShape = {
  * cutover. */
 export type HostWordPressMcpService = {
   listInstances(): Array<WordPressInstanceRowShape>;
+  /**
+   * ACTOR-SCOPED instance lister. Returns ONLY the WordPress instances the
+   * CURRENT TRUSTED actor is authorized to `use`, resolved host-side from the
+   * active MCP/llm request frame (NEVER connector/tool input), with the SAME
+   * live-membership reverify (deny-no-row) + per-instance org-binding +
+   * connector-package gate as the `instance-write-authority` service. Returns
+   * `[]` FAIL-CLOSED when no trusted actor / membership resolves (NEVER the
+   * global unscoped `listInstances`).
+   *
+   * OPTIONAL + pure-additive. The WordPress connector toolbox gates injection
+   * per-instance through the `instance-write-authority` `requireWrite` gate (so
+   * it is already fail-closed WITHOUT this member); this method is published
+   * symmetrically with the Drupal service so a future WP toolbox revision can
+   * adopt the single-call actor-scoped lister, and an older connector that
+   * ignores it is unaffected. */
+  listAuthorizedInstances?(): Promise<Array<WordPressInstanceRowShape>>;
   probeAdapter(instance: {
     id: string;
     name: string;
@@ -413,6 +464,58 @@ export type HostWordPressContentService = {
     excerpt: string;
     adminUrl: string;
   }>;
+};
+
+/**
+ * Per-user / per-connector-instance WRITE authority for the CMS content path
+ * (cinatra#409). The WordPress / Drupal content-editor MCP connectors resolve
+ * this host service and call `requireWrite` at the TOP of every write primitive
+ * (after schema-parse + instance resolve), BEFORE any host content writer.
+ *
+ * TRUST: the host resolves the TRUSTED user actor from the active request/run
+ * context (`mcpRequestContextStorage` / llm / cookie) — NEVER from connector or
+ * tool input — DENIES (throws) fail-closed when no `userId` + `orgId` resolve.
+ * It then enforces TWO host-side layers, both keyed on the TRUSTED actor's org:
+ *   1. PER-INSTANCE — resolves the instance row host-side and asserts its
+ *      persisted org binding (cinatra#274) == the trusted actor's org, so a
+ *      forged `instanceId` (same-org-mismatch or a different-org instance) is
+ *      DENIED; an unknown / unbound row is DENIED fail-closed.
+ *   2. CONNECTOR-PACKAGE — delegates to the host `requireConnectorAuthority`
+ *      policy (emits a `connector_instance` audit row).
+ * Both the connector package whose policy is evaluated AND the instance reader
+ * are HOST-BOUND from the connector KIND (the connector names only WHICH kind it
+ * is — its own static identity — via `selectForConnector`); a connector can
+ * never select another package's policy nor another connector's instance rows.
+ *
+ * FAIL-CLOSED CONTRACT: a connector that resolves this service MUST let
+ * `requireWrite` throw propagate (never fall back to a write); a connector that
+ * CANNOT resolve it (old host, dep unbound) MUST also fail closed — never write
+ * under a synthetic / anonymous actor. `requireWrite` resolves `void` on allow
+ * and THROWS on deny (no boolean result to misread).
+ */
+/** The CLOSED set of CMS content connector KINDS the per-instance write
+ * authority gates. A connector names its OWN kind (its static identity); the
+ * host maps the kind to the package id + instance reader. Type-closed AND
+ * runtime-closed (the host also throws for any unknown kind at call time). */
+export type InstanceWriteConnectorKind = "wordpress" | "drupal";
+
+export type HostInstanceWriteAuthorityService = {
+  /**
+   * Bind the guard to a connector KIND (`"wordpress" | "drupal"`) — the
+   * connector's OWN static identity, NOT a package id or any other caller-chosen
+   * policy selector. The host maps the kind to BOTH the connector package id and
+   * the instance reader; an unknown kind THROWS. Returns the bound guard.
+   */
+  selectForConnector(kind: InstanceWriteConnectorKind): {
+    /** Throws on deny (fail-closed); resolves void on allow. `sourceType` is the
+     * host-threaded request source (additive; `"public_site_widget"` triggers a
+     * defensive no-platform-admin-bypass assertion) — NOT trusted from input. */
+    requireWrite(input: {
+      instanceId: string;
+      primitiveName: string;
+      sourceType?: string;
+    }): Promise<void>;
+  };
 };
 
 /** Widget AUTH-CONFIG storage for the WordPress assistant widget
@@ -583,13 +686,14 @@ export type HostLinkedInConnectionService = {
  * boundary — the identical posture the static `@/lib/youtube-api` import
  * carried before the cutover. */
 export type HostYouTubeConnectionService = {
-  /** Nango-backed OAuth2 access-token mint. Returns null when Nango is
-   * unconfigured or the resolved credentials are not a usable OAUTH2 bearer;
-   * with no SAVED connection it still attempts the legacy fixed Nango
-   * connection id before giving up, and a failing Nango credential resolution
-   * REJECTS (it is not folded to null) — identical semantics to the static
-   * `getConfiguredYouTubeAccessToken` import this replaces (callers keep
-   * their existing null/throw handling). */
+  /** Nango-backed OAuth2 access-token mint. This is a GLOBAL, actor-less
+   * reader, so it resolves ONLY an app-scoped saved connection (a per-user
+   * credential is never visible here). Returns null when Nango is
+   * unconfigured, no app-scoped SAVED connection exists (it FAILS CLOSED — it
+   * does NOT fall back to a legacy fixed Nango connection id), or the resolved
+   * credentials are not a usable OAUTH2 bearer; a failing Nango credential
+   * resolution REJECTS (it is not folded to null). Callers keep their existing
+   * null/throw handling. */
   getConfiguredAccessToken(): Promise<string | null>;
 };
 
@@ -815,6 +919,12 @@ export const SOCIAL_POST_CAPABILITY = "social-post";
 
 /** The crm-provider capability id concrete CRM providers register under. */
 export const CRM_PROVIDER_CAPABILITY = "crm-provider";
+
+/** The pm-provider capability id concrete PM (project-management) providers
+ *  register under (plane-connector today). The host PM bridge
+ *  (src/lib/register-pm-providers.ts) feeds the SDK PM provider registry's
+ *  external resolver from this capability — same shape as crm-provider. */
+export const PM_PROVIDER_CAPABILITY = "pm-provider";
 
 /** The email-send capability id concrete email providers register under. */
 export const EMAIL_SEND_CAPABILITY = "email-send";

@@ -227,7 +227,29 @@ export async function AgentsPage({ searchParams }: AgentsSearchPageProps) {
 
 export async function NewAgentPage() {
   const allTemplates = await readInstalledAgentTemplates();
-  const visibleTemplates = selectHitlRunVisibleTemplates(allTemplates);
+  // RUNTIME-LIFECYCLE GATE (cinatra#659): `readInstalledAgentTemplates` filters
+  // by the agent-builder `status` (active|published) only — NOT the canonical
+  // `installed_extension` source of truth. Intersect the LOCAL (non-external)
+  // templates against the runtime install state so a disabled/uninstalled
+  // (archived) agent disappears from the run picker without a rebuild. CG-1: a
+  // template with NO canonical row (legacy/bundled/ungoverned) and a `null`
+  // packageName stay listed (the bundled floor). External A2A templates are
+  // governed by their own connector lifecycle, not an agent install row, so they
+  // bypass this gate (the runnable set only includes scanned agent packages).
+  // Fail-OPEN on a store outage (keep all).
+  const { resolveRunnableAgentPackageNames } = await import("./runtime-install-gate");
+  const runnable = await resolveRunnableAgentPackageNames(
+    allTemplates
+      .filter((t) => t.sourceType !== "external")
+      .map((t) => t.packageName ?? null),
+  );
+  const lifecycleVisible = allTemplates.filter(
+    (t) =>
+      t.sourceType === "external" ||
+      t.packageName == null ||
+      runnable.has(t.packageName),
+  );
+  const visibleTemplates = selectHitlRunVisibleTemplates(lifecycleVisible);
 
   type RowModel = {
     key: string;
@@ -287,11 +309,11 @@ export async function NewAgentPage() {
           <section className="soft-panel rounded-card flex flex-col items-center justify-center gap-4 py-16 text-center">
             <h2 className="text-lg font-semibold">No human-in-the-loop agents installed</h2>
             <p className="text-muted-foreground text-sm max-w-md">
-              Install an agent with review or approval steps from the registry, or connect an external A2A server.
+              Install an agent with review or approval steps from the marketplace, or connect an external A2A server.
             </p>
             <div className="flex flex-wrap gap-2 justify-center">
               <Button asChild>
-                <Link href="/agents/registry">Open registry</Link>
+                <Link href="/configuration/marketplace">Browse marketplace</Link>
               </Button>
               <Button asChild variant="outline">
                 <Link href="/connectors?tool=a2a-server">Connect A2A server</Link>

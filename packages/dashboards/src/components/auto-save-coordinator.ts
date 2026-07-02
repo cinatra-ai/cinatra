@@ -1,5 +1,5 @@
 /**
- * Auto-save coordinator for `AgentsDashboardGrid`.
+ * Auto-save coordinator for `DashboardGridContainer`.
  *
  * Pure coordination logic split out of the React component so it can be
  * tested hermetically (no React, no drizzle-cube, no DOM). The component

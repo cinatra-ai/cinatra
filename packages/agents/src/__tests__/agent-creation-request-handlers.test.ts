@@ -46,6 +46,15 @@ const dbMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/database", () => dbMock);
 
+// Better-auth-db: the decide path counts OTHER platform admins (issue #392)
+// to decide whether the self-approval SoD guard applies. Default to 1 (another
+// admin exists → guard stays on / SoD preserved); single-admin tests override
+// to 0.
+const betterAuthDbMock = vi.hoisted(() => ({
+  countOtherPlatformAdmins: vi.fn(async () => 1),
+}));
+vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);
+
 // Mock the handlers.ts circular target (materializeAndPublish lazy-imports it).
 const innerHandlersMock = vi.hoisted(() => ({
   createAgentBuilderPrimitiveHandlers: vi.fn(() => ({
@@ -106,6 +115,19 @@ const ADMIN = {
   organizationId: "org-1",
   platformRole: "platform_admin",
 };
+// A platform_admin authoring via the DELEGATED-CHAT surface (the chat model
+// acting on the user's behalf). `delegatedRestricted` is stamped by
+// buildActorFromMcpContext for chat delegation. cinatra#538: the admin
+// instant-grant must be withheld here so the chat model can't auto-publish
+// N versions per turn.
+const DELEGATED_CHAT_ADMIN = {
+  actorType: "model" as const,
+  source: "agent",
+  userId: "user-admin",
+  organizationId: "org-1",
+  platformRole: "platform_admin",
+  delegatedRestricted: true,
+};
 
 const SAMPLE_INPUT = {
   packageSlug: "test-agent",
@@ -123,6 +145,7 @@ describe("agent_creation_request handlers", () => {
     notificationsMock.createNotificationForRecipient.mockResolvedValue([]);
     dbMock.readConnectorConfigFromDatabase.mockReturnValue({ allowSelfApproval: false });
     storeReadMock.readAgentTemplates.mockResolvedValue({ items: [], total: 0 });
+    betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
   });
 
   describe("propose", () => {
@@ -153,6 +176,48 @@ describe("agent_creation_request handlers", () => {
       )) as { structuredContent: { collisionWarning?: string } };
       expect(out.structuredContent.collisionWarning).toMatch(/already exists/i);
     });
+
+    it("withholds the admin instant-grant for delegated-chat callers — proposal-only, no publish (#538)", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue({
+        id: "req-1", status: "proposed", authorId: "user-admin", packageName: "@test/test-agent",
+        packageSlug: "test-agent", packageVersion: "0.1.0", snapshotHash: "fakehash",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, DELEGATED_CHAT_ADMIN),
+      )) as { instantGrant?: boolean };
+      // No auto-approve, no materialize/publish pipeline — the chat proposal
+      // queues for a deliberate decision via the Approvals UI.
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(innerHandlersMock.createAgentBuilderPrimitiveHandlers).not.toHaveBeenCalled();
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+      expect(out.instantGrant).not.toBe(true);
+    });
+
+    it("keeps the admin instant-grant for non-delegated (UI) authoring (#382)", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue({
+        id: "req-1", status: "proposed", authorId: "user-admin", packageName: "@test/test-agent",
+        packageSlug: "test-agent", packageVersion: "0.1.0", snapshotHash: "fakehash",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const handlerMap = {
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        agent_source_publish: vi.fn(async () => ({ published: true, packageName: "@test/test-agent" })),
+      };
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue(handlerMap);
+
+      await handleAgentCreationRequestPropose(req("agent_creation_request_propose", SAMPLE_INPUT, ADMIN));
+      // Non-delegated admin authoring still publishes directly (the #382 design).
+      expect(storeMock.decideAgentCreationRequestCas).toHaveBeenCalled();
+      expect(handlerMap.agent_source_publish).toHaveBeenCalled();
+    });
   });
 
   describe("decide", () => {
@@ -166,7 +231,9 @@ describe("agent_creation_request handlers", () => {
       expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
     });
 
-    it("rejects self-approval by default", async () => {
+    it("rejects self-approval by default when another admin exists (SoD)", async () => {
+      // Default mock: countOtherPlatformAdmins → 1, so segregation of duties
+      // applies and the self-approval guard fires.
       storeMock.readAgentCreationRequestById.mockReturnValue({
         id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
         packageName: "@test/test-agent", proposalSnapshot: SAMPLE_INPUT,
@@ -178,6 +245,69 @@ describe("agent_creation_request handlers", () => {
       )) as { error?: string };
       expect(out.error).toMatch(/self-approval is disallowed/i);
       expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).toHaveBeenCalledWith("user-admin");
+    });
+
+    it("allows self-approval on a single-admin instance (issue #392 deadlock fix)", async () => {
+      // No OTHER platform_admin exists → SoD is impossible, so the only admin
+      // must be able to clear their own pre-existing `proposed` request.
+      betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(0);
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(storeMock.decideAgentCreationRequestCas).toHaveBeenCalled();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).toHaveBeenCalledWith("user-admin");
+    });
+
+    it("keeps the guard when the admin-count read fails closed (returns >=1)", async () => {
+      // countOtherPlatformAdmins fails CLOSED at the source; here we simulate a
+      // resolved value of 1 (its error fallback) and assert the guard holds.
+      betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/self-approval is disallowed/i);
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+    });
+
+    it("does NOT count admins for a cross-author approval (no self-approval)", async () => {
+      // Admin approving someone ELSE's proposal never touches the SoD guard.
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-other", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toBeUndefined();
+      expect(betterAuthDbMock.countOtherPlatformAdmins).not.toHaveBeenCalled();
     });
 
     it("allows self-approval when connector_config flag is set", async () => {
@@ -433,6 +563,140 @@ describe("agent_creation_request handlers", () => {
       );
       expect(notificationsMock.createNotificationForRecipient).not.toHaveBeenCalled();
       expect(storeMock.markAgentCreationRequestNotificationSent).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Admin "instant grant" (issue #382): a platform_admin authoring via chat
+  // publishes DIRECTLY — propose auto-approves + publishes the freshly-created
+  // proposal under the admin actor, reusing the gated approve→publish pipeline.
+  // A NON-admin author STILL queues at 'proposed' (unchanged).
+  // -------------------------------------------------------------------------
+  describe("propose admin instant-grant (#382)", () => {
+    const PROPOSED_ADMIN_ROW = {
+      id: "req-1",
+      orgId: "org-1",
+      authorId: "user-admin",
+      status: "proposed",
+      snapshotHash: "fakehash",
+      packageName: "@test/test-agent",
+      packageSlug: "test-agent",
+      packageVersion: "0.1.0",
+      proposalSnapshot: SAMPLE_INPUT,
+    };
+
+    it("auto-approves + publishes when the author is a platform_admin (instant grant)", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue(PROPOSED_ADMIN_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...PROPOSED_ADMIN_ROW, status: "approved",
+        notificationState: { decision: "approved", claimedAt: "2026-06-10T12:00:01.000Z" },
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({
+        ...PROPOSED_ADMIN_ROW, status: "published",
+      });
+      const handlerMap = {
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        agent_source_publish: vi.fn(async () => ({ published: true, packageName: "@test/test-agent" })),
+      };
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue(handlerMap);
+
+      const out = (await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, ADMIN),
+      )) as { error?: string; structuredContent?: { request?: { status?: string } } };
+
+      // No error; the proposal was approved (CAS) and published end-to-end.
+      expect(out.error).toBeUndefined();
+      expect(storeMock.decideAgentCreationRequestCas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "req-1",
+          decision: "approve",
+          decidedBy: "user-admin",
+          expectedSnapshotHash: "fakehash",
+        }),
+      );
+      // The gated publish pipeline ran under the admin actor.
+      expect(handlerMap.agent_source_write).toHaveBeenCalled();
+      expect(handlerMap.agent_source_publish).toHaveBeenCalled();
+      for (const fn of [handlerMap.agent_source_write, handlerMap.agent_source_publish]) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const callArg = (fn.mock.calls as any[])[0][0] as { actor: { platformRole?: string } };
+        expect(callArg.actor.platformRole).toBe("platform_admin");
+      }
+      expect(storeMock.markAgentCreationRequestPublished).toHaveBeenCalled();
+      expect(out.structuredContent?.request?.status).toBe("published");
+    });
+
+    it("audits the instant grant as operation:approve with admin_authoring_instant_grant origin", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue(PROPOSED_ADMIN_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...PROPOSED_ADMIN_ROW, status: "approved",
+      });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({
+        ...PROPOSED_ADMIN_ROW, status: "published",
+      });
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue({
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        agent_source_publish: vi.fn(async () => ({ published: true })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, ADMIN),
+      );
+      expect(auditMock.logAuditEventStrict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceType: "agent_creation_request",
+          resourceId: "req-1",
+          operation: "approve",
+          decision: "allowed",
+          metadata: expect.objectContaining({
+            decisionOrigin: "admin_authoring_instant_grant",
+          }),
+        }),
+      );
+    });
+
+    it("does NOT auto-approve a NON-admin author — proposal stays at 'proposed'", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue({
+        id: "req-1", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, NON_ADMIN),
+      )) as { error?: string; structuredContent?: { request?: { status?: string } } };
+
+      // No decide, no publish pipeline, no audit — the proposal queues.
+      expect(storeMock.decideAgentCreationRequestCas).not.toHaveBeenCalled();
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+      expect(innerHandlersMock.createAgentBuilderPrimitiveHandlers).not.toHaveBeenCalled();
+      expect(auditMock.logAuditEventStrict).not.toHaveBeenCalled();
+      expect(out.structuredContent?.request?.status).toBe("proposed");
+    });
+
+    it("surfaces a publish failure (row stays 'approved'; admin can retry) without throwing", async () => {
+      storeMock.createAgentCreationRequest.mockReturnValue(PROPOSED_ADMIN_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...PROPOSED_ADMIN_ROW, status: "approved",
+      });
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue({
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ error: "compile blew up" })),
+        agent_source_publish: vi.fn(async () => ({ published: true })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+
+      const out = (await handleAgentCreationRequestPropose(
+        req("agent_creation_request_propose", SAMPLE_INPUT, ADMIN),
+      )) as { error?: string; instantGrant?: boolean };
+      expect(out.error).toMatch(/compile/i);
+      expect(out.instantGrant).toBe(true);
+      // Publish never succeeded → markPublished not called (row stays approved).
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
     });
   });
 });

@@ -65,7 +65,12 @@ import {
   VendorCredentialsMissingError,
 } from "@/lib/marketplace-credentials";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
-import type { MarketplaceVendorApplicationStatusOutput } from "@cinatra-ai/marketplace-mcp-client";
+import {
+  MarketplaceMcpError,
+  type MarketplaceVendorApplicationStatusOutput,
+} from "@cinatra-ai/marketplace-mcp-client";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
   loadVerdaccioConfigForReads,
   loadVerdaccioConfigForServer,
@@ -202,6 +207,77 @@ export async function reconcileFirstPublishedAtAndPersist(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// Offline/local rename override (cinatra#396).
+//
+// The rename gate consults the Cinatra Marketplace to confirm the current scope
+// isn't locked by an open/approved vendor application. On a LOCAL/self-hosted
+// instance the marketplace MCP is unreachable (no MARKETPLACE_BASE_URL override,
+// so the client points at the hosted default https://marketplace.cinatra.ai,
+// which a local box can't reach) — and failing CLOSED there permanently blocks
+// the namespace rename, with no offline path.
+//
+// canFailOpenOnUnreachableMarketplace() decides whether a marketplace-probe
+// failure is a GENUINE local/offline situation safe to fail-OPEN on. ALL must
+// hold:
+//
+//   1. The error is a real TRANSPORT/network failure — NOT a reachable
+//      marketplace error. A reachable-but-erroring marketplace (a structured
+//      MarketplaceMcpError, an SDK StreamableHTTPError for a 401/403/5xx HTTP
+//      response, or an McpError JSON-RPC error) means the marketplace ANSWERED;
+//      that stays fail-CLOSED. Only a raw connect/transport failure (DNS,
+//      ECONNREFUSED, TLS, timeout) qualifies as "unreachable".
+//
+//   2. There is NO local vendor reservation to protect. The instance identity
+//      row mirrors the cm-side reservation (`vendorState` applied/approved, or a
+//      non-empty `vendorApplicationId`); this is authoritative WITHOUT the
+//      network. If a reservation is recorded locally we fail-CLOSED so the
+//      rename can't orphan it.
+//
+//   3. This is not a hosted/governed deployment. A production build
+//      (NODE_ENV === "production") or an explicit MARKETPLACE_BASE_URL override
+//      means a real marketplace governs this instance; a transient transport
+//      blip there must NOT fail open. (Hosted is additionally pre-blocked by the
+//      MARKETPLACE_INSTANCE_TOKEN guard in provisionAndPersist.)
+//
+// This narrowly unblocks the local/offline case in #396 without weakening the
+// gate for hosted instances where the marketplace governs namespace uniqueness.
+// -----------------------------------------------------------------------------
+
+function canFailOpenOnUnreachableMarketplace(
+  identity: InstanceIdentity,
+  err: unknown,
+): boolean {
+  // (1) Only a genuine transport/network failure qualifies. Any error class
+  // that signals the marketplace ANSWERED keeps the gate closed.
+  const marketplaceAnswered =
+    err instanceof MarketplaceMcpError ||
+    err instanceof StreamableHTTPError ||
+    err instanceof McpError;
+  if (marketplaceAnswered) {
+    return false;
+  }
+
+  // (2) A locally-recorded vendor reservation must never be orphaned.
+  const hasLocalReservation =
+    identity.vendorState === "applied" ||
+    identity.vendorState === "approved" ||
+    (identity.vendorApplicationId != null && identity.vendorApplicationId !== "");
+  if (hasLocalReservation) {
+    return false;
+  }
+
+  // (3) Never fail open on a hosted/governed deployment.
+  const marketplaceGoverned =
+    process.env.NODE_ENV === "production" ||
+    !!process.env.MARKETPLACE_BASE_URL?.trim();
+  if (marketplaceGoverned) {
+    return false;
+  }
+
+  return true;
+}
+
+// -----------------------------------------------------------------------------
 // Rename gate helper — calls the marketplace MCP client's
 // vendor_application_status to check whether the current scope is locked by
 // an open ("applied") or approved vendor application. Both states block the
@@ -254,11 +330,16 @@ async function assertNamespaceRenameAllowed(
     const client = createHttpMarketplaceMcpClient({ token });
     status = await client.vendorApplicationStatus();
   } catch (err) {
-    // Fail-CLOSED on cm unreachable: avoid orphaning a reservation row.
     console.error(
       "[provisionAndPersist] vendor_application_status() failed during rename gate:",
       err,
     );
+    // Fail-OPEN only for a genuine local/offline instance with no reservation
+    // to protect (cinatra#396); otherwise fail-CLOSED to avoid orphaning a
+    // reservation row when the marketplace governs this namespace.
+    if (canFailOpenOnUnreachableMarketplace(identity, err)) {
+      return;
+    }
     redirectWithError(
       "Could not reach the Cinatra Marketplace to verify vendor-application status. " +
         "Please retry in a moment; if the marketplace is down, rename is paused.",
@@ -476,25 +557,41 @@ export async function editVendorAction(formData: FormData): Promise<void> {
   }
   const newName = namespaceResult.canonical;
 
+  const updatedCurrent: InstanceIdentity = { ...current, instanceDisplayName };
+
   if (current.firstPublishedAt !== null) {
-    writeInstanceIdentity({ ...current, instanceDisplayName });
+    writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");
-    redirect("/configuration/environment?tab=instance");
+    redirect("/configuration/environment?tab=instance&saved=1");
   }
   // Short-circuit no-op edits so the registry never sees a duplicate adduser
   // call, which Verdaccio answers with 409 and we misinterpret as "name taken
   // by someone else".
   if (newName === current.instanceNamespace) {
-    writeInstanceIdentity({ ...current, instanceDisplayName });
+    writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");
-    redirect("/configuration/environment?tab=instance");
+    redirect("/configuration/environment?tab=instance&saved=1");
   }
 
-  await provisionAndPersist({ ...current, instanceDisplayName }, newName, operatorEmail, { append: false });
+  // Decouple the display-name edit from namespace provisioning (cinatra#357).
+  // The namespace change routes through provisionAndPersist, which is
+  // all-or-nothing: a registry-provisioning failure (createNpmUser) calls
+  // redirectWithError and persists NOTHING. Pre-persisting the validated
+  // display-name change here — a plain metadata write that needs no
+  // provisioning — guarantees that a downstream provisioning failure no longer
+  // discards an unrelated, valid display-name edit. Safe pre-publish: this is a
+  // same-namespace metadata write (firstPublishedAt === null), which
+  // writeInstanceIdentity allows without { allowNamespaceRename }.
+  writeInstanceIdentity(updatedCurrent);
+  invalidateInstanceIdentityCache();
 
-  redirect("/configuration/environment?tab=instance");
+  // provisionAndPersist spreads from `updatedCurrent`, so the rename write
+  // carries the new display name forward (never the stale value) on success.
+  await provisionAndPersist(updatedCurrent, newName, operatorEmail, { append: false });
+
+  redirect("/configuration/environment?tab=instance&saved=1");
 }
 
 // -----------------------------------------------------------------------------
@@ -537,7 +634,7 @@ export async function renameInstanceNamespaceAction(formData: FormData): Promise
 
   await provisionAndPersist(current, newName, operatorEmail, { append: true });
 
-  redirect("/configuration/environment?tab=instance");
+  redirect("/configuration/environment?tab=instance&saved=1");
 }
 
 // -----------------------------------------------------------------------------

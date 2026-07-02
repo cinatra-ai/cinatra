@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   checkSetupIntegrity,
   scanScriptForMissingPaths,
@@ -54,6 +54,35 @@ describe("setup-integrity — the REAL scripts/setup.sh PASSES", () => {
     // No path violations and no shellcheck violations either way.
     expect(withSc.violations).toEqual(withoutSc.violations);
     expect(withSc.shellcheckViolations).toEqual([]);
+  });
+});
+
+describe("setup-integrity — the dev clone-back is PINNED (cinatra#489)", () => {
+  // Regression guard for cinatra#489: a fresh `make setup` must clone the
+  // companion extension repos PINNED to the committed lock shas, not at floating
+  // `main` HEADs. Tip-tracking can drift the on-disk extension tree ahead of the
+  // committed pnpm-lock.yaml; the unfrozen `pnpm install` in setup.sh then
+  // silently mutates the lockfile + generated maps, leaving a fresh install with
+  // a dirty git tree. Pinning the dev clone-back keeps the fresh tree clean.
+  const setupSrc = readFileSync(REAL_SETUP, "utf8");
+  const syncLines = setupSrc
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("node ") && l.includes("scripts/ci/sync-dev-extensions.mjs"));
+
+  it("invokes the dev clone-back exactly once", () => {
+    expect(syncLines.length).toBe(1);
+  });
+
+  it("invokes the dev clone-back with --pinned (deterministic, lock-tracking fresh installs)", () => {
+    expect(syncLines[0]).toContain("--pinned");
+  });
+
+  it("the dev clone-back is NOT a bare (floating-HEAD) invocation", () => {
+    // The bare `node scripts/ci/sync-dev-extensions.mjs` form is the floating-HEAD
+    // canary, kept only as an explicit CI opt-in (clone-extensions `head` mode).
+    // `make setup` must never use it — that is exactly the drift #489 reports.
+    expect(syncLines[0]).not.toMatch(/sync-dev-extensions\.mjs\s*$/);
   });
 });
 
