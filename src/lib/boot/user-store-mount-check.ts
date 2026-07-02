@@ -1,7 +1,8 @@
 // User-store durable-mount check (cinatra#789 item 5) — pure classifier.
 //
 // The required-extension reconcile already REFUSES to write into the durable user
-// store (`/data/extensions/packages`). The residual gap: nothing VALIDATES at boot
+// store (the configured extension data root, default `/data/extensions`;
+// cinatra#791). The residual gap: nothing VALIDATES at boot
 // that the durable user-store mount actually EXISTS and is writable, so a
 // misconfigured deploy (the volume never mounted) would silently treat it as
 // ephemeral — and every user-installed extension would vanish on the next restart.

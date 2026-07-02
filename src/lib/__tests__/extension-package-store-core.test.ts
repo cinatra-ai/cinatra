@@ -1,10 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import {
-  sanitizeStoreSegment,
-  storePackageDirName,
-  storePackageDir,
-  storeTarballPath,
   parseSri,
   sriForBytes,
   sriMatches,
@@ -16,37 +12,8 @@ import {
   HOST_PROVIDED_PACKAGES,
 } from "@/lib/extension-package-store-core";
 
-describe("storePackageDirName / sanitizeStoreSegment", () => {
-  it("flattens a scoped name to a single path-safe segment (with a uniqueness hash)", () => {
-    const dir = storePackageDirName("@cinatra-ai/foo-connector", "1.2.3");
-    expect(dir).toMatch(/^cinatra-ai__foo-connector@1\.2\.3__[a-f0-9]{10}$/);
-  });
-  it("leaves an unscoped name readable", () => {
-    expect(storePackageDirName("foo", "0.1.0")).toMatch(/^foo@0\.1\.0__[a-f0-9]{10}$/);
-  });
-  it("is collision-free for names that sanitize to the same label", () => {
-    expect(storePackageDirName("@a/b", "1.0.0")).not.toBe(storePackageDirName("a__b", "1.0.0"));
-  });
-  it("refuses traversal-unsafe segments", () => {
-    expect(() => sanitizeStoreSegment("@x/..")).toThrow(/traversal/);
-    expect(() => sanitizeStoreSegment("../etc")).toThrow();
-    expect(() => sanitizeStoreSegment("a\0b")).toThrow(/NUL/);
-    expect(() => sanitizeStoreSegment("a/b/../c")).toThrow();
-  });
-  it("rejects unsafe characters", () => {
-    expect(() => sanitizeStoreSegment("foo;rm -rf")).toThrow(/unsafe/);
-  });
-});
-
-describe("storePackageDir / storeTarballPath", () => {
-  it("composes <root>/<pkg@ver>/<digest> and a sibling .tgz", () => {
-    const dir = storePackageDir("/data/extensions/packages", "@cinatra-ai/foo", "1.0.0", "abc123");
-    expect(dir).toMatch(
-      /^\/data\/extensions\/packages\/cinatra-ai__foo@1\.0\.0__[a-f0-9]{10}\/abc123$/,
-    );
-    expect(storeTarballPath("/data/extensions/packages", "@cinatra-ai/foo", "1.0.0", "abc123")).toBe(`${dir}.tgz`);
-  });
-});
+// (cinatra#791) The V1 `<pkg@ver__hash>/<digest>` layout helpers are retired;
+// the V2 kind-segregated grammar is covered in extension-store-io.test.ts.
 
 describe("SRI", () => {
   const bytes = Buffer.from("hello cinatra extension");

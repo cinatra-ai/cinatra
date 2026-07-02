@@ -937,6 +937,9 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
           version: i.version,
           expectedIntegrity: i.expectedIntegrity,
           registryUrl: persistRegistryUrl,
+          // cinatra#791: this saga installs kind:"workflow" packages ONLY — the
+          // caller-threaded kind is authoritative and the manifest must agree.
+          expectedKind: "workflow",
           // cinatra#181: the verified plan threads into step 4.7; per-node
           // fetches ride the SAME injected fetchTarball seam built above, so
           // a gatekept install's plan nodes keep the broker grant/identity.

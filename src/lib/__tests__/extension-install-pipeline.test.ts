@@ -221,6 +221,21 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
     delete process.env.CINATRA_EXTENSION_REQUIRE_SIGNATURES;
   });
 
+  it("threads the caller's expectedKind into the materializer (cinatra#791: kind-segregated store placement)", async () => {
+    const seen: unknown[] = [];
+    const { deps } = fakeDeps({
+      materialize: async (i) => {
+        seen.push(i.expectedKind);
+        return { storeDir: "/store/foo/digest", digest: "digest", integrity: "sha512-abc", contentHash: "ch" };
+      },
+    });
+    await installExtensionFromRegistry(
+      { packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null, expectedKind: "artifact" },
+      deps,
+    );
+    expect(seen).toEqual(["artifact"]);
+  });
+
   it("AUTO-APPROVES a trusted-SIGNED package and carries the signature into provenance", async () => {
     const { deps, calls } = withSignedDeps("@cinatra-ai/foo", "1.0.0", "sha512-abc");
     const r = await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null, actorUserId: "u1" }, deps);

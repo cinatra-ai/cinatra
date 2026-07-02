@@ -35,7 +35,6 @@ import "server-only";
 // durable path; this is the no-restart convenience on top).
 
 import {
-  DEFAULT_PACKAGE_STORE_PATH,
   classifyServerEntryArtifact,
   destroyExtensionModule,
   normalizeServerModule,
@@ -75,7 +74,8 @@ export async function activateInstalledPackageInProcess(
   orgId: string | null,
   opts: { currentStoreDir?: string; storeRoot?: string } = {},
 ): Promise<ActivationResult[]> {
-  const storeRoot = opts.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+  const storeRoot =
+    opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
 
   const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
   const resolveInstallAnchor = await makeDefaultInstallAnchorResolver(orgId);
@@ -196,8 +196,9 @@ export async function verifyDigestImportsAndRegisters(
   trusted: { integrity: string; contentHash: string; approvedPorts: readonly string[] },
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
-    const { discoverPackageStoreRecords, resolveServerEntry } = await import("@cinatra-ai/sdk-extensions");
-    const all = await discoverPackageStoreRecords(storeRoot, await makeRealFs());
+    const { resolveServerEntry } = await import("@cinatra-ai/sdk-extensions");
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+    const all = await discoverStoreRecordsV2(storeRoot, await makeRealFs());
     // Target the new digest precisely: the currentStoreDir record (or, if not
     // supplied, the sole record for the package).
     const candidates = all.filter((r) => r.packageName === packageName);
@@ -338,7 +339,8 @@ export async function hotUpdateWithDurableRollback(
   rollbackDeps: HotUpdateRollbackDeps,
   opts: { storeRoot?: string } = {},
 ): Promise<HotUpdateActivateResult> {
-  const storeRoot = opts.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+  const storeRoot =
+    opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
 
   const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
 
@@ -569,8 +571,8 @@ async function teardownPartialNewRegistration(
   }
   // Destroy the new module if it loaded — best-effort.
   try {
-    const { discoverPackageStoreRecords } = await import("@cinatra-ai/sdk-extensions");
-    const all = await discoverPackageStoreRecords(storeRoot, await makeRealFs());
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+    const all = await discoverStoreRecordsV2(storeRoot, await makeRealFs());
     const rec = all.find((r) => r.packageName === packageName && r.storeDir === newStoreDir);
     if (rec) {
       const mod = await importStoreModule(rec);
@@ -608,10 +610,10 @@ async function gcStoreDirBestEffort(storeDir: string): Promise<void> {
 // The store layout is `<root>/<pkg@ver>/<digest>/package.json`. Discovery walks
 // only depth 1 (`<root>/<entry>/package.json`) and depth 2
 // (`<root>/<entry>/<sub>/package.json`). We move the OLD digest dir to
-// `<root>/<pkg@ver>/.cinatra-quarantine/<digest>/`, whose package.json sits at
+// `<root>/<kind>/<slug>/.cinatra-quarantine/<digest>/`, whose package.json sits at
 // depth 3 — INVISIBLE to discovery (so the duplicate-name gate is satisfied) yet
 // recoverable by an in-place rename back. A `.json` manifest at
-// `<root>/<pkg@ver>/.cinatra-quarantine/manifest.json` records the moves so a
+// `<root>/<kind>/<slug>/.cinatra-quarantine/manifest.json` records the moves so a
 // fresh process can find + restore (or GC) them. Same-filesystem rename = atomic.
 // ---------------------------------------------------------------------------
 
@@ -657,14 +659,58 @@ async function readQuarantineManifest(
     const path = await import("node:path");
     const { readdir, stat, readFile } = await import("node:fs/promises");
     const out: QuarantineEntry[] = [];
-    let pkgVerDirs: string[];
+
+    // V2 layout (cinatra#791): slug dirs live at `<root>/<kind>/<slug>/` where
+    // a scoped slug is TWO path segments (`@scope/name`). Enumerate every slug
+    // dir the same way discovery does, then check its quarantine subtree.
+    const isDir = async (p: string) => {
+      try {
+        return (await stat(p)).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    const slugDirs: string[] = [];
+    let kindDirs: string[];
     try {
-      pkgVerDirs = await readdir(storeRoot);
+      kindDirs = await readdir(storeRoot);
     } catch {
       return [];
     }
-    for (const pkgVer of pkgVerDirs) {
-      const qRoot = path.join(storeRoot, pkgVer, QUARANTINE_DIRNAME);
+    for (const kind of kindDirs) {
+      if (kind.startsWith(".")) continue;
+      const kindDir = path.join(storeRoot, kind);
+      if (!(await isDir(kindDir))) continue;
+      let level1: string[];
+      try {
+        level1 = await readdir(kindDir);
+      } catch {
+        continue;
+      }
+      for (const e1 of level1) {
+        if (e1.startsWith(".")) continue;
+        const p1 = path.join(kindDir, e1);
+        if (!(await isDir(p1))) continue;
+        if (e1.startsWith("@")) {
+          let level2: string[];
+          try {
+            level2 = await readdir(p1);
+          } catch {
+            continue;
+          }
+          for (const e2 of level2) {
+            if (e2.startsWith(".")) continue;
+            const p2 = path.join(p1, e2);
+            if (await isDir(p2)) slugDirs.push(p2);
+          }
+        } else {
+          slugDirs.push(p1);
+        }
+      }
+    }
+
+    for (const slugDir of slugDirs) {
+      const qRoot = path.join(slugDir, QUARANTINE_DIRNAME);
       let digestDirs: string[];
       try {
         digestDirs = await readdir(qRoot);
@@ -681,7 +727,7 @@ async function readQuarantineManifest(
           const pkg = JSON.parse(raw) as { name?: string };
           if (pkg.name !== packageName) continue;
           // The original dir is the sibling of `.cinatra-quarantine`, same digest seg.
-          const originalDir = path.join(storeRoot, pkgVer, digest);
+          const originalDir = path.join(slugDir, digest);
           out.push({ originalDir, quarantineDir: qDir });
         } catch {
           /* skip an unreadable quarantine entry */
@@ -794,7 +840,20 @@ export async function runHostExtensionInstallAndActivate(
       "@/lib/extension-install-pipeline"
     );
     const deps = await makeDefaultInstallPipelineDeps();
-    const result = await installExtensionFromRegistry({ packageName, version, orgId }, deps);
+    // cinatra#791: thread the canonical row's kind — it is AUTHORITATIVE for the
+    // kind-segregated store placement (the DDL constrains it to the store kinds;
+    // the guard keeps the type narrow, an invalid value falls back to the
+    // materializer's manifest-kind requirement).
+    const { isExtensionStoreKind } = await import("@/lib/extension-package-store-core");
+    const result = await installExtensionFromRegistry(
+      {
+        packageName,
+        version,
+        orgId,
+        ...(isExtensionStoreKind(row.kind) ? { expectedKind: row.kind } : {}),
+      },
+      deps,
+    );
 
     // ARTIFACT-BRIDGE RESCAN (cinatra#661): an artifact package is metadata-only
     // (no serverEntry), so the in-process activation half returns
@@ -959,8 +1018,8 @@ async function discoverSupersededStoreDirs(
   keepStoreDir: string | undefined,
 ): Promise<PackageStoreRecord[]> {
   try {
-    const { discoverPackageStoreRecords } = await import("@cinatra-ai/sdk-extensions");
-    const all = await discoverPackageStoreRecords(storeRoot, await makeRealFs());
+    const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+    const all = await discoverStoreRecordsV2(storeRoot, await makeRealFs());
     return all.filter(
       (r) => r.packageName === packageName && r.storeDir !== keepStoreDir,
     );
