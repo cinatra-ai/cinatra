@@ -1,19 +1,25 @@
 import { Suspense } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { requireAdminSession } from "@/lib/auth-session";
+import { requireAdminSession, buildCanDoOptsFromSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { getEffectiveViewerScope } from "@/lib/marketplace-credentials";
 import {
   readActiveExtensionTemplates,
   readArchivedExtensionTemplates,
 } from "@cinatra-ai/agents";
+// Server-side install-scope picker rows — the SAME shared builder the agent
+// registry detail screen uses (single source of truth for enabled/disabled
+// state per org/team/project target row).
+import { buildInstallTargetPickerContext } from "@cinatra-ai/agents/install-target-picker";
 import {
   installExtensionPackageFormAction,
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
 import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
+import { ExtensionInstallScopeDialog } from "./extension-install-scope-dialog";
+import { isInstallAccessTargetKind } from "../install-access-target";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import {
   buildMarketplaceFailureCopy,
@@ -108,7 +114,23 @@ export async function ExtensionsMarketplaceScreen({
   registryConnected: boolean;
 }) {
   // Admin-only — no public catalog exposure.
-  await requireAdminSession();
+  const session = await requireAdminSession();
+
+  // -------------------------------------------------------------------------
+  // Pre-install access selector context (cinatra#805). Server-computed picker
+  // rows (org / team / project) shared with the agent install-scope dialog;
+  // the connector/artifact/workflow Install CTA opens a dialog over these
+  // rows. Default selection is the ORG row when installable — parity with the
+  // per-kind default (workspace access) so the flow stays one-click.
+  // -------------------------------------------------------------------------
+  const { orgRole } = await buildCanDoOptsFromSession(session);
+  const activeOrgId = session.session?.activeOrganizationId ?? "";
+  const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
+    await buildInstallTargetPickerContext({ session, orgRole });
+  const orgRow = installTargets.find(
+    (t) => t.level === "organization" && !t.disabled,
+  );
+  const installScopeDefaultValue = orgRow ? orgRow.value : pickerFallbackValue;
 
   // Registry temp-policy declaration (config-driven; default off → no banner).
   // When configured, warn operators that this registry's private packages are
@@ -215,6 +237,25 @@ export async function ExtensionsMarketplaceScreen({
                 <Button size="sm" disabled className="w-full flex-1" title="Connect the package registry to install">
                   Install Now
                 </Button>
+              ) : isInstallAccessTargetKind(card.kindSlug) ? (
+                // connector / artifact / workflow: pre-install access selector
+                // (cinatra#805) — dialog over the shared server-computed
+                // org/team/project rows; the chosen target is authorized
+                // server-side and persisted via setExtensionInstallAccess.
+                // Failure copy contract matches MarketplaceInstallForm (#685).
+                <ExtensionInstallScopeDialog
+                  packageName={card.packageName}
+                  packageVersion={card.packageVersion}
+                  displayName={card.displayName}
+                  installTargets={installTargets}
+                  ownerEntityNames={ownerEntityNames}
+                  activeOrgId={activeOrgId}
+                  defaultValue={installScopeDefaultValue}
+                  failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+                  installAction={installExtensionPackageFormAction}
+                  triggerClassName="w-full flex-1"
+                />
               ) : (
                 // A failed install toasts instead of crashing the route (#356). The
                 // message is now classified per the merged install-failure taxonomy
