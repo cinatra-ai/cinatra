@@ -905,7 +905,7 @@ async function runAgentBuilderExecutionJobInner(
   if (template.packageName) {
     try {
       const resolvedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
-      snapshotSkillsAtRunStart({
+      await snapshotSkillsAtRunStart({
         runId,
         skills: resolvedSkillIds.map((skillId) => ({
           skillId,
