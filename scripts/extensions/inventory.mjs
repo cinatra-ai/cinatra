@@ -8,12 +8,14 @@
 //
 // The dependency graph here is the CANDIDATE source for the later manifest
 // backfill — it is NOT the canonical `cinatra.dependencies` (no manifest
-// declares that yet). The CI drift gate is deferred; this script's `--check`
-// mode is intentionally non-failing for now.
+// declares that yet). CI-grade enforcement (a committed baseline generated in
+// the canonical, fully-populated `extensions/` environment) is deferred; but
+// `--check` now lands the real enforcing exit code for the cases it can decide
+// locally — see the decision table at the `--check` branch below.
 //
 // Usage:
 //   node scripts/extensions/inventory.mjs            # regenerate JSON artifacts
-//   node scripts/extensions/inventory.mjs --check    # report drift vs committed JSON (exit 0)
+//   node scripts/extensions/inventory.mjs --check    # exit 1 on real drift (see decision table); exit 0 when no baseline yet
 //   node scripts/extensions/inventory.mjs --print     # print summary only, write nothing
 
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from "node:fs";
@@ -733,22 +735,61 @@ async function main() {
   }
 
   if (args.includes("--check")) {
+    // Enforcing drift check (reconcile "wired but inert" surfaces).
+    //
+    // The scanned source tree (`extensions/`, EXT_ROOT) is GITIGNORED and
+    // populated per-environment by a clone-back step, and the baseline outputs
+    // live under the (also gitignored) `generated/` dir — so a fresh checkout
+    // normally has NEITHER a committed baseline NOR the source tree. A baseline
+    // generated from one machine's local `extensions/` set is not reproducible
+    // elsewhere, so we deliberately do NOT commit one here; canonical, CI-grade
+    // enforcement runs in the companion environment that fully populates
+    // `extensions/` first (tracked separately). What this check DOES land now is
+    // the real enforcing exit code for the cases decidable locally:
+    //
+    //   no baseline (the normal fresh-checkout state)      -> exit 0 (deferred)
+    //   baseline present + source absent/empty             -> exit 1 (broken
+    //       precondition: cannot regenerate to compare, so real drift would be
+    //       invisible — fail closed rather than pass blindly)
+    //   baseline present + source present + output matches -> exit 0 (OK)
+    //   baseline present + source present + output differs -> exit 1 (DRIFT)
+    const extRootPopulated = existsSync(EXT_ROOT) && readdirSync(EXT_ROOT).length > 0;
+    const anyBaseline = [OUT_JSON, OUT_GRAPH].some((p) => existsSync(p));
+
+    if (!anyBaseline) {
+      console.log(
+        "[extension-inventory] no committed baseline present — drift enforcement is deferred to the canonical environment that fully populates the gitignored extensions/ tree; nothing to verify in this checkout.",
+      );
+      return; // exit 0: normal fresh-checkout state, no canonical baseline yet.
+    }
+
+    if (!extRootPopulated) {
+      console.error(
+        `[extension-inventory] a baseline exists but the extensions/ source tree (${relative(REPO_ROOT, EXT_ROOT)}) is absent/empty — cannot regenerate to compare, so drift would be invisible. Failing closed.`,
+      );
+      process.exit(1);
+    }
+
     let drift = false;
     for (const [path, fresh] of [[OUT_JSON, inv], [OUT_GRAPH, graphDoc]]) {
       if (!existsSync(path)) {
-        console.log(`[extension-inventory] MISSING ${relative(REPO_ROOT, path)} (run without --check to generate)`);
+        console.error(
+          `[extension-inventory] MISSING ${relative(REPO_ROOT, path)} while a sibling baseline exists — incomplete baseline set; regenerate with \`node scripts/extensions/inventory.mjs\`.`,
+        );
         drift = true;
         continue;
       }
       const committed = readFileSync(path, "utf8");
       if (committed !== stable(fresh)) {
-        console.log(`[extension-inventory] DRIFT ${relative(REPO_ROOT, path)} differs from regenerated output`);
+        console.error(
+          `[extension-inventory] DRIFT ${relative(REPO_ROOT, path)} differs from regenerated output — regenerate with \`node scripts/extensions/inventory.mjs\`.`,
+        );
         drift = true;
       }
     }
-    if (drift) console.log("[extension-inventory] NOTE: --check is non-failing for now (a later drift gate enforces it).");
-    else console.log("[extension-inventory] OK — committed artifacts match regenerated output.");
-    return; // exit 0 regardless for now
+    if (drift) process.exit(1);
+    console.log("[extension-inventory] OK — committed artifacts match regenerated output.");
+    return;
   }
 
   mkdirSync(dirname(OUT_JSON), { recursive: true });

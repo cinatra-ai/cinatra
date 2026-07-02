@@ -268,14 +268,20 @@ describe("createTriggerEmailSendUseCases — initial-send + worker methods", () 
       status: "cancelled",
     });
   });
-  it("runInitialSendWorker is a no-op under the synchronous send path", async () => {
+  it("runInitialSendWorker returns a typed not_supported result (retired, does not throw)", async () => {
     await expect(
       uc.runInitialSendWorker({ serviceId: "s", campaignId: "c", jobId: "j" }, actor),
-    ).rejects.toThrow("runInitialSendWorker is a no-op under the synchronous send path.");
+    ).resolves.toEqual({
+      ok: false,
+      status: "not_supported",
+      reason: "The initial-send worker is retired under the synchronous send path.",
+    });
   });
-  it("processDueFollowUps is not implemented under the synchronous send path", async () => {
-    await expect(uc.processDueFollowUps({ campaignId: "c" }, actor)).rejects.toThrow(
-      "not implemented",
-    );
+  it("processDueFollowUps returns a typed not_supported result (retired, does not throw)", async () => {
+    await expect(uc.processDueFollowUps({ campaignId: "c" }, actor)).resolves.toEqual({
+      ok: false,
+      status: "not_supported",
+      reason: "Due follow-up processing is not implemented under the synchronous send path.",
+    });
   });
 });

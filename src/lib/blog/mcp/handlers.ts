@@ -10,6 +10,24 @@ import * as schemas from "./schemas";
 
 const useCases = createBlogContentUseCases();
 
+// Retired blog primitives stay registered (their names are referenced by the
+// generated authz inventory, the deterministic client, and the run label map)
+// but MUST NOT throw when an agent invokes them. Return a typed, structured
+// not_supported result that names the replacement flow instead — matching the
+// acceptance contract "no agent-facing MCP tool throws instead of returning a
+// typed unsupported result". Short-circuit BEFORE the retired use-case so the
+// throwing stub (kept only for legacy compile-time callers) is never reached.
+function retiredToolResult(tool: string, replacement: string) {
+  return {
+    ok: false as const,
+    status: "not_supported" as const,
+    code: "tool_retired" as const,
+    tool,
+    reason: `${tool} is retired and no longer performs an action.`,
+    replacement,
+  };
+}
+
 export function createBlogContentPrimitiveHandlers() {
   return {
     "blog_project_list": async (request: PrimitiveInvocationRequest<unknown>) => {
@@ -33,15 +51,21 @@ export function createBlogContentPrimitiveHandlers() {
       return useCases.getProject(projectId);
     },
 
-    "blog_project_create": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const input = schemas.createProjectSchema.parse(request.input);
-      return useCases.startIdeaGeneration(input);
-    },
+    // RETIRED (replaced by the blog pipeline agent's idea_flow). Kept registered
+    // so the tool name still resolves, but returns a typed not_supported result
+    // instead of throwing.
+    "blog_project_create": async (_request: PrimitiveInvocationRequest<unknown>) =>
+      retiredToolResult(
+        "blog_project_create",
+        "Use the blog pipeline agent's idea_flow to create a project and generate ideas.",
+      ),
 
-    "blog_post_ideas_generate_start": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const input = schemas.createProjectSchema.parse(request.input);
-      return useCases.startIdeaGeneration(input);
-    },
+    // RETIRED (replaced by the blog pipeline agent's idea_flow).
+    "blog_post_ideas_generate_start": async (_request: PrimitiveInvocationRequest<unknown>) =>
+      retiredToolResult(
+        "blog_post_ideas_generate_start",
+        "Use the blog pipeline agent's idea_flow to generate blog post ideas.",
+      ),
 
     "blog_post_ideas_generate_cancel": async (request: PrimitiveInvocationRequest<unknown>) => {
       const { projectId } = schemas.projectIdSchema.parse(request.input);
@@ -145,10 +169,13 @@ export function createBlogContentPrimitiveHandlers() {
       return useCases.stopLinkedInDraftPublish(projectId);
     },
 
-    "blog_media_image_save": async (request: PrimitiveInvocationRequest<unknown>) => {
-      const input = schemas.saveImageToMediaSchema.parse(request.input);
-      return useCases.saveImageToMediaLibrary(input);
-    },
+    // RETIRED (blog_media_* is delete-as-superseded; images live as canonical
+    // blog image artifacts). Returns a typed not_supported result, not a throw.
+    "blog_media_image_save": async (_request: PrimitiveInvocationRequest<unknown>) =>
+      retiredToolResult(
+        "blog_media_image_save",
+        "Blog images are canonical blog image artifacts; reach them through /artifacts.",
+      ),
 
     "blog_media_list": async (_request: PrimitiveInvocationRequest<unknown>) => {
       return useCases.listSavedMedia();
