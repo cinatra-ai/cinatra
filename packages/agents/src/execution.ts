@@ -22,6 +22,8 @@ import {
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 import { isTriggerReleased } from "./trigger-gate";
 import { resolveTemplateInputSchema } from "./input-schema-resolver";
+import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
+import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
 import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -831,6 +833,43 @@ async function runAgentBuilderExecutionJobInner(
       error: `Template ${run.templateId} not found`,
     });
     return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Per-run skill-usage ledger (agent_run_skills_used) — snapshot the resolved
+  // skill set at run start. This is THE run-start write path for the ledger:
+  // the writer (snapshotSkillsAtRunStart) previously had zero production call
+  // sites, so the ledger never populated and the run's Skills tab was always
+  // empty (#848).
+  //
+  // Resolve the skill set exactly as the llm-bridge does at each LLM step —
+  // `getAssignedSkillIdsForAgent(packageName)` with NO actor — so the ledger
+  // reflects the same matched catalog skills the run's LLM steps actually
+  // receive (custom/personal assignments are actor-scoped and are not delivered
+  // to sessionless bridge callers, so they are intentionally excluded here).
+  // These are installed catalog skills, hence skillKind "installed".
+  //
+  // This is the single per-run seam: every producer (LangGraph/MCP `agent_run`,
+  // WayFlow/A2A) enqueues AGENT_BUILDER_EXECUTION, which this worker consumes
+  // exactly once per dispatch. The write is idempotent (ON CONFLICT DO NOTHING)
+  // so re-entry on resume is safe, and best-effort — a ledger write must never
+  // fail a run.
+  if (template.packageName) {
+    try {
+      const resolvedSkillIds = await getAssignedSkillIdsForAgent(template.packageName);
+      snapshotSkillsAtRunStart({
+        runId,
+        skills: resolvedSkillIds.map((skillId) => ({
+          skillId,
+          skillKind: "installed" as const,
+        })),
+      });
+    } catch (err) {
+      console.warn(
+        `[agent-builder] skill-usage ledger snapshot failed for run ${runId}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
