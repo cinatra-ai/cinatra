@@ -4,6 +4,7 @@ import {
   buildBreadcrumbTrail,
   breadcrumbCrumbKey,
   connectorCanonicalCrumbHref,
+  isPagelessContainerCrumb,
   CANONICAL_CONNECTOR_SUBROUTE,
 } from "../breadcrumb-trail";
 
@@ -116,6 +117,66 @@ describe("breadcrumbCrumbKey — unique React keys (#499)", () => {
     const crumbs = buildBreadcrumbTrail("/a/b/c/d/e");
     const keys = crumbs.map((c, i) => breadcrumbCrumbKey(c, i));
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe("buildBreadcrumbTrail — marketplace [scope] crumb (#797)", () => {
+  it("renders the vendor/scope crumb as a non-navigable label on a detail page", () => {
+    const crumbs = buildBreadcrumbTrail(
+      "/configuration/marketplace/cinatra-ai/openai-connector",
+    );
+    expect(crumbs).toHaveLength(4);
+
+    // Configuration and Marketplace ancestors stay navigable links.
+    expect(crumbs[0]).toMatchObject({
+      label: "Configuration",
+      href: "/configuration",
+    });
+    expect(crumbs[0].nonNavigable).toBeFalsy();
+    expect(crumbs[1]).toMatchObject({
+      label: "Marketplace",
+      href: "/configuration/marketplace",
+    });
+    expect(crumbs[1].nonNavigable).toBeFalsy();
+
+    // The [scope] level has no page.tsx — must be a plain label, not a link
+    // to a 404.
+    expect(crumbs[2].label).toBe("Cinatra Ai");
+    expect(crumbs[2].nonNavigable).toBe(true);
+
+    // Leaf (current page).
+    expect(crumbs[3]).toMatchObject({
+      label: "Openai Connector",
+      href: "/configuration/marketplace/cinatra-ai/openai-connector",
+    });
+  });
+
+  it("keeps the static marketplace sibling routes navigable", () => {
+    for (const staticSeg of ["submissions", "vendor-applications"]) {
+      const crumbs = buildBreadcrumbTrail(
+        `/configuration/marketplace/${staticSeg}/x`,
+      );
+      expect(crumbs[2].nonNavigable).toBeFalsy();
+      expect(crumbs[2].href).toBe(`/configuration/marketplace/${staticSeg}`);
+    }
+  });
+
+  it("keeps the submissions crumb navigable on the admin sub-page", () => {
+    const crumbs = buildBreadcrumbTrail(
+      "/configuration/marketplace/submissions/admin",
+    );
+    expect(crumbs[2]).toMatchObject({
+      label: "Submissions",
+      href: "/configuration/marketplace/submissions",
+    });
+    expect(crumbs[2].nonNavigable).toBeFalsy();
+  });
+
+  it("does not mark depth-3 crumbs pageless outside /configuration/marketplace", () => {
+    expect(isPagelessContainerCrumb(["configuration", "extensions", "x"], 2)).toBe(
+      false,
+    );
+    expect(isPagelessContainerCrumb(["marketplace", "foo", "bar"], 2)).toBe(false);
   });
 });
 
