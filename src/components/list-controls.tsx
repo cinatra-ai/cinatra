@@ -467,7 +467,7 @@ export function ListControls({
 
                   <div className="mt-5 grid min-h-0 flex-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
                     <div className="flex min-h-0 flex-col rounded-panel border border-line bg-surface-strong/76 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Available columns</p>
+                      <p className="text-xs font-semibold uppercase tracking-kicker text-muted-foreground">Available columns</p>
                       <div
                         className="mt-4 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
                         onDragOver={(event) => event.preventDefault()}
@@ -483,7 +483,7 @@ export function ListControls({
                         {availableColumnsBySection.length > 0 ? (
                           availableColumnsBySection.map((section) => (
                             <div key={section.key}>
-                              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                              <p className="mb-2 text-[10px] font-semibold uppercase tracking-kicker text-muted-foreground">
                                 {section.label}
                               </p>
                               <div className="grid gap-2">
@@ -509,13 +509,13 @@ export function ListControls({
                     </div>
 
                     <div className="flex items-center justify-center">
-                      <div className="rounded-control border border-line bg-surface-strong/72 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      <div className="rounded-control border border-line bg-surface-strong/72 px-3 py-2 text-xs font-semibold uppercase tracking-kicker text-muted-foreground">
                         View
                       </div>
                     </div>
 
                     <div className="flex min-h-0 flex-col rounded-panel border border-line bg-surface-strong/76 p-4">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Selected columns</p>
+                      <p className="text-xs font-semibold uppercase tracking-kicker text-muted-foreground">Selected columns</p>
                       <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
                         <div className="grid gap-2">
                         {selectedColumnItems.length > 0 ? (

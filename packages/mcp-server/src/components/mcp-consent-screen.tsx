@@ -127,7 +127,7 @@ export function McpConsentScreen(props: {
 
         <div className="grid gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Redirect URIs</p>
+            <p className="text-xs font-semibold uppercase tracking-kicker-wide text-muted-foreground">Redirect URIs</p>
             <div className="mt-2 grid gap-2">
               {(props.client?.redirect_uris ?? []).map((redirectUri) => (
                 <code key={redirectUri} className="rounded-xl border border-line bg-surface-muted px-3 py-2 text-xs text-foreground">
@@ -138,7 +138,7 @@ export function McpConsentScreen(props: {
           </div>
 
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">Requested scopes</p>
+            <p className="text-xs font-semibold uppercase tracking-kicker-wide text-muted-foreground">Requested scopes</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {requestedScopes.length > 0 ? (
                 requestedScopes.map((scope) => (

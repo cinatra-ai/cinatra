@@ -504,7 +504,7 @@ export function NotificationsBellTrigger(): React.ReactElement {
         className="z-[200] w-[22rem] rounded-control border border-line bg-surface-strong p-2 shadow-lg backdrop-blur-xl"
       >
         <div className="flex items-center justify-between gap-3 px-3 py-2">
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+          <p className="text-xs font-semibold uppercase tracking-kicker-wide text-muted-foreground">
             Notifications
           </p>
           <Button

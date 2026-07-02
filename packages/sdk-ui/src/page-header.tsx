@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cva } from "class-variance-authority";
 import { cn } from "./lib/utils";
 
 export type PageHeaderSize = "sm" | "md" | "lg";
@@ -34,6 +35,30 @@ interface PageHeaderProps {
 }
 
 /**
+ * Page-title typography — the spec h1 ramp as named design tokens.
+ *
+ * `text-page-title-{sm,md,lg}` carry their paired line-height (1.05) and
+ * tight display tracking (-0.018em) via the design package's @theme mapping,
+ * so no bracket literals are needed here. A future scale change is a
+ * one-line token edit in `@cinatra-ai/design/tokens.css`.
+ */
+export const pageTitleVariants = cva(
+  "font-display italic font-extrabold text-balance",
+  {
+    variants: {
+      size: {
+        sm: "text-page-title-sm",
+        md: "text-page-title-md",
+        lg: "text-page-title-lg",
+      },
+    },
+    defaultVariants: {
+      size: "lg",
+    },
+  },
+);
+
+/**
  * PageHeader — canonical page chrome h1 for Cinatra-design-strict surfaces.
  *
  * Owns the spec h1 typography (Archivo italic 800, `-0.018em` tracking,
@@ -64,16 +89,13 @@ export function PageHeader({
       <div className="flex items-start justify-between gap-4">
         <div>
           {label && (
-            <p className="font-mono text-xs uppercase tracking-[0.3em] text-muted-foreground">
+            <p className="font-mono text-xs uppercase tracking-page-label text-muted-foreground">
               {label}
             </p>
           )}
           <h1
             className={cn(
-              "font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance",
-              size === "sm" && "text-[20px]",
-              size === "md" && "text-[24px]",
-              size === "lg" && "text-[28px]",
+              pageTitleVariants({ size }),
               size === "lg" && !label && "-mt-2",
               tone === "mustard" && "text-brand-mustard",
               tone === "ink" && "text-foreground",

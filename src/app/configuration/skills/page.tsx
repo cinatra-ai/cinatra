@@ -284,7 +284,7 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
             These assignments are used as the default checked skills on agent-specific review pages.
           </p>
           {matchState.matchedAt ? (
-            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-muted-foreground">
+            <p className="mt-2 text-xs uppercase tracking-kicker text-muted-foreground">
               Last matched {new Date(matchState.matchedAt).toLocaleString()}
             </p>
           ) : null}
