@@ -804,9 +804,23 @@ function main() {
       process.exit(2);
     }
     diffText = readFileSync(resolve(diffPath), "utf8");
-    // The working tree IS the diff's base in this mode (the fixture corpus
-    // applies cleanly to the tree; the companion test asserts that).
+    // Base resolution for --diff-file mode. By default the working tree IS the
+    // diff's base. --base-dir <dir> overlays a pinned base on top of the tree:
+    // a file present under <dir> is read from there, otherwise the working tree
+    // wins. The fixture corpus pins migrations/manifest.json this way so the
+    // ledger's append-only tail can't rot the fixtures as real migrations land.
+    const baseDirIdx = argv.indexOf("--base-dir");
+    const baseDir = baseDirIdx !== -1 ? argv[baseDirIdx + 1] : null;
+    if (baseDirIdx !== -1 && !baseDir) {
+      console.error("[schema-migration-gate] --base-dir requires a path");
+      process.exit(2);
+    }
+    const baseDirAbs = baseDir ? resolve(baseDir) : null;
     readBaseFile = (p) => {
+      if (baseDirAbs) {
+        const pinned = join(baseDirAbs, p);
+        if (existsSync(pinned)) return readFileSync(pinned, "utf8");
+      }
       const abs = join(REPO_ROOT, p);
       return existsSync(abs) ? readFileSync(abs, "utf8") : null;
     };

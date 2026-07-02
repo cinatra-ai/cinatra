@@ -1,0 +1,110 @@
+{
+  "_doc": [
+    "Append-only ledger of versioned migration artifacts for the first-party",
+    "core store schema (buildCreateStoreSchemaQueries / createStoreTables in",
+    "src/lib/drizzle-store.ts). See migrations/README.md for the convention:",
+    "every migrations/core/core__NNNN_short-description.mjs runner module",
+    "ships with an entry here, in the same PR as the schema change it",
+    "accompanies. Entry shape:",
+    "  seq         — the NNNN sequence number, as a string ('0001')",
+    "  file        — the artifact path relative to migrations/ (new entries:",
+    "                'core/core__NNNN_short-description.mjs'; seq 0001/0002",
+    "                predate the node-pg-migrate runner and point at the",
+    "                legacy psql artifacts — their runner forms live at",
+    "                core/core__0001_… and core/core__0002_…)",
+    "  summary     — one line: what the migration does and why",
+    "  destructive — true when the change affects user-land data (the case",
+    "                that REQUIRES an artifact); false for optional artifacts",
+    "                shipped with additive changes (e.g. long backfills)",
+    "  tables      — the affected core-store table names (no schema prefix;",
+    "                the schema name is variable, see the README)",
+    "Never renumber or rewrite an entry once its migration has shipped;",
+    "supersede it with a new sequence number."
+  ],
+  "migrations": [
+    {
+      "seq": "0001",
+      "file": "0001_notifications-dedupe-key.sql",
+      "summary": "Add notifications.dedupe_key + partial unique index (user_id, dedupe_key) for the general per-user notification dedupe (issue #50). Required by the unique-index-on-existing-table rule; cannot collide in practice — the column is new, so every pre-existing row is outside the partial-index predicate.",
+      "destructive": true,
+      "tables": ["notifications"]
+    },
+    {
+      "seq": "0002",
+      "file": "0002_drop-agent-templates-durable.sql",
+      "summary": "Drop the dead agent_templates.durable column (issue #84). No routing/execution code ever read it and every writer only persisted the default false, so no user-land data is lost; required by the drop-column-on-existing-table rule.",
+      "destructive": true,
+      "tables": ["agent_templates"]
+    },
+    {
+      "seq": "0003",
+      "file": "core/core__0003_drop-extension-migrations-ledger.mjs",
+      "summary": "Drop the dormant extension_migrations ledger (issue #118): it backed the RETIRED extension JSON-DSL migration machinery and was empty on every lineage (no extension ever declared cinatra.migrations). Extension migrations now record into the shared node-pg-migrate pgmigrations ledger under ext_<scope>_<pkg>__NNNN names; required by the drop-table rule.",
+      "destructive": true,
+      "tables": ["extension_migrations"]
+    },
+    {
+      "seq": "0004",
+      "file": "core/core__0004_demote-optional-extension-anchors.mjs",
+      "summary": "Demote the 17 anchor rows the requiredExtensions shrink (cinatra#7) removed from the prod bootable set (33 -> 16): required_in_prod -> false and locked -> active for exactly those rows; archived tombstones stay archived; nothing is uninstalled and all provenance/dependency/owner state is preserved. Fresh databases seed from the current declaration and ledger-fake the chain; idempotent on re-run.",
+      "destructive": true,
+      "tables": ["installed_extension"]
+    },
+    {
+      "seq": "0005",
+      "file": "core/core__0005_extension-install-ops-append-only.mjs",
+      "summary": "Convert the extension install-op journal to APPEND-ONLY (cinatra#158): drop the two single-row-per-(package,org) unique indexes (pkg_org_uniq / pkg_global_uniq), add partial-UNIQUE indexes enforcing at most one finalized op per (package,org) (the install anchor) + the global org_id-IS-NULL twin, add a (package_name, org_id, phase) scan index, and widen the phase CHECK to admit the new terminal 'superseded' phase. Existing rows are preserved (append-only is strictly more permissive than single-row, so the new partial-unique-on-finalized cannot collide: a single-row schema had at most one row per (package,org), hence at most one finalized). COORDINATED, NON-ROLLING boundary: apply with pre-0005 writers drained — old reset-on-begin UPDATE keyed by (package,org) could touch multiple appended rows once the full unique indexes are gone.",
+      "destructive": true,
+      "tables": ["extension_install_ops"]
+    },
+    {
+      "seq": "0006",
+      "file": "core/core__0006_dashboards-v12.mjs",
+      "summary": "Pinned fixture snapshot entry for seq 0006 — real ledger summary elided; the schema-migration gate does not read this field.",
+      "destructive": true,
+      "tables": ["dashboards", "dashboard_revisions"]
+    },
+    {
+      "seq": "0007",
+      "file": "core/core__0007_agent-run-pm-links.mjs",
+      "summary": "Add the agent_run_pm_links link table for the schedule↔PM-task sync (cinatra#317): one row per schedule-defining trigger mirrored to an external project-management provider (Plane), keyed by run_id (one-to-one with agent_run_triggers) with FK run_id → agent_runs.id ON DELETE CASCADE, plus a (provider) scan index. Columns: provider (PM provider id), external_task_id (provider work-item id; null until first successful push), synced_at (last successful mirror), sync_error (last fail-open error; null=healthy), version (optimistic-concurrency counter for the reconcile loop #318). ADDITIVE (a brand-new table) so no artifact is strictly required — it rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS to keep the fresh-bootstrap and migration paths aligned and give the table a ledgered row (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the index then the table.",
+      "destructive": false,
+      "tables": ["agent_run_pm_links"]
+    },
+    {
+      "seq": "0008",
+      "file": "core/core__0008_webhook-idempotency-ledger.mjs",
+      "summary": "Add the webhook_idempotency leased dedupe ledger for the generic inbound-webhook route (cinatra#340): one row per (scope, site_id, message_id) where scope is '<vendor>/<slug>/<hook>' and message_id is the Standard-Webhooks webhook-id. Leased state machine (processing | done | failed) with lease_until + attempt_count (the finalize fence) so a crashed holder's lease expires and a later arrival re-claims, and a stale holder cannot overwrite a newer attempt's verdict. All three key columns NOT NULL with a UNIQUE index (scope, site_id, message_id); site_id uuid (connect_sites.site_id identity space, D1b). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the index then the table.",
+      "destructive": false,
+      "tables": ["webhook_idempotency"]
+    },
+    {
+      "seq": "0009",
+      "file": "core/core__0009_webhook-secret-bindings.mjs",
+      "summary": "Add the webhook_secret_bindings table for the per-webhook/per-site secret service (cinatra#340): one active row per (vendor, slug, hook, site) holding the Standard-Webhooks secret material ENCRYPTED via the host secretsCodec (current_secret_ciphertext/iv + an optional previous_secret_ciphertext/iv for the bounded dual-secret rotation window, previous_expires_at, rotated_at), resolved by the server-issued opaque binding_id (PRIMARY KEY) — never from the request payload. site_id uuid (connect_sites.site_id space, D1b). A partial UNIQUE index (vendor, slug, hook, site_id) WHERE revoked_at IS NULL enforces at most one active binding per tuple; revoked_at tombstones a binding. legacy_enabled is the structural hook for the #343 legacy single-shared-secret bridge (its legacy-secret STORAGE columns are deferred to #343 per D3c option A; stays false in #340). ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL; ships as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
+      "destructive": false,
+      "tables": ["webhook_secret_bindings"]
+    },
+    {
+      "seq": "0010",
+      "file": "core/core__0010_webhook-outbound-dead-letter.mjs",
+      "summary": "Add the webhook_outbound_dead_letter table for the host-owned OUTBOUND webhook delivery engine (cinatra#341): the durable dead-letter record the pre-#341 fire-and-forget assistant-webhook path lacked. The WEBHOOK_OUTBOUND_DELIVERY BullMQ dispatcher arm writes one row when a delivery is classified `permanent` (non-retryable 4xx, missing url/secret, or a non-decodable legacy secret the standardwebhooks signer rejects) OR when all configured `attempts` are exhausted on a `retryable` result. Columns: event_kind (e.g. 'assistant.mention'), message_id (the Standard-Webhooks webhook-id / receiver idempotency key), target_url (reduced to origin+pathname — query string + userinfo stripped so a URL token can't leak), payload_digest (sha256 hex of the serialized payload — NEVER the raw payload or secret), attempts, last_status (int|null), last_error (truncated+scrubbed text), failed_at, created_at. A UNIQUE index (event_kind, message_id) makes the DLQ insert idempotent (ON CONFLICT DO NOTHING — a permanent row and a later last-attempt-retryable row for the same identity collapse to one) and a failed_at scan index backs the operator view. ADDITIVE (a brand-new table) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same CREATE TABLE/INDEX this PR); the module ships anyway as a pure CREATE … IF NOT EXISTS (no-op on a bootstrap-seeded schema, ledger-faked on a fresh install). down() drops the indexes then the table.",
+      "destructive": false,
+      "tables": ["webhook_outbound_dead_letter"]
+    },
+    {
+      "seq": "0011",
+      "file": "core/core__0011_webhook-legacy-secret.mjs",
+      "summary": "Add the legacy single-shared-secret STORAGE columns (legacy_secret_ciphertext/iv) to webhook_secret_bindings for the #343 legacy webhook bridge (D3c option A) deferred by core__0009. A binding flagged legacy_enabled keeps its in-field sender's bespoke `sha256=<hex>` HMAC (the deployed WordPress plugin) while still routing through the generic /webhook facility; the shared HMAC secret is stored ENCRYPTED via the host secretsCodec (ciphertext+iv blob, NOT a ref) under a field-scoped AAD (webhook-binding.<binding_id>.legacy) so a legacy blob can never decrypt in the current/previous columns. Both columns nullable — a Standard-Webhooks binding (the forward default) leaves them null. ADDITIVE + idempotent (ADD COLUMN IF NOT EXISTS) — rides the idempotent bootstrap DDL (buildCreateStoreSchemaQueries adds the same columns); no-op on a bootstrap-seeded schema, ledger-faked on a fresh install. down() drops the two columns.",
+      "destructive": false,
+      "tables": ["webhook_secret_bindings"]
+    },
+    {
+      "seq": "0012",
+      "file": "core/core__0012_drop-gtm-normalization.mjs",
+      "summary": "Pinned fixture snapshot entry for seq 0012 — real ledger summary elided; the schema-migration gate does not read this field.",
+      "destructive": true,
+      "tables": ["metadata", "startups", "startup_overrides", "skill_packages", "skills", "notifications", "campaigns", "chat_threads"]
+    }
+  ]
+}
