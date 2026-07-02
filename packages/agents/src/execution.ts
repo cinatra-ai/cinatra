@@ -1387,11 +1387,25 @@ async function runAgentBuilderExecutionJobInner(
         cinatra_run_id: run.id,
         ...(runBinding ? { cinatra_run_binding: runBinding } : {}),
       };
+      // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
+      // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
+      // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
+      // already find the run or it 403s "context_unresolved" and the whole flow
+      // fails. Previously no contextId was passed, so WayFlow minted its own and
+      // it was only synced onto the run AFTER sendTask returned (the resync at
+      // handleWayflowTaskState) — too late for the in-flow callback. Generate +
+      // persist it here and pass it in, mirroring the resume path
+      // (orchestrator-actions.ts: `contextId: run.a2aContextId`).
+      const dispatchContextId = run.a2aContextId ?? randomUUID();
+      if (dispatchContextId !== run.a2aContextId) {
+        await updateAgentRunA2AContextId(runId, dispatchContextId);
+      }
       const task = await client.sendTask({
         message: {
           role: "user",
           kind: "message",
           messageId: randomUUID(),
+          contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
         },
         configuration: { acceptedOutputModes: ["text"] },
