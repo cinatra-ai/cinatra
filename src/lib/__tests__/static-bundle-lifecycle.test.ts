@@ -178,6 +178,57 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
     expect(result.seededLive).toEqual([]);
   });
 
+  it("LEGACY stringly `static-bundle:` platform anchor row → idempotently REWRITTEN to the typed source (cinatra#792 cutover)", async () => {
+    // Clean cutover, no legacy-row reader shims: the retired encoding no longer
+    // matches isStaticBundleAnchorSource, so the platform-row ADOPTION branch
+    // source-switches it to the typed `type:"bundled"` shape (status preserved).
+    const legacyAnchor = row({
+      id: "iext_legacy",
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      status: "active",
+      source: {
+        type: "local",
+        path: "static-bundle:@cinatra-ai/bundled-connector",
+        resolvedCommitOrTreeHash: "bundled@0.1.0",
+      },
+    });
+    readInstalledExtensionsByPackageName.mockResolvedValue([legacyAnchor]);
+    const result = await runSeeder();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).toHaveBeenCalledTimes(1);
+    const [id, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(id).toBe("iext_legacy");
+    expect(newSource).toEqual({
+      type: "bundled",
+      packageName: "@cinatra-ai/bundled-connector",
+      version: "0.1.0",
+    });
+    expect(result.seededLive).toEqual(["@cinatra-ai/bundled-connector"]);
+  });
+
+  it("LEGACY stringly anchor TOMBSTONE (archived) → rewritten typed with status PRESERVED", async () => {
+    const legacyTombstone = row({
+      id: "iext_legacy_tomb",
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      status: "archived",
+      source: {
+        type: "local",
+        path: "static-bundle:@cinatra-ai/bundled-connector",
+        resolvedCommitOrTreeHash: "bundled@0.1.0",
+      },
+    });
+    readInstalledExtensionsByPackageName.mockResolvedValue([legacyTombstone]);
+    const result = await runSeeder();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).toHaveBeenCalledTimes(1);
+    expect(result.seededArchived).toEqual(["@cinatra-ai/bundled-connector"]);
+    expect(result.seededLive).toEqual([]);
+  });
+
   it("live org rows but no platform row → seeds a live anchor (matches effective state)", async () => {
     readInstalledExtensionsByPackageName.mockResolvedValue([row({ status: "active" })]);
     const result = await runSeeder();

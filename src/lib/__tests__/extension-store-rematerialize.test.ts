@@ -151,4 +151,59 @@ describe("rematerializeMissingInstalls", () => {
     expect(result.rebuilt).toEqual(["@cinatra-ai/sweep-fixture"]);
     expect(materialize).toHaveBeenCalledTimes(1);
   });
+
+  // cinatra#792 — the sweep runs the SHARED journal-gated selector
+  // (selectActiveDigest), so it can never rebuild a digest the loader's trust
+  // anchor would refuse.
+  describe("journal-gated activeDigest selection (cinatra#792)", () => {
+    const verdaccioSource = (activeDigest?: string) => ({
+      type: "verdaccio",
+      integrity: "sha512-real",
+      registryUrl: "https://registry.cinatra.ai",
+      version: "1.0.0",
+      ...(activeDigest ? { activeDigest } : {}),
+    });
+
+    it("rebuilds the row's activeDigest when the finalized journal digest confirms it", async () => {
+      const { deps, materialize } = makeDeps({
+        listRows: async () => [row({ source: verdaccioSource(DIGEST) })],
+        readJournalDigest: async () => DIGEST,
+      });
+      const result = await rematerializeMissingInstalls(deps);
+      expect(result.rebuilt).toEqual(["@cinatra-ai/sweep-fixture"]);
+      expect(materialize).toHaveBeenCalledTimes(1);
+    });
+
+    it("FAILS CLOSED (skip, no rebuild) when the row's activeDigest mismatches the journal digest", async () => {
+      const { deps, materialize } = makeDeps({
+        listRows: async () => [row({ source: verdaccioSource("e".repeat(128)) })],
+        readJournalDigest: async () => DIGEST,
+      });
+      const result = await rematerializeMissingInstalls(deps);
+      expect(result.rebuilt).toEqual([]);
+      expect(result.skipped).toEqual(["@cinatra-ai/sweep-fixture"]);
+      expect(materialize).not.toHaveBeenCalled();
+    });
+
+    it("FAILS CLOSED when the row carries an activeDigest but no finalized journal digest exists", async () => {
+      const { deps, materialize } = makeDeps({
+        listRows: async () => [row({ source: verdaccioSource(DIGEST) })],
+        readJournalDigest: async () => null,
+      });
+      const result = await rematerializeMissingInstalls(deps);
+      expect(result.rebuilt).toEqual([]);
+      expect(result.skipped).toEqual(["@cinatra-ai/sweep-fixture"]);
+      expect(materialize).not.toHaveBeenCalled();
+    });
+
+    it("a row WITHOUT activeDigest keeps the journal-digest fallback (legacy rows)", async () => {
+      const { deps, materialize } = makeDeps({
+        listRows: async () => [row({ source: verdaccioSource() })],
+        readJournalDigest: async () => DIGEST,
+      });
+      const result = await rematerializeMissingInstalls(deps);
+      expect(result.rebuilt).toEqual(["@cinatra-ai/sweep-fixture"]);
+      expect(materialize).toHaveBeenCalledTimes(1);
+    });
+  });
 });

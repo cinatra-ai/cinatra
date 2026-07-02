@@ -128,8 +128,44 @@ export async function rescanArtifactBridgeFromStore(
     return { registered, skippedNotActive };
   }
 
+  // cinatra#792 — MULTI-DIGEST NARROWING: with retention (#796) several digests
+  // of one package may legitimately be on disk. A package discovered at more
+  // than one digest registers ONLY its anchor-bound digest (the DB pins it);
+  // no anchor / a digest-unbound anchor with >1 digest = skip the package
+  // (fail closed — never register an arbitrary digest's object type). A
+  // single-digest package keeps the unchanged path, including the ungoverned
+  // (no-row) bundled/disk allowance (CG-1).
+  const digestCountByName = new Map<string, number>();
+  for (const rec of records) {
+    digestCountByName.set(rec.packageName, (digestCountByName.get(rec.packageName) ?? 0) + 1);
+  }
+  let boundDigestFor: ((packageName: string) => Promise<string | null>) | null = null;
+  if ([...digestCountByName.values()].some((n) => n > 1)) {
+    try {
+      const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
+      const resolveAnchor = await makeDefaultInstallAnchorResolver();
+      boundDigestFor = async (packageName: string) => (await resolveAnchor(packageName))?.digest ?? null;
+    } catch (err) {
+      console.warn(
+        "[artifact-bridge-rescan] anchor resolver unavailable — skipping multi-digest packages:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   for (const rec of records) {
     if (opts.onlyPackage && rec.packageName !== opts.onlyPackage) continue;
+    if ((digestCountByName.get(rec.packageName) ?? 0) > 1) {
+      const bound = boundDigestFor ? await boundDigestFor(rec.packageName) : null;
+      if (!bound || rec.declaredDigest !== bound) {
+        console.warn(
+          `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
+            `multiple store digests on disk and this one is not the anchor-bound digest ` +
+            `(${bound ?? "unbound"}) — fail closed`,
+        );
+        continue;
+      }
+    }
     // Read-only probe: only `kind:"artifact"` packages have a bridge type.
     if (!(await recordIsArtifactKind(rec.storeDir))) continue;
 

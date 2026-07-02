@@ -39,9 +39,7 @@ import { aggregateEffectiveStatusByPackageName } from "../canonical-store";
 import { deleteExtensionPermissions } from "../permissions-store";
 import { installExtensionManifest, transitionExtensionLifecycle } from "../lifecycle-primitive";
 import {
-  STATIC_BUNDLE_ANCHOR_PATH_PREFIX,
   isStaticBundleAnchorSource,
-  staticBundleAnchorPath,
   staticBundleAnchorSource,
   staticBundleAnchorVersion,
 } from "../static-bundle-anchor";
@@ -87,15 +85,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("static-bundle anchor provenance helpers (pure)", () => {
-  it("builds and recognizes the anchor source shape", () => {
+describe("static-bundle anchor provenance helpers (pure, typed — cinatra#792)", () => {
+  it("builds and recognizes the TYPED anchor source shape", () => {
     const source = staticBundleAnchorSource(PKG, "0.1.0");
     expect(source).toEqual({
-      type: "local",
-      path: `${STATIC_BUNDLE_ANCHOR_PATH_PREFIX}${PKG}`,
-      resolvedCommitOrTreeHash: "bundled@0.1.0",
+      type: "bundled",
+      packageName: PKG,
+      version: "0.1.0",
     });
-    expect(staticBundleAnchorPath(PKG)).toBe(`static-bundle:${PKG}`);
     expect(isStaticBundleAnchorSource(source)).toBe(true);
     expect(staticBundleAnchorVersion(source)).toBe("0.1.0");
   });
@@ -115,19 +112,24 @@ describe("static-bundle anchor provenance helpers (pure)", () => {
     expect(staticBundleAnchorVersion(orgRow().source)).toBeNull();
   });
 
-  it("fails closed on an unparseable bundled version", () => {
+  it("the RETIRED stringly `static-bundle:` local encoding is NO LONGER an anchor (clean cutover)", () => {
+    // A legacy row shaped this way must not match — the boot seeder's
+    // platform-row adoption branch rewrites it to the typed source instead.
+    const legacy = {
+      type: "local",
+      path: `static-bundle:${PKG}`,
+      resolvedCommitOrTreeHash: "bundled@0.1.0",
+    } as const;
+    expect(isStaticBundleAnchorSource(legacy)).toBe(false);
+    expect(staticBundleAnchorVersion(legacy)).toBeNull();
+  });
+
+  it("fails closed on a missing/empty bundled version", () => {
     expect(
       staticBundleAnchorVersion({
-        type: "local",
-        path: staticBundleAnchorPath(PKG),
-        resolvedCommitOrTreeHash: "garbage",
-      }),
-    ).toBeNull();
-    expect(
-      staticBundleAnchorVersion({
-        type: "local",
-        path: staticBundleAnchorPath(PKG),
-        resolvedCommitOrTreeHash: "bundled@",
+        type: "bundled",
+        packageName: PKG,
+        version: "",
       }),
     ).toBeNull();
   });

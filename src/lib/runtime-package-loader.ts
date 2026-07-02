@@ -32,7 +32,8 @@ import {
   type PackageStoreRecord,
   type ActivationResult,
 } from "@cinatra-ai/sdk-extensions";
-import { discoverStoreRecordsV2, realStoreFs } from "@/lib/extension-store-io";
+import { discoverStoreRecordsV2, realStoreFs, type PackageStoreRecordV2 } from "@/lib/extension-store-io";
+import { isExtensionStoreKind } from "@/lib/extension-package-store-core";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import {
   verifyMaterializedPackageIntegrity,
@@ -126,10 +127,35 @@ export async function loadRuntimePackageExtensions(
     : discovered;
   if (candidates.length === 0) return [];
 
+  // PER-PACKAGE ANCHOR NARROWING (cinatra#792). Multi-digest discovery is
+  // NORMAL once retention lands (#796): the store may legitimately hold the
+  // active digest plus retained prior digests for one package. So instead of
+  // refusing ambiguity wholesale, the loader resolves the trusted anchor ONCE
+  // per package name and narrows the discovered records to EXACTLY the
+  // anchor-bound digest:
+  //   - no anchor                        → refuse every record of the name;
+  //   - anchor kind (the canonical row's) contradicts a record's PATH kind
+  //     (`<root>/<kind>/...`)            → that record is refused (fail closed);
+  //   - anchor digest BOUND              → select the single record whose
+  //     declaredDigest matches; none on disk → refuse (a flat/undeclared-digest
+  //     record can never satisfy a bound anchor — same fail-closed as before);
+  //   - anchor digest UNBOUND (legacy)   → exactly one discovered digest may
+  //     proceed (the integrity/contentHash re-verify remains the backstop);
+  //     >1 digest with an unbound anchor → refuse (ambiguous, fail closed).
+  // The selected single record then runs the UNCHANGED integrity/signature/
+  // trust gates below.
+  const byName = new Map<string, PackageStoreRecordV2[]>();
+  for (const rec of candidates) {
+    const bucket = byName.get(rec.packageName);
+    if (bucket) bucket.push(rec);
+    else byName.set(rec.packageName, [rec]);
+  }
+
   // Trust filter BEFORE activation: a trusted DB anchor must resolve,
   // integrity must verify against THAT anchor (not the sidecar), and the
   // classifier must pass. Anything else is refused.
   const trusted: PackageStoreRecord[] = [];
+  const narrowed: PackageStoreRecordV2[] = [];
   const anchorByName = new Map<string, InstallTrustAnchor>();
   // Track which trusted records reached the `trusted-signed` tier — only those are
   // eligible for boot-time host DDL (the capability split): a
@@ -140,30 +166,60 @@ export async function loadRuntimePackageExtensions(
   const activationHosts = trustedActivationHosts();
   const bootstrapTrust = allowMarketplaceBootstrapTrust();
   const refused: string[] = [];
-  for (const rec of candidates) {
-    const anchor = await resolveInstallAnchor(rec.packageName);
+  for (const [packageName, recs] of byName) {
+    const anchor = await resolveInstallAnchor(packageName);
     if (!anchor) {
-      refused.push(`${rec.packageName}: no trusted install record`);
+      refused.push(`${packageName}: no trusted install record`);
       continue;
     }
+    // cinatra#792 — ANCHOR KIND BINDING. The V2 store is kind-segregated, so
+    // the canonical row's kind must agree with the record's path-derived kind;
+    // a contradiction (or an anchor kind outside the store enum) is refused.
+    const kindBound = recs.filter((r) => {
+      if (anchor.kind == null) return true; // unbound (legacy resolvers/tests)
+      if (!isExtensionStoreKind(anchor.kind) || anchor.kind !== r.kind) {
+        refused.push(
+          `${packageName}: install-anchor kind binding failed (canonical row kind ` +
+            `${JSON.stringify(anchor.kind)} != store path kind "${r.kind}") — refusing`,
+        );
+        return false;
+      }
+      return true;
+    });
+    if (kindBound.length === 0) continue;
     // cinatra#158 — ANCHOR DIGEST BINDING. With the append-only journal, a NEW
     // canonical source could (after a crash mid durable-restore) coexist with the
     // OLD `finalized` journal op. NEW bytes would verify against NEW source, so the
     // integrity/contentHash re-verify alone is NOT sufficient to refuse them. The
-    // finalized op records the tarball DIGEST of the install it anchored; a
-    // real-pipeline install is ALWAYS digest-pinned on disk (`<kind>/<slug>/<digest>/`
-    // → rec.declaredDigest). So when the anchor carries a digest we FAIL CLOSED on
-    // BOTH a mismatch AND a MISSING on-disk digest (a flat-layout record that claims
-    // a digest-bound anchor is suspect — never trust it; codex refute finding): a
-    // bound journal anchor must resolve to a digest-pinned dir naming the SAME
-    // install. A null anchor digest (legacy/test rows) is "unbound" → skip (the
-    // integrity/contentHash re-verify remains the backstop).
-    if (anchor.digest && anchor.digest !== rec.declaredDigest) {
-      refused.push(
-        `${rec.packageName}: install-anchor digest binding failed (journal anchor ${anchor.digest} != on-disk ${rec.declaredDigest ?? "(flat/none)"}) — refusing`,
-      );
-      continue;
+    // anchor digest (journal-gated `source.activeDigest` selection, cinatra#792)
+    // names the install the DB pins; a real-pipeline install is ALWAYS
+    // digest-pinned on disk (`<kind>/<slug>/<digest>/` → rec.declaredDigest). So a
+    // BOUND anchor selects exactly the matching record and FAILS CLOSED when none
+    // exists (a flat-layout record that claims a digest-bound anchor is suspect —
+    // never trust it). An UNBOUND anchor digest (legacy/test rows) proceeds only
+    // when the on-disk digest is unambiguous.
+    let rec: PackageStoreRecordV2;
+    if (anchor.digest) {
+      const match = kindBound.find((r) => r.declaredDigest === anchor.digest);
+      if (!match) {
+        refused.push(
+          `${packageName}: install-anchor digest binding failed (anchor ${anchor.digest} != on-disk ` +
+            `${kindBound.map((r) => r.declaredDigest ?? "(flat/none)").join(", ")}) — refusing`,
+        );
+        continue;
+      }
+      rec = match;
+    } else {
+      if (kindBound.length > 1) {
+        refused.push(
+          `${packageName}: ${kindBound.length} store digests on disk but the install anchor is ` +
+            `digest-unbound — refusing (ambiguous)`,
+        );
+        continue;
+      }
+      rec = kindBound[0];
     }
+    narrowed.push(rec);
     const integrityOk = await verifyMaterializedPackageIntegrity(rec, {
       trustedIntegrity: anchor.integrity,
       trustedContentHash: anchor.contentHash,
@@ -230,10 +286,13 @@ export async function loadRuntimePackageExtensions(
   // (runRuntimePackageActivation) refuses every record of a packageName that
   // appears more than once in the store — but it runs AFTER this migration
   // pass. Running migrations for an ambiguous name could execute DDL from a
-  // record that activation then refuses, so the same refusal applies here,
-  // computed over the full discovered candidate set.
+  // record that activation then refuses, so the same refusal applies here.
+  // cinatra#792: computed over the anchor-NARROWED set (at most one record per
+  // package name survives narrowing, so this is a defensive fence that should
+  // never fire) — computing it over the raw discovered candidates would refuse
+  // the legitimate multi-digest-retention case the narrowing just resolved.
   const candidateCountByName = new Map<string, number>();
-  for (const rec of candidates) {
+  for (const rec of narrowed) {
     candidateCountByName.set(rec.packageName, (candidateCountByName.get(rec.packageName) ?? 0) + 1);
   }
   const ambiguousNames = new Set(

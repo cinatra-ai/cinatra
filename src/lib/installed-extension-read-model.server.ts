@@ -243,8 +243,8 @@ export async function buildInstalledExtensionReadModel(
       deps.discoverRecords ??
       (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
     const records = await discover(storeRoot);
-    const record = records.find((r) => r.packageName === packageName) ?? null;
-    sourcePackageStoreRecordPresent = record !== null;
+    const candidates = records.filter((r) => r.packageName === packageName);
+    sourcePackageStoreRecordPresent = candidates.length > 0;
 
     const resolveTrustAnchor =
       deps.resolveTrustAnchor ??
@@ -253,6 +253,15 @@ export async function buildInstalledExtensionReadModel(
         return makeDefaultInstallAnchorResolver(actor.organizationId ?? null);
       })());
     const anchor = await resolveTrustAnchor(packageName);
+
+    // cinatra#792: with multi-digest retention (#796) several digests of one
+    // package may legitimately be on disk — evaluate the descriptive trust
+    // verdict against the ANCHOR-BOUND record (the digest the DB pins), never
+    // an arbitrary first match. A digest-unbound (legacy) anchor keeps the
+    // first-record behavior (its integrity re-verify is the backstop).
+    const record =
+      (anchor?.digest ? candidates.find((r) => r.declaredDigest === anchor.digest) : candidates[0]) ??
+      null;
 
     if (record && anchor) {
       const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;

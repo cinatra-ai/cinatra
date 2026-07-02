@@ -89,7 +89,30 @@ export type InstallPipelineDeps = {
     signature?: string | null;
     /** The verified materialization-plan closureHash (cinatra#181), if the package carried a plan. */
     closureHash?: string | null;
+    /**
+     * The store tarball digest to bind as the row's DB-authoritative
+     * `source.activeDigest` (cinatra#792) — `mat.digest` on the forward path,
+     * the CAPTURED prior digest on a durable-rollback re-record. null/undefined
+     * = no digest recorded (legacy prior sources) → selection falls back to
+     * the journal digest at read time. The default writer also mirrors the
+     * digest into the plain-text `current` store file (best-effort — the
+     * mirror is an ops/GC hint, never a selector).
+     */
+    digest?: string | null;
+    /** Store-root override threaded from the install input (the `current` mirror's root). */
+    storeRoot?: string;
   }) => Promise<void>;
+  /**
+   * FINALIZE-TIME CROSS-CHECK basis (cinatra#792): read back the canonical
+   * row's `source.activeDigest` for the (package, org) AFTER `recordProvenance`
+   * so the pipeline can assert row digest == journal digest BEFORE
+   * `finalizeInstallOp` — a torn/clobbered provenance write is refused instead
+   * of finalized (the throw routes into the existing restore path). Optional so
+   * existing unit tests can omit it (then no cross-check runs — the read-time
+   * journal gate in `selectActiveDigest` remains the backstop); the default
+   * factory always wires it.
+   */
+  readActiveDigest?: (packageName: string, orgId: string | null) => Promise<string | null>;
   /** Record the pending host-port grant request. */
   recordRequestedGrant: (input: { packageName: string; orgId: string | null; requestedPorts: string[] }) => Promise<void>;
   /** Approve a grant (auto-approve path for a `trusted-signed` package). requestedPorts is the mandatory subset basis. */
@@ -198,6 +221,8 @@ export type InstallPipelineDeps = {
     attestedSha256?: string;
     signature?: string | null;
     closureHash?: string | null;
+    /** The prior install's DB-authoritative digest (cinatra#792) — re-pinned on rollback. */
+    activeDigest?: string;
   } | null>;
   /**
    * Capture the CURRENT canonical row's persisted dependency edges for the
@@ -825,7 +850,31 @@ export async function installExtensionFromRegistry(
       ...(sha256 ? { attestedSha256: sha256 } : {}),
       ...(signature ? { signature } : {}),
       ...(closureHash ? { closureHash } : {}),
+      // cinatra#792: bind the DB-authoritative active digest at the outcome
+      // seam — the SAME `mat.digest` `beginInstallOp` journaled above, so the
+      // finalized journal digest confirms it at read time (selectActiveDigest).
+      digest: mat.digest,
+      ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
     });
+
+    // FINALIZE-TIME CROSS-CHECK (cinatra#792): the row's just-written
+    // `source.activeDigest` must equal the digest this op journaled, or we
+    // refuse to finalize (a torn `sourceSwitch` write, or a concurrent writer
+    // clobbering the row mid-install, must not be promoted to the anchor). The
+    // throw routes into the existing catch: the NEW op is terminalized and an
+    // update's captured prior state is restored. Read-time selection
+    // (`selectActiveDigest`) remains the enforcement backstop for anything
+    // this in-flight check cannot see.
+    if (deps.readActiveDigest) {
+      const rowDigest = await deps.readActiveDigest(input.packageName, input.orgId);
+      if (rowDigest !== mat.digest) {
+        throw new Error(
+          `install of ${input.packageName}@${resolvedVersion}: canonical row activeDigest ` +
+            `${rowDigest ?? "(absent)"} does not match this install's journaled digest ${mat.digest} ` +
+            `after recordProvenance — refusing to finalize (torn/clobbered provenance write).`,
+        );
+      }
+    }
 
     // EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
     // manifest's dependency edges (read EARLY above, fail-loud) land on the
@@ -937,6 +986,13 @@ export async function installExtensionFromRegistry(
             // cinatra#181: the prior install's closureHash MUST ride every restore —
             // sourceSwitchExtension replaces the WHOLE source object.
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
+            // cinatra#792: re-pin the OLD digest (row `activeDigest` + the
+            // `current` mirror). A legacy prior source without a recorded
+            // activeDigest falls back to the OLD finalized journal digest —
+            // the same value read-time selection would pick — so the mirror
+            // never stays pointed at the failed NEW digest.
+            digest: priorSource.activeDigest ?? priorOp?.digest ?? null,
+            ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
           });
         } catch (restoreErr) {
           emitDurableRestoreFailure(deps, {
@@ -1032,6 +1088,10 @@ export async function installExtensionFromRegistry(
             ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
             ...(priorSource.signature ? { signature: priorSource.signature } : {}),
             ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
+            // cinatra#792: re-pin the OLD digest (row `activeDigest` + the
+            // `current` mirror; journal-digest fallback for legacy sources).
+            digest: priorSource.activeDigest ?? priorOp?.digest ?? null,
+            ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
           });
         } catch (e) {
           recordFailure("provenance", e);
@@ -1397,9 +1457,32 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
           ...(p.attestedSha256 ? { attestedSha256: p.attestedSha256 } : {}),
           ...(p.signature ? { signature: p.signature } : {}),
           ...(p.closureHash ? { closureHash: p.closureHash } : {}),
+          // cinatra#792: the DB-authoritative active digest, written at the
+          // outcome seam (forward install AND durable-rollback re-record).
+          // Absent when the caller carried none (legacy prior source) — read-
+          // time selection then falls back to the journal digest.
+          ...(p.digest ? { activeDigest: p.digest } : {}),
         },
         { actor: { source: "runtime-installer" }, reason: `runtime install provenance @ ${p.version}` },
       );
+      // Mirror the digest into the plain-text `current` store file (cinatra#792)
+      // on EVERY activeDigest write — best-effort, never a selector/trust input.
+      const { mirrorCurrentDigestBestEffort } = await import("@/lib/extension-store-io");
+      await mirrorCurrentDigestBestEffort({
+        ...(p.storeRoot ? { dataRoot: p.storeRoot } : {}),
+        kind: target.kind,
+        packageName: p.packageName,
+        digest: p.digest,
+      });
+    },
+    // FINALIZE-TIME CROSS-CHECK basis (cinatra#792): the canonical row's
+    // just-written activeDigest at the SAME (package, org) scope.
+    readActiveDigest: async (packageName, orgId) => {
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      const target = pickSingleActiveRow(rows, orgId);
+      const src = target?.source;
+      if (!src || (src as { type?: string }).type !== "verdaccio") return null;
+      return (src as { activeDigest?: string }).activeDigest ?? null;
     },
     applyMigrations: async (i) => {
       const { applyExtensionMigrationsFromStore } = await import("@/lib/extension-migration-host");
@@ -1476,6 +1559,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         attestedSha256?: string;
         signature?: string;
         closureHash?: string;
+        activeDigest?: string;
       };
       return {
         registryUrl: v.registryUrl,
@@ -1485,6 +1569,9 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
         ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
         ...(v.signature ? { signature: v.signature } : {}),
         ...(v.closureHash ? { closureHash: v.closureHash } : {}),
+        // cinatra#792: the prior install's DB-authoritative digest — re-pinned
+        // (row + `current` mirror) by the durable rollback.
+        ...(v.activeDigest ? { activeDigest: v.activeDigest } : {}),
       };
     },
     // CAPTURE (#180): the prior canonical row's persisted dependency edges —

@@ -93,6 +93,11 @@ vi.mock("@/lib/extension-migration-host", () => ({
   // Validate-only preflight (#118): these fixtures declare no migrations.
   preflightExtensionMigrationsFromStore: vi.fn(async () => null),
 }));
+vi.mock("@/lib/extension-store-io", () => ({
+  // cinatra#792: the default recordProvenance mirrors the active digest into
+  // the `current` store file — hermetic no-op here (fs-free fixtures).
+  mirrorCurrentDigestBestEffort: vi.fn(async () => {}),
+}));
 
 import {
   installExtensionFromRegistry,
@@ -134,11 +139,23 @@ beforeEach(() => {
     integrity: "sha512-abc",
     contentHash: "ch",
   });
-  h.readInstalledExtensionsByPackageName.mockResolvedValue([
-    { id: "row-1", status: "active", organizationId: null },
-  ]);
-  h.pickSingleActiveRow.mockReturnValue({ id: "row-1", status: "active", organizationId: null });
-  h.sourceSwitchExtension.mockResolvedValue(undefined);
+  // Behave like a real (single-row) canonical store: sourceSwitchExtension
+  // PERSISTS the source onto the fixture row, so the pipeline's finalize-time
+  // activeDigest cross-check (cinatra#792) reads back what recordProvenance
+  // just wrote — exactly the live wiring.
+  const fixtureRow: { id: string; status: string; organizationId: string | null; kind: string; source: unknown } = {
+    id: "row-1",
+    status: "active",
+    organizationId: null,
+    kind: "connector",
+    source: null,
+  };
+  h.readInstalledExtensionsByPackageName.mockResolvedValue([fixtureRow]);
+  h.pickSingleActiveRow.mockReturnValue(fixtureRow);
+  h.sourceSwitchExtension.mockImplementation(async (_id: unknown, source: unknown) => {
+    fixtureRow.source = source;
+    return undefined;
+  });
 });
 
 afterEach(() => {

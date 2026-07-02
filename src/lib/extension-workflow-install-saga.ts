@@ -196,8 +196,19 @@ export type WorkflowInstallSagaDeps = {
   recordRequestedGrant: (input: { packageName: string; orgId: string | null; requestedPorts: string[] }) => Promise<void>;
   approveGrant: (input: { packageName: string; orgId: string | null; approvedPorts: string[]; requestedPorts: string[]; approvedBy: string }) => Promise<void>;
   /** Persist the REAL provenance (sha512 integrity + content hash + the additive
-   *  sha256 attestation) on the canonical row — LATE, just before finalize. */
-  recordProvenance: (input: { packageName: string; orgId: string | null; version: string; registryUrl: string; integrity: string; contentHash: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null }) => Promise<void>;
+   *  sha256 attestation) on the canonical row — LATE, just before finalize.
+   *  `digest` (cinatra#792) binds the row's DB-authoritative
+   *  `source.activeDigest` (mat.digest forward; the captured prior digest on a
+   *  failed-update restore); the default writer also mirrors it into the
+   *  plain-text `current` store file (best-effort, never a selector). */
+  recordProvenance: (input: { packageName: string; orgId: string | null; version: string; registryUrl: string; integrity: string; contentHash: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null; digest?: string | null }) => Promise<void>;
+  /** FINALIZE-TIME CROSS-CHECK basis (cinatra#792): read back the canonical
+   *  row's `source.activeDigest` AFTER `recordProvenance` so the saga asserts
+   *  row digest == this op's journaled digest BEFORE `finalizeInstallOp` — a
+   *  torn/clobbered provenance write routes into the compensation path instead
+   *  of finalizing. Optional so existing unit tests can omit it (read-time
+   *  journal gating remains the backstop); the default factory wires it. */
+  readActiveDigest?: (packageName: string, orgId: string | null) => Promise<string | null>;
   /** Read the materialized manifest's dependency edges (#180) — the DUAL-READ
    *  helper (`cinatra.dependencies` canonical-wins; legacy
    *  `cinatra.agentDependencies` projected; conflict/malformed = THROW,
@@ -222,7 +233,7 @@ export type WorkflowInstallSagaDeps = {
    *  the catch block re-records it so the canonical row keeps pointing at the
    *  still-live OLD install. Optional (omitted → no provenance restore); the
    *  default factory wires the canonical-store read. */
-  readCurrentSource?: (packageName: string, orgId: string | null) => Promise<{ registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null } | null>;
+  readCurrentSource?: (packageName: string, orgId: string | null) => Promise<{ registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string | null; closureHash?: string | null; activeDigest?: string } | null>;
   /** Capture the CURRENT canonical row's persisted dependency edges (#180)
    *  BEFORE the finalize seam overwrites them — on a failed UPDATE the catch
    *  block re-persists them (closure gates must read the live OLD install's
@@ -564,7 +575,25 @@ export async function installWorkflowExtensionSaga(
         ...(sha256 ? { attestedSha256: sha256 } : {}),
         ...(signature ? { signature } : {}),
         ...(closureHash ? { closureHash } : {}),
+        // cinatra#792: bind the DB-authoritative active digest at the outcome
+        // seam — the SAME digest `beginInstallOp` journaled for this attempt.
+        digest: mat.digest,
       });
+
+      // FINALIZE-TIME CROSS-CHECK (cinatra#792): the row's just-written
+      // activeDigest must equal the digest this op journaled, or the saga
+      // refuses to finalize (throw → inverse-order compensation + prior-state
+      // restore below). Read-time selection remains the backstop.
+      if (deps.readActiveDigest) {
+        const rowDigest = await deps.readActiveDigest(packageName, orgId);
+        if (rowDigest !== mat.digest) {
+          throw new Error(
+            `workflow install of ${packageName}@${version}: canonical row activeDigest ` +
+              `${rowDigest ?? "(absent)"} does not match this install's journaled digest ${mat.digest} ` +
+              `after recordProvenance — refusing to finalize (torn/clobbered provenance write).`,
+          );
+        }
+      }
 
       // 6.5 EDGE PERSISTENCE at the FINALIZE SEAM (#180): the
       // manifest edges (read at 1.6, fail-loud) land on the canonical row
@@ -624,6 +653,10 @@ export async function installWorkflowExtensionSaga(
               ...(priorSource.attestedSha256 ? { attestedSha256: priorSource.attestedSha256 } : {}),
               ...(priorSource.signature ? { signature: priorSource.signature } : {}),
               ...(priorSource.closureHash ? { closureHash: priorSource.closureHash } : {}),
+              // cinatra#792: re-pin the OLD digest (row activeDigest + the
+              // `current` mirror; the OLD finalized journal digest is the
+              // fallback for a legacy prior source with no recorded field).
+              digest: priorSource.activeDigest ?? existing?.digest ?? null,
             });
           } catch (restoreErr) {
             const reason = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
@@ -1183,9 +1216,27 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
           ...(p.attestedSha256 ? { attestedSha256: p.attestedSha256 } : {}),
           ...(p.signature ? { signature: p.signature } : {}),
           ...(p.closureHash ? { closureHash: p.closureHash } : {}),
+          // cinatra#792: the DB-authoritative active digest (outcome seam).
+          ...(p.digest ? { activeDigest: p.digest } : {}),
         },
         { actor: { source: "runtime-installer" }, reason: `workflow runtime install provenance @ ${p.version}` },
       );
+      // Mirror the digest into the plain-text `current` store file (cinatra#792)
+      // — best-effort, never a selector/trust input.
+      const { mirrorCurrentDigestBestEffort } = await import("@/lib/extension-store-io");
+      await mirrorCurrentDigestBestEffort({
+        kind: target.kind,
+        packageName: p.packageName,
+        digest: p.digest,
+      });
+    },
+    // FINALIZE-TIME CROSS-CHECK basis (cinatra#792).
+    readActiveDigest: async (packageName, orgId) => {
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      const target = pickSingleActiveRow(rows, orgId);
+      const src = target?.source;
+      if (!src || (src as { type?: string }).type !== "verdaccio") return null;
+      return (src as { activeDigest?: string }).activeDigest ?? null;
     },
     // FAILED-UPDATE RESTORE CAPTURES (#180): the prior canonical verdaccio
     // source + persisted dependency edges for the saga's (package, org) scope —
@@ -1195,7 +1246,7 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
       const target = pickSingleActiveRow(rows, orgId);
       const src = target?.source;
       if (!src || (src as { type?: string }).type !== "verdaccio") return null;
-      const v = src as { registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string; closureHash?: string };
+      const v = src as { registryUrl: string; version: string; integrity: string; contentHash?: string; attestedSha256?: string; signature?: string; closureHash?: string; activeDigest?: string };
       return {
         registryUrl: v.registryUrl,
         version: v.version,
@@ -1204,6 +1255,8 @@ export async function makeDefaultWorkflowInstallSagaDeps(): Promise<WorkflowInst
         ...(v.attestedSha256 ? { attestedSha256: v.attestedSha256 } : {}),
         ...(v.signature ? { signature: v.signature } : {}),
         ...(v.closureHash ? { closureHash: v.closureHash } : {}),
+        // cinatra#792: the prior install's DB-authoritative digest.
+        ...(v.activeDigest ? { activeDigest: v.activeDigest } : {}),
       };
     },
     readCurrentDependencies: async (packageName, orgId) => {

@@ -18,7 +18,7 @@ export type ExtensionLifecycleStatus = (typeof EXTENSION_LIFECYCLE_STATUSES)[num
 export const EXTENSION_OWNER_LEVELS = ["user", "team", "organization", "workspace", "platform"] as const;
 export type ExtensionOwnerLevel = (typeof EXTENSION_OWNER_LEVELS)[number];
 
-export const EXTENSION_SOURCE_TYPES = ["verdaccio", "github", "local"] as const;
+export const EXTENSION_SOURCE_TYPES = ["verdaccio", "github", "local", "bundled"] as const;
 export type ExtensionSourceType = (typeof EXTENSION_SOURCE_TYPES)[number];
 
 export type ExtensionSourceVerdaccio = {
@@ -65,6 +65,19 @@ export type ExtensionSourceVerdaccio = {
    * field — no SQL migration; legacy rows still validate.
    */
   closureHash?: string;
+  /**
+   * The DB-authoritative ACTIVE tarball digest (cinatra#792) — the 128-hex
+   * sha512 store digest (`<root>/<kind>/<slug>/<digest>/`) of the install this
+   * row currently pins. Written ONLY at the install pipeline/saga
+   * finalize/rollback OUTCOME seam (`recordProvenance`), mirrored to the
+   * plain-text `current` store file on every write. JOURNAL-GATED at read
+   * time: selection honors it ONLY when it equals the finalized install-op
+   * journal digest (`selectActiveDigest`) — a crash between the provenance
+   * write and the journal finalize can never leave this field outranking the
+   * journal. Absent on legacy rows (selection falls back to the journal digest
+   * alone). ADDITIVE JSONB field — no SQL migration.
+   */
+  activeDigest?: string;
 };
 
 export type ExtensionSourceGithub = {
@@ -81,7 +94,32 @@ export type ExtensionSourceLocal = {
   resolvedCommitOrTreeHash: string;
 };
 
-export type ExtensionSource = ExtensionSourceVerdaccio | ExtensionSourceGithub | ExtensionSourceLocal;
+/**
+ * A BUNDLED (image-compiled) package's typed provenance (cinatra#792) — the
+ * static-bundle lifecycle ANCHOR row's source shape. Replaces the retired
+ * stringly encoding (`type:"local"`, `path:"static-bundle:<name>"`,
+ * `resolvedCommitOrTreeHash:"bundled@<version>"`): provenance is now a
+ * first-class discriminant, so readers switch on `type` instead of parsing
+ * path prefixes.
+ *
+ * `digest` is the image-recorded content hash of the bundled payload —
+ * assigned when the build/seed pipeline records it (cinatra#795; staged
+ * deviation from the epic's non-optional wording: the generated static
+ * records carry no hash yet, and a placeholder value would be worse than an
+ * absent field). Absent = seeded before the image hash existed.
+ */
+export type ExtensionSourceBundled = {
+  type: "bundled";
+  packageName: string;
+  version: string;
+  digest?: string;
+};
+
+export type ExtensionSource =
+  | ExtensionSourceVerdaccio
+  | ExtensionSourceGithub
+  | ExtensionSourceLocal
+  | ExtensionSourceBundled;
 
 export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;
 export type DependencyEdgeType = (typeof DEPENDENCY_EDGE_TYPES)[number];
@@ -149,11 +187,23 @@ export function isExtensionSource(value: unknown): value is ExtensionSource {
     typeof x === "string" && x.length > 0 && !PROVENANCE_PLACEHOLDERS.has(x);
   switch (v.type) {
     case "verdaccio":
-      return str(v.registryUrl) && str(v.packageName) && str(v.version) && str(v.integrity);
+      return (
+        str(v.registryUrl) &&
+        str(v.packageName) &&
+        str(v.version) &&
+        str(v.integrity) &&
+        // `activeDigest` is OPTIONAL (additive, cinatra#792) — but when present
+        // it must be a real value, never an empty/placeholder string.
+        (v.activeDigest === undefined || str(v.activeDigest))
+      );
     case "github":
       return str(v.repo) && str(v.ref) && str(v.resolvedSha);
     case "local":
       return str(v.path) && str(v.resolvedCommitOrTreeHash);
+    case "bundled":
+      // `digest` is OPTIONAL until the build records the image content hash
+      // (cinatra#795) — but when present it must be a real value.
+      return str(v.packageName) && str(v.version) && (v.digest === undefined || str(v.digest));
     default:
       return false;
   }
@@ -183,6 +233,9 @@ export function validateExtensionSource(value: unknown): string[] {
       if (!str(v.integrity)) errors.push("verdaccio.integrity");
       // `attestedSha256` is OPTIONAL (additive attestation) — do NOT require it
       // here or legacy rows + the sha256-less registry path would fail to validate.
+      // `activeDigest` is OPTIONAL (additive, cinatra#792) — required to be a
+      // real value only when present.
+      if (v.activeDigest !== undefined && !str(v.activeDigest)) errors.push("verdaccio.activeDigest");
       break;
     case "github":
       if (!str(v.repo)) errors.push("github.repo");
@@ -192,6 +245,12 @@ export function validateExtensionSource(value: unknown): string[] {
     case "local":
       if (!str(v.path)) errors.push("local.path");
       if (!str(v.resolvedCommitOrTreeHash)) errors.push("local.resolvedCommitOrTreeHash");
+      break;
+    case "bundled":
+      if (!str(v.packageName)) errors.push("bundled.packageName");
+      if (!str(v.version)) errors.push("bundled.version");
+      // `digest` is OPTIONAL until the image content hash is recorded (#795).
+      if (v.digest !== undefined && !str(v.digest)) errors.push("bundled.digest");
       break;
     default:
       errors.push(`unknown source type '${String(v.type)}'`);

@@ -31,6 +31,8 @@ describe("resolveInstallAnchor (closes the runtime-loader trust loop)", () => {
       // cinatra#158: the anchor surfaces the finalized op's digest (null when the
       // test's readInstallOp returns no digest).
       digest: null,
+      // cinatra#792: the canonical row's kind (null — this row view omits it).
+      kind: null,
       closureHash: null,
     });
   });
@@ -318,7 +320,9 @@ describe("installExtensionFromRegistry — capability split (signed auto-grants;
     const { deps, calls } = fakeDeps({ resolveIntegrity: async () => ({ integrity: "sha512-abc", registryUrl: REGISTRY, sha256: "abc123" }) });
     await installExtensionFromRegistry({ packageName: "@cinatra-ai/foo", version: "1.0.0", orgId: null }, deps);
     expect(calls.provenance).toEqual([
-      { packageName: "@cinatra-ai/foo", orgId: null, version: "1.0.0", registryUrl: REGISTRY, integrity: "sha512-abc", contentHash: "ch", attestedSha256: "abc123" },
+      // cinatra#792: the forward provenance write binds the materialized digest
+      // as the row's DB-authoritative activeDigest.
+      { packageName: "@cinatra-ai/foo", orgId: null, version: "1.0.0", registryUrl: REGISTRY, integrity: "sha512-abc", contentHash: "ch", attestedSha256: "abc123", digest: "digest" },
     ]);
   });
 

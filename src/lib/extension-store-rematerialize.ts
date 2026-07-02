@@ -17,19 +17,19 @@ import "server-only";
 //   - rows with status active|locked and a REAL-pipeline verdaccio source
 //     (a recorded non-placeholder `integrity`) — the only provenance shape the
 //     default fetch seam can re-fetch;
-//   - only when the install-op journal has a FINALIZED digest for the row (the
-//     same anchor the loader binds to) AND that digest dir is absent on disk;
+//   - only when the SHARED journal-gated selector (`selectActiveDigest`,
+//     cinatra#792 — the SAME rule the loader's trust anchor uses: row
+//     `source.activeDigest` honored only when the finalized journal digest
+//     confirms it, else the journal digest alone, else fail closed) yields a
+//     digest for the row AND that digest dir is absent on disk — the sweep and
+//     the loader can never rebuild/select different digests;
 //   - closure packages (a recorded `closureHash`) are SKIPPED: re-executing a
 //     signed materialization plan requires the plan transport, which is an
 //     install-pipeline concern — a skipped closure package surfaces in the
 //     result for the operator to re-install.
-//
-// cinatra#792 NOTE: when the DB-authoritative `source.activeDigest` lands, this
-// sweep re-bases onto the SAME validated selector the loader uses
-// (journal-gated activeDigest > journal > skip), so the sweep and the loader
-// can never rebuild/select different digests.
 
 import { isExtensionStoreKind, storeDigestDirV2 } from "@/lib/extension-package-store-core";
+import { selectActiveDigest } from "@/lib/extension-install-anchor";
 
 /** Integrity values that mean "not materialized through the real pipeline". */
 const PLACEHOLDER_INTEGRITY = new Set(["", "dispatcher-install", "pending-resolution", "latest", "HEAD"]);
@@ -54,6 +54,8 @@ type SweepRow = {
     registryUrl?: string;
     version?: string;
     closureHash?: string;
+    /** The DB-authoritative active digest (cinatra#792), if recorded. */
+    activeDigest?: string;
   } | null;
 };
 
@@ -163,13 +165,29 @@ export async function rematerializeMissingInstalls(
       continue;
     }
 
-    let digest: string | null;
+    let journalDigest: string | null;
     try {
-      digest = await readJournalDigest(row.packageName, row.organizationId);
+      journalDigest = await readJournalDigest(row.packageName, row.organizationId);
     } catch {
-      digest = null;
+      journalDigest = null;
     }
-    if (!digest) continue; // no finalized anchor digest → nothing bindable to rebuild
+    // cinatra#792: the SHARED journal-gated selector (the same rule the
+    // loader's trust anchor applies). A row activeDigest the journal does not
+    // confirm FAILS CLOSED — the sweep must never rebuild a digest the loader
+    // would refuse to activate.
+    const selection = selectActiveDigest({
+      activeDigest: src.activeDigest ?? null,
+      journalDigest,
+    });
+    if (!selection.ok) {
+      console.warn(
+        `[extension-store-rematerialize] skipping ${row.packageName}: ${selection.reason}`,
+      );
+      result.skipped.push(row.packageName);
+      continue;
+    }
+    const digest = selection.digest;
+    if (!digest) continue; // no bindable anchor digest → nothing to rebuild
 
     let dir: string;
     try {

@@ -310,8 +310,18 @@ async function resolveTrustedRuntimeStoreRecord(
     deps.discoverRecords ??
     (async (root: string) => (await import("@/lib/extension-store-io")).discoverStoreRecordsV2(root, realStoreFs));
   const records = await discover(storeRoot);
-  const candidates = records.filter((r) => r.packageName === packageName);
+  let candidates = records.filter((r) => r.packageName === packageName);
   if (candidates.length === 0) return null;
+
+  // cinatra#792 — ANCHOR DIGEST NARROWING (same rule as the boot loader): a
+  // digest-BOUND anchor selects exactly the on-disk record it pins; none on
+  // disk → refuse (fail closed). Multi-digest discovery is normal once
+  // retention lands (#796); the anchor's integrity/contentHash re-verify below
+  // remains the backstop for a digest-unbound (legacy) anchor.
+  if (anchor.digest) {
+    candidates = candidates.filter((r) => r.declaredDigest === anchor.digest);
+    if (candidates.length === 0) return null;
+  }
 
   const verifyIntegrity = deps.verifyIntegrity ?? defaultVerifyIntegrity;
   const classifyTrust = deps.classifyTrust ?? classifyExtensionTrust;

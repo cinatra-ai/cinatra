@@ -20,61 +20,52 @@
 // tombstone decision is process-independent: any process that can run the
 // lifecycle primitive tombstones correctly without host wiring.
 //
+// cinatra#792: the anchor is the TYPED `source.type === "bundled"` discriminant
+// (`ExtensionSourceBundled`). The former stringly encoding — `type:"local"`
+// with `path:"static-bundle:<name>"` and the version packed into
+// `resolvedCommitOrTreeHash` as `bundled@<version>` — is RETIRED with no
+// legacy-row reader shims: a legacy anchor row no longer matches
+// `isStaticBundleAnchorSource`, so the boot seeder's platform-row adoption
+// branch idempotently rewrites it to the typed shape (status preserved).
+//
 // Pure helpers — no DB, no host imports; testable in isolation.
 
-import type { ExtensionSource, ExtensionSourceLocal } from "./canonical-types";
-
-/** `source.path` prefix that marks a row as the static-bundle anchor. */
-export const STATIC_BUNDLE_ANCHOR_PATH_PREFIX = "static-bundle:";
-
-/** `resolvedCommitOrTreeHash` prefix carrying the bundled package version. */
-const ANCHOR_VERSION_PREFIX = "bundled@";
-
-/** The anchor row's `source.path` for a bundled package. */
-export function staticBundleAnchorPath(packageName: string): string {
-  return `${STATIC_BUNDLE_ANCHOR_PATH_PREFIX}${packageName}`;
-}
+import type { ExtensionSource, ExtensionSourceBundled } from "./canonical-types";
 
 /**
- * Build the anchor row's source block. The bundled package version is recorded
- * in `resolvedCommitOrTreeHash` (as `bundled@<version>`) so the required-in-prod
- * verifier can check the pin against a CONCRETE version instead of treating the
- * anchor as an unverifiable non-registry source.
+ * Build the anchor row's typed source block. The bundled package version is a
+ * first-class field so the required-in-prod verifier checks the pin against a
+ * CONCRETE version instead of treating the anchor as an unverifiable
+ * non-registry source. `digest` (the image-recorded content hash) is assigned
+ * by the build/seed pipeline when it records one (cinatra#795).
  */
 export function staticBundleAnchorSource(
   packageName: string,
   version: string,
-): ExtensionSourceLocal {
+): ExtensionSourceBundled {
   return {
-    type: "local",
-    path: staticBundleAnchorPath(packageName),
-    resolvedCommitOrTreeHash: `${ANCHOR_VERSION_PREFIX}${version}`,
+    type: "bundled",
+    packageName,
+    version,
   };
 }
 
 /** Is this row's provenance the static-bundle anchor shape? */
 export function isStaticBundleAnchorSource(
   source: ExtensionSource | null | undefined,
-): source is ExtensionSourceLocal {
-  return (
-    !!source &&
-    source.type === "local" &&
-    typeof source.path === "string" &&
-    source.path.startsWith(STATIC_BUNDLE_ANCHOR_PATH_PREFIX)
-  );
+): source is ExtensionSourceBundled {
+  return !!source && source.type === "bundled";
 }
 
 /**
  * The bundled version recorded on an anchor row, or null when the source is
- * not an anchor (or carries no parseable version — fail closed: the
- * required-in-prod verifier then treats it as a mismatch, never a silent pass).
+ * not an anchor (or carries no version — fail closed: the required-in-prod
+ * verifier then treats it as a mismatch, never a silent pass).
  */
 export function staticBundleAnchorVersion(
   source: ExtensionSource | null | undefined,
 ): string | null {
   if (!isStaticBundleAnchorSource(source)) return null;
-  const h = source.resolvedCommitOrTreeHash;
-  if (typeof h !== "string" || !h.startsWith(ANCHOR_VERSION_PREFIX)) return null;
-  const version = h.slice(ANCHOR_VERSION_PREFIX.length);
-  return version.length > 0 ? version : null;
+  const version = source.version;
+  return typeof version === "string" && version.length > 0 ? version : null;
 }
