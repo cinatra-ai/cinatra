@@ -257,7 +257,7 @@ echo "    pre-migrate core__ ledger: $(printf '%s' "$PRE_LEDGER_CORE" | grep -c 
 
 echo "==> [candidate] run core migration chain (cinatra db migrate)"
 MIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs db migrate 2>&1)" \
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance db migrate 2>&1)" \
   || { printf '%s\n' "$MIGRATE_OUT"; fail "candidate core migration chain failed against the upgraded database."; }
 printf '%s\n' "$MIGRATE_OUT"
 
@@ -380,7 +380,7 @@ echo "    data preserved — 3/3 seeded rows survive, every (id, payload) byte-i
 # ── 5c. IDEMPOTENCY ──────────────────────────────────────────────────────────
 echo "==> assert: re-running the candidate chain is a no-op"
 REMIGRATE_OUT="$(SUPABASE_DB_URL="$DB_URL_HOST" SUPABASE_SCHEMA="$SCHEMA" \
-  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs db migrate 2>&1)"
+  node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance db migrate 2>&1)"
 printf '%s\n' "$REMIGRATE_OUT" | tail -2
 if ! printf '%s' "$REMIGRATE_OUT" | grep -qiE 'No migrations to run|up to date'; then
   fail "re-running the migration chain was NOT a no-op — idempotency broken."
