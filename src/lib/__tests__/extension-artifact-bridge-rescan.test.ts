@@ -11,11 +11,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { writeAllowedMock } = vi.hoisted(() => ({
+const { writeAllowedMock, hasLiveRowMock } = vi.hoisted(() => ({
   writeAllowedMock: vi.fn(async (): Promise<boolean> => true),
+  // cinatra#792 — the rescan's tri-state discriminator between a REFUSED anchor
+  // (a live canonical row exists but resolution returned null) and a genuinely
+  // ABSENT row. Default false = no live row = the ungoverned CG-1 allowance.
+  hasLiveRowMock: vi.fn(async (): Promise<boolean> => false),
 }));
 vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: writeAllowedMock,
+  hasLiveInstallRow: hasLiveRowMock,
 }));
 
 // cinatra#792 — the rescan resolves the trusted install anchor (digest +
@@ -70,6 +75,7 @@ describe("rescanArtifactBridgeFromStore (cinatra#661)", () => {
     objectTypeRegistry._clearForTests();
     writeAllowedMock.mockReset().mockResolvedValue(true);
     anchorMock.mockReset().mockResolvedValue(null);
+    hasLiveRowMock.mockReset().mockResolvedValue(false);
   });
   afterEach(() => {
     rmSync(storeRoot, { recursive: true, force: true });
@@ -161,6 +167,7 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 anchor narrowing", () =>
     objectTypeRegistry._clearForTests();
     writeAllowedMock.mockReset().mockResolvedValue(true);
     anchorMock.mockReset().mockResolvedValue(null);
+    hasLiveRowMock.mockReset().mockResolvedValue(false);
     // Two digests of the SAME package on disk (a retained prior + the active).
     writeStorePackage(storeRoot, "m", DIG_A, artifactPkgWithMime(PKG, "text/markdown"));
     writeStorePackage(storeRoot, "m", DIG_B, artifactPkgWithMime(PKG, "text/plain"));
@@ -218,6 +225,7 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 single-digest anchor kin
     objectTypeRegistry._clearForTests();
     writeAllowedMock.mockReset().mockResolvedValue(true);
     anchorMock.mockReset().mockResolvedValue(null);
+    hasLiveRowMock.mockReset().mockResolvedValue(false);
     // Exactly ONE digest of the package on disk, under artifact/.
     writeStorePackage(storeRoot, "s", DIG, artifactPkg(PKG));
   });
@@ -251,8 +259,21 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 single-digest anchor kin
 
   it("registers a single-digest artifact with no canonical row (CG-1 ungoverned allowance)", async () => {
     anchorMock.mockResolvedValue(null); // no row → ungoverned bundled/disk artifact
+    hasLiveRowMock.mockResolvedValue(false); // no live row proves the CG-1 case
     const res = await rescanArtifactBridgeFromStore({ storeRoot });
     expect(res.registered).toEqual([PKG]);
     expect(objectTypeRegistry.resolve(TYPE_ID)).not.toBeNull();
+  });
+
+  it("FAIL-CLOSED: a single-digest artifact whose anchor is REFUSED (null) while a live row EXISTS does not register", async () => {
+    // `null` from the resolver conflates "no row" with "row present but refused"
+    // (activeDigest/journal mismatch, ambiguous scope). A live canonical row
+    // proves the package is DB-governed → never register its unpinned digest
+    // through the CG-1 ungoverned allowance.
+    anchorMock.mockResolvedValue(null);
+    hasLiveRowMock.mockResolvedValue(true);
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
   });
 });

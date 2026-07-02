@@ -114,6 +114,30 @@ export async function isArtifactExtensionWriteAllowed(
   }
 }
 
+/**
+ * cinatra#792 — does ANY live (`active|locked`) canonical install row exist for
+ * this package, of ANY kind? The artifact-bridge rescan uses this to
+ * discriminate the two states the trusted-anchor resolver collapses into a
+ * single `null`:
+ *   - a genuinely UNGOVERNED (no-row) bundled/disk artifact → keeps the CG-1
+ *     allowance (register the disk type); vs
+ *   - a package the DB GOVERNS whose trusted anchor could not be resolved
+ *     (refused: activeDigest/journal mismatch, ambiguous multi-org scope, or a
+ *     row governing a different kind) → must fail closed, never register an
+ *     unpinned digest.
+ * A read error returns `false` (matching this module's fail-closed convention);
+ * the rescan's downstream `isArtifactExtensionWriteAllowed` gate — which also
+ * fail-closes `false` on a read error — is the backstop that skips the record.
+ */
+export async function hasLiveInstallRow(packageName: string): Promise<boolean> {
+  try {
+    const rows = await readInstalledExtensionsByPackageName(packageName);
+    return rows.some((r) => r.status === "active" || r.status === "locked");
+  } catch {
+    return false;
+  }
+}
+
 export async function canAccessArtifactExtension(
   packageName: string,
   actor: ActorContext | undefined | null,

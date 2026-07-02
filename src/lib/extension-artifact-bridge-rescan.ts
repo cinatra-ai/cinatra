@@ -36,7 +36,10 @@ import {
   type PackageStoreFs,
 } from "@cinatra-ai/sdk-extensions";
 import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
-import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
+import {
+  hasLiveInstallRow,
+  isArtifactExtensionWriteAllowed,
+} from "@/lib/artifacts/artifact-extension-access";
 
 /** Real node:fs surface for the pure store-discovery walk (read-only). */
 const realFs: PackageStoreFs = {
@@ -185,14 +188,30 @@ export async function rescanArtifactBridgeFromStore(
         );
         continue;
       }
-    } else if (anchor?.digest != null && rec.declaredDigest !== anchor.digest) {
-      // Single-digest, but the DB pins a DIFFERENT active digest than the one on
-      // disk → the on-disk digest is unpinned; never register it (fail closed).
-      // An unbound anchor (digest null) leaves the single unambiguous record
-      // registrable, as before.
+    } else if (anchor != null) {
+      // Single-digest WITH a resolved anchor: if the row pins a digest, it must
+      // match the one on disk. An unbound anchor (digest null) leaves the single
+      // unambiguous record registrable, as before.
+      if (anchor.digest != null && rec.declaredDigest !== anchor.digest) {
+        console.warn(
+          `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
+            `the canonical row pins digest ${anchor.digest} but only this unpinned digest is on disk — fail closed`,
+        );
+        continue;
+      }
+    } else if (await hasLiveInstallRow(rec.packageName)) {
+      // Single-digest, resolver returned NO anchor, BUT a live canonical row
+      // exists → the anchor was REFUSED (activeDigest/journal mismatch or
+      // ambiguous scope), not absent. `null` from the resolver conflates
+      // "no row" with "row present but refused"; a live row disambiguates it.
+      // Never register an unpinned digest for a package the DB governs — fail
+      // closed. (No live row → genuinely ungoverned bundled/disk artifact →
+      // CG-1 allowance, handled by the recordIsArtifactKind/write-allow gates
+      // below.)
       console.warn(
         `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
-          `the canonical row pins digest ${anchor.digest} but only this unpinned digest is on disk — fail closed`,
+          `a live canonical row exists but its trusted anchor could not be resolved ` +
+          `(refused/ambiguous) — fail closed`,
       );
       continue;
     }
