@@ -5,9 +5,9 @@
     {
       "packageName": "@cinatra-ai/assistant-skills",
       "repo": "cinatra-ai/assistant-skills",
-      "resolvedSha": "a7030f0d78f2f669759207806d88bafae83ed5d2",
-      "packageVersion": "0.1.0",
-      "treeSha256": "c64a3971d309f0f7c381c16c6525f72dc03a194a861f77a4b680a7ef5b12ac5b"
+      "resolvedSha": "bd6ef4ad2d867254bb524811378fa6479fd5e688",
+      "packageVersion": "0.1.2",
+      "treeSha256": "74329e1c9e1e9855b646ad70a96e943b396199836dee29a4aa0b529235490fa7"
     },
     {
       "packageName": "@cinatra-ai/author-agent",
@@ -40,16 +40,16 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "f95e07396d308cf4d20c6623671540a54dcf5dbe",
-      "packageVersion": "0.1.4",
-      "treeSha256": "b574182278257c7616a2b8d39fe556c1c50b7c1abb982c0772abcd0919b161e5"
+      "resolvedSha": "a1f325c2dd3ae3776dee4cd0fb9743a65a13116b",
+      "packageVersion": "0.1.5",
+      "treeSha256": "d06da924d7e0ed84d2a7a43ea0ee73ca789380593135382bcf555307bbdbe8cb"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "f9f6e38407e038c381850c3b64789ad266fbdb24",
-      "packageVersion": "0.1.5",
-      "treeSha256": "a578254fe35df0ef1c1ceb5460218047377291eab8cfda7c5dc342439243ece5"
+      "resolvedSha": "36a4beacb6aefb492a4641fa86b6026151266ecc",
+      "packageVersion": "0.1.7",
+      "treeSha256": "5504140131973211f9c53deb7156c4b2a2bafdfd21dc2cb977d4848149bb01d9"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",

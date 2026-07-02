@@ -276,7 +276,7 @@ docker run --rm --network "$NET" \
   -e CINATRA_ENCRYPTION_KEY="$ENCRYPTION_KEY" \
   -e CINATRA_RUNTIME_MODE=production \
   -e CINATRA_REPO_ROOT=/app \
-  "$IMAGE" node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs setup prod
+  "$IMAGE" node node_modules/@cinatra-ai/cinatra/bin/cinatra.mjs instance setup prod
 
 # ── 3. Boot the app container (Next standalone server.js) ────────────────────
 # Env mirrors the ops app-container contract (environments/cinatra_cinatra_app):
