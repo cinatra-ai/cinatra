@@ -331,8 +331,18 @@ function HitlApprovalCard({
   // operator]" → persist node got `runId: ""` → WayFlow task failed).
   // The ref only advances on real renderer→renderer transitions; null
   // is treated as "no change" so a flicker is a no-op.
+  //
+  // The key includes the interrupt's `fieldName` alongside xRenderer (#810):
+  // sequential per-field setup gates all reuse the SAME xRenderer
+  // (schema-field-fallback), so an xRenderer-only key never fires on a
+  // field→field advance (postTitle → blogPostUrl) and field 1's buffered
+  // value bleeds into field 2. fieldName is undefined outside the setup loop,
+  // so non-setup gate transitions keep their existing xRenderer-only behavior.
   const prevBufferKeyRef = useRef<string | null>(null);
-  const bufferKey = interruptContext?.xRenderer ?? null;
+  const bufferKey =
+    interruptContext != null
+      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
+      : null;
   if (
     bufferKey !== null &&
     prevBufferKeyRef.current !== null &&
@@ -695,7 +705,15 @@ function HitlApprovalCard({
     <>
         {RendererComponent && !isGenericObjectSchema ? (
           <RendererComponent
-            key={interruptContext.xRenderer}
+            // Keyed by xRenderer AND fieldName (#810): per-field setup gates
+            // share one xRenderer, and the setup loop advances fields without
+            // any RUN_STARTED/RESUME frame in between, so the card never
+            // unmounts. Without fieldName in the key the renderer (and its
+            // internal input state, e.g. SchemaFieldRenderer's localValue)
+            // survives the field advance and the previous field's typed text
+            // pre-fills the next field. fieldName is undefined for non-setup
+            // interrupts, so those keep the existing xRenderer-keyed identity.
+            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
             fieldName="hitl-field"
             schema={renderSchema}
             value={{
