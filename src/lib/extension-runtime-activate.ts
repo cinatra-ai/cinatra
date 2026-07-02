@@ -45,6 +45,7 @@ import {
 } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionActivateResult } from "@cinatra-ai/extensions";
 import { bumpActivationGeneration } from "@/lib/extension-activation-generation";
+import { isContainedRealpath } from "@/lib/fs-safety";
 
 /**
  * Targeted in-process activation for a SINGLE package, after its trusted anchor
@@ -1070,7 +1071,7 @@ async function importStoreModule(rec: PackageStoreRecord): Promise<ExtensionModu
     const { pathToFileURL } = await import("node:url");
     const { realpath } = await import("node:fs/promises");
     const [realAbs, realStore] = await Promise.all([realpath(abs), realpath(rec.storeDir)]);
-    if (realAbs !== realStore && !realAbs.startsWith(realStore + "/")) return null;
+    if (!isContainedRealpath(realAbs, realStore)) return null;
     const imported = await import(/* webpackIgnore: true */ /* @vite-ignore */ pathToFileURL(realAbs).href);
     return normalizeServerModule(rec.packageName, imported);
   } catch {

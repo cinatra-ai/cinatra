@@ -38,6 +38,7 @@ import {
   verifyMaterializedPackageIntegrity,
   type InstallTrustAnchor,
 } from "@/lib/extension-package-store";
+import { isContainedRealpath } from "@/lib/fs-safety";
 import { classifyExtensionTrust, untrustedActivationMode } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
@@ -334,7 +335,7 @@ export async function loadRuntimePackageExtensions(
         }
         throw error;
       }
-      if (realAbs !== realStore && !realAbs.startsWith(realStore + "/")) {
+      if (!isContainedRealpath(realAbs, realStore)) {
         throw new Error(
           `[runtime-package-loader] serverEntry for ${rec.packageName} resolves outside its package dir — refusing import`,
         );
