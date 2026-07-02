@@ -208,21 +208,73 @@ export type ReapStoreInput = {
 export type ReapStoreResult = {
   /** Digest dirs actually deleted. */
   deleted: OnDiskDigest[];
+  /**
+   * Digest dirs that were GC-eligible at the initial lease snapshot but SKIPPED
+   * because the immediate pre-delete re-check found a live lease (or the active
+   * digest) — i.e. a lease raced in AFTER the snapshot. Surfaced for the
+   * reaper's observability; empty in the common case.
+   */
+  skippedForRacedLease: OnDiskDigest[];
 };
+
+/**
+ * Targeted liveness probe for ONE `pkg@digest`: is there a live (unexpired)
+ * lease right now? Used by the reaper's per-entry TOCTOU re-check so it reads
+ * the FRESH state immediately before each delete, not the initial snapshot.
+ */
+async function hasLiveLease(
+  query: SnapshotLeaseQuery,
+  table: string,
+  packageName: string,
+  digest: string,
+  now?: string,
+): Promise<boolean> {
+  const rows =
+    now !== undefined
+      ? await query(
+          `SELECT 1 AS live FROM ${table}
+             WHERE package_name = $1 AND digest = $2 AND expires_at > $3 LIMIT 1`,
+          [packageName, digest, now],
+        )
+      : await query(
+          `SELECT 1 AS live FROM ${table}
+             WHERE package_name = $1 AND digest = $2 AND expires_at > now() LIMIT 1`,
+          [packageName, digest],
+        );
+  return rows.length > 0;
+}
 
 /**
  * The GC reaper: compose live leases + the pure GC selector + `rmDir` to delete
  * digest dirs that are neither the active digest nor under a live lease.
  * Injected `listOnDiskDigests` + `rmDir` keep it testable without fs; the
  * live-lease set is read through the (injectable) query.
+ *
+ * TOCTOU guard (cinatra#850): `acquireLease` is a plain INSERT with no
+ * coordination, so a lease acquired AFTER the initial `listActiveLeases`
+ * snapshot but BEFORE a given `rmDir` is absent from the snapshot — the old
+ * loop would delete a store dir out from under a just-started run. We now
+ * re-verify each candidate's lease liveness against a FRESH per-entry read
+ * (`hasLiveLease`) immediately before deleting it, shrinking the unavoidable
+ * window from "the whole delete loop" to the sub-millisecond check→`rmDir` gap.
+ * (The active-digest pointer is a caller-supplied snapshot the reaper cannot
+ * re-read, so activation races are out of scope here — see the residual below.)
+ *
+ * Residual (documented follow-up): fully closing the remaining check→`rmDir`
+ * gap needs either a DB lock spanning the read+fs-deletes (not expressible
+ * through the single-query injected surface without a connection/txn handle) or
+ * an acquire-side "verify the dir still exists after the INSERT" guard in the
+ * run that takes the lease. `reapStore`/`acquireLease` have no production caller
+ * yet; that wiring should add the acquire-side guard.
  */
 export async function reapStore(
   input: ReapStoreInput,
   deps?: SnapshotLeaseDeps,
 ): Promise<ReapStoreResult> {
+  const { query, schema } = await resolveDeps(deps);
+  const table = qualifiedTable(schema);
   const onDisk = await input.listOnDiskDigests();
-  const active = listActiveLeases({ now: input.now }, deps);
-  const liveLeases = await active;
+  const liveLeases = await listActiveLeases({ now: input.now }, deps);
   const leasedDigests = new Set<string>(
     liveLeases.map((lease) => digestKey(lease.packageName, lease.digest)),
   );
@@ -232,9 +284,17 @@ export async function reapStore(
     leasedDigests,
   });
   const deleted: OnDiskDigest[] = [];
+  const skippedForRacedLease: OnDiskDigest[] = [];
   for (const entry of eligible) {
+    // Re-verify liveness against a FRESH read immediately before deleting: a
+    // lease acquired after the snapshot above is absent from `leasedDigests`,
+    // so without this the dir would be reaped out from under a just-started run.
+    if (await hasLiveLease(query, table, entry.packageName, entry.digest, input.now)) {
+      skippedForRacedLease.push(entry);
+      continue;
+    }
     await input.rmDir(entry);
     deleted.push(entry);
   }
-  return { deleted };
+  return { deleted, skippedForRacedLease };
 }

@@ -20,9 +20,10 @@ import { BACKGROUND_JOB_NAMES, enqueueBackgroundJob } from "@/lib/background-job
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   readInstanceIdentity,
-  writeInstanceIdentity,
+  updateInstanceIdentityRegistries,
   type RemoteRegistryConnection,
 } from "@/lib/instance-identity-store";
+import type { InstanceIdentityCasOutcome } from "@/lib/instance-identity-cas";
 import {
   readRegistryCredential,
   writeRegistryCredential,
@@ -50,20 +51,83 @@ const NOT_FOUND_REASON = "Request not recognized by registry.";
 // -----------------------------------------------------------------------------
 
 /**
- * Persist `next` into `instance_identity.registries.remote`. Skips writing if
- * there is no identity row at all (defensive — should never happen because the
- * handler's first guard re-reads identity).
+ * Persist `next` into `instance_identity.registries.remote`, cross-process-safe
+ * via a row-level CAS with bounded retry (cinatra#850).
  *
- * Duplication of the action-side helper is intentional: the action file is
- * `"use server"` and importing from a worker context would inflate the bundle.
- * The function is 6 lines — duplication is cheap.
+ * This worker is a BullMQ replica racing the foreground network-config actions
+ * on the single `instance_identity` row. Two guarantees:
+ *   1. Whole-row safety: the CAS re-reads the fresh row each attempt, so the
+ *      sibling `registries.local` slot and every non-registries field are
+ *      carried forward — a concurrent write to a DIFFERENT field/slot is never
+ *      clobbered (the earlier lock-free whole-row overwrite, serialised only by
+ *      an in-process mutex, lost those across processes).
+ *   2. Same-slot state-awareness: the mutation only applies this poll's
+ *      transition if the freshly re-read `remote` slot is STILL the same
+ *      in-flight request validated at handler entry (matching `requestId`) AND
+ *      still `pending`. If the operator cancelled/disconnected it, a newer
+ *      request superseded it (different `requestId`), or a concurrent poll (or
+ *      the "Refresh status" action) already terminalised it, the poll becomes a
+ *      no-op — it never resurrects a cancelled request or reverts a newer
+ *      authoritative state (the classic same-slot lost update).
+ *
+ * `next` is always `{ ...remote, ... }` for the `remote` this handler validated,
+ * so `next.requestId` identifies the request under poll. A missing identity row
+ * is a no-op. "exhausted" under sustained contention is logged and NOT
+ * force-written; the next tick re-derives and re-persists.
+ *
+ * Documented residual: if approval was fetched and the npm token already written
+ * to Nango in the SAME tick that the operator cancelled, the connected-persist
+ * is skipped and that token is left orphaned in Nango (encrypted, not leaked).
+ * Cleaning it up is follow-up work (cinatra#899).
  */
-function persistRemote(next: RemoteRegistryConnection): void {
-  const identity = readInstanceIdentity();
-  if (!identity) return;
-  const registries = { ...(identity.registries ?? {}) };
-  registries.remote = next;
-  writeInstanceIdentity({ ...identity, registries });
+function persistRemote(next: RemoteRegistryConnection): InstanceIdentityCasOutcome {
+  const outcome = updateInstanceIdentityRegistries((registries) => {
+    const fresh = registries.remote;
+    const sameInflight =
+      !!fresh && fresh.requestId === next.requestId && fresh.status === "pending";
+    if (!sameInflight) return registries; // slot moved on — do not resurrect/clobber
+    return { ...registries, remote: next };
+  });
+  if (outcome === "exhausted" || outcome === "unparseable") {
+    console.warn(
+      `[registry-poll] persistRemote could not commit registries.remote (${outcome}); ` +
+        `a reconciliation poll will re-derive and re-persist.`,
+    );
+  }
+  return outcome;
+}
+
+/**
+ * Reconcile a TERMINAL-branch persist whose row-level CAS did not commit
+ * (cinatra#850). The terminal response branches (approved / denied / 404 / 410)
+ * have already performed an IRREVERSIBLE Nango credential delete and — unlike
+ * the pending / backoff branches — do NOT self-reschedule, so a lost CAS
+ * (sustained contention → "exhausted", or a corrupt row → "unparseable") would
+ * leave the slot silently stuck at `pending`. The caller must NOT treat that as
+ * success: enqueue ONE bounded reconciliation poll so a later tick (once
+ * contention has passed) re-derives the real terminal state instead of the loop
+ * going quiet. `swapped` (committed, incl. the benign slot-moved-on no-op) and
+ * `no-identity` (the row is gone — nothing to reconcile) need no action. A
+ * reconciliation that races a genuinely fresh attempt is dropped by the
+ * stale-attempt guard, so an extra poll is at worst one wasted HTTP round-trip.
+ */
+async function reconcileUncommittedTerminalPersist(
+  requestId: string,
+  outcome: InstanceIdentityCasOutcome,
+  expiresAt: string | null | undefined,
+): Promise<void> {
+  if (outcome === "swapped" || outcome === "no-identity") return;
+  console.warn(
+    "[registry-poll] terminal persist did not commit; scheduling reconciliation",
+    redactSensitive({ requestId, outcome }),
+  );
+  await reschedule(requestId, BACKOFF_START_MS, expiresAt).catch((err) => {
+    console.warn(
+      "[registry-poll] reconciliation reschedule failed",
+      redactSensitive({ requestId, error: err }),
+    );
+    return null;
+  });
 }
 
 /**
@@ -333,7 +397,7 @@ export async function runRegistryPollJob(
             redactSensitive(cleanupErr),
           );
         }
-        persistRemote({
+        const nangoFailOutcome = persistRemote({
           ...remote,
           status: "error",
           terminalReason: TOKEN_STORAGE_FAILED_REASON,
@@ -342,13 +406,18 @@ export async function runRegistryPollJob(
           "[registry-poll] nango-failure",
           redactSensitive({ requestId: payload.requestId, error: err }),
         );
+        await reconcileUncommittedTerminalPersist(
+          payload.requestId,
+          nangoFailOutcome,
+          remote.expiresAt,
+        );
         return;
       }
 
       // Nango write succeeded. NOW delete the request-secret.
       await deleteRegistryCredential(remote.namespace, "request-secret");
       const nowIso = new Date().toISOString();
-      persistRemote({
+      const connectedOutcome = persistRemote({
         ...remote,
         status: "connected",
         approvedAt: nowIso,
@@ -359,18 +428,32 @@ export async function runRegistryPollJob(
       });
       // Audit emission — event tag + requestId only. Never the token.
       console.log("[registry-poll] approved", { requestId: payload.requestId });
+      // The token is already in Nango but the connected-persist may not have
+      // landed under sustained CAS contention; reconcile so the slot doesn't
+      // stay stuck at `pending` (the token stays namespace-scoped in Nango,
+      // orphan-cleanup tracked in cinatra#899).
+      await reconcileUncommittedTerminalPersist(
+        payload.requestId,
+        connectedOutcome,
+        remote.expiresAt,
+      );
       return;
     }
 
     if (body.status === "denied") {
       const nowIso = new Date().toISOString();
       await deleteRegistryCredential(remote.namespace, "request-secret");
-      persistRemote({
+      const deniedOutcome = persistRemote({
         ...remote,
         status: "denied",
         deniedAt: nowIso,
         denyReason: body.reason ?? null,
       });
+      await reconcileUncommittedTerminalPersist(
+        payload.requestId,
+        deniedOutcome,
+        remote.expiresAt,
+      );
       return;
     }
 
@@ -396,11 +479,16 @@ export async function runRegistryPollJob(
 
   if (status === 404) {
     await deleteRegistryCredential(remote.namespace, "request-secret");
-    persistRemote({
+    const notFoundOutcome = persistRemote({
       ...remote,
       status: "error",
       terminalReason: NOT_FOUND_REASON,
     });
+    await reconcileUncommittedTerminalPersist(
+      payload.requestId,
+      notFoundOutcome,
+      remote.expiresAt,
+    );
     return;
   }
 
@@ -412,16 +500,20 @@ export async function runRegistryPollJob(
       body = {};
     }
     await deleteRegistryCredential(remote.namespace, "request-secret");
-    if (body.status === "expired") {
-      persistRemote({ ...remote, status: "expired" });
-    } else {
-      // "consumed" or unknown — terminal error.
-      persistRemote({
-        ...remote,
-        status: "error",
-        terminalReason: CONSUMED_REASON,
-      });
-    }
+    const goneOutcome =
+      body.status === "expired"
+        ? persistRemote({ ...remote, status: "expired" })
+        : // "consumed" or unknown — terminal error.
+          persistRemote({
+            ...remote,
+            status: "error",
+            terminalReason: CONSUMED_REASON,
+          });
+    await reconcileUncommittedTerminalPersist(
+      payload.requestId,
+      goneOutcome,
+      remote.expiresAt,
+    );
     return;
   }
 

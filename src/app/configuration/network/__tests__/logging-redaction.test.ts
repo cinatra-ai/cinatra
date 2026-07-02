@@ -47,10 +47,31 @@ vi.mock("@/lib/auth-session", () => ({
     user: { id: "u", email: "operator@example.com" },
   })),
 }));
-vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(),
-  writeInstanceIdentity: vi.fn(),
-}));
+vi.mock("@/lib/instance-identity-store", () => {
+  const readInstanceIdentity = vi.fn();
+  const writeInstanceIdentity = vi.fn();
+  // cinatra#850: registry-slot persistence now flows through a row-level-CAS
+  // wrapper (`updateInstanceIdentityRegistries`). The handler/action behavioral
+  // contract is unchanged — each path still ends in ONE merged-identity persist
+  // — so this mock shims that wrapper to delegate to the `writeInstanceIdentity`
+  // sink these suites already assert against (re-read fresh, apply the caller's
+  // registries mutation, persist). The real CAS engine (bounded retry,
+  // byte-preservation, legacy-shim derivation) is unit-tested directly in
+  // `src/lib/__tests__/instance-identity-cas.test.ts`.
+  const updateInstanceIdentityRegistries = vi.fn(
+    (mutate: (r: Record<string, unknown>) => Record<string, unknown>) => {
+      const current = readInstanceIdentity() as
+        | { registries?: Record<string, unknown> }
+        | null
+        | undefined;
+      if (!current) return "no-identity";
+      const nextRegistries = mutate(current.registries ?? {});
+      writeInstanceIdentity({ ...current, registries: nextRegistries });
+      return "swapped";
+    },
+  );
+  return { readInstanceIdentity, writeInstanceIdentity, updateInstanceIdentityRegistries };
+});
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: vi.fn(),
 }));

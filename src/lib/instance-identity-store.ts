@@ -37,6 +37,11 @@ import {
 import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
 import { decryptSecret, encryptSecret } from "@/lib/instance-secrets";
 import { withInstanceIdentityWriteLock } from "@/lib/instance-identity-write-lock";
+import {
+  casUpdateInstanceIdentityRow,
+  type InstanceIdentityCasDeps,
+  type InstanceIdentityCasOutcome,
+} from "@/lib/instance-identity-cas";
 import { quotePostgresIdentifier, runPostgresQueriesSync } from "@/lib/postgres-sync";
 
 // -----------------------------------------------------------------------------
@@ -632,6 +637,67 @@ export function compareAndSwapInstanceIdentity(
   expectedRaw: string,
 ): boolean {
   return compareAndSwapMetadataValueFromDatabase(METADATA_KEY, next, expectedRaw);
+}
+
+/** The non-optional shape of `InstanceIdentity.registries` (both slots optional). */
+export type InstanceRegistries = NonNullable<InstanceIdentity["registries"]>;
+
+/**
+ * Atomically update ONLY the `registries` sub-object of the instance-identity
+ * row, cross-process-safe via row-level CAS with bounded retry (cinatra#850).
+ *
+ * The lost-update bug this closes: the registry-poll background worker and the
+ * foreground network-config actions each persisted `registries` with a
+ * lock-free whole-row read-modify-write, serialised only by an IN-PROCESS mutex
+ * — so a worker replica and a server request raced and silently clobbered each
+ * other. Here every write is a byte-equal CAS against the exact snapshot it was
+ * derived from; a concurrent commit to ANY field forces a re-read + re-apply
+ * instead of a lost update, across processes/replicas.
+ *
+ * `mutateRegistries` receives the CURRENT registries derived from the freshly
+ * re-read row EXACTLY as `readInstanceIdentity()` would (so a legacy row whose
+ * slots are inferred from top-level `registryUrl`/token fields is preserved, not
+ * dropped) and returns the next registries. Every OTHER field is carried forward
+ * byte-for-byte from the snapshot.
+ *
+ * Bypassing `writeInstanceIdentity()` (durable-field merge + namespace-freeze
+ * guard) is safe: untouched fields are preserved verbatim and `instanceNamespace`
+ * is never mutated, so the freeze invariant cannot be violated. A concurrent
+ * durable-field change flips the CAS bytes and is correctly re-merged on retry.
+ *
+ * Outcomes: "swapped" on success; "aborted" for a row with no usable namespace
+ * (mirrors the `readInstanceIdentity()` null-guard); "exhausted" under sustained
+ * contention — WITHOUT any clobbering fallback, so the "no lost update"
+ * guarantee holds (callers log; the worker self-heals on its next tick).
+ *
+ * NOTE (scope, cinatra#850): this closes the race AMONG the registry-poll worker
+ * and the network-config registry actions. Other whole-row writers that also
+ * touch registries-adjacent state via `writeInstanceIdentity({ ...identity })`
+ * after an await (marketplace publish/attach, vendor-application, setup) retain
+ * their pre-existing narrow re-read→write window and are a separate follow-up;
+ * they are not converted here.
+ *
+ * `deps` is injectable for unit tests; production callers omit it.
+ */
+export function updateInstanceIdentityRegistries(
+  mutateRegistries: (current: InstanceRegistries) => InstanceRegistries,
+  deps?: Partial<InstanceIdentityCasDeps>,
+): InstanceIdentityCasOutcome {
+  const resolved: InstanceIdentityCasDeps = {
+    readRawSnapshot: deps?.readRawSnapshot ?? readRawInstanceIdentitySnapshot,
+    compareAndSwap: deps?.compareAndSwap ?? compareAndSwapInstanceIdentity,
+    onSwapped: deps?.onSwapped ?? invalidateInstanceIdentityCache,
+  };
+  return casUpdateInstanceIdentityRow(resolved, (parsed) => {
+    const namespace = (parsed.instanceNamespace ?? parsed.vendorName) as
+      | string
+      | undefined;
+    if (!namespace) return null; // no usable identity — decline to write
+    const current = (deriveRegistriesShim(parsed, namespace) ??
+      {}) as InstanceRegistries;
+    const nextRegistries = mutateRegistries({ ...current });
+    return { ...parsed, registries: nextRegistries };
+  });
 }
 
 /**

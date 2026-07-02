@@ -80,6 +80,14 @@ export default defineConfig({
         __dirname,
         "../../src/lib/instance-identity-write-lock.ts",
       ),
+      // @/lib/instance-identity-cas — pure, IO-free row-level CAS retry engine
+      // imported by instance-identity-store.ts (cinatra#850). Self-contained (no
+      // further @/ deps), but the specifier must resolve for the store module —
+      // pulled in transitively via mcp/handlers.ts — to load in this sandbox.
+      "@/lib/instance-identity-cas": path.join(
+        __dirname,
+        "../../src/lib/instance-identity-cas.ts",
+      ),
       // @/lib/postgres-sync — synchronous Postgres query runner used by
       // instance-identity-store. Tests don't issue real queries (the @/lib/database
       // stub above is the no-op), but the module must resolve.

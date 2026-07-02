@@ -26,3 +26,25 @@ export function getPostgresConnectionString(): string {
 export function ensurePostgresSchema(): void {
   // noop — schema provisioning is a no-op in unit tests
 }
+
+// cinatra#850: src/lib/instance-identity-store.ts STATICALLY imports these two
+// row-level-CAS helpers from @/lib/database. The store is pulled transitively
+// into root-level vitest runs (e.g. via src/mcp/handlers.ts in the
+// packages/extensions invariants sandbox, which aliases @/lib/database → this
+// stub), so a missing export makes the store module fail resolution/
+// instantiation. ADD — never replace the helpers above. Inert test-safe
+// versions: the store's DEFAULT CAS deps call these, but every unit test
+// injects fakes, so the production DB path is exercised via the real
+// src/lib/database in integration tests, never through this stub.
+export function readRawMetadataStringFromDatabase(_key: string): string | null {
+  // No row in the stub → the store's CAS engine short-circuits at "no-identity".
+  return null;
+}
+export function compareAndSwapMetadataValueFromDatabase(
+  _key: string,
+  _value: unknown,
+  _expectedRaw: string,
+): boolean {
+  // Never reached in unit tests (readRaw above returns null first); inert.
+  return false;
+}

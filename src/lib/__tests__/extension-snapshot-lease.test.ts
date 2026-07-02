@@ -28,6 +28,23 @@ type Row = {
 function fakeDb(serverNowMs: number) {
   const rows = new Map<string, Row>();
   let idSeq = 0;
+  // Fired ONCE, right after the first list-all-active-leases SELECT computes its
+  // snapshot but BEFORE it returns — models a lease acquired in the reaper's
+  // snapshot→delete gap (the #850 TOCTOU).
+  let onFirstListActive: (() => void) | null = null;
+
+  const insertLive = (packageName: string, digest: string, ttlMs: number): string => {
+    const id = `lease-${++idSeq}`;
+    rows.set(id, {
+      id,
+      package_name: packageName,
+      digest,
+      lease_holder: `injected-${id}`,
+      acquired_at: String(serverNowMs),
+      expires_at: String(serverNowMs + ttlMs),
+    });
+    return id;
+  };
 
   const query = async <T,>(text: string, values?: readonly unknown[]): Promise<T[]> => {
     const v = values ?? [];
@@ -35,17 +52,8 @@ function fakeDb(serverNowMs: number) {
 
     if (t.startsWith("INSERT")) {
       // INSERT (package_name $1, digest $2, lease_holder $3, expires_at now()+ $4ms)
-      const ttlMs = Number(v[3]);
-      const id = `lease-${++idSeq}`;
-      const row: Row = {
-        id,
-        package_name: String(v[0]),
-        digest: String(v[1]),
-        lease_holder: String(v[2]),
-        acquired_at: String(serverNowMs),
-        expires_at: String(serverNowMs + ttlMs),
-      };
-      rows.set(id, row);
+      const id = insertLive(String(v[0]), String(v[1]), Number(v[3]));
+      rows.get(id)!.lease_holder = String(v[2]);
       return [{ id }] as T[];
     }
 
@@ -55,16 +63,40 @@ function fakeDb(serverNowMs: number) {
     }
 
     if (t.startsWith("SELECT")) {
+      const targeted = /package_name\s*=\s*\$1/.test(text);
+      if (targeted) {
+        // hasLiveLease: WHERE package_name=$1 AND digest=$2 AND expires_at > ($3 | now())
+        const cutoffMs = /\$3/.test(text) ? Date.parse(String(v[2])) : serverNowMs;
+        const match = [...rows.values()].filter(
+          (r) =>
+            r.package_name === String(v[0]) &&
+            r.digest === String(v[1]) &&
+            Number(r.expires_at) > cutoffMs,
+        );
+        return match as T[];
+      }
       // listActiveLeases: WHERE expires_at > ($1 | now())
       const cutoffMs = /\$1/.test(text) ? Date.parse(String(v[0])) : serverNowMs;
       const live = [...rows.values()].filter((r) => Number(r.expires_at) > cutoffMs);
+      if (onFirstListActive) {
+        const hook = onFirstListActive;
+        onFirstListActive = null;
+        hook();
+      }
       return live as T[];
     }
 
     throw new Error(`unexpected SQL: ${text}`);
   };
 
-  return { query: query as SnapshotLeaseDeps["query"], rows };
+  return {
+    query: query as SnapshotLeaseDeps["query"],
+    rows,
+    insertLive,
+    onFirstListActive: (fn: () => void) => {
+      onFirstListActive = fn;
+    },
+  };
 }
 
 const NOW = 1_000_000;
@@ -176,5 +208,38 @@ describe("reapStore", () => {
     );
     expect(result.deleted).toEqual([]);
     expect(removed).toEqual([]);
+  });
+
+  it("does NOT reap a digest that acquires a live lease AFTER the snapshot read (TOCTOU, #850)", async () => {
+    const db = fakeDb(NOW);
+    const deps: SnapshotLeaseDeps = { query: db.query };
+
+    // Model a just-started run acquiring a lease on "raced" in the gap AFTER the
+    // reaper's initial listActiveLeases snapshot but BEFORE its per-entry
+    // re-check. Without the re-check, "raced" (eligible from the empty snapshot)
+    // would be deleted out from under the run.
+    db.onFirstListActive(() => db.insertLive(PKG, "raced", 10_000));
+
+    const onDisk: OnDiskDigest[] = [
+      { packageName: PKG, digest: "raced" }, // eligible at snapshot; leased mid-reap
+      { packageName: PKG, digest: "truly-orphan" }, // eligible, never leased
+    ];
+    const removed: OnDiskDigest[] = [];
+    const result = await reapStore(
+      {
+        listOnDiskDigests: async () => onDisk,
+        activeDigests: new Set<string>(),
+        rmDir: async (entry) => {
+          removed.push(entry);
+        },
+      },
+      deps,
+    );
+
+    // The raced dir is protected by the fresh per-entry re-check; only the
+    // truly-unleased orphan is deleted.
+    expect(result.deleted).toEqual([{ packageName: PKG, digest: "truly-orphan" }]);
+    expect(result.skippedForRacedLease).toEqual([{ packageName: PKG, digest: "raced" }]);
+    expect(removed).toEqual([{ packageName: PKG, digest: "truly-orphan" }]);
   });
 });
