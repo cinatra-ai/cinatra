@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-02
+
+This release makes model-backed connectors runtime-configurable, refreshes the marketplace card experience, and hardens the production install path.
+
+### Added
+
+- **Runtime-configurable LLM connectors.** Model-backed connectors now render their setup surface from a declarative configuration schema, so an admin configures API keys, default models, and connector options from the connector's own page — no rebuild required.
+
+### Changed
+
+- **Redesigned marketplace cards.** Extension cards in the marketplace were redesigned for clearer status, vendor, and installation actions.
+
+### Fixed
+
+- **Actionable install failures.** Extension install and update failures now surface the concrete, actionable reason instead of a misleading generic message, so a failed install points at the real next step.
+- **Production install hardening.** The self-hosting production install path was hardened so a fresh production install comes up cleanly, matching the local development install experience.
+
+### Security
+
+- **Release safety checks.** Automated publish and deploy jobs now verify that the target version is approved for release, reducing the risk of accidental or premature releases.
+
 ## [0.1.5] - 2026-06-30
 
 This release makes installed extensions fully hot-installable on a running instance and resolves them at runtime instead of from build-time static maps, alongside connector UX and developer-experience fixes.
@@ -159,7 +180,8 @@ The first public open source release of Cinatra, the open source AI workspace.
 - A four-tier ownership model (user, team, organization, workspace) and projects as bounded spaces for related work.
 - A five-audience documentation set: User, Admin, Hosting, Developer, and MCP.
 
-[Unreleased]: https://github.com/cinatra-ai/cinatra/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/cinatra-ai/cinatra/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.6
 [0.1.5]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.5
 [0.1.4]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.4
 [0.1.3]: https://github.com/cinatra-ai/cinatra/releases/tag/v0.1.3
