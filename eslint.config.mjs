@@ -255,6 +255,118 @@ function dynamicBansFor(...patternGroups) {
   return restrictions;
 }
 
+// First-party extension boundary (cinatra#803): extensions under
+// extensions/** share the app's `@/*` tsconfig alias while they live in the
+// monorepo, so a stray `@/components/...` import silently couples an
+// extension to APP-PRIVATE modules. Extensions must consume the portable
+// sdk-ui primitives (`@cinatra-ai/sdk-ui/marketplace`, PageHeader / Button /
+// SectionHeader / ConnectorSettingsDialog) or their OWN vendored copies
+// (scripts/extensions/vendor-extension-primitives.mjs) — never the app tree.
+// STATIC-import ban only (documented): the dynamic-loader mirror would need
+// per-zone no-restricted-syntax restatements across the extension surface;
+// the realpath/package-boundary build gates already cover the dynamic path.
+// NOTE: the ui-design-system-gate CI job lints WITHOUT extensions/ checked
+// out (clone-extensions is not part of that job), so this layer enforces in
+// local / full lints; it still rides the same GATED rule id.
+const APP_ALIAS_BAN = [
+  {
+    group: ["@/*"],
+    message:
+      "extensions must not import app-private modules via the `@/*` alias — use @cinatra-ai/sdk-ui (marketplace subpath) or the extension's own vendored primitives.",
+  },
+];
+
+// Arbitrary-value className bans (cinatra#803). The design system expresses
+// color through semantic tokens (text-foreground / bg-surface /
+// text-muted-foreground / …) and the type ramp through named @theme tokens
+// (text-page-title-* / text-badge-* / tracking-kicker / …), so arbitrary
+// bracket values for COLOR and TYPE are banned outside the carve-outs:
+//   - the vendored shadcn primitives (**/components/ui/**, **/src/ui/** —
+//     already outside the RAW_JSX layers),
+//   - packages/sdk-ui (the shared components own the raw values BEHIND the
+//     named tokens),
+//   - test files (they assert class strings),
+//   - the shrink-only TYPE_ARBITRARY_MIGRATION_ALLOWLIST below.
+// LAYOUT arbitraries (w-[…], gap-[…], calc()) stay legitimate and ungated:
+// a warn lane cannot ride no-restricted-syntax next to these error selectors
+// (one severity per file-set) and a custom rule id would not be counted by
+// the ui-design-system-gate's GATED set.
+// Matching is bare string Literals so cva()/cn() module-level class lists are
+// covered too; template literals and .ts HTML-string builders knowingly
+// escape (the same static-analysis limitation the dynamic-loader mirrors
+// document above).
+const TYPE_BANS = [
+  {
+    selector:
+      "Literal[value=/(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()/]",
+    message:
+      "Arbitrary color value in a class string — use the semantic color tokens (text-foreground, bg-surface, text-muted-foreground, border-line, …) from @cinatra-ai/design.",
+  },
+  {
+    selector:
+      "Literal[value=/(^|[^a-zA-Z0-9_-])dark:[a-z-]*:?(text|bg|border|ring|fill|stroke|divide|outline|decoration|accent)-/]",
+    message:
+      "Manual dark: color override — the semantic tokens adapt to dark mode through the cascade; style with the token utilities instead of per-theme colors.",
+  },
+  {
+    // `text-[length:inherit]` stays allowed (inherit is not an arbitrary
+    // value — it defers to the cascade); every OTHER `text-[…]`, including
+    // an explicit `text-[length:12px]`, is banned so `length:` cannot be
+    // used as a bypass prefix.
+    selector:
+      "Literal[value=/(^|[^a-zA-Z0-9_-])text-\\[(?!length:inherit\\])/]",
+    message:
+      "Arbitrary text-[…] font size — use the named type-scale tokens (text-page-title-{sm,md,lg}, text-listing-title, text-badge-xs, text-badge-2xs) or the standard Tailwind sizes. See cinatra#886 for the migration of pre-existing sites.",
+  },
+  {
+    selector:
+      "Literal[value=/(^|[^a-zA-Z0-9_-])tracking-\\[/]",
+    message:
+      "Arbitrary tracking-[…] letter-spacing — use the named tracking tokens (tracking-title-tight, tracking-kicker, tracking-kicker-wide, tracking-page-label). See cinatra#886 for the migration of pre-existing sites.",
+  },
+];
+
+// Shrink-only allowlist (cinatra#886): files that still carry PRE-EXISTING
+// arbitrary type values. They keep every other JSX-layer ban but skip
+// TYPE_BANS until migrated — migration is tracked in cinatra#886 (it needs
+// the app-cn tailwind-merge extension, which needs the vendored-primitive
+// re-vendor cascade, plus per-site normalization decisions). NEVER add a
+// file here for new code — migrate to the named tokens instead.
+const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
+  "src/app/configuration/workspace/page.tsx",
+  "src/app/configuration/workspace/members/page.tsx",
+  "src/app/configuration/permissions/page.tsx",
+  "src/app/configuration/approvals/page.tsx",
+  "src/app/design-fixtures/primitive-row.tsx",
+  "src/app/design-fixtures/token-swatches.tsx",
+  "src/app/design-fixtures/sidebar-fixture.tsx",
+  "src/app/notifications/notifications-archive-body.tsx",
+  "src/components/marketplace-readme-section.tsx",
+  "src/components/list-controls.tsx",
+  "src/components/scope-badge.tsx",
+  "src/components/app-sidebar.tsx",
+  "src/components/extension-card.tsx",
+  "src/components/marketplace-detail-header.tsx",
+  "src/components/visibility-badge.tsx",
+  "src/components/workflows/workflow-task-detail.tsx",
+  "src/components/workflows/workflow-editable-title.tsx",
+  "src/components/workflows/workflow-task-list.tsx",
+  "src/components/workflows/workflow-target-date-control.tsx",
+  "src/components/workflows/workflow-audit-log.tsx",
+  "src/components/extensions/extensions-tab-select.tsx",
+  "src/components/extensions/install-batch-panel.tsx",
+  "packages/chat/src/chat-page.tsx",
+  "packages/mcp-server/src/index.tsx",
+  "packages/agents/src/campaign-recipients-review-renderer.tsx",
+  "packages/agents/src/import-skill-from-github-form.tsx",
+  "packages/permissions/src/user-impersonation-panel.tsx",
+  "packages/permissions/src/impersonation-banner.tsx",
+  "packages/extensions/src/screens/extension-resolution-panel.tsx",
+  "packages/permissions/src/pages.tsx",
+  "packages/metric-cost-api/src/components/legacy-cost-list.tsx",
+  "packages/notifications/src/notifications-flyout.tsx",
+];
+
 // AND a path-zone glob with an extension glob. ESLint flat config treats a
 // nested array inside `files` as a logical AND (every pattern must match), so
 // `[zoneGlob, extGlob]` matches files in the zone with that extension only —
@@ -601,7 +713,7 @@ const eslintConfig = defineConfig([
     files: ["**/*.{jsx,tsx}"],
     ignores: ["**/components/ui/**", "**/src/ui/**"],
     rules: {
-      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...TYPE_BANS, ...DYNAMIC_BANS_L1],
     },
   },
   // JSX Layer 2 (sdk-dashboard, excluding the adapter): +sdk-dashboard bans.
@@ -613,7 +725,7 @@ const eslintConfig = defineConfig([
       "**/src/ui/**",
     ],
     rules: {
-      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L2],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...TYPE_BANS, ...DYNAMIC_BANS_L2],
     },
   },
   // JSX Layer 3 (sdk-dashboard adapter): drizzle server + /mcp re-allowed.
@@ -621,7 +733,7 @@ const eslintConfig = defineConfig([
     files: ["packages/sdk-dashboard/src/adapters/drizzle-cube/**/*.tsx"],
     ignores: ["**/components/ui/**", "**/src/ui/**"],
     rules: {
-      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L3],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...TYPE_BANS, ...DYNAMIC_BANS_L3],
     },
   },
   // JSX Layer 4 (packages/dashboards/src/components):
@@ -630,14 +742,14 @@ const eslintConfig = defineConfig([
     files: andJsx(["packages/dashboards/src/components/**"]),
     ignores: ["**/components/ui/**", "**/src/ui/**"],
     rules: {
-      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L4],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...TYPE_BANS, ...DYNAMIC_BANS_L4],
     },
   },
   // JSX Layer 4b (dc-modal-a11y-scope.tsx): also re-allow Radix dynamically.
   {
     files: ["packages/dashboards/src/components/dc-modal-a11y-scope.tsx"],
     rules: {
-      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L4B],
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...TYPE_BANS, ...DYNAMIC_BANS_L4B],
     },
   },
   // JSX Layer 5 (vendored shadcn primitives): dynamic-loader bans only — no
@@ -657,6 +769,112 @@ const eslintConfig = defineConfig([
     ]),
     rules: {
       "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L5B],
+    },
+  },
+
+  // ───── TYPE_BANS carve-outs (cinatra#803) — declared AFTER the JSX layers
+  // so they win for their file sets; each restates its zone's full selector
+  // set MINUS TYPE_BANS (one `no-restricted-syntax` severity per file-set).
+  //
+  // packages/sdk-ui: the issue-mandated allowlist — the shared components
+  // own the raw values BEHIND the named tokens. The vendored-primitive dirs
+  // (src/ui) stay on JSX Layer 5 (raw elements allowed there), so they are
+  // excluded here exactly like in the base JSX layers.
+  {
+    files: ["packages/sdk-ui/src/**/*.{jsx,tsx}"],
+    ignores: ["**/components/ui/**", "**/src/ui/**"],
+    rules: {
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+    },
+  },
+  // Test files assert class strings (including regex literals that stringify
+  // into the banned shapes). L1-zone tests:
+  {
+    files: [["**/__tests__/**", JSX_EXT], "**/*.test.{jsx,tsx}"],
+    ignores: [
+      "**/components/ui/**",
+      "**/src/ui/**",
+      "packages/dashboards/src/components/**",
+    ],
+    rules: {
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+    },
+  },
+  // …and the dashboards-components zone keeps its L4 dynamic set:
+  {
+    files: [["packages/dashboards/src/components/**", "**/*.test.tsx"]],
+    rules: {
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L4],
+    },
+  },
+  // extensions/**: first-party extension INTERNALS are not gated on the
+  // arbitrary-type ramp (the issue gates repo-owned code; extension
+  // normalization lands with their sdk-ui adoption). The ui-glob ignores
+  // keep the vendored-primitive dirs on JSX Layer 5.
+  {
+    files: [["extensions/**", JSX_EXT]],
+    ignores: ["**/components/ui/**", "**/src/ui/**"],
+    rules: {
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+    },
+  },
+  // Shrink-only migration allowlist — see TYPE_ARBITRARY_MIGRATION_ALLOWLIST
+  // above (all entries are L1-zone files; tracked in cinatra#886).
+  {
+    files: TYPE_ARBITRARY_MIGRATION_ALLOWLIST,
+    rules: {
+      "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+    },
+  },
+
+  // ───── First-party extension import boundary (cinatra#803) ─────
+  // Restates the zone's import-ban set (flat config: last match WINS the
+  // whole rule entry) and adds the `@/*` app-alias ban. Static imports only
+  // (see APP_ALIAS_BAN docblock).
+  {
+    files: ["extensions/**/*.{js,jsx,cjs,mjs,ts,tsx,cts,mts}"],
+    ignores: [
+      "**/components/ui/**",
+      "**/src/ui/**",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...CLIENT_BAN,
+            ...DRIZZLE_CUBE_BAN,
+            ...RADIX_BAN,
+            ...UI_LIB_BAN,
+            ...GRID_LAYOUT_BAN,
+            ...APP_ALIAS_BAN,
+          ],
+        },
+      ],
+    },
+  },
+  // Vendored-primitive dirs inside extensions keep the Layer-5 Radix
+  // allowance, plus the `@/*` ban (their imports must stay relative).
+  {
+    files: [
+      "extensions/**/components/ui/**/*.{js,jsx,ts,tsx}",
+      "extensions/**/src/ui/**/*.{js,jsx,ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            ...MCP_BAN,
+            ...CLIENT_BAN,
+            ...DRIZZLE_CUBE_BAN,
+            ...UI_LIB_BAN,
+            ...GRID_LAYOUT_BAN,
+            ...APP_ALIAS_BAN,
+          ],
+        },
+      ],
     },
   },
 

@@ -13,6 +13,10 @@ const FIXTURE_DIR = path.join(__dirname, "fixtures");
  * `--no-ignore` defeats the `globalIgnores` entry that excludes the fixture
  * directory from `pnpm lint` (the fixtures intentionally violate the
  * boundary rules; default lint must skip them to stay green).
+ *
+ * `--no-inline-config` mirrors the ui-design-system-gate invocation: the
+ * "exemptions are files-glob carve-outs, never inline eslint-disable"
+ * contract must hold in this harness exactly as it does in the gate.
  */
 function lintFile(file: string): Array<{
   filePath: string;
@@ -21,7 +25,7 @@ function lintFile(file: string): Array<{
 }> {
   try {
     const stdout = execSync(
-      `pnpm exec eslint --no-ignore --format json "${file}"`,
+      `pnpm exec eslint --no-ignore --no-inline-config --format json "${file}"`,
       {
         cwd: REPO_ROOT,
         stdio: ["ignore", "pipe", "pipe"],
@@ -66,6 +70,59 @@ function expectNoBoundaryViolation(result: ReturnType<typeof lintFile>) {
     boundary,
     `Expected no no-restricted-imports violations, got: ${JSON.stringify(boundary, null, 2)}`,
   ).toEqual([]);
+}
+
+// ───── Arbitrary color/type ban helpers (TYPE_BANS, cinatra#803) ─────
+
+const TYPE_BAN_FRAGMENTS = [
+  "Arbitrary color value",
+  "Manual dark: color override",
+  "Arbitrary text-[…] font size",
+  "Arbitrary tracking-[…] letter-spacing",
+];
+
+function typeBanMessages(result: ReturnType<typeof lintFile>) {
+  const all = result[0];
+  expect(all).toBeDefined();
+  return all.messages.filter(
+    (m) =>
+      m.ruleId === "no-restricted-syntax" &&
+      TYPE_BAN_FRAGMENTS.some((fragment) => m.message.includes(fragment)),
+  );
+}
+
+function expectTypeBan(
+  result: ReturnType<typeof lintFile>,
+  messageSubstring: string,
+) {
+  const matching = typeBanMessages(result).filter((m) =>
+    m.message.includes(messageSubstring),
+  );
+  expect(
+    matching.length,
+    `Expected a no-restricted-syntax type ban including "${messageSubstring}", got: ${JSON.stringify(result[0]?.messages, null, 2)}`,
+  ).toBeGreaterThan(0);
+}
+
+function expectNoTypeBans(result: ReturnType<typeof lintFile>) {
+  const bans = typeBanMessages(result);
+  expect(
+    bans,
+    `Expected no type-ban violations, got: ${JSON.stringify(bans, null, 2)}`,
+  ).toEqual([]);
+}
+
+/**
+ * Copy a fixture to a repo-relative destination so it is linted under the
+ * config layer that owns that zone (the fixtures directory itself sits in
+ * the `__tests__` carve-out, where TYPE_BANS intentionally do not apply).
+ * Returns the absolute destination path; the caller removes it in afterAll.
+ */
+function copyFixtureTo(fixture: string, destRelative: string): string {
+  const dest = path.join(REPO_ROOT, destRelative);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURE_DIR, fixture), dest);
+  return dest;
 }
 
 describe("sdk-dashboard ESLint import-boundary", () => {
@@ -193,5 +250,143 @@ describe("sdk-dashboard ESLint import-boundary", () => {
       const r = lintFile(allowedFixture);
       expectNoBoundaryViolation(r);
     });
+  });
+});
+
+describe("arbitrary color/type className bans (cinatra#803)", () => {
+  // Temp copies land in real zone paths (see copyFixtureTo); every path is
+  // tracked here and removed in afterAll.
+  const tempFiles: string[] = [];
+  const EXT_FIXTURE_ROOT = path.join(
+    REPO_ROOT,
+    "extensions/__eslint-boundary-fixtures__",
+  );
+
+  const l1Forbidden = "src/components/__eslint-boundary-type-ban.fixture.tsx";
+  const l1LengthBypass =
+    "src/components/__eslint-boundary-length-bypass.fixture.tsx";
+  const l1Allowed = "src/components/__eslint-boundary-type-allowed.fixture.tsx";
+  const sdkUiCarveOut =
+    "packages/sdk-ui/src/__eslint-boundary-type-carveout.fixture.tsx";
+  const extensionCarveOut =
+    "extensions/__eslint-boundary-fixtures__/src/type-carveout.fixture.tsx";
+
+  beforeAll(() => {
+    tempFiles.push(
+      copyFixtureTo("forbidden-arbitrary-type-values.fixture.tsx", l1Forbidden),
+      copyFixtureTo("forbidden-text-length-bypass.fixture.tsx", l1LengthBypass),
+      copyFixtureTo("allowed-type-tokens.fixture.tsx", l1Allowed),
+      copyFixtureTo(
+        "forbidden-arbitrary-type-values.fixture.tsx",
+        sdkUiCarveOut,
+      ),
+      copyFixtureTo(
+        "forbidden-arbitrary-type-values.fixture.tsx",
+        extensionCarveOut,
+      ),
+    );
+  });
+
+  afterAll(() => {
+    for (const f of tempFiles) {
+      if (fs.existsSync(f)) fs.rmSync(f);
+    }
+    if (fs.existsSync(EXT_FIXTURE_ROOT)) {
+      fs.rmSync(EXT_FIXTURE_ROOT, { recursive: true });
+    }
+  });
+
+  it("flags arbitrary color values in the app zone", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1Forbidden));
+    expectTypeBan(r, "Arbitrary color value");
+  });
+
+  it("flags manual dark: color overrides, including variant chains", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1Forbidden));
+    const darkBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Manual dark: color override"),
+    );
+    // `dark:text-red-500` and `dark:focus-visible:ring-red-500` both fire.
+    expect(darkBans.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("flags arbitrary text-[…] sizes and tracking-[…] letter-spacing", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1Forbidden));
+    expectTypeBan(r, "Arbitrary text-[…] font size");
+    expectTypeBan(r, "Arbitrary tracking-[…] letter-spacing");
+  });
+
+  it("flags text-[length:<value>] — the length: prefix is not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1LengthBypass));
+    expectTypeBan(r, "Arbitrary text-[…] font size");
+  });
+
+  it("allows named tokens, text-[length:inherit], and non-color dark: variants", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1Allowed));
+    expectNoTypeBans(r);
+  });
+
+  it("carves out packages/sdk-ui (the tokens' raw values live there)", () => {
+    const r = lintFile(path.join(REPO_ROOT, sdkUiCarveOut));
+    expectNoTypeBans(r);
+  });
+
+  it("carves out extensions/** internals (gated on sdk-ui adoption, not the type ramp)", () => {
+    const r = lintFile(path.join(REPO_ROOT, extensionCarveOut));
+    expectNoTypeBans(r);
+  });
+
+  it("keeps migration-allowlisted files exempt (shrink-only, cinatra#886)", () => {
+    // scope-badge.tsx carries a pre-existing tracking-[0.15em]; the
+    // TYPE_ARBITRARY_MIGRATION_ALLOWLIST layer keeps it lint-green until
+    // the cinatra#886 migration shrinks the list.
+    const r = lintFile(path.join(REPO_ROOT, "src/components/scope-badge.tsx"));
+    expectNoTypeBans(r);
+  });
+});
+
+describe("first-party extension import boundary (cinatra#803)", () => {
+  const EXT_FIXTURE_ROOT = path.join(
+    REPO_ROOT,
+    "extensions/__eslint-boundary-fixtures__",
+  );
+  const extSrc =
+    "extensions/__eslint-boundary-fixtures__/src/app-alias.fixture.tsx";
+  const extVendoredUi =
+    "extensions/__eslint-boundary-fixtures__/components/ui/app-alias.fixture.tsx";
+
+  beforeAll(() => {
+    copyFixtureTo("forbidden-extension-app-alias.fixture.tsx", extSrc);
+    copyFixtureTo("forbidden-extension-app-alias.fixture.tsx", extVendoredUi);
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(EXT_FIXTURE_ROOT)) {
+      fs.rmSync(EXT_FIXTURE_ROOT, { recursive: true });
+    }
+  });
+
+  it("blocks @/* app-alias imports inside extensions/", () => {
+    const r = lintFile(path.join(REPO_ROOT, extSrc));
+    expectViolation(r, "app-private modules");
+  });
+
+  it("keeps the restated Radix ban firing inside extensions/ (last-match-wins)", () => {
+    const r = lintFile(path.join(REPO_ROOT, extSrc));
+    expectViolation(r, "Radix belongs inside the vendored shadcn primitives");
+  });
+
+  it("keeps the Radix allowance in extension vendored-ui dirs while still banning @/*", () => {
+    const r = lintFile(path.join(REPO_ROOT, extVendoredUi));
+    expectViolation(r, "app-private modules");
+    const radix = r[0].messages.filter(
+      (m) =>
+        m.ruleId === "no-restricted-imports" &&
+        m.message.includes("Radix belongs"),
+    );
+    expect(
+      radix,
+      `Radix must stay allowed in extension vendored-ui dirs, got: ${JSON.stringify(radix, null, 2)}`,
+    ).toEqual([]);
   });
 });
