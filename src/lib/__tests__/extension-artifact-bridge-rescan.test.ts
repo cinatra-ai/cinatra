@@ -23,11 +23,16 @@ import { rescanArtifactBridgeFromStore } from "@/lib/extension-artifact-bridge-r
 
 function writeStorePackage(
   storeRoot: string,
-  pkgDir: string,
+  _pkgDir: string,
   digest: string,
   pkg: Record<string, unknown>,
 ): void {
-  const dir = path.join(storeRoot, pkgDir, digest);
+  // V2 layout (cinatra#791): <root>/<kind>/<slug>/<digest>/ — the path kind
+  // comes from the manifest's cinatra.kind and the slug from its name; the
+  // digest segment must be long hex, so short test labels are padded.
+  const kind = ((pkg.cinatra as Record<string, unknown> | undefined)?.kind as string) ?? "artifact";
+  const name = pkg.name as string;
+  const dir = path.join(storeRoot, kind, ...name.split("/"), digest.padEnd(64, "0"));
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2));
 }

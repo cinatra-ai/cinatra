@@ -91,6 +91,33 @@ export function extensionActivationPhases(
         if (process.env.CINATRA_DISABLE_RUNTIME_PACKAGE_LOADER === "true") {
           return SKIPPED_BY_KILL_SWITCH("CINATRA_DISABLE_RUNTIME_PACKAGE_LOADER");
         }
+        // Rematerialization sweep (cinatra#791): the store is a REBUILDABLE
+        // CACHE — before the loader pass, best-effort re-materialize any live,
+        // finalized, real-pipeline install whose digest dir is missing from the
+        // configured data root (cutover instance / wiped volume self-heal).
+        // Strictly non-fatal; per-package failures log + skip.
+        if (process.env.CINATRA_DISABLE_EXTENSION_REMATERIALIZE !== "true") {
+          try {
+            const { rematerializeMissingInstalls } = await import(
+              "@/lib/extension-store-rematerialize"
+            );
+            const sweep = await rematerializeMissingInstalls();
+            if (sweep.rebuilt.length || sweep.failed.length) {
+              console.info(
+                `[boot] ExtensionStoreRematerialize: rebuilt ${sweep.rebuilt.length}, ` +
+                  `skipped ${sweep.skipped.length}, failed ${sweep.failed.length}` +
+                  (sweep.failed.length
+                    ? ` (${sweep.failed.map((f) => f.packageName).join(", ")})`
+                    : ""),
+              );
+            }
+          } catch (err) {
+            console.warn(
+              "[boot] ExtensionStoreRematerialize failed (non-fatal):",
+              err instanceof Error ? err.message : err,
+            );
+          }
+        }
         const { loadRuntimePackageExtensions } = await import("@/lib/runtime-package-loader");
         const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
         const resolveInstallAnchor = await makeDefaultInstallAnchorResolver();
@@ -116,7 +143,8 @@ export function extensionActivationPhases(
         // PROD artifact-bridge rescan (cinatra#661). A RUNTIME-installed artifact
         // package is metadata-only (no serverEntry), so the runtime-package-loader
         // above returns `no-server-entry` for it and never registers its object
-        // type in-process. This phase scans `/data/extensions/packages` and
+        // type in-process. This phase scans the runtime store (the configured
+        // extension data root) and
         // registers each install-active `kind:"artifact"` package's object type
         // (WITH provenance) so a marketplace-installed artifact type appears after
         // boot WITHOUT an image rebuild — the registration path parallel to the

@@ -12,11 +12,15 @@ const runRuntimePackageActivation =
   vi.fn<(...args: unknown[]) => Promise<ActivationResult[]>>();
 
 vi.mock("@cinatra-ai/sdk-extensions", () => ({
-  DEFAULT_PACKAGE_STORE_PATH: "/data/extensions/packages",
-  discoverPackageStoreRecords: (...args: unknown[]) =>
-    discoverPackageStoreRecords(...(args as [])),
   runRuntimePackageActivation: (...args: unknown[]) => runRuntimePackageActivation(...args),
   recordDeclaresHostMigrations: () => false,
+}));
+
+// cinatra#791: the loader now discovers via the host-side V2 store IO.
+vi.mock("@/lib/extension-store-io", () => ({
+  discoverStoreRecordsV2: (...args: unknown[]) =>
+    discoverPackageStoreRecords(...(args as [])),
+  realStoreFs: {},
 }));
 
 vi.mock("@/lib/extension-package-store", () => ({

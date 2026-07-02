@@ -11,7 +11,7 @@
 //
 // Design (converged):
 //   - The install dir is treated as a RECONSTRUCTABLE CACHE for the required
-//     set, exactly as `/data/extensions/packages` is the durable USER store.
+//     set, exactly as the extension data root is the durable USER store.
 //   - Atomic per slug: each required slug dir is written to a temp sibling and
 //     renamed into place, so a concurrent WayFlow scan never sees a half-written
 //     tree. Idempotent: a slug whose on-disk OAS bytes already match the seed is
@@ -20,7 +20,7 @@
 //     seed ownership marker (`.cinatra-required-seed.json`) AND is absent from
 //     the current seed manifest. A coexisting user/operator dir (no marker) is
 //     NEVER pruned. User-installed extensions live in a SEPARATE root
-//     (`/data/extensions/packages`) and are never read or written here.
+//     (the configured extension data root) and are never read or written here.
 //   - FAIL-CLOSED in prod: a missing/unreadable seed dir or manifest throws, so
 //     the prod boot does not come up with WayFlow pointed at an empty tree while
 //     the required-activation assert (which checks the in-process registry, not
@@ -40,6 +40,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { resolveExtensionDataRoot } from "@/lib/extension-data-root";
 
 // Kept in sync with scripts/extensions/build-required-oas-seed.mjs (the build-
 // time producer). Duplicated as plain consts rather than imported because the
@@ -58,7 +59,12 @@ export const DEFAULT_REQUIRED_OAS_SEED_DIR = "/app/.cinatra-required-oas-seed";
 // The durable user-install store — NEVER a valid materialize target. Exported so the
 // boot-time user-store-mount-check (cinatra#789 item 5) validates the SAME path this
 // module refuses to write into — one source of truth, no drift.
-export const USER_STORE_ROOT = "/data/extensions/packages";
+// cinatra#791: the store root is the ONE configurable extension data root
+// (env CINATRA_EXTENSION_DATA_ROOT > DB metadata > /data/extensions) — resolved
+// at call time, never frozen at import (env/DB may change per boot).
+export function resolveUserStoreRoot(): string {
+  return resolveExtensionDataRoot();
+}
 
 export type MaterializeResult = {
   /** required slug dirs created or refreshed (OAS bytes differed) */
@@ -80,7 +86,7 @@ type SeedManifest = {
 
 function isUnderUserStore(dir: string): boolean {
   const resolved = path.resolve(dir);
-  const store = path.resolve(USER_STORE_ROOT);
+  const store = path.resolve(resolveUserStoreRoot());
   return resolved === store || resolved.startsWith(store + path.sep);
 }
 
@@ -222,7 +228,7 @@ export function materializeRequiredExtensions(opts: {
   if (isUnderUserStore(installDir)) {
     throw new Error(
       `[required-extension-materialize] refusing to materialize into the user-install store ` +
-        `(${installDir} is at or under ${USER_STORE_ROOT}); the install dir must be a ` +
+        `(${installDir} is at or under ${resolveUserStoreRoot()}); the install dir must be a ` +
         `separate, reconstructable required-set cache.`,
     );
   }

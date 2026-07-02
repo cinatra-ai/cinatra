@@ -45,6 +45,8 @@ export type InstallPipelineInput = {
    * suffixed with a nonce) so a one-shot install still journals + finalizes.
    */
   installOpId?: string;
+  /** Caller-known kind (cinatra#791): authoritative for the kind-segregated store placement; the manifest must match fail-closed. */
+  expectedKind?: import("@/lib/extension-package-store-core").ExtensionStoreKind;
 };
 
 export type InstallPipelineDeps = {
@@ -54,7 +56,7 @@ export type InstallPipelineDeps = {
    */
   resolveIntegrity: (packageName: string, version: string) => Promise<{ integrity: string; registryUrl: string; sha256?: string; signature?: string | null; resolvedVersion?: string; materializationPlan?: unknown }>;
   /** Materialize the verified tarball into the store (SRI-checked before write). */
-  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; storeRoot?: string; plan?: MaterializationPlan | null; expectedClosureHash?: string | null }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
+  materialize: (input: { packageName: string; version: string; expectedIntegrity: string; registryUrl: string; storeRoot?: string; expectedKind?: import("@/lib/extension-package-store-core").ExtensionStoreKind; plan?: MaterializationPlan | null; expectedClosureHash?: string | null }) => Promise<{ storeDir: string; digest: string; integrity: string; contentHash: string }>;
   /** Read the materialized package's declared requestedHostPorts. */
   readRequestedPorts: (storeDir: string) => Promise<string[]>;
   /**
@@ -495,7 +497,7 @@ export async function installExtensionFromRegistry(
     version: resolvedVersion,
     expectedIntegrity: integrity,
     registryUrl,
-    storeRoot: input.storeRoot,
+    storeRoot: input.storeRoot, expectedKind: input.expectedKind, // cinatra#791
     plan,
     expectedClosureHash: closureHash,
   });
@@ -1303,10 +1305,9 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
           expectedIntegrity: i.expectedIntegrity,
           registryUrl: persistRegistryUrl,
           storeRoot: i.storeRoot,
-          // cinatra#181: the parsed plan + verified closureHash thread into the
-          // materializer (step 4.7); per-node fetches ride the SAME fetchTarball
-          // seam built above, so a gatekept install's plan nodes keep the broker
-          // grant/identity (codex round-0 finding 7).
+          expectedKind: i.expectedKind,
+          // cinatra#181: the parsed plan + verified closureHash thread into the materializer
+          // (step 4.7); per-node fetches ride the SAME injected fetchTarball seam.
           plan: i.plan ?? null,
           expectedClosureHash: i.expectedClosureHash ?? null,
         },
@@ -1506,8 +1507,7 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { discoverSupersededStoreDirsForPackage, verifyDigestImportsAndRegisters } = await import(
         "@/lib/extension-runtime-activate"
       );
-      const { DEFAULT_PACKAGE_STORE_PATH } = await import("@cinatra-ai/sdk-extensions");
-      const storeRoot = i.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+      const storeRoot = i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
       const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
       if (superseded.length === 0) return { supersedes: false };
       const verdict = await verifyDigestImportsAndRegisters(i.packageName, storeRoot, i.storeDir, {
