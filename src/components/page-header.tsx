@@ -24,10 +24,10 @@ interface PageHeaderProps {
   actions?: ReactNode;
   /**
    * Page-title display scale.
-   *  - "lg" (default) — 38px. Brand-y top-level pages.
-   *  - "md" — 30px. Action-heavy admin / settings / detail subpages with
+   *  - "lg" (default) — 28px. Brand-y top-level pages.
+   *  - "md" — 24px. Action-heavy admin / settings / detail subpages with
    *    long titles, where the lg size crowds the actions slot.
-   *  - "sm" — 24px. Nested sub-screens.
+   *  - "sm" — 20px. Nested sub-screens.
    */
   size?: PageHeaderSize;
   /**
@@ -75,9 +75,9 @@ export function PageHeader({
           <h1
             className={cn(
               "font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance",
-              size === "sm" && "text-[24px]",
-              size === "md" && "text-[30px]",
-              size === "lg" && "text-[38px]",
+              size === "sm" && "text-[20px]",
+              size === "md" && "text-[24px]",
+              size === "lg" && "text-[28px]",
               size === "lg" && !label && "-mt-2",
               tone === "mustard" && "text-brand-mustard",
               tone === "ink" && "text-foreground",
