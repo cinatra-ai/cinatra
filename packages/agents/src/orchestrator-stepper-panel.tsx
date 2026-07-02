@@ -108,6 +108,37 @@ function statusBadgeVariant(
 // `./attachment-envelope-payload` so the precedence rules can be unit-tested
 // without dragging this panel's client-only imports.
 
+// Stale-gate CAS rejection (#811): approveReviewTaskInternal guards every
+// approval with a run.status === "pending_approval" compare-and-swap. A submit
+// that reaches the server AFTER the run already left pending_approval (e.g.
+// the setup loop re-queued the run while this panel's SSE status was still
+// catching up) is rejected with an internal invariant message — "Setup
+// approval rejected: run … is not pending_approval (current status: queued)".
+// That rejection is an expected UI race, not a user-facing error: detect it so
+// the submit paths below can translate it into a friendly processing state
+// instead of surfacing the raw message (SchemaFieldRenderer renders rethrown
+// errors verbatim via its submitError line). Same message-matching idiom as
+// the existing "already resolved" checks.
+//
+// DELIBERATELY NARROW: only FORWARD-PROGRESS statuses (queued /
+// pending_input / running — a later frame is guaranteed to reconcile the
+// panel) count as stale; a rejection carrying a terminal status
+// (completed / failed / stopped) stays on the generic error path so the
+// spinner can never wait on a frame that will not come. Matches the setup-
+// ("current status: …") and wayflow- ("status: …") variants plus the
+// status-less concurrent-transition variant ("left pending_approval before
+// the approval committed"), which only fires when a write races the
+// millisecond CAS window.
+function isStaleGateRejection(message: string): boolean {
+  return /not pending_approval \((?:current )?status: (?:queued|pending_input|running)\)|left pending_approval/i.test(
+    message,
+  );
+}
+
+// Human-readable replacement for the raw CAS rejection (#811).
+const STALE_GATE_MESSAGE =
+  "This step was already submitted or has moved on — the run is still processing. The form will update automatically.";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -621,6 +652,16 @@ function HitlApprovalCard({
       if (msg.toLowerCase().includes("already resolved")) {
         didApprove = true;
         onApprovalSubmitted?.(nextBuffered, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
+      } else if (isStaleGateRejection(msg)) {
+        // Stale-gate race (#811): the run already left pending_approval
+        // (re-queued / moved on), so this submit could never apply. Keep the
+        // optimistic spinner from onApproved() — the run IS processing — and
+        // let the next SSE frame (INTERRUPT or status change) re-sync the
+        // panel instead of rolling the user back to a stale form. The
+        // submitted values are NOT recorded via onApprovalSubmitted because
+        // the server rejected the write.
+        justSubmittedXRendererRef.current = null;
+        toast.info(STALE_GATE_MESSAGE);
       } else {
         justSubmittedXRendererRef.current = null;
         onApproveRejected?.();
@@ -708,6 +749,14 @@ function HitlApprovalCard({
                       } catch (err) {
                         const m = err instanceof Error ? err.message : "unknown";
                         if (m.toLowerCase().includes("already resolved")) return;
+                        if (isStaleGateRejection(m)) {
+                          // Stale-gate race (#811): keep the optimistic
+                          // spinner from onApproved() and let the stream
+                          // re-sync the panel; rethrowing would surface the
+                          // raw CAS message via the renderer's submitError.
+                          toast.info(STALE_GATE_MESSAGE);
+                          return;
+                        }
                         onApproveRejected?.();
                         throw err;
                       }
@@ -759,6 +808,22 @@ function HitlApprovalCard({
                     } catch (err) {
                       const m = err instanceof Error ? err.message : "unknown";
                       if (m.toLowerCase().includes("already resolved")) return;
+                      if (isStaleGateRejection(m)) {
+                        // Stale-gate race (#811): the run re-queued before this
+                        // submit landed (the setup loop is processing the
+                        // previous field), so the CAS guard rejected it with
+                        // the raw "… is not pending_approval (current status:
+                        // queued)" message — which SchemaFieldRenderer would
+                        // otherwise render verbatim under the field. Flip the
+                        // panel to the processing spinner instead
+                        // (awaitingNextStep resets itself when the next
+                        // INTERRUPT or status change arrives) and show a
+                        // human-readable message. This path never called
+                        // onApproved() on submit, so it is invoked here.
+                        onApproved?.();
+                        toast.info(STALE_GATE_MESSAGE);
+                        return;
+                      }
                       throw err;
                     }
                   }
