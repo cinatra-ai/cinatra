@@ -199,56 +199,64 @@ export function DefaultProvidersCard({
         </Select>
       </div>
 
-      <Separator className="my-4" />
+      {/* Row 4: Agent creation (preview) — HIDDEN while the readiness pin is
+          inert. `isAgentCreationPinActive()` is hardcoded false today, so this
+          per-purpose Anthropic selection (wired to `agent_creation_*` settings
+          that NO live LLM call consumes) is not rendered at all: operators must
+          not see a control that silently does nothing. The row and its write
+          path (gated on the same flag in handleSave + campaigns/actions.ts)
+          light up together when the readiness gate flips. It NEVER changes the
+          global default (Row 1 stays OpenAI). */}
+      {agentCreationPinActive && (
+        <>
+          <Separator className="my-4" />
 
-      {/* Row 4: Agent creation (preview).
-          The per-purpose Anthropic selection surface. Selecting Anthropic here
-          is a genuine per-purpose override wired to `agent_creation_*` settings
-          — it NEVER changes the global default (Row 1 stays OpenAI). */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-foreground">Agent creation</p>
-            <p className="text-xs text-muted-foreground">
-              Per-purpose override. Takes effect after Anthropic skill governance
-              and sync are configured. Does not change the global default.
-            </p>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-foreground">Agent creation</p>
+                <p className="text-xs text-muted-foreground">
+                  Per-purpose override. Takes effect after Anthropic skill governance
+                  and sync are configured. Does not change the global default.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select
+                  value={acProvider}
+                  onValueChange={(v) => {
+                    setAcProvider(v);
+                    setAcModel(
+                      v === "anthropic"
+                        ? (anthropicModels[0] ?? "")
+                        : (agentCreationOpenaiModels[0] ?? ""),
+                    );
+                  }}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                    {anthropicConnected && (
+                      <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                <Select value={acModel} onValueChange={setAcModel}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="Default model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {acModelOptions.map((m) => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Select
-              value={acProvider}
-              onValueChange={(v) => {
-                setAcProvider(v);
-                setAcModel(
-                  v === "anthropic"
-                    ? (anthropicModels[0] ?? "")
-                    : (agentCreationOpenaiModels[0] ?? ""),
-                );
-              }}
-            >
-              <SelectTrigger className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                {anthropicConnected && (
-                  <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-            <Select value={acModel} onValueChange={setAcModel}>
-              <SelectTrigger className="w-48">
-                <SelectValue placeholder="Default model" />
-              </SelectTrigger>
-              <SelectContent>
-                {acModelOptions.map((m) => (
-                  <SelectItem key={m} value={m}>{m}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       <Separator className="my-4" />
 
