@@ -207,6 +207,13 @@ function ChatNavItem() {
 
   function handleChatLinkClick(e: React.MouseEvent) {
     setOpenMobile(false);
+    // Clicking the label row also toggles the collapsible — mirrors the full-button
+    // trigger behaviour of NavCollapsible items (Data/Analytics) so label-click is
+    // uniform across all sidebar groups (cinatra#819). The chevron remains a
+    // secondary toggle via SidebarMenuAction. Navigation to /chat is preserved:
+    // the auto-expand useEffect above re-opens sub-items whenever isActive
+    // becomes true (i.e. on any navigation that lands on a /chat route).
+    setOpen((prev) => !prev);
     // ChatPage uses pushState for thread navigation — Next.js router doesn't know
     // the URL changed, so a <Link href="/chat"> click is treated as a same-route
     // no-op. Check the real browser URL and dispatch the new-chat event instead.
@@ -230,7 +237,8 @@ function ChatNavItem() {
     );
   }
 
-  // Expanded sidebar — link navigates, chevron-only toggles collapsible
+  // Expanded sidebar — label-click toggles collapsible (uniform with NavCollapsible
+  // groups); chevron is a secondary toggle; link navigates to /chat
   return (
     <Collapsible asChild open={open} onOpenChange={setOpen} className="group/collapsible">
       <SidebarMenuItem>
