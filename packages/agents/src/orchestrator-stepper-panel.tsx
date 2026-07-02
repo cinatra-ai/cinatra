@@ -631,6 +631,35 @@ function HitlApprovalCard({
         }),
       };
     }
+    // #817: context-selector gate — synthesize the selection envelope when the
+    // renderer emitted none. ContextSelectorRenderer only fires its envelope
+    // `emit()` on a toggle/clear; when a slot has ZERO eligible candidates the
+    // user cannot toggle (the gate shows "run without context" + Continue), so
+    // `userResponse` is never buffered and /api/context-finalize 422s on the
+    // non-JSON value. Mirror the sibling gate branches above: lift the trusted
+    // slotMeta + (pre-resolved) selectedRefs from the interrupt values into the
+    // envelope /api/context-finalize expects. A real toggle already set
+    // bufferedHitlValue.userResponse — PRESERVE it (only fill when absent).
+    if (
+      interruptContext.xRenderer.endsWith(":context-selector") &&
+      typeof (nextBuffered as { userResponse?: unknown }).userResponse !== "string"
+    ) {
+      const vals = (interruptContext.values ?? {}) as Record<string, unknown>;
+      const slotMeta = vals["slotMeta"] as
+        | { slotId?: unknown; resolutionMode?: unknown }
+        | undefined;
+      const selectedRefs = Array.isArray(vals["selectedRefs"]) ? vals["selectedRefs"] : [];
+      if (slotMeta && typeof slotMeta.slotId === "string") {
+        nextBuffered = {
+          ...nextBuffered,
+          userResponse: JSON.stringify({
+            slotId: slotMeta.slotId,
+            resolutionMode: slotMeta.resolutionMode,
+            selectedRefs,
+          }),
+        };
+      }
+    }
     // Wrap the legacy `userResponse` text with the WayFlow envelope when
     // paperclip attachments are pending. Skip wrap for setup gates because the
     // server path doesn't read userResponse there; only enter the wrap when

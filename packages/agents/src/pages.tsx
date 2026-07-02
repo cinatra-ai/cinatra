@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Kicker } from "@cinatra-ai/sdk-ui/section-header";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { Bot, Play, Plus } from "lucide-react";
+import { Play, Plus } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ListControls } from "@/components/list-controls";
@@ -18,9 +18,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ExtensionCard, deriveExtensionAccent } from "@cinatra-ai/sdk-ui";
 import { AgentBuilderRunScreen, AgentBuilderImportScreen } from "./screens";
+import { AgentRunClient, type AgentRunRowModel } from "./agent-run-client";
 
 // ---------------------------------------------------------------------------
 // AgentBuilder page exports
@@ -252,17 +251,7 @@ export async function NewAgentPage() {
   );
   const visibleTemplates = selectHitlRunVisibleTemplates(lifecycleVisible);
 
-  type RowModel = {
-    key: string;
-    name: string;
-    description: string;
-    version: string;
-    skills: string[];
-    host: "local" | string;
-    runHref: string;
-  };
-
-  const rows: RowModel[] = visibleTemplates.map<RowModel>((t) => {
+  const rows: AgentRunRowModel[] = visibleTemplates.map<AgentRunRowModel>((t) => {
     const ioSkills = (() => {
       if (!t.ioSpec) return [] as string[];
       const raw: unknown = t.ioSpec;
@@ -322,69 +311,11 @@ export async function NewAgentPage() {
             </div>
           </section>
         ) : (
-          // ExtensionCard grid (shell mode → footer Run CTA outside the
-          // clickable chip; no nested interactive controls). Each signal
-          // the prior table carried is preserved: visible-template filter
-          // (rows already), internal/external runHref, description, version,
-          // skills chips with +N tooltip, host badge/tooltip, empty state.
-          // Accent is derived deterministically from row.key.
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {rows.map((row) => {
-              const visibleSkills = row.skills.slice(0, 3);
-              const remainingSkills = row.skills.slice(3);
-              const truncatedHost = row.host.length > 24 ? `${row.host.slice(0, 23)}…` : row.host;
-              const hostBadge = row.host === "local" ? (
-                <Badge variant="secondary" className="rounded-chip">Cinatra</Badge>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Badge variant="outline" className="rounded-chip cursor-default">{truncatedHost}</Badge>
-                  </TooltipTrigger>
-                  <TooltipContent>{row.host}</TooltipContent>
-                </Tooltip>
-              );
-              return (
-                <ExtensionCard
-                  key={row.key}
-                  name={row.name}
-                  accentColor={deriveExtensionAccent(row.key)}
-                  emblem={<Bot aria-hidden="true" />}
-                  description={row.description || undefined}
-                  meta={
-                    <div className="flex flex-wrap items-center gap-2">
-                      {row.version ? (
-                        <Badge variant="outline" className="rounded-chip text-xs font-mono">v{row.version}</Badge>
-                      ) : null}
-                      {row.skills.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {visibleSkills.map((s) => (
-                            <Badge key={s} variant="secondary" className="rounded-chip text-xs">{s}</Badge>
-                          ))}
-                          {remainingSkills.length > 0 ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge variant="outline" className="rounded-chip text-xs cursor-default">+{remainingSkills.length}</Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>{remainingSkills.join(", ")}</TooltipContent>
-                            </Tooltip>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      {hostBadge}
-                    </div>
-                  }
-                  footer={
-                    <Button asChild size="sm">
-                      <Link href={row.runHref}>
-                        <Bot data-icon="inline-start" aria-hidden="true" />
-                        Run
-                      </Link>
-                    </Button>
-                  }
-                />
-              );
-            })}
-          </section>
+          // ExtensionCard grid with client-side search toolbar (cinatra#814).
+          // AgentRunClient receives the pre-built rows and filters on name +
+          // description via a ToolbarSearchInput — same primitive used by the
+          // marketplace and notifications archive pages.
+          <AgentRunClient rows={rows} />
         )}
       </PageContent>
     </Main>

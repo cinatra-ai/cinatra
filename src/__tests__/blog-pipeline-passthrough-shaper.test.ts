@@ -34,14 +34,40 @@ describe("blog-pipeline passthrough seam shapers", () => {
     expect(out!.rawData.cinatra_agent_run_id).toBe("run-1");
   });
 
-  it("blog_pipeline_selected_idea: falls back to first offered idea on unparseable / non-matching input", () => {
+  it("blog_pipeline_selected_idea: THROWS on unparseable selectedIdeaJson (fail closed, no ideas[0] default)", () => {
     const ideas = [{ title: "Only", summary: "s", outline: [] }];
-    const bad = __shapeBlogPipelineObjectsSave(
-      { _shape: "blog_pipeline_selected_idea", selectedIdeaJson: "not json", ideas },
+    expect(() =>
+      __shapeBlogPipelineObjectsSave(
+        { _shape: "blog_pipeline_selected_idea", selectedIdeaJson: "not json", ideas },
+        "run-x",
+      ),
+    ).toThrow(/not a parseable BlogIdea/);
+  });
+
+  it("blog_pipeline_selected_idea: THROWS when the selected idea matches none of the offered ideas", () => {
+    const ideas = [{ title: "Only", summary: "s", outline: [] }];
+    expect(() =>
+      __shapeBlogPipelineObjectsSave(
+        {
+          _shape: "blog_pipeline_selected_idea",
+          selectedIdeaJson: JSON.stringify({ title: "Other", summary: "x", outline: [] }),
+          ideas,
+        },
+        "run-x",
+      ),
+    ).toThrow(/does not match any of the 1 offered ideas/);
+  });
+
+  it("blog_pipeline_selected_idea: accepts a parsed idea when no offered list arrived (unenforceable match)", () => {
+    const out = __shapeBlogPipelineObjectsSave(
+      {
+        _shape: "blog_pipeline_selected_idea",
+        selectedIdeaJson: JSON.stringify({ title: "Solo", summary: "s", outline: [] }),
+      },
       "run-x",
     );
-    expect(bad!.rawData.idea).toEqual({ title: "Only", summary: "s", outline: [] });
-    expect(bad!.rawData.cinatra_agent_run_id).toBe("run-x");
+    expect(out!.rawData.idea).toEqual({ title: "Solo", summary: "s", outline: [] });
+    expect(out!.rawData.cinatra_agent_run_id).toBe("run-x");
   });
 
   it("blog_pipeline_draft_projection: projects the draft object into linkedin string fields", () => {

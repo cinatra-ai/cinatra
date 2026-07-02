@@ -837,6 +837,32 @@ export function AgenticRunPanel({
             );
             nextBuffered.userResponse = wrapped.userResponse;
           }
+          // #817: context-selector gate — synthesize the selection envelope when
+          // the renderer emitted none. ContextSelectorRenderer only fires its
+          // `emit()` on a toggle/clear; a slot with ZERO eligible candidates
+          // gives the user nothing to toggle (the gate shows "run without
+          // context" + Continue), so `userResponse` is never buffered and
+          // /api/context-finalize 422s on the non-JSON value. Lift the trusted
+          // slotMeta + (pre-resolved) selectedRefs from the interrupt values
+          // into the envelope the finalize node forwards. A real toggle already
+          // set bufferedHitlValue.userResponse — PRESERVE it (only fill when absent).
+          if (
+            effectiveHitlContext.xRenderer.endsWith(":context-selector") &&
+            typeof nextBuffered.userResponse !== "string"
+          ) {
+            const vals = (effectiveHitlContext.currentValues ?? {}) as Record<string, unknown>;
+            const slotMeta = vals["slotMeta"] as
+              | { slotId?: unknown; resolutionMode?: unknown }
+              | undefined;
+            const selectedRefs = Array.isArray(vals["selectedRefs"]) ? vals["selectedRefs"] : [];
+            if (slotMeta && typeof slotMeta.slotId === "string") {
+              nextBuffered.userResponse = JSON.stringify({
+                slotId: slotMeta.slotId,
+                resolutionMode: slotMeta.resolutionMode,
+                selectedRefs,
+              });
+            }
+          }
           try {
             await approveReviewTask(
               effectiveHitlContext.reviewTaskId,

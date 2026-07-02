@@ -93,6 +93,25 @@ async function resolveTemplateForActor(agentId: string) {
 //    summary of required fields from inputSchema (showing the values
 //    already collected in run.inputParams), not the AgenticRunPanel. The
 //    Run tab owns AgenticRunPanel; Setup remains a calm pre-run surface.
+// Serialize AgentRunMessageRecord rows for the client panels (Date → ISO
+// string). Shared by SetupScreen (executed-run output, cinatra#831) and
+// RunScreen.
+function serializeRunMessages(
+  rawMessages: Awaited<ReturnType<typeof readAgentRunMessages>>,
+): SerializedAgentRunMessage[] {
+  return rawMessages.map((m) => ({
+    id: m.id,
+    runId: m.runId,
+    sequence: m.sequence,
+    role: m.role,
+    messageType: m.messageType,
+    toolCallId: m.toolCallId,
+    toolName: m.toolName,
+    body: m.body,
+    createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : (m.createdAt as string),
+  }));
+}
+
 export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -227,6 +246,24 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   const trigger = run ? await readRunTriggerByRunId(run.id) : null;
   const showTriggerTab = trigger !== null && (trigger.triggerType === "scheduled" || trigger.triggerType === "recurring");
 
+  // `completed` is ambiguous (cinatra#831): genuine setup-success awaiting
+  // trigger configuration (the /trigger redirect flow, cinatra#580) vs a
+  // fully EXECUTED run. Execution evidence — persisted step results, run
+  // messages, or streamed text — marks the latter: those runs must keep
+  // their output reachable on the base run URL instead of redirecting to
+  // the scheduler, which is a dead end for them (a completed run has no
+  // legal transition back into the trigger lifecycle). Messages are loaded
+  // only for completed runs — the watcher's panel needs them to render the
+  // executed output (LangGraph runs persist output as message rows).
+  const completedRunMessages =
+    run && run.status === "completed" ? await readAgentRunMessages(run.id) : [];
+  const runHasExecuted =
+    run !== null &&
+    run.status === "completed" &&
+    ((run.stepResults?.length ?? 0) > 0 ||
+      completedRunMessages.length > 0 ||
+      (run.streamedText ?? "") !== "");
+
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
   // pending_input runs skip auto-naming to avoid wasting numbered slots.
@@ -290,13 +327,15 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                   instanceId={instanceId}
                   initialStatus={run.status}
                   initialError={run.error ?? null}
-                  initialMessages={[]}
+                  initialMessages={serializeRunMessages(completedRunMessages)}
                   agUiEnabled={run.agUiEnabled}
                   agentPackageName={agentId}
                   traceId={run.traceId ?? undefined}
                   requiredFields={required}
                   initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
                   noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
+                  runHasExecuted={runHasExecuted}
+                  initialStreamedText={run.streamedText ?? ""}
                 />
               )
             )}
@@ -342,17 +381,7 @@ export async function RunScreen({ agentId, instanceId }: ScreenProps) {
   }
 
   const rawMessages = run ? await readAgentRunMessages(run.id) : [];
-  const initialMessages: SerializedAgentRunMessage[] = rawMessages.map((m) => ({
-    id: m.id,
-    runId: m.runId,
-    sequence: m.sequence,
-    role: m.role,
-    messageType: m.messageType,
-    toolCallId: m.toolCallId,
-    toolName: m.toolName,
-    body: m.body,
-    createdAt: m.createdAt instanceof Date ? m.createdAt.toISOString() : (m.createdAt as string),
-  }));
+  const initialMessages: SerializedAgentRunMessage[] = serializeRunMessages(rawMessages);
 
   const runName = run ? await ensureRunTitle(run, template.name) : "";
   const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);

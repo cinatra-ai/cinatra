@@ -31,7 +31,15 @@ export function SkillAutosaveForm({ initialConfig }: SkillAutosaveFormProps) {
 
   async function handleSubmit(formData: FormData) {
     try {
-      await saveSkillAutosaveAction(formData);
+      const saved = await saveSkillAutosaveAction(formData);
+      // Re-sync the controlled state to the authoritative persisted config. A
+      // server-action submit refreshes the route and resets the rendered inputs,
+      // which otherwise desyncs the checkboxes from the just-saved value until a
+      // hard reload (cinatra#808). Seeding from the returned config keeps them in
+      // lockstep with the DB.
+      setEnabled(saved.enabled);
+      setUserCanConfigure(saved.userCanConfigure);
+      setUserCanSeeIndicator(saved.userCanSeeIndicator);
       addNotification({
         title: "Skill autosave administration saved",
         body: "Autosave configuration has been updated.",
