@@ -291,20 +291,26 @@ const APP_ALIAS_BAN = [
 // a warn lane cannot ride no-restricted-syntax next to these error selectors
 // (one severity per file-set) and a custom rule id would not be counted by
 // the ui-design-system-gate's GATED set.
-// Matching is bare string Literals so cva()/cn() module-level class lists are
-// covered too; template literals and .ts HTML-string builders knowingly
-// escape (the same static-analysis limitation the dynamic-loader mirrors
-// document above).
-const TYPE_BANS = [
+// Each ban matches bare string Literals (cva()/cn() module-level class lists
+// included) AND TemplateElement chunks, so template-literal classNames and
+// .ts HTML-string builders (e.g. the chat markdown renderer) are covered
+// too. Only interpolated VALUES escape (`text-[${size}px]` still trips on
+// the `text-[` chunk).
+const TYPE_BAN_SPECS = [
   {
-    selector:
-      "Literal[value=/(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()/]",
+    // `(color:)?` — Tailwind's type-hint prefix must not become a bypass
+    // (`bg-[color:#fff]` is as arbitrary as `bg-[#fff]`).
+    pattern:
+      "(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(color:)?(#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()",
     message:
       "Arbitrary color value in a class string — use the semantic color tokens (text-foreground, bg-surface, text-muted-foreground, border-line, …) from @cinatra-ai/design.",
   },
   {
-    selector:
-      "Literal[value=/(^|[^a-zA-Z0-9_-])dark:[a-z-]*:?(text|bg|border|ring|fill|stroke|divide|outline|decoration|accent)-/]",
+    // `([a-zA-Z0-9-]*(\[[^\]]*\])?:)*` — any chain of further variants
+    // (hover:, focus-visible:, data-[state=open]:, [&>svg]:) between
+    // `dark:` and the color utility, so variant stacking is not a bypass.
+    pattern:
+      "(^|[^a-zA-Z0-9_-])dark:([a-zA-Z0-9-]*(\\[[^\\]]*\\])?:)*(text|bg|border|ring|fill|stroke|divide|outline|decoration|accent)-",
     message:
       "Manual dark: color override — the semantic tokens adapt to dark mode through the cascade; style with the token utilities instead of per-theme colors.",
   },
@@ -313,18 +319,20 @@ const TYPE_BANS = [
     // value — it defers to the cascade); every OTHER `text-[…]`, including
     // an explicit `text-[length:12px]`, is banned so `length:` cannot be
     // used as a bypass prefix.
-    selector:
-      "Literal[value=/(^|[^a-zA-Z0-9_-])text-\\[(?!length:inherit\\])/]",
+    pattern: "(^|[^a-zA-Z0-9_-])text-\\[(?!length:inherit\\])",
     message:
       "Arbitrary text-[…] font size — use the named type-scale tokens (text-page-title-{sm,md,lg}, text-listing-title, text-badge-xs, text-badge-2xs) or the standard Tailwind sizes. See cinatra#886 for the migration of pre-existing sites.",
   },
   {
-    selector:
-      "Literal[value=/(^|[^a-zA-Z0-9_-])tracking-\\[/]",
+    pattern: "(^|[^a-zA-Z0-9_-])tracking-\\[",
     message:
       "Arbitrary tracking-[…] letter-spacing — use the named tracking tokens (tracking-title-tight, tracking-kicker, tracking-kicker-wide, tracking-page-label). See cinatra#886 for the migration of pre-existing sites.",
   },
 ];
+const TYPE_BANS = TYPE_BAN_SPECS.flatMap(({ pattern, message }) => [
+  { selector: `Literal[value=/${pattern}/]`, message },
+  { selector: `TemplateElement[value.raw=/${pattern}/]`, message },
+]);
 
 // Shrink-only allowlist (cinatra#886): files that still carry PRE-EXISTING
 // arbitrary type values. They keep every other JSX-layer ban but skip
@@ -365,6 +373,10 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   "packages/permissions/src/pages.tsx",
   "packages/metric-cost-api/src/components/legacy-cost-list.tsx",
   "packages/notifications/src/notifications-flyout.tsx",
+  // .ts template-literal HTML builder (chat markdown renderer): text-[0.8rem]
+  // code blocks + tracking-[0.1em] table headers — normalization decisions
+  // tracked in cinatra#886 like the JSX sites above.
+  "packages/chat/src/markdown-render.ts",
 ];
 
 // AND a path-zone glob with an extension glob. ESLint flat config treats a
@@ -633,11 +645,16 @@ const eslintConfig = defineConfig([
   // the JSX raw-JSX+dynamic blocks below on a single `no-restricted-syntax`
   // severity. Extension scope of each block matches its import-layer twin.
   //
-  // Non-JSX Layer 1 (everywhere).
+  // Non-JSX Layer 1 (everywhere). TYPE_BANS ride here too (cinatra#803):
+  // class strings are also built in .ts (template-literal HTML builders,
+  // shared cva()/cn() modules), and those must not become the bypass lane
+  // around the JSX-layer bans. Carve-outs (sdk-ui, tests, extensions, the
+  // migration allowlist, this config file) are restated after the JSX
+  // layers below.
   {
     files: ["**/*.{js,cjs,mjs,ts,cts,mts}"],
     rules: {
-      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L1],
+      "no-restricted-syntax": ["error", ...TYPE_BANS, ...DYNAMIC_BANS_L1],
     },
   },
   // Non-JSX Layer 2 (sdk-dashboard, excluding the adapter). Static twin is
@@ -647,7 +664,7 @@ const eslintConfig = defineConfig([
     files: andExt(["packages/sdk-dashboard/src/**"], TS_NON_JSX_EXT),
     ignores: ["packages/sdk-dashboard/src/adapters/drizzle-cube/**/*.ts"],
     rules: {
-      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L2],
+      "no-restricted-syntax": ["error", ...TYPE_BANS, ...DYNAMIC_BANS_L2],
     },
   },
   // Non-JSX Layer 3 (sdk-dashboard adapter): drizzle server + /mcp re-allowed.
@@ -658,7 +675,7 @@ const eslintConfig = defineConfig([
       TS_NON_JSX_EXT,
     ),
     rules: {
-      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L3],
+      "no-restricted-syntax": ["error", ...TYPE_BANS, ...DYNAMIC_BANS_L3],
     },
   },
   // Non-JSX Layer 4 (packages/dashboards/src/components):
@@ -667,7 +684,7 @@ const eslintConfig = defineConfig([
   {
     files: andExt(["packages/dashboards/src/components/**"], JS_TS_NON_JSX_EXT),
     rules: {
-      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L4],
+      "no-restricted-syntax": ["error", ...TYPE_BANS, ...DYNAMIC_BANS_L4],
     },
   },
   // Non-JSX Layer 5 (vendored shadcn primitives): Radix re-allowed. Static
@@ -819,11 +836,59 @@ const eslintConfig = defineConfig([
     },
   },
   // Shrink-only migration allowlist — see TYPE_ARBITRARY_MIGRATION_ALLOWLIST
-  // above (all entries are L1-zone files; tracked in cinatra#886).
+  // above (all entries are L1-zone files — .tsx and the one .ts HTML
+  // builder, where the raw-JSX selectors simply never match; tracked in
+  // cinatra#886).
   {
     files: TYPE_ARBITRARY_MIGRATION_ALLOWLIST,
     rules: {
       "no-restricted-syntax": ["error", ...RAW_JSX_RESTRICTIONS, ...DYNAMIC_BANS_L1],
+    },
+  },
+
+  // Non-JSX twins of the carve-outs above (the TYPE_BANS also ride the
+  // non-JSX layers): sdk-ui, tests, extensions, and this config file itself
+  // (its ban messages and selector sources spell out the banned shapes).
+  // Each keeps its zone's dynamic-loader set, exactly like the JSX twins.
+  {
+    files: andExt(["packages/sdk-ui/src/**"], L1_NON_JSX_EXT),
+    ignores: ["**/components/ui/**", "**/src/ui/**"],
+    rules: {
+      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L1],
+    },
+  },
+  {
+    files: [
+      ["**/__tests__/**", L1_NON_JSX_EXT],
+      "**/*.test.{js,cjs,mjs,ts,cts,mts}",
+    ],
+    ignores: [
+      "**/components/ui/**",
+      "**/src/ui/**",
+      "packages/dashboards/src/components/**",
+    ],
+    rules: {
+      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L1],
+    },
+  },
+  // …and the dashboards-components zone tests keep their L4 dynamic set:
+  {
+    files: [["packages/dashboards/src/components/**", "**/*.test.{js,ts}"]],
+    rules: {
+      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L4],
+    },
+  },
+  {
+    files: [["extensions/**", L1_NON_JSX_EXT]],
+    ignores: ["**/components/ui/**", "**/src/ui/**"],
+    rules: {
+      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L1],
+    },
+  },
+  {
+    files: ["eslint.config.mjs"],
+    rules: {
+      "no-restricted-syntax": ["error", ...DYNAMIC_BANS_L1],
     },
   },
 

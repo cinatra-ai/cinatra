@@ -265,6 +265,9 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
   const l1Forbidden = "src/components/__eslint-boundary-type-ban.fixture.tsx";
   const l1LengthBypass =
     "src/components/__eslint-boundary-length-bypass.fixture.tsx";
+  const l1BypassForms =
+    "src/components/__eslint-boundary-bypass-forms.fixture.tsx";
+  const l1NonJsx = "src/lib/__eslint-boundary-type-ban.fixture.ts";
   const l1Allowed = "src/components/__eslint-boundary-type-allowed.fixture.tsx";
   const sdkUiCarveOut =
     "packages/sdk-ui/src/__eslint-boundary-type-carveout.fixture.tsx";
@@ -275,6 +278,11 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
     tempFiles.push(
       copyFixtureTo("forbidden-arbitrary-type-values.fixture.tsx", l1Forbidden),
       copyFixtureTo("forbidden-text-length-bypass.fixture.tsx", l1LengthBypass),
+      copyFixtureTo(
+        "forbidden-type-ban-bypass-forms.fixture.tsx",
+        l1BypassForms,
+      ),
+      copyFixtureTo("forbidden-type-values-nonjsx.fixture.ts", l1NonJsx),
       copyFixtureTo("allowed-type-tokens.fixture.tsx", l1Allowed),
       copyFixtureTo(
         "forbidden-arbitrary-type-values.fixture.tsx",
@@ -321,6 +329,33 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
     expectTypeBan(r, "Arbitrary text-[…] font size");
   });
 
+  it("flags color: type-hint arbitrary colors — bg-[color:#…] is not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    const colorBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Arbitrary color value"),
+    );
+    // `bg-[color:#ff0000]` and `border-[color:rgb(255,0,0)]` both fire.
+    expect(colorBans.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("flags dark: overrides behind variant chains — dark:hover:focus:/dark:data-[…]: are not bypasses", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    const darkBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Manual dark: color override"),
+    );
+    expect(darkBans.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("flags template-literal class strings — backticks are not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    expectTypeBan(r, "Arbitrary text-[…] font size");
+  });
+
+  it("flags .ts template-literal HTML builders (non-JSX layer coverage)", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1NonJsx));
+    expectTypeBan(r, "Arbitrary tracking-[…] letter-spacing");
+  });
+
   it("allows named tokens, text-[length:inherit], and non-color dark: variants", () => {
     const r = lintFile(path.join(REPO_ROOT, l1Allowed));
     expectNoTypeBans(r);
@@ -341,6 +376,18 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
     // TYPE_ARBITRARY_MIGRATION_ALLOWLIST layer keeps it lint-green until
     // the cinatra#886 migration shrinks the list.
     const r = lintFile(path.join(REPO_ROOT, "src/components/scope-badge.tsx"));
+    expectNoTypeBans(r);
+  });
+
+  it("keeps the allowlisted .ts HTML builder exempt (markdown-render.ts)", () => {
+    const r = lintFile(
+      path.join(REPO_ROOT, "packages/chat/src/markdown-render.ts"),
+    );
+    expectNoTypeBans(r);
+  });
+
+  it("carves out eslint.config.mjs itself (its messages spell the banned shapes)", () => {
+    const r = lintFile(path.join(REPO_ROOT, "eslint.config.mjs"));
     expectNoTypeBans(r);
   });
 });
