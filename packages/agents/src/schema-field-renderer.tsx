@@ -22,6 +22,7 @@ import {
   type FieldRendererProps,
   type RendererMode,
 } from "./field-renderer-registry";
+import { humanizeFieldName } from "./humanize-field-name";
 
 type Props = {
   fieldName: string;
@@ -68,7 +69,7 @@ export function SchemaFieldRenderer(props: Props) {
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
-  const label = title ?? description ?? fieldName;
+  const label = title ?? description ?? humanizeFieldName(fieldName);
 
   // Local state for text-entry inputs (string, url, email, number, array).
   // onChange in HITL context calls approveReviewTask; these inputs need local
