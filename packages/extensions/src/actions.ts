@@ -21,6 +21,15 @@ import {
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./screens/marketplace-failure-copy";
+// Pre-install access selector (cinatra#805): target schema + target→policy
+// mapping. PURE module — the authz gates + policy write are lazy-imported
+// inside the action so the no-target path pays nothing.
+import {
+  InstallAccessTargetSchema,
+  accessTargetToInstallPolicy,
+  isInstallAccessTargetKind,
+  type InstallAccessTarget,
+} from "./install-access-target";
 
 // ---------------------------------------------------------------------------
 // Operator-side failure logging (cinatra#685). The end user only ever sees a
@@ -305,6 +314,15 @@ export async function forceDeleteExtensionPackage(
 export async function installExtensionPackageFormAction(input: {
   packageName: string;
   packageVersion: string;
+  /**
+   * Pre-install access selection (cinatra#805) — the same org / team /
+   * project target rows the agent InstallScopeDialog offers. OPTIONAL:
+   * absent → exactly the legacy behavior (install with the implicit per-kind
+   * default access, no policy write). Present → server-gated (fail-closed)
+   * and persisted through setExtensionInstallAccess after a successful
+   * install. Only the connector / artifact / workflow kinds accept it.
+   */
+  accessTarget?: { level: "organization" | "team" | "project"; id: string };
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
@@ -316,16 +334,203 @@ export async function installExtensionPackageFormAction(input: {
     // materialization) has organization context from the UI server-action path.
     ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
   };
-  const result = await installExtensionPackage(input.packageName, input.packageVersion, actor);
-  if (!result.success) {
-    // cinatra#685: RETURN the classified category instead of throwing. A thrown
-    // server-action message is masked in production (digest only) so it cannot
-    // carry the cause to the client; a returned value is delivered intact. The
-    // raw technical error stays operator-side (logs), never in the user toast.
-    const category = result.failureCategory ?? "unrecoverable";
-    logMarketplaceFailureForOperator("install", input.packageName, category, result.error);
-    return { ok: false, category };
+
+  // -------------------------------------------------------------------------
+  // Pre-install access-target validation + authorization (cinatra#805).
+  // Runs BEFORE any mutation so a denied/invalid target installs nothing.
+  // The dialog's disabled rows are UX only — this gate is the security
+  // boundary, shared verbatim with the agent at-scope install path
+  // (@cinatra-ai/agents/install-target-authz).
+  // -------------------------------------------------------------------------
+  let accessTarget: InstallAccessTarget | undefined;
+  const orgId = session.session?.activeOrganizationId ?? null;
+  if (input.accessTarget) {
+    try {
+      accessTarget = InstallAccessTargetSchema.parse(input.accessTarget);
+      if (!orgId) {
+        throw new Error(
+          "An install access target requires an active organization.",
+        );
+      }
+      const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
+      const {
+        readActorRolesForInstall,
+        assertTargetBelongsToActiveOrg,
+        assertCanInstallAtTarget,
+      } = await import("@cinatra-ai/agents/install-target-authz");
+      const { orgRole } = await buildCanDoOptsFromSession(session);
+      const roleBag = readActorRolesForInstall(session, orgId, orgRole);
+      const tenantCheck = await assertTargetBelongsToActiveOrg(
+        roleBag,
+        accessTarget,
+        orgId,
+      );
+      await assertCanInstallAtTarget(
+        roleBag,
+        accessTarget,
+        tenantCheck.projectOwnership,
+      );
+      // NOTE — the KIND gate ("only connector/artifact/workflow accept an
+      // access target") runs POST-install against the canonical row's kind,
+      // NOT here. A pre-install packument probe (resolveExtensionTypeId) is
+      // unreliable for this: when the connected registry cannot serve the
+      // packument (or a legacy package omits `cinatra.kind`) it falls back to
+      // "agent" and would wrongly refuse a legitimate connector install
+      // (observed live). The canonical row's kind comes from the REAL
+      // installed manifest — authoritative; a mismatch there compensates the
+      // fresh install (fail-closed), see below.
+    } catch (err) {
+      // Fail closed, nothing installed. RETURN a classified category instead
+      // of throwing (thrown messages are masked in production — cinatra#685);
+      // the full technical error stays operator-side.
+      logMarketplaceFailureForOperator(
+        "install-access-gate",
+        input.packageName,
+        "unrecoverable",
+        err,
+      );
+      return { ok: false, category: "unrecoverable" };
+    }
   }
+
+  if (accessTarget && orgId) {
+    // -------------------------------------------------------------------------
+    // Install + install-time access as ONE unit under the per-package install
+    // lock — the SAME ALS re-entrant lock the dispatcher install and uninstall
+    // paths hold (nested acquires run inline). Without it, the "did a live row
+    // exist before?" snapshot could race a CONCURRENT install of the same
+    // package, and the fail-closed compensation below could uninstall a row
+    // the other request just installed.
+    //
+    // The selected access persists through the sanctioned contract
+    // (setExtensionInstallAccess) — organization target applies the per-kind
+    // default (workspace); team/project targets scope all visibility tiers to
+    // the selection. FAIL-CLOSED: if the policy write fails (or the installed
+    // kind turns out not to accept a target), the fresh install is rolled back
+    // (uninstalled) rather than left at the BROADER default — unless a live
+    // install already existed before this call, in which case we must not
+    // destroy it and report the partial state instead.
+    // -------------------------------------------------------------------------
+    const target = accessTarget;
+    const { withInstallLock } = await import("@cinatra-ai/agents");
+    const outcome = await withInstallLock(
+      input.packageName,
+      async (): Promise<MarketplaceInstallActionResult | "installed"> => {
+        const { readInstalledExtensionByIdentity } = await import(
+          "./canonical-store"
+        );
+        const identity = {
+          organizationId: orgId,
+          ownerLevel: "organization" as const,
+          ownerId: orgId,
+          packageName: input.packageName,
+        };
+        // Snapshot BEFORE the install (under the lock): an install of an
+        // already-installed package is a registry no-op that still reports
+        // success — the compensation must never uninstall that row.
+        const preRow = await readInstalledExtensionByIdentity(identity);
+        const hadLiveRowBefore =
+          preRow != null &&
+          (preRow.status === "active" || preRow.status === "locked");
+
+        const result = await installExtensionPackage(
+          input.packageName,
+          input.packageVersion,
+          actor,
+        );
+        if (!result.success) {
+          // cinatra#685: RETURN the classified category (see legacy path note).
+          const category = result.failureCategory ?? "unrecoverable";
+          logMarketplaceFailureForOperator(
+            "install",
+            input.packageName,
+            category,
+            result.error,
+          );
+          return { ok: false, category };
+        }
+
+        try {
+          const row = await readInstalledExtensionByIdentity(identity);
+          if (!row) {
+            throw new Error(
+              "canonical install row not found after a successful install",
+            );
+          }
+          if (!isInstallAccessTargetKind(row.kind)) {
+            throw new Error(
+              `installed kind "${row.kind}" does not accept an install access target`,
+            );
+          }
+          const policy = accessTargetToInstallPolicy(target);
+          const { setExtensionInstallAccess } = await import(
+            "./install-access-contract"
+          );
+          await setExtensionInstallAccess({
+            kind: row.kind,
+            resourceId: row.id,
+            ...(policy ? { policy } : {}),
+            installedByUserId: session.user.id,
+          });
+          return "installed";
+        } catch (accessErr) {
+          logMarketplaceFailureForOperator(
+            "install-access",
+            input.packageName,
+            "unrecoverable",
+            accessErr,
+          );
+          if (hadLiveRowBefore) {
+            // Pre-existing install — never uninstall it; its previous access
+            // stands. Surface the partial state honestly.
+            return {
+              ok: false,
+              category: "unrecoverable",
+              stage: "access-partial",
+            };
+          }
+          // Compensate: roll the fresh install back so a narrower-than-default
+          // selection can never silently fail open to workspace access. (Root
+          // package only — auto-installed dependencies are shared and stay.)
+          const rollback = await uninstallExtensionPackage(
+            input.packageName,
+            input.packageVersion,
+            actor,
+          );
+          if (!rollback.success) {
+            logMarketplaceFailureForOperator(
+              "install-access-rollback",
+              input.packageName,
+              "unrecoverable",
+              rollback.error,
+            );
+            return {
+              ok: false,
+              category: "unrecoverable",
+              stage: "access-partial",
+            };
+          }
+          return { ok: false, category: "unrecoverable", stage: "access" };
+        }
+      },
+    );
+    if (outcome !== "installed") {
+      return outcome;
+    }
+  } else {
+    // Legacy path (no access target) — behavior unchanged.
+    const result = await installExtensionPackage(input.packageName, input.packageVersion, actor);
+    if (!result.success) {
+      // cinatra#685: RETURN the classified category instead of throwing. A thrown
+      // server-action message is masked in production (digest only) so it cannot
+      // carry the cause to the client; a returned value is delivered intact. The
+      // raw technical error stays operator-side (logs), never in the user toast.
+      const category = result.failureCategory ?? "unrecoverable";
+      logMarketplaceFailureForOperator("install", input.packageName, category, result.error);
+      return { ok: false, category };
+    }
+  }
+
   redirect("/configuration/extensions");
 }
 

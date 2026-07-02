@@ -57,25 +57,10 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { ImportAgentForm } from "./import-form";
 import { ImportSkillFromGitHubForm } from "./import-skill-from-github-form";
-// InstallScopeDialog + server-side picker target builder.
+// InstallScopeDialog + server-side picker target builder (shared with the
+// extension marketplace screen — see install-target-picker.ts).
 import { InstallScopeDialog } from "./components/install-scope-dialog";
-import {
-  buildInstallTargets,
-  pickDefaultPickerValue,
-  type InstallActorForTargets,
-} from "./install-targets";
-import {
-  readTeamsForUser,
-  betterAuthDb,
-  betterAuthOrganizations,
-} from "@/lib/better-auth-db";
-import {
-  readProjectById,
-  readProjectCoOwners,
-  projects as projectsTable,
-  projectsDb,
-} from "@/lib/projects-store";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { buildInstallTargetPickerContext } from "./install-target-picker";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -773,18 +758,9 @@ export async function RegistryEntryDetailSections({
   }
 
   // -------------------------------------------------------------------------
-  // Server-side compute of install picker rows.
-  //
-  // Single source of truth for enabled/disabled state per target row. The
-  // dialog never reads actor.teamRoles — it consumes installTargets as a
-  // pre-decided shape. Mirrors the assertCanInstallAtTarget rule grid in
-  // actions.ts (parity locked by install-targets-parity.test.ts).
-  //
-  // NOTE: Production today does NOT load teamRoles from any canonical store
-  // (Better Auth's teamMember table has no role column). Team and
-  // team-owned-project rows are DISABLED for non-platform_admin actors until
-  // team_admin role loading exists. The picker reflects this naturally — no
-  // special branch here.
+  // Server-side compute of install picker rows — shared builder (see
+  // install-target-picker.ts). Single source of truth for enabled/disabled
+  // state per target row; the dialog never reads actor.teamRoles.
   // -------------------------------------------------------------------------
   const activeOrgId = getActiveOrganizationId(session);
   // currentProjectId is propagation deferred — agent-detail screen does
@@ -792,105 +768,15 @@ export async function RegistryEntryDetailSections({
   // render whenever the actor owns the project; just no auto-default.
   const currentProjectId: string | undefined = undefined;
 
-  const installActor: InstallActorForTargets = {
-    principalId: session.user.id,
-    organizationId: activeOrgId ?? "",
-    platformRole:
-      String(session.user.role ?? "")
-        .split(",")
-        .map((s) => s.trim())
-        .some((r) => r === "admin" || r === "platform_admin")
-        ? "platform_admin"
-        : "member",
+  const {
+    installTargets,
+    ownerEntityNames,
+    defaultValue: installDefaultValue,
+  } = await buildInstallTargetPickerContext({
+    session,
     orgRole: opts.orgRole,
-    // teamRoles intentionally omitted — see hand-off note above.
-  };
-
-  // Look up org name for the picker label.
-  let orgName = "Organization";
-  if (activeOrgId) {
-    const orgRows = await betterAuthDb
-      .select({ name: betterAuthOrganizations.name })
-      .from(betterAuthOrganizations)
-      .where(eq(betterAuthOrganizations.id, activeOrgId))
-      .limit(1);
-    if (orgRows[0]?.name) orgName = orgRows[0].name;
-  }
-
-  // Teams the actor belongs to in the active org.
-  const userTeams = activeOrgId
-    ? await readTeamsForUser(session.user.id, activeOrgId)
-    : [];
-
-  // Projects in the active org owned by the actor (user-owned or co-owned)
-  // OR by a team the actor is a member of. Visibility is intentionally
-  // narrower than "all projects in the org" — non-owners should not see
-  // projects they have no install authority over.
-  const projectsForPicker: {
-    id: string;
-    name: string;
-    ownerUserIds: string[];
-    owningTeamId: string | null;
-  }[] = [];
-  if (activeOrgId) {
-    const teamIds = userTeams.map((t) => t.id);
-    const ownClause = and(
-      eq(projectsTable.ownerLevel, "user"),
-      eq(projectsTable.ownerId, session.user.id),
-    );
-    const teamClause =
-      teamIds.length > 0
-        ? and(
-            eq(projectsTable.ownerLevel, "team"),
-            inArray(projectsTable.ownerId, teamIds),
-          )
-        : undefined;
-    const orClauses = [ownClause, ...(teamClause ? [teamClause] : [])];
-    const rows = await projectsDb
-      .select({
-        id: projectsTable.id,
-        name: projectsTable.name,
-        ownerLevel: projectsTable.ownerLevel,
-        ownerId: projectsTable.ownerId,
-      })
-      .from(projectsTable)
-      .where(orClauses.length > 1 ? or(...orClauses) : ownClause)
-      .orderBy(projectsTable.name);
-
-    for (const row of rows) {
-      // ownerUserIds union: project owner (when user-owned) + co-owners.
-      const ownerUserIds: string[] = [];
-      if (row.ownerLevel === "user") ownerUserIds.push(row.ownerId);
-      const coOwners = await readProjectCoOwners(row.id);
-      for (const co of coOwners) ownerUserIds.push(co.userId);
-      projectsForPicker.push({
-        id: row.id,
-        name: row.name,
-        ownerUserIds,
-        owningTeamId: row.ownerLevel === "team" ? row.ownerId : null,
-      });
-    }
-  }
-
-  const installTargets = buildInstallTargets({
-    actor: installActor,
-    activeOrgId: activeOrgId ?? "",
-    orgName,
-    teams: userTeams,
-    projects: projectsForPicker,
     currentProjectId,
   });
-  const ownerEntityNames: Record<string, string> = {
-    org: orgName,
-    ...Object.fromEntries(userTeams.map((t) => [`team:${t.id}`, t.name])),
-    ...Object.fromEntries(
-      projectsForPicker.map((p) => [`project:${p.id}`, p.name]),
-    ),
-  };
-  const installDefaultValue = pickDefaultPickerValue(
-    installTargets,
-    currentProjectId,
-  );
 
   // New installs go through InstallScopeDialog →
   // installRegistryPackageAtScope. Update + Uninstall actions remain
