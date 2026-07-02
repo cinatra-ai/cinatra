@@ -39,6 +39,7 @@ import type { NextRequest } from "next/server";
 
 import { getActorContext } from "@/lib/auth-session";
 import { CONNECTOR_ACCESS_DENIED, guardConnectorAccess } from "@/lib/connectors-scope-guard";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import { validateExecuteToolCall } from "@/lib/external-mcp/twenty-execute-tool-proxy";
 import {
   getExternalMcpServerById,
@@ -210,12 +211,26 @@ export async function POST(
   };
   if (bearer) upstreamHeaders.authorization = `Bearer ${bearer}`;
 
-  let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(row.serverUrl, {
-      method: "POST",
-      headers: upstreamHeaders,
-      body: JSON.stringify(body),
+    // External MCP tool execution can legitimately run longer than a plain
+    // REST call, but must still be bounded so a hung upstream never pins the
+    // request slot. Reading the body is inside this try so a timeout that fires
+    // during the (previously uncapped) `.text()` also maps to a JSON-RPC error
+    // instead of surfacing as an unhandled 500.
+    const upstreamResponse = await fetchWithTimeout(
+      row.serverUrl,
+      {
+        method: "POST",
+        headers: upstreamHeaders,
+        body: JSON.stringify(body),
+      },
+      { timeoutMs: 60_000 },
+    );
+    const contentType = upstreamResponse.headers.get("content-type") ?? "application/json";
+    const responseBody = await upstreamResponse.text();
+    return new Response(responseBody, {
+      status: upstreamResponse.status,
+      headers: { "content-type": contentType },
     });
   } catch (err) {
     return jsonRpcError(
@@ -224,11 +239,4 @@ export async function POST(
       `upstream MCP fetch failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
-
-  const contentType = upstreamResponse.headers.get("content-type") ?? "application/json";
-  const responseBody = await upstreamResponse.text();
-  return new Response(responseBody, {
-    status: upstreamResponse.status,
-    headers: { "content-type": contentType },
-  });
 }
