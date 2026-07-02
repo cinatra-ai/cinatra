@@ -247,6 +247,102 @@ describe("createHttpMarketplaceMcpClient", () => {
     }
   });
 
+  it("fetchPublicMarketplaceExtensionDetail maps the in-app modal contract (rating/reviews/vendor)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          name: "@vendor/weather-agent",
+          scope: "vendor",
+          extension_name: "weather-agent",
+          kind: "agent",
+          kind_label: "Agent",
+          display_name: "Weather Agent",
+          latest_version: "3.1.0",
+          description: "Forecasts.",
+          current_visibility: "public",
+          freshness_at: "2026-06-20T10:00:00Z",
+          install_count: 128,
+          permalink: "https://marketplace.cinatra.ai/product/weather-agent",
+          badge: { text: "Open source", variant: "oss", license: "MIT" },
+          icon_url: { url: "https://cdn.example/i.png", width: 46, height: 46 },
+          rating_summary: { average: 4.5, total: 2, counts: { "5": 1, "4": 1 } },
+          reviews: [
+            { author: "Grace", verified_owner: true, date: "2026-06-21T08:00:00Z", rating: 5, text: "Accurate." },
+            { author: "Ada", verified_owner: false, date: "2026-06-19T08:00:00Z", rating: 4, text: "Handy." },
+          ],
+          vendor: { name: "WeatherWorks", slug: "weatherworks", store_url: "https://marketplace.cinatra.ai/store/weatherworks/" },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const out = await fetchPublicMarketplaceExtensionDetail(
+        { packageName: "@vendor/weather-agent" },
+        { baseUrl: "https://mk.test" },
+      );
+
+      expect(out.displayName).toBe("Weather Agent");
+      expect(out.kindLabel).toBe("Agent");
+      expect(out.commerceBadge).toEqual({ text: "Open source", variant: "oss", license: "MIT" });
+      expect(out.freshnessAt).toBe("2026-06-20T10:00:00Z");
+      expect(out.installCount).toBe(128);
+      expect(out.permalink).toBe("https://marketplace.cinatra.ai/product/weather-agent");
+      expect(out.iconUrl).toBe("https://cdn.example/i.png");
+      expect(out.ratingSummary).toEqual({
+        average: 4.5,
+        total: 2,
+        counts: { "1": 0, "2": 0, "3": 0, "4": 1, "5": 1 },
+      });
+      expect(out.reviews).toEqual([
+        { author: "Grace", verifiedOwner: true, date: "2026-06-21T08:00:00Z", rating: 5, text: "Accurate." },
+        { author: "Ada", verifiedOwner: false, date: "2026-06-19T08:00:00Z", rating: 4, text: "Handy." },
+      ]);
+      expect(out.vendor).toEqual({
+        name: "WeatherWorks",
+        slug: "weatherworks",
+        storeUrl: "https://marketplace.cinatra.ai/store/weatherworks/",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fetchPublicMarketplaceExtensionDetail drops a non-http vendor store URL and defaults an absent modal contract", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          name: "@vendor/plain-agent",
+          scope: "vendor",
+          extension_name: "plain-agent",
+          kind: "agent",
+          latest_version: "1.0.0",
+          current_visibility: "public",
+          // A tampered store URL must never survive to the client.
+          vendor: { name: "Sneaky", slug: "sneaky", store_url: "javascript:alert(1)" },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const out = await fetchPublicMarketplaceExtensionDetail(
+        { packageName: "@vendor/plain-agent" },
+        { baseUrl: "https://mk.test" },
+      );
+      expect(out.vendor).toEqual({ name: "Sneaky", slug: "sneaky", storeUrl: null });
+      // Absent modal-contract fields default safely (older payload shape).
+      expect(out.ratingSummary).toBeNull();
+      expect(out.reviews).toEqual([]);
+      expect(out.installCount).toBeNull();
+      expect(out.commerceBadge).toBeNull();
+      // displayName falls back to name when display_name is absent.
+      expect(out.displayName).toBe("@vendor/plain-agent");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("fetchPublicMarketplaceExtensionDetail maps public REST 404 to MarketplaceMcpError without fallback", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("not found", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);

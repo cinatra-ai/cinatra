@@ -21,6 +21,7 @@ import { ExtensionsMarketplaceClient } from "./extensions-marketplace-client";
 import { ExtensionInstallScopeDialog } from "./extension-install-scope-dialog";
 import { isInstallAccessTargetKind } from "../install-access-target";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
+import { MarketplaceDetailModal } from "./marketplace-detail-modal";
 import {
   buildMarketplaceFailureCopy,
   marketplaceFailureCopy,
@@ -292,9 +293,17 @@ export async function ExtensionsMarketplaceScreen({
             ) : (
               <Button size="sm" variant="secondary" disabled className="w-full flex-1">Installed</Button>
             )}
-            <Button asChild size="sm" variant="outline" className="flex-1">
-              <Link href={card.detailHref}>More details</Link>
-            </Button>
+            {/* More details opens the in-app extension-detail modal (embedding
+                the marketplace listing detail) instead of navigating to the
+                full-page route. The install CTA above stays the card's 4-state
+                CTA; the modal footer carries the full six-state install CTA. */}
+            <MarketplaceDetailModal
+              card={card}
+              cta={cta}
+              installAction={installAction}
+              updateAction={updateAction}
+              restoreAction={restoreAction}
+            />
           </div>
         }
       />

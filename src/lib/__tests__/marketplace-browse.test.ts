@@ -7,13 +7,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // loader's orchestration is tested in isolation. Field mapping itself is
 // covered by marketplace-card-model.test.ts.
 
-const { publicListMock, loadVerdaccioMock } = vi.hoisted(() => ({
+const { publicListMock, publicDetailMock, loadVerdaccioMock } = vi.hoisted(() => ({
   publicListMock: vi.fn(),
+  publicDetailMock: vi.fn(),
   loadVerdaccioMock: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
   fetchPublicMarketplaceExtensionList: publicListMock,
+  fetchPublicMarketplaceExtensionDetail: publicDetailMock,
 }));
 
 vi.mock("@cinatra-ai/registries", () => ({
@@ -34,13 +36,14 @@ vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForReads: loadVerdaccioMock,
 }));
 
-import { loadMarketplaceBrowse } from "../marketplace-browse";
+import { loadMarketplaceBrowse, loadPublicMarketplaceDetail } from "../marketplace-browse";
 import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 import { InstanceNamespaceNotConfiguredError } from "@cinatra-ai/registries";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
 
 beforeEach(() => {
   publicListMock.mockReset();
+  publicDetailMock.mockReset();
   loadVerdaccioMock.mockReset();
   loadVerdaccioMock.mockResolvedValue({
     registryUrl: "https://registry.test",
@@ -178,5 +181,75 @@ describe("loadMarketplaceBrowse", () => {
     publicListMock.mockRejectedValue({ code: -32601, message: "Method not found" });
 
     await expect(loadMarketplaceBrowse()).rejects.toMatchObject({ code: -32601 });
+  });
+});
+
+describe("loadPublicMarketplaceDetail", () => {
+  it("projects a public ExtensionDetail into the client-safe modal view", async () => {
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      description: "Forecasts.",
+      longDescription: null,
+      readmeMarkdown: "# Weather",
+      license: "MIT",
+      commerceBadge: { text: "Open source", variant: "oss", license: "MIT" },
+      freshnessAt: "2026-06-20T10:00:00Z",
+      installCount: 128,
+      permalink: "https://marketplace.cinatra.ai/product/weather-agent",
+      sdkAbiRange: "^2",
+      iconUrl: "https://cdn.example/i.png",
+      ratingSummary: { average: 4.5, total: 2, counts: { "1": 0, "2": 0, "3": 0, "4": 1, "5": 1 } },
+      reviews: [{ author: "Grace", verifiedOwner: true, date: "2026-06-21T08:00:00Z", rating: 5, text: "Accurate." }],
+      vendor: { name: "WeatherWorks", slug: "weatherworks", storeUrl: "https://marketplace.cinatra.ai/store/weatherworks/" },
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.displayName).toBe("Weather Agent");
+    expect(res.detail.kindLabel).toBe("Agent");
+    expect(res.detail.cost).toBe("Open source");
+    expect(res.detail.license).toBe("MIT");
+    expect(res.detail.installCount).toBe(128);
+    expect(res.detail.sdkAbiRange).toBe("^2");
+    expect(res.detail.ratingSummary.total).toBe(2);
+    expect(res.detail.reviews).toHaveLength(1);
+    expect(res.detail.vendor?.storeUrl).toBe("https://marketplace.cinatra.ai/store/weatherworks/");
+  });
+
+  it("returns not_found for a malformed scoped name without hitting the marketplace", async () => {
+    const res = await loadPublicMarketplaceDetail("not-a-scoped-name");
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+    expect(publicDetailMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a non-public visibility as not_found (defense in depth)", async () => {
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/private-agent",
+      name: "@vendor/private-agent",
+      kind: "agent",
+      currentVisibility: "unknown",
+    });
+    const res = await loadPublicMarketplaceDetail("@vendor/private-agent");
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("maps a 404 MarketplaceMcpError to not_found", async () => {
+    publicDetailMock.mockRejectedValue(new MarketplaceMcpError("nope", 404, ""));
+    const res = await loadPublicMarketplaceDetail("@vendor/missing-agent");
+    expect(res).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  it("maps any other failure to error (retryable, never a crash)", async () => {
+    publicDetailMock.mockRejectedValue(new MarketplaceMcpError("boom", 502, ""));
+    const res = await loadPublicMarketplaceDetail("@vendor/flaky-agent");
+    expect(res).toEqual({ ok: false, reason: "error" });
   });
 });
