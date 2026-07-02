@@ -3371,23 +3371,13 @@ END $$` },
     },
 
     // -------------------------------------------------------------------
-    // agent_templates first_run_at trigger
-    //   Also CLAIMS the template's org on first run: install-seeded templates
-    //   (ensureAgentPackage → importAgentTemplateCore, and the marketplace
-    //   install saga) persist org_id = NULL, and nothing backfilled it — so the
-    //   org-scoped /agents "Installed agents" card (count(*) WHERE org_id = :org)
-    //   and readAgentTemplates excluded them (cinatra#847). agent_runs.org_id is
-    //   NOT NULL, so the first run resolves the owning org; COALESCE fills org_id
-    //   only when it is still NULL (an org_id already set at install is
-    //   preserved, never moved). Runs its single UPDATE only on the first run
-    //   (first_run_at IS NULL), so the added column write costs nothing extra.
+    // agent_templates first_run_at trigger — also stamps org_id from the run's org on first run (COALESCE never moves an already-set org_id; cinatra#847; full rationale in core__0013's manifest entry)
     // -------------------------------------------------------------------
     {
       text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".set_agent_template_first_run() RETURNS trigger LANGUAGE plpgsql AS $body$
         BEGIN
           UPDATE "${schemaName.replaceAll('"', '""')}"."agent_templates"
-             SET first_run_at = NEW.created_at,
-                 org_id       = COALESCE(org_id, NEW.org_id)
+             SET first_run_at = NEW.created_at, org_id = COALESCE(org_id, NEW.org_id)
            WHERE id = NEW.template_id AND first_run_at IS NULL;
           RETURN NEW;
         END;
