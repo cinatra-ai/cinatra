@@ -2109,8 +2109,9 @@ jobs:
       # release only publishes once the org has cleared THIS exact tag: the
       # org-level Actions variable RELEASE_CLEARED_VERSION must equal the tag being
       # published. The variable is set by a separate private release-readiness
-      # workflow; this repo only reads a version string (no other state crosses
-      # over). Mirrors the existing vars.RELEASE_GATING_ENABLED read pattern.
+      # workflow; this repo only reads that version string. The separate release
+      # deploy master arm, RELEASE_GATING_ENABLED, lives in cinatra-ai/ops and is
+      # read by ops/.github/workflows/deploy-instances.yml after dispatch.
       #
       # SCOPE of the exemption (deliberate, not a bypass): a non-semver
       # checkpoint/marker v-tag (e.g. 'v-pre-extension-system') is a pre-existing,
