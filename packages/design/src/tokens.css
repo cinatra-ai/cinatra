@@ -59,6 +59,30 @@
   --r-control: 0.625rem;
   --r-chip: 0.5rem;
 
+  /* Type scale — theme-invariant (no .cinatra/.dark overrides; :root only).
+     Page-title display ramp (design spec, Page header brief): the h1 scale
+     consumed by PageHeader via the `text-page-title-{sm,md,lg}` utilities.
+     Sizes pair with the shared display line-height + tight tracking through
+     the @theme mapping in theme.css. */
+  --page-title-sm: 20px;
+  --page-title-md: 24px;
+  --page-title-lg: 28px;
+  --page-title-line-height: 1.05;
+  --title-tracking-tight: -0.018em;
+  /* Marketplace listing-card banner title (ExtensionCard §IV). */
+  --listing-title-size: 18px;
+  --listing-title-line-height: 1.12;
+  --listing-title-tracking: -0.012em;
+  /* Mono kicker / uppercase-label letter-spacing lanes. */
+  --kicker-tracking: 0.18em;
+  --kicker-tracking-wide: 0.2em;
+  --page-label-tracking: 0.3em;
+  /* Badge / chip type. --badge-tracking pairs with the 2xs chip size
+     through the @theme mapping. */
+  --badge-text-xs: 10px;
+  --badge-text-2xs: 9.5px;
+  --badge-tracking: 0.14em;
+
   /* shadcn/ui compatibility — mapped from cinatra design tokens */
   --card: var(--surface);
   --card-foreground: var(--foreground);

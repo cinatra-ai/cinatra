@@ -39,6 +39,16 @@
 // entry count are all capped before extraction, so a hostile response cannot
 // fill the disk.
 //
+// Canonical spec: the runtime host path consolidates these same file-safety
+// invariants (tar-header entry-type allowlist, realpath containment, EXDEV-safe
+// atomic replace-dir) in `src/lib/fs-safety.ts` (cinatra#798). This CLI package
+// (`@cinatra-ai/cli`) is a SEPARATE private ESM package that cannot import the
+// app's `@/lib/*` graph, so it keeps a parallel implementation here — kept
+// behavior-parallel by review, not a build-time bridge. Note this checkout-time
+// path is deliberately STRICTER than the runtime allowlist: it additionally
+// rejects setuid/setgid/sticky mode bits at the tar header (a git tree can never
+// carry them). Change the invariants here and in `fs-safety.ts` together.
+//
 // This module is data-driven end to end: package identities come from the
 // lockfile, never from code (no host->extension coupling is added here).
 // `tar` (a root dependency) is imported lazily AFTER the entry guards so

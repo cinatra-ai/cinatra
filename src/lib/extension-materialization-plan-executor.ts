@@ -63,6 +63,7 @@ import {
   type MaterializationPlanNode,
 } from "@/lib/extension-materialization-plan-core";
 import { sriMatches } from "@/lib/extension-package-store-core";
+import { isAcceptedTarEntryType } from "@/lib/fs-safety";
 import type { FetchTarball } from "@/lib/extension-package-store";
 
 /** Thrown for EVERY executor refusal — callers fail closed. */
@@ -95,15 +96,10 @@ const REFUSED_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prep
 /** Script-text markers of native-addon build tooling (refused wholesale). */
 const NATIVE_BUILD_TOOL_RE = /\b(node-gyp|node-pre-gyp|prebuild-install)\b/;
 
-/**
- * tar entry types accepted by the HARDENED extraction filter. Everything else
- * — SymbolicLink, Link (hardlink), CharacterDevice, BlockDevice, FIFO,
- * GNUDumpDir, … — is refused AT THE HEADER, before any byte is written.
- * (A walk-time `isFile()` check passes a hardlinked entry — node-tar
- * materializes it as a hardlink to a previously extracted path — so the
- * header is the only reliable refusal point for the Link type.)
- */
-const ACCEPTED_TAR_ENTRY_TYPES = new Set(["File", "Directory"]);
+// The accepted tar entry-type allowlist (File/Directory only; every symlink /
+// hardlink / device / FIFO header is refused) now lives in the consolidated
+// `@/lib/fs-safety` module (cinatra#798) behind the `isAcceptedTarEntryType`
+// predicate, so no importer can widen the accepted set.
 
 /**
  * Extract a tarball buffer into `destDir` (npm layout: the leading `package/`
@@ -164,7 +160,7 @@ export async function extractTarballHardened(input: {
           }
         }
         const entryType = String((entry as { type?: unknown }).type ?? "Unknown");
-        if (!ACCEPTED_TAR_ENTRY_TYPES.has(entryType)) {
+        if (!isAcceptedTarEntryType(entryType)) {
           // Bounded detail: refusal is already certain — keep the message O(1).
           if (violations.length < MAX_REPORTED_VIOLATIONS) violations.push(`${entryType} entry "${entryPath}"`);
           else suppressedViolations += 1;

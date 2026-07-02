@@ -234,7 +234,16 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
-  const input = shaper ? shaper(rawInput, agentRunId) : rawInput;
+  let input: Record<string, unknown>;
+  try {
+    input = shaper ? shaper(rawInput, agentRunId) : rawInput;
+  } catch (err) {
+    // A shaper that fails closed (e.g. blog-pipeline `selectedIdeaJson` that
+    // is not a parseable/matching BlogIdea) surfaces a clear 400 instead of
+    // continuing into a wrong/empty downstream artifact.
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
 
   // Resolve actor from the agent_run row — same authority the originating
   // run had. This is critical for tools that authorize on run ownership

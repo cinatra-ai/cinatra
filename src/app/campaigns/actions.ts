@@ -58,6 +58,7 @@ import {
   writeAgentCreationLlmProviderToDatabase,
   writeAgentCreationModelToDatabase,
   writeAnthropicSkillSyncEnabledToDatabase,
+  isAgentCreationPinActive,
 } from "@/lib/database";
 import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
 
@@ -257,15 +258,21 @@ export async function setDefaultProvidersAction(formData: FormData) {
   if (anthropicDefaultModel && claudeModels.includes(anthropicDefaultModel)) {
     anthropicSurface?.saveDefaultModel?.(anthropicDefaultModel);
   }
-  // Explicit per-purpose agent-creation override. Validate the provider and
-  // that the model belongs to the chosen provider's family so we never persist
-  // poisoned cross-provider config. An invalid model is dropped while the
-  // provider is still saved.
+  // Explicit per-purpose agent-creation override. DEFENSE-IN-DEPTH: only persist
+  // these settings while the agent-creation readiness pin is active. The pin
+  // (`isAgentCreationPinActive()`) is hardcoded false today — the subsystem that
+  // would consume `agent_creation_*` is inert and no live LLM call reads it — so
+  // the admin UI already hides the fields and omits them from the POST while
+  // inert. A crafted POST could still carry them, so the server refuses to
+  // persist a value nothing consumes until the readiness gate flips.
+  // Validate the provider and that the model belongs to the chosen provider's
+  // family so we never persist poisoned cross-provider config. An invalid model
+  // is dropped while the provider is still saved.
   const validAgentCreationProvider =
     agentCreationProvider === "openai" || agentCreationProvider === "anthropic"
       ? agentCreationProvider
       : null;
-  if (validAgentCreationProvider) {
+  if (isAgentCreationPinActive() && validAgentCreationProvider) {
     writeAgentCreationLlmProviderToDatabase(validAgentCreationProvider);
     // Validate the model against an explicit per-provider allow-list, not
     // "any non-Claude string", so a crafted POST cannot persist a bogus or

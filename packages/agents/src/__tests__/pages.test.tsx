@@ -19,9 +19,16 @@ import { readFileSync, existsSync } from "node:fs";
 import * as path from "node:path";
 
 const pagesPath = path.resolve(__dirname, "..", "pages.tsx");
+// Agent-run client: card grid + search toolbar extracted from NewAgentPage
+// (cinatra#814). Icon and row-type checks read this file instead of pages.tsx.
+const agentRunClientPath = path.resolve(__dirname, "..", "agent-run-client.tsx");
 
 function readSource() {
   return readFileSync(pagesPath, "utf8");
+}
+
+function readClientSource() {
+  return readFileSync(agentRunClientPath, "utf8");
 }
 
 describe("NewAgentPage merged discovery table", () => {
@@ -44,7 +51,9 @@ describe("NewAgentPage merged discovery table", () => {
     const source = readSource();
     expect(source).toMatch(/selectHitlRunVisibleTemplates\s*\(/);
     // Row mapping must consume the filtered set, not the raw input.
-    expect(source).toMatch(/visibleTemplates\.map<RowModel>/);
+    // RowModel is now AgentRunRowModel (exported from agent-run-client for
+    // the client component, imported into pages.tsx — cinatra#814).
+    expect(source).toMatch(/visibleTemplates\.map<AgentRunRowModel>/);
   });
 
   it("branches rows on sourceType === \"external\"", () => {
@@ -102,11 +111,29 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).not.toMatch(/Open registry/);
   });
 
-  // Icon pinning — Bot only (not Ai which doesn't exist in lucide-react)
+  // Icon pinning — Bot only (not Ai which doesn't exist in lucide-react).
+  // Bot + card rendering live in agent-run-client.tsx (cinatra#814 extraction).
   it("uses Bot icon from lucide-react for the Run button", () => {
+    const client = readClientSource();
+    expect(existsSync(agentRunClientPath)).toBe(true);
+    expect(client).toMatch(/import\s+\{[^}]*\bBot\b[^}]*\}\s+from\s+"lucide-react"/);
+    expect(client).toMatch(/<Bot\s/);
+  });
+
+  // Search toolbar (cinatra#814) — AgentRunClient provides client-side filter.
+  it("AgentRunClient renders a ToolbarSearchInput for filter-as-you-type", () => {
+    const client = readClientSource();
+    // Uses the same ToolbarSearchInput primitive as the marketplace + notifications pages.
+    expect(client).toMatch(/ToolbarSearchInput/);
+    // Filters on name and description (the two user-visible fields on each card).
+    expect(client).toMatch(/\.name\.toLowerCase\(\)/);
+    expect(client).toMatch(/\.description\.toLowerCase\(\)/);
+  });
+
+  it("NewAgentPage delegates card rendering to AgentRunClient (cinatra#814)", () => {
     const source = readSource();
-    expect(source).toMatch(/import\s+\{[^}]*\bBot\b[^}]*\}\s+from\s+"lucide-react"/);
-    expect(source).toMatch(/<Bot\s/);
+    expect(source).toMatch(/AgentRunClient/);
+    expect(source).toMatch(/rows=\{rows\}/);
   });
 
   // Page-shell contract (CLAUDE.md — non-negotiable)

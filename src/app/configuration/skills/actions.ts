@@ -86,7 +86,9 @@ export async function saveSkillAutosaveAction(formData: FormData) {
   const userCanSeeIndicator = formData.get("userCanSeeIndicator") === "on";
   // Defense-in-depth: users cannot toggle something they cannot see.
   const userCanConfigure = userCanSeeIndicator ? formData.get("userCanConfigure") === "on" : false;
-  writeSkillAutosaveConfig({
+  // Return the persisted config so the form re-syncs its controlled state to the
+  // saved values instead of desyncing after the server-action submit (cinatra#808).
+  return writeSkillAutosaveConfig({
     enabled: formData.get("enabled") === "on",
     userCanConfigure,
     userCanSeeIndicator,

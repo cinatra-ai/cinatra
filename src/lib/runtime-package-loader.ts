@@ -4,7 +4,8 @@ import "server-only";
 // the pure `runRuntimePackageActivation` core (the runtime installer).
 //
 // Mirrors `static-bundle-loader.ts` (the dev half) but sources records from the
-// on-disk package store (`/data/extensions/packages`) instead of a generated
+// on-disk runtime store (the configured extension data root, cinatra#791:
+// `<root>/<kind>/<slug>/<digest>/`) instead of a generated
 // import map, and injects the REAL dependencies the pure core needs:
 //   - `fs`           : node:fs/promises over the store;
 //   - `importModule` : a realpath-bound dynamic `file://` import of the
@@ -24,48 +25,26 @@ import "server-only";
 // resolver. Untrusted isolation (subprocess/container) is untrusted isolation.
 
 import { pathToFileURL } from "node:url";
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import {
   runRuntimePackageActivation,
-  discoverPackageStoreRecords,
   recordDeclaresHostMigrations,
-  DEFAULT_PACKAGE_STORE_PATH,
-  type PackageStoreFs,
   type PackageStoreRecord,
   type ActivationResult,
 } from "@cinatra-ai/sdk-extensions";
+import { discoverStoreRecordsV2, realStoreFs } from "@/lib/extension-store-io";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import {
   verifyMaterializedPackageIntegrity,
   type InstallTrustAnchor,
 } from "@/lib/extension-package-store";
+import { isContainedRealpath } from "@/lib/fs-safety";
 import { classifyExtensionTrust, untrustedActivationMode } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
   trustedActivationHosts,
   allowMarketplaceBootstrapTrust,
 } from "@/lib/extension-trust-config";
-
-/** Real filesystem surface for the pure loader core. */
-const realFs: PackageStoreFs = {
-  exists: async (p) => {
-    try {
-      await stat(p);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  isDirectory: async (p) => {
-    try {
-      return (await stat(p)).isDirectory();
-    } catch {
-      return false;
-    }
-  },
-  readdir: (p) => readdir(p),
-  readFile: (p) => readFile(p, "utf8"),
-};
 
 /**
  * Resolve the TRUSTED install anchor for a package from a source OUTSIDE the
@@ -129,11 +108,14 @@ async function readLiveDependencyEdgesByPackage(): Promise<
  * trusted records is a clean no-op).
  */
 export async function loadRuntimePackageExtensions(
-  storeRoot: string = DEFAULT_PACKAGE_STORE_PATH,
+  storeRoot?: string,
   hostDeps: RuntimeLoaderHostDeps = {},
 ): Promise<ActivationResult[]> {
+  // The extension DATA ROOT (cinatra#791): env > DB metadata > /data/extensions.
+  const dataRoot =
+    storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const resolveInstallAnchor = hostDeps.resolveInstallAnchor ?? denyAllResolver;
-  const discovered = await discoverPackageStoreRecords(storeRoot, realFs);
+  const discovered = await discoverStoreRecordsV2(dataRoot, realStoreFs);
   if (discovered.length === 0) return [];
 
   // Targeted activation: when a single package is requested, narrow the scan to
@@ -169,7 +151,7 @@ export async function loadRuntimePackageExtensions(
     // OLD `finalized` journal op. NEW bytes would verify against NEW source, so the
     // integrity/contentHash re-verify alone is NOT sufficient to refuse them. The
     // finalized op records the tarball DIGEST of the install it anchored; a
-    // real-pipeline install is ALWAYS digest-pinned on disk (`<pkg>@<ver>/<digest>/`
+    // real-pipeline install is ALWAYS digest-pinned on disk (`<kind>/<slug>/<digest>/`
     // → rec.declaredDigest). So when the anchor carries a digest we FAIL CLOSED on
     // BOTH a mismatch AND a MISSING on-disk digest (a flat-layout record that claims
     // a digest-bound anchor is suspect — never trust it; codex refute finding): a
@@ -325,8 +307,8 @@ export async function loadRuntimePackageExtensions(
     }
   }
 
-  return runRuntimePackageActivation(storeRoot, {
-    fs: realFs,
+  return runRuntimePackageActivation(dataRoot, {
+    fs: realStoreFs,
     records: orderedActivatable,
     importModule: async (abs, rec) => {
       // realpath-bound: the resolved server entry must stay INSIDE the verified
@@ -353,7 +335,7 @@ export async function loadRuntimePackageExtensions(
         }
         throw error;
       }
-      if (realAbs !== realStore && !realAbs.startsWith(realStore + "/")) {
+      if (!isContainedRealpath(realAbs, realStore)) {
         throw new Error(
           `[runtime-package-loader] serverEntry for ${rec.packageName} resolves outside its package dir — refusing import`,
         );

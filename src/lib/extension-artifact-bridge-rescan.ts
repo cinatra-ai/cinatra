@@ -9,7 +9,7 @@ import "server-only";
 // is metadata-only (no serverEntry), so the runtime activator returns
 // `no-server-entry` and never registers its object type in-process — the
 // artifact type therefore never appeared after a marketplace install, even
-// after a restart, because nothing scanned `/data/extensions/packages`.
+// after a restart, because nothing scanned the runtime store.
 //
 // This adapter closes that gap: it scans the on-disk package store and
 // registers each materialized `kind:"artifact"` package's generic object type
@@ -33,8 +33,6 @@ import "server-only";
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import {
-  discoverPackageStoreRecords,
-  DEFAULT_PACKAGE_STORE_PATH,
   type PackageStoreFs,
 } from "@cinatra-ai/sdk-extensions";
 import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
@@ -111,13 +109,15 @@ export type RescanArtifactBridgeResult = {
 export async function rescanArtifactBridgeFromStore(
   opts: RescanArtifactBridgeOptions = {},
 ): Promise<RescanArtifactBridgeResult> {
-  const storeRoot = opts.storeRoot ?? DEFAULT_PACKAGE_STORE_PATH;
+  const storeRoot =
+    opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const registered: string[] = [];
   const skippedNotActive: string[] = [];
 
-  let records: Awaited<ReturnType<typeof discoverPackageStoreRecords>>;
+  const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
+  let records: Awaited<ReturnType<typeof discoverStoreRecordsV2>>;
   try {
-    records = await discoverPackageStoreRecords(storeRoot, realFs);
+    records = await discoverStoreRecordsV2(storeRoot, realFs);
   } catch (err) {
     // A discovery failure must NOT crash boot or an install — degrade to a
     // no-op rescan (the bundled built-ins are already registered separately).

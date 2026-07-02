@@ -22,6 +22,24 @@ type SetupCompletionWatcherProps = {
   taskId?: string;
   /** Suppress /trigger redirect — for orchestrator agents that auto-run after setup. */
   noRedirect?: boolean;
+  /**
+   * True when the run has already fully EXECUTED (terminal `completed` with
+   * execution evidence — step results, persisted messages, or streamed text).
+   * `status === "completed"` alone is ambiguous: it also describes genuine
+   * setup-success awaiting trigger configuration, which is what the /trigger
+   * redirect exists for. An executed run redirected to /trigger strands the
+   * user on a dead-end scheduler and makes its output unreachable — the base
+   * run URL (Setup tab) is the only nav path to the output view (cinatra#831).
+   * Computed server-side in instance-screens.tsx where the full run row is
+   * available. Suppresses every redirect path (mount, SSE, polling).
+   */
+  runHasExecuted?: boolean;
+  /**
+   * DB-persisted streamed text, forwarded to AgenticRunPanel so an executed
+   * external run's output renders even after its AG-UI event log expired
+   * (parity with RunScreen). Empty/undefined for internal runs.
+   */
+  initialStreamedText?: string;
 };
 
 export function SetupCompletionWatcher({
@@ -38,6 +56,8 @@ export function SetupCompletionWatcher({
   traceId,
   taskId,
   noRedirect = false,
+  runHasExecuted = false,
+  initialStreamedText,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -55,6 +75,11 @@ export function SetupCompletionWatcher({
     // (cinatra#580). Non-failure post-setup states (completed and legitimate
     // in-flight `queued`/`running`) still advance to /trigger.
     if (initialStatus === "failed" || initialStatus === "stopped") return;
+    // A run that already fully EXECUTED must stay on the run page so its
+    // output stays reachable — the trigger scheduler is a dead end for it
+    // (cinatra#831). Only setup-success `completed` (no execution evidence)
+    // may still advance to /trigger.
+    if (runHasExecuted) return;
     const params = initialInputParams ?? {};
     const allFilled = requiredFields.every((f) =>
       Object.prototype.hasOwnProperty.call(params, f),
@@ -82,6 +107,10 @@ export function SetupCompletionWatcher({
   // SSE-based navigation (fast path — fires when agUiEnabled=true and stream delivers events).
   useEffect(() => {
     if (hasFiredRef.current) return;
+    // An executed run's replayed INTERRUPT/RESUME frames must not re-trigger
+    // the redirect decision (cinatra#831) — the run is terminal; there is no
+    // setup completion left to watch.
+    if (runHasExecuted) return;
     if (!hasSeenInterrupt) return;
     if (streamResult.interruptContext !== null) return;
     if (streamResult.status === "pending_approval") return;
@@ -107,11 +136,16 @@ export function SetupCompletionWatcher({
         }
       })
       .catch(() => {});
-  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect]);
+  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect, runHasExecuted]);
 
   // Polling-based navigation (fallback — covers agUiEnabled=false and any missed SSE events).
   useEffect(() => {
     if (hasFiredRef.current) return;
+    // Terminal executed run: nothing to watch — the poll's `completed` check
+    // would misread execution success as setup success and bounce the user to
+    // the dead-end scheduler 800ms after the mount guard spared them
+    // (cinatra#831). Skip the interval entirely.
+    if (runHasExecuted) return;
     const interval = window.setInterval(() => {
       if (hasFiredRef.current) { window.clearInterval(interval); return; }
       fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, { cache: "no-store" })
@@ -148,6 +182,7 @@ export function SetupCompletionWatcher({
       traceId={traceId}
       taskId={taskId}
       inputParams={initialInputParams ?? undefined}
+      initialStreamedText={initialStreamedText}
     />
   );
 }

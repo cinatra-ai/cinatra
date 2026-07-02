@@ -3,7 +3,9 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
+import { Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "@/lib/cinatra-toast";
 import { AgentInstanceNav } from "@/components/agent-instance-nav";
 import type { AgentInstanceNavProps } from "@/components/agent-instance-nav";
@@ -26,6 +28,19 @@ type AgentPageLayoutProps = {
   children: ReactNode;
 };
 
+/**
+ * Detects the auto-generated run-name shape produced by ensureRunTitle
+ * (store.ts: `${templateName} (${n})`) and returns `n`, or null for a
+ * custom name. Drives the "(N)" suffix explainer tooltip so the hint only
+ * appears while the ambiguous auto-number is actually displayed.
+ */
+export function getAutoRunNumber(runName: string, templateName: string): number | null {
+  const prefix = `${templateName} (`;
+  if (!runName.startsWith(prefix) || !runName.endsWith(")")) return null;
+  const digits = runName.slice(prefix.length, -1);
+  return /^\d+$/.test(digits) ? Number(digits) : null;
+}
+
 export function AgentPageLayout({
   agentId,
   instanceId,
@@ -43,6 +58,7 @@ export function AgentPageLayout({
 }: AgentPageLayoutProps) {
   const [runName, setRunName] = useState(initialRunName);
   const titleRef = useRef<InlinePageTitleHandle>(null);
+  const autoRunNumber = getAutoRunNumber(runName, templateName);
 
   // Listen for cross-component name updates from HitlApprovalCard:
   //   "cinatra:agent:name-set"  — auto-generated or confirmed name; update displayed value
@@ -108,12 +124,33 @@ export function AgentPageLayout({
                   {extensionIdentifier}
                 </Link>
               )}
-              <InlinePageTitle
-                ref={titleRef}
-                value={runName}
-                placeholder={templateName}
-                onCommit={handleCommit}
-              />
+              <div className="flex min-w-0 items-center gap-2">
+                <InlinePageTitle
+                  ref={titleRef}
+                  value={runName}
+                  placeholder={templateName}
+                  onCommit={handleCommit}
+                />
+                {/* "(N)" suffix explainer — same Info-icon tooltip pattern as
+                    the run surface's stepper hints (orchestrator-stepper-panel). */}
+                {autoRunNumber !== null && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        tabIndex={0}
+                        aria-label={`Run number ${autoRunNumber} — runs of this agent are numbered automatically to keep their names unique`}
+                        className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-default"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="max-w-[220px] whitespace-normal text-left">
+                      Runs of this agent are numbered automatically — ({autoRunNumber}) keeps
+                      this run&apos;s name unique. Rename it anytime with the pencil.
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
             </div>
             {isPublished === false && (
               <Badge variant="secondary" className="shrink-0 self-center">Unpublished</Badge>

@@ -42,6 +42,11 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import {
+  isTrustedEmbedOrigin,
+  parseAllowedEmbedOrigins,
+  sanitizeEmbedSection,
+} from "@/lib/client-trust";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
   NotificationsBellTrigger,
@@ -50,7 +55,19 @@ import {
 
 function EmbedMessageListener() {
   useEffect(() => {
+    // Trust boundary for cross-frame commands: only an allowlisted origin may
+    // drive the embedded shell. Same-origin (self-embedding) is always
+    // trusted; additional cross-origin embedders are declared via
+    // NEXT_PUBLIC_CINATRA_EMBED_ORIGINS (build-time inlined). Without this,
+    // any parent frame could force-submit the active form.
+    const allowedOrigins = [
+      ...(typeof window !== "undefined" ? [window.location.origin] : []),
+      ...parseAllowedEmbedOrigins(process.env.NEXT_PUBLIC_CINATRA_EMBED_ORIGINS),
+    ];
     function handleMessage(e: MessageEvent) {
+      if (!isTrustedEmbedOrigin(e.origin, allowedOrigins)) return;
+      // Defense in depth: only the immediate parent frame may command us.
+      if (e.source !== window.parent) return;
       if (e.data === "cinatra:embed:submit") {
         const form = document.querySelector("form");
         if (form) {
@@ -338,9 +355,17 @@ export function AppShell({
 
   if (shouldBypassShell) {
     // Section-level embedding: ?embed=1&section=audience shows only that section.
-    const embedSection = isEmbedMode && typeof window !== "undefined"
+    // The raw param is only interpolated into the <style> selector below after
+    // sanitizeEmbedSection() confirms it is a plain identifier — otherwise a
+    // crafted value could break out of the selector and inject style rules.
+    const rawEmbedSection = isEmbedMode && typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("section")
       : null;
+    const embedSection = sanitizeEmbedSection(rawEmbedSection);
+    // A section was explicitly requested but did not pass sanitization: fail
+    // closed (hide the section content) rather than falling through to showing
+    // the whole embed.
+    const embedSectionInvalid = rawEmbedSection !== null && embedSection === null;
 
     return (
       <>
@@ -369,6 +394,15 @@ export function AppShell({
             a[href*="provide-context"] { display: none !important; }
             /* Hide step navigation cards */
             [class*="step-navigation"], nav { display: none !important; }
+          `}</style>
+        )}
+        {embedSectionInvalid && (
+          <style>{`
+            /* Invalid section request: fail closed — hide all section content
+               and page chrome instead of revealing the full embed. */
+            [data-section] { display: none !important; }
+            [data-embed-hide] { display: none !important; }
+            form > button[type="submit"] { display: none !important; }
           `}</style>
         )}
         {children}
@@ -665,7 +699,7 @@ export function AppShell({
                   shell header for package pages without their own <PageHeader>;
                   activeHeader.title is computed at runtime
                   and the surrounding chrome differs from a normal page mount. */}
-              <h1 className="font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance text-[28px] text-foreground text-left">{activeHeader.title}</h1>
+              <h1 className="font-display italic font-extrabold text-page-title-lg text-balance text-foreground text-left">{activeHeader.title}</h1>
             </section>
           ) : null}
           {children}

@@ -5,11 +5,14 @@
  *
  * Two write paths:
  *   - Snapshot at run start: snapshotSkillsAtRunStart() inserts the resolved
- *     skill set (from skills_installed_resolve_for_agent) with
- *     invocation_count=0. Idempotent on (run_id, skill_id).
+ *     skill set (from getAssignedSkillIdsForAgent) with invocation_count=0.
+ *     Idempotent on (run_id, skill_id). Called once per dispatch by the
+ *     agent-execution worker (packages/agents/src/execution.ts) — the single
+ *     per-run seam every run type flows through.
  *   - Increment on invocation: incrementSkillInvocation() upserts +
- *     increments invocation_count. Called by /api/llm-bridge when a skill
- *     is resolved during an LLM step.
+ *     increments invocation_count. Intended for the actual skill-use boundary;
+ *     truthful per-invocation counting is provider-dependent and not yet wired
+ *     (see #848), so counts currently stay at the snapshot value of 0.
  *
  * Read path:
  *   - listSkillsUsedForRun() — Skills tab in the agent run detail page.

@@ -36,9 +36,10 @@
   padding: 0;
   border-radius: 0;
   box-shadow: none;
-  font-size: 10px;
+  /* Token-driven (tokens.css): badge-xs size + kicker tracking. */
+  font-size: var(--badge-text-xs, 10px);
   font-weight: 600;
-  letter-spacing: 0.18em;
+  letter-spacing: var(--kicker-tracking, 0.18em);
   text-transform: uppercase;
   color: var(--muted);
 }

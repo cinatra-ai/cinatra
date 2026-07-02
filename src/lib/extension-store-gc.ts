@@ -2,7 +2,7 @@
 // NO IO: it decides WHICH on-disk digest dirs are safe
 // to delete; the reaper in `extension-snapshot-lease.ts` does the actual fs rm.
 //
-// Store layout: /data/extensions/packages/<pkg@ver>/<digest>/ (digest-pinned).
+// Store layout (cinatra#791): `<dataRoot>/<kind>/<slug>/<digest>/` (digest-pinned).
 // Updates land at a NEW <digest> path (never overwrite in place) and the loader
 // imports per-digest `file://` URLs — so a new digest is naturally a fresh
 // module graph. That IS the ESM-cache-safe update mechanism: the old digest dir

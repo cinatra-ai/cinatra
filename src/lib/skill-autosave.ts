@@ -29,12 +29,16 @@ export function readSkillAutosaveConfig(): SkillAutosaveConfig {
   };
 }
 
-export function writeSkillAutosaveConfig(value: Partial<SkillAutosaveConfig>) {
+export function writeSkillAutosaveConfig(value: Partial<SkillAutosaveConfig>): SkillAutosaveConfig {
   const current = readSkillAutosaveConfig();
-  writeConnectorConfigToDatabase(SKILL_AUTOSAVE_CONFIG_KEY, {
+  const merged: SkillAutosaveConfig = {
     ...current,
     ...value,
-  });
+  };
+  writeConnectorConfigToDatabase(SKILL_AUTOSAVE_CONFIG_KEY, merged);
+  // Return the persisted config so callers (the save action → form) can re-sync
+  // their rendered state to the authoritative saved values (cinatra#808).
+  return merged;
 }
 
 /**

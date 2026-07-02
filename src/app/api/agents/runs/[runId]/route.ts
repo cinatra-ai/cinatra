@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
+import { AuthzError } from "@/lib/authz";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
   deriveRunHitlContext,
   readAgentRunById,
   readAgentRunMessages,
   readAgentTemplateById,
-  readRunCoOwners,
+  type ActorRoleHints,
 } from "@cinatra-ai/agents";
 
 type RouteContext = { params: Promise<{ runId: string }> };
@@ -21,23 +23,40 @@ export async function GET(_request: Request, context: RouteContext) {
     const { runId } = await context.params;
     const decodedRunId = decodeURIComponent(runId);
 
-    const [run, messages] = await Promise.all([
-      readAgentRunById(decodedRunId),
-      readAgentRunMessages(decodedRunId),
-    ]);
+    // Thread the caller through readAgentRunById so enforceRunAccess runs the
+    // real per-run authorization: owner / co-owner / same-org / platform-admin.
+    // This closes the cross-tenant read gap for unowned (runBy: null) runs,
+    // which the previous hand-rolled guard let through to ALLOW. AuthzError is
+    // mapped to 404 (hidden) or 403 (forbidden); messages are fetched only after
+    // the access check succeeds so a denied caller never receives them.
+    const actor: PrimitiveActorContext = {
+      actorType: "human",
+      source: "route",
+      userId: actorUserId,
+    };
+    const roles: ActorRoleHints = {
+      platformRole: isPlatformAdmin(session) ? "platform_admin" : "member",
+      actorOrganizationId: session?.session?.activeOrganizationId ?? undefined,
+    };
+
+    let run: Awaited<ReturnType<typeof readAgentRunById>>;
+    try {
+      run = await readAgentRunById(decodedRunId, actor, roles);
+    } catch (err) {
+      if (err instanceof AuthzError) {
+        return NextResponse.json(
+          { error: err.statusCode === 404 ? "Run not found" : "Forbidden" },
+          { status: err.statusCode },
+        );
+      }
+      throw err;
+    }
 
     if (!run) {
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 
-    // Per-run access: owner, co-owner, or platform admin can poll.
-    if (run.runBy && run.runBy !== actorUserId && !isPlatformAdmin(session)) {
-      const coOwnerRows = await readRunCoOwners(run.id);
-      const isCoOwner = coOwnerRows.some((c) => c.userId === actorUserId);
-      if (!isCoOwner) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-    }
+    const messages = await readAgentRunMessages(run.id);
 
     // Fetch the template once and reuse it in BOTH the hitlContext derivation
     // AND the inline-card metadata response below.

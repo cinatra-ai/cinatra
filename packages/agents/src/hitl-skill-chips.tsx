@@ -71,7 +71,13 @@ export function HitlSkillChips({ skills }: HitlSkillChipsProps) {
       </Collapsible>
 
       {/* Single Sheet at component root — driven by selectedSkill state.
-          By design: NOT Sheet-per-chip in the map above. */}
+          By design: NOT Sheet-per-chip in the map above.
+          SheetContent is constrained to top-16…bottom-0 by the base sheet
+          component (matching the fixed app-bar height) so the SheetHeader/
+          SheetTitle is always visible above the top bar. overflow-y-auto on
+          SheetContent provides a single scroll region for the whole panel;
+          the <pre> no longer carries its own max-height/overflow to avoid a
+          nested scroll container that hides the header. */}
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="right" className="w-[480px] sm:max-w-[480px] overflow-y-auto">
           <SheetHeader>
@@ -84,7 +90,7 @@ export function HitlSkillChips({ skills }: HitlSkillChipsProps) {
           </SheetHeader>
           {selectedSkill && (
             <div className="mt-4">
-              <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono bg-surface-muted rounded-panel p-4 max-h-[calc(100vh-12rem)] overflow-y-auto border border-line">
+              <pre className="text-xs text-foreground whitespace-pre-wrap break-words font-mono bg-surface-muted rounded-panel p-4 border border-line">
                 {selectedSkill.content}
               </pre>
             </div>

@@ -50,15 +50,17 @@ Most AI tools are optimized for individual use and short chat sessions. Cinatra 
 
 The main sidebar groups the day-to-day workspace:
 
-- **Chat** — multi-threaded AI assistant chat with team threads; the place agents are created, run, and edited conversationally
+- **Intelligence → Chat** — multi-threaded AI assistant chat with team threads; the place agents are created, run, and edited conversationally
 - **Agents** — installed agents and run history. The top-level `/agents` route is an interactive dashboard of recently used and recently run agents, and is the installed-agents surface
 - **Management** — Personal, Projects, Teams, Organizations
 - **Information** — Artifacts, Data (a unified object list with typed views, plus History and Merge), and Analytics (LLM and API usage)
 - **Tools** — Skills (catalog, installed packages, match overview, autosave from chat edits) and Connectors (e.g. Gmail, Google Calendar, Apollo, LinkedIn, WordPress, Drupal, Apify, YouTube, GitHub)
 
-Beyond the sidebar, the platform ships routes for **Dashboards** (custom drag-and-drop dashboards on a shared semantic layer, with the agents dashboard as the default at `/agents`), **Lists** (typed groupings agents read from and write to as first-class inputs and outputs), and **Notifications** (a durable feed with real-time updates and failure routing). They are reachable directly by URL and as MCP primitives.
+Platform admins also see an **Admin** group at the top of the sidebar (Approvals, Configuration).
 
-A separate **Administration** area covers platform-level settings: LLM providers, MCP, assistants, [marketplace](https://docs.cinatra.ai/guides/admin/marketplace/) (install agents, connectors, skills, artifacts, and workflows from the shared registry), extensions (install / archive / restore / remove), [permissions](https://docs.cinatra.ai/guides/admin/permissions/) (a co-owner model across extension resources — agents, agent runs, connectors, skills, skill packages, artifacts, and workflows), network, environment, telemetry, instance, workspace, and operations. Most administration screens are admin-only. The [Admin Guide](https://docs.cinatra.ai/guides/admin/) covers this surface in detail.
+Beyond the sidebar, the platform ships routes for **Dashboards** (operator workspaces composed from extension-shipped portlets, with the agents dashboard as the default at `/agents`, also reachable as an MCP primitive) and **Notifications** (a durable feed with real-time updates and failure routing). They are reachable directly by URL.
+
+A separate **Configuration** area (linked from the sidebar as **Admin → Configuration**) covers platform-level settings: environment, AI providers, MCP, extensions, webhooks, [marketplace](https://docs.cinatra.ai/guides/admin/marketplace/) (install agents, connectors, skills, artifacts, and workflows from the shared registry), skills, [permissions](https://docs.cinatra.ai/guides/admin/permissions/) (a co-owner model across extension resources — agents, agent runs, connectors, skills, skill packages, artifacts, and workflows), access control, workflows, agents, assistants, workspace, telemetry, and development. Most configuration screens are admin-only. The [Admin Guide](https://docs.cinatra.ai/guides/admin/) covers this surface in detail.
 
 ---
 
@@ -84,33 +86,14 @@ For the full write-up, see the [Architecture](https://docs.cinatra.ai/references
 ## Quick start
 
 ```bash
-git clone https://github.com/cinatra-ai/cinatra.git
-cd cinatra
-make setup
-make dev
+npx @cinatra-ai/cinatra install
 ```
 
-`make setup` runs an interactive script (`scripts/setup.sh`) that checks prerequisites, starts the supporting Docker services (Postgres, Redis, Nango, and others), creates `.env.local`, and provisions the app — prompting for dev/prod mode and optional sample data along the way (`YES=1` accepts the defaults).
+The [cinatra CLI](https://www.npmjs.com/package/@cinatra-ai/cinatra) is the single, idempotent command that takes a machine from zero to a running instance: it checks prerequisites (Node.js 24+, git, pnpm via Corepack, Docker + Compose), clones Cinatra, creates your `.env.local`, brings up the local Docker services, installs dependencies, and runs first-time setup. Re-running it on an existing checkout reconciles it in place instead of cloning again. Use `--mode prod` for a production instance.
+
+Once it finishes, `cd` into the checkout (`cinatra/` by default) and run `npx @cinatra-ai/cinatra instance start` for day-to-day dev-server start/stop, or `npx @cinatra-ai/cinatra doctor` / `npx @cinatra-ai/cinatra status` to check on it. After pulling new code, `npx @cinatra-ai/cinatra instance refresh` reconciles dependencies and the dev database schema to match your checkout; `npx @cinatra-ai/cinatra update` moves the checkout itself forward first (dev → latest `main`, prod → latest release) and then reconciles. Install the CLI globally with `npm install -g @cinatra-ai/cinatra` to drop the `npx` prefix.
 
 Open <http://localhost:3000>. The first user to register becomes the platform admin and lands in the in-app setup wizard for the remaining first-run configuration.
-
-### Connect an LLM
-
-The final wizard step, **`/setup/ai`**, gives the instance a working model provider — the minimum is an OpenAI API key plus a default model, which is all agents and chat need to run. Additional providers are managed under Administration → LLM after setup: Gemini can be connected as the second globally eligible provider (it steps in when OpenAI is unavailable and can take over image generation), while Anthropic is available for specific purposes only, never as the global default. Provider configuration lives in-app, not in `.env` (the `OPENAI_API_KEY` env var only powers Graphiti object embeddings, not the assistant).
-
-**Keeping your checkout up to date.** After pulling new code, reconcile your dev environment —
-dependencies and the dev database schema — to match it:
-
-```bash
-git pull
-make refresh
-```
-
-`make refresh` is dev-only and never touches git: you manage branches, it brings dependencies and
-the dev database in sync with the code on disk. It applies **additive** schema changes automatically
-and then runs the versioned migration chain (`migrations/core/`, recorded in the `pgmigrations`
-ledger), so transformational changes (renames/backfills) apply automatically too — hand-run
-release-note migrations are retired. Restart with `make dev` afterwards.
 
 Full walkthrough with prerequisites, services, and first-time configuration: see [Installation](https://docs.cinatra.ai/guides/hosting/installation/) and [Quickstart](https://docs.cinatra.ai/guides/hosting/quickstart/) in the Hosting Guide.
 
@@ -122,28 +105,6 @@ The full documentation set is published at **[docs.cinatra.ai](https://docs.cina
 
 Release history and notable changes are tracked in **[CHANGELOG.md](CHANGELOG.md)**; each tagged release also has auto-generated notes on the [GitHub Releases](https://github.com/cinatra-ai/cinatra/releases) page.
 
-## Troubleshooting
-
-**`make setup` fails.** The setup script (`scripts/setup.sh`) checks prerequisites — Node.js 24.x, pnpm, Docker — before starting services. Read the error output to identify which prerequisite is missing. Use `corepack pnpm` to get the pnpm version the repo pins. After services are running, `make check` (which runs `scripts/check-services.mjs`) validates that each supporting service (Postgres, Redis, Nango, and others) is reachable.
-
-**App boots but LLM calls fail or the assistant doesn't respond.** An LLM provider must be connected through the in-app setup wizard at `/setup/ai` (OpenAI is the minimum). Provider configuration lives in-app under Administration → LLM, not in `.env`. The environment variable for Graphiti object embeddings is separate from the assistant — see the setup wizard and the [Hosting Guide](https://docs.cinatra.ai/guides/hosting/) for details.
-
-**Schema or database errors after pulling new code.** Run `git pull && make refresh` to bring dependencies and the dev database schema in sync with the checked-out code, then restart with `make dev`. For production deployments, schema migrations apply automatically at boot; see [`migrations/README.md`](migrations/README.md) for details.
-
-**Port 3000 already in use.** Another process is listening on that port. Stop it first, then run `make dev`. If you need to run on a different port, update all localhost URLs in your `.env.local` consistently (the app, auth, and any callback URLs must agree).
-
-For additional troubleshooting guidance, see the [Hosting Guide](https://docs.cinatra.ai/guides/hosting/) and the [Developer Guide](https://docs.cinatra.ai/guides/developer/) at docs.cinatra.ai.
-
----
-
-## What belongs in this repo vs elsewhere
-
-This repository is the core Cinatra platform — the Next.js application, schema migrations, WayFlow agent-runtime integration, first-party extension packages, and supporting tooling. It is the right place for bugs, feature proposals, and contributions that affect the platform itself.
-
-- **Marketplace extensions and connectors** are developed in separate repositories and installed onto a running workspace. The [Developer Guide](https://docs.cinatra.ai/guides/developer/) covers authoring extensions.
-- **Hosting documentation** (deployment, upgrades, configuration) lives at [docs.cinatra.ai/guides/hosting/](https://docs.cinatra.ai/guides/hosting/).
-- **Security vulnerabilities** go to [SECURITY.md](SECURITY.md), not public issues.
-
 ---
 
 ## Contributing
@@ -152,4 +113,4 @@ Issues and pull requests are welcome — start with **[CONTRIBUTING.md](CONTRIBU
 
 ## License
 
-Cinatra is open source under the Apache License 2.0 — see **[LICENSE](LICENSE)**. The WordPress and Drupal client integrations are distributed separately under GPL-2.0-or-later.
+Cinatra is open source under the Apache License 2.0 — see **[LICENSE](LICENSE)**.
