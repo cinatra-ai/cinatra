@@ -110,6 +110,18 @@ export function useAgUiRunStream(
   // Ref to track current EventSource for cleanup — avoids stale closure issues.
   const esRef = useRef<EventSource | null>(null);
 
+  // A run whose DB-seeded status is terminally `failed` must never be
+  // re-animated by replayed history (cinatra#809). The SSE route replays the
+  // full event log for fresh subscribers, and a dispatch-time failure can
+  // leave RUN_STARTED (and INTERRUPT) frames in the log without a terminal
+  // RUN_ERROR — replaying those flipped a dead run back to "running"
+  // (perpetual spinner + Pause) or re-opened a dead HITL gate. The only way
+  // out of `failed` is resetAgentRun (failed → pending_input), which
+  // re-renders the page with a fresh initialStatus, so pinning is safe for
+  // the lifetime of this mount. Terminal events (RUN_ERROR / RUN_FINISHED)
+  // and content events (TEXT_MESSAGE_* / DATA_PART) still apply.
+  const seededFailed = initialStatus === "failed";
+
   const isLive =
     status === "running" || status === "queued" || status === "pending_approval";
 
@@ -143,6 +155,9 @@ export function useAgUiRunStream(
 
       switch (event.type) {
         case "RUN_STARTED":
+          // Replayed RUN_STARTED must not regress a terminally-failed run
+          // back to "running" (cinatra#809 — see seededFailed above).
+          if (seededFailed) break;
           setStatus("running");
           // Clear stale interrupt context when run (re-)starts — covers the setup-loop
           // path which never emits RESUME before dispatching to LangGraph.
@@ -155,6 +170,10 @@ export function useAgUiRunStream(
           break;
 
         case "INTERRUPT": {
+          // A replayed INTERRUPT on a terminally-failed run is a dead gate —
+          // its review task can no longer be approved. Re-opening it would
+          // both mask the failure and dead-end the user (cinatra#809).
+          if (seededFailed) break;
           // Read the 5th INTERRUPT arg (`fieldName`) that the
           // setup-loop sets on `adapter.onInterrupt(schema, xRenderer, values,
           // reviewTaskId, fieldName)` in execution.ts. Without surfacing it

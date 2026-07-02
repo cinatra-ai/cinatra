@@ -1435,6 +1435,22 @@ async function runAgentBuilderExecutionJobInner(
           : "",
       );
       const runError = describeWayflowDispatchError(err, wayflowUrl);
+      // Terminal-consistency for the durable AG-UI log (cinatra#809):
+      // RUN_STARTED was already published before sendTask, so a dispatch
+      // failure must also publish RUN_ERROR — otherwise the log ends on
+      // RUN_STARTED and every later page load replays the run into a phantom
+      // "running" state. Mirrors the handleWayflowTaskState failed branch
+      // (publish first, then transition). Best-effort like every publish —
+      // a Redis outage must not block the failed transition.
+      await Promise.resolve(
+        publishAgUiEvent(runId, {
+          type: "RUN_ERROR",
+          threadId: runId,
+          runId,
+          message: runError,
+          timestamp: Date.now(),
+        } as never),
+      ).catch(() => undefined);
       await transitionRunStatus(runId, "running", "failed", {
         error: runError,
       }).catch((e) => {
