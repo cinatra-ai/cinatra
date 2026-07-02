@@ -289,7 +289,7 @@ function ExtensionCardListingBanner({
       <div
         data-slot="extension-card-name"
         className={cn(
-          "line-clamp-3 min-w-0 font-display text-[18px] font-extrabold italic leading-[1.12] tracking-[-0.012em]",
+          "line-clamp-3 min-w-0 font-display text-listing-title font-extrabold italic",
           // Reserve room for the top-right badge overlay so a long, line-clamped
           // name never runs underneath the badges.
           badges && "pr-20",
@@ -312,7 +312,7 @@ function Indicator({
   spinning,
 }: { label: string; dotColour: string; spinning?: boolean }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-surface-strong px-2.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-foreground shadow-sm">
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-surface-strong px-2.5 py-0.5 text-badge-2xs font-bold uppercase text-foreground shadow-sm">
       {spinning ? (
         <svg
           viewBox="0 0 24 24"

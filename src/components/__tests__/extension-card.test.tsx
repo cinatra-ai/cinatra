@@ -32,11 +32,11 @@ describe("ExtensionCard listing banner (§IV, shell mode, variant=listing)", () 
     expect(html).toContain("h-[46px]");
     expect(html).toContain("w-[46px]");
     expect(html).toContain("rounded-[11px]");
-    // Name lives inside the banner (Archivo italic-800, 18px, line-clamp-3).
+    // Name lives inside the banner (Archivo italic-800, listing-title token = 18px, line-clamp-3).
     expect(html).toContain('data-slot="extension-card-name"');
     expect(html).toContain("Research Assistant");
     expect(html).toContain("line-clamp-3");
-    expect(html).toContain("text-[18px]");
+    expect(html).toContain("text-listing-title");
   });
 
   it("uses the kind emblem when no icon URL is supplied (fallback chain tail)", () => {

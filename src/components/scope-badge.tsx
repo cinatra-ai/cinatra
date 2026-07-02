@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 // This is the ONLY file in the codebase allowed to use these raw Tailwind palette classes
 // for ownership-level encoding — all call sites MUST consume <ScopeBadge> rather than re-applying.
 export const scopeBadgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.15em]",
+  "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-badge-xs font-semibold uppercase tracking-[0.15em]",
   {
     variants: {
       level: {

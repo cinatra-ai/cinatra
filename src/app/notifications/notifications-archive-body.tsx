@@ -344,7 +344,7 @@ function ArchiveRow({
               {notification.body}
             </p>
           ) : null}
-          <p className="mt-3 text-xs uppercase tracking-[0.2em] text-muted-foreground">
+          <p className="mt-3 text-xs uppercase tracking-kicker-wide text-muted-foreground">
             {notification.readAt ? "Seen" : "Unseen"} ·{" "}
             <NotificationTimestamp value={notification.createdAt} />
             {notification.sourceJobName

@@ -106,7 +106,7 @@ export function UserImpersonationPanel(props: {
       ) : null}
 
       <div className="overflow-hidden rounded-control border border-line">
-        <div className="hidden grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto] gap-4 border-b border-line bg-surface-muted px-4 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground md:grid">
+        <div className="hidden grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_auto] gap-4 border-b border-line bg-surface-muted px-4 py-3 text-xs font-semibold uppercase tracking-kicker text-muted-foreground md:grid">
           <span>User</span>
           <span>Platform role</span>
           <span>Action</span>

@@ -665,7 +665,7 @@ export function AppShell({
                   shell header for package pages without their own <PageHeader>;
                   activeHeader.title is computed at runtime
                   and the surrounding chrome differs from a normal page mount. */}
-              <h1 className="font-display italic font-extrabold leading-[1.05] tracking-[-0.018em] text-balance text-[28px] text-foreground text-left">{activeHeader.title}</h1>
+              <h1 className="font-display italic font-extrabold text-page-title-lg text-balance text-foreground text-left">{activeHeader.title}</h1>
             </section>
           ) : null}
           {children}

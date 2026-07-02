@@ -137,19 +137,19 @@ export function SidebarFixture() {
     >
       <div className="flex flex-wrap items-start gap-6">
         <div className="flex flex-col items-start gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          <span className="font-mono text-[10px] uppercase tracking-kicker text-muted-foreground">
             expanded
           </span>
           <ExpandedSidebar />
         </div>
         <div className="flex flex-col items-start gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          <span className="font-mono text-[10px] uppercase tracking-kicker text-muted-foreground">
             collapsed (icon)
           </span>
           <CollapsedSidebar />
         </div>
         <div className="flex flex-col items-start gap-2">
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          <span className="font-mono text-[10px] uppercase tracking-kicker text-muted-foreground">
             mobile sheet
           </span>
           <MobileSheetSidebar />

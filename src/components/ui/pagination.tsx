@@ -135,7 +135,7 @@ function PaginationCaption({
     <p
       data-slot="pagination-caption"
       className={cn(
-        "font-mono text-[11px] leading-normal text-muted-foreground",
+        "font-mono text-micro leading-normal text-muted-foreground",
         className,
       )}
       {...props}

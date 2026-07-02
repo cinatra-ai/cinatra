@@ -1,5 +1,34 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+/**
+ * tailwind-merge with the design type-scale utilities registered (mirrors
+ * `@cinatra-ai/sdk-ui`'s cn). Unknown `text-*` classes are classified as
+ * text-COLOR utilities by tailwind-merge's default config, so a later
+ * `text-foreground` would silently strip `text-page-title-lg`. Keep in sync
+ * with the @theme mapping in src/app/globals.css.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [
+        "text-page-title-sm",
+        "text-page-title-md",
+        "text-page-title-lg",
+        "text-listing-title",
+        "text-badge-xs",
+        "text-badge-2xs",
+        "text-micro",
+      ],
+      tracking: [
+        "tracking-title-tight",
+        "tracking-kicker",
+        "tracking-kicker-wide",
+        "tracking-page-label",
+      ],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

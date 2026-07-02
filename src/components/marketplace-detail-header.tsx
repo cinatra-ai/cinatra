@@ -183,14 +183,14 @@ export function MarketplaceDetailHeader({
           <span
             data-slot="marketplace-detail-badge"
             title={badge.license ?? undefined}
-            className="inline-flex shrink-0 items-center rounded-full bg-surface-strong px-2.5 py-0.5 text-[9.5px] font-bold uppercase tracking-[0.14em] text-foreground shadow-sm"
+            className="inline-flex shrink-0 items-center rounded-full bg-surface-strong px-2.5 py-0.5 text-badge-2xs font-bold uppercase text-foreground shadow-sm"
           >
             {badge.text}
           </span>
         </div>
         <h1
           className={cn(
-            "relative font-display text-[24px] font-extrabold italic leading-[1.05] tracking-[-0.018em] text-balance",
+            "relative font-display text-page-title-md font-extrabold italic text-balance",
             // Over a banner image the name sits on the `foreground`-token scrim
             // — use the contrasting `background` token (no raw palette) so it
             // reads against the scrim in both themes.
