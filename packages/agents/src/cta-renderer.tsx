@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import type { FieldRendererProps } from "./field-renderer-registry";
 import { fetchAppointmentSchedules } from "./cta-actions";
+import { humanizeFieldName } from "./humanize-field-name";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "cta"
@@ -27,7 +28,7 @@ import { fetchAppointmentSchedules } from "./cta-actions";
 type AppointmentSchedule = { title: string; bookingPageUrl: string };
 
 export function CtaRenderer({ fieldName, schema, value, onChange, disabled, required }: FieldRendererProps) {
-  const label = (schema as Record<string, unknown>).title as string | undefined ?? fieldName;
+  const label = ((schema as Record<string, unknown>).title as string | undefined) ?? humanizeFieldName(fieldName);
   const description = (schema as Record<string, unknown>).description as string | undefined;
   const placeholder = (schema as Record<string, unknown>)["x-placeholder"] as string | undefined;
 
