@@ -14,7 +14,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
@@ -51,24 +52,69 @@ test("fixture corpus covers the convention's required cases", () => {
   }
 });
 
+// The corpus applies each fixture against a PINNED base: the volatile
+// migrations/manifest.json is read from a frozen snapshot (base-manifest.json)
+// while every other base file is the live working tree. This stops the ledger's
+// append-only tail from rotting the fixtures every time a real migration lands
+// — the snapshot ends at the sequence the fixtures were cut against, so their
+// hunks (and the gate's own base read, via --base-dir) stay stable forever,
+// while a genuine change to the in-scope DDL still invalidates a stale fixture
+// through the live-tree files copied below.
+const PINNED_BASE_MANIFEST = join(FIXTURES_DIR, "base-manifest.json");
+
+/**
+ * Build a throwaway git work tree for one fixture: migrations/manifest.json is
+ * the pinned snapshot; every other file the fixture patches is copied live from
+ * the repo. `git apply --check` and the gate (via --base-dir) both run against
+ * it, so neither rots when unrelated migrations append to the live ledger.
+ */
+function makePinnedBase(fixtureText) {
+  const dir = mkdtempSync(join(tmpdir(), "schema-migration-base-"));
+  execFileSync("git", ["init", "-q", dir]);
+  // The pinned ledger — always present so the gate's base manifest read is
+  // deterministic even for fixtures that don't patch the manifest.
+  mkdirSync(join(dir, "migrations", "core"), { recursive: true });
+  copyFileSync(PINNED_BASE_MANIFEST, join(dir, MIGRATION_MANIFEST_PATH));
+  // Live copies of every other base file the fixture patches.
+  for (const f of parseUnifiedDiff(fixtureText)) {
+    if (f.status === "added") continue; // /dev/null base — nothing to seed
+    const p = f.oldPath ?? f.newPath;
+    if (!p || p === MIGRATION_MANIFEST_PATH) continue;
+    const src = join(REPO_ROOT, p);
+    if (!existsSync(src)) continue;
+    const dest = join(dir, p);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(src, dest);
+  }
+  return dir;
+}
+
 for (const fixture of corpus.fixtures) {
   test(`fixture ${fixture.file} → ${fixture.expect} (${fixture.category})`, () => {
     const diffPath = join(FIXTURES_DIR, fixture.file);
+    const fixtureText = readFileSync(diffPath, "utf8");
+    const baseDir = makePinnedBase(fixtureText);
+    try {
+      // Corpus contract: the fixture applies cleanly to its pinned base. If this
+      // throws, the in-scope DDL moved under the fixture — refresh it (and the
+      // snapshot, if a real migration changed the ledger shape the fixtures
+      // assume). See the corpus manifest _doc.
+      execFileSync("git", ["apply", "--check", "--end-of-options", diffPath], { cwd: baseDir });
 
-    // The corpus contract: fixtures apply cleanly to the current tree, which
-    // is what lets --diff-file mode classify them against the working tree
-    // as base. If this throws, the schema moved under the fixtures — refresh
-    // them (see the corpus manifest _doc).
-    execFileSync("git", ["apply", "--check", "--end-of-options", diffPath], { cwd: REPO_ROOT });
-
-    const run = spawnSync(process.execPath, [GATE, "--diff-file", diffPath], { cwd: REPO_ROOT, encoding: "utf8" });
-    const output = `${run.stdout}\n${run.stderr}`;
-    if (fixture.expect === "pass") {
-      assert.equal(run.status, 0, `expected pass (exit 0), got ${run.status}:\n${output}`);
-    } else {
-      assert.equal(run.status, 1, `expected fail (exit 1), got ${run.status}:\n${output}`);
-      assert.match(run.stderr, /migration artifact/i, "fail output must tell the author what to ship");
-      assert.match(run.stderr, /migrations\/README\.md/, "fail output must cite the convention");
+      const run = spawnSync(process.execPath, [GATE, "--diff-file", diffPath, "--base-dir", baseDir], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      });
+      const output = `${run.stdout}\n${run.stderr}`;
+      if (fixture.expect === "pass") {
+        assert.equal(run.status, 0, `expected pass (exit 0), got ${run.status}:\n${output}`);
+      } else {
+        assert.equal(run.status, 1, `expected fail (exit 1), got ${run.status}:\n${output}`);
+        assert.match(run.stderr, /migration artifact/i, "fail output must tell the author what to ship");
+        assert.match(run.stderr, /migrations\/README\.md/, "fail output must cite the convention");
+      }
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
     }
   });
 }

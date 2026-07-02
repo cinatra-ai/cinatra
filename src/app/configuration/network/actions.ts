@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { requireAdminSession } from "@/lib/auth-session";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import { encryptSecret } from "@/lib/instance-secrets";
 import {
   readInstanceIdentity,
@@ -198,7 +199,10 @@ export async function requestRemoteAccessAction(formData: FormData): Promise<voi
   // has accepted the request before the local slot believes it's pending).
   let res: Response;
   try {
-    res = await fetch(`${REMOTE_REGISTRY_URL}/api/register`, {
+    // Bounded so a hung registry can't pin this server action indefinitely
+    // (mirrors the registry-poll job). A timeout throw hits the same catch and
+    // redirects with registry_unreachable — no behavior change beyond the wait.
+    res = await fetchWithTimeout(`${REMOTE_REGISTRY_URL}/api/register`, {
       method: "POST",
       headers: {
         "content-type": "application/json",

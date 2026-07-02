@@ -123,6 +123,67 @@ export interface ExtensionDetail extends ExtensionCard {
    * accent panel. Never a raw SVG blob (the marketplace rasterizes/sanitizes).
    */
   bannerUrl?: string | null;
+  // -------------------------------------------------------------------------
+  // In-app extension-detail modal contract. All OPTIONAL so older payloads /
+  // legacy camelCase fixtures (which predate these fields) stay valid; the
+  // http-client mapper always populates safe defaults. Sourced from the
+  // marketplace public REST detail (the storefront listing detail).
+  // -------------------------------------------------------------------------
+  /** Human display title (wire `display_name`), else falls back to `name`. */
+  displayName?: string | null;
+  /** Title-case kind label for the "{Type} by {Vendor}" hero (wire `kind_label`). */
+  kindLabel?: string | null;
+  /** Commerce badge (cost / open-source), mirrored from the storefront card. */
+  commerceBadge?: MarketplaceDetailBadge | null;
+  /** ISO-8601 UTC "last updated" moment (wire `freshness_at`), or null. */
+  freshnessAt?: string | null;
+  /** Deduped authorized-install tally (wire `install_count`), or null. */
+  installCount?: number | null;
+  /** Public storefront product permalink (share row source), or null. */
+  permalink?: string | null;
+  /** Sanitized square-icon URL for the modal hero tile, or null. */
+  iconUrl?: string | null;
+  /** Aggregate rating summary (average, total, per-star 5→1 counts). */
+  ratingSummary?: MarketplaceRatingSummary | null;
+  /** APPROVED public reviews (author, verified-owner, date, rating, text). */
+  reviews?: MarketplaceReview[];
+  /** Vendor public store identity (name, slug, sanitized store URL). */
+  vendor?: MarketplaceVendorRef | null;
+}
+
+/** Commerce badge on the detail contract — cost / open-source + SPDX id. */
+export interface MarketplaceDetailBadge {
+  text: string;
+  variant: string;
+  license: string | null;
+}
+
+/** Aggregate rating summary for the modal's read-only rating column. */
+export interface MarketplaceRatingSummary {
+  average: number;
+  total: number;
+  /** Always a full 5→1 map, keyed by star as a string. */
+  counts: Record<"1" | "2" | "3" | "4" | "5", number>;
+}
+
+/**
+ * One APPROVED public review. Carries ONLY the public display fields — never a
+ * reviewer email / user id / IP; `text` is tag-stripped and MUST be rendered
+ * escaped (never as HTML).
+ */
+export interface MarketplaceReview {
+  author: string;
+  verifiedOwner: boolean;
+  date: string | null;
+  rating: number;
+  text: string;
+}
+
+/** Vendor public store identity for the "by {Vendor}" hero link. */
+export interface MarketplaceVendorRef {
+  name: string;
+  slug: string;
+  storeUrl: string | null;
 }
 
 export interface MarketplaceExtensionGetInput {
@@ -169,6 +230,29 @@ export interface MarketplaceExtensionGetWire {
   /** Sanitized hosted detail-banner URL; optional/null. */
   banner_url?: string | null;
   bannerUrl?: string | null;
+  // In-app extension-detail modal contract (public REST detail). snake_case,
+  // faithful to the PHP controller; all optional (older builds omit them).
+  display_name?: string | null;
+  kind_label?: string | null;
+  badge?: { text?: string | null; variant?: string | null; license?: string | null } | null;
+  freshness_at?: string | null;
+  install_count?: number | null;
+  permalink?: string | null;
+  /** Sanitized square-icon descriptor {url,width,height}, or null. */
+  icon_url?: { url?: string | null; width?: number; height?: number } | null;
+  rating_summary?: {
+    average?: number | null;
+    total?: number | null;
+    counts?: Record<string, number> | null;
+  } | null;
+  reviews?: Array<{
+    author?: string | null;
+    verified_owner?: boolean | null;
+    date?: string | null;
+    rating?: number | null;
+    text?: string | null;
+  }> | null;
+  vendor?: { name?: string | null; slug?: string | null; store_url?: string | null } | null;
 }
 
 // ---------------------------------------------------------------------------

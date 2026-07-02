@@ -54,6 +54,18 @@ export type MarketplaceFailureOperation = "install" | "update" | "restore";
 export type MarketplaceInstallActionResult = {
   ok: false;
   category: MarketplaceFailureCategory;
+  /**
+   * WHERE the failure happened, for callers that need to distinguish (added
+   * with the pre-install access selector, cinatra#805). Absent / "install" =
+   * the install itself failed. "access" = the install SUCCEEDED but applying
+   * the selected access policy failed AND the fresh install was rolled back
+   * (uninstalled), so a narrower-than-default selection never silently fails
+   * open to workspace access. "access-partial" = the access write failed AND
+   * the compensating uninstall ALSO failed — the extension is installed with
+   * the per-kind DEFAULT (workspace) access; the operator log carries the
+   * details.
+   */
+  stage?: "install" | "access" | "access-partial";
 };
 
 /**
@@ -292,6 +304,26 @@ export function marketplaceFailureCopy(
     default:
       return `Couldn't ${verb} ${name}. Please try again, and contact your administrator if it keeps happening.`;
   }
+}
+
+/**
+ * Copy for an install-access failure (cinatra#805) — the install itself
+ * succeeded but applying the selected pre-install access failed. Two shapes:
+ *  - "access": the fresh install was ROLLED BACK (fail-closed) — nothing is
+ *    installed; retrying is safe.
+ *  - "access-partial": the rollback was impossible (pre-existing install) or
+ *    itself failed — the extension IS installed, with its default access.
+ * Same copy rules as marketplaceFailureCopy: plain language, no jargon, never
+ * asserts a cause it cannot be sure of.
+ */
+export function installAccessStageFailureCopy(
+  stage: "access" | "access-partial",
+  displayName: string,
+): string {
+  if (stage === "access") {
+    return `Couldn't apply the selected access for ${displayName}, so nothing was installed. Please try again.`;
+  }
+  return `${displayName} was installed, but the selected access couldn't be applied — it currently uses the default access for everyone in your workspace. Contact your administrator if that's not what you want.`;
 }
 
 /**

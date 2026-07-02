@@ -8,10 +8,14 @@ import "server-only";
  * Install + vendor/admin features stay bearer-backed.
  */
 
-import { fetchPublicMarketplaceExtensionList } from "@cinatra-ai/marketplace-mcp-client/http-client";
+import {
+  fetchPublicMarketplaceExtensionList,
+  fetchPublicMarketplaceExtensionDetail,
+} from "@cinatra-ai/marketplace-mcp-client/http-client";
 import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 import type {
   MarketplaceCatalogEntry,
+  MarketplaceExtensionGetOutput,
   MarketplaceExtensionListInput,
 } from "@cinatra-ai/marketplace-mcp-client";
 import { InstanceNamespaceNotConfiguredError } from "@cinatra-ai/registries";
@@ -21,6 +25,12 @@ import {
 } from "@cinatra-ai/extensions/screens";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
+import {
+  emptyRatingSummary,
+  safeHttpUrl,
+  type MarketplaceDetailLoadResult,
+  type MarketplaceDetailView,
+} from "@/lib/marketplace-detail-view";
 
 /**
  * A malformed public catalog payload — a distinct subclass (still a
@@ -140,4 +150,87 @@ export async function loadMarketplaceBrowse(): Promise<MarketplaceBrowseResult> 
   // rethrows loudly; only a genuinely-missing config → false.
   const registryConnected = (await loadInstallableRegistryConfigOrNull()) !== null;
   return { kind: "storefront", cards, registryConnected };
+}
+
+// Strict scoped npm name ("@scope/name") — the public detail endpoint's own
+// route shape. Anything else never reaches the marketplace (→ not_found).
+const SCOPED_NPM_NAME_RE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
+
+const KIND_LABEL: Record<string, string> = {
+  agent: "Agent",
+  skill: "Skill",
+  connector: "Connector",
+  artifact: "Artifact",
+  workflow: "Workflow",
+};
+
+/** Project the marketplace ExtensionDetail into the client-safe modal view. */
+function toDetailView(
+  packageName: string,
+  detail: MarketplaceExtensionGetOutput,
+): MarketplaceDetailView {
+  const kindLabel =
+    (typeof detail.kindLabel === "string" && detail.kindLabel.trim() !== ""
+      ? detail.kindLabel
+      : KIND_LABEL[detail.kind ?? ""]) ?? "Extension";
+  return {
+    packageName,
+    displayName:
+      (typeof detail.displayName === "string" && detail.displayName.trim() !== ""
+        ? detail.displayName
+        : detail.name) || packageName,
+    kindLabel,
+    cost: detail.commerceBadge?.text ?? null,
+    license: detail.commerceBadge?.license ?? detail.license ?? null,
+    latestVersion: detail.latestVersion ?? null,
+    freshnessAt: detail.freshnessAt ?? null,
+    installCount: typeof detail.installCount === "number" ? detail.installCount : null,
+    permalink: detail.permalink ?? null,
+    sdkAbiRange: detail.sdkAbiRange ?? null,
+    readmeMarkdown: detail.readmeMarkdown ?? null,
+    longDescription: detail.longDescription ?? null,
+    description: detail.description ?? null,
+    // Scheme-guard the icon fallback: detail.iconUrl is sanitized upstream but
+    // detail.iconAssetUrl is a raw passthrough, so a non-http(s) asset URL would
+    // otherwise reach the modal's <img src>. safeHttpUrl drops it to null.
+    iconUrl: safeHttpUrl(detail.iconUrl ?? detail.iconAssetUrl),
+    ratingSummary: detail.ratingSummary ?? emptyRatingSummary(),
+    reviews: detail.reviews ?? [],
+    vendor: detail.vendor ?? null,
+  };
+}
+
+/**
+ * Load the public marketplace detail for the in-app extension-detail modal, as
+ * a discriminated result so the modal renders content / not-found / error
+ * without a thrown server-action crash. Anonymous public read (no bearer). The
+ * CALLER is responsible for the admin gate — this is the shared fetch+project
+ * seam (kept here so the marketplace client stays server-only + allowlisted).
+ */
+export async function loadPublicMarketplaceDetail(
+  packageName: string,
+): Promise<MarketplaceDetailLoadResult> {
+  const name = typeof packageName === "string" ? packageName.trim() : "";
+  if (!SCOPED_NPM_NAME_RE.test(name)) {
+    return { ok: false, reason: "not_found" };
+  }
+  try {
+    const detail = await fetchPublicMarketplaceExtensionDetail({ packageName: name });
+    // Defense in depth: the public endpoint should only return public, listed
+    // extensions; a non-public shape is treated as not-found (never rendered).
+    if (detail.currentVisibility !== "public") {
+      return { ok: false, reason: "not_found" };
+    }
+    return { ok: true, detail: toDetailView(name, detail) };
+  } catch (err) {
+    if (err instanceof MarketplaceMcpError && err.httpStatus === 404) {
+      return { ok: false, reason: "not_found" };
+    }
+    const status = (err as { status?: number; statusCode?: number }).status
+      ?? (err as { statusCode?: number }).statusCode;
+    if ((err as { code?: string }).code === "E404" || status === 404) {
+      return { ok: false, reason: "not_found" };
+    }
+    return { ok: false, reason: "error" };
+  }
 }
