@@ -128,44 +128,54 @@ export async function rescanArtifactBridgeFromStore(
     return { registered, skippedNotActive };
   }
 
-  // cinatra#792 — MULTI-DIGEST NARROWING: with retention (#796) several digests
-  // of one package may legitimately be on disk. A package discovered at more
-  // than one digest registers ONLY its anchor-bound digest (the DB pins it);
-  // no anchor / a digest-unbound anchor with >1 digest = skip the package
-  // (fail closed — never register an arbitrary digest's object type). A
-  // single-digest package keeps the unchanged path, including the ungoverned
-  // (no-row) bundled/disk allowance (CG-1).
+  // cinatra#792 — MULTI-DIGEST NARROWING + UNIFORM ANCHOR KIND BINDING: with
+  // retention (#796) several digests of one package may legitimately be on disk.
+  // A package discovered at more than one digest registers ONLY its anchor-bound
+  // digest (the DB pins it); no anchor / a digest-unbound anchor with >1 digest =
+  // skip the package (fail closed — never register an arbitrary digest's object
+  // type). The trusted install anchor also carries the canonical row's KIND, and
+  // that kind gates a SINGLE-digest record too: a package whose row governs a
+  // DIFFERENT kind than the store path kind must never register an object type
+  // (fail closed, uniformly with the boot loader). A package with NO row resolves
+  // to a null anchor and keeps the ungoverned (no-row) bundled/disk allowance
+  // (CG-1).
   const digestCountByName = new Map<string, number>();
   for (const rec of records) {
     digestCountByName.set(rec.packageName, (digestCountByName.get(rec.packageName) ?? 0) + 1);
   }
+  // Resolve the anchor for EVERY package (memoized), not only the multi-digest
+  // ones — the single-digest kind binding needs it. A resolver that is
+  // unavailable (no DB at boot) degrades to the pre-#792 posture: multi-digest
+  // packages fail closed (skipped below), single-digest packages proceed unbound.
   let boundAnchorFor:
     | ((packageName: string) => Promise<{ digest: string | null; kind: string | null } | null>)
     | null = null;
-  if ([...digestCountByName.values()].some((n) => n > 1)) {
-    try {
-      const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-      const resolveAnchor = await makeDefaultInstallAnchorResolver();
-      const memo = new Map<string, { digest: string | null; kind: string | null } | null>();
-      boundAnchorFor = async (packageName: string) => {
-        if (memo.has(packageName)) return memo.get(packageName) ?? null;
-        const anchor = await resolveAnchor(packageName);
-        const bound = anchor ? { digest: anchor.digest ?? null, kind: anchor.kind ?? null } : null;
-        memo.set(packageName, bound);
-        return bound;
-      };
-    } catch (err) {
-      console.warn(
-        "[artifact-bridge-rescan] anchor resolver unavailable — skipping multi-digest packages:",
-        err instanceof Error ? err.message : err,
-      );
-    }
+  try {
+    const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
+    const resolveAnchor = await makeDefaultInstallAnchorResolver();
+    const memo = new Map<string, { digest: string | null; kind: string | null } | null>();
+    boundAnchorFor = async (packageName: string) => {
+      if (memo.has(packageName)) return memo.get(packageName) ?? null;
+      const anchor = await resolveAnchor(packageName);
+      const bound = anchor ? { digest: anchor.digest ?? null, kind: anchor.kind ?? null } : null;
+      memo.set(packageName, bound);
+      return bound;
+    };
+  } catch (err) {
+    console.warn(
+      "[artifact-bridge-rescan] anchor resolver unavailable — multi-digest packages skipped, " +
+        "single-digest packages proceed unbound:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
   for (const rec of records) {
     if (opts.onlyPackage && rec.packageName !== opts.onlyPackage) continue;
-    if ((digestCountByName.get(rec.packageName) ?? 0) > 1) {
-      const anchor = boundAnchorFor ? await boundAnchorFor(rec.packageName) : null;
+    const multiDigest = (digestCountByName.get(rec.packageName) ?? 0) > 1;
+    const anchor = boundAnchorFor ? await boundAnchorFor(rec.packageName) : null;
+    if (multiDigest) {
+      // Ambiguous on disk: register ONLY the anchor-bound digest; an unbound or
+      // absent anchor with >1 digest = fail closed.
       const bound = anchor?.digest ?? null;
       if (!bound || rec.declaredDigest !== bound) {
         console.warn(
@@ -175,21 +185,30 @@ export async function rescanArtifactBridgeFromStore(
         );
         continue;
       }
-      // cinatra#792 — ANCHOR KIND BINDING (same rule as the boot loader): the
-      // canonical row's kind must agree with the record's PATH-derived kind —
-      // the same package/digest materialized under a DIFFERENT kind dir than
-      // the one the row governs must never register an object type (fail
-      // closed). Unbound (null) anchor kind = no assertion (legacy resolvers).
-      // The single-digest path stays anchor-free on purpose: it keeps the
-      // ungoverned (no-row) bundled/disk allowance (CG-1).
-      if (anchor?.kind != null && anchor.kind !== rec.kind) {
-        console.warn(
-          `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
-            `canonical row kind ${JSON.stringify(anchor.kind)} contradicts the store path kind ` +
-            `"${rec.kind}" — fail closed`,
-        );
-        continue;
-      }
+    } else if (anchor?.digest != null && rec.declaredDigest !== anchor.digest) {
+      // Single-digest, but the DB pins a DIFFERENT active digest than the one on
+      // disk → the on-disk digest is unpinned; never register it (fail closed).
+      // An unbound anchor (digest null) leaves the single unambiguous record
+      // registrable, as before.
+      console.warn(
+        `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
+          `the canonical row pins digest ${anchor.digest} but only this unpinned digest is on disk — fail closed`,
+      );
+      continue;
+    }
+    // cinatra#792 — ANCHOR KIND BINDING (uniform across single- and multi-digest,
+    // same rule as the boot loader): the canonical row's kind must agree with the
+    // record's PATH-derived kind — a package/digest materialized under a DIFFERENT
+    // kind dir than the row governs must never register an object type (fail
+    // closed). An unbound (null) anchor kind = no assertion (legacy resolvers); no
+    // anchor at all = the ungoverned (no-row) bundled/disk allowance (CG-1).
+    if (anchor?.kind != null && anchor.kind !== rec.kind) {
+      console.warn(
+        `[artifact-bridge-rescan] skipping ${rec.packageName}@${rec.declaredDigest ?? "(flat)"}: ` +
+          `canonical row kind ${JSON.stringify(anchor.kind)} contradicts the store path kind ` +
+          `"${rec.kind}" — fail closed`,
+      );
+      continue;
     }
     // Read-only probe: only `kind:"artifact"` packages have a bridge type.
     if (!(await recordIsArtifactKind(rec.storeDir))) continue;

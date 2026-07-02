@@ -18,10 +18,11 @@ vi.mock("@/lib/artifacts/artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: writeAllowedMock,
 }));
 
-// cinatra#792 — the multi-digest narrowing path resolves the trusted install
-// anchor (digest + canonical-row kind). Single-digest packages never hit this
-// (the ungoverned CG-1 allowance keeps them anchor-free), so the pre-existing
-// tests are unaffected by this mock.
+// cinatra#792 — the rescan resolves the trusted install anchor (digest +
+// canonical-row kind) for EVERY package: multi-digest narrowing picks the bound
+// digest, and the anchor kind gates single-digest records too (a row governing a
+// different kind refuses). A null anchor = the ungoverned (no-row) CG-1
+// allowance, so the pre-existing tests (which mock a null anchor) are unaffected.
 const { anchorMock } = vi.hoisted(() => ({
   anchorMock: vi.fn(
     async (): Promise<{ digest: string | null; kind?: string | null } | null> => null,
@@ -198,5 +199,60 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 anchor narrowing", () =>
     const res = await rescanArtifactBridgeFromStore({ storeRoot });
     expect(res.registered).toEqual([]);
     expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+});
+
+// cinatra#792 — single-digest anchor KIND binding: even with exactly one digest
+// on disk, the canonical row's kind must agree with the store path kind. A row
+// that governs the package under a DIFFERENT kind (e.g. connector) must refuse
+// an artifact object-type registration; a package with NO row keeps the
+// ungoverned (no-row) CG-1 allowance.
+describe("rescanArtifactBridgeFromStore — cinatra#792 single-digest anchor kind binding", () => {
+  let storeRoot: string;
+  const PKG = "@cinatra-ai/single-artifact";
+  const TYPE_ID = `${PKG}:artifact`;
+  const DIG = "5e".padEnd(64, "0");
+
+  beforeEach(() => {
+    storeRoot = mkdtempSync(path.join(tmpdir(), "artifact-store-792-single-"));
+    objectTypeRegistry._clearForTests();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
+    anchorMock.mockReset().mockResolvedValue(null);
+    // Exactly ONE digest of the package on disk, under artifact/.
+    writeStorePackage(storeRoot, "s", DIG, artifactPkg(PKG));
+  });
+  afterEach(() => {
+    rmSync(storeRoot, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+  });
+
+  it("FAIL-CLOSED: a single on-disk artifact whose canonical row kind is NOT artifact does not register", async () => {
+    // The row governs this package as a connector; only an artifact dir is on
+    // disk. The kind must refuse it even though there is a single digest.
+    anchorMock.mockResolvedValue({ digest: DIG, kind: "connector" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+
+  it("registers a single-digest artifact whose canonical row kind agrees (artifact)", async () => {
+    anchorMock.mockResolvedValue({ digest: DIG, kind: "artifact" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([PKG]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).not.toBeNull();
+  });
+
+  it("FAIL-CLOSED: a single-digest artifact whose row pins a DIFFERENT digest does not register", async () => {
+    anchorMock.mockResolvedValue({ digest: "ff".padEnd(64, "0"), kind: "artifact" });
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+
+  it("registers a single-digest artifact with no canonical row (CG-1 ungoverned allowance)", async () => {
+    anchorMock.mockResolvedValue(null); // no row → ungoverned bundled/disk artifact
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.registered).toEqual([PKG]);
+    expect(objectTypeRegistry.resolve(TYPE_ID)).not.toBeNull();
   });
 });
