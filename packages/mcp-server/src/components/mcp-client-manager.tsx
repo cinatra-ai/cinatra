@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { SectionHeader } from "@cinatra-ai/sdk-ui";
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AppDialog } from "@/components/app-dialog";
@@ -327,11 +328,12 @@ function LlmAccessSection(props: {
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardContent className="p-6">
       <div className="max-w-2xl">
-        <p className="section-kicker">LLM API Access</p>
-        <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">Grant AI providers access</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Allow connected LLM providers to use the Cinatra MCP server as a tool. Each provider gets a dedicated OAuth client that is passed automatically when making LLM calls.
-        </p>
+        <SectionHeader
+          size="lg"
+          kicker="LLM API Access"
+          title="Grant AI providers access"
+          description="Allow connected LLM providers to use the Cinatra MCP server as a tool. Each provider gets a dedicated OAuth client that is passed automatically when making LLM calls."
+        />
       </div>
 
       <div className="mt-6 grid gap-3">
@@ -486,11 +488,12 @@ export function McpClientsDashboard(props: {
       <Card className="border-line bg-surface backdrop-blur-none">
         <CardContent className="p-6">
         <div className="max-w-2xl">
-          <p className="section-kicker">OAuth Clients</p>
-          <h2 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">MCP applications</h2>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Create clients for MCP-compatible applications (such as Claude) that users authorize to access their account.
-          </p>
+          <SectionHeader
+            size="lg"
+            kicker="OAuth Clients"
+            title="MCP applications"
+            description="Create clients for MCP-compatible applications (such as Claude) that users authorize to access their account."
+          />
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
@@ -711,18 +714,20 @@ export function McpClientDetailManager(props: {
     <div className="grid gap-6">
       <Card className="border-line bg-surface backdrop-blur-none">
         <CardContent className="p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <p className="section-kicker">OAuth Client</p>
-            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">{clientHeadline}</h1>
-            <p className="mt-2 break-all font-mono text-xs text-muted-foreground">{client.client_id}</p>
-          </div>
-          <Button asChild variant="outline">
-            <Link href={props.listHref}>
-              Back to clients
-            </Link>
-          </Button>
-        </div>
+        <SectionHeader
+          as="h1"
+          size="lg"
+          kicker="OAuth Client"
+          title={clientHeadline}
+          description={<span className="break-all font-mono text-xs">{client.client_id}</span>}
+          actions={
+            <Button asChild variant="outline">
+              <Link href={props.listHref}>
+                Back to clients
+              </Link>
+            </Button>
+          }
+        />
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <Label className="grid gap-2 text-sm text-foreground">

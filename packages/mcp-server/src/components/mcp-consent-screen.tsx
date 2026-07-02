@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import { SectionHeader } from "@cinatra-ai/sdk-ui";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -94,11 +95,13 @@ export function McpConsentScreen(props: {
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardContent className="p-6">
       <div className="max-w-2xl">
-        <p className="section-kicker">MCP Access</p>
-        <h1 className="mt-4 text-3xl font-semibold tracking-tight text-foreground">Authorize client access</h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Confirm that this MCP client application can request tokens for the Cinatra MCP server.
-        </p>
+        <SectionHeader
+          as="h1"
+          size="lg"
+          kicker="MCP Access"
+          title="Authorize client access"
+          description="Confirm that this MCP client application can request tokens for the Cinatra MCP server."
+        />
       </div>
 
       <div className="mt-6 grid gap-5 rounded-panel border border-line bg-surface-strong/90 p-5 shadow-[0_18px_40px_rgba(15,23,42,0.06)]">

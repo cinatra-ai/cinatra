@@ -3,6 +3,7 @@ import { BotIcon, MailIcon, FileTextIcon } from "lucide-react";
 import { StatusPill } from "@/components/ui/status-pill";
 import { BrandMark } from "@/components/brand-mark";
 import { ExtensionCard } from "@/components/extension-card";
+import { SectionHeader, Kicker } from "@cinatra-ai/sdk-ui";
 
 import { PrimitiveRow } from "./primitive-row";
 
@@ -13,6 +14,34 @@ import { PrimitiveRow } from "./primitive-row";
 export function NewComponentPlaceholders() {
   return (
     <div className="flex flex-col">
+      <PrimitiveRow
+        name="SectionHeader / Kicker"
+        spec="@cinatra-ai/sdk-ui/section-header"
+        conformance="Canonical section-header + uppercase mono-kicker; kicker size xs/sm, tracking kicker/wide/label lanes from the design tokens; supersedes .section-kicker."
+      >
+        <div className="flex w-full flex-col gap-6">
+          <SectionHeader
+            kicker="Section kicker"
+            title="Section header title"
+            description="Optional description in muted body text under the semibold title."
+          />
+          <SectionHeader
+            size="lg"
+            kicker="Wide tracking"
+            kickerTracking="wide"
+            kickerSize="sm"
+            title="Large title with actions"
+            actions={<StatusPill status="running" />}
+          />
+          <div className="flex flex-col gap-1">
+            <Kicker>kicker · xs · 0.18em</Kicker>
+            <Kicker size="sm" tracking="wide">
+              kicker · sm · 0.2em
+            </Kicker>
+            <Kicker tracking="label">kicker · xs · 0.3em</Kicker>
+          </div>
+        </div>
+      </PrimitiveRow>
       <PrimitiveRow
         name="StatusPill (§VI)"
         spec="@/components/ui/status-pill"
