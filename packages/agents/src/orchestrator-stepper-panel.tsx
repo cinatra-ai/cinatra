@@ -175,6 +175,9 @@ export type OrchestratorStepperPanelProps = {
     gateCount?: number;
     hitlOwnedBy?: string;
     xRenderer?: string;
+    // #839: false marks a metadata-only phantom gateStep; the client refetch's
+    // buildSubmissionMapByStepIndex reads it via stepFiresRendererGate.
+    firesRendererGate?: boolean;
   }>;
 };
 

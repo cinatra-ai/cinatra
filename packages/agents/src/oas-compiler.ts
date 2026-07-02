@@ -887,6 +887,14 @@ export type CompiledAgentOasStep = {
     inputMapping: Record<string, string>;
   };
   connectionConfig?: CompiledAgentOasConnectionConfig;
+  // #839: false ONLY on a metadata-only FlowNode gateStep — one whose wrapped
+  // subflow never fires a non-context runtime HITL pause (proved structurally
+  // at compile time). Such a step carries an `xRenderer` for the stepper but
+  // must NOT consume a renderer-gate index slot, else it misroutes the next
+  // real reviewer gate (e.g. blog-pipeline's idea_selection_gate). Unset (the
+  // default) means "fires / unknown" and the step is INCLUDED — see
+  // stepFiresRendererGate in orchestrator-gate-predicate.ts.
+  firesRendererGate?: boolean;
   // InputMessageNode projection fields.
   inputMessageField?: string;
   inputMessageSchema?: Record<string, unknown>;
@@ -964,6 +972,54 @@ function assertHandledComponentType(
         `Update COMPONENT_TYPES_HANDLED + add a matching branch in the steppableNodeIds.map body.`,
     );
   }
+}
+
+// #839: does a FlowNode's wrapped subflow fire a real (non-context) runtime
+// HITL pause? A subflow pauses at runtime only where it declares an
+// InputMessageNode with `metadata.cinatra.requiresApproval === true`. A gate
+// whose renderer is the context-selector is EXCLUDED here — those are handled
+// transparently at runtime by the #824 renderer-gate index (payload-shape
+// detection) and never consume a renderer-gate slot, so they must not count as
+// a "real reviewer pause" that would keep a FlowNode's review gateSteps alive.
+//
+// Used to distinguish a genuine review gateStep (email-outreach: subflow has
+// recipients-review_gate / drafts-approval_gate) from a metadata-only phantom
+// (blog-pipeline: subflows only emit ctx-* context-selector gates, so the
+// authored review gateSteps never actually pause). Scans the INLINED subflow
+// only; when the ref is absent or not inlined we return true (safe default:
+// treat as firing so a real gate is never dropped).
+function subflowFiresNonContextRuntimeGate(
+  subflowRef: string | undefined,
+  localRefs: Record<string, unknown>,
+): boolean {
+  if (!subflowRef) return true;
+  const subflow = localRefs[subflowRef];
+  if (!subflow || typeof subflow !== "object") return true;
+  let fires = false;
+  const visit = (o: unknown): void => {
+    if (fires || o === null || typeof o !== "object") return;
+    if (Array.isArray(o)) {
+      for (const v of o) visit(v);
+      return;
+    }
+    const node = o as Record<string, unknown>;
+    if (node["component_type"] === "InputMessageNode") {
+      const cin =
+        ((node["metadata"] as { cinatra?: Record<string, unknown> } | undefined)?.cinatra) ??
+        {};
+      const requiresApproval = cin["requiresApproval"] === true;
+      const renderer = typeof cin["renderer"] === "string" ? (cin["renderer"] as string) : "";
+      const nodeId = typeof node["id"] === "string" ? (node["id"] as string) : "";
+      const isContextGate = renderer.endsWith(":context-selector") || nodeId.startsWith("ctx-");
+      if (requiresApproval && !isContextGate) {
+        fires = true;
+        return;
+      }
+    }
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(subflow);
+  return fires;
 }
 
 // ---------------------------------------------------------------------------
@@ -1393,6 +1449,17 @@ export async function compileOasAgentJson(opts: {
         if (gateStep.gateCount !== undefined) step.gateCount = gateStep.gateCount;
         if (gateStep.requiresApproval !== undefined) step.requiresApproval = gateStep.requiresApproval;
         if (effective.a2uiSurfaceId !== undefined) step.a2uiSurfaceId = effective.a2uiSurfaceId;
+        // #839: a gateStep is a metadata-only PHANTOM (does not fire a runtime
+        // renderer gate) when its wrapped subflow never pauses at a non-context
+        // HITL node. Proved structurally against the INLINED subflow; if the
+        // subflow is not inlined/inspectable we leave the flag unset (safe:
+        // include, never drop a real gate). blog-pipeline's four review
+        // gateSteps become firesRendererGate:false; email-outreach's gateSteps
+        // (subflows carry real reviewer InputMessageNodes) stay unset/included,
+        // so its compiled policy is byte-identical.
+        if (!subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
+          step.firesRendererGate = false;
+        }
         return step;
       }
 

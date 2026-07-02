@@ -92,6 +92,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
+import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
@@ -263,7 +264,7 @@ function isContextSelectorInterruptPayload(
 async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
-  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean }>,
+  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean }>,
 ): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   // All WayFlow-gated steps ordered by appearance: both self-owned (orchestrator
@@ -297,9 +298,13 @@ async function resolveWayflowXRenderer(
   // subsumes the prior setup-loop and gate-index logic — xRenderer is
   // strictly tighter than (hitlOwnedBy ∈ {childAgent, self}) ∨
   // (xRenderer set) and excludes the Inputs gate implicitly.
-  const childSteps = approvalPolicySteps.filter(
-    (s) => typeof s.xRenderer === "string",
-  );
+  // #839: also exclude metadata-only PHANTOM gateSteps (a FlowNode review
+  // gateStep whose subflow fires no non-context runtime pause — compiler-stamped
+  // firesRendererGate:false). They carry an xRenderer for the stepper but never
+  // produce a runtime interrupt, so counting them shifts the real reviewer gate
+  // (blog-pipeline's idea_selection_gate) onto a phantom's null schema. Shared
+  // predicate keeps this walk in lockstep with run-actions + instance-screens.
+  const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
   if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null };
 
   // Redis-backed index: survives hot-reloads and restarts unlike a module-level
@@ -520,7 +525,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
         const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
-          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>;
+          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean;
         }>;
         ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema } =
           await resolveWayflowXRenderer(runId, task.id, policySteps));
