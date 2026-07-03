@@ -41,7 +41,7 @@ export type InstalledExtensionCardProps = {
   kindLabel: string;
   vendor?: string | null;
   description?: string | null;
-  /** Already-formatted version text (e.g. "v1.2.0" formatting is the caller's). */
+  /** Already-formatted version text (the v-prefixed formatting is the caller's). */
   version?: string | null;
   /** Lifecycle status indicator (+ any visibility/risk badges) beside the version. */
   status?: ReactNode;
