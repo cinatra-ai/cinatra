@@ -331,14 +331,22 @@ export function AppSidebar({
           href="/chat"
           className="flex h-full items-center gap-2.5 px-2 transition hover:opacity-90 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
         >
-          {/* Sidebar brand head uses <BrandMark> (fedora + italic Archivo 800
-              wordmark). The collapsible-icon state hides the wordmark — we
-              drop back to the bare <CinatraLogo> there to preserve the
-              existing 32px chip size. */}
+          {/* Sidebar brand head uses <BrandMark> — the official horizontal
+              lockup (fedora + outlined wordmark, spec §I proportions baked
+              in). Mustard on the light sidebar; on dark grounds the lockup
+              goes cream, not mustard (§I inverted colourway). The
+              collapsible-icon state hides the wordmark — we drop back to the
+              bare <CinatraLogo> there to preserve the existing 32px chip
+              size. */}
           <span className="group-data-[collapsible=icon]:hidden">
-            <BrandMark size={28} tone="mustard" variant="animated" />
+            <BrandMark
+              size={28}
+              tone="mustard"
+              variant="animated"
+              className="dark:text-foreground"
+            />
           </span>
-          <CinatraLogo className="hidden size-8 shrink-0 text-brand-mustard group-data-[collapsible=icon]:block" />
+          <CinatraLogo className="hidden size-8 shrink-0 text-brand-mustard group-data-[collapsible=icon]:block dark:text-foreground" />
         </Link>
       </SidebarHeader>
 
