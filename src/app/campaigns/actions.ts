@@ -21,7 +21,7 @@ import {
   getLlmProviderSurface,
   requireLlmProviderSurface,
 } from "@/lib/llm-provider-surfaces";
-import { requireAuthSession, requireAdminSession, isPlatformAdmin, getActorContext } from "@/lib/auth-session";
+import { requireAuthSession, requireAdminSession, isPlatformAdmin, resolveOrgRoleForSession, getActorContext } from "@/lib/auth-session";
 import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
 import {
   getExternalMcpServerByIdFresh,
@@ -29,6 +29,9 @@ import {
   updateExternalMcpServerGuarded,
   deleteExternalMcpServerGuarded,
   ExternalMcpServerWriteConflictError,
+  saveTwentyConnection,
+  disconnectTwentyConnection,
+  TwentyConnectionError,
   type ExternalMcpServerScope,
 } from "@/lib/external-mcp-registry";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
@@ -706,3 +709,67 @@ void listWordPressInstances;
 void createNotification;
 void importNangoConnection;
 void ensureNangoIntegration;
+
+// ---------------------------------------------------------------------------
+// Twenty CRM connect flow (issue cinatra-ai/twenty-connector#39).
+//
+// These two actions back the twenty-connector setup page's connect/disconnect
+// forms. They own the AUTHORIZATION boundary host-side (derived from the trusted
+// session — never from connector/package input) and delegate the guard + live
+// probe + Nango import + row write to the host `twenty-connection-service`.
+// The instance-global Twenty workspace is shared, LLM-adjacent connector state,
+// so a write requires org-manager / platform-admin authority (mirrors the
+// /api/nango/connections/save app-scope authz). The pasted API key transits this
+// server action only and is never logged.
+// ---------------------------------------------------------------------------
+
+function twentyConnectorSetupHref(): string {
+  return (
+    getConnectorSetupHref("cinatra-ai/twenty-connector") ??
+    "/connectors/cinatra-ai/twenty-connector/setup"
+  );
+}
+
+async function requireTwentyConnectManager(): Promise<boolean> {
+  const session = await requireAuthSession();
+  const orgRole = await resolveOrgRoleForSession(session);
+  return isPlatformAdmin(session) || orgRole === "org_owner" || orgRole === "org_admin";
+}
+
+export async function saveTwentyConnectionAction(formData: FormData): Promise<void> {
+  const base = twentyConnectorSetupHref();
+  if (!(await requireTwentyConnectManager())) {
+    redirect(`${base}?error=${encodeURIComponent("Only an administrator can connect Twenty.")}`);
+  }
+  const instanceUrl = String(formData.get("instanceUrl") ?? "");
+  const apiKey = String(formData.get("apiKey") ?? "");
+  let errorMessage: string | null = null;
+  try {
+    await saveTwentyConnection({ instanceUrl, apiKey });
+  } catch (err) {
+    // Only surface our OWN vetted messages (TwentyConnectionError, which never
+    // carries the key or a readback value). Any other error may embed the
+    // request payload / key — never place it in the redirect URL (it would land
+    // in browser + server access logs); use a generic message instead.
+    errorMessage =
+      err instanceof TwentyConnectionError
+        ? err.message
+        : "Unable to connect Twenty. Please try again.";
+  }
+  if (errorMessage) {
+    redirect(`${base}?error=${encodeURIComponent(errorMessage)}`);
+  }
+  redirect(`${base}?saved=1`);
+}
+
+export async function disconnectTwentyConnectionAction(formData: FormData): Promise<void> {
+  void formData; // the disconnect form carries no fields; the param satisfies `<form action>`
+  const base = twentyConnectorSetupHref();
+  if (!(await requireTwentyConnectManager())) {
+    redirect(
+      `${base}?error=${encodeURIComponent("Only an administrator can disconnect Twenty.")}`,
+    );
+  }
+  await disconnectTwentyConnection();
+  redirect(`${base}?deleted=1`);
+}

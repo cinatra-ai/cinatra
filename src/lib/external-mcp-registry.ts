@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import {
   getPostgresConnectionString,
@@ -7,7 +8,13 @@ import {
   postgresSchema,
 } from "@/lib/database";
 import { isPrivateUrl } from "@/lib/wordpress-mcp-connection";
-import { getNangoCredentials, isNangoConfigured } from "@/lib/nango-system";
+import {
+  getNangoCredentials,
+  isNangoConfigured,
+  ensureNangoIntegration,
+  importNangoConnection,
+  deleteNangoConnection,
+} from "@/lib/nango-system";
 import { getMcpPublicBaseUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { LlmMcpServerTool } from "@cinatra-ai/llm";
 
@@ -628,5 +635,287 @@ export async function buildSingleExternalMcpTool(
       err instanceof Error ? err.message : String(err),
     );
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Twenty CRM connect flow (issue cinatra-ai/twenty-connector#39).
+//
+// Productionizes the dev-auto-setup Twenty attach as a UI-triggered flow: an
+// admin pastes a Twenty instance URL + API key on the connector setup page, and
+// this code (a) guards + normalizes the URL, (b) LIVE-PROBES the key against the
+// instance BEFORE persisting (fail-closed), (c) imports the key into Nango under
+// the SHARED external-MCP provider key (EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY),
+// readback-verified, then (d) upserts the singleton twenty-workspace row binding
+// the connection + the Layer-B read allowlist. resolveExternalMcpServerBearer is
+// UNCHANGED (no resolver change, no seal-store change).
+//
+// It lives HERE (rather than a dedicated module) so the connect flow adds NO new
+// module to the locked route graphs that reach the external-MCP registry (the
+// dev-perf route-graph ratchet); all of its dependencies (the row CRUD above,
+// nango-system, node:crypto) are already in this module's graph — the same
+// reason createExternalMcpServerAction does its work through this module.
+//
+// SECURITY (codex-converged, issue #39):
+//   - The pasted key is NEVER logged (errors carry a generic message only).
+//   - The key transits this SERVER action in-process only; it is stored sealed
+//     at rest by Nango. cinatra keeps no plaintext copy (the row has no key
+//     column — only the connection id).
+//   - ALL authority is derived from the trusted session by the caller (the
+//     "use server" action) — this code takes only the instance URL + key. It
+//     NEVER accepts a caller-supplied Nango connection id / provider key / row
+//     id / scope (a client-supplied pointer is a credential-routing hazard).
+//   - Instance-global admin-managed singleton for the MVP; per-user connections
+//     are deferred (they need a per-user row id + an actor-aware getTwentyRow).
+// ---------------------------------------------------------------------------
+
+/** The singleton external_mcp_servers row id the Twenty CRM transport resolves
+ *  by id. Instance-global / admin-managed for the MVP. */
+export const TWENTY_WORKSPACE_ROW_ID = "twenty-workspace";
+/** Default human label for the Twenty workspace row. */
+export const TWENTY_ROW_LABEL = "Twenty CRM";
+/** The Nango integration template the shared external-MCP provider uses for a
+ *  bearer API key (matches the dev-auto-setup import). */
+const TWENTY_NANGO_INTEGRATION_PROVIDER = "private-api-bearer";
+/**
+ * Layer-B catalog allowlist — the read tools the Twenty MCP proxy permits on
+ * every execute_tool. READ-ONLY at first; write verbs land with the
+ * agent-rewrite cutover. Native MCP tools are controlled by Layer A allowedTools,
+ * NOT Layer B — never include them here. Shared with dev-auto-setup.
+ */
+export const TWENTY_LAYER_B_CATALOG_TOOLS: readonly string[] = [
+  "find_companies",
+  "find_people",
+  "find_one_company",
+  "find_one_person",
+  "get_views",
+] as const;
+
+/** A user-actionable Twenty connect failure. The message is safe to surface
+ *  (never carries the key or a readback value). */
+export class TwentyConnectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TwentyConnectionError";
+  }
+}
+
+/** Current Twenty connection state for the setup page (never returns the key). */
+export type TwentyConnectionState = {
+  connected: boolean;
+  instanceUrl: string | null;
+};
+
+/**
+ * True for a hostname that is loopback, RFC-1918 private, or link-local (incl.
+ * the 169.254.169.254 cloud-metadata address). The probe + the LLM-facing proxy
+ * both make server-side requests to serverUrl, so a private target is an SSRF
+ * hazard. NOTE: checks the literal host only; a public DNS name that resolves to
+ * a private address (DNS rebinding) is NOT caught here — that residual is shared
+ * with the existing external-MCP proxy surface and is tracked as follow-up.
+ */
+function isPrivateOrLinkLocalHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    h === "localhost" ||
+    h === "::1" ||
+    h.endsWith(".local") ||
+    h.endsWith(".internal") ||
+    /^127\./.test(h) ||
+    /^10\./.test(h) ||
+    /^192\.168\./.test(h) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(h) ||
+    /^169\.254\./.test(h) ||
+    h === "0.0.0.0" ||
+    /^f[cd][0-9a-f]{2}:/.test(h) ||
+    /^fe80:/.test(h)
+  );
+}
+
+/**
+ * Validate + normalize a Twenty instance URL and derive the REST base (for the
+ * live probe) + the MCP endpoint (persisted as the row's serverUrl). Throws a
+ * TwentyConnectionError on a bad URL. Guard: http only for localhost; https +
+ * public otherwise (private/link-local/metadata rejected). A trailing slash and
+ * any pasted /mcp suffix are normalized away.
+ */
+export function normalizeTwentyInstanceUrl(raw: string): { restBase: string; mcpUrl: string } {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) throw new TwentyConnectionError("Enter your Twenty instance URL.");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new TwentyConnectionError("Enter a valid instance URL, including https://.");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new TwentyConnectionError("The instance URL must start with http:// or https://.");
+  }
+  const isLocalhost =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !isLocalhost) {
+    throw new TwentyConnectionError("The instance URL must use HTTPS.");
+  }
+  if (!isLocalhost && isPrivateOrLinkLocalHost(url.hostname)) {
+    throw new TwentyConnectionError(
+      "The instance URL must be a public address (private or link-local addresses are not allowed).",
+    );
+  }
+  const path = url.pathname.replace(/\/+$/, "").replace(/\/mcp$/i, "");
+  const restBase = `${url.origin}${path}`;
+  return { restBase, mcpUrl: `${restBase}/mcp` };
+}
+
+/**
+ * The Nango connection id for a given instance. DERIVED FROM THE INSTANCE URL so
+ * changing the URL yields a DIFFERENT connection id: a re-save under a new URL
+ * never overwrites the previous URL's key, and if the row upsert fails the row
+ * keeps pointing at its old {serverUrl, connection} pair (no key↔URL mismatch).
+ */
+function twentyConnectionIdFor(restBase: string): string {
+  const digest = createHash("sha256").update(restBase).digest("hex").slice(0, 16);
+  return `${TWENTY_WORKSPACE_ROW_ID}-${digest}`;
+}
+
+/**
+ * Live-probe a Twenty API key against the instance's REST surface. Returns
+ * "ok" | "unauthorized" | "unreachable". Never logs the key.
+ */
+async function probeTwentyKey(
+  restBase: string,
+  apiKey: string,
+  timeoutMs = 8000,
+): Promise<"ok" | "unauthorized" | "unreachable"> {
+  const url = `${restBase.replace(/\/+$/, "")}/rest/companies?limit=1`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (res.ok) return "ok";
+    if (res.status === 401 || res.status === 403) return "unauthorized";
+    return "unreachable";
+  } catch {
+    return "unreachable";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Read the current Twenty connection state from the singleton row. */
+export function getTwentyConnectionState(): TwentyConnectionState {
+  const row = getExternalMcpServerById(TWENTY_WORKSPACE_ROW_ID);
+  if (!row) return { connected: false, instanceUrl: null };
+  const instanceUrl = row.serverUrl.replace(/\/mcp$/i, "");
+  return { connected: row.enabled && Boolean(row.nangoConnectionId), instanceUrl };
+}
+
+/**
+ * Connect (or re-connect) the instance-global Twenty workspace. Guards the URL,
+ * live-probes the key, imports it into Nango under the shared external-MCP
+ * provider (readback-verified), then upserts the singleton row. The caller MUST
+ * have already authorized the actor as an admin/org-manager — this takes no
+ * caller-supplied connection/scope pointer.
+ */
+export async function saveTwentyConnection(input: {
+  instanceUrl: string;
+  apiKey: string;
+}): Promise<void> {
+  const apiKey = (input.apiKey ?? "").trim();
+  if (!apiKey) throw new TwentyConnectionError("Enter your Twenty API key.");
+  const { restBase, mcpUrl } = normalizeTwentyInstanceUrl(input.instanceUrl);
+
+  if (!isNangoConfigured()) {
+    throw new TwentyConnectionError(
+      "The connection service (Nango) is not configured — an administrator must run `cinatra setup nango` first.",
+    );
+  }
+
+  // (1) MANDATORY live probe BEFORE any persistence (fail-closed).
+  const probe = await probeTwentyKey(restBase, apiKey);
+  if (probe === "unauthorized") {
+    throw new TwentyConnectionError(
+      "Twenty rejected that API key (401/403). Check the key and try again.",
+    );
+  }
+  if (probe !== "ok") {
+    throw new TwentyConnectionError(
+      "Could not reach the Twenty instance to verify the key — check the instance URL and that Twenty is reachable.",
+    );
+  }
+
+  // (2) Import the key into Nango under the SHARED external-MCP provider key
+  //     (the resolver reads exactly this pair). No connectorKey => no pointer
+  //     record; the resolver reads the raw connection. The connection id is
+  //     DERIVED FROM THE URL so a URL change never reuses the prior URL's key.
+  const connectionId = twentyConnectionIdFor(restBase);
+  const priorConnectionId =
+    getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID)?.nangoConnectionId ?? null;
+  await ensureNangoIntegration({
+    provider: TWENTY_NANGO_INTEGRATION_PROVIDER,
+    providerConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+    displayName: "Cinatra External MCP",
+  });
+  await importNangoConnection({
+    providerConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+    connectionId,
+    credentials: { type: "API_KEY", apiKey },
+  });
+
+  // (3) Readback-verify the write landed (generic message only — never the value).
+  const readback = await getNangoCredentials(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, connectionId, {
+    forceRefresh: true,
+  });
+  const readbackKey =
+    readback && typeof readback === "object" && "apiKey" in readback
+      ? (readback as { apiKey?: unknown }).apiKey
+      : null;
+  if (readbackKey !== apiKey) {
+    throw new TwentyConnectionError(
+      "The connection service did not store the key correctly (readback mismatch). Please try again.",
+    );
+  }
+
+  // (4) Single row upsert: singleton id, workspace scope, Layer-B read allowlist.
+  upsertExternalMcpServer({
+    id: TWENTY_WORKSPACE_ROW_ID,
+    label: TWENTY_ROW_LABEL,
+    serverUrl: mcpUrl,
+    nangoConnectionId: connectionId,
+    scope: "workspace",
+    orgId: null,
+    userId: null,
+    enabled: true,
+    allowedTools: null,
+    allowedCatalogTools: [...TWENTY_LAYER_B_CATALOG_TOOLS],
+  });
+
+  // (5) After a URL change, best-effort remove the PREVIOUS instance's Nango key.
+  if (priorConnectionId && priorConnectionId !== connectionId) {
+    try {
+      await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, priorConnectionId);
+    } catch {
+      // Best-effort: the row no longer references the prior connection.
+    }
+  }
+}
+
+/**
+ * Disconnect the Twenty workspace: remove the row, then best-effort delete the
+ * Nango connection. The row is read FRESH (bypassing the TTL cache) so a stale
+ * null cache on another worker cannot leave the Nango key behind.
+ */
+export async function disconnectTwentyConnection(): Promise<void> {
+  const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+  deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
+  if (row?.nangoConnectionId && isNangoConfigured()) {
+    try {
+      await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, row.nangoConnectionId);
+    } catch {
+      // Best-effort: the row (the resolver binding) is already deleted.
+    }
   }
 }

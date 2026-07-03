@@ -40,6 +40,8 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   upsertExternalMcpServer: (...a: unknown[]) => upsertMock(...a),
   resolveExternalMcpServerBearer: vi.fn(),
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "cinatra-external-mcp",
+  TWENTY_WORKSPACE_ROW_ID: "twenty-workspace",
+  TWENTY_LAYER_B_CATALOG_TOOLS: ["find_companies", "find_people", "find_one_company", "find_one_person", "get_views"],
 }));
 
 // Stub the Twenty keygen module (imported at top-level of dev-auto-setup) so the

@@ -231,6 +231,14 @@ type HostExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
   /** The host server action the per-row delete button submits to. Owns the
    * authorization boundary + redirect host-side. */
   deleteServerAction(formData: FormData): Promise<void>;
+  /** The host server action the twenty-connector setup page's connect form
+   * submits to. Owns the admin-authorization boundary + the URL guard + the
+   * live key probe + the Nango import + the twenty-workspace row write, host-side
+   * (twenty-connector#39). */
+  saveTwentyConnectionAction(formData: FormData): Promise<void>;
+  /** The host server action the twenty-connector setup page's disconnect button
+   * submits to. Owns the authorization boundary + row/connection teardown. */
+  disconnectTwentyConnectionAction(formData: FormData): Promise<void>;
   /** Resolve the current viewer (platform-admin flag + user id) for the
    * setup page's visibility scoping. */
   resolveViewerContext(): Promise<{ isAdmin: boolean; userId: string }>;
@@ -351,6 +359,21 @@ export function registerHostConnectorServices(): void {
     deleteServerAction: async (formData: FormData) => {
       const { deleteExternalMcpServerAction } = await import("@/app/campaigns/actions");
       return deleteExternalMcpServerAction(formData);
+    },
+    // twenty-connector setup-page connect/disconnect actions (twenty-connector#39).
+    // Same lazy-import posture as the MCP-Servers write actions above: the
+    // "use server" module loads on first form-submit, and the connector's
+    // register(ctx) forwards these real server-action references into `<form
+    // action={…}>`. The host owns the admin authz + URL guard + live key probe +
+    // Nango import + twenty-workspace row write inside the action; the connector
+    // reimplements NO auth and never sees the key.
+    saveTwentyConnectionAction: async (formData: FormData) => {
+      const { saveTwentyConnectionAction } = await import("@/app/campaigns/actions");
+      return saveTwentyConnectionAction(formData);
+    },
+    disconnectTwentyConnectionAction: async (formData: FormData) => {
+      const { disconnectTwentyConnectionAction } = await import("@/app/campaigns/actions");
+      return disconnectTwentyConnectionAction(formData);
     },
     // Resolve the viewer (platform-admin flag + user id) for visibility
     // scoping. Mirrors the derivation the host external-MCP page carried —
