@@ -48,4 +48,4 @@ jobs:
     uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
     with:
       mode: enforce
-      ref: 8eede1022e835997d94974e4bd6205daf72131a2
+      ref: 0de02f3ae7b30b9bf2b7a7e4a508c814bbc7c282
