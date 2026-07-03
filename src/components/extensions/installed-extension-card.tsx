@@ -47,6 +47,13 @@ export type InstalledExtensionCardProps = {
   status?: ReactNode;
   /** Right-panel actions, top to bottom (Settings, More details, management). */
   actions?: ReactNode;
+  /**
+   * Archived / fully-greyed §VI treatment (cinatra#957): the accent ground
+   * desaturates to light grey, the logo tile inks muted, and every text /
+   * status / action zone renders muted grey. Active cards keep their
+   * category colour.
+   */
+  archived?: boolean;
   className?: string;
 };
 
@@ -62,6 +69,7 @@ export function InstalledExtensionCard({
   version,
   status,
   actions,
+  archived = false,
   className,
 }: InstalledExtensionCardProps) {
   const { bg } = ACCENT_PALETTE[accentColor];
@@ -69,17 +77,20 @@ export function InstalledExtensionCard({
     <div
       data-slot="installed-extension-card"
       data-accent={accentColor}
+      data-archived={archived ? "" : undefined}
       className={cn(
         "flex flex-col overflow-hidden rounded-card border border-line bg-surface-strong shadow-sm md:flex-row md:items-stretch",
         className,
       )}
     >
-      {/* LEFT — the ListingCard mark at listing-card width. */}
+      {/* LEFT — the ListingCard mark at listing-card width; archived cards
+          render the muted (light-grey) variant of the mark. */}
       <ExtensionCardListingBanner
         name={name}
         accentColor={accentColor}
         emblem={emblem}
         iconUrl={iconUrl}
+        muted={archived}
         className="p-4 md:w-[340px] md:shrink-0"
       />
 
@@ -87,16 +98,34 @@ export function InstalledExtensionCard({
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-2 px-[18px] py-[15px]">
         <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           {kindIcon && (
-            <span aria-hidden className="inline-flex shrink-0" style={{ color: bg }}>
+            <span
+              aria-hidden
+              className={cn("inline-flex shrink-0", archived && "text-muted-foreground")}
+              style={archived ? undefined : { color: bg }}
+            >
               {kindIcon}
             </span>
           )}
           <span className="truncate">
-            <span className="font-medium text-foreground">{kindLabel}</span>
+            <span
+              className={cn(
+                "font-medium",
+                archived ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {kindLabel}
+            </span>
             {vendor && (
               <>
                 {" by "}
-                <span className="font-medium text-foreground">{vendor}</span>
+                <span
+                  className={cn(
+                    "font-medium",
+                    archived ? "text-muted-foreground" : "text-foreground",
+                  )}
+                >
+                  {vendor}
+                </span>
               </>
             )}
           </span>
@@ -106,7 +135,12 @@ export function InstalledExtensionCard({
             {description}
           </p>
         )}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-3 gap-y-1.5",
+            archived && "opacity-70",
+          )}
+        >
           {version && (
             <span className="font-mono text-xs text-muted-foreground">{version}</span>
           )}
@@ -114,9 +148,15 @@ export function InstalledExtensionCard({
         </div>
       </div>
 
-      {/* RIGHT — hairline-divided actions panel. */}
+      {/* RIGHT — hairline-divided actions panel; archived cards mute it so the
+          whole card reads inactive while Restore / Reinstall stay operable. */}
       {actions && (
-        <div className="flex flex-col items-stretch justify-center gap-2 border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0">
+        <div
+          className={cn(
+            "flex flex-col items-stretch justify-center gap-2 border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
+            archived && "opacity-70",
+          )}
+        >
           {actions}
         </div>
       )}

@@ -754,6 +754,10 @@ export async function RegistryCatalogScreen({
       version={row.versionLabel}
       status={renderStatus(row)}
       actions={isArchived ? renderArchivedActions(row) : renderActiveActions(row)}
+      // Archived extensions render the fully-greyed §VI card (cinatra#957):
+      // category ground → light grey, muted logo tile, all text/status/actions
+      // muted. Active cards keep their category colour.
+      archived={isArchived}
     />
   );
 
