@@ -4,6 +4,7 @@ import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { resolveExtensionDataRoot } from "@/lib/extension-data-root";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
@@ -319,6 +320,20 @@ export function getSkillsDataRootPath(): string {
 export function getSkillStoreRootPath(): string {
   const { storePath } = readSkillsStorageConfig();
   return path.isAbsolute(storePath) ? storePath : path.join(process.cwd(), storePath);
+}
+
+/**
+ * The unified extension store's `skill/` subtree (cinatra#793):
+ * `<CINATRA_EXTENSION_DATA_ROOT>/skill/<slug>/<digest>/`. A verdaccio-installed
+ * skill package's `repositoryPath`/`sourcePath` now point INTO the finalized
+ * store digest dir the shared install pipeline materialized (the dispatcher
+ * runs that pipeline BEFORE the skill handler), so this root joins the skill
+ * read allowlists. Lazy dynamic-free import of the host resolver is safe here:
+ * `@/lib/extension-data-root` reads env > DB metadata > default with no heavy
+ * graph (same dependency shape this module already has via `@/lib/database`).
+ */
+export function getExtensionStoreSkillRootPath(): string {
+  return path.join(resolveExtensionDataRoot(), "skill");
 }
 
 function getInstalledPackagesDir() {
@@ -1567,21 +1582,27 @@ function assertLeafNotSymlink(leafPath: string): void {
  * skill roots cannot exfiltrate arbitrary local files. `readSkillFileContent`
  * and `readSkillContent` already use it internally.
  *
- * Accepts EITHER the new content-store root (`data/skill-store`,
- * canonical for new writes) OR the legacy `data/skills` root (compat fallback
- * — legacy rows' sourcePath stays valid until the store migration migrates
- * them). Out-of-both-roots → reject.
+ * Accepts the new content-store root (`data/skill-store`, canonical for new
+ * writes), the legacy `data/skills` root (compat fallback — legacy rows'
+ * sourcePath stays valid until the store migration migrates them), OR the
+ * unified extension store's `skill/` subtree (cinatra#793 — verdaccio skill
+ * packages' sourcePath points into the finalized store digest dir under
+ * `<CINATRA_EXTENSION_DATA_ROOT>/skill/<slug>/<digest>/`). Out-of-all-roots →
+ * reject.
  */
 export function assertSkillFilePathInsideRoot(filePath: string): void {
   const storeRoot = path.resolve(getSkillStoreRootPath());
   const legacyRoot = path.resolve(getSkillsDataRootPath());
+  const extensionStoreRoot = path.resolve(getExtensionStoreSkillRootPath());
   const resolved = path.resolve(filePath);
   // Layer 1 — lexical containment (KEEP; defense in depth).
   const insideStore =
     resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
   const insideLegacy =
     resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
-  if (!insideStore && !insideLegacy) {
+  const insideExtensionStore =
+    resolved === extensionStoreRoot || resolved.startsWith(extensionStoreRoot + path.sep);
+  if (!insideStore && !insideLegacy && !insideExtensionStore) {
     throw new Error("Skill file path is outside the allowed skill roots.");
   }
   // Layer 2 — realpath containment (#300). A symlinked ANCESTOR under either
@@ -1589,7 +1610,9 @@ export function assertSkillFilePathInsideRoot(filePath: string): void {
   // Re-assert against the canonicalized root(s) the target lexically matched.
   const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
   const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
-  if (!realpathInsideStore && !realpathInsideLegacy) {
+  const realpathInsideExtensionStore =
+    insideExtensionStore && isRealpathContained(resolved, extensionStoreRoot);
+  if (!realpathInsideStore && !realpathInsideLegacy && !realpathInsideExtensionStore) {
     throw new Error("Skill file path is outside the allowed skill roots.");
   }
 }
@@ -1616,13 +1639,16 @@ export function assertSkillDirectoryInsideRoot(directoryPath: string): string {
   }
   const storeRoot = path.resolve(getSkillStoreRootPath());
   const legacyRoot = path.resolve(getSkillsDataRootPath());
+  const extensionStoreRoot = path.resolve(getExtensionStoreSkillRootPath());
   const resolved = path.resolve(directoryPath);
   // Layer 2 — lexical containment (KEEP; defense in depth).
   const insideStore =
     resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
   const insideLegacy =
     resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
-  if (!insideStore && !insideLegacy) {
+  const insideExtensionStore =
+    resolved === extensionStoreRoot || resolved.startsWith(extensionStoreRoot + path.sep);
+  if (!insideStore && !insideLegacy && !insideExtensionStore) {
     throw new Error("Skill directory path is outside the allowed skill roots.");
   }
   // Layer 3 — realpath containment (#300). A symlinked ANCESTOR under either
@@ -1632,7 +1658,9 @@ export function assertSkillDirectoryInsideRoot(directoryPath: string): string {
   // created leaf without throwing).
   const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
   const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
-  if (!realpathInsideStore && !realpathInsideLegacy) {
+  const realpathInsideExtensionStore =
+    insideExtensionStore && isRealpathContained(resolved, extensionStoreRoot);
+  if (!realpathInsideStore && !realpathInsideLegacy && !realpathInsideExtensionStore) {
     throw new Error("Skill directory path is outside the allowed skill roots.");
   }
   return resolved;

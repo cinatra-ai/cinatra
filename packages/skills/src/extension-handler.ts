@@ -87,20 +87,24 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "skill",
 
-    async install(ref: PackageRef, _actor: Actor): Promise<void> {
+    async install(ref: PackageRef, actor: Actor): Promise<void> {
       const source = resolveSkillPackageSource(ref);
       if (source.kind === "github") {
         await installSkillPackageFromGitHub(ref.packageName);
       } else {
+        // cinatra#793: the verdaccio installer consumes the FINALIZED unified-
+        // store payload the dispatcher's pipeline just materialized — resolved
+        // at the SAME org scope the dispatcher ensured the canonical row at.
         await installSkillPackageFromVerdaccio({
           packageName: ref.packageName,
           packageVersion: ref.version,
+          orgId: actor.orgId ?? null,
         });
       }
       await matchAgentsToSkills();
     },
 
-    async update(ref: PackageRef, _actor: Actor): Promise<void> {
+    async update(ref: PackageRef, actor: Actor): Promise<void> {
       // upsert semantics — same as install per source kind.
       const source = resolveSkillPackageSource(ref);
       if (source.kind === "github") {
@@ -109,6 +113,7 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
         await installSkillPackageFromVerdaccio({
           packageName: ref.packageName,
           packageVersion: ref.version,
+          orgId: actor.orgId ?? null,
         });
       }
       await matchAgentsToSkills();
