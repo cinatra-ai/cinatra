@@ -260,6 +260,7 @@ export function ExtensionCardListingBanner({
   iconUrl,
   badges,
   className,
+  muted = false,
 }: {
   name: string;
   accentColor: ExtensionAccent;
@@ -267,24 +268,38 @@ export function ExtensionCardListingBanner({
   iconUrl?: string | null;
   badges?: React.ReactNode;
   className?: string;
+  /**
+   * Archived / fully-greyed variant (design system SVI, cinatra#957): the
+   * accent category ground desaturates to the light-grey `muted` token and
+   * the mark renders muted-foreground — an archived extension must read as
+   * inactive at a glance. Active cards keep their category colour.
+   */
+  muted?: boolean;
 }) {
   const { bg, fg } = ACCENT_PALETTE[accentColor];
   return (
     <div
       data-slot="extension-card-banner"
+      data-muted={muted ? "" : undefined}
       className={cn(
         "relative flex min-h-[96px] items-center gap-3 p-[14px]",
+        muted && "bg-muted text-muted-foreground",
         className,
       )}
-      style={{ background: bg, color: fg }}
+      style={muted ? undefined : { background: bg, color: fg }}
     >
       {/* Square icon tile — 46×46, 11px radius, white ground, soft shadow,
           icon colour matching the banner (spec §IV). A hosted icon image
           renders cover-fit inside the tile; otherwise the kind/vendor emblem. */}
+      {/* Muted variant: the tile keeps its white ground but the emblem inks
+          muted-foreground instead of the accent (SVI "logo tile muted"). */}
       <span
         data-slot="extension-card-icon"
-        className="grid h-[46px] w-[46px] shrink-0 place-items-center overflow-hidden rounded-[11px] bg-surface-strong shadow-sm"
-        style={{ color: bg }}
+        className={cn(
+          "grid h-[46px] w-[46px] shrink-0 place-items-center overflow-hidden rounded-[11px] bg-surface-strong shadow-sm",
+          muted && "text-muted-foreground",
+        )}
+        style={muted ? undefined : { color: bg }}
       >
         {iconUrl ? (
           // An arbitrary remote marketplace asset host; not a build-time-known
