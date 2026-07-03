@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+import type { ReviewFinding } from "../validate-agent-json";
+import {
+  collectArtifactBindingsFromOasDocument,
+  collectArtifactMaterializeNodesFromOasDocument,
+} from "../artifact-binding";
+
 export const CINATRA_AGENT_PACKAGE_TYPE = "agent" as const;
 export const CINATRA_AGENT_MANIFEST_VERSION = 1 as const;
 export const AGENT_PACKAGE_FORMAT_VERSION = 2 as const;
@@ -199,4 +205,92 @@ export function parseAgentPackagePayload(input: unknown): AgentPackagePayload {
 
 export function isAgentPackageManifest(input: unknown): input is AgentPackageManifest {
   return agentPackageManifestSchema.safeParse(input).success;
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2 — publish-time artifact-produces materialization contract (cinatra#924).
+//
+// A package that declares `cinatra.produces` must actually materialize each
+// declared extension: an EndNode `outputs[].cinatra.artifact` binding or an
+// `artifact_materialize` passthrough ApiNode per produced extension. This is
+// the PUBLISH-CONTRACT view of the #922 epic invariant "declared production ⇒
+// runnable materialization edge"; the runtime OAS-lint view is
+// `scanOasForArtifactParityFindings` (validate-oas-runtime-invariants.ts).
+//
+// Ratchet (must NOT red un-migrated agent repos):
+//   - Grammar violations (malformed `cinatra.artifact`, binding.extension ∉
+//     produces) are NET-NEW shapes — no existing repo has a binding, so
+//     nothing existing reddens; they are BLOCKER (already hard-blocked by the
+//     compile gate — this is the defense-in-depth publish view).
+//   - A produces entry with no materialization edge is a check EXISTING repos
+//     trip (blog-draft-writer, blog-idea-generator), so it is WARNING day one.
+//   - `ARTIFACT_PRODUCES_ENFORCEMENT` is the single WARN→BLOCK phase switch;
+//     the Phase-2 flip to "block" (republish refusal) is a dedicated owner-gated
+//     PR AFTER the fleet migration completes. This file ships "warn".
+// The single binding-grammar source (#923 `artifact-binding.ts`) is reused —
+// there is no duplicate parser.
+// ---------------------------------------------------------------------------
+
+/**
+ * The WARN→BLOCK phase for the produces-materialization publish contract.
+ * "warn": findings are advisory (the publish path logs them, never refuses).
+ * "block": the caller refuses republish of a produces-declaring package whose
+ * contract has any finding. Flipped only in a dedicated owner-gated PR once all
+ * agent-repo migrations have merged and republished (cinatra#924, Phase 2).
+ */
+export const ARTIFACT_PRODUCES_ENFORCEMENT: "warn" | "block" = "warn";
+
+/**
+ * Evaluate the produces-materialization contract for a package at publish time.
+ * Pure: no I/O, no registry. `produces` = the manifest `cinatra.produces`
+ * extension ids; `oasDoc` = the parsed `cinatra/oas.json` Flow document.
+ *
+ * Returns `ReviewFinding[]`:
+ *   - BLOCKER `ARTIFACT-CONTRACT-BINDING` — an invalid binding/materialize
+ *     annotation (NET-NEW; safe — no existing repo has one).
+ *   - WARNING `ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED` — a produces entry
+ *     with no valid materialization edge (existing repos trip this).
+ * Empty `produces` ⇒ no findings (nothing declared, nothing to materialize).
+ */
+export function evaluateProducesMaterializationContract(args: {
+  produces: readonly string[];
+  oasDoc: Record<string, unknown>;
+}): ReviewFinding[] {
+  const { produces, oasDoc } = args;
+  const findings: ReviewFinding[] = [];
+  if (produces.length === 0) return findings;
+
+  const bindingResult = collectArtifactBindingsFromOasDocument(oasDoc, { produces });
+  const materializeResult = collectArtifactMaterializeNodesFromOasDocument(oasDoc, {
+    produces,
+  });
+
+  for (const err of [...bindingResult.errors, ...materializeResult.errors]) {
+    findings.push({
+      code: "ARTIFACT-CONTRACT-BINDING",
+      severity: "blocker",
+      message: `Invalid artifact binding / artifact_materialize annotation: ${err}`,
+      source: "deterministic",
+    });
+  }
+
+  const covered = new Set<string>();
+  for (const b of bindingResult.bindings) covered.add(b.binding.extension);
+  for (const n of materializeResult.nodes) covered.add(n.extension);
+  for (const ext of produces) {
+    if (covered.has(ext)) continue;
+    findings.push({
+      code: "ARTIFACT-CONTRACT-PRODUCES-UNMATERIALIZED",
+      severity: "warning",
+      message:
+        `cinatra.produces declares "${ext}" but no EndNode output binding ` +
+        `(outputs[].cinatra.artifact) or artifact_materialize passthrough node ` +
+        `materializes it — the declared artifact is never persisted at run completion. ` +
+        `Add a binding/materialize node for "${ext}" before the republish BLOCK flip ` +
+        `(cinatra#924).`,
+      source: "deterministic",
+    });
+  }
+
+  return findings;
 }
