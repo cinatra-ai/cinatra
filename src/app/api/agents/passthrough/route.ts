@@ -10,6 +10,10 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
+import {
+  shapeArtifactMaterializeInput,
+  type ShapedArtifactMaterializeInput,
+} from "./artifact-materialize-shaper";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -45,6 +49,14 @@ const ALLOWED_TOOLS = new Set([
   "objects_save",
   "objects_classify",
   "objects_update",
+  // Deterministic mid-flow artifact materialization (cinatra#925) — NOT an
+  // MCP primitive: dispatched to the run-completion materializer core
+  // (`@/lib/artifacts/run-artifact-materializer#materializeToolArtifact`)
+  // under the bound run's own authority, sharing the #923 idempotency
+  // ledger (`path:'materialize_tool'`). HITL gating stays the existing
+  // per-node OAS metadata mechanism (riskClass/sideEffects) — nothing
+  // route-side.
+  "artifact_materialize",
 ]);
 
 type RequestBody = {
@@ -171,6 +183,15 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
   },
 };
 
+// Generic artifact_materialize seam shaper (cinatra#925) — pure module in
+// ./artifact-materialize-shaper (zero-dep, unit-tested). Unlike the
+// per-agent `_shape` opt-ins the contract is generic: flow variables wire
+// straight to {extension, content, declaredMime, title, node_id}
+// (+ optional contentJsonField parse-then-project). A shaper throw
+// surfaces as a 400 via the existing shaper-throw contract.
+TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
+  shapeArtifactMaterializeInput(raw);
+
 // blog-pipeline-agent deterministic seam dispatch.
 // The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
 // Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
@@ -287,31 +308,69 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const handlers = await collectAllPrimitiveHandlers();
-  const handler = handlers[tool];
-  if (typeof handler !== "function") {
-    return NextResponse.json(
-      { error: `Tool "${tool}" has no registered handler.` },
-      { status: 404 },
-    );
-  }
-
   try {
-    // Establish the ALS actor-context frame BEFORE the
-    // handler call. Some handlers (e.g. `objects_save` which classifies
-    // via LLM) internally call `runDeterministicLlmTask`, which throws
-    // `requires actorContext (no ALS frame established)` if the AsyncLocal-
-    // Storage frame isn't set. Passing the actor as a parameter is NOT
-    // enough — the ALS frame is read by `runDeterministicLlmTask` from
-    // the surrounding async context.
-    const result = await withActorContext(alsActorContext, () =>
-      handler({
-        primitiveName: tool,
-        input,
-        actor,
-        mode: "agentic",
-      }),
-    );
+    let result: unknown;
+    if (tool === "artifact_materialize") {
+      // Deterministic artifact materialization (cinatra#925) — NOT an MCP
+      // primitive. Dispatches to the SAME materializer core + idempotency
+      // ledger as the #923 run-completion path (`path:'materialize_tool'`,
+      // ledger output identity = the calling node's id) under the authority
+      // of the run PROVEN by bindBridgeRunId above. The core re-validates
+      // extension ∈ the run package's `cinatra.produces` FAIL-CLOSED even
+      // though the compiler also checks. Dynamic import keeps the host
+      // artifact stack out of this route's static module graph (same
+      // posture as execution.ts).
+      const { materializeToolArtifact } = await import(
+        "@/lib/artifacts/run-artifact-materializer"
+      );
+      const shaped = input as unknown as ShapedArtifactMaterializeInput;
+      const outcome = await materializeToolArtifact({
+        runId: run.id,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        nodeId: shaped.nodeId,
+        extension: shaped.extension,
+        title: shaped.title,
+        mime: shaped.declaredMime,
+        content: shaped.content,
+      });
+      if (!outcome.ok) {
+        // Fail the calling node visibly (validation OR infra) — the flow
+        // author decides whether the node failure gates the run.
+        return NextResponse.json({ error: outcome.error }, { status: 400 });
+      }
+      result = {
+        artifactId: outcome.artifactId,
+        representationRevisionId: outcome.representationRevisionId,
+        deduped: outcome.deduped,
+      };
+    } else {
+      const handlers = await collectAllPrimitiveHandlers();
+      const handler = handlers[tool];
+      if (typeof handler !== "function") {
+        return NextResponse.json(
+          { error: `Tool "${tool}" has no registered handler.` },
+          { status: 404 },
+        );
+      }
+      // Establish the ALS actor-context frame BEFORE the
+      // handler call. Some handlers (e.g. `objects_save` which classifies
+      // via LLM) internally call `runDeterministicLlmTask`, which throws
+      // `requires actorContext (no ALS frame established)` if the AsyncLocal-
+      // Storage frame isn't set. Passing the actor as a parameter is NOT
+      // enough — the ALS frame is read by `runDeterministicLlmTask` from
+      // the surrounding async context.
+      result = await withActorContext(alsActorContext, () =>
+        handler({
+          primitiveName: tool,
+          input,
+          actor,
+          mode: "agentic",
+        }),
+      );
+    }
 
     // Optional response shaping for nodes whose OAS-declared
     // outputs include the input payload (e.g. a watcher orchestrator's

@@ -206,3 +206,246 @@ export function collectArtifactBindingsFromOasDocument(
 
   return { bindings, errors };
 }
+
+// ---------------------------------------------------------------------------
+// Deterministic `artifact_materialize` passthrough-tool nodes (cinatra#925).
+//
+// Mid-flow / conditional artifact emission: an ApiNode targets the
+// deterministic passthrough route with an object-shaped data block
+//
+//   "data": { "tool": "artifact_materialize", "agent_run_id": "{{ cinatra_run_id }}",
+//     "input": {
+//       "extension": "@cinatra-ai/blog-post-artifact",  // LITERAL, ∈ cinatra.produces
+//       "content": "{{ draft }}",                        // flow variable
+//       "title": "{{ title }}",                          // flow variable
+//       "declaredMime": "text/markdown",                 // LITERAL, text-authorable
+//       "node_id": "<this ApiNode's id>",                // LITERAL — ledger identity
+//       "contentJsonField": "body"                       // optional LITERAL: parse-then-project
+//     } }
+//
+// The host materializes through the SAME core + idempotency ledger as the
+// run-completion path (`path:'materialize_tool'`, ledger `output_id` = the
+// calling node id). This collector is the compile-time validator: statics
+// only (grammar + produces parity); registry checks (extension installed,
+// accepts) stay at run time, exactly like the EndNode bindings above.
+// ---------------------------------------------------------------------------
+
+export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
+
+/** URL marker identifying the deterministic passthrough route. */
+export const AGENTS_PASSTHROUGH_URL_MARKER = "/api/agents/passthrough";
+
+export type CollectedArtifactMaterializeNode = {
+  /** The calling ApiNode's component id — the ledger `output_id` identity. */
+  nodeId: string;
+  extension: string;
+  declaredMime: string;
+};
+
+export type CollectArtifactMaterializeNodesResult = {
+  /** Fully valid materialize nodes only. */
+  nodes: CollectedArtifactMaterializeNode[];
+  /** Human-readable errors, one per invalid node/field. */
+  errors: string[];
+};
+
+/** A `{{ ... }}` placeholder makes a value runtime-templated — not a literal. */
+function isTemplated(value: string): boolean {
+  return value.includes("{{");
+}
+
+function walkPassthroughApiNodes(
+  doc: Record<string, unknown>,
+  visit: (node: Record<string, unknown>, refKey: string, path: string) => void,
+): void {
+  function go(value: unknown, refKey: string, path: string): void {
+    if (!isPlainObject(value)) return;
+    if (value.component_type === "ApiNode") {
+      const url = value.url;
+      if (typeof url === "string" && url.includes(AGENTS_PASSTHROUGH_URL_MARKER)) {
+        visit(value, refKey, path);
+      }
+    }
+    const refs = value.$referenced_components;
+    if (isPlainObject(refs)) {
+      for (const [k, v] of Object.entries(refs)) {
+        go(v, k, `${path}.$referenced_components.${k}`);
+      }
+    }
+    // Subflow on a FlowNode.
+    if (isPlainObject(value.subflow)) {
+      go(value.subflow, refKey, `${path}.subflow`);
+    }
+  }
+  go(doc, "$", "$");
+}
+
+/**
+ * Collect + validate every `artifact_materialize` passthrough ApiNode of an
+ * OAS document (top-level components AND FlowNode subflows — the tool fires
+ * mid-flow, so unlike EndNode bindings there is no top-level-only scoping).
+ *
+ * Fail-closed statics (codex round 0 of the #925 lane):
+ *   - `data.tool` on ANY passthrough-route ApiNode must be a LITERAL string —
+ *     a templated/dynamic tool selection cannot be compile-validated and
+ *     could resolve to `artifact_materialize` at run time unvalidated;
+ *   - string-shaped `data` is accepted only when it parses to a JSON object
+ *     (then validated identically); an unparseable string mentioning the
+ *     tool is rejected;
+ *   - `input.node_id` must be a LITERAL equal to the ApiNode's own component
+ *     id — it is the idempotency-ledger `output_id`; a free-form literal
+ *     would let two distinct materialize nodes share one ledger identity and
+ *     silently collapse same-byte outputs into one artifact;
+ *   - `input.extension` / `input.declaredMime` / `input.contentJsonField`
+ *     must be LITERAL (extension additionally ∈ `produces` when the produces
+ *     set is known — same fail-closed parity semantics as the EndNode
+ *     bindings: an empty known set rejects; only null/unknown skips);
+ *   - `input.content` / `input.title` must be present non-empty strings
+ *     (flow-variable placeholders expected).
+ */
+export function collectArtifactMaterializeNodesFromOasDocument(
+  doc: Record<string, unknown>,
+  opts?: { produces?: readonly string[] | null },
+): CollectArtifactMaterializeNodesResult {
+  const nodes: CollectedArtifactMaterializeNode[] = [];
+  const errors: string[] = [];
+
+  walkPassthroughApiNodes(doc, (node, refKey, path) => {
+    const nodeId =
+      typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
+    const where = `${path} (ApiNode "${nodeId}")`;
+
+    let data: unknown = node.data;
+    if (typeof data === "string") {
+      // The fleet authors object-shaped data blocks; a JSON string is
+      // statically equivalent when it parses.
+      try {
+        const parsed: unknown = JSON.parse(data);
+        if (isPlainObject(parsed)) data = parsed;
+      } catch {
+        // fall through — handled below
+      }
+      if (typeof data === "string") {
+        if (data.includes(ARTIFACT_MATERIALIZE_TOOL)) {
+          errors.push(
+            `${where}.data: a passthrough data block mentioning "${ARTIFACT_MATERIALIZE_TOOL}" ` +
+              "must be object-shaped (or a parseable JSON string) so the call is statically validatable",
+          );
+        }
+        return;
+      }
+    }
+    if (!isPlainObject(data)) return; // no data block — cannot select a tool
+
+    const tool = data.tool;
+    if (typeof tool !== "string" || tool.length === 0 || isTemplated(tool)) {
+      errors.push(
+        `${where}.data.tool: passthrough tool selection must be a literal string ` +
+          `(got ${JSON.stringify(tool)}) — a templated/dynamic tool cannot be compile-validated`,
+      );
+      return;
+    }
+    if (tool !== ARTIFACT_MATERIALIZE_TOOL) return;
+
+    const input = data.input;
+    if (!isPlainObject(input)) {
+      errors.push(
+        `${where}.data.input: required object with {extension, content, declaredMime, title, node_id}`,
+      );
+      return;
+    }
+
+    let valid = true;
+    const fieldError = (field: string, message: string): void => {
+      errors.push(`${where}.data.input.${field}: ${message}`);
+      valid = false;
+    };
+
+    const extension = input.extension;
+    if (typeof extension !== "string" || extension.length === 0 || isTemplated(extension)) {
+      fieldError(
+        "extension",
+        `must be a literal artifact-extension package name (got ${JSON.stringify(extension)})`,
+      );
+    } else if (opts?.produces != null && !opts.produces.includes(extension)) {
+      fieldError(
+        "extension",
+        `"${extension}" is not declared in package.json cinatra.produces ` +
+          `([${opts.produces.join(", ")}]) — declared production and materialization must agree`,
+      );
+    }
+
+    const declaredMime = input.declaredMime;
+    if (
+      typeof declaredMime !== "string" ||
+      declaredMime.length === 0 ||
+      isTemplated(declaredMime)
+    ) {
+      fieldError(
+        "declaredMime",
+        `must be a literal MIME type (got ${JSON.stringify(declaredMime)})`,
+      );
+    } else if (!ARTIFACT_BINDING_AUTHORABLE_MIMES.has(declaredMime)) {
+      fieldError(
+        "declaredMime",
+        `"${declaredMime}" is not text-authorable; allowed: ` +
+          `${[...ARTIFACT_BINDING_AUTHORABLE_MIMES].join(", ")} (binary artifacts ` +
+          "use the upload/template paths)",
+      );
+    }
+
+    for (const field of ["content", "title"] as const) {
+      const value = input[field];
+      if (typeof value !== "string" || value.length === 0) {
+        fieldError(
+          field,
+          `must be a non-empty string (a flow-variable placeholder such as "{{ ${field} }}")`,
+        );
+      }
+    }
+
+    const declaredNodeId = input.node_id;
+    if (
+      typeof declaredNodeId !== "string" ||
+      declaredNodeId.length === 0 ||
+      isTemplated(declaredNodeId)
+    ) {
+      fieldError(
+        "node_id",
+        `must be a literal string equal to this ApiNode's id ("${nodeId}") — ` +
+          `it is the idempotency-ledger output identity (got ${JSON.stringify(declaredNodeId)})`,
+      );
+    } else if (declaredNodeId !== nodeId) {
+      fieldError(
+        "node_id",
+        `"${declaredNodeId}" must equal this ApiNode's id ("${nodeId}") — two ` +
+          "materialize nodes sharing one ledger identity would silently collapse " +
+          "same-byte outputs into one artifact",
+      );
+    }
+
+    const contentJsonField = input.contentJsonField;
+    if (contentJsonField !== undefined) {
+      if (
+        typeof contentJsonField !== "string" ||
+        contentJsonField.length === 0 ||
+        isTemplated(contentJsonField)
+      ) {
+        fieldError(
+          "contentJsonField",
+          `when present, must be a literal field name (got ${JSON.stringify(contentJsonField)})`,
+        );
+      }
+    }
+
+    if (valid) {
+      nodes.push({
+        nodeId,
+        extension: extension as string,
+        declaredMime: declaredMime as string,
+      });
+    }
+  });
+
+  return { nodes, errors };
+}
