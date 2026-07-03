@@ -26,6 +26,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { cp, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { moveDirExdevSafe } from "./exdev-safe-move";
 
 // ---------------------------------------------------------------------------
 // Process-local re-entrant serialization of the install transaction for the
@@ -262,9 +263,14 @@ export async function materializeAgentPackageToDisk(
     // targetDir doesn't exist — fresh install. Leave priorDirBackup null.
   }
 
-  // Step 3: promote tmp → target. On failure, restore .old → target before throwing.
+  // Step 3: promote tmp → target. EXDEV-safe (cinatra#846): a bare `rename`
+  // crash-loops when tmpDir (staging) and targetDir (the extensions mount) sit
+  // on different filesystems; moveDirExdevSafe falls back to
+  // copy → fsync → verify → atomic intra-fs swap → unlink-source. targetDir was
+  // renamed aside above (or never existed), so the move promotes into a free
+  // path. On failure, restore .old → target before throwing.
   try {
-    await rename(tmpDir, targetDir);
+    await moveDirExdevSafe(tmpDir, targetDir);
   } catch (err) {
     // Best-effort: clean up the tmp dir.
     await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
