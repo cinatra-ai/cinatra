@@ -89,8 +89,9 @@ export function createWorkflowExtensionHandler(deps: WorkflowExtensionDeps = {})
       // Prefer the host-injected atomic install saga (journal + preflight against
       // the integrity-verified package store + per-project instance fan-out +
       // inverse-order compensating rollback). When the host hasn't wired it (a
-      // worker that never loaded `@/lib`, or a unit test), fall back to the legacy
-      // in-package install that sources sidecars from the dev checkout.
+      // worker that never loaded `@/lib`, or a unit test), fall back to the
+      // in-package install that sources sidecars from the finalized runtime-store
+      // payload (dev-tree authoring fallback in dev mode only — cinatra#794).
       const saga = getWorkflowInstallSagaHook();
       if (saga) {
         await saga({ packageName: ref.packageName, version: ref.version, actor: { userId: actor.userId, orgId: actor.orgId } });

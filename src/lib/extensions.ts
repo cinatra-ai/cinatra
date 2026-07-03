@@ -99,8 +99,10 @@ setExtensionCapabilityTeardownHook((packageName) => teardownExtensionCapabilitie
 // package up WITHOUT a restart. Shared so the Server Action path wires it too.)
 
 // Inject the atomic workflow-install saga into the workflow extension handler's
-// slot (the handler delegates to it when present, else falls back to the legacy
-// dev-checkout-sourced install). The saga lives in `@/lib` (host) — it needs the
+// slot (the handler delegates to it when present, else falls back to the
+// in-package install sourced from the finalized runtime-store payload, with a
+// development-only dev-tree authoring fallback — cinatra#794). The saga lives
+// in `@/lib` (host) — it needs the
 // package store + the install-op journal + the canonical store + `withInstallLock`,
 // which `@cinatra-ai/workflows` cannot import — so the host wires it here via the
 // globalThis-anchored slot (mirrors the capability teardown hook above). The deps
