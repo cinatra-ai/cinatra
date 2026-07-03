@@ -74,22 +74,32 @@ export class ArtifactCreationDisabledError extends Error {
 }
 
 export interface BlobStore {
-  /** Persist a blob; computes sha256 + size, sniffs MIME, enforces maxBytes. */
+  /** Persist a blob; computes sha256 + size, sniffs MIME, enforces maxBytes.
+   *  Since cinatra#926 the returned `storageKey` is org-scoped +
+   *  CONTENT-ADDRESSED (`orgs/<org>/blobs/sha256/<aa>/<sha>.bin`) — callers
+   *  MUST persist it and read back through the storage-key accessors below,
+   *  never by re-deriving a path from scope. */
   put(input: BlobPutInput): Promise<BlobRecord>;
-  /** Open a blob for reading, scoped — fails if scope/blob mismatch. */
+  /** LEGACY-KEY ACCESSOR (cinatra#926): reconstructs the pre-content-
+   *  addressing per-revision path from scope — serves files written BEFORE
+   *  the cutover and CANNOT locate a blob written by the current `put()`.
+   *  New readers use `openByStorageKey` with the DB-carried key. */
   open(scope: BlobScope & { blobId: string }): Promise<BlobReadHandle>;
   /**
    * Open an inclusive byte range `[start, end]` (HTTP Range semantics) for
    * the serving layer. `end` is inclusive; implementations clamp to size-1.
+   * LEGACY-KEY ACCESSOR — same caveat as `open`.
    */
   openRange(
     scope: BlobScope & { blobId: string; start: number; end: number },
   ): Promise<BlobReadHandle & { totalSize: number }>;
-  /** Metadata without reading bytes. Null if absent. */
+  /** Metadata without reading bytes. Null if absent.
+   *  LEGACY-KEY ACCESSOR — same caveat as `open`. */
   stat(
     scope: BlobScope & { blobId: string },
   ): Promise<Pick<BlobRecord, "sizeBytes" | "mimeDetected" | "sha256"> | null>;
-  /** Best-effort delete (orphan GC / retention). Never throws on absence. */
+  /** Best-effort delete (orphan GC / retention). Never throws on absence.
+   *  LEGACY-KEY ACCESSOR — same caveat as `open`. */
   deleteBlob(scope: BlobScope & { blobId: string }): Promise<void>;
 
   // Storage-key-keyed accessors for the semantic serve path. Scope-keyed

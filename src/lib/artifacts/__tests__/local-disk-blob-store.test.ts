@@ -1,9 +1,27 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
-import { createLocalDiskBlobStore } from "../local-disk-blob-store";
+
+// artifact-data-root reads the DB metadata key via @/lib/database — stub it
+// so the unit graph stays DB-free (env unset + null metadata ⇒ the default
+// cwd-relative `data/artifacts` root, i.e. the historical layout).
+vi.mock("@/lib/database", () => ({
+  readMetadataValueFromDatabase: () => null,
+  writeMetadataValueToDatabase: () => {},
+}));
+
+import {
+  ARTIFACT_ORG_QUOTA_BYTES_ENV,
+  ARTIFACT_QUOTA_MODE_ENV,
+  ARTIFACT_STAGING_CAP_BYTES_ENV,
+  ARTIFACT_STAGING_DIR_NAME,
+  ArtifactQuotaExceededError,
+  createLocalDiskBlobStore,
+  isContentAddressedStorageKey,
+  sha256FromContentAddressedKey,
+} from "../local-disk-blob-store";
 
 // Local-disk BlobStore coverage. Root vitest config supplies the
 // server-only stub + the @cinatra-ai/artifacts alias.
@@ -12,20 +30,37 @@ async function* bytes(...chunks: string[]): AsyncIterable<Uint8Array> {
   for (const c of chunks) yield new TextEncoder().encode(c);
 }
 
+const QUOTA_ENVS = [
+  ARTIFACT_ORG_QUOTA_BYTES_ENV,
+  ARTIFACT_QUOTA_MODE_ENV,
+  ARTIFACT_STAGING_CAP_BYTES_ENV,
+] as const;
+
 describe("createLocalDiskBlobStore", () => {
   let root: string;
   let cwdSpy: ReturnType<typeof vi.spyOn>;
+  const priorEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
     root = mkdtempSync(path.join(tmpdir(), "v5-blob-"));
     cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+    for (const k of QUOTA_ENVS) {
+      priorEnv[k] = process.env[k];
+      delete process.env[k];
+    }
   });
   afterEach(() => {
     cwdSpy.mockRestore();
     rmSync(root, { recursive: true, force: true });
+    for (const k of QUOTA_ENVS) {
+      if (priorEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = priorEnv[k];
+    }
   });
 
-  it("put → sha256 + size + scoped key; open round-trips bytes", async () => {
+  const dataRoot = () => path.join(root, "data", "artifacts");
+
+  it("put → sha256 + size + org-scoped CONTENT-ADDRESSED key; openByStorageKey round-trips bytes", async () => {
     const store = createLocalDiskBlobStore();
     const scope = { orgId: "org1", artifactId: "art1", representationRevisionId: "v1" };
     const rec = await store.put({
@@ -35,16 +70,71 @@ describe("createLocalDiskBlobStore", () => {
     });
     expect(rec.sizeBytes).toBe(11);
     expect(rec.sha256).toMatch(/^[a-f0-9]{64}$/);
+    // orgs/<org>/blobs/sha256/<aa>/<sha>.bin — org IN the path, extension
+    // and blobId NOT in the path.
     expect(rec.storageKey).toBe(
-      `orgs/org1/artifacts/art1/versions/v1/${rec.blobId}.bin`,
+      `orgs/org1/blobs/sha256/${rec.sha256.slice(0, 2)}/${rec.sha256}.bin`,
     );
-    const handle = await store.open({ ...scope, blobId: rec.blobId });
+    expect(isContentAddressedStorageKey(rec.storageKey)).toBe(true);
+    expect(sha256FromContentAddressedKey(rec.storageKey)).toBe(rec.sha256);
+    const handle = await store.openByStorageKey({
+      orgId: "org1",
+      storageKey: rec.storageKey,
+    });
     let out = "";
     for await (const c of handle.stream) out += new TextDecoder().decode(c);
     expect(out).toBe("hello world");
+    // The staging dir holds no residue after a successful publish.
+    expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
   });
 
-  it("enforces maxBytes (BlobTooLargeError)", async () => {
+  it("same bytes twice → SAME storage key, one file, both puts succeed (deterministic concurrent-write handling)", async () => {
+    const store = createLocalDiskBlobStore();
+    const scope = { orgId: "org1", artifactId: "artA", representationRevisionId: "v1" };
+    const a = await store.put({ ...scope, stream: bytes("same-bytes"), maxBytes: 1024 });
+    const b = await store.put({
+      ...scope,
+      artifactId: "artB",
+      stream: bytes("same-bytes"),
+      maxBytes: 1024,
+    });
+    expect(b.storageKey).toBe(a.storageKey);
+    expect(b.sha256).toBe(a.sha256);
+    expect(b.blobId).not.toBe(a.blobId); // row id stays fresh per put
+    expect(existsSync(path.join(dataRoot(), a.storageKey))).toBe(true);
+    expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+  });
+
+  it("different bytes → different content-addressed keys", async () => {
+    const store = createLocalDiskBlobStore();
+    const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+    const a = await store.put({ ...scope, stream: bytes("one"), maxBytes: 64 });
+    const b = await store.put({ ...scope, stream: bytes("two"), maxBytes: 64 });
+    expect(a.storageKey).not.toBe(b.storageKey);
+  });
+
+  it("LEGACY scope-derived keys stay readable (openByStorageKey + scope-keyed open)", async () => {
+    const legacyKey = "orgs/org1/artifacts/art1/versions/v1/blob-1.bin";
+    const abs = path.join(dataRoot(), legacyKey);
+    mkdirSync(path.dirname(abs), { recursive: true });
+    writeFileSync(abs, "legacy bytes");
+    const store = createLocalDiskBlobStore();
+    const byKey = await store.openByStorageKey({ orgId: "org1", storageKey: legacyKey });
+    let out = "";
+    for await (const c of byKey.stream) out += new TextDecoder().decode(c);
+    expect(out).toBe("legacy bytes");
+    const byScope = await store.open({
+      orgId: "org1",
+      artifactId: "art1",
+      representationRevisionId: "v1",
+      blobId: "blob-1",
+    });
+    out = "";
+    for await (const c of byScope.stream) out += new TextDecoder().decode(c);
+    expect(out).toBe("legacy bytes");
+  });
+
+  it("enforces maxBytes (BlobTooLargeError) and leaves no staging/final residue", async () => {
     const store = createLocalDiskBlobStore();
     await expect(
       store.put({
@@ -55,6 +145,8 @@ describe("createLocalDiskBlobStore", () => {
         maxBytes: 10,
       }),
     ).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+    expect(existsSync(path.join(dataRoot(), "orgs"))).toBe(false);
   });
 
   it("rejects path-traversal scope segments", async () => {
@@ -68,6 +160,237 @@ describe("createLocalDiskBlobStore", () => {
         maxBytes: 64,
       }),
     ).rejects.toThrow(/unsafe orgId/);
+  });
+
+  describe("reachability-guarded content-addressed delete", () => {
+    it("keeps a YOUNG content-addressed file (grace window) without consulting reachability", async () => {
+      const isReferenced = vi.fn().mockResolvedValue(false);
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: isReferenced });
+      const rec = await store.put({
+        orgId: "org1",
+        artifactId: "a",
+        representationRevisionId: "v",
+        stream: bytes("fresh"),
+        maxBytes: 64,
+      });
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: rec.storageKey });
+      expect(existsSync(path.join(dataRoot(), rec.storageKey))).toBe(true);
+      expect(isReferenced).not.toHaveBeenCalled();
+    });
+
+    it("keeps an OLD content-addressed file while a live row references it", async () => {
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: () => true });
+      const rec = await store.put({
+        orgId: "org1",
+        artifactId: "a",
+        representationRevisionId: "v",
+        stream: bytes("kept"),
+        maxBytes: 64,
+      });
+      const abs = path.join(dataRoot(), rec.storageKey);
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(abs, old, old);
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: rec.storageKey });
+      expect(existsSync(abs)).toBe(true);
+    });
+
+    it("deletes an OLD, unreferenced content-addressed file", async () => {
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: () => false });
+      const rec = await store.put({
+        orgId: "org1",
+        artifactId: "a",
+        representationRevisionId: "v",
+        stream: bytes("gone"),
+        maxBytes: 64,
+      });
+      const abs = path.join(dataRoot(), rec.storageKey);
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(abs, old, old);
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: rec.storageKey });
+      expect(existsSync(abs)).toBe(false);
+    });
+
+    it("re-put of the SAME bytes refreshes mtime, re-arming the grace window", async () => {
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: () => false });
+      const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+      const rec = await store.put({ ...scope, stream: bytes("reused"), maxBytes: 64 });
+      const abs = path.join(dataRoot(), rec.storageKey);
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(abs, old, old);
+      // Second writer reuses the existing file → mtime refreshed to now.
+      await store.put({ ...scope, stream: bytes("reused"), maxBytes: 64 });
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: rec.storageKey });
+      expect(existsSync(abs)).toBe(true); // young again → kept
+    });
+
+    it("keeps the file when a concurrent writer refreshes mtime DURING the reachability probe", async () => {
+      // Simulates the put()-reuses-file-while-GC-probes race: the injected
+      // probe refreshes the file's mtime (what a concurrent put() does
+      // before committing its row) and reports unreferenced. The post-probe
+      // mtime re-check must keep the file.
+      const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+      const store = createLocalDiskBlobStore({
+        isStorageKeyReferenced: (_org, key) => {
+          const now = new Date();
+          utimesSync(path.join(dataRoot(), key), now, now);
+          return false;
+        },
+      });
+      const rec = await store.put({ ...scope, stream: bytes("raced"), maxBytes: 64 });
+      const abs = path.join(dataRoot(), rec.storageKey);
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(abs, old, old);
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: rec.storageKey });
+      expect(existsSync(abs)).toBe(true);
+    });
+
+    it("per-key critical section: a same-bytes put racing the unlink never loses the bytes", async () => {
+      // Deterministic interleaving of the codex-round-2 race: a guarded
+      // delete is MID-SEQUENCE (probe pending) when a same-bytes put()
+      // arrives. The per-storage-key mutex forces the put to wait; the
+      // delete unlinks the old unreferenced file; the put then observes the
+      // missing file and PUBLISHES ITS STAGED COPY. End state: bytes on
+      // disk — never a returned record pointing at nothing.
+      const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+      let releaseProbe!: () => void;
+      let releaseProbeEntered!: () => void;
+      const probeEntered = new Promise<void>((r) => {
+        releaseProbeEntered = r;
+      });
+      const probeGate = new Promise<void>((r) => {
+        releaseProbe = r;
+      });
+      const store = createLocalDiskBlobStore({
+        isStorageKeyReferenced: async () => {
+          releaseProbeEntered();
+          await probeGate;
+          return false; // rows already GC'd
+        },
+      });
+      const seed = await store.put({ ...scope, stream: bytes("contested"), maxBytes: 64 });
+      const abs = path.join(dataRoot(), seed.storageKey);
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      utimesSync(abs, old, old);
+
+      const deleting = store.deleteByStorageKey({ orgId: "org1", storageKey: seed.storageKey });
+      await probeEntered; // delete holds the key lock, probe in flight
+      const racingPut = store.put({ ...scope, stream: bytes("contested"), maxBytes: 64 });
+      // Give the racing put a beat to reach the lock, then let the delete win.
+      await new Promise((r) => setTimeout(r, 25));
+      releaseProbe();
+      await deleting;
+      const rec = await racingPut;
+      expect(rec.storageKey).toBe(seed.storageKey);
+      expect(existsSync(abs)).toBe(true); // staged copy was published
+    });
+
+    it("LEGACY keys keep today's direct-delete semantics", async () => {
+      const legacyKey = "orgs/org1/artifacts/art1/versions/v1/blob-1.bin";
+      const abs = path.join(dataRoot(), legacyKey);
+      mkdirSync(path.dirname(abs), { recursive: true });
+      writeFileSync(abs, "legacy");
+      const isReferenced = vi.fn().mockResolvedValue(true);
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: isReferenced });
+      await store.deleteByStorageKey({ orgId: "org1", storageKey: legacyKey });
+      expect(existsSync(abs)).toBe(false);
+      expect(isReferenced).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("WARN-first quotas", () => {
+    it("org quota in default WARN mode logs and proceeds", async () => {
+      process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "5";
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10 });
+        const rec = await store.put({
+          orgId: "org1",
+          artifactId: "a",
+          representationRevisionId: "v",
+          stream: bytes("over-quota-but-warn"),
+          maxBytes: 64,
+        });
+        expect(rec.sha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("org-quota"));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("org quota in enforce mode rejects the put", async () => {
+      process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "5";
+      process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+      const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10 });
+      await expect(
+        store.put({
+          orgId: "org1",
+          artifactId: "a",
+          representationRevisionId: "v",
+          stream: bytes("rejected"),
+          maxBytes: 64,
+        }),
+      ).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+    });
+
+    it("an unanswerable org-usage read skips the check (fail-soft)", async () => {
+      process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "5";
+      process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+      const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => null });
+      const rec = await store.put({
+        orgId: "org1",
+        artifactId: "a",
+        representationRevisionId: "v",
+        stream: bytes("usage-unknown"),
+        maxBytes: 64,
+      });
+      expect(rec.sizeBytes).toBeGreaterThan(0);
+    });
+
+    it("enforce mode bounds the INCOMING stream by the remaining headroom", async () => {
+      process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+      process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+      const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => 4 });
+      // 4 used + 20 incoming > 10 → rejected mid-stream.
+      await expect(
+        store.put({
+          orgId: "org1",
+          artifactId: "a",
+          representationRevisionId: "v",
+          stream: bytes("x".repeat(20)),
+          maxBytes: 1024,
+        }),
+      ).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+      // No staging residue, no final file.
+      expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+      expect(existsSync(path.join(dataRoot(), "orgs"))).toBe(false);
+      // 4 used + 3 incoming ≤ 10 → accepted.
+      const rec = await store.put({
+        orgId: "org1",
+        artifactId: "a",
+        representationRevisionId: "v",
+        stream: bytes("abc"),
+        maxBytes: 1024,
+      });
+      expect(rec.sizeBytes).toBe(3);
+    });
+
+    it("staging-dir residency cap in enforce mode rejects the put", async () => {
+      process.env[ARTIFACT_STAGING_CAP_BYTES_ENV] = "4";
+      process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+      const staging = path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME);
+      mkdirSync(staging, { recursive: true });
+      writeFileSync(path.join(staging, "resident"), "xxxxxxxx"); // 8 bytes ≥ cap
+      const store = createLocalDiskBlobStore();
+      await expect(
+        store.put({
+          orgId: "org1",
+          artifactId: "a",
+          representationRevisionId: "v",
+          stream: bytes("blocked"),
+          maxBytes: 64,
+        }),
+      ).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+    });
   });
 
   it("sniffs PNG magic bytes over a wrong declaredMime", async () => {

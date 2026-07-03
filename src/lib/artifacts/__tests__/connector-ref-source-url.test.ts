@@ -148,4 +148,21 @@ describe("ArtifactSummary.sourceUrl projection (list + get read paths)", () => {
     expect(byId.get("a1")).toBe("https://app.example.com/doc/9");
     expect(byId.get("a2")).toBeNull();
   });
+
+  it("connectorRef carve-out (cinatra#926): a pointer-only artifact serves WITHOUT any blob binding — no representation revision, no storage key, no local bytes required", async () => {
+    // Pointer-only externals (Google Doc, Notion page) remain metadata-only:
+    // no `artifact_blobs` row, no file under the artifact data root. The
+    // read path projects them from objects.data alone; a future change that
+    // starts requiring a blob binding for connectorRef rows breaks this pin.
+    const { getArtifact } = await import("../artifact-service");
+    getObjectById.mockReturnValue(
+      objectRow({
+        artifactType: "connectorRef",
+        connectorRef: { url: "https://docs.example.com/d/pointer-only" },
+      }),
+    );
+    const summary = getArtifact({ artifactId: "a1", orgId: "org1" });
+    expect(summary?.sourceUrl).toBe("https://docs.example.com/d/pointer-only");
+    expect(summary?.latestRepresentationRevisionId).toBeNull();
+  });
 });

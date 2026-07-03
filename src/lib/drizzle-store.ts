@@ -1697,9 +1697,8 @@ END $$` },
     // graph with LangGraph Server. Nullable — only set for execution_provider='langgraph'
     // templates.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS lg_graph_id text` },
-    // objects table: generic typed-object store for future content types.
-    // Existing content types (blog-post, email-draft, transcript-content) keep their
-    // current storage to avoid a forced migration.
+    // objects table: generic typed-object store. Existing content types
+    // (blog-post, email-draft, transcript-content) keep their current storage.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."objects" (
   id          text PRIMARY KEY,
   type        text NOT NULL,
@@ -1714,10 +1713,9 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS objects_type_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (type)` },
     { text: `CREATE INDEX IF NOT EXISTS objects_parent_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (parent_id) WHERE parent_id IS NOT NULL` },
     { text: `CREATE INDEX IF NOT EXISTS objects_org_type_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (org_id, type) WHERE org_id IS NOT NULL` },
-    // Tenant-scoped blob metadata. Bytes live
-    // on the blob store (data/artifacts), NEVER in objects.data. sha256
-    // dedupe (if used) is internal + org-scoped — never global, never an
-    // authorization signal. Additive, isolated table; no shared-table ALTER.
+    // Tenant-scoped blob metadata. Bytes live ONLY on the blob store (the
+    // configured artifact data root), NEVER in objects.data. sha256 dedupe is
+    // internal + org-scoped — never global, never an authorization signal.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_blobs" (
   id              text PRIMARY KEY,
   org_id          text NOT NULL,
@@ -1732,6 +1730,8 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_blobs_org_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_blobs" (org_id)` },
     // Internal, ORG-SCOPED dedupe lookup only (never global sha, never authz).
     { text: `CREATE INDEX IF NOT EXISTS artifact_blobs_org_sha_size_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_blobs" (org_id, sha256, size_bytes)` },
+    // cinatra#926: single-indexed reachability probe for the content-addressed guarded delete.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_blobs_org_storage_key_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_blobs" (org_id, storage_key)` },
     // Immutable artifact versions. Each
     // upload/regeneration appends one immutable row; `objects.version` (a
     // mutable per-row counter for Graphiti staleness) is NEVER reused for
