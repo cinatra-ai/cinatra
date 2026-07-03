@@ -93,9 +93,11 @@ import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
 // The conversation renderer is the LAZY BOUNDARY for the chat route's heavy
-// renderers (marked/katex/recharts/mermaid/shiki all sit behind it). SSR stays
-// enabled (next/dynamic default), so the initial HTML is unchanged; only the
-// client chunk splits.
+// renderers (marked/katex/recharts/mermaid/shiki all sit behind it). ssr:false
+// is deliberate: a default-SSR dynamic() here tripped a latent Turbopack
+// async-module-cycle in unrelated SSR chunks and broke `next build`; the view
+// SSR'd an empty container anyway (messages are fetched client-side), so
+// client-only rendering of the list is visually equivalent.
 const ChatMessagesView = dynamic(
   () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
   { ssr: false, loading: () => null },
