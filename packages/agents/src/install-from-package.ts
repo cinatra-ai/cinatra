@@ -412,13 +412,20 @@ async function _installAgentFromPackageImpl(
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
         hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? existing.status,
-        // Owner tier must follow the install target on re-install too.
+        // Org + owner tier must follow the install target on re-install too.
         // Otherwise the audit row written by installRegistryPackageAtScope says
         // targetScope: { level: "team", id: "team-X" } while this DB row keeps
         // the prior owner_level / owner_id, producing an auth-vs-state divergence
         // for any downstream reader (e.g. enforceResourceAccess) that consults
         // agent_templates.owner_level / owner_id. The fresh-install branch below
         // writes these via the freshSeed; the upsert branch must do the same.
+        // org_id rides the same rule (cinatra#847): the freshSeed persists
+        // input.orgId, so re-installing a still-NULL-org row (e.g. a boot-seeded
+        // template a user installs) must stamp org_id here or the org-scoped
+        // /agents "Installed agents" card keeps excluding it. undefined leaves
+        // the column unchanged (updateAgentTemplate only writes org_id when the
+        // patch defines it), so callers that omit orgId are unaffected.
+        orgId: input.orgId,
         ownerLevel: input.ownerLevel,
         ownerId: input.ownerId,
       });

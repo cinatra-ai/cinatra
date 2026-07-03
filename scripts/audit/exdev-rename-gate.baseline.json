@@ -1,0 +1,95 @@
+{
+  "note": "No-new-rot baseline for the exdev-rename-gate (cinatra#874). Each entry is a CURRENT tolerated bare rename/renameSync on the extension install/materialize/publish/store/boot surface. Regenerate with `node scripts/audit/exdev-rename-gate.mjs --write-baseline`; it should only ever SHRINK as sites route through the shared EXDEV-safe move primitives (fs-safety.ts atomicReplaceDir / exdev-safe-move.ts moveDirExdevSafe).",
+  "findings": [
+    {
+      "file": "packages/agents/src/materialize-agent-package.ts",
+      "rule": "bare-rename",
+      "line": 259,
+      "src": "await rename(targetDir, oldDir);"
+    },
+    {
+      "file": "packages/agents/src/materialize-agent-package.ts",
+      "rule": "bare-rename",
+      "line": 280,
+      "src": "await rename(priorDirBackup, targetDir);"
+    },
+    {
+      "file": "packages/agents/src/materialize-agent-package.ts",
+      "rule": "bare-rename",
+      "line": 325,
+      "src": "await rename(result.priorDirBackup, result.targetDir).catch("
+    },
+    {
+      "file": "packages/agents/src/materialize-agent-package.ts",
+      "rule": "bare-rename",
+      "line": 683,
+      "src": "await rename(tempPath, markerPath);"
+    },
+    {
+      "file": "packages/cli/src/prod-extension-acquisition.mjs",
+      "rule": "bare-rename",
+      "line": 684,
+      "src": "renameSync(dest, asideDir);"
+    },
+    {
+      "file": "packages/cli/src/prod-extension-acquisition.mjs",
+      "rule": "bare-rename",
+      "line": 688,
+      "src": "renameSync(tmpDir, dest);"
+    },
+    {
+      "file": "packages/cli/src/prod-extension-acquisition.mjs",
+      "rule": "bare-rename",
+      "line": 690,
+      "src": "if (movedOldAside) renameSync(asideDir, dest); // restore the old verified tree"
+    },
+    {
+      "file": "packages/skills/src/relocate-worker.ts",
+      "rule": "bare-rename",
+      "line": 310,
+      "src": "await rename(oldAbs, newAbs);"
+    },
+    {
+      "file": "src/lib/extension-runtime-activate.ts",
+      "rule": "bare-rename",
+      "line": 639,
+      "src": "await rename(storeDir, qDir);"
+    },
+    {
+      "file": "src/lib/extension-runtime-activate.ts",
+      "rule": "bare-rename",
+      "line": 641,
+      "src": "await rename(`${storeDir}.tgz`, `${qDir}.tgz`).catch(() => undefined);"
+    },
+    {
+      "file": "src/lib/extension-runtime-activate.ts",
+      "rule": "bare-rename",
+      "line": 752,
+      "src": "await rename(e.quarantineDir, e.originalDir);"
+    },
+    {
+      "file": "src/lib/extension-runtime-activate.ts",
+      "rule": "bare-rename",
+      "line": 753,
+      "src": "await rename(`${e.quarantineDir}.tgz`, `${e.originalDir}.tgz`).catch(() => undefined);"
+    },
+    {
+      "file": "src/lib/extension-store-io.ts",
+      "rule": "bare-rename",
+      "line": 215,
+      "src": "await rename(tmp, currentFilePathV2(dataRoot, kind, packageName));"
+    },
+    {
+      "file": "src/lib/required-extension-materialize.ts",
+      "rule": "bare-rename",
+      "line": 329,
+      "src": "if (hadLive) renameSync(liveSlugDir, bakDir);"
+    },
+    {
+      "file": "src/lib/required-extension-materialize.ts",
+      "rule": "bare-rename",
+      "line": 330,
+      "src": "renameSync(tmpDir, liveSlugDir);"
+    }
+  ]
+}

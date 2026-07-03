@@ -42,8 +42,12 @@ export async function POST(req: Request): Promise<Response> {
   }
   try {
     const ctx = await deriveContextRouteContext(req, parsed.data);
-    // Use the TRUSTED package name (from the run's template), never the body.
-    const slot = await loadTrustedSlot(ctx.trustedPackageName, parsed.data.slotId);
+    // Load the slot from the VERIFIED owner (the run package, or the composed
+    // child that the run package's own OAS binds to this slotId), never the body.
+    const slot = await loadTrustedSlot(
+      ctx.trustedSlotPackageName,
+      parsed.data.slotId,
+    );
     const candidates = resolveCandidates({
       actor: ctx.actor,
       slot,

@@ -112,6 +112,20 @@ jobs:
       # /design-fixtures route is static + runtime-mode-independent, and the
       # setup-bypass (setup-wizard.ts) is not gated on runtime mode.
       CINATRA_RUNTIME_MODE: production
+      # Skip the `required-extension-materialize` boot phase (cinatra#888). In
+      # production runtime mode that phase is `fatal` + fail-closed on the absent
+      # image-baked required-extension OAS seed — a standalone `pnpm build` (vs
+      # the Docker image) never bakes it, so the phase aborts boot against the
+      # placeholder DB before the server ever serves /design-fixtures. This
+      # documented escape hatch (src/lib/boot/phases/required-extension-materialize.ts)
+      # makes the phase a clean no-op; the static fixtures route needs no required
+      # extensions. Everything else (production runtime mode, placeholder DB,
+      # redis, encryption key) is unchanged from #881 — the boot-mode fix the
+      # issue's option (b) calls for. NOTE: this fixes the boot only; the
+      # committed pixel baselines still need a refresh against a real Linux-CI
+      # render (they were never CI-validated while this gate could not boot) —
+      # tracked separately in cinatra#863.
+      CINATRA_DISABLE_REQUIRED_EXTENSION_MATERIALIZE: "true"
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

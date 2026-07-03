@@ -851,6 +851,25 @@ jobs:
       - name: Core -> extension import-ban gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/core-extension-import-ban.test.mjs
 
+      # No NEW bare fs.rename / renameSync on the extension install / materialize
+      # / publish / store / boot surface (cinatra#874). A staged tmp tree promoted
+      # to a persistent mount with a bare `rename` throws EXDEV cross-device and
+      # crash-loops install/boot (cinatra#158, #846, #873); route the promote
+      # through a shared EXDEV-safe move (src/lib/fs-safety.ts `atomicReplaceDir`
+      # or packages/{agents,skills}/src/exdev-safe-move.ts `moveDirExdevSafe`)
+      # instead. No-new-rot ratchet: a committed baseline enumerates the current
+      # tolerated (same-fs / legacy) sites; a NEW surface rename fails CI.
+      - name: EXDEV-safe rename gate (no-new-rot)
+        env:
+          # Monotonic guard: the committed baseline must be a subset of the
+          # base-branch baseline (it may only shrink). Same base ref the other
+          # ratchet gates use.
+          EXDEV_RENAME_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/exdev-rename-gate.mjs
+
+      - name: EXDEV-safe rename gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/exdev-rename-gate.test.mjs
+
       # Discovery-dispatcher bypass gate. The runtime-discovery
       # dispatcher (discoverActiveExtensionCapabilities) is the ONE sanctioned way
       # a surface discovers active extension capabilities. ZERO-TOLERANCE
