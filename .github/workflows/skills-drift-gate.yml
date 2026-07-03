@@ -34,6 +34,13 @@ on:
 
 permissions:
   contents: read
+  # pull-requests:read is required by the bumped engine's PUSH arm (ci #57):
+  # on a squash-merge to main it resolves the merged PR via
+  # GET /commits/{sha}/pulls to read a PR-body-only Skills-* acknowledgement.
+  # A reusable workflow's scope is capped by the caller, so this MUST be
+  # granted here in the SAME change as the pin bump or the run fails at
+  # startup (same rule as the attribution caller's actions:read).
+  pull-requests: read
 
 jobs:
   # KEEP this job name stable as `skills-drift-gate` — it is the required-check
@@ -42,7 +49,7 @@ jobs:
     # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>) and the
     # `ref` input below are pinned to the SAME cinatra-ai/ci commit (the v2 gate),
     # so the gate code is never pulled from mutable main.
-    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.1
+    uses: cinatra-ai/ci/.github/workflows/skills-drift-gate.yml@0de02f3ae7b30b9bf2b7a7e4a508c814bbc7c282 # v0.1.2-next.0de02f3
     with:
       # assistant-skills pin: points at the commit that carries the skills'
       # `cinatra-watches` declarations. As of the closeout W5 skills-drift
@@ -60,4 +67,4 @@ jobs:
       # Correction-for: PR#432 (malformed Reviewed-by — missing tier=maintainer).
       skills_ref: 538a8176f12a5e9dfe0c95f29b4b74cd711f7038
       mode: enforce
-      ref: 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # same SHA as the workflow @ref (v0.1.1)
+      ref: 0de02f3ae7b30b9bf2b7a7e4a508c814bbc7c282 # same SHA as the workflow @ref
