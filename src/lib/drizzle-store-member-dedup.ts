@@ -1,7 +1,10 @@
 // Member-dedup ranking mirror — vertical slice extracted from
 // drizzle-store.ts (file-size ratchet, cinatra#923). Pure helpers, no store
-// internals; drizzle-store re-exports them so existing import sites are
-// unchanged.
+// internals. TEST-ONLY module: the production ranking lives in the SQL
+// emitted by buildCreateStoreSchemaQueries (independently shape-guarded);
+// this JS mirror exists so the strategy is unit-testable on synthetic rows
+// (member-dedup-ranking.test.ts imports it directly — no runtime importer,
+// keeping it out of the locked route graphs).
 
 // JS mirror of the window-CTE ORDER BY in buildCreateStoreSchemaQueries'
 // member dedup block. Source of truth is the SQL; this mirror exists so the
