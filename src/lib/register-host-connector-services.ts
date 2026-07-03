@@ -41,20 +41,25 @@ import {
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
 } from "@/lib/external-mcp-registry";
-// External-MCP setup-page surface for @cinatra-ai/mcp-server-connector
-// (cinatra#612): the carved "MCP Servers" connector binds these into its own
-// deps slot at activation. The create/delete WRITE actions own the
-// admin-authorization boundary + the post-write redirect — the connector
-// reimplements NO auth; it submits FormData to these opaque server actions.
-//
-// `@/app/campaigns/actions` is imported LAZILY (the `skillsCatalog` precedent
-// below): that "use server" module carries a heavy nango/wordpress/llm edge
-// graph, and a STATIC import here would drag it onto the synchronous boot path
-// AND into every unit test whose module graph reaches this host binder (e.g.
-// packages/agents store helpers), forcing those tests to mock host campaign
-// internals they have no business knowing. The actions are only INVOKED at
-// form-submit time (never at register()), so the lazy `import()` keeps the
-// action's "use server" identity while loading it on first use.
+// Connector setup-page server actions for @cinatra-ai/mcp-server-connector
+// (cinatra#612) and @cinatra-ai/twenty-connector (twenty-connector#39): the
+// connectors bind these into their own deps slots at activation and pass them
+// DIRECTLY into `<form action={…}>`. They MUST therefore be real
+// server-action REFERENCES — exports of a "use server" module — not adapter
+// closures defined here: a closure in this (non-"use server") module carries
+// no server-reference marker and React rejects it at RSC form render
+// (twenty-connector#39, digest 1769553696; the setup page 500'd for every
+// admin). The dedicated `@/app/campaigns/connector-setup-actions` module is
+// feather-weight (no static imports — each action lazy-imports the heavy
+// `@/app/campaigns/actions` graph on FIRST INVOCATION, preserving the boot- /
+// test-collection-path reason the old closures lazy-imported), so this static
+// import is safe on the synchronous boot path.
+import {
+  createExternalMcpServerAction,
+  deleteExternalMcpServerAction,
+  saveTwentyConnectionAction,
+  disconnectTwentyConnectionAction,
+} from "@/app/campaigns/connector-setup-actions";
 import { requireAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { getNangoStatus } from "@/lib/nango-system";
 import { encryptSecret, decryptSecret } from "@/lib/instance-secrets";
@@ -345,36 +350,26 @@ export function registerHostConnectorServices(): void {
     listServers: listExternalMcpServers,
     resolveBearer: resolveExternalMcpServerBearer,
     // --- mcp-server-connector setup-page surface (cinatra#612) --------------
-    // The carved "MCP Servers" connector binds these into its deps slot. The
-    // WRITE actions own the admin-authorization boundary + redirect host-side
-    // (src/app/campaigns/actions.ts) — the connector reimplements NO auth.
-    // Lazy `import()` (see the module-head note): the "use server" actions load
-    // on first form-submit, never at boot/test-collection. The connector's
-    // `register(ctx)` already wraps these in `(fd) => registry().…(fd)`
-    // closures, so the indirection is transparent to `<form action={…}>`.
-    createServerAction: async (formData: FormData) => {
-      const { createExternalMcpServerAction } = await import("@/app/campaigns/actions");
-      return createExternalMcpServerAction(formData);
-    },
-    deleteServerAction: async (formData: FormData) => {
-      const { deleteExternalMcpServerAction } = await import("@/app/campaigns/actions");
-      return deleteExternalMcpServerAction(formData);
-    },
-    // twenty-connector setup-page connect/disconnect actions (twenty-connector#39).
-    // Same lazy-import posture as the MCP-Servers write actions above: the
-    // "use server" module loads on first form-submit, and the connector's
-    // register(ctx) forwards these real server-action references into `<form
-    // action={…}>`. The host owns the admin authz + URL guard + live key probe +
-    // Nango import + twenty-workspace row write inside the action; the connector
-    // reimplements NO auth and never sees the key.
-    saveTwentyConnectionAction: async (formData: FormData) => {
-      const { saveTwentyConnectionAction } = await import("@/app/campaigns/actions");
-      return saveTwentyConnectionAction(formData);
-    },
-    disconnectTwentyConnectionAction: async (formData: FormData) => {
-      const { disconnectTwentyConnectionAction } = await import("@/app/campaigns/actions");
-      return disconnectTwentyConnectionAction(formData);
-    },
+    // The carved "MCP Servers" connector binds these into its deps slot and
+    // passes them straight into `<form action={…}>`, so they are published as
+    // the REAL server-action references from the "use server"
+    // connector-setup-actions module (see the module-head note — an adapter
+    // closure here carries no server-reference marker and 500s the setup page
+    // at RSC form render, twenty-connector#39). The actions own the
+    // admin-authorization boundary + redirect host-side
+    // (src/app/campaigns/actions.ts, lazy-loaded on first submit) — the
+    // connector reimplements NO auth.
+    createServerAction: createExternalMcpServerAction,
+    deleteServerAction: deleteExternalMcpServerAction,
+    // twenty-connector setup-page connect/disconnect actions
+    // (twenty-connector#39). Same posture as the MCP-Servers write actions
+    // above: real "use server" references, bound by the connector's
+    // register(ctx) directly into `<form action={…}>`. The host owns the admin
+    // authz + URL guard + live key probe + Nango import + twenty-workspace row
+    // write inside the action; the connector reimplements NO auth and never
+    // sees the key.
+    saveTwentyConnectionAction,
+    disconnectTwentyConnectionAction,
     // Resolve the viewer (platform-admin flag + user id) for visibility
     // scoping. Mirrors the derivation the host external-MCP page carried —
     // `requireAuthSession` redirects an unauthenticated viewer to sign-in.

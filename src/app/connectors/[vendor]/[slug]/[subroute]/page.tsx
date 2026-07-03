@@ -11,6 +11,18 @@ import {
 // bundled connector, so the host-injected setup-page badge reads the SAME live
 // connection signal the /connectors card grid does.
 import "@/lib/connector-readiness.server";
+// Server-reference bridge for the connector setup-page form actions
+// (twenty-connector#39): the setup pages rendered by this route bind the
+// host's "use server" connector-setup actions (published via the capability
+// registry at boot) directly into `<form action={…}>`. The boot
+// (instrumentation) graph is compiled WITHOUT the "use server" reference
+// transform, so the published instances carry no server-reference marker and
+// RSC would reject them at form render. This import (side effect) reflects
+// the compiler-minted reference metadata from THIS route's transformed
+// compilation onto those published instances, and simultaneously anchors the
+// "use server" module into this route's graph so the form POST-back resolves
+// here. See the bridge module's header for the full layering story.
+import "@/lib/connector-setup-action-references.server";
 import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge";
 import {
   enforceConnectorPolicy,
