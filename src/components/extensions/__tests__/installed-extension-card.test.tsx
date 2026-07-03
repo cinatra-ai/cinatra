@@ -26,7 +26,7 @@ function render(archived: boolean): string {
       kindLabel="Agent"
       vendor="cinatra-ai"
       description="Stateless schema-driven web research enricher."
-      version="v0.1.0"
+      version="dev / abc1234"
       status={<span data-testid="status-slot">status</span>}
       actions={<Button type="button">Restore</Button>}
       archived={archived}
