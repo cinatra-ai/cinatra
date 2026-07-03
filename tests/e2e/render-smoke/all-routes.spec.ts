@@ -36,11 +36,23 @@
  * The DYNAMIC routes are SKIPPED-with-reason; the skipped list and the
  * count of static routes visited are printed to the run output AND attached to
  * the test report so "automated render-smoke" never silently overstates coverage.
+ *
+ * EXCEPTION to the dynamic skip (twenty-connector#39): the connector setup
+ * dispatch route `/connectors/[vendor]/[slug]/[subroute]` has a fully
+ * ENUMERABLE instance set — the connectors-catalog descriptors. Each catalog
+ * connector's real setup route is visited under the same floor, because these
+ * pages bind host server actions into `<form action>` and an RSC-serialization
+ * regression there is invisible to every unit suite while 500ing the page for
+ * the platform admin (the exact shipped failure this suite now pins).
  */
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+// CLI-safe, dependency-free catalog data (plain .mjs, no imports — the same
+// module the plain-Node CLI consumes), so a Playwright spec can import it
+// directly. Source of the connector setup-page route enumeration below.
+import { CONNECTOR_DESCRIPTORS } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 
 // ---------------------------------------------------------------------------
 // Route enumeration (from source, at run time)
@@ -104,6 +116,26 @@ const STATIC_ROUTES = ALL_ROUTES.filter((r) => !isDynamicRoute(r));
 const DYNAMIC_ROUTES = ALL_ROUTES.filter(isDynamicRoute);
 
 // ---------------------------------------------------------------------------
+// Connector setup-page routes (dynamic-but-ENUMERABLE — twenty-connector#39)
+//
+// `/connectors/[vendor]/[slug]/[subroute]` is a dynamic route, so the generic
+// enumeration skips it — which is exactly how the twenty-connector setup page
+// shipped a deterministic admin-session 500 (a non-server-reference function
+// bound into `<form action>`; RSC rejects it at render, digest 1769553696)
+// while every unit suite stayed green: nothing rendered these pages to a
+// client payload. The catalog descriptors make the real instances enumerable
+// at run time (no hand-curated list): every catalog connector's setup page is
+// `/connectors/<vendor>/<slug>/<setupSubroute>`, with the vendor segment
+// derived from the packageId scope the same way the dispatch route derives it.
+// These render under the SAME floor as the static routes below.
+// ---------------------------------------------------------------------------
+
+const CONNECTOR_SETUP_ROUTES = CONNECTOR_DESCRIPTORS.map(
+  (d: { packageId: string; slug: string; setupSubroute: string }) =>
+    `/connectors/${d.packageId.replace(/^@/, "").split("/")[0]}/${d.slug}/${d.setupSubroute}`,
+).sort();
+
+// ---------------------------------------------------------------------------
 // Public / unauth allow-list (derived from src/lib/auth-route-guard.ts)
 //
 // For these routes a redirect to /sign-in is the EXPECTED behavior, so a
@@ -154,14 +186,17 @@ async function trippedErrorBoundary(page: Page): Promise<string | null> {
 // ---------------------------------------------------------------------------
 
 function buildInventorySummary(): string {
-  const skipped = DYNAMIC_ROUTES.map(
-    (r) => `  - ${r}  (dynamic-[segment]; needs real ID / seeded data)`,
+  const skipped = DYNAMIC_ROUTES.map((r) =>
+    r === "/connectors/[vendor]/[slug]/[subroute]"
+      ? `  - ${r}  (dynamic-[segment]; catalog instances visited separately — see "connector setup" count)`
+      : `  - ${r}  (dynamic-[segment]; needs real ID / seeded data)`,
   );
   return [
     `Render-smoke route inventory (enumerated from src/app at run time):`,
-    `  total routes:    ${ALL_ROUTES.length}`,
-    `  static visited:  ${STATIC_ROUTES.length}`,
-    `  dynamic skipped: ${DYNAMIC_ROUTES.length}`,
+    `  total routes:            ${ALL_ROUTES.length}`,
+    `  static visited:          ${STATIC_ROUTES.length}`,
+    `  connector setup visited: ${CONNECTOR_SETUP_ROUTES.length} (enumerated from the connectors catalog)`,
+    `  dynamic skipped:         ${DYNAMIC_ROUTES.length}`,
     ``,
     `Skipped routes (reasons):`,
     ...skipped,
@@ -192,42 +227,74 @@ test.describe("all-routes render-smoke (static)", () => {
 
   for (const route of STATIC_ROUTES) {
     test(`renders ${route}`, async ({ page }) => {
-      const response = await page.goto(route, { waitUntil: "domcontentloaded" });
+      await visitAndAssertRenderFloor(page, route);
+    });
+  }
+});
 
-      const status = response?.status() ?? 0;
-      expect(
-        status,
-        `${route} returned HTTP ${status} (expected not 5xx)`,
-      ).toBeLessThan(500);
+// Shared per-route floor: not-5xx, no error boundary, no unexpected auth
+// redirect. Used by both the static enumeration and the connector setup-page
+// enumeration below.
+async function visitAndAssertRenderFloor(page: Page, route: string): Promise<void> {
+  const response = await page.goto(route, { waitUntil: "domcontentloaded" });
 
-      // Redirect handling: a /sign-in redirect is a PASS only for genuinely
-      // public/unauth routes; otherwise the admin session should have rendered.
-      const landedPath = new URL(page.url()).pathname;
-      if (landedPath.startsWith("/sign-in")) {
-        expect(
-          isPublicRoute(route),
-          `${route} redirected to /sign-in under an admin session — should-render route must NOT redirect`,
-        ).toBeTruthy();
-        return;
-      }
+  const status = response?.status() ?? 0;
+  expect(
+    status,
+    `${route} returned HTTP ${status} (expected not 5xx)`,
+  ).toBeLessThan(500);
 
-      // A /not-authorized redirect proves the admin session didn't take
-      // (requireAdminSession redirects non-admins there). On a should-render
-      // route this is ALWAYS a FAIL — never let an auth-denied admin page
-      // false-pass as "rendered". The `route !== landedPath` guard is what
-      // makes this a *redirect* check: visiting the /not-authorized page itself
-      // lands on /not-authorized with no redirect, and must still render.
-      if (landedPath.startsWith("/not-authorized") && route !== landedPath) {
-        expect(
-          false,
-          `${route} redirected to /not-authorized — admin session did not take (saved storageState is not platform-admin)`,
-        ).toBeTruthy();
-        return;
-      }
+  // Redirect handling: a /sign-in redirect is a PASS only for genuinely
+  // public/unauth routes; otherwise the admin session should have rendered.
+  const landedPath = new URL(page.url()).pathname;
+  if (landedPath.startsWith("/sign-in")) {
+    expect(
+      isPublicRoute(route),
+      `${route} redirected to /sign-in under an admin session — should-render route must NOT redirect`,
+    ).toBeTruthy();
+    return;
+  }
 
-      // Error-boundary FLOOR: the page must not be the error boundary chrome.
-      const marker = await trippedErrorBoundary(page);
-      expect(marker, `${route} tripped the error boundary ("${marker}")`).toBeNull();
+  // A /not-authorized redirect proves the admin session didn't take
+  // (requireAdminSession redirects non-admins there). On a should-render
+  // route this is ALWAYS a FAIL — never let an auth-denied admin page
+  // false-pass as "rendered". The `route !== landedPath` guard is what
+  // makes this a *redirect* check: visiting the /not-authorized page itself
+  // lands on /not-authorized with no redirect, and must still render.
+  if (landedPath.startsWith("/not-authorized") && route !== landedPath) {
+    expect(
+      false,
+      `${route} redirected to /not-authorized — admin session did not take (saved storageState is not platform-admin)`,
+    ).toBeTruthy();
+    return;
+  }
+
+  // Error-boundary FLOOR: the page must not be the error boundary chrome.
+  const marker = await trippedErrorBoundary(page);
+  expect(marker, `${route} tripped the error boundary ("${marker}")`).toBeNull();
+}
+
+// ---------------------------------------------------------------------------
+// One test per CONNECTOR SETUP route (catalog-enumerated dynamic instances).
+//
+// Regression surface for twenty-connector#39: these pages render connector-
+// bound host server actions into `<form action={…}>` — an RSC-serialization
+// failure there is INVISIBLE to unit suites (nothing renders the page to a
+// client payload) and 500s deterministically for the platform admin. The
+// floor is identical to the static pass; a not-installed connector legitimately
+// renders its Install/Activate CTA or "requires rebuild" state (200), and a
+// policy-denied one 404s — all pass the floor; only a 5xx / error boundary /
+// auth redirect fails.
+// ---------------------------------------------------------------------------
+
+test.describe("connector setup-page render-smoke (catalog-enumerated)", () => {
+  test("enumerates a non-empty connector setup-route inventory", () => {
+    expect(CONNECTOR_SETUP_ROUTES.length).toBeGreaterThan(0);
+  });
+
+  for (const route of CONNECTOR_SETUP_ROUTES) {
+    test(`renders ${route}`, async ({ page }) => {
+      await visitAndAssertRenderFloor(page, route);
     });
   }
 });

@@ -11,6 +11,16 @@ import {
 // bundled connector, so the host-injected setup-page badge reads the SAME live
 // connection signal the /connectors card grid does.
 import "@/lib/connector-readiness.server";
+// Route-graph anchor for the connector setup-page server actions
+// (twenty-connector#39): the setup pages rendered by this route bind the
+// host's "use server" connector-setup actions (published via the capability
+// registry at boot) directly into `<form action={…}>`. For the form POST-back
+// to resolve on THIS route in a production build, the "use server" module
+// carrying those actions must be part of this route's module graph — the
+// registry publication alone lives only in the instrumentation graph. The
+// module is feather-weight (no static imports; each action lazy-loads its
+// implementation on first invocation).
+import "@/app/campaigns/connector-setup-actions";
 import { ConnectorBadge } from "@cinatra-ai/connectors/connector-badge";
 import {
   enforceConnectorPolicy,
