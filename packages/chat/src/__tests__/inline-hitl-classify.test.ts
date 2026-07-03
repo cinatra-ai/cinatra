@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyPromptForGate,
+  createChatGateRegistry,
+  resolveExtractedGateValues,
   type ClassifyGate,
 } from "../inline-hitl-classify";
 
@@ -160,5 +162,90 @@ describe("classifyPromptForGate — new-task guard", () => {
     expect(classifyPromptForGate("   ", singleStringGate)).toEqual({
       kind: "chat",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveExtractedGateValues (cinatra#853) — the LLM-fallback required-field
+// policy split out of chat-page.tsx's gate-drive block.
+// ---------------------------------------------------------------------------
+describe("resolveExtractedGateValues", () => {
+  const fields = [
+    { name: "title", required: true },
+    { name: "url", required: true },
+    { name: "note", required: false },
+  ];
+
+  it("submits when every required field is present", () => {
+    expect(
+      resolveExtractedGateValues({ title: "T", url: "https://e.com" }, fields),
+    ).toEqual({ kind: "submit", value: { title: "T", url: "https://e.com" } });
+  });
+
+  it("submits any extraction when the gate has no required fields", () => {
+    expect(
+      resolveExtractedGateValues({ note: "hi" }, [{ name: "note", required: false }]),
+    ).toEqual({ kind: "submit", value: { note: "hi" } });
+  });
+
+  it("partial when something was extracted but required fields are missing", () => {
+    expect(resolveExtractedGateValues({ title: "T" }, fields)).toEqual({
+      kind: "partial",
+      presentKeys: ["title"],
+      missing: ["url"],
+    });
+  });
+
+  it("null/undefined extracted values do not count as present", () => {
+    expect(
+      resolveExtractedGateValues({ title: "T", url: null }, fields),
+    ).toEqual({ kind: "partial", presentKeys: ["title", "url"], missing: ["url"] });
+  });
+
+  it("none when nothing was extracted (falls through to chat routing)", () => {
+    expect(resolveExtractedGateValues({}, fields)).toEqual({ kind: "none" });
+    // A gate with no required fields and no extraction is also none.
+    expect(
+      resolveExtractedGateValues({}, [{ name: "note", required: false }]),
+    ).toEqual({ kind: "none" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createChatGateRegistry (cinatra#853) — the runId-keyed inline-gate registry
+// split out of chat-page.tsx.
+// ---------------------------------------------------------------------------
+describe("createChatGateRegistry", () => {
+  const makeGate = (runId: string, instanceId: string) =>
+    ({ runId, instanceId } as unknown as Parameters<
+      ReturnType<typeof createChatGateRegistry>["handleActiveGateChange"]
+    >[1] & { runId: string; instanceId: string });
+
+  it("registers gates and returns the most-recently-registered one", () => {
+    const reg = createChatGateRegistry();
+    expect(reg.getLatestOpenGate()).toBeUndefined();
+    reg.handleActiveGateChange("run-1", makeGate("run-1", "i1"), "i1");
+    reg.handleActiveGateChange("run-2", makeGate("run-2", "i2"), "i2");
+    expect(reg.getLatestOpenGate()?.runId).toBe("run-2");
+  });
+
+  it("re-registering an existing runId keeps its original insertion position", () => {
+    const reg = createChatGateRegistry();
+    reg.handleActiveGateChange("run-1", makeGate("run-1", "i1"), "i1");
+    reg.handleActiveGateChange("run-2", makeGate("run-2", "i2"), "i2");
+    // Map.set on an existing key does NOT move it to the end.
+    reg.handleActiveGateChange("run-1", makeGate("run-1", "i1b"), "i1b");
+    expect(reg.getLatestOpenGate()?.runId).toBe("run-2");
+  });
+
+  it("clears a gate only when the SAME instance unregisters (remount guard)", () => {
+    const reg = createChatGateRegistry();
+    reg.handleActiveGateChange("run-1", makeGate("run-1", "new-instance"), "new-instance");
+    // An OLDER instance's unmount must not clobber the remounted card's gate.
+    reg.handleActiveGateChange("run-1", null, "old-instance");
+    expect(reg.getLatestOpenGate()?.runId).toBe("run-1");
+    // The live instance's clear removes it.
+    reg.handleActiveGateChange("run-1", null, "new-instance");
+    expect(reg.getLatestOpenGate()).toBeUndefined();
   });
 });

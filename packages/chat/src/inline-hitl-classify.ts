@@ -16,6 +16,8 @@
  *  - mid-run single-field wraps under fields[0].name
  */
 
+import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
+
 export type ClassifyGate = {
   fields: Array<{ name: string; type: string; title?: string; required: boolean }>;
   fieldName?: string;
@@ -173,4 +175,107 @@ export function classifyPromptForGate(
   // ---- Defer to LLM fallback for short/medium non-question ----------------
   if (trimmed.length <= 600) return { kind: "llm" };
   return { kind: "chat" };
+}
+
+// ---------------------------------------------------------------------------
+// LLM-fallback extraction resolution (cinatra#853 — split out of
+// chat-page.tsx's gate-drive block so the required-field policy is pure and
+// unit-testable).
+// ---------------------------------------------------------------------------
+
+export type ExtractedGateResolution =
+  /** Extraction satisfies the gate — submit `value` via gate.submit(). */
+  | { kind: "submit"; value: Record<string, unknown> }
+  /**
+   * Extraction found SOME fields but required ones are missing — keep the
+   * gate open, tell the user what is missing, do NOT route to the LLM (the
+   * message was a gate attempt).
+   */
+  | { kind: "partial"; presentKeys: string[]; missing: string[] }
+  /** Nothing extracted → fall through to normal chat routing. */
+  | { kind: "none" };
+
+/**
+ * Decide what to do with the values the LLM fallback extracted from a chat
+ * message for an open gate:
+ *  - all required fields present → submit;
+ *  - the gate has NO required fields and anything was extracted → submit;
+ *  - something extracted but required fields missing → partial;
+ *  - nothing extracted → none (normal chat routing).
+ * `undefined`/`null` extracted values do not count as present.
+ */
+export function resolveExtractedGateValues(
+  extracted: Record<string, unknown>,
+  fields: ReadonlyArray<{ name: string; required: boolean }>,
+): ExtractedGateResolution {
+  const requiredNames = fields.filter((f) => f.required).map((f) => f.name);
+  const hasAllRequired =
+    requiredNames.length > 0 &&
+    requiredNames.every(
+      (n) => extracted[n] !== undefined && extracted[n] !== null,
+    );
+  const hasAny = Object.keys(extracted).length > 0;
+  if (hasAllRequired || (requiredNames.length === 0 && hasAny)) {
+    return { kind: "submit", value: extracted };
+  }
+  if (hasAny) {
+    const missing = requiredNames.filter(
+      (n) => extracted[n] === undefined || extracted[n] === null,
+    );
+    return { kind: "partial", presentKeys: Object.keys(extracted), missing };
+  }
+  return { kind: "none" };
+}
+
+// ---------------------------------------------------------------------------
+// Chat-side inline HITL gate registry (cinatra#853 — the chat/run gate
+// concern split out of chat-page.tsx). A pure closure factory, NOT a hook:
+// chat-page holds one instance in state so the function identities are
+// stable across renders (the handler is threaded to InlineAgentRunCard).
+// Kept in THIS module (rather than its own file) so the /chat route's
+// first-party module graph does not grow — the route-graph ratchet ceiling
+// only ever shrinks.
+// ---------------------------------------------------------------------------
+
+export type ChatGateRegistry = {
+  /** AgenticRunPanel's onActiveGateChange (threaded through
+   *  InlineAgentRunCard). Registers an OPEN gate by runId; a `null` gate
+   *  clears the entry ONLY if the registry still holds the SAME instanceId —
+   *  a remounted card for the same runId must not be clobbered by an older
+   *  instance's unmount. */
+  handleActiveGateChange: (
+    runId: string,
+    gate: ChatGateDescriptor | null,
+    instanceId: string,
+  ) => void;
+  /** The most-recently-registered OPEN gate, or undefined when none. */
+  getLatestOpenGate: () => ChatGateDescriptor | undefined;
+};
+
+/**
+ * Create the runId-keyed registry of OPEN inline HITL gates. Multiple
+ * InlineAgentRunCards can mount (one per agent_run tool result); the
+ * runId-keyed map prevents an older card from clobbering a newer gate.
+ * `getLatestOpenGate` relies on Map insertion order (re-`set()` of an
+ * existing runId keeps its original position), matching the previous
+ * inline chat-page behavior exactly.
+ */
+export function createChatGateRegistry(): ChatGateRegistry {
+  const gates = new Map<string, ChatGateDescriptor>();
+  return {
+    handleActiveGateChange(runId, gate, instanceId) {
+      if (gate) {
+        gates.set(runId, gate);
+      } else {
+        const current = gates.get(runId);
+        if (current && current.instanceId === instanceId) {
+          gates.delete(runId);
+        }
+      }
+    },
+    getLatestOpenGate() {
+      const openGates = Array.from(gates.values());
+      return openGates[openGates.length - 1];
+    },
+  };
 }

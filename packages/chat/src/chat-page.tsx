@@ -35,7 +35,11 @@ import {
   extractHitlGateValuesAction,
 } from "./actions";
 // Chat prompt-window HITL drive.
-import { classifyPromptForGate } from "./inline-hitl-classify";
+import {
+  classifyPromptForGate,
+  createChatGateRegistry,
+  resolveExtractedGateValues,
+} from "./inline-hitl-classify";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
@@ -1322,26 +1326,12 @@ const skipNextThreadLoadRef = useRef(false);
   // Latest-value ref for messages so re-entrant senders never read a stale
   // snapshot when building the next request's context.
   const messagesRef = useRef<Message[]>([]);
-  // RunId-keyed registry of OPEN inline HITL gates. Multiple InlineAgentRunCards
-  // can mount (one per agent_run tool result); a ref-map keyed by runId prevents
-  // an older card from clobbering a newer gate.
-  const gateRegistryRef = useRef<Map<string, ChatGateDescriptor>>(new Map());
-  const handleActiveGateChange = useCallback(
-    (runId: string, gate: ChatGateDescriptor | null, instanceId: string) => {
-      if (gate) {
-        gateRegistryRef.current.set(runId, gate);
-      } else {
-        // Clear only if the registry still holds THIS instance. A remounted
-        // card for the same runId must not be clobbered by an older instance's
-        // unmount.
-        const current = gateRegistryRef.current.get(runId);
-        if (current && current.instanceId === instanceId) {
-          gateRegistryRef.current.delete(runId);
-        }
-      }
-    },
-    [],
-  );
+  // RunId-keyed registry of OPEN inline HITL gates (cinatra#853 — the
+  // chat/run gate concern lives in inline-hitl-classify's pure factory).
+  // useState initializer → ONE registry instance for the component lifetime,
+  // so both function identities are stable across renders (the handler is
+  // threaded to InlineAgentRunCard).
+  const [{ handleActiveGateChange, getLatestOpenGate }] = useState(createChatGateRegistry);
   // Latest-value ref for the active thread id so in-flight streamResponse coroutines
   // can detect thread switches after an await and no-op their patches.
   const activeThreadIdRef = useRef<string | null>(null);
@@ -2460,9 +2450,8 @@ const skipNextThreadLoadRef = useRef(false);
     // to normal chat routing below.
     // -----------------------------------------------------------------------
     {
-      const openGates = Array.from(gateRegistryRef.current.values());
       // Drive the most-recently-registered open gate (typical case: one).
-      const gate = openGates[openGates.length - 1];
+      const gate = getLatestOpenGate();
       if (gate) {
         const verdict = classifyPromptForGate(trimmed, {
           fields: gate.fields,
@@ -2531,27 +2520,18 @@ const skipNextThreadLoadRef = useRef(false);
           } catch {
             extracted = {};
           }
-          const requiredNames = gate.fields
-            .filter((f) => f.required)
-            .map((f) => f.name);
-          const hasAllRequired =
-            requiredNames.length > 0 &&
-            requiredNames.every(
-              (n) => extracted[n] !== undefined && extracted[n] !== null,
-            );
-          const hasAny = Object.keys(extracted).length > 0;
-          if (hasAllRequired || (requiredNames.length === 0 && hasAny)) {
-            await finishGateSubmit(extracted);
+          // The required-field policy is pure and unit-tested — see
+          // resolveExtractedGateValues in inline-hitl-classify.ts.
+          const resolution = resolveExtractedGateValues(extracted, gate.fields);
+          if (resolution.kind === "submit") {
+            await finishGateSubmit(resolution.value);
             return;
           }
-          if (hasAny) {
+          if (resolution.kind === "partial") {
             // Partial — keep the gate open, tell the user what's missing,
             // do NOT route to the LLM (the message was a gate attempt).
-            const missing = requiredNames.filter(
-              (n) => extracted[n] === undefined || extracted[n] === null,
-            );
             persistAck(
-              `Got ${Object.keys(extracted).join(", ")}. Still need: ${missing.join(", ")}. Fill the form or reply with the remaining value(s).`,
+              `Got ${resolution.presentKeys.join(", ")}. Still need: ${resolution.missing.join(", ")}. Fill the form or reply with the remaining value(s).`,
             );
             return;
           }
