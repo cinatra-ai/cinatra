@@ -245,6 +245,22 @@ async function hasLiveLease(
 }
 
 /**
+ * Public per-`pkg@digest` live-lease probe (the same FRESH read `reapStore`
+ * uses for its per-entry TOCTOU re-check), exported for the V2 retention-aware
+ * reaper (`extension-store-reaper.ts`, cinatra#796) so its delete loop can
+ * re-verify lease liveness immediately before each `rm`.
+ */
+export async function hasLiveSnapshotLease(
+  packageName: string,
+  digest: string,
+  now?: string,
+  deps?: SnapshotLeaseDeps,
+): Promise<boolean> {
+  const { query, schema } = await resolveDeps(deps);
+  return hasLiveLease(query, qualifiedTable(schema), packageName, digest, now);
+}
+
+/**
  * The GC reaper: compose live leases + the pure GC selector + `rmDir` to delete
  * digest dirs that are neither the active digest nor under a live lease.
  * Injected `listOnDiskDigests` + `rmDir` keep it testable without fs; the

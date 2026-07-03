@@ -18,7 +18,43 @@ import {
   MARKETPLACE_CATALOG_SYNC_LOOP_JOB_ID,
   VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID,
   PM_SCHEDULE_RECONCILE_LOOP_JOB_ID,
+  EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
 } from "@/lib/background-jobs-names";
+// TYPE-ONLY (erased at compile; not a route-graph edge) — the reaper VALUE is
+// boot-registered through the slot below, never imported here.
+import type { ExtensionStoreReapReport } from "@/lib/extension-store-reaper";
+
+// ---------------------------------------------------------------------------
+// Extension-store GC reaper slot (cinatra#796).
+//
+// The reaper implementation is BOOT-REGISTERED (the system-loops seed phase
+// dynamic-imports `@/lib/extension-store-reaper` and registers the runner)
+// instead of being imported here: this registry sits in the reachable
+// first-party graph of the LOCKED dev-perf routes (route-graph ratchet), and
+// even a dynamic `import("@/lib/extension-store-reaper")` specifier would pull
+// the reaper + lease/GC modules into every enqueuer's request-path graph.
+// Maintenance-only code stays out of the locked graphs; the handler below
+// no-ops LOUDLY (and re-delays) when the slot is empty — GC is maintenance,
+// a skipped cycle is safe, and the boot seed always registers before it seeds
+// the loop job. globalThis-backed so a worker dispatching from a different
+// bundle's module instance still sees the boot registration.
+// ---------------------------------------------------------------------------
+
+type ExtensionStoreReaperRunner = () => Promise<ExtensionStoreReapReport>;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __cinatraExtensionStoreReaperRunner: ExtensionStoreReaperRunner | undefined;
+}
+
+/** Boot-time registration (system-loops phase). Idempotent (last write wins). */
+export function registerExtensionStoreReaper(runner: ExtensionStoreReaperRunner): void {
+  globalThis.__cinatraExtensionStoreReaperRunner = runner;
+}
+
+function resolveExtensionStoreReaper(): ExtensionStoreReaperRunner | null {
+  return globalThis.__cinatraExtensionStoreReaperRunner ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // Background-job handler registry (cinatra#304).
@@ -631,6 +667,53 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             console.warn(
               `[artifact-provider-cache-evict] ${totalRemoteDeleteFailures} of ${totalReaped} remote deletes FAILED — provider SDK or credentials may be misconfigured; DB rows were still removed`,
             );
+          }
+        },
+      });
+    },
+  },
+  [BACKGROUND_JOB_NAMES.EXTENSION_STORE_GC_REAP]: {
+    payloadSchema: looseObject(),
+    async handle(job) {
+      // Explicit content-addressed extension-store GC reaper (cinatra#796).
+      // Enforces the epic-#790 retention contract over the V2 runtime store:
+      // keep the DB-anchored ACTIVE digest + the 2 newest priors per
+      // {kind, slug}; delete the rest — never anything active, leased,
+      // undatable, too young, or belonging to a fail-closed slug. The delete
+      // loop re-verifies BOTH the lease AND the DB/journal active binding
+      // against FRESH reads immediately before each rm (TOCTOU, cinatra#850).
+      // Self-reschedules with a 24h delay; a cycle error propagates to
+      // runRecurringLoop, which reports it and always re-delays (cinatra#849).
+      const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+      await runRecurringLoop({
+        job,
+        loopJobId: EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+        delayMs: TWENTY_FOUR_HOURS_MS,
+        label: "extension-store-gc-reap",
+        run: async () => {
+          // Resolve the BOOT-REGISTERED runner (see the slot above) — never a
+          // direct import (route-graph ratchet: the locked routes reach this
+          // registry). An empty slot no-ops loudly; runRecurringLoop re-delays.
+          const reap = resolveExtensionStoreReaper();
+          if (!reap) {
+            console.warn(
+              "[extension-store-gc-reap] no reaper registered (the boot system-loops phase did not run in this process) — skipping this cycle",
+            );
+            return;
+          }
+          const report = await reap();
+          const summary =
+            `deleted=${report.deleted.length} retained=${report.retained.length} ` +
+            `protected=${report.protectedEntries.length} scanned=${report.scannedDigests} ` +
+            `racedLease=${report.skippedForRacedLease.length} racedActive=${report.skippedForRacedActive.length} ` +
+            `failedDeletes=${report.failedDeletes.length} unsafeSlugs=${report.unsafeSlugs.length}`;
+          if (report.deleted.length > 0 || report.failedDeletes.length > 0) {
+            console.log(`[extension-store-gc-reap] ${summary}`, {
+              deleted: report.deleted,
+              failedDeletes: report.failedDeletes,
+            });
+          } else {
+            console.log(`[extension-store-gc-reap] ${summary}`);
           }
         },
       });

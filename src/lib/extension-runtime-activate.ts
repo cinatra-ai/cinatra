@@ -18,12 +18,15 @@ import "server-only";
 //      loader uses — so the running process picks it up WITHOUT a restart.
 //
 // HOT-UPDATE (new digest): when a previously-materialized digest already exists
-// for the package, the activator GCs the superseded store dir(s) (so the
-// runtime loader's fail-closed duplicate-name gate never sees two dirs for one
-// package), fires the (async) capability teardown for the old package AND calls
-// `destroyExtensionModule` on the old module BEFORE re-activating the new digest.
-// A same-digest re-activate is idempotent (the in-memory registries replace by
-// id/package).
+// for the package, the activator fires the (async) capability teardown for the
+// old package AND calls `destroyExtensionModule` on the previously-ACTIVE
+// digest's module BEFORE re-activating the new digest. RETENTION (cinatra#796):
+// superseded digest dirs are NO LONGER hard-deleted here — they are RETAINED on
+// disk as prior digests (the loader narrows multi-digest discovery to the
+// anchor-bound digest, cinatra#792) so the epic's `current + 2` rollback window
+// exists; the explicit maintenance reaper (`extension-store-reaper.ts`)
+// enforces the retention cap. A same-digest re-activate is idempotent (the
+// in-memory registries replace by id/package).
 //
 // FAIL-CLOSED PRESERVED: this never bypasses the anchor/loader trust gates. The
 // pipeline finalizes the journal LATE, and the loader still refuses any package
@@ -56,14 +59,15 @@ import { isContainedRealpath } from "@/lib/fs-safety";
  *
  * HOT-UPDATE SAFETY (the order matters): when a superseded digest exists (the
  * UPDATE case), the new digest is PROVEN importable + integrity-verified FIRST —
- * BEFORE the old digest is torn down / destroyed / GC'd. A loader returns
- * structured results (it does NOT throw on a bad module), so the previous order
- * (GC old → activate new) would, for a bad new module, leave the old torn down +
- * its dir removed with nothing to fall back to. Now:
+ * BEFORE the old digest is torn down. A loader returns structured results (it
+ * does NOT throw on a bad module), so the previous order (teardown old →
+ * activate new) would, for a bad new module, leave the old torn down with
+ * nothing to fall back to. Now:
  *   1. (update only) verify the NEW digest imports + integrity-checks; if it does
  *      NOT, RETURN early leaving the old digest fully intact (in-memory + on-disk);
- *   2. teardown the OLD in-memory registrations + destroy the OLD module + GC the
- *      superseded dir(s) (so the loader's duplicate-name gate is satisfied);
+ *   2. teardown the OLD in-memory registrations (superseded dirs are RETAINED on
+ *      disk as prior digests, cinatra#796 — the anchor-narrowed loader ignores
+ *      them and the maintenance reaper enforces `current + 2`);
  *   3. activate the NEW digest via the shared loader.
  *
  * Returns the loader's `ActivationResult[]` for the package (empty when the
@@ -118,12 +122,18 @@ export async function activateInstalledPackageInProcess(
     destroyPorts = [];
   }
 
-  // (2) HOT-UPDATE teardown + GC: drop in-memory state from a previous activation
-  // of this package + destroy the old module(s) + remove superseded store dir(s)
-  // so a single (current) dir remains for the loader's duplicate-name gate. For a
-  // clean NEW install this still fires the (idempotent) capability teardown
-  // defensively so a re-activate replaces rather than stacks.
-  await teardownAndGcSupersededDigests(packageName, storeRoot, opts.currentStoreDir, superseded, destroyPorts);
+  // (2) Teardown: drop in-memory state from a previous activation of this
+  // package (idempotent capability teardown) so a re-activate replaces rather
+  // than stacks. RETENTION (cinatra#796): superseded dirs are RETAINED on disk
+  // (the anchor-narrowed loader ignores them; the maintenance reaper enforces
+  // `current + 2`), and no prior MODULE is destroyed here — this function is
+  // the pipeline's FRESH-install / same-digest re-activate path (real
+  // superseding updates route through `hotUpdateWithDurableRollback`, which
+  // destroys exactly the previously-active digest's module), so any dirs found
+  // here are non-live retained priors whose code must not be re-imported.
+  await teardownSupersededDigests(packageName, storeRoot, opts.currentStoreDir, superseded, destroyPorts, {
+    destroyModules: false,
+  });
 
   // (3) Activate the NEW digest through the SAME shared loader the boot path uses.
   const { loadRuntimePackageExtensions } = await import("@/lib/runtime-package-loader");
@@ -283,10 +293,12 @@ export async function verifyDigestImportsAndRegisters(
 // install (provenance + finalized journal + grant) and is the production caller
 // for a superseding UPDATE. Order:
 //   (a) QUARANTINE the OLD digest store dir (move it OUT of the discovery walk —
-//       the loader refuses duplicate package names, so the old dir must not
-//       co-exist as a live discovery, but it stays RECOVERABLE on disk);
+//       robust even for a digest-UNBOUND legacy anchor, where multi-digest
+//       discovery is refused as ambiguous — while staying RECOVERABLE on disk);
 //   (b) ACTIVATE the NEW digest in-process via the shared loader;
-//   (c) NEW activates → GC the quarantined OLD dir → { activated:true };
+//   (c) NEW activates → RETIRE the quarantined OLD dir back into the store as a
+//       RETAINED prior digest (cinatra#796 — the `current + 2` rollback window;
+//       the maintenance reaper enforces the cap) → { activated:true };
 //   (d) NEW FAILS → DURABLE ROLLBACK in order:
 //         (i)   restore the OLD durable anchor (pipeline callback: re-record the
 //               OLD provenance/source + re-finalize the OLD journal op + re-approve
@@ -356,7 +368,18 @@ export async function hotUpdateWithDurableRollback(
   orgId: string | null,
   newStoreDir: string,
   rollbackDeps: HotUpdateRollbackDeps,
-  opts: { storeRoot?: string } = {},
+  opts: {
+    storeRoot?: string;
+    /**
+     * The previously-ACTIVE digest (cinatra#796: the pipeline passes
+     * `priorSource.activeDigest ?? priorOp.digest`). When set, the OLD-module
+     * destroy targets ONLY this digest's record — with retention the store
+     * legitimately holds older retained priors whose modules were already
+     * destroyed by earlier updates and must not be re-imported/re-destroyed.
+     * Absent/null → legacy destroy-all fallback.
+     */
+    priorDigest?: string | null;
+  } = {},
 ): Promise<HotUpdateActivateResult> {
   const storeRoot =
     opts.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
@@ -400,19 +423,21 @@ export async function hotUpdateWithDurableRollback(
     grantedPorts = [];
   }
 
-  // (a) QUARANTINE the OLD digest dir(s) — move them OUT of the discovery walk so
-  // the loader's duplicate-name gate sees exactly the new dir, while keeping them
-  // recoverable. We capture the (originalDir → quarantineDir) map for restore/GC.
-  // ALSO tear down the OLD in-memory registrations + destroy the OLD module(s)
-  // FIRST so the in-memory registries hold a single package's registrations after
-  // the new digest activates (mirrors the previous teardown ordering).
-  await teardownAndGcSupersededDigests(
+  // (a) QUARANTINE the OLD digest dir(s) — move them OUT of the discovery walk
+  // (robust even for a digest-UNBOUND legacy anchor, where multi-digest
+  // discovery would be refused as ambiguous) while keeping them recoverable.
+  // We capture the (originalDir → quarantineDir) map for restore/retire. ALSO
+  // tear down the OLD in-memory registrations + destroy the previously-ACTIVE
+  // digest's module FIRST so the in-memory registries hold a single package's
+  // registrations after the new digest activates (retained older priors were
+  // already destroyed by earlier updates — targeted via `priorDigest`).
+  await teardownSupersededDigests(
     packageName,
     storeRoot,
     newStoreDir,
     superseded,
     grantedPorts,
-    { quarantineInsteadOfGc: true },
+    { quarantine: true, priorDigest: opts.priorDigest },
   );
   const quarantined = await readQuarantineManifest(storeRoot, packageName);
 
@@ -440,12 +465,16 @@ export async function hotUpdateWithDurableRollback(
 
   if (activated) {
     // (c) SUCCESS — the NEW digest already mutated the live registries above, so
-    // bump the control-plane generation NOW (before the GC await) to close the
-    // staleness window: a concurrent self-MCP call during GC must observe the new
-    // generation and rebuild against the NEW digest's primitives (replaces the
-    // prior ad-hoc reset). GC of the quarantined OLD dir(s) then follows.
+    // bump the control-plane generation NOW (before the retire await) to close
+    // the staleness window: a concurrent self-MCP call during the disk move must
+    // observe the new generation and rebuild against the NEW digest's primitives
+    // (replaces the prior ad-hoc reset). RETENTION-AWARE RETIRE (cinatra#796):
+    // the quarantined OLD dir(s) are moved BACK into the store as retained
+    // prior digests — NOT hard-deleted — so the epic's `current + 2` rollback
+    // window exists; the maintenance reaper enforces the retention cap. The
+    // anchor-narrowed loader (cinatra#792) ignores retained non-anchor digests.
     bumpActivationGeneration("hot-update", packageName);
-    await gcQuarantined(quarantined);
+    await retireQuarantinedToStore(quarantined);
     return { activated: true };
   }
 
@@ -772,7 +801,7 @@ export async function restoreQuarantined(entries: QuarantineEntry[]): Promise<{ 
     } catch (err) {
       failed.push(e.originalDir);
       console.error(
-        `[extension-runtime-activate] could not restore quarantined dir "${e.quarantineDir}" → "${e.originalDir}" (the OLD digest's durable DB anchor is still restored; boot re-materializes if needed):`,
+        `[extension-runtime-activate] could not restore quarantined dir "${e.quarantineDir}" → "${e.originalDir}" (non-fatal for the digest bytes: the dir stays quarantined, invisible to discovery; the DB anchor owns selection and the boot rematerialize sweep can rebuild a missing SELECTED digest):`,
         err instanceof Error ? err.message : err,
       );
     }
@@ -785,21 +814,23 @@ export async function restoreQuarantined(entries: QuarantineEntry[]): Promise<{ 
   return { ok: failed.length === 0, failed };
 }
 
-/** GC the quarantined OLD digest dir(s) after a SUCCESSFUL new activation (step c). */
-async function gcQuarantined(entries: QuarantineEntry[]): Promise<void> {
-  const { rm } = await import("node:fs/promises");
-  for (const e of entries) {
-    try {
-      await rm(e.quarantineDir, { recursive: true, force: true });
-      await rm(`${e.quarantineDir}.tgz`, { force: true }).catch(() => undefined);
-    } catch (err) {
-      console.warn(
-        `[extension-runtime-activate] could not GC quarantined dir "${e.quarantineDir}" (non-fatal — boot-orphan cleanup will sweep it):`,
-        err instanceof Error ? err.message : err,
-      );
-    }
+/**
+ * RETENTION-AWARE RETIRE (cinatra#796, step c): after a SUCCESSFUL new
+ * activation, move the quarantined OLD digest dir(s) BACK into the store as
+ * retained prior digests instead of hard-deleting them — the epic's
+ * `current + 2` rollback window. The anchor-narrowed loader (cinatra#792)
+ * ignores non-anchor digests; the explicit maintenance reaper
+ * (`extension-store-reaper.ts`) enforces the retention cap. Best-effort: a
+ * failed move leaves the dir quarantined (invisible, recoverable) — never a
+ * hot-update failure.
+ */
+async function retireQuarantinedToStore(entries: QuarantineEntry[]): Promise<void> {
+  const res = await restoreQuarantined(entries);
+  if (!res.ok) {
+    console.warn(
+      `[extension-runtime-activate] could not retire ${res.failed.length} quarantined prior digest dir(s) back into the store (non-fatal — they stay quarantined, invisible to discovery): ${res.failed.join(", ")}`,
+    );
   }
-  await cleanupEmptyQuarantineRoots(entries);
 }
 
 async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<void> {
@@ -871,16 +902,22 @@ export async function runHostExtensionInstallAndActivate(
     // NATIVE handler after this hook returns / by the artifact rescan below).
     //   - a FRESH install has nothing to import → an inert activateInProcess;
     //   - an UPDATE must NOT durably roll back on the loader's inevitable
-    //     `no-server-entry` skip — instead the superseded OLD digest dir(s) are
-    //     GC'd (single-digest store per package) and the committed NEW digest
-    //     stands. The dispatcher gates these kinds on `finalized` ONLY.
+    //     `no-server-entry` skip — the committed NEW digest stands, and the
+    //     superseded OLD digest dir(s) are RETAINED on disk as prior digests
+    //     (cinatra#796 — the anchor-narrowed readers ignore them; the
+    //     maintenance reaper enforces `current + 2`). The dispatcher gates
+    //     these kinds on `finalized` ONLY.
     if (METADATA_ONLY_STORE_KINDS.has(row.kind)) {
       deps.activateInProcess = async () => ({ activated: false, reason: "metadata-only-kind" });
       deps.activateUpdateWithRollback = async (i) => {
         const storeRoot =
           i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
         const superseded = await discoverSupersededStoreDirs(i.packageName, storeRoot, i.storeDir);
-        await teardownAndGcSupersededDigests(i.packageName, storeRoot, i.storeDir, superseded, []);
+        // Metadata-only payloads have no server module — destroy is a no-op by
+        // construction; skip it explicitly and retain the superseded dirs.
+        await teardownSupersededDigests(i.packageName, storeRoot, i.storeDir, superseded, [], {
+          destroyModules: false,
+        });
         return { activated: false, reason: "metadata-only-kind" };
       };
     }
@@ -946,25 +983,43 @@ export async function runHostExtensionInstallAndActivate(
 // ---------------------------------------------------------------------------
 
 /**
- * Hot-update teardown + GC for a package. Imports + destroys the OLD module(s)
- * whose store dir is NOT `keepStoreDir`, fires the package's in-memory capability
- * teardown, then removes the superseded store dir(s) (and their sibling `.tgz`)
- * so the runtime loader's duplicate-name gate sees a single current dir.
+ * Hot-update teardown for a package. Fires the package's in-memory capability
+ * teardown, optionally imports + destroys the previously-ACTIVE module, and —
+ * for the durable-rollback update path — QUARANTINES the superseded store
+ * dir(s).
  *
- * Order (per the update contract): (1) fire+await capability teardown for
- * the OLD package, (2) destroy the OLD module(s), (3) GC the superseded dir(s).
- * All steps best-effort — a teardown/destroy/unlink failure is logged, never
+ * RETENTION (cinatra#796): superseded dirs are NEVER hard-deleted here
+ * anymore. Outside the quarantine path they are RETAINED on disk as prior
+ * digests (the anchor-narrowed loader ignores them, cinatra#792) so the
+ * epic's `current + 2` rollback window exists; the explicit maintenance
+ * reaper (`extension-store-reaper.ts`) enforces the retention cap.
+ *
+ * Module destroy scope: with retention the store legitimately holds MULTIPLE
+ * prior digests, but only the previously-ACTIVE one has a live module in this
+ * process — so when `opts.priorDigest` is set, destroy targets ONLY that
+ * record (re-importing an older retained prior would EXECUTE stale module
+ * code and double-run its destroy hook). `opts.destroyModules === false`
+ * skips module destroy entirely (the fresh-install path — nothing is live);
+ * priorDigest absent/null with destroy enabled → legacy destroy-all fallback.
+ *
+ * All steps best-effort — a teardown/destroy/rename failure is logged, never
  * thrown (in-memory + filesystem cleanup must not abort a committed install).
  */
-async function teardownAndGcSupersededDigests(
+async function teardownSupersededDigests(
   packageName: string,
   storeRoot: string,
   keepStoreDir: string | undefined,
   precomputedSuperseded?: PackageStoreRecord[],
   destroyPorts: readonly import("@cinatra-ai/sdk-extensions").HostPortName[] = [],
-  // When set, QUARANTINE the superseded dir(s) (recoverable) instead of
-  // hard-GC'ing them — so a failed new activation can durably roll back to OLD.
-  opts: { quarantineInsteadOfGc?: boolean } = {},
+  opts: {
+    /** QUARANTINE the superseded dir(s) (recoverable) — the durable-rollback
+     *  update path. Default: retain them in place (cinatra#796). */
+    quarantine?: boolean;
+    /** The previously-ACTIVE digest — destroy ONLY its module. */
+    priorDigest?: string | null;
+    /** false → skip module destroy entirely (fresh-install path). Default true. */
+    destroyModules?: boolean;
+  } = {},
 ): Promise<void> {
   const superseded =
     precomputedSuperseded ?? (await discoverSupersededStoreDirs(packageName, storeRoot, keepStoreDir));
@@ -984,9 +1039,16 @@ async function teardownAndGcSupersededDigests(
 
   if (superseded.length === 0) return;
 
-  // Destroy the OLD module(s) before removing their dir(s) — gives a hot-updated
-  // extension's `destroy(ctx)` a chance to release resources it acquired.
-  for (const rec of superseded) {
+  // Destroy the previously-live module(s) — gives a hot-updated extension's
+  // `destroy(ctx)` a chance to release resources it acquired. Scoped to the
+  // previously-ACTIVE digest when known (see the doc comment above).
+  const destroyTargets =
+    opts.destroyModules === false
+      ? []
+      : opts.priorDigest
+        ? superseded.filter((rec) => rec.declaredDigest === opts.priorDigest)
+        : superseded;
+  for (const rec of destroyTargets) {
     try {
       const mod = await importStoreModule(rec);
       if (mod) {
@@ -1012,26 +1074,14 @@ async function teardownAndGcSupersededDigests(
     }
   }
 
-  // Either QUARANTINE (recoverable; the new activation may still fail
-  // and need OLD restored) or hard-GC (the new digest already proved
-  // activatable via the pre-verify probe) the superseded store dir(s).
-  if (opts.quarantineInsteadOfGc) {
+  // QUARANTINE (recoverable; the new activation may still fail and need OLD
+  // restored — and a digest-UNBOUND legacy anchor would refuse multi-digest
+  // discovery as ambiguous) for the durable-rollback update path; otherwise
+  // RETAIN the superseded dir(s) in place (cinatra#796 — the reaper owns
+  // deletion under the `current + 2` retention contract).
+  if (opts.quarantine) {
     for (const rec of superseded) {
       await quarantineStoreDir(rec.storeDir);
-    }
-    return;
-  }
-  // GC the superseded store dir(s) + their sibling verified-tarball files.
-  const { rm } = await import("node:fs/promises");
-  for (const rec of superseded) {
-    try {
-      await rm(rec.storeDir, { recursive: true, force: true });
-      await rm(`${rec.storeDir}.tgz`, { force: true }).catch(() => undefined);
-    } catch (err) {
-      console.warn(
-        `[extension-runtime-activate] could not GC superseded store dir for "${packageName}" (non-fatal):`,
-        err instanceof Error ? err.message : err,
-      );
     }
   }
 }
