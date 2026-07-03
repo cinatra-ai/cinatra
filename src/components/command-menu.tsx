@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ChevronRight, Laptop, Moon, Sun } from "lucide-react";
+import { ArrowRight, Laptop, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSearch } from "@/context/search-provider";
 import {
@@ -17,14 +17,16 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-const navGroups = [
+/** Exported for tests: titles must be unique within each group (React keys). */
+export const navGroups = [
   {
     heading: "Navigate",
     items: [
       { title: "Chat", href: "/chat" },
       { title: "Personal", href: "/personal" },
       { title: "Agents", href: "/agents" },
-      { title: "New agent", href: "/chat" },
+      // Same destination + mode flag the app-shell "Create agent" action uses.
+      { title: "New agent", href: "/chat?mode=create-agent" },
       { title: "Skills", href: "/skills" },
       { title: "Connectors", href: "/connectors" },
       { title: "Data — History", href: "/data-safety/change-sets" },
@@ -68,7 +70,7 @@ export function CommandMenu() {
             <CommandGroup key={group.heading} heading={group.heading}>
               {group.items.map((item) => (
                 <CommandItem
-                  key={item.href}
+                  key={item.title}
                   value={item.title}
                   onSelect={() => runCommand(() => router.push(item.href))}
                 >

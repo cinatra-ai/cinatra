@@ -280,3 +280,13 @@ export function summarizeBatchOutcome(batch: InstallBatch): BatchOutcomeSummary 
     updatedAt: batch.updatedAt,
   };
 }
+
+/**
+ * True when any rendered batch is still in an ACTIVE (non-terminal) phase —
+ * i.e. the panel is showing in-flight progress that will go stale without a
+ * refresh. Drives the extensions admin view's live-refresh loop (cinatra
+ * #851 finding 3): the screen polls only while something is actually running.
+ */
+export function hasActiveInstallBatch(batches: readonly InstallBatch[]): boolean {
+  return batches.some((batch) => !summarizeBatchOutcome(batch).terminal);
+}

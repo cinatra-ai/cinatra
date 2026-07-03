@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatVersionConstraint,
+  hasActiveInstallBatch,
   summarizeRequiredDependencies,
   summarizeBatchOutcome,
   toMemberProgressRows,
@@ -214,5 +215,44 @@ describe("summarizeBatchOutcome", () => {
     expect(o.tone).toBe("active");
     expect(o.terminal).toBe(false);
     expect(o.headline).toContain("Installing @scope/root");
+  });
+});
+
+// cinatra #851 finding 3 — the extensions admin view polls only while a
+// rendered batch is actually in-flight.
+describe("hasActiveInstallBatch", () => {
+  it("is false for an empty panel", () => {
+    expect(hasActiveInstallBatch([])).toBe(false);
+  });
+
+  it("is false when every batch is terminal (finalized / compensated / failed)", () => {
+    const batches = (["finalized", "compensated", "failed"] as const).map((phase, i) =>
+      batch({
+        batchId: `b-${i}`,
+        rootPackage: "@scope/root",
+        phase,
+        members: [member({ packageName: "@scope/dep", status: "installed" })],
+      }),
+    );
+    expect(hasActiveInstallBatch(batches)).toBe(false);
+  });
+
+  it("is true while any batch is in an ACTIVE phase (planning / installing)", () => {
+    for (const phase of ["planning", "installing"] as const) {
+      const batches = [
+        batch({
+          rootPackage: "@scope/done",
+          phase: "finalized",
+          members: [member({ packageName: "@scope/dep", status: "installed" })],
+        }),
+        batch({
+          batchId: "b-live",
+          rootPackage: "@scope/root",
+          phase,
+          members: [member({ packageName: "@scope/dep" })],
+        }),
+      ];
+      expect(hasActiveInstallBatch(batches)).toBe(true);
+    }
   });
 });

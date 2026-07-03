@@ -58,6 +58,8 @@ import {
 } from "@/components/ui/toolbar";
 import { ExtensionsTabSelect } from "@/components/extensions/extensions-tab-select";
 import { InstallBatchPanel } from "@/components/extensions/install-batch-panel";
+import { InstallBatchLiveRefresh } from "@/components/extensions/install-batch-live-refresh";
+import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
@@ -274,6 +276,9 @@ export async function RegistryCatalogScreen({
                 compensation outcomes from the durable ledger (cinatra #209
                 item 2, surfaces 2 & 3). Renders nothing when there are no
                 batches. */}
+            {/* While any batch is non-terminal, poll router.refresh() so the
+                server snapshot below stays live (cinatra #851 finding 3). */}
+            <InstallBatchLiveRefresh active={hasActiveInstallBatch(recentBatches)} />
             <InstallBatchPanel batches={recentBatches} />
             {activeRowsWithVariant.length === 0 ? (
               <ActiveEmptyState />

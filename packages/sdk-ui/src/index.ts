@@ -33,8 +33,6 @@ export type {
 
 // Widget / background-process / hitl primitives.
 export { LoadingSpinner } from "./loading-spinner";
-export { HitlAssistField } from "./hitl-assist-field";
-export type { HitlAssistFieldProps } from "./hitl-assist-field";
 export { InlinePageTitle } from "./inline-page-title";
 export type { InlinePageTitleProps, InlinePageTitleHandle } from "./inline-page-title";
 export { PromptField } from "./prompt-field";
@@ -56,9 +54,7 @@ export { BackgroundProcessModal } from "./background-process-modal";
 export { BackgroundProcessModalActions } from "./background-process-modal-actions";
 export { BackgroundProcessStatusBanner } from "./background-process-status-banner";
 export { ProcessProgressList } from "./process-progress";
-export { useBackgroundProcessModalVisibility } from "./use-background-process-modal-visibility";
 export { useBackgroundProcessModalSession } from "./use-background-process-modal-session";
-export { useBackgroundProcessEventStream } from "./use-background-process-event-stream";
 export type { ProcessProgressStep } from "./process-progress";
 export type {
   BackgroundProcessJobState,

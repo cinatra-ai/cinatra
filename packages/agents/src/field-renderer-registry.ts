@@ -89,9 +89,10 @@ export type FieldRendererProps = {
    * (no internal button) can safely ignore this prop.
    */
   hideSubmit?: boolean;
+  // Parent-injected callback for hitl-assist suggestions, applied by
+  // renderers when mode === "edit" (the parent's sticky-bottom PromptField
+  // sources the suggestions — see `aiSuggestions` below).
   onApply?: (suggestions: Record<string, unknown>) => void;
-  // Parent-injected callback for hitl-assist suggestions.
-  // When defined and mode === "edit", renderers should mount <HitlAssistField>.
   /**
    * Stable AI-suggestion payload from the parent's
    * sticky-bottom PromptField. Renderers use `useEffect([aiSuggestions])` to
