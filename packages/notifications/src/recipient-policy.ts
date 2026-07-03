@@ -202,6 +202,11 @@ const SYSTEM_JOBS = new Set<string>([
   // for link rows whose last mirror failed or never synced (cinatra#318).
   // System-initiated.
   "pm-schedule-reconcile",
+  // Explicit content-addressed extension-store GC reaper (cinatra#796).
+  // Daily self-rescheduling maintenance sweep (boot-seeded, canonical-id
+  // re-delay) enforcing `current + 2` retention over the V2 runtime store.
+  // System-initiated.
+  "extension-store-gc-reap",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

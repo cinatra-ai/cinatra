@@ -119,6 +119,13 @@ export const BACKGROUND_JOB_NAMES = {
   // arm at each attempt (e.g. `assistant.mention` → readAssistantProfile) so
   // the secret never reaches Redis and url/secret can't drift.
   WEBHOOK_OUTBOUND_DELIVERY: "webhook-outbound-delivery",
+  // Explicit content-addressed extension-store GC reaper (cinatra#796).
+  // Daily self-rescheduling maintenance sweep enforcing the `current + 2`
+  // per-{kind, slug} retention over the V2 runtime store via the lease-based
+  // selector — NEVER boot-swept (boot only seeds this delayed loop job; boot
+  // itself keeps the cheap integrity re-verify only). Also runnable on demand
+  // through POST /api/admin/extensions/store-gc.
+  EXTENSION_STORE_GC_REAP: "extension-store-gc-reap",
 } as const;
 
 export type BackgroundJobName = (typeof BACKGROUND_JOB_NAMES)[keyof typeof BACKGROUND_JOB_NAMES];
@@ -173,3 +180,12 @@ export const VENDOR_APPLICATION_STATE_RECONCILE_LOOP_JOB_ID =
  * CI gate.
  */
 export const PM_SCHEDULE_RECONCILE_LOOP_JOB_ID = "pm-schedule-reconcile-loop";
+/**
+ * Canonical loop-job id for the extension-store GC reaper sweep (cinatra#796).
+ * Same contract as the other loop ids above: the boot seed creates the job
+ * under this id and the handler re-delays THIS job via moveToDelayed each
+ * cycle; any other id is a legacy anonymous duplicate that runs once WITHOUT
+ * rescheduling. Drift here re-introduces the per-restart queue storm guarded
+ * by the perpetual-system-loops CI gate.
+ */
+export const EXTENSION_STORE_GC_REAP_LOOP_JOB_ID = "extension-store-gc-reap-loop";

@@ -197,6 +197,43 @@ export function systemLoopPhases(): BootPhase[] {
       },
     },
     {
+      name: "seed-extension-store-gc-reap",
+      policy: "retryable",
+      run: async () => {
+        // Seed the extension-store GC reaper loop (cinatra#796). The GC itself
+        // NEVER runs at boot — boot only creates this delayed job; the worker
+        // handler enforces the `current + 2` per-{kind, slug} retention and
+        // self-reschedules at 24h cadence via moveToDelayed.
+        //
+        // The reaper IMPLEMENTATION is registered here (boot-only graph)
+        // rather than imported by the handler registry: the registry sits in
+        // the locked dev-perf routes' reachable graph (route-graph ratchet),
+        // and maintenance-only code must not ride in every enqueuer's
+        // request-path graph. Register BEFORE seeding so the loop can never
+        // fire against an empty slot in this process.
+        const { registerExtensionStoreReaper } = await import("@/lib/background-jobs-registry");
+        const { reapExtensionStore } = await import("@/lib/extension-store-reaper");
+        registerExtensionStoreReaper(() => reapExtensionStore());
+        const {
+          enqueueBackgroundJob,
+          BACKGROUND_JOB_NAMES,
+          EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+        } = await import("@/lib/background-jobs");
+        await enqueueBackgroundJob(
+          BACKGROUND_JOB_NAMES.EXTENSION_STORE_GC_REAP,
+          {},
+          {
+            jobId: EXTENSION_STORE_GC_REAP_LOOP_JOB_ID,
+            delay: 24 * 60 * 60 * 1000, // 24h
+            overwriteIfStale: true,
+            skipWorker: true,
+            inheritActorContext: false,
+          },
+        );
+        console.log("[extension-store-gc-reap] daily store GC reap scheduled (24h delay)");
+      },
+    },
+    {
       name: "eager-background-worker",
       policy: "degraded",
       run: async () => {

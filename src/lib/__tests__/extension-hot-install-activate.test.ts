@@ -375,6 +375,10 @@ function trustAnchorFor(name: string, mat: MaterializedPackage) {
           approvedPorts: ["mcp", "capabilities", "objects", "ui"],
           version: VERSION,
           signature: null,
+          // cinatra#796: digest-BOUND anchor (the journal-recorded digest) —
+          // with retention the store legitimately holds prior digests, and the
+          // loader narrows multi-digest discovery to exactly this record.
+          digest: mat.digest,
         }
       : null;
 }
@@ -528,7 +532,7 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
     expect(teardownIdx, "teardown precedes the new register").toBeLessThan(registerIdx);
   });
 
-  it("UPDATE (new digest): two store dirs for one package would FAIL-CLOSED; after GC only the new digest remains + activates; OLD module destroy + teardown fire before re-activate", async () => {
+  it("UPDATE (new digest, cinatra#796 retention): the raw driver still fails closed on ambiguity; the digest-BOUND anchor narrows past it; the superseded OLD dir is RETAINED on disk and its module is NOT re-imported/destroyed by this (fresh-install) path", async () => {
     const storeRoot = path.join(workDir, "store-update");
     // OLD digest already materialized + activated.
     const oldMat = await materialize(storeRoot, "v1", "old-bytes");
@@ -536,16 +540,15 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
     await activateInstalledPackageInProcess(PKG, null, { currentStoreDir: oldMat.storeDir, storeRoot });
 
     // NEW digest materialized into the SAME package dir (different bytes →
-    // different digest). The store now holds TWO dirs for one packageName.
+    // different digest). The store now holds TWO dirs for one packageName —
+    // with retention (cinatra#796) this is a NORMAL steady state.
     const newMat = await materialize(storeRoot, "v2", "new-bytes");
     expect(newMat.storeDir).not.toBe(oldMat.storeDir);
-    expect(await readStoreDigestDirs(storeRoot), "two digest dirs present before GC").toHaveLength(2);
+    expect(await readStoreDigestDirs(storeRoot), "two digest dirs present").toHaveLength(2);
 
-    // PROOF of fail-close: the shared activation driver refuses BOTH records for
-    // the duplicated name while two dirs coexist (so a hot-update MUST GC the old
-    // dir first). Exercise the pure driver directly over the real discovered
-    // records (integrity verified true here — the duplicate-name gate, not
-    // integrity, is what must refuse).
+    // The RAW activation driver (no anchor narrowing) still refuses BOTH records
+    // for the duplicated name — the fail-closed fence the anchor-NARROWED loader
+    // resolves by selecting exactly the anchor-bound digest (cinatra#792).
     const { runRuntimePackageActivation } = await import("@cinatra-ai/sdk-extensions");
     const { discoverStoreRecordsV2 } = await import("@/lib/extension-store-io");
     const driverFs = {
@@ -573,40 +576,41 @@ describe("hot-activate idempotent re-activation + UPDATE (end-to-end, no registr
     expect(dupRow?.status, "ambiguous duplicate name fails closed").toBe("failed");
     expect(String(dupRow?.error)).toMatch(/ambiguous package/);
 
-    // Now run the hot-update activate, keeping the NEW digest. It must:
-    //  - fire teardown for the OLD package + destroy the OLD module, THEN
-    //  - GC the superseded OLD dir so only the new digest remains, THEN
-    //  - re-activate the NEW digest (the duplicate-name gate is now satisfied).
+    // Now re-activate keeping the NEW digest through the fresh-install /
+    // re-activate path. Under retention (cinatra#796) it must:
+    //  - fire the (idempotent) capability teardown for the package, THEN
+    //  - re-activate the NEW digest via the anchor-NARROWED loader — the
+    //    retained OLD dir stays on disk (the `current + 2` rollback window;
+    //    the maintenance reaper owns deletion), and
+    //  - NOT import/destroy the retained OLD module (real superseding updates
+    //    route through hotUpdateWithDurableRollback, which destroys exactly
+    //    the previously-active digest's module via `priorDigest`).
     globalThis.__hotFixtureEvents = [];
     currentAnchorResolver = trustAnchorFor(PKG, newMat) as never;
     const updated = await activateInstalledPackageInProcess(PKG, null, { currentStoreDir: newMat.storeDir, storeRoot });
 
-    // Only ONE dir survives (the new digest) and the new digest activated.
+    // BOTH dirs survive (retention) and the new digest activated.
     const remaining = await readStoreDigestDirs(storeRoot);
-    expect(remaining, "GC left a single store dir").toHaveLength(1);
+    expect(remaining, "superseded dir RETAINED (no hard-delete)").toHaveLength(2);
     expect(await pathExists(newMat.storeDir), "new digest kept").toBe(true);
-    expect(await pathExists(oldMat.storeDir), "old digest GC'd").toBe(false);
+    expect(await pathExists(oldMat.storeDir), "old digest retained on disk").toBe(true);
     expect(updated.find((r) => r.packageName === PKG)?.status).toBe("registered");
 
-    // Ordering (Finding 2): the NEW digest's register is PROVEN via the pre-verify
-    // PROBE register BEFORE the old digest is torn down, and the OLD module destroy
-    // + capability teardown both fire BEFORE the FINAL (real) NEW register. The
-    // fixture's register() pushes "register:v2" each time it runs, so the event log
-    // now holds TWO "register:v2" entries: the probe (first) and the real (last).
+    // Ordering: the NEW digest's register is PROVEN via the pre-verify PROBE
+    // register BEFORE any teardown, and the capability teardown fires BEFORE the
+    // FINAL (real) NEW register. The retained OLD module is NOT destroyed by
+    // this path (no stale-code re-import).
     const events = globalThis.__hotFixtureEvents!;
-    const destroyIdx = events.indexOf("destroy:v1");
     const teardownIdx = events.indexOf(`teardown:${PKG}`);
     const probeRegisterIdx = events.indexOf("register:v2"); // the FIRST = the probe
     const realRegisterIdx = events.lastIndexOf("register:v2"); // the LAST = the real activation
-    expect(destroyIdx, "old module destroy() fired").toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("destroy:v1"), "retained OLD module NOT destroyed by the fresh-install path").toBe(-1);
     expect(teardownIdx, "capability teardown fired").toBeGreaterThanOrEqual(0);
     expect(probeRegisterIdx, "new digest probe-registered").toBeGreaterThanOrEqual(0);
     expect(realRegisterIdx, "new digest re-registered for real").toBeGreaterThan(probeRegisterIdx);
     // The probe register proves the new digest activates BEFORE any teardown.
-    expect(probeRegisterIdx, "probe register precedes old teardown").toBeLessThan(teardownIdx);
-    expect(probeRegisterIdx, "probe register precedes old destroy").toBeLessThan(destroyIdx);
-    // Destroy + teardown of the old precede the FINAL (real) re-register.
-    expect(destroyIdx, "destroy precedes the real new register").toBeLessThan(realRegisterIdx);
+    expect(probeRegisterIdx, "probe register precedes teardown").toBeLessThan(teardownIdx);
+    // Teardown precedes the FINAL (real) re-register.
     expect(teardownIdx, "teardown precedes the real new register").toBeLessThan(realRegisterIdx);
 
     // Registries hold exactly the NEW digest's single registration (no stale v1).
@@ -688,11 +692,20 @@ export function destroy(ctx) {
     currentAnchorResolver = settingsAnchorFor(oldMat) as never;
     await activateInstalledPackageInProcess(PKG, null, { currentStoreDir: oldMat.storeDir, storeRoot });
 
-    // NEW digest, anchor still approves `settings`. Run the hot-update.
+    // NEW digest, anchor still approves `settings`. Run the hot-update through
+    // the DURABLE-ROLLBACK activator (cinatra#796: the production update path —
+    // the fresh-install path no longer destroys retained prior modules), with
+    // `priorDigest` naming the previously-active digest so destroy targets it.
     const newMat = await materializeSettingsFixture("v2", "new-bytes");
     currentAnchorResolver = settingsAnchorFor(newMat) as never;
     globalThis.__hotFixtureEvents = [];
-    await activateInstalledPackageInProcess(PKG, null, { currentStoreDir: newMat.storeDir, storeRoot });
+    await hotUpdateWithDurableRollback(
+      PKG,
+      null,
+      newMat.storeDir,
+      { restoreDurableAnchor: async () => ({ complete: true }) },
+      { storeRoot, priorDigest: oldMat.digest },
+    );
 
     // The OLD module's destroy(ctx) saw `settings` GRANTED — NOT the old empty-grant
     // bug (which would have recorded settings-NOT-GRANTED).
@@ -1069,7 +1082,7 @@ export function destroy(ctx) { globalThis.__hotFixtureEvents.push("destroy:v2");
     expect((provider?.impl as { marker?: string })?.marker, "OLD capability re-registered (not the partial v2)").toBe("v1");
   });
 
-  it("UPDATE with a GOOD new digest → new activates, OLD dir GC'd (not left in quarantine), activated:true (no rollback)", async () => {
+  it("UPDATE with a GOOD new digest → new activates, OLD dir RETIRED back into the store as a retained prior (cinatra#796 — not deleted, not left in quarantine), activated:true (no rollback)", async () => {
     const storeRoot = path.join(workDir, "store-designb-good");
     const oldMat = await materialize(storeRoot, "v1", "old-bytes");
     currentAnchorResolver = trustAnchorFor(PKG, oldMat) as never;
@@ -1084,20 +1097,25 @@ export function destroy(ctx) { globalThis.__hotFixtureEvents.push("destroy:v2");
     const restoreDurableAnchor = async () => { restoreRan = true; return { complete: true }; };
 
     globalThis.__hotFixtureEvents = [];
-    const res = await hotUpdateWithDurableRollback(PKG, null, newMat.storeDir, { restoreDurableAnchor }, { storeRoot });
+    const res = await hotUpdateWithDurableRollback(PKG, null, newMat.storeDir, { restoreDurableAnchor }, { storeRoot, priorDigest: oldMat.digest });
 
     expect(res.activated).toBe(true);
     expect(res.rolledBack).toBeUndefined();
     expect(restoreRan, "no rollback on a good update").toBe(false);
 
-    // Only ONE dir survives (the new digest); the OLD quarantine was GC'd (NOT left behind).
+    // BOTH dirs survive: the NEW digest is live, the OLD digest was RETIRED
+    // back into the store as a retained prior (the `current + 2` rollback
+    // window — the maintenance reaper owns deletion), NOT hard-deleted.
     const digestDirs = await readStoreDigestDirs(storeRoot);
-    expect(digestDirs, "GC left a single live store dir").toHaveLength(1);
+    expect(digestDirs, "retention keeps the superseded dir").toHaveLength(2);
     expect(await pathExists(newMat.storeDir), "new digest kept").toBe(true);
-    expect(await pathExists(oldMat.storeDir), "old digest GC'd (not in original location)").toBe(false);
+    expect(await pathExists(oldMat.storeDir), "old digest retired back to its store location").toBe(true);
+    expect(await pathExists(`${oldMat.storeDir}.tgz`), "old digest tgz retired back too").toBe(true);
     // No quarantine subtree lingers under the package dir.
     const lingering = await findQuarantineDirs(storeRoot);
-    expect(lingering, "no quarantine dir left after a successful GC").toEqual([]);
+    expect(lingering, "no quarantine dir left after a successful retire").toEqual([]);
+    // The OLD (previously-active) module's destroy(ctx) fired — targeted via priorDigest.
+    expect(globalThis.__hotFixtureEvents).toContain("destroy:v1");
 
     // The NEW digest is the sole live registration (marker v2).
     const provider = resolveCapabilityProviders("hot-cap").find((p) => p.packageName === PKG);

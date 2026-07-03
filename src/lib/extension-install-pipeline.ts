@@ -275,6 +275,9 @@ export type InstallPipelineDeps = {
     orgId: string | null;
     storeDir: string;
     storeRoot?: string;
+    /** Previously-ACTIVE digest — targeted module destroy (cinatra#796; full
+     *  contract on `hotUpdateWithDurableRollback`'s opts). null = destroy-all. */
+    priorDigest?: string | null;
     /**
      * Re-pin the durable anchor to the OLD install (pipeline-owned writers).
      * Returns a `{ complete }` verdict: `complete:false` means ≥1 durable restore
@@ -1155,6 +1158,7 @@ export async function installExtensionFromRegistry(
         orgId: input.orgId,
         storeDir: mat.storeDir,
         ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
+        priorDigest: priorSource?.activeDigest ?? priorOp?.digest ?? null, // cinatra#796
         restoreDurableAnchor,
       });
       activated = res.activated;
@@ -1527,13 +1531,9 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     // The atomic hot-update activator with durable-rollback-first.
     activateUpdateWithRollback: async (i) => {
       const { hotUpdateWithDurableRollback } = await import("@/lib/extension-runtime-activate");
-      return hotUpdateWithDurableRollback(
-        i.packageName,
-        i.orgId,
-        i.storeDir,
+      return hotUpdateWithDurableRollback(i.packageName, i.orgId, i.storeDir,
         { restoreDurableAnchor: i.restoreDurableAnchor },
-        { ...(i.storeRoot ? { storeRoot: i.storeRoot } : {}) },
-      );
+        { ...(i.storeRoot ? { storeRoot: i.storeRoot } : {}), priorDigest: i.priorDigest ?? null });
     },
     // cinatra#158 (d): the structured operational-event sink. No central event bus
     // backs the install path, so the default is the stable structured console
