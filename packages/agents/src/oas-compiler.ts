@@ -52,6 +52,10 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   TRIGGER_WAIT_STATUS_RENDERER_ID,
 } from "./agent-builder-ids";
+// Declarative artifact-output binding grammar (cinatra#923) — the single
+// grammar source; the compiler only VALIDATES here (the run-completion
+// materializer + parity gates parse through the same module).
+import { collectArtifactBindingsFromOasDocument } from "./artifact-binding";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -78,13 +82,30 @@ import {
 
 const componentRefSchema = z.object({ "$component_ref": z.string() });
 
+// An output-port `cinatra` annotation is EITHER an object-type pointer
+// (`object_type`, the legacy objects wiring) OR a declarative artifact
+// binding (`artifact`, cinatra#923 — grammar single-sourced in
+// artifact-binding.ts). At least one of the two must be present. The
+// artifact block's own field shape is validated by the binding collector
+// (`collectArtifactBindingsFromOasDocument`), not here, so its errors carry
+// precise per-field locations.
 const outputCinatraAnnotationSchema = z
   .object({
-    object_type: z.string(),
+    object_type: z.string().optional(),
     display_name: z.string().optional(),
     category: z.enum(["profile", "content", "project", "idea", "report"]).optional(),
     canonical_keys: z.array(z.string()).optional(),
     identity_key: z.string().optional(),
+    artifact: z.record(z.string(), z.unknown()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.object_type === undefined && value.artifact === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "output cinatra annotation must carry object_type (objects wiring) or artifact (declarative artifact binding)",
+      });
+    }
   })
   .optional();
 
@@ -630,6 +651,9 @@ async function readSiblingPackageJson(
   packageName: string | null;
   packageVersion: string | null;
   agentDependencies: Record<string, string>;
+  /** `cinatra.produces` extension ids; null when absent/malformed (quietly —
+   *  the produces reader contract; parity checks skip on null). */
+  produces: string[] | null;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -648,12 +672,29 @@ async function readSiblingPackageJson(
       const parsed = JSON.parse(raw) as {
         name?: unknown;
         version?: unknown;
-        cinatra?: { agentDependencies?: Record<string, string> };
+        cinatra?: { agentDependencies?: Record<string, string>; produces?: unknown };
       };
+      // `cinatra.produces` — same quietly-tolerant posture as
+      // readAgentProducesFromPackageManifest: a malformed/absent block yields
+      // null (binding↔produces parity is then skipped here; the publish/install
+      // readers re-derive it from the authoritative manifest).
+      let produces: string[] | null = null;
+      const producesRaw = parsed.cinatra?.produces;
+      if (Array.isArray(producesRaw)) {
+        const collected = producesRaw
+          .map((r) =>
+            r && typeof r === "object" && typeof (r as { extension?: unknown }).extension === "string"
+              ? ((r as { extension: string }).extension)
+              : null,
+          )
+          .filter((e): e is string => typeof e === "string" && e.length > 0);
+        if (collected.length === producesRaw.length) produces = collected;
+      }
       return {
         packageName: typeof parsed.name === "string" ? parsed.name : null,
         packageVersion: typeof parsed.version === "string" ? parsed.version : null,
         agentDependencies: parsed.cinatra?.agentDependencies ?? {},
+        produces,
       };
     } catch {
       // try next candidate
@@ -1766,6 +1807,27 @@ export async function compileOasAgentJson(opts: {
   // 10. Load sibling package.json
   const sibling = await readSiblingPackageJson(oasSourcePath);
   const cinatraConfig = await readSiblingCinatraJson(oasSourcePath);
+
+  // 10b. Declarative artifact bindings (cinatra#923) — grammar + graph-local
+  // reference validation, plus binding↔`cinatra.produces` parity when the
+  // sibling package.json is readable (install/publish layouts; the builder
+  // path without a package.json skips parity — the install seed re-runs this
+  // compile with the manifest present). Grammar single-sourced in
+  // artifact-binding.ts; registry checks (extension installed, accepts)
+  // deliberately stay at run time.
+  {
+    const bindingResult = collectArtifactBindingsFromOasDocument(parsed, {
+      produces: sibling?.produces ?? null,
+    });
+    if (bindingResult.errors.length > 0) {
+      return {
+        ok: false,
+        error:
+          `artifact output-binding validation failed for ${opts.packageName}:\n` +
+          bindingResult.errors.join("\n"),
+      };
+    }
+  }
 
   // 11. Flow-level metadata
   const flowCinatra = (parsed.metadata as { cinatra: { type: "leaf" | "orchestrator" | "flow" | "node"; hitlScreens?: string[] } })

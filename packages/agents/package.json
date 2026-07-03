@@ -33,7 +33,8 @@
     "./trigger-store": "./src/trigger-store.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
-    "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts"
+    "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",
+    "./artifact-binding": "./src/artifact-binding.ts"
   },
   "scripts": {
     "test": "vitest run",

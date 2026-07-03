@@ -131,6 +131,31 @@ export type CreateSemanticArtifactInput = {
    * artifacts.
    */
   authoringStepId?: string | null;
+  /**
+   * Restrict the deterministic producer assertion to ONE declared extension
+   * (cinatra#923). The legacy behavior splices the run package's ENTIRE
+   * `produces` list onto every created artifact — correct for a
+   * single-output emit, wrong for a multi-produce agent (each output would
+   * get every declared type). When set, the plan asserts ONLY this
+   * extension, still validated through `resolveProducerAssertionPlan`
+   * (run-org validation + manifest `produces` membership + the CG-4
+   * install-active write gate); when the extension does not survive that
+   * validation the write degrades to NO producer assertion — exactly
+   * today's fail-soft. Unset ⇒ existing whole-`produces` behavior.
+   */
+  producerAssertionExtension?: string;
+  /**
+   * Tx-composable follow-on queries appended at the END of Tx 2
+   * (cinatra#923 — the materialization-ledger finalize op). Called AFTER
+   * the artifact/representation ids are allocated but BEFORE Tx 2 opens;
+   * the returned queries commit atomically with the artifact write (a
+   * failure rolls back the whole creation). Results of these queries are
+   * NOT parsed — keep them write-only.
+   */
+  additionalTx2Queries?: (ids: {
+    artifactId: string;
+    representationRevisionId: string;
+  }) => Array<{ text: string; values: unknown[] }>;
 };
 
 export type CreateSemanticArtifactResult = {
@@ -449,12 +474,30 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   // The run id actually persisted into the representation row — the
   // validated one (or NULL when the run was missing / cross-org).
   const persistedRunId = producerPlan.validatedRunId;
+  // Per-binding producer scoping (cinatra#923): when the caller names ONE
+  // produced extension, assert only that one — the whole-`produces` splice
+  // would stamp a multi-produce agent's every declared type onto every
+  // output. The plan's `produces` list already passed run-org validation,
+  // manifest membership, and the CG-4 write gate; an extension that did not
+  // survive (or was never declared) degrades to NO producer assertion —
+  // the existing fail-soft (the LLM matcher path stays the fallback).
+  let planProduces = producerPlan.produces;
+  if (input.producerAssertionExtension !== undefined) {
+    planProduces = planProduces.includes(input.producerAssertionExtension)
+      ? [input.producerAssertionExtension]
+      : [];
+    if (planProduces.length === 0) {
+      console.warn(
+        `[producer-assertions] producerAssertionExtension "${input.producerAssertionExtension}" is not in the run's validated produces set — degrading to no producer assertion`,
+      );
+    }
+  }
   // Build the tx-composable producer assertion ops (assertedBy:"agent"
   // — the highest-confidence deterministic source). One archive +
   // insert-RETURNING pair per produced extension. The default-floor
   // type was already filtered out in resolveProducerAssertionPlan so
   // `buildAssertSemanticTypeQueries` cannot throw here.
-  const producerSplice = producerPlan.produces.map((extension) =>
+  const producerSplice = planProduces.map((extension) =>
     buildAssertSemanticTypeQueries({
       orgId: input.orgId,
       artifactId,
@@ -669,6 +712,14 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
               },
             ]
           : []),
+        // Caller-composed follow-on ops (cinatra#923 — the materialization-
+        // ledger finalize). Appended LAST so every fixed offset above
+        // (PRODUCER_OPS_OFFSET and the producer splice) is untouched; they
+        // commit atomically with the artifact write and their results are
+        // never parsed.
+        ...(input.additionalTx2Queries
+          ? input.additionalTx2Queries({ artifactId, representationRevisionId })
+          : []),
       ],
     });
   } catch (err) {
@@ -725,7 +776,7 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
           tx2Results as ReturnType<typeof runPostgresQueriesSync>,
           PRODUCER_OPS_OFFSET + i * 2,
         );
-        const ext = producerPlan.produces[i];
+        const ext = planProduces[i];
         console.info(
           outcome.inserted
             ? `[producer-assertions] asserted ${ext} (agent) on artifact ${artifactId}`
