@@ -29,6 +29,7 @@ import {
   type PersistedSkillPackage,
 } from "./skills-store";
 import { verdaccioSkillPackageId as buildVerdaccioId } from "./skill-package-source";
+import { moveDirExdevSafe } from "./exdev-safe-move";
 
 // Re-export the pure-fn id builder so callers that already import this
 // module don't need to learn about ./skill-package-source.
@@ -160,7 +161,15 @@ export async function installSkillPackageFromVerdaccio(
     fs.rmSync(installDir, { recursive: true, force: true });
   }
   fs.mkdirSync(path.dirname(installDir), { recursive: true });
-  fs.renameSync(extracted.tempDir, installDir);
+  // Promote the extracted tree into the persistent install dir. `extracted.tempDir`
+  // is under `os.tmpdir()` (container overlay) while `installDir` is under the
+  // `data/skills` mount — a bare `renameSync` throws EXDEV across that mount
+  // boundary and crash-loops the skill install (cinatra#873, same class as
+  // cinatra#846). Route through the EXDEV-safe move: intra-fs rename fast path,
+  // and on EXDEV a copy → fsync → verify → atomic intra-fs swap → drop-source
+  // fallback. `installDir` was just removed above on re-install so the target is
+  // absent — a pure move.
+  await moveDirExdevSafe(extracted.tempDir, installDir);
 
   // packageId omits version; the installed version is captured inside the
   // persisted payload.

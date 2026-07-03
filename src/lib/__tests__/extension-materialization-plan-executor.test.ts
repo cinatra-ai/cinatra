@@ -3,7 +3,7 @@
 // fly and served through an injected fetchTarball (the SAME seam shape the
 // materializer injects), so every byte is test-controlled.
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi, type Mock } from "vitest";
 import { mkdir, mkdtemp, link, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,18 @@ import {
 } from "@/lib/extension-materialization-plan-core";
 import { sriForBytes } from "@/lib/extension-package-store-core";
 import type { FetchTarball } from "@/lib/extension-package-store";
+import { atomicReplaceDir } from "@/lib/fs-safety";
+
+// Spy on the EXDEV-safe move primitive while preserving every other fs-safety
+// export (notably `isAcceptedTarEntryType`, which the executor also imports).
+// The spy passes through to the real `atomicReplaceDir`, so behavior is
+// unchanged — it just records that placement routes through the sanctioned
+// primitive rather than a bare `rename` (cinatra#873). The real EXDEV
+// copy-fallback branch itself is exercised in `fs-safety.test.ts`.
+vi.mock("@/lib/fs-safety", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/fs-safety")>();
+  return { ...actual, atomicReplaceDir: vi.fn(actual.atomicReplaceDir) };
+});
 
 let workDir: string;
 const tempDirs: string[] = [];
@@ -128,6 +140,32 @@ describe("executeMaterializationPlan — verbatim placement", () => {
     expect(JSON.parse(await readFile(path.join(packageDir, "node_modules/lib-b/package.json"), "utf8")).version).toBe("1.0.0");
     expect(JSON.parse(await readFile(path.join(packageDir, "node_modules/lib-a/node_modules/lib-b/package.json"), "utf8")).version).toBe("2.0.0");
     expect(await readFile(path.join(packageDir, "node_modules/lib-a/index.js"), "utf8")).toContain("require('lib-b')");
+  });
+
+  it("promotes each staged node via the EXDEV-safe atomicReplaceDir primitive — not a bare rename (cinatra#873)", async () => {
+    const spy = atomicReplaceDir as unknown as Mock;
+    spy.mockClear();
+    const lib = await makeTarball("lib-x", "1.0.0", { "index.js": "module.exports = 'x';\n" });
+    const { plan, closureHash, fetchTarball } = makePlanAndFetch(
+      { name: "@cinatra-test/ext", version: "1.0.0" },
+      [{ name: "lib-x", placementPath: "node_modules/lib-x" }],
+      [{ name: "lib-x", version: "1.0.0", placementPath: "node_modules/lib-x", bytes: lib }],
+    );
+    const packageDir = await tempDir("pkg-route-");
+    await executeMaterializationPlan(
+      { plan, expectedClosureHash: closureHash, packageDir, packageName: "@cinatra-test/ext" },
+      { fetchTarball },
+    );
+    // The tmp-staged node dir (an `os.tmpdir()` extract, cross-mount vs the store)
+    // is promoted through the shared EXDEV-safe move, never `fs.rename` — so a
+    // cross-device store never crash-loops (same class as cinatra#846).
+    const target = path.join(packageDir, "node_modules/lib-x");
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [srcArg, targetArg] = spy.mock.calls[0] as [string, string];
+    expect(targetArg).toBe(target);
+    expect(srcArg).not.toBe(target); // promoted FROM a distinct tmp staging dir
+    // The pass-through spy still performed the real move: the tree landed.
+    expect(JSON.parse(await readFile(path.join(target, "package.json"), "utf8")).version).toBe("1.0.0");
   });
 
   it("REFUSES caller-threading drift: an expectedClosureHash that is not the plan's re-derived hash", async () => {
