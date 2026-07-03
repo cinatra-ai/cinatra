@@ -55,7 +55,10 @@ import {
 // Declarative artifact-output binding grammar (cinatra#923) — the single
 // grammar source; the compiler only VALIDATES here (the run-completion
 // materializer + parity gates parse through the same module).
-import { collectArtifactBindingsFromOasDocument } from "./artifact-binding";
+import {
+  collectArtifactBindingsFromOasDocument,
+  collectArtifactMaterializeNodesFromOasDocument,
+} from "./artifact-binding";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1828,6 +1831,27 @@ export async function compileOasAgentJson(opts: {
         error:
           `artifact output-binding validation failed for ${opts.packageName}:\n` +
           bindingResult.errors.join("\n"),
+      };
+    }
+  }
+
+  // 10c. Deterministic `artifact_materialize` passthrough nodes (cinatra#925)
+  // — same statics posture as 10b: literal tool/extension/declaredMime/
+  // node_id grammar plus extension↔`cinatra.produces` parity when the
+  // sibling package.json is readable; registry checks (extension installed,
+  // accepts) and the produces re-check stay at run time (fail-closed in the
+  // route's materializer core).
+  {
+    const materializeResult = collectArtifactMaterializeNodesFromOasDocument(
+      parsed,
+      { produces: sibling?.produces ?? null },
+    );
+    if (materializeResult.errors.length > 0) {
+      return {
+        ok: false,
+        error:
+          `artifact_materialize node validation failed for ${opts.packageName}:\n` +
+          materializeResult.errors.join("\n"),
       };
     }
   }

@@ -17,7 +17,10 @@
  *      next claim (same ledger id);
  *   5. the advisory WARN-phase lookup finds ONLY finalized
  *      `end_node_binding` rows (an `llm_emit` provenance row of the same
- *      run/extension/hash does not suppress).
+ *      run/extension/hash does not suppress);
+ *   6. (cinatra#925) the `materialize_tool` path's node-id identity dedupes
+ *      a retry to the finalized refs — the passthrough tool never
+ *      double-writes.
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -185,6 +188,76 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
       artifactId: firstArtifactId,
       representationRevisionId: firstRepresentationId,
     });
+  });
+
+  it("the materialize_tool path (cinatra#925) prevents double-writes on the node-id identity", async () => {
+    const { claimMaterialization, buildFinalizeMaterializationQuery } = await import(
+      "@/lib/artifacts/materialization-ledger"
+    );
+    const { createSemanticArtifact } = await import("@/lib/artifacts/artifact-creation");
+
+    const toolContent = "cinatra#925 mid-flow payload";
+    const toolHash = sha(toolContent);
+    // Ledger identity for the passthrough tool: output_id = the calling
+    // ApiNode's id (path 'materialize_tool') — exactly what
+    // materializeToolArtifact claims.
+    const claim = await claimMaterialization({
+      orgId: ORG,
+      runId: RUN,
+      outputId: "persist_draft",
+      nodeId: "persist_draft",
+      path: "materialize_tool",
+      extension: EXT,
+      contentHash: toolHash,
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") return;
+
+    const created = await createSemanticArtifact({
+      orgId: ORG,
+      createdBy: null,
+      ownerLevel: "organization",
+      ownerId: ORG,
+      title: "925 mid-flow one",
+      declaredMime: "text/plain",
+      originKind: "agent_generated",
+      skipFallbackClassification: true,
+      createdByRunId: RUN,
+      producerAssertionExtension: EXT,
+      stream: bytes(toolContent),
+      additionalTx2Queries: (ids) => [
+        buildFinalizeMaterializationQuery({
+          ledgerId: claim.ledgerId,
+          orgId: ORG,
+          artifactId: ids.artifactId,
+          representationRevisionId: ids.representationRevisionId,
+        }),
+      ],
+    });
+
+    // A run retry re-hitting the SAME node with the SAME bytes dedupes to
+    // the finalized refs — no second artifact.
+    const retry = await claimMaterialization({
+      orgId: ORG,
+      runId: RUN,
+      outputId: "persist_draft",
+      nodeId: "persist_draft",
+      path: "materialize_tool",
+      extension: EXT,
+      contentHash: toolHash,
+    });
+    expect(retry).toEqual({
+      kind: "finalized",
+      artifactId: created.artifactId,
+      representationRevisionId: created.representationRevisionId,
+    });
+
+    // The tool path's provenance column is recorded.
+    const row = await client.query(
+      `SELECT path, phase FROM "${TEST_SCHEMA}"."artifact_materializations" WHERE id = $1`,
+      [claim.ledgerId],
+    );
+    expect(row.rows[0]).toEqual({ path: "materialize_tool", phase: "finalized" });
   });
 
   it("an unfinalized (crashed) claim is re-used by the next drive", async () => {

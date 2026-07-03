@@ -51,6 +51,11 @@ import {
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
 // the binding — never prompt-invented.
+//
+// The deterministic `artifact_materialize` passthrough tool (cinatra#925,
+// `materializeToolArtifact` below) shares the same write core
+// (`writeClaimedArtifact`) and the same ledger with `path:'materialize_tool'`
+// and the calling node's id as the output identity.
 // ---------------------------------------------------------------------------
 
 export type RunArtifactMaterializationOutcome =
@@ -87,13 +92,17 @@ function pool(): Pool {
 // never cached.
 const pinnedBindingsCache = new Map<
   string,
-  { bindings: CollectedArtifactBinding[]; errors: string[] }
+  { bindings: CollectedArtifactBinding[]; errors: string[]; produces: string[] }
 >();
 
 async function loadRunPackageBindings(input: {
   packageName: string;
   packageVersion: string | null;
-}): Promise<{ bindings: CollectedArtifactBinding[]; errors: string[] }> {
+}): Promise<{
+  bindings: CollectedArtifactBinding[];
+  errors: string[];
+  produces: string[];
+}> {
   const cacheKey =
     input.packageVersion !== null
       ? `${input.packageName}@${input.packageVersion}`
@@ -112,25 +121,28 @@ async function loadRunPackageBindings(input: {
     packageName: input.packageName,
     packageVersion: input.packageVersion ?? undefined,
   });
-  const payload = pkg.payload;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    const empty = { bindings: [], errors: [] as string[] };
-    if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
-    return empty;
-  }
   // Defensive re-validation of binding↔produces parity at run time (the
   // compile/install gate already enforced it for fresh publishes). The
   // reader's quietly-[] result for an absent/malformed manifest block is
   // passed through AS the (empty) parity set — FAIL-CLOSED: a binding whose
   // package declares no produces yields a visible per-output failure, never
-  // a skipped check (codex round 0).
+  // a skipped check (codex round 0). The produces set is also the runtime
+  // authority for the `artifact_materialize` tool path (cinatra#925), so it
+  // is computed (and cached) even when the OAS payload is absent/malformed.
   const produces = producesReader
     .readAgentProducesFromPackageManifest(pkg.manifest)
     .map((r) => r.extension);
-  const result = collectArtifactBindingsFromOasDocument(
+  const payload = pkg.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    const empty = { bindings: [], errors: [] as string[], produces };
+    if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
+    return empty;
+  }
+  const collected = collectArtifactBindingsFromOasDocument(
     payload as Record<string, unknown>,
     { produces },
   );
+  const result = { ...collected, produces };
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
 }
@@ -157,6 +169,144 @@ async function resolveTemplatePackageName(
 
 async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
+}
+
+type ArtifactDefs = ReturnType<typeof objectTypeRegistry.listArtifacts>;
+
+/**
+ * Shared write core for both materialization paths (cinatra#923 EndNode
+ * bindings, cinatra#925 `artifact_materialize` tool): registry/accepts/
+ * write-gate validation on an ALREADY-RESOLVED {extension, title, mime,
+ * content}, then sha256 → ledger claim → write-through with the tx-composed
+ * finalize → concurrent-loser recovery. Throws only on infra failure (both
+ * callers wrap); every validation failure is a returned error string.
+ */
+async function writeClaimedArtifact(input: {
+  runId: string;
+  orgId: string;
+  createdBy: string | null;
+  /** Ledger identity: the EndNode output name (bindings) or node id (tool). */
+  outputId: string;
+  nodeId: string;
+  path: "end_node_binding" | "materialize_tool";
+  extension: string;
+  title: string;
+  mime: string;
+  content: string;
+  artifactDefs: ArtifactDefs;
+  /** Per-path wording for the accepts-mismatch error message. */
+  mimeDescription: string;
+}): Promise<
+  | {
+      ok: true;
+      artifactId: string;
+      representationRevisionId: string;
+      deduped: boolean;
+    }
+  | { ok: false; error: string }
+> {
+  const def = input.artifactDefs.find(
+    (d) => d.type === `${input.extension}${ARTIFACT_TYPE_SUFFIX}`,
+  );
+  const manifest = def?.isArtifact;
+  if (!manifest) {
+    return {
+      ok: false,
+      error: `artifact extension "${input.extension}" is not installed/registered on this host`,
+    };
+  }
+  const acceptedMimes = manifest.accepts?.file?.mimeTypes ?? [];
+  if (!acceptedMimes.includes(input.mime)) {
+    return {
+      ok: false,
+      error: `extension "${input.extension}" accepts [${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`,
+    };
+  }
+  if (!(await isArtifactExtensionWriteAllowed(input.extension, input.orgId))) {
+    return {
+      ok: false,
+      error: `artifact extension "${input.extension}" is not write-allowed for this org (archived/ungoverned-denied install state)`,
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // Ledger claim → write-through (finalize atomic with the write).
+  // ------------------------------------------------------------------
+  const contentHash = createHash("sha256").update(input.content, "utf8").digest("hex");
+  const claim = await claimMaterialization({
+    orgId: input.orgId,
+    runId: input.runId,
+    outputId: input.outputId,
+    nodeId: input.nodeId,
+    path: input.path,
+    extension: input.extension,
+    contentHash,
+  });
+  if (claim.kind === "finalized") {
+    return {
+      ok: true,
+      artifactId: claim.artifactId,
+      representationRevisionId: claim.representationRevisionId,
+      deduped: true,
+    };
+  }
+
+  let created: { artifactId: string; representationRevisionId: string };
+  try {
+    created = await createSemanticArtifact({
+      orgId: input.orgId,
+      createdBy: input.createdBy,
+      ownerLevel: "organization",
+      ownerId: input.orgId,
+      title: input.title,
+      declaredMime: input.mime,
+      originKind: "agent_generated",
+      stream: asUtf8Stream(input.content),
+      // Server-side provenance: the actually-executing run id. The
+      // existing cross-org validation inside the creation path yields
+      // validatedRunId:null on any mismatch — never a caller-smuggled id.
+      createdByRunId: input.runId,
+      // The producer assertion is the deterministic classification;
+      // scoped to THIS extension (multi-produce agents must not stamp
+      // every declared type onto every output).
+      producerAssertionExtension: input.extension,
+      skipFallbackClassification: true,
+      additionalTx2Queries: (ids) => [
+        buildFinalizeMaterializationQuery({
+          ledgerId: claim.ledgerId,
+          orgId: input.orgId,
+          artifactId: ids.artifactId,
+          representationRevisionId: ids.representationRevisionId,
+        }),
+      ],
+    });
+  } catch (err) {
+    // Concurrent-double-drive loser (codex round 0): a parallel drive
+    // finalized this claim first; OUR Tx2 (artifact included) rolled
+    // back atomically. Recover the winner's refs — the output IS
+    // materialized, exactly once.
+    if (isMaterializationFinalizeConflict(err)) {
+      const winner = await readFinalizedMaterialization({
+        orgId: input.orgId,
+        ledgerId: claim.ledgerId,
+      });
+      if (winner) {
+        return {
+          ok: true,
+          artifactId: winner.artifactId,
+          representationRevisionId: winner.representationRevisionId,
+          deduped: true,
+        };
+      }
+    }
+    throw err;
+  }
+  return {
+    ok: true,
+    artifactId: created.artifactId,
+    representationRevisionId: created.representationRevisionId,
+    deduped: false,
+  };
 }
 
 /**
@@ -296,121 +446,36 @@ export async function materializeRunArtifacts(input: {
       }
 
       // ------------------------------------------------------------------
-      // Validate against the artifact extension (installed + accepts +
-      // install-active write gate). Fail-closed per output.
+      // Registry/accepts/write-gate validation + ledger claim → write-
+      // through (finalize atomic with the write) — the shared core
+      // (writeClaimedArtifact, also driving the #925 tool path).
       // ------------------------------------------------------------------
-      const def = artifactDefs.find(
-        (d) => d.type === `${binding.extension}${ARTIFACT_TYPE_SUFFIX}`,
-      );
-      const manifest = def?.isArtifact;
-      if (!manifest) {
-        fail(
-          `artifact extension "${binding.extension}" is not installed/registered on this host`,
-        );
-        continue;
-      }
-      const acceptedMimes = manifest.accepts?.file?.mimeTypes ?? [];
-      if (!acceptedMimes.includes(mime)) {
-        fail(
-          `extension "${binding.extension}" accepts [${acceptedMimes.join(", ")}]; the binding resolved MIME "${mime}"`,
-        );
-        continue;
-      }
-      if (!(await isArtifactExtensionWriteAllowed(binding.extension, input.orgId))) {
-        fail(
-          `artifact extension "${binding.extension}" is not write-allowed for this org (archived/ungoverned-denied install state)`,
-        );
-        continue;
-      }
-
-      // ------------------------------------------------------------------
-      // Ledger claim → write-through (finalize atomic with the write).
-      // ------------------------------------------------------------------
-      const contentHash = createHash("sha256").update(content, "utf8").digest("hex");
-      const claim = await claimMaterialization({
-        orgId: input.orgId,
+      const result = await writeClaimedArtifact({
         runId: input.runId,
+        orgId: input.orgId,
+        createdBy: input.createdBy,
         outputId,
         nodeId,
         path: "end_node_binding",
         extension: binding.extension,
-        contentHash,
+        title,
+        mime,
+        content,
+        artifactDefs,
+        mimeDescription: "the binding resolved MIME",
       });
-      if (claim.kind === "finalized") {
-        outcomes.push({
-          ok: true,
-          outputId,
-          nodeId,
-          extension: binding.extension,
-          artifactId: claim.artifactId,
-          representationRevisionId: claim.representationRevisionId,
-          deduped: true,
-        });
+      if (!result.ok) {
+        fail(result.error);
         continue;
-      }
-
-      let created: { artifactId: string; representationRevisionId: string };
-      try {
-        created = await createSemanticArtifact({
-          orgId: input.orgId,
-          createdBy: input.createdBy,
-          ownerLevel: "organization",
-          ownerId: input.orgId,
-          title,
-          declaredMime: mime,
-          originKind: "agent_generated",
-          stream: asUtf8Stream(content),
-          // Server-side provenance: the actually-executing run id. The
-          // existing cross-org validation inside the creation path yields
-          // validatedRunId:null on any mismatch — never a caller-smuggled id.
-          createdByRunId: input.runId,
-          // The producer assertion is the deterministic classification;
-          // scoped to THIS binding's extension (multi-produce agents must
-          // not stamp every declared type onto every output).
-          producerAssertionExtension: binding.extension,
-          skipFallbackClassification: true,
-          additionalTx2Queries: (ids) => [
-            buildFinalizeMaterializationQuery({
-              ledgerId: claim.ledgerId,
-              orgId: input.orgId,
-              artifactId: ids.artifactId,
-              representationRevisionId: ids.representationRevisionId,
-            }),
-          ],
-        });
-      } catch (err) {
-        // Concurrent-double-drive loser (codex round 0): a parallel drive
-        // finalized this claim first; OUR Tx2 (artifact included) rolled
-        // back atomically. Recover the winner's refs — the output IS
-        // materialized, exactly once.
-        if (isMaterializationFinalizeConflict(err)) {
-          const winner = await readFinalizedMaterialization({
-            orgId: input.orgId,
-            ledgerId: claim.ledgerId,
-          });
-          if (winner) {
-            outcomes.push({
-              ok: true,
-              outputId,
-              nodeId,
-              extension: binding.extension,
-              artifactId: winner.artifactId,
-              representationRevisionId: winner.representationRevisionId,
-              deduped: true,
-            });
-            continue;
-          }
-        }
-        throw err;
       }
       outcomes.push({
         ok: true,
         outputId,
         nodeId,
         extension: binding.extension,
-        artifactId: created.artifactId,
-        representationRevisionId: created.representationRevisionId,
-        deduped: false,
+        artifactId: result.artifactId,
+        representationRevisionId: result.representationRevisionId,
+        deduped: result.deduped,
       });
     } catch (err) {
       fail(
@@ -419,4 +484,112 @@ export async function materializeRunArtifacts(input: {
     }
   }
   return outcomes;
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic `artifact_materialize` passthrough tool (cinatra#925).
+// ---------------------------------------------------------------------------
+
+export type ToolArtifactMaterialization =
+  | {
+      ok: true;
+      artifactId: string;
+      representationRevisionId: string;
+      /** true when the idempotency ledger already held finalized refs. */
+      deduped: boolean;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Materialize ONE artifact for a mid-flow `artifact_materialize` passthrough
+ * call (`src/app/api/agents/passthrough/route.ts`). Same write core and same
+ * idempotency ledger as the run-completion path — `path:'materialize_tool'`,
+ * ledger `output_id` = the calling node id, so a run retry re-hitting the
+ * node with the same bytes returns the finalized refs instead of writing a
+ * second artifact.
+ *
+ * FAIL-CLOSED produces parity at run time (defense-in-depth over the
+ * compile-time collector): the extension must be declared in the run's
+ * template package `cinatra.produces`; an empty/absent produces block
+ * rejects. Never throws — every failure is a returned error the route
+ * surfaces as an HTTP error to the calling node.
+ */
+export async function materializeToolArtifact(input: {
+  runId: string;
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  /** The run's runBy principal — persisted as the artifact's createdBy. */
+  createdBy: string | null;
+  /** The calling ApiNode's id — the ledger output identity. */
+  nodeId: string;
+  extension: string;
+  title: string;
+  mime: string;
+  content: string;
+}): Promise<ToolArtifactMaterialization> {
+  try {
+    const packageName = await resolveTemplatePackageName(input.templateId);
+    if (packageName === null) {
+      return {
+        ok: false,
+        error: `run template ${input.templateId} has no package name — cannot resolve cinatra.produces`,
+      };
+    }
+    const loaded = await loadRunPackageBindings({
+      packageName,
+      packageVersion: input.packageVersion,
+    });
+    if (!loaded.produces.includes(input.extension)) {
+      return {
+        ok: false,
+        error:
+          `extension "${input.extension}" is not declared in ${packageName}'s ` +
+          `cinatra.produces ([${loaded.produces.join(", ")}]) — declared ` +
+          "production and materialization must agree",
+      };
+    }
+
+    if (!TEXT_AUTHORING_COMPATIBLE_MIMES.has(input.mime)) {
+      return {
+        ok: false,
+        error: `declaredMime "${input.mime}" is not text-authorable — artifact_materialize is v1-scoped to ${[...TEXT_AUTHORING_COMPATIBLE_MIMES].join(", ")}`,
+      };
+    }
+    const title = input.title.trim();
+    if (title.length === 0) {
+      return { ok: false, error: "title must be a non-empty string" };
+    }
+    const contentBytes = new TextEncoder().encode(input.content).byteLength;
+    if (contentBytes > MAX_AUTHORED_CONTENT_BYTES) {
+      return {
+        ok: false,
+        error: `content (${contentBytes} bytes) exceeds the ${MAX_AUTHORED_CONTENT_BYTES}-byte cap`,
+      };
+    }
+
+    // Warm the registry for the accepts checks in the shared core.
+    registerAllObjectTypes();
+    const artifactDefs = objectTypeRegistry.listArtifacts();
+
+    return await writeClaimedArtifact({
+      runId: input.runId,
+      orgId: input.orgId,
+      createdBy: input.createdBy,
+      outputId: input.nodeId,
+      nodeId: input.nodeId,
+      path: "materialize_tool",
+      extension: input.extension,
+      title,
+      mime: input.mime,
+      content: input.content,
+      artifactDefs,
+      mimeDescription: "the call declared MIME",
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      error: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
