@@ -157,3 +157,180 @@ export function hydrateLegacyParts(input: {
   }
   return parts;
 }
+
+// ---------------------------------------------------------------------------
+// Streaming-embed trimming + live progress/status helpers (cinatra#918)
+// ---------------------------------------------------------------------------
+// Moved unchanged from chat-page.tsx. These are needed on BOTH sides of the
+// lazy message-view boundary (the stream event appliers compute liveStatus
+// with them; the view renders status lines with them), so they live in this
+// eager, dependency-light module — NOT in markdown-render.ts, which pulls
+// marked/katex and must stay behind the lazy boundary. Typed structurally so
+// this module keeps zero imports.
+
+/** Minimal structural view of a tool call for label/status formatting. */
+export type ToolCallLike = {
+  name: string;
+  serverLabel?: string;
+};
+
+/** Minimal structural view of a UI message for live-status derivation. */
+export type StreamStatusMessage = {
+  content: string;
+  liveStatus?: string;
+  parts?: AssistantMessagePart[];
+  thoughtGroups?: Array<{
+    id: string;
+    thinkingSeconds?: number;
+    toolCalls: Array<ToolCallLike & { status: "running" | "completed" | "failed" }>;
+  }>;
+};
+
+/**
+ * While an assistant message is streaming, the tail of the content may contain
+ * an incomplete embed that hasn't been closed yet (e.g. `[chart:{"type":"bar"...`
+ * with no closing `}]`). renderMarkdown would pass this raw text through to
+ * the markdown renderer, causing a flash of JSON code.
+ *
+ * This trims any trailing incomplete embed prefix so the markdown renderer
+ * never sees partial special tokens. Only used on the live streaming message.
+ */
+export function trimIncompleteEmbeds(text: string): string {
+  // Each embed starts with one of these prefixes.
+  const PREFIXES = ["[chart:", "[widget:", "[confirm-", "```mermaid"];
+  let result = text;
+  for (const prefix of PREFIXES) {
+    const idx = result.lastIndexOf(prefix);
+    if (idx === -1) continue;
+    // Check whether the embed has been fully closed after this prefix.
+    const tail = result.slice(idx);
+    const isClosed =
+      prefix === "```mermaid"
+        ? tail.includes("```", prefix.length)     // fenced block needs closing ```
+        : prefix === "[chart:"
+          ? (() => {
+              // Use the same brace-depth logic as detectCharts.
+              const jsonStart = prefix.length;
+              if (tail[jsonStart] !== "{") return true; // not a JSON chart, let it pass
+              let depth = 0;
+              for (let i = jsonStart; i < tail.length; i++) {
+                if (tail[i] === "{") depth++;
+                else if (tail[i] === "}") {
+                  depth--;
+                  if (depth === 0) return tail[i + 1] === "]";
+                }
+              }
+              return false;
+            })()
+          : tail.includes("]");                    // widget/confirm just need closing ]
+    if (!isClosed) {
+      result = result.slice(0, idx);
+    }
+  }
+  return result;
+}
+
+export function formatToolName(name: string) {
+  const parts = name.split(".");
+  if (parts.length < 2) {
+    return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  // Show "resource · action" (e.g., "Campaigns · List", "Gmail · Aliases list").
+  const action = parts.pop()!;
+  const resource = parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
+  const label = `${resource} · ${action}`.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  return label;
+}
+
+export function formatToolCallLabel(tc: ToolCallLike) {
+  if (tc.serverLabel && tc.serverLabel !== "cinatra") {
+    const server = tc.serverLabel
+      .replace(/^external-/, "")
+      .replace(/-connector$/, "")
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    const action = tc.name
+      .replace(/-/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return `${server} · ${action}`;
+  }
+
+  return formatToolName(tc.name);
+}
+
+export function formatToolProgressStatus(tc: ToolCallLike) {
+  const name = tc.name.toLowerCase();
+  const label = formatToolCallLabel(tc);
+
+  if (name === "agent_source_list") return "Loading agent sources";
+  if (name === "agent_source_read") return "Reading agent source";
+  if (name === "agent_source_write") return "Writing agent source";
+  if (name === "agent_source_write_files") return "Writing agent package files";
+  if (name === "agent_source_validate") return "Validating agent source";
+  if (name === "agent_source_compile") return "Compiling agent source";
+  if (name === "agent_source_publish") return "Publishing agent source";
+  if (name.includes("web_search")) return "Searching the web";
+  if (name.includes("extensions_search")) return "Searching extensions";
+  if (name.includes("agent_run_messages_list")) return "Checking agent messages";
+  if (name.includes("agent_run_get")) return "Checking agent run";
+  if (name.includes("agent_run")) return "Starting agent run";
+  if (name.includes("search")) return `Searching ${label}`;
+  if (name.includes("list") || name.includes("get") || name.includes("read") || name.includes("fetch")) {
+    return `Reading ${label}`;
+  }
+
+  return `Using ${label}`;
+}
+
+export function hasVisibleStreamingText(content: string) {
+  return trimIncompleteEmbeds(content).replace(/\s+/g, "").length > 0;
+}
+
+export function getLatestAssistantPart(message: StreamStatusMessage) {
+  const parts = message.parts;
+  if (!parts || parts.length === 0) return null;
+
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i];
+    if (part.kind === "text" && !hasVisibleStreamingText(part.content)) {
+      continue;
+    }
+    return part;
+  }
+
+  return null;
+}
+
+export function getLiveProgressStatus(message: StreamStatusMessage) {
+  if (message.liveStatus) return message.liveStatus;
+
+  const latestPart = getLatestAssistantPart(message);
+  if (latestPart?.kind === "tool_call" && latestPart.status === "running") {
+    return formatToolProgressStatus(latestPart);
+  }
+
+  const group = message.thoughtGroups?.[message.thoughtGroups.length - 1];
+  const runningTool = group?.toolCalls.findLast((tc) => tc.status === "running");
+
+  if (runningTool) {
+    return formatToolProgressStatus(runningTool);
+  }
+
+  if (group?.toolCalls.some((tc) => tc.status === "completed")) {
+    return "Reviewing tool results";
+  }
+
+  if (hasVisibleStreamingText(message.content)) {
+    return "Working on the next step";
+  }
+
+  return "Thinking";
+}
+
+export function shouldShowLiveProgressStatus(message: StreamStatusMessage) {
+  if (message.liveStatus) return true;
+
+  const latestPart = getLatestAssistantPart(message);
+  if (latestPart) return latestPart.kind === "tool_call";
+  return !hasVisibleStreamingText(message.content);
+}

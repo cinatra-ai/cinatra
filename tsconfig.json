@@ -357,6 +357,7 @@
       "@cinatra-ai/skills/mcp-handlers": ["./packages/skills/src/mcp/handlers.ts"],
       "@cinatra-ai/skills/mcp-module": ["./packages/skills/src/mcp/module.ts"],
       "@cinatra-ai/chat": ["./packages/chat/src/index.ts"],
+      "@cinatra-ai/chat/chat-page": ["./packages/chat/src/chat-page.tsx"],
       "@cinatra-ai/chat/actions": ["./packages/chat/src/actions.ts"],
       "@cinatra-ai/chat/module": ["./packages/chat/src/integration/module.ts"],
       "@cinatra-ai/chat/mcp-handlers": ["./packages/chat/src/mcp/handlers.ts"],

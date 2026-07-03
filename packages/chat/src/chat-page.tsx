@@ -1,19 +1,26 @@
 "use client";
 
+// ---------------------------------------------------------------------------
+// ChatPage — orchestration shell for the /chat conversation surface.
+// ---------------------------------------------------------------------------
+// cinatra#918 split this former ~3.4k-line monolith along its concerns,
+// mirroring the #853 approach (pure testable seams first, thin component
+// wiring after):
+//   - ./chat-persistence   — thread CRUD-over-fetch + thread-model helpers
+//   - ./chat-stream-events — pure SSE parsing + per-event message transforms
+//   - ./chat-routing       — pure client-side routing decisions
+//   - ./chat-messages-view — the conversation renderer, mounted via
+//     next/dynamic so the heavy renderers (marked/katex via markdown-render,
+//     recharts via chart-embed, the mermaid/shiki wrappers) load in their own
+//     chunk and stop riding the initial /chat bundle.
+// This component keeps the state machine, effects, and dispatch orchestration
+// unchanged — every extracted seam is a mechanical move.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { RotateCcw, PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import dynamic from "next/dynamic";
 import { authClient } from "@/lib/auth-client";
-// Direct per-icon imports — avoid Turbopack processing the full simple-icons barrel (see apis-page.tsx note)
-import SiAnthropic from "@icons-pack/react-simple-icons/icons/SiAnthropic.mjs";
-import SiGooglegemini from "@icons-pack/react-simple-icons/icons/SiGooglegemini.mjs";
-import { cn } from "@/lib/utils";
 import { useTheme } from "next-themes";
-import { highlightCodeAsync, type ThemeName } from "./syntax-highlight";
-import { renderMarkdown, detectCharts } from "./markdown-render";
+import type { ThemeName } from "./syntax-highlight";
 import { PromptField, type PromptFieldHandle, type Mentionable, type WidgetDefinition, type WidgetManifest, type WidgetSubmitHandle } from "@cinatra-ai/sdk-ui";
 // The widget set is NOT imported from extension packages here. It arrives as
 // props from the server chat mount, which resolves it from the generated
@@ -25,11 +32,8 @@ import {
   createChatWidgetRuntime,
   EMPTY_WIDGETS,
   EMPTY_WIDGET_MANIFESTS,
-  type DetectedWidget,
 } from "./widget-runtime";
 import {
-  deleteChatThread,
-  deleteAllChatThreads,
   resolveMessageRouting,
   setAssistantPauseState,
   extractHitlGateValuesAction,
@@ -40,148 +44,70 @@ import {
   createChatGateRegistry,
   resolveExtractedGateValues,
 } from "./inline-hitl-classify";
-import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
-import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
 // importing @/lib directly.
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-
-// Plain fetch instead of a Next.js server action — avoids the RSC re-render
-// that server actions trigger, which caused a corrective navigation (and
-// visible "page reload") when the URL had been changed via pushState while
-// Next.js's internal router state still pointed at the old route.
-async function saveChatThreadViaFetch(thread: Record<string, unknown> & { id: string }): Promise<void> {
-  await fetch("/api/chat/save", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(thread),
-  });
-}
-
-// Plain fetch instead of a Next.js server action — avoids corrective navigation
-// triggered when the URL was updated via pushState before the action resolved.
-async function fetchThreadByIdViaFetch(threadId: string): Promise<Record<string, unknown> | null> {
-  const res = await fetch(`/api/chat/thread/${threadId}`);
-  if (!res.ok) return null;
-  return res.json() as Promise<Record<string, unknown> | null>;
-}
-
-async function fetchThreadListViaFetch(): Promise<ThreadSummary[]> {
-  const res = await fetch("/api/chat/threads");
-  if (!res.ok) return [];
-  return res.json() as Promise<ThreadSummary[]>;
-}
-
+import type { UiMessage as Message, UiThread as Thread, UiThreadSummary as ThreadSummary } from "./types";
+import {
+  saveChatThreadViaFetch,
+  fetchThreadList,
+  fetchThreadById,
+  generateId,
+  deriveThreadTitle,
+  extractAgentName,
+} from "./chat-persistence";
+import {
+  parseSseEventBlock,
+  extractAgentRunId,
+  normalizeCitations,
+  createSlackBuffers,
+  appendSlackTextDelta,
+  applySlackThinkingStart,
+  applySlackThinkingEnd,
+  applySlackToolCall,
+  applySlackToolResult,
+  applySlackCitations,
+  applyTextDeltaToMessages,
+  applyThinkingStartToMessages,
+  applyThinkingEndToMessages,
+  applyToolCallToMessages,
+  applyToolResultToMessages,
+  applyCitationsToMessages,
+  applyErrorToMessages,
+  extractErrorMessage,
+} from "./chat-stream-events";
+import {
+  EXTERNAL_TAKEOVER_MS,
+  countMentions,
+  shouldEnterSlackModeOnSend,
+  applyExternalMentionsToMessages,
+  applyBuiltInMentionToMessages,
+  collectNewlyTaggedIds,
+  resolveDispatchPlan,
+} from "./chat-routing";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
-import { resolveAssistantDisplayName } from "./assistant-display-name";
-import { CINATRA_LOGO } from "@/lib/cinatra-brand";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
-import { MermaidBlock } from "./mermaid-block";
-import { ChartEmbed, ChartError } from "./chart-embed";
 import { DancingRobot } from "./dancing-robot";
 
-type ToolCall = {
-  id: string;
-  name: string;
-  status: "running" | "completed" | "failed";
-  resultLabel?: string;
-  serverLabel?: string;
-};
-
-type ThoughtGroup = {
-  id: string;
-  thinkingSeconds?: number;
-  toolCalls: ToolCall[];
-};
-
-// Ordered render trace for an assistant turn — text deltas and tool-call
-// events recorded in the chronological order they arrived on the stream.
-// When present, the renderer uses this to interleave narration with tool
-// badges (so the user sees "I'll check existing agents... [agent_source_list]
-// ✓ ... Found one... [agent_source_read] ✓ ..." in the natural progression),
-// instead of clustering all badges above all text. Legacy messages without
-// `parts` fall back to the flat `content` + `thoughtGroups` rendering.
-//
-// Pure mutation helpers (applyTextDelta/applyToolCallEvent/applyToolResultEvent)
-// live in `./assistant-parts.ts` with their own unit tests; the event-handler
-// loop below uses them directly to avoid behavioural drift.
-import {
-  applyTextDelta,
-  applyToolCallEvent,
-  applyToolResultEvent,
-  type AssistantMessagePart,
-} from "./assistant-parts";
-// Inline AgenticRunPanel wrapper. Mounted beneath assistant messages whose
-// `parts` include an `agent_run` tool_call with a pinned runId (set by the
-// tool_result handler below from the result JSON).
-import { InlineAgentRunCard } from "./inline-agent-run-card";
-import { UndoActionChip } from "./chat-undo-action-chip";
-
-type Citation = {
-  index: number;
-  title: string;
-  url: string;
-};
-
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  // Optional artifact refs attached to THIS turn. Persisted verbatim in the
-  // thread JSON; forwarded to /api/chat so the runner can resolve them via the
-  // bridge ports. Older messages without this field replay byte-identically.
-  attachments?: LlmAttachmentRef[];
-  thoughtGroups?: ThoughtGroup[];
-  // Chronological render trace — populated alongside `content` and
-  // `thoughtGroups` during streaming. Renderer prefers this when present.
-  // Older persisted messages without `parts` fall back to the flat layout.
-  parts?: AssistantMessagePart[];
-  citations?: Citation[];
-  error?: string;
-  errorRaw?: string;
-  liveStatus?: string;
-  // Mention tracking — set on user messages directed at external assistants
-  mentions?: Array<{ handle: string; assistantUserId: string; offset: number; length: number }>;
-  mentionState?: Record<string, "pending" | "handled">;
-  // Set on assistant messages from external assistants (not Cinatra's own LLM)
-  authorUserId?: string;
-};
-
-type Thread = {
-  id: string;
-  title: string;
-  messages: Message[];
-  createdAt: string;
-  updatedAt: string;
-  activeAssistantHandle?: string;
-  taggedAssistantUserIds?: string[];
-  slackMode?: boolean;
-  ownerUserId?: string;
-};
-
-type ThreadSummary = {
-  id: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-const MAX_STORED_THREADS = 50;
+// The conversation renderer is the LAZY BOUNDARY for the chat route's heavy
+// renderers (marked/katex/recharts/mermaid/shiki all sit behind it). SSR stays
+// enabled (next/dynamic default), so the initial HTML is unchanged; only the
+// client chunk splits.
+const ChatMessagesView = dynamic(
+  () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
+  { loading: () => null },
+);
 
 // Empty-state badge + caption selection live in ./chat-badges (pure +
 // unit-tested). The component imports `selectChatBadges` +
 // `chatEmptyStateCaption` and feeds the result into the badge cloud / h1.
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Greeting
 // ---------------------------------------------------------------------------
-
-function generateId() {
-  return crypto.randomUUID();
-}
 
 const CINATRA_QUOTES = [
   "I did it my way.",
@@ -221,848 +147,7 @@ function getGreeting() {
   return pick(["Working late?", "Late one tonight?", "Night shift. What do you need?"]);
 }
 
-function formatToolName(name: string) {
-  const parts = name.split(".");
-  if (parts.length < 2) {
-    return name.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  }
-  // Show "resource · action" (e.g., "Campaigns · List", "Gmail · Aliases list").
-  const action = parts.pop()!;
-  const resource = parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
-  const label = `${resource} · ${action}`.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  return label;
-}
-
-function deriveThreadTitle(firstUserMessage: string) {
-  const cleaned = firstUserMessage.replace(/\n/g, " ").trim();
-  return cleaned.length > 60 ? `${cleaned.slice(0, 57)}...` : cleaned;
-}
-
-function extractAgentName(text: string): string | null {
-  const match = text.match(/the agent'?s?\s+name\s+is[:\s]+([^\n.!?,]+)/i);
-  const name = match?.[1]?.trim();
-  return name && name.length > 0 ? name : null;
-}
-
-function extractErrorMessage(raw: string): string {
-  // Try to parse JSON error responses from OpenAI or the API route.
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed?.error?.message) return String(parsed.error.message);
-    if (parsed?.message) return String(parsed.message);
-    if (parsed?.error && typeof parsed.error === "string") return parsed.error;
-  } catch {
-    // Not JSON — use as-is.
-  }
-
-  const trimmed = raw.trim();
-  if (!trimmed) return "Something went wrong. Please try again.";
-
-  // If it looks like a raw HTTP error body, simplify it.
-  if (trimmed.length > 300) {
-    return "The request failed. Please try again in a moment.";
-  }
-
-  return trimmed;
-}
-
-function formatRelativeTime(isoString: string) {
-  const diffMs = Date.now() - new Date(isoString).getTime();
-  const minutes = Math.floor(diffMs / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(isoString).toLocaleDateString();
-}
-
 const DEFAULT_GREETING = "How can I help?";
-
-// ---------------------------------------------------------------------------
-// Database persistence
-// ---------------------------------------------------------------------------
-
-async function fetchThreadList(): Promise<ThreadSummary[]> {
-  try {
-    const list = await fetchThreadListViaFetch();
-    return list.slice(0, MAX_STORED_THREADS);
-  } catch {
-    return [];
-  }
-}
-
-async function fetchThreadById(threadId: string): Promise<Thread | null> {
-  try {
-    return await fetchThreadByIdViaFetch(threadId) as Thread | null;
-  } catch {
-    return null;
-  }
-}
-
-// The markdown renderer (renderMarkdown) and chart-embed detection
-// (detectCharts) live in ./markdown-render so they can be unit-tested in
-// isolation; they are imported at the top of this file.
-
-// ---------------------------------------------------------------------------
-// Icons
-// ---------------------------------------------------------------------------
-
-function IconChat({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className ?? "h-7 w-7"}>
-      <path d="M20 6c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v9c0 1.1.9 2 2 2h2l4 4 4-4h2c1.1 0 2-.9 2-2V6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <circle cx="8.5" cy="10.5" r="1" fill="currentColor" />
-      <circle cx="12" cy="10.5" r="1" fill="currentColor" />
-      <circle cx="15.5" cy="10.5" r="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function IconPlus() {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-      <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />
-    </svg>
-  );
-}
-
-function IconHistory() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
-      <circle cx="10" cy="10" r="7" />
-      <path d="M10 6v4l2.5 2.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconTrash() {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" className="h-3.5 w-3.5">
-      <path d="M2.5 4h11M5.5 4V2.5h5V4M6.5 7v4M9.5 7v4M3.5 4l.5 8.5a1 1 0 0 0 1 .92h6a1 1 0 0 0 1-.92L12.5 4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function IconCheck() {
-  return (
-    <svg viewBox="0 0 16 16" fill="currentColor" className="h-3 w-3">
-      <path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" />
-    </svg>
-  );
-}
-
-function IconAgent() {
-  return (
-    <svg viewBox={CINATRA_LOGO.fullViewBox} fill="none" aria-hidden="true" style={{ height: "0.75rem", width: "auto", flexShrink: 0 }}>
-      <path d={CINATRA_LOGO.brim} fill="currentColor" />
-      <path d={CINATRA_LOGO.crown} fill="currentColor" />
-    </svg>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Collapsible thought group (like ChatGPT's "Thought & used N tools")
-// ---------------------------------------------------------------------------
-
-function ThoughtGroupSection({ group, isLive }: { group: ThoughtGroup; isLive: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const toolCount = group.toolCalls.length;
-  const allDone = group.toolCalls.every((tc) => tc.status === "completed");
-  const seconds = group.thinkingSeconds ?? 0;
-
-  // Build the summary label.
-  let summary: string;
-  if (isLive && !allDone) {
-    summary = toolCount > 0 ? `Thinking & using ${toolCount} tool${toolCount === 1 ? "" : "s"}` : "Thinking...";
-  } else if (toolCount > 0 && seconds > 1) {
-    summary = `Thought for ${seconds}s & used ${toolCount} tool${toolCount === 1 ? "" : "s"}`;
-  } else if (toolCount > 0) {
-    summary = `Used ${toolCount} tool${toolCount === 1 ? "" : "s"}`;
-  } else if (seconds > 1) {
-    summary = `Thought for ${seconds} second${seconds === 1 ? "" : "s"}`;
-  } else {
-    return null; // Nothing interesting to show.
-  }
-
-  return (
-    <div className="mb-2">
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex h-auto items-center gap-1.5 px-0 py-0 text-xs text-muted-foreground transition hover:bg-transparent hover:text-foreground"
-      >
-        {isLive && !allDone ? (
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
-        ) : (
-          <IconAgent />
-        )}
-        <span className="font-medium">{summary}</span>
-        <svg
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className={`h-3 w-3 transition ${expanded ? "rotate-90" : ""}`}
-        >
-          <path d="M6 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </Button>
-      {expanded && group.toolCalls.length > 0 && (
-        <div className="ml-4 mt-1.5 flex flex-col gap-1 border-l border-line pl-3">
-          {group.toolCalls.map((tc) => (
-            <div key={tc.id} className="flex items-center gap-2 text-xs text-muted-foreground">
-              {tc.status === "running" ? (
-                <span className="inline-block h-1 w-1 animate-pulse rounded-full bg-muted-foreground" />
-              ) : (
-                <svg viewBox="0 0 16 16" fill="currentColor" className="h-2.5 w-2.5 text-muted-foreground">
-                  <circle cx="8" cy="8" r="3" />
-                </svg>
-              )}
-              <span>{tc.resultLabel || (tc.serverLabel && tc.serverLabel !== "cinatra"
-                ? `${tc.serverLabel.replace(/^external-/, "").replace(/-connector$/, "").replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())} · ${tc.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}`
-                : formatToolName(tc.name))}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Ordered parts renderer (chronologically interleaved text + tool badges)
-// ---------------------------------------------------------------------------
-
-function OrderedPartsSection({
-  parts,
-  trimContent,
-  theme,
-  detectWidgets,
-  onMarkdownClick,
-  onActiveGateChange,
-}: {
-  parts: AssistantMessagePart[];
-  trimContent?: (content: string) => string;
-  theme: ThemeName;
-  /** Live widget detector from the chat widget runtime (renderMarkdown needs
-   *  it to strip URL lines already rendered as widget embeds). */
-  detectWidgets: (content: string) => DetectedWidget[];
-  // Delegated click handler so the same code-copy / table-action behaviour
-  // that the legacy `message.content` div provides also works for text
-  // parts rendered here. Bound at the parent level so the `closest`
-  // selectors still match any child element inside any text part.
-  onMarkdownClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
-  // Threaded down to the inline agent-run card so an open HITL gate can be
-  // driven from the chat prompt window.
-  onActiveGateChange?: (
-    runId: string,
-    gate: ChatGateDescriptor | null,
-    instanceId: string,
-  ) => void;
-}) {
-  if (parts.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-2" onClick={onMarkdownClick}>
-      {parts.map((part, idx) => {
-        if (part.kind === "text") {
-          const raw = trimContent ? trimContent(part.content) : part.content;
-          // Skip pure-whitespace text parts (they're separator artifacts).
-          if (!raw.replace(/\s+/g, "").length) return null;
-          return (
-            <div
-              key={`text-${idx}`}
-              className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-              dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
-            />
-          );
-        }
-        // `agent_run` tool_results carry a runId pinned by the tool_result
-        // handler. Mount AgenticRunPanel inline so the user can drive HITL
-        // gates (URL pickers, list pickers, reviewer approvals) from within
-        // the chat thread instead of navigating to /agents/<v>/<s>/<runId>.
-        // The card resolves to its own panel chrome — no extra Card wrapper here.
-        if (part.kind === "tool_call" && part.name === "agent_run" && part.runId) {
-          return (
-            <div key={`agent-run-${part.runId}`}>
-              <InlineAgentRunCard
-                runId={part.runId}
-                onActiveGateChange={onActiveGateChange}
-              />
-              {/* Inline undo for a recent restorable change-set produced by
-                  this run. */}
-              <UndoActionChip runId={part.runId} />
-            </div>
-          );
-        }
-        // Other tool parts feed the single live status line below the
-        // message and don't render inline content.
-        return null;
-      })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Live progress indicator (ChatGPT-style pulsating dot + short status text)
-// ---------------------------------------------------------------------------
-
-function formatToolCallLabel(tc: ToolCall) {
-  if (tc.serverLabel && tc.serverLabel !== "cinatra") {
-    const server = tc.serverLabel
-      .replace(/^external-/, "")
-      .replace(/-connector$/, "")
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
-    const action = tc.name
-      .replace(/-/g, " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
-    return `${server} · ${action}`;
-  }
-
-  return formatToolName(tc.name);
-}
-
-function formatToolProgressStatus(tc: ToolCall) {
-  const name = tc.name.toLowerCase();
-  const label = formatToolCallLabel(tc);
-
-  if (name === "agent_source_list") return "Loading agent sources";
-  if (name === "agent_source_read") return "Reading agent source";
-  if (name === "agent_source_write") return "Writing agent source";
-  if (name === "agent_source_write_files") return "Writing agent package files";
-  if (name === "agent_source_validate") return "Validating agent source";
-  if (name === "agent_source_compile") return "Compiling agent source";
-  if (name === "agent_source_publish") return "Publishing agent source";
-  if (name.includes("web_search")) return "Searching the web";
-  if (name.includes("extensions_search")) return "Searching extensions";
-  if (name.includes("agent_run_messages_list")) return "Checking agent messages";
-  if (name.includes("agent_run_get")) return "Checking agent run";
-  if (name.includes("agent_run")) return "Starting agent run";
-  if (name.includes("search")) return `Searching ${label}`;
-  if (name.includes("list") || name.includes("get") || name.includes("read") || name.includes("fetch")) {
-    return `Reading ${label}`;
-  }
-
-  return `Using ${label}`;
-}
-
-function getLiveProgressStatus(message: Message) {
-  if (message.liveStatus) return message.liveStatus;
-
-  const latestPart = getLatestAssistantPart(message);
-  if (latestPart?.kind === "tool_call" && latestPart.status === "running") {
-    return formatToolProgressStatus(latestPart);
-  }
-
-  const group = message.thoughtGroups?.[message.thoughtGroups.length - 1];
-  const runningTool = group?.toolCalls.findLast((tc) => tc.status === "running");
-
-  if (runningTool) {
-    return formatToolProgressStatus(runningTool);
-  }
-
-  if (group?.toolCalls.some((tc) => tc.status === "completed")) {
-    return "Reviewing tool results";
-  }
-
-  if (hasVisibleStreamingText(message.content)) {
-    return "Working on the next step";
-  }
-
-  return "Thinking";
-}
-
-function getLatestAssistantPart(message: Message) {
-  const parts = message.parts;
-  if (!parts || parts.length === 0) return null;
-
-  for (let i = parts.length - 1; i >= 0; i -= 1) {
-    const part = parts[i];
-    if (part.kind === "text" && !hasVisibleStreamingText(part.content)) {
-      continue;
-    }
-    return part;
-  }
-
-  return null;
-}
-
-function hasVisibleStreamingText(content: string) {
-  return trimIncompleteEmbeds(content).replace(/\s+/g, "").length > 0;
-}
-
-function shouldShowLiveProgressStatus(message: Message) {
-  if (message.liveStatus) return true;
-
-  const latestPart = getLatestAssistantPart(message);
-  if (latestPart) return latestPart.kind === "tool_call";
-  return !hasVisibleStreamingText(message.content);
-}
-
-function ThinkingIndicator({ className, label = "Thinking" }: { className?: string; label?: string } = {}) {
-  const showProgressSuffix = label !== "Thinking";
-
-  return (
-    <div className={cn("flex animate-pulse items-center gap-2.5 text-muted-foreground", className)} role="status" aria-live="polite">
-      <span className="relative flex h-2 w-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-current opacity-60" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-current opacity-70" />
-      </span>
-      <span className="text-sm font-medium">
-        {label}
-        {showProgressSuffix ? " >" : null}
-      </span>
-    </div>
-  );
-}
-
-// Waiting indicator — shown while an external assistant (@handle) is expected to reply.
-function WaitingIndicator({ handle }: { handle: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="relative flex h-2 w-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-muted-foreground opacity-75" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground opacity-40" />
-      </span>
-      <span className="text-sm text-muted-foreground">
-        Waiting for @{handle}...
-      </span>
-    </div>
-  );
-}
-
-// Per-assistant typing indicator shown in Slack mode while a Cinatra stream is buffering.
-function SlackTypingIndicator({ handle }: { handle: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="relative flex h-2 w-2">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-muted-foreground opacity-75" />
-        <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground opacity-40" />
-      </span>
-      <span className="text-sm text-muted-foreground">
-        @{handle} is thinking...
-      </span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Error card
-// ---------------------------------------------------------------------------
-
-function ErrorCard({ error, errorRaw }: { error: string; errorRaw?: string }) {
-  const [copied, setCopied] = useState(false);
-  const verbatim = errorRaw || error;
-
-  function handleCopy() {
-    void navigator.clipboard.writeText(verbatim).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }
-
-  return (
-    <div className="max-w-full overflow-hidden rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
-      <div className="flex items-start gap-2.5">
-        <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-destructive">
-          <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
-        </svg>
-        <div className="min-w-0 flex-1">
-          <FriendlyErrorBody error={error} />
-        </div>
-      </div>
-      <div className="mt-2 flex items-center justify-end">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={handleCopy}
-          className="inline-flex h-auto items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium text-destructive transition hover:bg-destructive/15 hover:text-destructive"
-        >
-          {copied ? (
-            <>
-              <IconCheck />
-              Copied
-            </>
-          ) : (
-            <>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
-                <rect x="5.5" y="5.5" width="7" height="7" rx="1" />
-                <path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5" />
-              </svg>
-              Copy error details
-            </>
-          )}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Widget system
-// ---------------------------------------------------------------------------
-// The registries, detector compilation, and wizard/refresh helpers live in
-// ./widget-runtime (pure factory). ChatPage builds the runtime from its
-// `widgets` / `widgetManifests` props via useMemo and threads it to the render
-// helpers below — no module-level widget state, no extension imports.
-
-// ---------------------------------------------------------------------------
-// Mermaid block detection
-// ---------------------------------------------------------------------------
-
-type MermaidSource = { source: string };
-
-function detectMermaidBlocks(text: string): MermaidSource[] {
-  const blocks: MermaidSource[] = [];
-  const re = /```mermaid\n([\s\S]*?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    blocks.push({ source: m[1].trim() });
-  }
-  return blocks;
-}
-
-// ---------------------------------------------------------------------------
-// Streaming embed trimming
-// (chart/widget detection itself lives in ./markdown-render)
-// ---------------------------------------------------------------------------
-
-/**
- * While an assistant message is streaming, the tail of the content may contain
- * an incomplete embed that hasn't been closed yet (e.g. `[chart:{"type":"bar"...`
- * with no closing `}]`). renderMarkdown would pass this raw text through to
- * the markdown renderer, causing a flash of JSON code.
- *
- * This trims any trailing incomplete embed prefix so the markdown renderer
- * never sees partial special tokens. Only used on the live streaming message.
- */
-function trimIncompleteEmbeds(text: string): string {
-  // Each embed starts with one of these prefixes.
-  const PREFIXES = ["[chart:", "[widget:", "[confirm-", "```mermaid"];
-  let result = text;
-  for (const prefix of PREFIXES) {
-    const idx = result.lastIndexOf(prefix);
-    if (idx === -1) continue;
-    // Check whether the embed has been fully closed after this prefix.
-    const tail = result.slice(idx);
-    const isClosed =
-      prefix === "```mermaid"
-        ? tail.includes("```", prefix.length)     // fenced block needs closing ```
-        : prefix === "[chart:"
-          ? (() => {
-              // Use the same brace-depth logic as detectCharts.
-              const jsonStart = prefix.length;
-              if (tail[jsonStart] !== "{") return true; // not a JSON chart, let it pass
-              let depth = 0;
-              for (let i = jsonStart; i < tail.length; i++) {
-                if (tail[i] === "{") depth++;
-                else if (tail[i] === "}") {
-                  depth--;
-                  if (depth === 0) return tail[i + 1] === "]";
-                }
-              }
-              return false;
-            })()
-          : tail.includes("]");                    // widget/confirm just need closing ]
-    if (!isClosed) {
-      result = result.slice(0, idx);
-    }
-  }
-  return result;
-}
-
-
-function ChatWidget({
-  widget,
-  def,
-  submitRef,
-  isOlderWidget,
-  refreshKey,
-}: {
-  widget: DetectedWidget;
-  /** Resolved by the caller from the live widget runtime (findWidget). */
-  def: WidgetDefinition | undefined;
-  submitRef: React.RefObject<WidgetSubmitHandle | null>;
-  isOlderWidget?: boolean;
-  refreshKey?: number;
-}) {
-  const ownRef = useRef<WidgetSubmitHandle | null>(null);
-  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
-  if (!def) return null;
-
-  const Component = def.component;
-  const effectiveRef = isOlderWidget ? ownRef : submitRef;
-
-  return (
-    <div className="mt-3 w-full overflow-hidden rounded-xl border border-line bg-surface-strong shadow-lg">
-      <div className="p-2">
-        <Component
-          key={refreshKey}
-          resourceId={widget.resourceId}
-          submitRef={effectiveRef}
-          onSave={isOlderWidget ? () => setStatus("saved") : undefined}
-        />
-        {isOlderWidget && (
-          <div className="flex justify-end px-2 pb-1">
-            {status === "saving" ? (
-              <svg className="h-4 w-4 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" className="opacity-25" />
-                <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-              </svg>
-            ) : status === "saved" ? (
-              <svg className="h-4 w-4 text-success" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 0 1 0 1.414l-8 8a1 1 0 0 1-1.414 0l-4-4a1 1 0 1 1 1.414-1.414L8 12.586l7.293-7.293a1 1 0 0 1 1.414 0Z" />
-              </svg>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={async () => {
-                  setStatus("saving");
-                  const ok = await ownRef.current?.submit();
-                  setStatus(ok ? "saved" : "idle");
-                }}
-                className="h-auto rounded-lg px-3 py-1 text-xs font-medium text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground"
-              >
-                Save
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// User message bubble with copy / edit actions
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Mention badge renderer — converts @handle tokens in plain text to inline chips
-// ---------------------------------------------------------------------------
-
-function MentionBadge({ m }: { m: Mentionable }) {
-  return (
-    <span
-      className="mention-chip inline-flex items-center gap-1 align-middle bg-surface-muted border border-line rounded-full pl-0.5 pr-1.5 py-0.5 text-xs leading-none select-none mx-1"
-    >
-      <span className="size-[1.1rem] rounded-full overflow-hidden inline-flex shrink-0 items-center justify-center bg-muted text-muted-foreground text-[8px] font-semibold">
-        {m.image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={m.image} alt="" className="size-full object-cover" />
-        ) : (
-          m.displayName.charAt(0).toUpperCase()
-        )}
-      </span>
-      <span>{m.displayName}</span>
-    </span>
-  );
-}
-
-function renderWithMentions(content: string, mentionables: Mentionable[]): React.ReactNode {
-  if (!mentionables.length || !content.includes("@")) return content;
-  const handleMap = new Map(mentionables.map((m) => [m.handle, m]));
-  const parts = content.split(/(@[a-zA-Z0-9_.\-]+)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith("@")) {
-      const m = handleMap.get(part.slice(1));
-      if (m) return <MentionBadge key={i} m={m} />;
-    }
-    return part;
-  });
-}
-
-// ---------------------------------------------------------------------------
-
-function UserMessageBubble({
-  message,
-  onEdit,
-  disabled,
-  isSlackMode = false,
-  editRequested = false,
-  onEditStarted,
-  mentionables = [],
-}: {
-  message: Message;
-  onEdit: (messageId: string, newContent: string) => void;
-  disabled?: boolean;
-  isSlackMode?: boolean;
-  editRequested?: boolean;
-  onEditStarted?: () => void;
-  mentionables?: Mentionable[];
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(message.content);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (!editRequested || editing) {
-      return;
-    }
-
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) {
-        return;
-      }
-
-      setEditing(true);
-      onEditStarted?.();
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [editRequested, editing, onEditStarted]);
-
-  useEffect(() => {
-    if (editing && textareaRef.current) {
-      const el = textareaRef.current;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-      el.style.height = "auto";
-      el.style.height = `${el.scrollHeight}px`;
-    }
-  }, [editing]);
-
-  if (editing) {
-    return (
-      <div className="mb-4 w-full rounded-control bg-surface-muted/60 px-4 py-3 shadow-sm">
-        <Textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            e.target.style.height = "auto";
-            e.target.style.height = `${e.target.scrollHeight}px`;
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (draft.trim()) {
-                setEditing(false);
-                onEdit(message.id, draft);
-              }
-            }
-            if (e.key === "Escape") {
-              setEditing(false);
-              setDraft(message.content);
-            }
-          }}
-          style={{ boxShadow: "none" }}
-          className="min-h-0 w-full resize-none border-0 bg-transparent px-3 py-2 text-sm text-foreground shadow-none outline-none focus-visible:ring-0"
-          rows={1}
-        />
-        <div className="mt-3 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => { setEditing(false); setDraft(message.content); }}
-            className="h-auto rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-surface-muted"
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={() => {
-              if (draft.trim()) {
-                setEditing(false);
-                onEdit(message.id, draft);
-              }
-            }}
-            className="h-auto rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/80"
-          >
-            Send
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={cn("group relative min-w-0", isSlackMode ? "max-w-[85%]" : "max-w-[75%]")}>
-      <div className="whitespace-pre-wrap break-words rounded-control bg-surface-muted px-4 py-3 text-sm text-foreground">
-        {renderWithMentions(message.content, mentionables)}
-      </div>
-      {!disabled && !isSlackMode && (
-        <div className="absolute -bottom-1 right-0 flex translate-y-full gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => void navigator.clipboard.writeText(message.content)}
-            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground"
-            title="Copy"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
-              <rect x="5.5" y="5.5" width="7" height="7" rx="1" />
-              <path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5" />
-            </svg>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => { setDraft(message.content); setEditing(true); }}
-            className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground"
-            title="Edit message"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
-              <path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5Z" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Slack-mode helpers
-// ---------------------------------------------------------------------------
-
-function getParticipantInitials(handle: string | undefined): string {
-  if (!handle || handle.length === 0) return "AS";
-  const stripped = handle.startsWith("@") ? handle.slice(1) : handle;
-  return stripped.slice(0, 2).toUpperCase();
-}
-
-// Inline OpenAI icon (removed from simple-icons)
-function OpenAIChatIcon({ size = 12 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v 5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855-5.843-3.368L15.116 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.104v-5.678a.79.79 0 0 0-.407-.666zm2.01-3.023-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08-4.778 2.758a.795.795 0 0 0-.393.681zm1.097-2.365 2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/>
-    </svg>
-  );
-}
-
-function CinatraAvatarIcon() {
-  // The Cinatra mark is wide (fullViewBox 512×320, ~1.6:1). Forcing it into a
-  // square (h-3 w-3) made preserveAspectRatio shrink it to ~7.5px tall, so it
-  // looked shrunken next to the square 12px provider glyphs (#502). Keep the
-  // 12px height and let width follow the aspect ratio (matching the same logo's
-  // other render at the response-header), so it reads at the sibling icons' size.
-  return (
-    <svg viewBox={CINATRA_LOGO.fullViewBox} xmlns="http://www.w3.org/2000/svg" fill="none" aria-label="Cinatra" className="h-3 w-auto">
-      <path d={CINATRA_LOGO.brim} fill="currentColor" />
-      <path d={CINATRA_LOGO.crown} fill="currentColor" />
-    </svg>
-  );
-}
-
-function getAssistantProviderIcon(handle: string | undefined): React.ReactNode | null {
-  if (!handle) return null;
-  const h = handle.toLowerCase();
-  if (h.includes("cinatra")) return <CinatraAvatarIcon />;
-  if (h.includes("claude") || h.includes("anthropic")) return <SiAnthropic size={12} />;
-  if (h.includes("gpt") || h.includes("openai")) return <OpenAIChatIcon size={12} />;
-  if (h.includes("gemini") || h.includes("google")) return <SiGooglegemini size={12} />;
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // Main chat page
@@ -1087,44 +172,6 @@ type ChatPageProps = {
   widgetManifests?: WidgetManifest[];
 };
 
-function updateChatTablePage(frame: Element, requestedPage: number) {
-  const pagination = frame.querySelector<HTMLElement>("[data-chat-table-pagination]");
-  if (!pagination) return;
-
-  const rows = Array.from(frame.querySelectorAll<HTMLTableRowElement>("[data-chat-table-row]"));
-  const pageSize = Number(pagination.dataset.pageSize ?? "25");
-  const rowCount = Number(pagination.dataset.rowCount ?? rows.length);
-  const safePageSize = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 25;
-  const safeRowCount = Number.isFinite(rowCount) && rowCount > 0 ? rowCount : rows.length;
-  const pageCount = Math.max(1, Math.ceil(safeRowCount / safePageSize));
-  const page = Math.min(Math.max(requestedPage, 0), pageCount - 1);
-  const firstIndex = page * safePageSize;
-  const lastIndex = Math.min(safeRowCount, firstIndex + safePageSize);
-
-  pagination.dataset.page = String(page);
-  rows.forEach((row, index) => {
-    row.classList.toggle("hidden", index < firstIndex || index >= lastIndex);
-  });
-
-  const rangeLabel = pagination.querySelector<HTMLElement>("[data-chat-table-range-label]");
-  if (rangeLabel) {
-    rangeLabel.textContent = `${firstIndex + 1}-${lastIndex} of ${safeRowCount}`;
-  }
-
-  const pageLabel = pagination.querySelector<HTMLElement>("[data-chat-table-page-label]");
-  if (pageLabel) {
-    pageLabel.textContent = `Page ${page + 1} of ${pageCount}`;
-  }
-
-  pagination.querySelectorAll<HTMLButtonElement>(".chat-table-pagination-action").forEach((button) => {
-    if (button.dataset.action === "previous") {
-      button.disabled = page === 0;
-    } else if (button.dataset.action === "next") {
-      button.disabled = page >= pageCount - 1;
-    }
-  });
-}
-
 export function ChatPage({ initialThreadId, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
@@ -1134,59 +181,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     () => createChatWidgetRuntime(widgets, widgetManifests),
     [widgets, widgetManifests],
   );
-  // Shared click handler for assistant markdown content: handles
-  // copy-code buttons (inside fenced code blocks) and table copy/CSV
-  // download actions. Both the legacy `message.content` div and the new
-  // `OrderedPartsSection` text parts wear this handler so the buttons
-  // work the same way regardless of which render path is active.
-  const handleAssistantMarkdownClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const codeBtn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action='copy-code']");
-    if (codeBtn) {
-      const block = codeBtn.closest(".chat-code-block");
-      if (block) {
-        const codeEl = block.querySelector("code");
-        const rawText = codeEl?.textContent ?? "";
-        void navigator.clipboard.writeText(rawText);
-      }
-      return;
-    }
-    const tablePageBtn = (e.target as HTMLElement).closest<HTMLButtonElement>(".chat-table-pagination-action");
-    if (tablePageBtn) {
-      const frame = tablePageBtn.closest("[data-chat-table-frame]");
-      const pagination = frame?.querySelector<HTMLElement>("[data-chat-table-pagination]");
-      if (frame && pagination) {
-        const currentPage = Number(pagination.dataset.page ?? "0");
-        updateChatTablePage(
-          frame,
-          tablePageBtn.dataset.action === "previous" ? currentPage - 1 : currentPage + 1,
-        );
-      }
-      return;
-    }
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".chat-table-action");
-    if (!btn) return;
-    const tableId = btn.dataset.tableId;
-    const action = btn.dataset.action;
-    if (action === "copy" && tableId) {
-      const table = document.getElementById(tableId);
-      if (table) {
-        const rows = Array.from(table.querySelectorAll("tr"));
-        const text = rows.map((row) =>
-          Array.from(row.querySelectorAll("th, td")).map((cell) => cell.textContent?.trim() ?? "").join("\t"),
-        ).join("\n");
-        void navigator.clipboard.writeText(text);
-      }
-    } else if (action === "download" && btn.dataset.csv) {
-      const csv = btn.dataset.csv.replace(/\\n/g, "\n");
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "table.csv";
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  }, []);
   const isCreateAgentMode = initialMode === "create-agent";
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
@@ -1199,9 +193,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   const [typingIndicators, setTypingIndicators] = useState<Map<string, string>>(new Map());
   const [activeAssistantHandle, setActiveAssistantHandle] = useState<string | undefined>();
   const [pendingExternalHandle, setPendingExternalHandle] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
   const [greeting, setGreeting] = useState(DEFAULT_GREETING);
   const [autosaveEnabled, setAutosaveEnabled] = useState(false);
   const [autosaveVisible, setAutosaveVisible] = useState(false);
@@ -1302,7 +293,7 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
     }
   }, [taggedAssistantUserIds]);
 
-const skipNextThreadLoadRef = useRef(false);
+  const skipNextThreadLoadRef = useRef(false);
   // Tracks the thread whose data is currently rendered. Prevents the persist
   // effect from saving stale messages to a new activeThreadId while the async
   // load is still in flight.
@@ -1386,7 +377,6 @@ const skipNextThreadLoadRef = useRef(false);
       setMessages([]);
       resetSlackMode();
       promptRef.current?.clear();
-      setEditingTitle(false);
       // Only change the greeting when leaving an active thread — avoids visible flicker
       // when clicking "New chat" while already at the empty state.
       if (wasInThread) setGreeting(getGreeting());
@@ -1401,12 +391,10 @@ const skipNextThreadLoadRef = useRef(false);
       const match = window.location.pathname.match(/^\/chat\/([a-f0-9-]{36})$/);
       if (match) {
         setActiveThreadId(match[1]);
-        setEditingTitle(false);
       } else {
         setActiveThreadId(null);
         setMessages([]);
         resetSlackMode();
-        setEditingTitle(false);
         setGreeting(getGreeting());
       }
     }
@@ -1415,7 +403,6 @@ const skipNextThreadLoadRef = useRef(false);
       const { threadId } = (e as CustomEvent<{ threadId: string }>).detail;
       promptRef.current?.clear();
       setActiveThreadId(threadId);
-      setEditingTitle(false);
       window.history.pushState(null, "", `/chat/${threadId}`);
     }
 
@@ -1601,33 +588,6 @@ const skipNextThreadLoadRef = useRef(false);
     prevHasActiveStreamRef.current = hasActiveStream;
   }, [hasActiveStream]);
 
-  // Hydrate shiki placeholders after render — replace fallback <pre> blocks with
-  // syntax-highlighted HTML loaded lazily from shiki.
-  useEffect(() => {
-    const placeholders = document.querySelectorAll<HTMLElement>("[data-shiki-code]");
-    if (placeholders.length === 0) return;
-    placeholders.forEach((el) => {
-      // URL-encoded raw source (UTF-safe, set in the code() renderer).
-      const code = decodeURIComponent(el.dataset.shikiCode ?? "");
-      const lang = el.dataset.shikiLang ?? "text";
-      const elTheme = (el.dataset.shikiTheme ?? "github-light") as ThemeName;
-      void highlightCodeAsync(code, lang, elTheme).then((html) => {
-        if (!html) return;
-        const pre = el.querySelector("pre");
-        if (!pre) return;
-        const temp = document.createElement("div");
-        temp.innerHTML = html;
-        const shikiPre = temp.querySelector("pre");
-        if (shikiPre) {
-          // Preserve our layout classes on the <pre> element.
-          shikiPre.classList.add("overflow-x-auto", "whitespace-pre", "p-4", "text-[0.8rem]", "leading-relaxed", "font-mono");
-          pre.replaceWith(shikiPre);
-        }
-        el.removeAttribute("data-shiki-code");
-      });
-    });
-  }, [messages, hasActiveStream, theme]);
-
   // Return focus to the prompt input after streaming completes.
   useEffect(() => {
     if (!hasActiveStream) promptRef.current?.focus();
@@ -1721,66 +681,9 @@ const skipNextThreadLoadRef = useRef(false);
       externalReplyTimerRef.current = null;
     }
     promptRef.current?.clear();
-    setEditingTitle(false);
     setGreeting(getGreeting());
     titleUserEditedRef.current = false;
     pushChatUrl(null);
-  }
-
-  function selectThread(id: string) {
-    setPendingExternalHandle(null);
-    if (externalReplyTimerRef.current) {
-      clearTimeout(externalReplyTimerRef.current);
-      externalReplyTimerRef.current = null;
-    }
-    setActiveThreadId(id);
-    setEditingTitle(false);
-    titleUserEditedRef.current = false;
-    pushChatUrl(id);
-  }
-
-  function handleDeleteThread(id: string) {
-    deleteChatThread(id).catch(() => {});
-    setThreads((prev) => prev.filter((t) => t.id !== id));
-    if (activeThreadId === id) {
-      startNewThread();
-    }
-  }
-
-  function handleDeleteAllThreads() {
-    deleteAllChatThreads().catch(() => {});
-    setThreads([]);
-    startNewThread();
-    setSidebarOpen(false);
-  }
-
-  function handleRenameThread() {
-    if (!activeThreadId || !titleDraft.trim()) {
-      setEditingTitle(false);
-      return;
-    }
-    const newTitle = titleDraft.trim();
-    const now = new Date().toISOString();
-    const existing = threads.find((t) => t.id === activeThreadId);
-    // A title-only edit is NOT conversational activity: preserve the thread's
-    // existing updatedAt (and immutable createdAt) so renaming does not bump the
-    // thread to the top of the activity-sorted sidebar (#283).
-    const preservedUpdatedAt = existing?.updatedAt ?? now;
-    // Save updated title to API — build full thread from current state.
-    const thread: Thread = {
-      id: activeThreadId,
-      title: newTitle,
-      messages,
-      createdAt: existing?.createdAt ?? loadedThreadCreatedAtRef.current ?? now,
-      updatedAt: preservedUpdatedAt,
-      ownerUserId: userId,
-    };
-    saveChatThreadViaFetch(thread).catch(() => {});
-    setThreads((prev) =>
-      prev.map((t) => (t.id === activeThreadId ? { ...t, title: newTitle } : t)),
-    );
-    setEditingTitle(false);
-    titleUserEditedRef.current = true;
   }
 
   // Register a stream in the registry and bump the count. Must only be called
@@ -1798,6 +701,9 @@ const skipNextThreadLoadRef = useRef(false);
     }
   }
 
+  // Thin SSE driver — connection handling, the read loop, and the
+  // thread-switch/abort guards live here; every per-event message transform is
+  // a pure, unit-tested applier in ./chat-stream-events.
   async function streamResponse(contextMessages: Message[], handle?: string, endpoint = "/api/chat", authorUserId?: string) {
     const assistantId = generateId();
     const abortController = new AbortController();
@@ -1805,7 +711,9 @@ const skipNextThreadLoadRef = useRef(false);
     // short-circuits if the active thread has changed since we started.
     const originThreadId = activeThreadIdRef.current;
     // Per-stream paragraph-break tracker. Must be function-local so two
-    // concurrent streams cannot corrupt each other's separator state.
+    // concurrent streams cannot corrupt each other's separator state. It is
+    // consumed HERE in event-loop scope (never inside a setMessages updater)
+    // — see applyTextDeltaToMessages for the React-replay rationale.
     let nextTextNeedsRoundSeparator = false;
     // Read Slack mode from the ref so stale closures (e.g. the 20-second takeover timer)
     // always see the current value rather than the value at the time sendMessage was called.
@@ -1818,10 +726,7 @@ const skipNextThreadLoadRef = useRef(false);
     const stillOnOriginThread = () => activeThreadIdRef.current === originThreadId;
 
     // Slack-mode accumulation buffers. Declared before try so they are accessible in finally.
-    let textBuffer = "";
-    const bufferedThoughtGroups: ThoughtGroup[] = [];
-    let bufferedCitations: Citation[] = [];
-    let bufferedError = "";
+    const slackBuffers = createSlackBuffers();
     // Error from catch block — declared before try so finally can read it.
     let caughtError = "";
 
@@ -1906,25 +811,15 @@ const skipNextThreadLoadRef = useRef(false);
         buffer = blocks.pop() ?? "";
 
         for (const block of blocks) {
-          const m = block.match(/^event: (\w+)\ndata: ([\s\S]+)$/);
-          if (!m) continue;
-
-          const [, evt, raw] = m;
-          let d: Record<string, unknown>;
-          try { d = JSON.parse(raw); } catch { continue; }
+          const parsed = parseSseEventBlock(block);
+          if (!parsed) continue;
+          const { evt, data: d } = parsed;
 
           if (evt === "text") {
             const delta = String(d.content ?? "");
-            // Read-and-clear the round-boundary flag HERE (event loop scope), not
-            // inside the setMessages updater. React may invoke functional state
-            // updaters multiple times (StrictMode dev double-invoke; automatic
-            // batching can replay them) — mutating an outer-scope variable inside
-            // the updater is unsafe. The first invocation flipped the flag to
-            // false; the second invocation (the one whose return value React kept)
-            // saw flag=false and skipped the separator. Result: "...new.I found"
-            // with no whitespace between sentences. Consuming the flag here, in
-            // the SSE handler (which runs exactly once per event), makes the
-            // updater itself a pure function of `prev`.
+            // Read-and-clear the round-boundary flag HERE (event loop scope) —
+            // the SSE handler runs exactly once per event, so the applier stays
+            // a pure function of `prev` (see chat-stream-events.ts).
             const consumeRoundSeparator = nextTextNeedsRoundSeparator;
             if (consumeRoundSeparator) {
               nextTextNeedsRoundSeparator = false;
@@ -1934,220 +829,77 @@ const skipNextThreadLoadRef = useRef(false);
             } else if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => {
-                  if (msg.id !== assistantId) return msg;
-                  const existing = msg.content;
-                  // A paragraph break is inserted when text resumes after a
-                  // tool-use round (signalled by thinking_end). Never insert
-                  // spaces between normal streaming chunks — providers split
-                  // tokens arbitrarily and adding spaces breaks markdown
-                  // formatting like **bold**.
-                  const separator =
-                    consumeRoundSeparator && existing.length > 0 && !/\s$/.test(existing)
-                      ? "\n\n"
-                      : "";
-                  const deltaWithSeparator = separator + delta;
-                  // Maintain the ordered `parts` trace via the pure helper so
-                  // behaviour matches the tested contract (assistant-parts.ts).
-                  const nextParts = applyTextDelta(msg.parts ?? [], deltaWithSeparator);
-                  const latestTextPart = nextParts.findLast((part) => part.kind === "text");
-                  const liveStatus = latestTextPart && hasVisibleStreamingText(latestTextPart.content)
-                    ? undefined
-                    : msg.liveStatus;
-                  return { ...msg, content: existing + deltaWithSeparator, parts: nextParts, liveStatus };
-                });
+                return applyTextDeltaToMessages(prev, assistantId, delta, consumeRoundSeparator);
               });
             } else {
               // Slack mode: accumulate into buffer instead of updating state per-chunk.
-              if (delta) {
-                const separator =
-                  consumeRoundSeparator && textBuffer.length > 0 && !/\s$/.test(textBuffer)
-                    ? "\n\n"
-                    : "";
-                textBuffer += separator + delta;
-              }
+              appendSlackTextDelta(slackBuffers, delta, consumeRoundSeparator);
             }
           } else if (evt === "thinking_start") {
             if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => {
-                  if (msg.id !== assistantId) return msg;
-                  if (msg.thoughtGroups && msg.thoughtGroups.length > 0) {
-                    return { ...msg, liveStatus: "Thinking" };
-                  }
-                  return { ...msg, thoughtGroups: [{ id: "main", toolCalls: [] }], liveStatus: "Thinking" };
-                });
+                return applyThinkingStartToMessages(prev, assistantId);
               });
             } else {
-              if (bufferedThoughtGroups.length === 0) {
-                bufferedThoughtGroups.push({ id: "main", toolCalls: [] });
-              }
+              applySlackThinkingStart(slackBuffers);
             }
           } else if (evt === "thinking_end") {
             const seconds = Number(d.seconds) || 0;
             if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => {
-                  if (msg.id !== assistantId) return msg;
-                  const group = msg.thoughtGroups?.[0];
-                  if (!group) return msg;
-                  return { ...msg, thoughtGroups: [{ ...group, thinkingSeconds: (group.thinkingSeconds ?? 0) + seconds }] };
-                });
+                return applyThinkingEndToMessages(prev, assistantId, seconds);
               });
             } else {
-              const lastGroup = bufferedThoughtGroups[bufferedThoughtGroups.length - 1];
-              if (lastGroup) {
-                lastGroup.thinkingSeconds = (lastGroup.thinkingSeconds ?? 0) + seconds;
-              }
+              applySlackThinkingEnd(slackBuffers, seconds);
             }
             nextTextNeedsRoundSeparator = true;
           } else if (evt === "tool_call") {
-            const tcServerLabel = typeof d.serverLabel === "string" ? d.serverLabel : undefined;
+            const event = {
+              id: String(d.id),
+              name: String(d.name),
+              serverLabel: typeof d.serverLabel === "string" ? d.serverLabel : undefined,
+            };
             if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => {
-                  if (msg.id !== assistantId) return msg;
-                  const group = msg.thoughtGroups?.[0] ?? { id: "main", toolCalls: [] };
-                  // Dedupe by id (defensive — server retry safety).
-                  if (group.toolCalls.some((tc) => tc.id === String(d.id))) return msg;
-                  // Maintain `parts` via the pure helper. Same dedupe contract
-                  // is enforced inside the helper.
-                  const nextParts = applyToolCallEvent(msg.parts ?? [], {
-                    id: String(d.id),
-                    name: String(d.name),
-                    serverLabel: tcServerLabel,
-                  });
-                  return {
-                    ...msg,
-                    thoughtGroups: [{ ...group, toolCalls: [...group.toolCalls, { id: String(d.id), name: String(d.name), status: "running" as const, serverLabel: tcServerLabel }] }],
-                    parts: nextParts,
-                    liveStatus: formatToolProgressStatus({ id: String(d.id), name: String(d.name), status: "running", serverLabel: tcServerLabel }),
-                  };
-                });
+                return applyToolCallToMessages(prev, assistantId, event);
               });
             } else {
-              const lastGroup = bufferedThoughtGroups[bufferedThoughtGroups.length - 1] ?? { id: "main", toolCalls: [] };
-              if (bufferedThoughtGroups.length === 0) bufferedThoughtGroups.push(lastGroup);
-              if (!lastGroup.toolCalls.some((tc) => tc.id === String(d.id))) {
-                lastGroup.toolCalls.push({ id: String(d.id), name: String(d.name), status: "running" as const, serverLabel: tcServerLabel });
-              }
+              applySlackToolCall(slackBuffers, event);
             }
           } else if (evt === "tool_result") {
             const toolName = String(d.name ?? "");
             if (widgetRuntime.isWidgetRefreshTool(toolName)) {
               setWidgetRefreshKey((k) => k + 1);
             }
-            const trServerLabel = typeof d.serverLabel === "string" ? d.serverLabel : undefined;
-            // When the resolved tool is agent_run, parse the `result` JSON
-            // (the server emits JSON.stringify({runId, status})) and pin runId
-            // on the matching tool_call part so the renderer can mount
-            // <InlineAgentRunCard runId={...} /> inline beneath the assistant
-            // message. Defensive: any parse failure is silent.
-            let extractedRunId: string | undefined;
-            if (toolName === "agent_run" && typeof d.result === "string") {
-              try {
-                const parsed = JSON.parse(d.result) as { runId?: unknown };
-                if (typeof parsed.runId === "string" && parsed.runId.length > 0) {
-                  extractedRunId = parsed.runId;
-                }
-              } catch {
-                // No-op — chat dispatch will still render the regular
-                // tool-call status line.
-              }
-            }
+            const event = {
+              id: String(d.id),
+              resultLabel: String(d.resultLabel ?? ""),
+              serverLabel: typeof d.serverLabel === "string" ? d.serverLabel : undefined,
+              // agent_run results carry a runId the renderer pins on the
+              // tool_call part (mounts <InlineAgentRunCard runId={...} />).
+              runId: extractAgentRunId(toolName, d.result),
+            };
             if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => {
-                  if (msg.id !== assistantId) return msg;
-                  const group = msg.thoughtGroups?.[0];
-                  if (!group) return msg;
-                  // Apply via pure helper so behaviour matches the tested
-                  // contract (preserves existing serverLabel when the event
-                  // omits one; no-op when no matching tool_call exists).
-                  const nextParts = msg.parts
-                    ? applyToolResultEvent(msg.parts, {
-                        id: String(d.id),
-                        resultLabel: String(d.resultLabel ?? ""),
-                        serverLabel: trServerLabel,
-                        runId: extractedRunId,
-                      })
-                    : undefined;
-                  return {
-                    ...msg,
-                    thoughtGroups: [{
-                      ...group,
-                      toolCalls: group.toolCalls.map((tc) =>
-                        tc.id === String(d.id)
-                          ? {
-                              ...tc,
-                              status: "completed" as const,
-                              resultLabel: String(d.resultLabel ?? ""),
-                              // Preserve serverLabel when the event doesn't
-                              // supply one — matches the tested helper contract.
-                              serverLabel: trServerLabel ?? tc.serverLabel,
-                            }
-                          : tc,
-                      ),
-                    }],
-                    ...(nextParts ? { parts: nextParts } : {}),
-                    liveStatus: "Reviewing tool results",
-                  };
-                });
+                return applyToolResultToMessages(prev, assistantId, event);
               });
             } else {
-              const lastGroup = bufferedThoughtGroups[bufferedThoughtGroups.length - 1];
-              if (lastGroup) {
-                const tc = lastGroup.toolCalls.find((t) => t.id === String(d.id));
-                if (tc) {
-                  tc.status = "completed";
-                  tc.resultLabel = String(d.resultLabel ?? "");
-                  // Preserve serverLabel when the event omits one — matches
-                  // the tested `applyToolResultEvent` helper contract and the
-                  // ChatGPT-mode branch above. Without this, external
-                  // connector badges (e.g. "WordPress · …") get relabelled
-                  // to generic "Tool · …" on completion in Slack mode.
-                  if (trServerLabel !== undefined) tc.serverLabel = trServerLabel;
-                }
-              }
+              applySlackToolResult(slackBuffers, event);
             }
           } else if (evt === "citations") {
-            const incoming = Array.isArray(d.citations) ? (d.citations as unknown[]) : [];
-            const normalized: Citation[] = incoming
-              .filter((c): c is Record<string, unknown> => c !== null && typeof c === "object")
-              .map((c, i) => ({
-                index: typeof c.index === "number" && isFinite(c.index) ? c.index : i + 1,
-                title: typeof c.title === "string" ? c.title : "",
-                url: typeof c.url === "string" ? c.url : "",
-              }))
-              .filter((c) => c.url.length > 0);
+            const normalized = normalizeCitations(d.citations);
             if (normalized.length > 0) {
               if (!isSlack) {
                 setMessages((prev) => {
                   if (!stillOnOriginThread()) return prev;
-                  return prev.map((msg) => {
-                    if (msg.id !== assistantId) return msg;
-                    const merged = [...(msg.citations ?? []), ...normalized];
-                    const seen = new Set<string>();
-                    const unique = merged.filter((c) => {
-                      if (seen.has(c.url)) return false;
-                      seen.add(c.url);
-                      return true;
-                    });
-                    return { ...msg, citations: unique };
-                  });
+                  return applyCitationsToMessages(prev, assistantId, normalized);
                 });
               } else {
-                const merged = [...bufferedCitations, ...normalized];
-                const seen = new Set<string>();
-                bufferedCitations = merged.filter((c) => {
-                  if (seen.has(c.url)) return false;
-                  seen.add(c.url);
-                  return true;
-                });
+                applySlackCitations(slackBuffers, normalized);
               }
             }
           } else if (evt === "error") {
@@ -2155,10 +907,10 @@ const skipNextThreadLoadRef = useRef(false);
             if (!isSlack) {
               setMessages((prev) => {
                 if (!stillOnOriginThread()) return prev;
-                return prev.map((msg) => msg.id === assistantId ? { ...msg, error: extractErrorMessage(rawError), errorRaw: rawError } : msg);
+                return applyErrorToMessages(prev, assistantId, rawError);
               });
             } else {
-              bufferedError = extractErrorMessage(rawError);
+              slackBuffers.error = extractErrorMessage(rawError);
               break;
             }
           }
@@ -2171,17 +923,17 @@ const skipNextThreadLoadRef = useRef(false);
       // The renderer's fallback to `thoughtGroups + content` runs for these
       // messages. If Slack ever moves to streamed reveal, also build a parts
       // trace here (cf. ChatGPT mode's event handlers above).
-      if (isSlack && stillOnOriginThread() && (textBuffer.length > 0 || bufferedThoughtGroups.length > 0 || bufferedError.length > 0)) {
+      if (isSlack && stillOnOriginThread() && (slackBuffers.text.length > 0 || slackBuffers.thoughtGroups.length > 0 || slackBuffers.error.length > 0)) {
         setMessages((prev) => {
           if (!stillOnOriginThread()) return prev;
           return [...prev, {
             id: assistantId,
             role: "assistant" as const,
-            content: textBuffer,
+            content: slackBuffers.text,
             ...(authorUserId ? { authorUserId } : {}),
-            ...(bufferedThoughtGroups.length > 0 ? { thoughtGroups: bufferedThoughtGroups } : {}),
-            ...(bufferedCitations.length > 0 ? { citations: bufferedCitations } : {}),
-            ...(bufferedError.length > 0 ? { error: bufferedError } : {}),
+            ...(slackBuffers.thoughtGroups.length > 0 ? { thoughtGroups: slackBuffers.thoughtGroups } : {}),
+            ...(slackBuffers.citations.length > 0 ? { citations: slackBuffers.citations } : {}),
+            ...(slackBuffers.error.length > 0 ? { error: slackBuffers.error } : {}),
           }];
         });
       }
@@ -2407,11 +1159,13 @@ const skipNextThreadLoadRef = useRef(false);
     const currentMessages = [...baseMessages, userMessage];
     // For any @mention, switch to Slack mode NOW — in the same synchronous batch as
     // setMessages — so the message is never rendered in normal (right-aligned) mode.
-    // resolveMessageRouting is async; a cheap regex check is sufficient here.
-    // Applies to all messages (not just the first) to handle human-user tags and
-    // built-in assistant tags (@chatgpt) that produce no externalMentions.
-    const newMentionCount = (trimmed.match(/@[a-z0-9_-]+/gi) ?? []).length;
-    if (!isSlackMode && ((taggedAssistantUserIds.length >= 1 && newMentionCount >= 1) || newMentionCount >= 2)) {
+    // resolveMessageRouting is async; the cheap regex check in ./chat-routing is
+    // sufficient here.
+    if (shouldEnterSlackModeOnSend({
+      isSlackMode,
+      taggedAssistantCount: taggedAssistantUserIds.length,
+      mentionCount: countMentions(trimmed),
+    })) {
       // Suppress the enter-animation only on the very first message of a new thread.
       if (baseMessages.length === 0) prevIsSlackModeRef.current = true;
       setIsSlackMode(true);
@@ -2542,7 +1296,7 @@ const skipNextThreadLoadRef = useRef(false);
     }
 
     // Check routing: broadcast to all non-paused participants when no @mention.
-    const { shouldCallLlm, activeHandle, externalMentions, isBroadcast, chatEndpoint, builtInMention } = await resolveMessageRouting(
+    const routing = await resolveMessageRouting(
       trimmed,
       threadId,
       activeAssistantHandle,
@@ -2554,9 +1308,7 @@ const skipNextThreadLoadRef = useRef(false);
     );
     // Optimistically append newly-tagged assistantUserIds to component state BEFORE
     // saveChatThread — this triggers the Slack-mode transition the moment the user sends.
-    const newlyTaggedIds = (externalMentions ?? [])
-      .map((m) => m.assistantUserId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    const newlyTaggedIds = collectNewlyTaggedIds(routing.externalMentions);
     if (newlyTaggedIds.length > 0) {
       // First message with @mention — conversation opens directly in Slack mode,
       // no "switching" animation needed. Mirror the cold-load suppression pattern.
@@ -2567,38 +1319,31 @@ const skipNextThreadLoadRef = useRef(false);
       });
     }
     // Persist the active assistant handle in component state.
-    const nextActiveHandle = activeHandle !== undefined ? (activeHandle || undefined) : activeAssistantHandle;
-    if (activeHandle !== undefined) setActiveAssistantHandle(nextActiveHandle);
+    const nextActiveHandle = routing.activeHandle !== undefined ? (routing.activeHandle || undefined) : activeAssistantHandle;
+    if (routing.activeHandle !== undefined) setActiveAssistantHandle(nextActiveHandle);
 
     // Always attach mentionState to the user message so external assistants get polled.
-    if (externalMentions && externalMentions.length > 0) {
-      const mentionState: Record<string, "pending" | "handled"> = {};
-      for (const m of externalMentions) mentionState[m.assistantUserId] = "pending";
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === userMessage.id ? { ...m, mentions: externalMentions, mentionState } : m,
-        ),
-      );
+    if (routing.externalMentions && routing.externalMentions.length > 0) {
+      const externalMentions = routing.externalMentions;
+      setMessages((prev) => applyExternalMentionsToMessages(prev, userMessage.id, externalMentions));
     }
 
     // Attach mention for built-in assistants so assistantHandleMap resolves their handle → name.
-    if (builtInMention) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === userMessage.id ? { ...m, mentions: [builtInMention] } : m,
-        ),
-      );
+    if (routing.builtInMention) {
+      const builtInMention = routing.builtInMention;
+      setMessages((prev) => applyBuiltInMentionToMessages(prev, userMessage.id, builtInMention));
     }
 
-    if (isBroadcast && !shouldCallLlm) {
+    const plan = resolveDispatchPlan(routing, nextActiveHandle);
+
+    if (plan.kind === "none") {
       // Broadcast fired to external assistants but Cinatra is paused — nothing more to do locally.
       return;
     }
 
-    if (!shouldCallLlm && !isBroadcast) {
+    if (plan.kind === "wait-external") {
       // Only external assistants are active — show waiting indicator.
-      const handle = nextActiveHandle ?? activeHandle ?? "the assistant";
-      setPendingExternalHandle(handle);
+      setPendingExternalHandle(plan.handle);
       if (externalReplyTimerRef.current) clearTimeout(externalReplyTimerRef.current);
       externalReplyTimerRef.current = window.setTimeout(() => {
         externalReplyTimerRef.current = null;
@@ -2608,29 +1353,40 @@ const skipNextThreadLoadRef = useRef(false);
         // "Waiting for @handle…" and the cinatra thinking indicator.
         void streamResponse(currentMessages, "cinatra");
         setPendingExternalHandle(null);
-      }, 20_000);
+      }, EXTERNAL_TAKEOVER_MS);
       return;
     }
 
-    if (shouldCallLlm) {
-      const endpoint = chatEndpoint ?? "/api/chat";
-      const builtInAuthorId = builtInMention?.assistantUserId;
-
-      if (isSlackMode) {
-        // Slack mode: fire-and-forget so sendMessage returns immediately and the
-        // composer unblocks. streamResponse is guaranteed non-throwing by its
-        // internal try/catch, which writes errors into the assistant message, so
-        // void dispatch cannot leak an unhandled rejection.
-        const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
-        void streamResponse(currentMessages, displayHandle, endpoint, builtInAuthorId);
-      } else {
-        // ChatGPT mode: preserve the existing synchronous, blocking behavior.
-        await streamResponse(currentMessages, undefined, endpoint, builtInAuthorId);
-      }
+    // plan.kind === "stream"
+    if (isSlackMode) {
+      // Slack mode: fire-and-forget so sendMessage returns immediately and the
+      // composer unblocks. streamResponse is guaranteed non-throwing by its
+      // internal try/catch, which writes errors into the assistant message, so
+      // void dispatch cannot leak an unhandled rejection.
+      const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
+      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId);
+    } else {
+      // ChatGPT mode: preserve the existing synchronous, blocking behavior.
+      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId);
     }
   }
 
-  const activeTitle = threads.find((t) => t.id === activeThreadId)?.title;
+  // Stable callbacks threaded to the lazily-loaded conversation view.
+  const isStreaming = useCallback(
+    (messageId: string) => streamingAbortControllersRef.current.has(messageId),
+    [],
+  );
+  const handleTogglePause = useCallback((participantId: string, next: boolean) => {
+    setPausedParticipants((prev) =>
+      next ? [...prev, participantId] : prev.filter((id) => id !== participantId),
+    );
+    // The pause button only renders inside an active thread, so activeThreadId
+    // is always set when this fires (same invariant the inline handler relied on).
+    if (activeThreadIdRef.current) {
+      void setAssistantPauseState(activeThreadIdRef.current, participantId, next);
+    }
+  }, []);
+  const handleEditStarted = useCallback(() => setRequestEditMessageId(null), []);
 
   // ----- Empty state -----
   // Only show the start screen when no thread is selected. When activeThreadId is
@@ -2716,607 +1472,34 @@ const skipNextThreadLoadRef = useRef(false);
             userScrolledUpRef.current = distanceFromBottom > 5;
           }}
         >
-          {/* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */}<div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
-            {messages.map((message) => {
-              const isUser = message.role === "user";
-              if (isSlackMode) {
-                const userInitials = session?.user?.name
-                  ? session.user.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-                  : "Me";
-                // Resolve per-message handle: authorUserId → handle map, fallback to "cinatra"
-                const messageHandle = !isUser
-                  ? (message.authorUserId
-                      ? (assistantHandleMap.get(message.authorUserId) ?? activeAssistantHandle ?? "cinatra")
-                      : "cinatra")
-                  : null;
-                const initials = isUser ? userInitials : getParticipantInitials(messageHandle ?? undefined);
-                const displayName = isUser
-                  ? (session?.user?.name ?? "You")
-                  : resolveAssistantDisplayName(messageHandle);
-                const assistantIcon = !isUser ? getAssistantProviderIcon(messageHandle ?? undefined) : null;
-                const participantId = !isUser ? (message.authorUserId ?? "cinatra") : null;
-                const isParticipantPaused = participantId ? pausedParticipants.includes(participantId) : false;
-                return (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      "group flex flex-col gap-1",
-                      animating && "animate-slack-slide-left",
-                    )}
-                  >
-                    {/* Header row: Avatar + name aligned in the middle */}
-                    <div className="flex items-center gap-2">
-                      {/* Resolve sender user ID — covers human, external assistant, and built-in cinatra */}
-                      {(() => {
-                        const senderUserId = isUser
-                          ? userId
-                          : (message.authorUserId ?? mentionables.find((m) => m.handle === (messageHandle ?? "cinatra"))?.id);
-                        const profileHref = senderUserId ? `/users/${senderUserId}` : null;
-                        const avatarEl = (
-                          <Avatar size="sm">
-                            {isUser && session?.user?.image && <AvatarImage src={session.user.image} />}
-                            <AvatarFallback>{assistantIcon ?? initials}</AvatarFallback>
-                          </Avatar>
-                        );
-                        return (
-                          <>
-                            {profileHref ? (
-                              <Link href={profileHref} className={cn("shrink-0", animating && "animate-slack-avatar-fade-in")}>{avatarEl}</Link>
-                            ) : (
-                              <span className={cn("shrink-0", animating && "animate-slack-avatar-fade-in")}>{avatarEl}</span>
-                            )}
-                            <div className={cn("group/name flex items-center gap-1", animating && "animate-slack-name-fade-in")}>
-                              {profileHref ? (
-                                <Link href={profileHref} className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline">{displayName}</Link>
-                              ) : (
-                                <span className="text-xs font-medium text-muted-foreground">{displayName}</span>
-                              )}
-                        {!isUser && activeThreadId && (() => {
-                          // Resolve participant ID: authorUserId for external, "cinatra" for built-in
-                          const participantId = message.authorUserId ?? "cinatra";
-                          const isPaused = pausedParticipants.includes(participantId);
-                          return (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              title={isPaused ? `Resume ${displayName}` : `Pause ${displayName}`}
-                              onClick={() => {
-                                const next = !isPaused;
-                                setPausedParticipants((prev) =>
-                                  next ? [...prev, participantId] : prev.filter((id) => id !== participantId),
-                                );
-                                void setAssistantPauseState(activeThreadId, participantId, next);
-                              }}
-                              className="h-auto w-auto transition-opacity text-muted-foreground hover:text-foreground hover:bg-transparent"
-                            >
-                              {isPaused
-                                ? <PlayCircle className="h-3.5 w-3.5" />
-                                : <PauseCircle className="h-3.5 w-3.5" />}
-                            </Button>
-                          );
-                        })()}
-                            </div>
-                          </>
-                        );
-                      })()}
-                      <div className="flex-1" />
-                      <div className="flex items-center gap-0.5">
-                        {isUser && !hasActiveStream && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            title="Edit message"
-                            onClick={() => setRequestEditMessageId(message.id)}
-                            className="h-auto w-auto rounded p-1 text-muted-foreground hover:text-foreground hover:bg-surface-muted transition-colors"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          title="Copy message"
-                          onClick={() => void navigator.clipboard.writeText(message.content)}
-                          className="h-auto w-auto rounded p-1 text-muted-foreground hover:text-foreground hover:bg-surface-muted transition-colors"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    {/* Bubble indented to align with name (past avatar + gap) */}
-                    <div className="relative ml-8 max-w-[85%]">
-                      {isUser ? (
-                        <UserMessageBubble
-                          message={message}
-                          onEdit={(id, content) => void editAndResend(id, content)}
-                          disabled={hasActiveStream}
-                          isSlackMode
-                          editRequested={requestEditMessageId === message.id}
-                          onEditStarted={() => setRequestEditMessageId(null)}
-                          mentionables={mentionables}
-                        />
-                      ) : (
-                        <div className="group min-w-0 max-w-full flex-1">
-                          {/* Ordered parts: when an assistant message
-                              has a `parts` trace, render text + tool badges
-                              chronologically interleaved. Replaces the
-                              flat thoughtGroups-above-content layout. Old
-                              messages without parts fall through to the
-                              legacy path below. */}
-                          {message.parts && message.parts.length > 0 && !message.error ? (
-                            <OrderedPartsSection
-                              parts={message.parts}
-                              trimContent={streamingAbortControllersRef.current.has(message.id) ? trimIncompleteEmbeds : undefined}
-                              theme={theme}
-                              detectWidgets={widgetRuntime.detectWidgets}
-                              onMarkdownClick={handleAssistantMarkdownClick}
-                              onActiveGateChange={handleActiveGateChange}
-                            />
-                          ) : (
-                            <>
-                              {message.thoughtGroups && message.thoughtGroups.length > 0 && !streamingAbortControllersRef.current.has(message.id) && (
-                                <div>
-                                  {message.thoughtGroups.map((group) => (
-                                    <ThoughtGroupSection
-                                      key={group.id}
-                                      group={group}
-                                      isLive={streamingAbortControllersRef.current.has(message.id)}
-                                    />
-                                  ))}
-                                </div>
-                              )}
-                            </>
-                          )}
-                          {message.error ? (
-                            <ErrorCard error={message.error} errorRaw={message.errorRaw} />
-                          ) : (message.parts && message.parts.length > 0) ? (
-                            // Rich-content adjuncts (mermaid, charts, citations,
-                            // widgets) are computed from `message.content` which
-                            // is populated alongside `parts`. Render them BELOW
-                            // the interleaved parts so the feature set matches
-                            // the legacy path.
-                            <>
-                              {(() => {
-                                const widgets = widgetRuntime.detectWidgets(message.content);
-                                if (widgets.length === 0) return null;
-                                const isLastMessage = message === messages[messages.length - 1];
-                                return widgets.map((widget) => (
-                                  <ChatWidget
-                                    key={widget.widgetId + widget.resourceId}
-                                    widget={widget}
-                                    def={widgetRuntime.findWidget(widget.widgetId)}
-                                    submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
-                                    isOlderWidget={!isLastMessage}
-                                    refreshKey={widgetRefreshKey}
-                                  />
-                                ));
-                              })()}
-                              {(() => {
-                                const mermaidBlocks = detectMermaidBlocks(message.content);
-                                if (mermaidBlocks.length === 0) return null;
-                                return mermaidBlocks.map((block, i) => (
-                                  <MermaidBlock
-                                    key={`${message.id}-mermaid-${i}`}
-                                    id={`${message.id}-${i}`}
-                                    source={block.source}
-                                  />
-                                ));
-                              })()}
-                              {(() => {
-                                const charts = detectCharts(message.content);
-                                if (charts.length === 0) return null;
-                                return charts.map((c, i) =>
-                                  c.spec
-                                    ? <ChartEmbed key={`chart-${message.id}-${i}`} spec={c.spec} />
-                                    : <ChartError key={`chart-err-${message.id}-${i}`} reason="invalid schema" />,
-                                );
-                              })()}
-                              {message.citations && message.citations.length > 0 && (
-                                <div className="mt-4 border-t border-line pt-3">
-                                  <div className="mb-2 text-xs font-semibold text-muted-foreground">Sources</div>
-                                  <ol className="text-xs">
-                                    {message.citations.map((c, i) => {
-                                      const host = (() => {
-                                        try { return new URL(c.url).hostname.replace(/^www\./, ""); } catch { return c.url; }
-                                      })();
-                                      return (
-                                        <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
-                                          <span className="text-muted-foreground">{i + 1}.</span>
-                                          <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
-                                            {c.title || host}
-                                            <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                          </Link>
-                                        </li>
-                                      );
-                                    })}
-                                  </ol>
-                                </div>
-                              )}
-                              {streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) && (
-                                <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
-                              )}
-                            </>
-                          ) : message.content ? (
-                            <>
-                              <div
-                                className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                                dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                                  streamingAbortControllersRef.current.has(message.id)
-                                    ? trimIncompleteEmbeds(message.content)
-                                    : message.content,
-                                  theme,
-                                  widgetRuntime.detectWidgets,
-                                ) }}
-                                onClick={handleAssistantMarkdownClick}
-                              />
-                              {(() => {
-                                const widgets = widgetRuntime.detectWidgets(message.content);
-                                if (widgets.length === 0) return null;
-                                const isLastMessage = message === messages[messages.length - 1];
-                                return widgets.map((widget) => (
-                                  <ChatWidget
-                                    key={widget.widgetId + widget.resourceId}
-                                    widget={widget}
-                                    def={widgetRuntime.findWidget(widget.widgetId)}
-                                    submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
-                                    isOlderWidget={!isLastMessage}
-                                    refreshKey={widgetRefreshKey}
-                                  />
-                                ));
-                              })()}
-                              {(() => {
-                                const mermaidBlocks = detectMermaidBlocks(message.content);
-                                if (mermaidBlocks.length === 0) return null;
-                                return mermaidBlocks.map((block, i) => (
-                                  <MermaidBlock
-                                    key={`${message.id}-mermaid-${i}`}
-                                    id={`${message.id}-${i}`}
-                                    source={block.source}
-                                  />
-                                ));
-                              })()}
-                              {(() => {
-                                const charts = detectCharts(message.content);
-                                if (charts.length === 0) return null;
-                                return charts.map((c, i) =>
-                                  c.spec
-                                    ? <ChartEmbed key={`chart-${message.id}-${i}`} spec={c.spec} />
-                                    : <ChartError key={`chart-err-${message.id}-${i}`} reason="invalid schema" />,
-                                );
-                              })()}
-                              {message.citations && message.citations.length > 0 && (
-                                <div className="mt-4 border-t border-line pt-3">
-                                  <div className="mb-2 text-xs font-semibold text-muted-foreground">Sources</div>
-                                  <ol className="text-xs">
-                                    {message.citations.map((c, i) => {
-                                      const host = (() => {
-                                        try { return new URL(c.url).hostname.replace(/^www\./, ""); } catch { return c.url; }
-                                      })();
-                                      return (
-                                        <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
-                                          <span className="text-muted-foreground">{i + 1}.</span>
-                                          <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
-                                            {c.title || host}
-                                            <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                          </Link>
-                                        </li>
-                                      );
-                                    })}
-                                  </ol>
-                                </div>
-                              )}
-                              {streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) && (
-                                <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
-                              )}
-                            </>
-                          ) : streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) ? (
-                            <ThinkingIndicator label={getLiveProgressStatus(message)} />
-                          ) : null}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              }
-              // ChatGPT branch — preserve byte-identical render behavior.
-              const showParticipantHeaders = true;
-              const nmUserInitials = session?.user?.name
-                ? session.user.name.split(" ").map((n: string) => n[0]).filter(Boolean).join("").toUpperCase().slice(0, 2)
-                : "Me";
-              const nmUserName = session?.user?.name ?? "You";
-              const nmThreadHasMention = taggedAssistantUserIds.length >= 1
-                || messages.some((m) => m.role === "user" && /@[a-z0-9_-]+/i.test(m.content));
-              const nmResolvedHandle = nmThreadHasMention ? activeAssistantHandle : undefined;
-              const nmHandle = !isUser
-                ? (message.authorUserId
-                    ? (assistantHandleMap.get(message.authorUserId) ?? nmResolvedHandle ?? "cinatra")
-                    : (nmResolvedHandle ?? "cinatra"))
-                : null;
-              const nmDisplayName = isUser ? nmUserName : resolveAssistantDisplayName(nmHandle);
-              const nmAssistantIcon = !isUser ? getAssistantProviderIcon(nmHandle ?? undefined) : null;
-              const nmInitials = !isUser ? getParticipantInitials(nmHandle ?? undefined) : nmUserInitials;
-              return (
-                <div key={message.id} className={cn("flex flex-col gap-1", isUser && "items-end")}>
-                  {showParticipantHeaders && (
-                    isUser ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-muted-foreground">{nmUserName}</span>
-                        <Avatar size="sm">
-                          {session?.user?.image && <AvatarImage src={session.user.image} />}
-                          <AvatarFallback>{nmUserInitials}</AvatarFallback>
-                        </Avatar>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <Avatar size="sm">
-                          <AvatarFallback>{nmAssistantIcon ?? nmInitials}</AvatarFallback>
-                        </Avatar>
-                        <span className="text-xs font-medium text-muted-foreground">{nmDisplayName}</span>
-                      </div>
-                    )
-                  )}
-                  {isUser ? (
-                    <UserMessageBubble
-                      message={message}
-                      onEdit={(id, content) => void editAndResend(id, content)}
-                      disabled={hasActiveStream}
-                      mentionables={mentionables}
-                    />
-                  ) : (
-                    <div className="group min-w-0 max-w-full flex-1">
-                      {/* Ordered parts — see comment at the first render site
-                          above. Same conditional applies here in slack-mode
-                          view. */}
-                      {message.parts && message.parts.length > 0 && !message.error ? (
-                        <OrderedPartsSection
-                          parts={message.parts}
-                          trimContent={streamingAbortControllersRef.current.has(message.id) ? trimIncompleteEmbeds : undefined}
-                          theme={theme}
-                          detectWidgets={widgetRuntime.detectWidgets}
-                          onMarkdownClick={handleAssistantMarkdownClick}
-                          onActiveGateChange={handleActiveGateChange}
-                        />
-                      ) : (
-                        <>
-                          {message.thoughtGroups && message.thoughtGroups.length > 0 && !streamingAbortControllersRef.current.has(message.id) && (
-                            <div>
-                              {message.thoughtGroups.map((group) => (
-                                <ThoughtGroupSection
-                                  key={group.id}
-                                  group={group}
-                                  isLive={streamingAbortControllersRef.current.has(message.id)}
-                                />
-                              ))}
-                            </div>
-                          )}
-                        </>
-                      )}
-                      {message.error ? (
-                        <ErrorCard error={message.error} errorRaw={message.errorRaw} />
-                      ) : (message.parts && message.parts.length > 0) ? (
-                        // Same rich-content adjuncts treatment as the
-                        // ChatGPT-mode render site above.
-                        <>
-                          {(() => {
-                            const widgets = widgetRuntime.detectWidgets(message.content);
-                            if (widgets.length === 0) return null;
-                            const isLastMessage = message === messages[messages.length - 1];
-                            return widgets.map((widget) => (
-                              <ChatWidget
-                                key={widget.widgetId + widget.resourceId}
-                                widget={widget}
-                                def={widgetRuntime.findWidget(widget.widgetId)}
-                                submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
-                                isOlderWidget={!isLastMessage}
-                                refreshKey={widgetRefreshKey}
-                              />
-                            ));
-                          })()}
-                          {(() => {
-                            const mermaidBlocks = detectMermaidBlocks(message.content);
-                            if (mermaidBlocks.length === 0) return null;
-                            return mermaidBlocks.map((block, i) => (
-                              <MermaidBlock
-                                key={`${message.id}-mermaid-${i}`}
-                                id={`${message.id}-${i}`}
-                                source={block.source}
-                              />
-                            ));
-                          })()}
-                          {(() => {
-                            const charts = detectCharts(message.content);
-                            if (charts.length === 0) return null;
-                            return charts.map((c, i) =>
-                              c.spec
-                                ? <ChartEmbed key={`chart-${message.id}-${i}`} spec={c.spec} />
-                                : <ChartError key={`chart-err-${message.id}-${i}`} reason="invalid schema" />,
-                            );
-                          })()}
-                          {message.citations && message.citations.length > 0 && (
-                            <div className="mt-4 border-t border-line pt-3">
-                              <div className="mb-2 text-xs font-semibold text-muted-foreground">Sources</div>
-                              <ol className="text-xs">
-                                {message.citations.map((c, i) => {
-                                  const host = (() => {
-                                    try { return new URL(c.url).hostname.replace(/^www\./, ""); } catch { return c.url; }
-                                  })();
-                                  return (
-                                    <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
-                                      <span className="text-muted-foreground">{i + 1}.</span>
-                                      <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
-                                        {c.title || host}
-                                        <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                      </Link>
-                                    </li>
-                                  );
-                                })}
-                              </ol>
-                            </div>
-                          )}
-                          {streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) && (
-                            <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
-                          )}
-                        </>
-                      ) : message.content ? (
-                        <>
-                          <div
-                            className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
-                            dangerouslySetInnerHTML={{ __html: renderMarkdown(
-                              // While streaming, trim incomplete embed prefixes so partial
-                              // JSON/mermaid never flashes as raw text in the markdown output.
-                              streamingAbortControllersRef.current.has(message.id)
-                                ? trimIncompleteEmbeds(message.content)
-                                : message.content,
-                              theme,
-                              widgetRuntime.detectWidgets,
-                            ) }}
-                            /* renderMarkdown strips mermaid blocks; they are rendered separately below */
-                            onClick={handleAssistantMarkdownClick}
-                          />
-                          {(() => {
-                            const widgets = widgetRuntime.detectWidgets(message.content);
-                            if (widgets.length === 0) return null;
-                            const isLastMessage = message === messages[messages.length - 1];
-                            return widgets.map((widget) => (
-                              <ChatWidget
-                                key={widget.widgetId + widget.resourceId}
-                                widget={widget}
-                                def={widgetRuntime.findWidget(widget.widgetId)}
-                                submitRef={isLastMessage ? widgetSubmitRef : { current: null }}
-                                isOlderWidget={!isLastMessage}
-                                refreshKey={widgetRefreshKey}
-                              />
-                            ));
-                          })()}
-                          {(() => {
-                            const mermaidBlocks = detectMermaidBlocks(message.content);
-                            if (mermaidBlocks.length === 0) return null;
-                            return mermaidBlocks.map((block, i) => (
-                              <MermaidBlock
-                                key={`${message.id}-mermaid-${i}`}
-                                id={`${message.id}-${i}`}
-                                source={block.source}
-                              />
-                            ));
-                          })()}
-                          {(() => {
-                            const charts = detectCharts(message.content);
-                            if (charts.length === 0) return null;
-                            return charts.map((c, i) =>
-                              c.spec
-                                ? <ChartEmbed key={`chart-${message.id}-${i}`} spec={c.spec} />
-                                : <ChartError key={`chart-err-${message.id}-${i}`} reason="invalid schema" />,
-                            );
-                          })()}
-                          {message.role === "assistant" && message.citations && message.citations.length > 0 && (
-                            <div className="mt-4 border-t border-line pt-3">
-                              <div className="mb-2 text-xs font-semibold text-muted-foreground">Sources</div>
-                              <ol className="text-xs">
-                                {message.citations.map((c, i) => {
-                                  const host = (() => {
-                                    try { return new URL(c.url).hostname.replace(/^www\./, ""); } catch { return c.url; }
-                                  })();
-                                  return (
-                                    <li key={`${message.id}-cite-${i}`} className="my-1 flex gap-2 first:mt-0">
-                                      <span className="text-muted-foreground">{i + 1}.</span>
-                                      <Link href={c.url} target="_blank" rel="noreferrer" className="truncate text-muted-foreground underline underline-offset-4 hover:text-foreground">
-                                        {c.title || host}
-                                        <span className="ml-2 text-muted-foreground/70">({host})</span>
-                                      </Link>
-                                    </li>
-                                  );
-                                })}
-                              </ol>
-                            </div>
-                          )}
-                          {streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) && (
-                            <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
-                          )}
-                          {(() => {
-                            const confirmMatch = message.content.match(/\[confirm-([a-z_-]+):([a-f0-9-]{36})\]/i);
-                            if (!confirmMatch) return null;
-                            const [, resourceType, resourceId] = confirmMatch;
-                            const manifest = widgetRuntime.findManifestByConfirmationResourceType(resourceType);
-                            if (!manifest?.wizard) return null;
-                            const isLastMessage = message === messages[messages.length - 1];
-                            if (!isLastMessage) return null;
-                            return (
-                              <div className="mt-3 flex gap-2">
-                                <Button
-                                  type="button"
-                                  onClick={() => void activateResource(resourceType, resourceId)}
-                                  disabled={hasActiveStream}
-                                  className="h-auto rounded-xl bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/80 disabled:opacity-50"
-                                >
-                                  {manifest.wizard.confirmation.buttonLabel}
-                                </Button>
-                              </div>
-                            );
-                          })()}
-                          {!(streamingAbortControllersRef.current.has(message.id)) && (
-                            <div className="mt-1 flex gap-0.5">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => void navigator.clipboard.writeText(message.content)}
-                                className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground"
-                                title="Copy response"
-                              >
-                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
-                                  <rect x="5.5" y="5.5" width="7" height="7" rx="1" />
-                                  <path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5" />
-                                </svg>
-                              </Button>
-                              {(() => {
-                                const idx = messages.findIndex((m) => m.id === message.id);
-                                const prevUser = idx > 0 ? messages.slice(0, idx).findLast((m) => m.role === "user") : undefined;
-                                if (!prevUser || isSlackMode) return null;
-                                return (
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => void editAndResend(prevUser.id, prevUser.content)}
-                                    disabled={hasActiveStream}
-                                    className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground disabled:opacity-50"
-                                    title="Try again"
-                                  >
-                                    <RotateCcw className="h-3.5 w-3.5" />
-                                  </Button>
-                                );
-                              })()}
-                            </div>
-                          )}
-                        </>
-                      ) : streamingAbortControllersRef.current.has(message.id) && shouldShowLiveProgressStatus(message) ? (
-                        <ThinkingIndicator label={getLiveProgressStatus(message)} />
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {/* Waiting indicator — shown while an external assistant is expected to reply */}
-            {pendingExternalHandle && (
-              <div className="flex justify-start">
-                <div className="min-w-0 max-w-full flex-1">
-                  <WaitingIndicator handle={pendingExternalHandle} />
-                </div>
-              </div>
-            )}
-            {/* Slack mode: per-assistant typing indicator while stream is buffering */}
-            {isSlackMode && typingIndicators.size > 0 && Array.from(typingIndicators.entries()).map(([id, indicatorHandle]) => (
-              <div key={id} className="flex justify-start">
-                <div className="min-w-0 max-w-full flex-1">
-                  <SlackTypingIndicator handle={indicatorHandle} />
-                </div>
-              </div>
-            ))}
-          </div>
+          <ChatMessagesView
+            messages={messages}
+            isSlackMode={isSlackMode}
+            animating={animating}
+            theme={theme}
+            userId={userId}
+            sessionUser={session?.user}
+            activeThreadId={activeThreadId}
+            activeAssistantHandle={activeAssistantHandle}
+            assistantHandleMap={assistantHandleMap}
+            taggedAssistantUserIds={taggedAssistantUserIds}
+            mentionables={mentionables}
+            pausedParticipants={pausedParticipants}
+            onTogglePause={handleTogglePause}
+            requestEditMessageId={requestEditMessageId}
+            onRequestEditMessage={setRequestEditMessageId}
+            onEditStarted={handleEditStarted}
+            hasActiveStream={hasActiveStream}
+            isStreaming={isStreaming}
+            onEditAndResend={(id, content) => void editAndResend(id, content)}
+            onActivateResource={(resourceType, resourceId) => void activateResource(resourceType, resourceId)}
+            widgetRuntime={widgetRuntime}
+            widgetSubmitRef={widgetSubmitRef}
+            widgetRefreshKey={widgetRefreshKey}
+            onActiveGateChange={handleActiveGateChange}
+            pendingExternalHandle={pendingExternalHandle}
+            typingIndicators={typingIndicators}
+          />
         </div>
 
         {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
