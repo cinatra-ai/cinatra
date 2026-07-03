@@ -15,6 +15,12 @@ import { canDo } from "@/lib/authz";
 // this RSC path. Mirrors src/lib/mcp-server.ts. Without it the dispatcher
 // would find no handlers and both tabs would be empty.
 import "@/lib/extensions";
+// The artifact reader facet lists the in-memory object-type registry, which is
+// populated LAZILY (artifact-service surfaces + the dev watcher) — on a fresh
+// production server this page can render before anything warmed it, silently
+// dropping every artifact card. Warm it exactly like the artifact services do
+// (idempotent; replace-by-id registry).
+import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { resolveExtensionDiscoveryContext } from "@/lib/extension-discovery-scope";
 import { getConnectorSetupHref } from "@/lib/connectors-registry.server";
 // Active + archived discovery both route through the canonical
@@ -428,6 +434,11 @@ export async function RegistryCatalogScreen({
     session,
     vendorScope ?? null,
   );
+
+  // Warm the object-type registry so the artifact reader facet sees the
+  // bundled artifact types even when this page is the first surface rendered
+  // by a fresh server process (see the import note above).
+  registerAllObjectTypes();
 
   const [
     available,
