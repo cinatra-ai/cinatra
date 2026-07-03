@@ -436,3 +436,21 @@ function stripChartEmbeds(text: string): string {
   }
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Mermaid block detection (moved unchanged from chat-page.tsx, cinatra#918 —
+// beside detectCharts: both scan assistant content for renderable embeds and
+// both are only needed behind the lazy message-view boundary)
+// ---------------------------------------------------------------------------
+
+export type MermaidSource = { source: string };
+
+export function detectMermaidBlocks(text: string): MermaidSource[] {
+  const blocks: MermaidSource[] = [];
+  const re = /```mermaid\n([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    blocks.push({ source: m[1].trim() });
+  }
+  return blocks;
+}

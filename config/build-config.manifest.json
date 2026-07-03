@@ -345,6 +345,7 @@
     { "alias": "@cinatra-ai/skills/mcp-handlers", "target": "./packages/skills/src/mcp/handlers.ts" },
     { "alias": "@cinatra-ai/skills/mcp-module", "target": "./packages/skills/src/mcp/module.ts" },
     { "alias": "@cinatra-ai/chat", "target": "./packages/chat/src/index.ts" },
+    { "alias": "@cinatra-ai/chat/chat-page", "target": "./packages/chat/src/chat-page.tsx" },
     { "alias": "@cinatra-ai/chat/actions", "target": "./packages/chat/src/actions.ts" },
     { "alias": "@cinatra-ai/chat/module", "target": "./packages/chat/src/integration/module.ts" },
     { "alias": "@cinatra-ai/chat/mcp-handlers", "target": "./packages/chat/src/mcp/handlers.ts" },

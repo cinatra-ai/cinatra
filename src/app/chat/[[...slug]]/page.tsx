@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { requireAuthSession } from "@/lib/auth-session";
 import { resolveChatWidgetCatalog } from "@/lib/chat-widget-catalog.server";
-import { ChatPage } from "@cinatra-ai/chat";
+// Narrow subpath import (not the @cinatra-ai/chat barrel): the barrel also
+// re-exports the thread/history/side panels this page never renders, and the
+// /chat route-graph ratchet counts every module the entry can reach. The
+// panels stay exported from the barrel for the chat layout + other consumers.
+import { ChatPage } from "@cinatra-ai/chat/chat-page";
 
 export const metadata: Metadata = { title: "Chat" };
 
