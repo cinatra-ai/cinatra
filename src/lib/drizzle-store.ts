@@ -9,9 +9,6 @@ import { eq, notInArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 import type { BindingScope, OwnerScope, SourceKind } from "@cinatra-ai/skills";
-// Extracted vertical DDL slice (file-size ratchet): semantic_assertion +
-// artifact_materializations. Splices into buildCreateStoreSchemaQueries below.
-import { buildSemanticArtifactStoreDdl } from "./drizzle-store-semantic-artifacts-ddl";
 
 type QueryInput = {
   text: string;
@@ -176,63 +173,14 @@ function getPayloadTable(store: StoreTables, tableName: Exclude<TableName, "meta
 // ---------------------------------------------------------------------------
 // public."member" dedup ranking
 // ---------------------------------------------------------------------------
-// JS mirror of the window-CTE ORDER BY in buildCreateStoreSchemaQueries'
-// member dedup block. Source of truth is the SQL; this mirror exists so the
-// ranking strategy can be unit-tested on synthetic rows (the SQL byte-shape
-// is independently guarded by member-dedup-migration-shape.test.ts). Keep
-// the two in lockstep when either changes.
-
-export type MemberDedupRow = {
-  id: string;
-  role: string | null;
-  createdAt: Date | string | null;
-};
-
-// owner > admin > member > unknown/NULL, taken as the MAX across comma-split
-// role tokens. Better Auth stores multi-role membership as comma-joined text
-// ('owner,admin') and splits member.role on commas in its permission checks,
-// so 'owner,admin' is owner-capable and must rank as owner (3) — never 0,
-// which would let a plain 'member' row survive the dedup and the owner-capable
-// row be deleted. Unknown/custom tokens contribute 0. Mirrors the SQL
-// role_rank = MAX(CASE trim(tok) ...) over unnest(string_to_array(role, ',')).
-export function memberDedupRoleRank(role: string | null | undefined): number {
-  if (!role) return 0;
-  return role.split(",").reduce((max, raw) => {
-    const tok = raw.trim();
-    const rank = tok === "owner" ? 3 : tok === "admin" ? 2 : tok === "member" ? 1 : 0;
-    return rank > max ? rank : max;
-  }, 0);
-}
-
-// Mirrors `"createdAt" ASC NULLS LAST`: NULL/invalid createdAt sorts last.
-function memberDedupCreatedAtKey(createdAt: Date | string | null): number {
-  if (createdAt == null) return Number.POSITIVE_INFINITY;
-  const ms = createdAt instanceof Date ? createdAt.getTime() : new Date(createdAt).getTime();
-  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
-}
-
-// Negative => a survives over b. Order: role rank DESC, createdAt ASC (NULLS
-// LAST), id ASC — identical to the SQL window ORDER BY.
-export function compareMemberDedup(a: MemberDedupRow, b: MemberDedupRow): number {
-  const rankDelta = memberDedupRoleRank(b.role) - memberDedupRoleRank(a.role);
-  if (rankDelta !== 0) return rankDelta;
-  // Compare keys directly (not by subtraction) so two NULLS-LAST rows
-  // (both Infinity) fall through to the id tie-break instead of producing
-  // NaN from Infinity - Infinity.
-  const ka = memberDedupCreatedAtKey(a.createdAt);
-  const kb = memberDedupCreatedAtKey(b.createdAt);
-  if (ka !== kb) return ka < kb ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-// Returns the row that survives dedup for a single (organizationId, userId)
-// partition — i.e. the SQL window's rn = 1 row.
-export function pickSurvivingMemberRow<T extends MemberDedupRow>(rows: T[]): T {
-  if (rows.length === 0) {
-    throw new Error("pickSurvivingMemberRow: empty partition");
-  }
-  return [...rows].sort(compareMemberDedup)[0];
-}
+// Member-dedup ranking mirror — extracted vertical slice (file-size
+// ratchet); re-exported so existing import sites are unchanged.
+export {
+  memberDedupRoleRank,
+  compareMemberDedup,
+  pickSurvivingMemberRow,
+  type MemberDedupRow,
+} from "./drizzle-store-member-dedup";
 
 export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {
   const queries: QueryInput[] = [
@@ -1934,10 +1882,99 @@ END;
 $body$` },
     { text: `DROP TRIGGER IF EXISTS trg_representation_append_only ON "${schemaName.replaceAll('"', '""')}"."representation"` },
     { text: `CREATE TRIGGER trg_representation_append_only BEFORE UPDATE OR DELETE ON "${schemaName.replaceAll('"', '""')}"."representation" FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_representation_append_only"()` },
-    // Artifact semantic-identity store + materialization ledger DDL —
-    // extracted vertical slice (drizzle-store-semantic-artifacts-ddl.ts);
-    // splices back here in the exact original order.
-    ...buildSemanticArtifactStoreDdl(schemaName),
+    // `semantic_assertion` — the ONLY semantic identity of an artifact.
+    // DB-level guards, generalizing the partial-index
+    // lesson — service enforcement alone is insufficient against a raw-SQL/
+    // MCP bypass):
+    //  - asserted_by ∈ user|authoring_skill|agent|matcher; eligibility ∈
+    //    eligible|draft|archived (enum CHECKs);
+    //  - a `matcher` row may ONLY be draft|archived — NEVER eligible (so a
+    //    matcher draft can never become eligible by UPDATE either);
+    //  - a non-matcher row is NEVER `draft` (draft is the matcher-pending
+    //    state only);
+    //  - ≤1 ACTIVE (non-archived) assertion per (org,artifact,extension)
+    //    (partial-unique);
+    //  - BEFORE UPDATE trigger freezes extension/asserted_by/asserted_at/
+    //    confidence (reclassification = a NEW row, never a mutation —
+    //    replay-safety).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (
+  id                    text PRIMARY KEY,
+  org_id                text NOT NULL,
+  artifact_id           text NOT NULL,
+  extension             text NOT NULL,
+  asserted_by           text NOT NULL,
+  eligibility           text NOT NULL,
+  confidence            double precision,
+  asserted_by_principal text,
+  asserted_at           timestamptz NOT NULL DEFAULT now(),
+  archived_at           timestamptz,
+  CONSTRAINT sa_assertedby_chk CHECK (asserted_by IN ('user','authoring_skill','agent','matcher')),
+  CONSTRAINT sa_elig_chk CHECK (eligibility IN ('eligible','draft','archived')),
+  CONSTRAINT sa_matcher_draft_chk CHECK (asserted_by <> 'matcher' OR eligibility IN ('draft','archived')),
+  CONSTRAINT sa_nonmatcher_nodraft_chk CHECK (asserted_by = 'matcher' OR eligibility <> 'draft')
+)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS sa_active_unique_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id, extension) WHERE eligibility <> 'archived'` },
+    { text: `CREATE INDEX IF NOT EXISTS sa_artifact_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS sa_eligible_idx ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" (org_id, artifact_id) WHERE eligibility = 'eligible'` },
+    { text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_semantic_assertion_frozen"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  IF NEW.extension <> OLD.extension OR NEW.asserted_by <> OLD.asserted_by
+     OR NEW.asserted_at <> OLD.asserted_at
+     OR NEW.confidence IS DISTINCT FROM OLD.confidence
+     OR NEW.artifact_id <> OLD.artifact_id OR NEW.org_id <> OLD.org_id THEN
+    RAISE EXCEPTION 'semantic_assertion identity is immutable: extension/asserted_by/asserted_at/confidence/artifact_id/org_id cannot change — reclassification must INSERT a new assertion';
+  END IF;
+  -- The ONLY legal eligibility UPDATE is a
+  -- transition INTO 'archived' from a non-archived state. No resurrection
+  -- (archived -> eligible/draft), no eligible<->draft re-write, no
+  -- archived no-op churn. Becoming eligible/draft happens ONLY via INSERT
+  -- This preserves raw-SQL and MCP defense-in-depth.
+  IF NEW.eligibility <> OLD.eligibility THEN
+    IF OLD.eligibility = 'archived' OR NEW.eligibility <> 'archived' THEN
+      RAISE EXCEPTION 'semantic_assertion eligibility may only transition to archived from a non-archived state: % -> % forbidden — becoming eligible/draft requires a new INSERT', OLD.eligibility, NEW.eligibility;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$body$` },
+    { text: `DROP TRIGGER IF EXISTS trg_semantic_assertion_frozen ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion"` },
+    { text: `CREATE TRIGGER trg_semantic_assertion_frozen BEFORE UPDATE ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_semantic_assertion_frozen"()` },
+    // ---- artifact_materializations idempotency ledger (cinatra#923) ----
+
+    // Claim-then-write-then-finalize journal for declarative artifact
+    // materialization (the install-op-journal shape). One row per attempted
+    // materialization; the 4-part unique key is the RETRY-idempotency
+    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
+    // hits the same key, reads the finalized row's refs and returns them
+    // instead of writing a second artifact. `phase` transitions
+    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
+    // artifact write — no window in which a committed artifact is invisible
+    // to the ledger). An unfinalized (crashed) claim is re-used by the next
+    // re-drive.
+    //
+    // `output_id` identity per path: the EndNode output name for
+    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
+    // the authoring step id for `llm_emit` provenance rows (unique per emit,
+    // so legitimately distinct same-byte emits never collide on the key).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
+  id                          text PRIMARY KEY,
+  org_id                      text NOT NULL,
+  run_id                      text NOT NULL,
+  output_id                   text NOT NULL,
+  node_id                     text,
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit')),
+  extension                   text NOT NULL,
+  content_hash                text NOT NULL,
+  artifact_id                 text,
+  representation_revision_id  text,
+  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
+  created_at                  timestamptz NOT NULL DEFAULT now()
+)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
+    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
+    // declarative rows of one run by extension + content hash.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
     // ---- run_context_selections audit table ----
 
     // Append-only audit row written by the context-agent at every
