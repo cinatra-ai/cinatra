@@ -208,13 +208,21 @@ describe("collectArtifactMaterializeNodesFromOasDocument", () => {
     expect(result.nodes).toHaveLength(1);
   });
 
-  it("rejects an unparseable string data block that mentions the tool", () => {
-    const result = collectArtifactMaterializeNodesFromOasDocument(
+  it("rejects ANY unparseable string data block (dynamic-payload bypass)", () => {
+    // A block that mentions the tool...
+    let result = collectArtifactMaterializeNodesFromOasDocument(
       docWithApiNode(
         materializeNode({
           data: '{"tool": "artifact_materialize", "input": {{ mangled }}',
         }),
       ),
+    );
+    expect(result.errors[0]).toContain("statically validatable");
+
+    // ...and a fully-templated block that could RESOLVE to the tool at run
+    // time with every static check skipped (codex round 1).
+    result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(materializeNode({ data: "{{ passthrough_payload }}" })),
     );
     expect(result.errors[0]).toContain("statically validatable");
   });

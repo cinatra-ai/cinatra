@@ -326,12 +326,17 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         // fall through — handled below
       }
       if (typeof data === "string") {
-        if (data.includes(ARTIFACT_MATERIALIZE_TOOL)) {
-          errors.push(
-            `${where}.data: a passthrough data block mentioning "${ARTIFACT_MATERIALIZE_TOOL}" ` +
-              "must be object-shaped (or a parseable JSON string) so the call is statically validatable",
-          );
-        }
+        // FAIL CLOSED on ANY string data block that does not parse to an
+        // object (codex round 1): a fully-templated block (e.g.
+        // "{{ passthrough_payload }}") could resolve to an
+        // artifact_materialize call at run time with every static check
+        // skipped. The fleet authors object-shaped blocks, so nothing
+        // existing reddens.
+        errors.push(
+          `${where}.data: a passthrough data block must be object-shaped (or a ` +
+            "parseable JSON string) so the tool selection is statically validatable " +
+            `(got a non-JSON string)`,
+        );
         return;
       }
     }
