@@ -21,10 +21,31 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(),
-  writeInstanceIdentity: vi.fn(),
-}));
+vi.mock("@/lib/instance-identity-store", () => {
+  const readInstanceIdentity = vi.fn();
+  const writeInstanceIdentity = vi.fn();
+  // cinatra#850: registry-slot persistence now flows through a row-level-CAS
+  // wrapper (`updateInstanceIdentityRegistries`). The handler/action behavioral
+  // contract is unchanged — each path still ends in ONE merged-identity persist
+  // — so this mock shims that wrapper to delegate to the `writeInstanceIdentity`
+  // sink these suites already assert against (re-read fresh, apply the caller's
+  // registries mutation, persist). The real CAS engine (bounded retry,
+  // byte-preservation, legacy-shim derivation) is unit-tested directly in
+  // `src/lib/__tests__/instance-identity-cas.test.ts`.
+  const updateInstanceIdentityRegistries = vi.fn(
+    (mutate: (r: Record<string, unknown>) => Record<string, unknown>) => {
+      const current = readInstanceIdentity() as
+        | { registries?: Record<string, unknown> }
+        | null
+        | undefined;
+      if (!current) return "no-identity";
+      const nextRegistries = mutate(current.registries ?? {});
+      writeInstanceIdentity({ ...current, registries: nextRegistries });
+      return "swapped";
+    },
+  );
+  return { readInstanceIdentity, writeInstanceIdentity, updateInstanceIdentityRegistries };
+});
 vi.mock("@/lib/registry-credentials", () => ({
   readRegistryCredential: vi.fn(),
   writeRegistryCredential: vi.fn(),
@@ -41,7 +62,11 @@ vi.mock("@/lib/redact-sensitive", () => ({
   redactSensitive: vi.fn((value: unknown) => value),
 }));
 
-import { readInstanceIdentity, writeInstanceIdentity } from "@/lib/instance-identity-store";
+import {
+  readInstanceIdentity,
+  writeInstanceIdentity,
+  updateInstanceIdentityRegistries,
+} from "@/lib/instance-identity-store";
 import {
   readRegistryCredential,
   writeRegistryCredential,
@@ -339,6 +364,32 @@ describe("runRegistryPollJob — 200 denied", () => {
     expect(written.registries.remote.status).toBe("denied");
     expect(written.registries.remote.denyReason).toBe("spam suspicion");
     expect(written.registries.remote.deniedAt).toBeTypeOf("string");
+  });
+});
+
+describe("runRegistryPollJob — terminal persist reconciliation (cinatra#850)", () => {
+  it("schedules a reconciliation poll when a terminal CAS does not commit (exhausted)", async () => {
+    // Denied response, but the row-level CAS exhausts under sustained contention
+    // so the `denied` state never lands. The request-secret is already deleted,
+    // so the terminal branch must NOT silently complete as if it succeeded — it
+    // enqueues ONE reconciliation poll so a later tick re-derives the real state.
+    mockFetchOnce(200, { status: "denied", reason: "spam" });
+    vi.mocked(updateInstanceIdentityRegistries).mockReturnValueOnce("exhausted");
+
+    await runRegistryPollJob({ requestId: REQUEST_ID });
+
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    // The terminal (normally no-reschedule) branch enqueued a reconciliation poll.
+    expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+    const opts = vi.mocked(enqueueBackgroundJob).mock.calls[0]![2] as { jobId: string };
+    expect(opts.jobId).toContain(`registry-poll:${REQUEST_ID}:`);
+  });
+
+  it("does NOT schedule a reconciliation poll when a terminal CAS commits (swapped)", async () => {
+    // Default mock commits ("swapped") — the terminal branch stays terminal.
+    mockFetchOnce(200, { status: "denied", reason: "spam" });
+    await runRegistryPollJob({ requestId: REQUEST_ID });
+    expect(enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 });
 
