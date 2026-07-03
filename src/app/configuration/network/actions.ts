@@ -264,7 +264,10 @@ export async function requestRemoteAccessAction(formData: FormData): Promise<voi
     // recovery (the registry has the request and will replay the same 201
     // within 24h via the Idempotency-Key cache once Nango is fixed).
     try {
-      await writeRegistryCredential(namespace, "request-secret", requestSecret);
+      // Request-scoped credential key (cinatra#899): the `requestId` from this
+      // 201 binds the secret to THIS request so a concurrent re-request for the
+      // same namespace can never read or delete it.
+      await writeRegistryCredential(namespace, "request-secret", requestId, requestSecret);
     } catch (err) {
       console.warn(
         "Failed to persist request-secret to Nango:",
@@ -293,7 +296,7 @@ export async function requestRemoteAccessAction(formData: FormData): Promise<voi
       // 201 within 24h via the Idempotency-Key cache — the same orphan-recovery
       // contract as the Nango-first ordering above.
       try {
-        await deleteRegistryCredential(namespace, "request-secret");
+        await deleteRegistryCredential(namespace, "request-secret", requestId);
       } catch (err) {
         console.warn(
           "Failed to roll back request-secret after pending-row persist failure:",
@@ -405,14 +408,20 @@ export async function cancelRemoteRequestAction(): Promise<void> {
   // The specific pending request this action intends to cancel.
   const cancelledRequestId = remote.requestId ?? null;
 
-  try {
-    await deleteRegistryCredential(namespace, "request-secret");
-  } catch (err) {
-    console.warn(
-      "Failed to delete request-secret from Nango (cancel):",
-      redactSensitive(err),
-    );
-    redirect(settingsRedirectUrl("error", "nango_unavailable"));
+  // Request-scoped delete (cinatra#899): only ever removes THIS request's
+  // secret, never a concurrent re-request's. A pending row always carries a
+  // requestId; if it is somehow absent no request-scoped credential can exist,
+  // so skipping the delete is fail-safe (the slot reset still proceeds).
+  if (cancelledRequestId) {
+    try {
+      await deleteRegistryCredential(namespace, "request-secret", cancelledRequestId);
+    } catch (err) {
+      console.warn(
+        "Failed to delete request-secret from Nango (cancel):",
+        redactSensitive(err),
+      );
+      redirect(settingsRedirectUrl("error", "nango_unavailable"));
+    }
   }
 
   // State-aware CAS (cinatra#850): only revert to not_connected if the freshly
@@ -481,20 +490,23 @@ export async function disconnectRemoteRegistryAction(): Promise<void> {
   // operators must contact the registry admin out-of-band to revoke the
   // npm token. This action only removes the cinatra-side pickup of it.
   //
-  // NOTE (cinatra#850 residual): the Nango `token` credential is namespace-keyed
-  // (not request-scoped), so this delete targets whatever the namespace slot
-  // holds. The DB-row guard below is request-identity-aware and never clobbers a
-  // newer request, but namespace-keyed credential deletes across concurrent
-  // requests are a separate, pre-existing concern tracked in cinatra#899
-  // (request-scoped registry credentials).
-  try {
-    await deleteRegistryCredential(namespace, "token");
-  } catch (err) {
-    console.warn(
-      "Failed to delete token from Nango (disconnect):",
-      redactSensitive(err),
-    );
-    redirect(settingsRedirectUrl("error", "nango_unavailable"));
+  // Request-scoped delete (cinatra#899): the `token` credential is keyed by the
+  // connected request's `requestId`, so this delete targets only the token this
+  // connection actually picked up — a concurrent teardown/re-request can never
+  // make it hit a different request's credential. The DB-row guard below is
+  // additionally request-identity-aware (cinatra#850). A connected row always
+  // carries a requestId; if it is somehow absent no request-scoped credential
+  // can exist, so skipping the delete is fail-safe.
+  if (disconnectRequestId) {
+    try {
+      await deleteRegistryCredential(namespace, "token", disconnectRequestId);
+    } catch (err) {
+      console.warn(
+        "Failed to delete token from Nango (disconnect):",
+        redactSensitive(err),
+      );
+      redirect(settingsRedirectUrl("error", "nango_unavailable"));
+    }
   }
 
   // State-aware CAS (cinatra#850): only clear the slot if it is STILL the SAME
@@ -572,22 +584,28 @@ export async function resetRemoteRegistryAction(): Promise<void> {
   // Nango-write success — the request-secret may have been deleted but the
   // token write failed, OR vice versa. Cleaning both leaves no dangling
   // credentials. Idempotent: a Nango error is logged and swallowed so the
-  // local slot reset still proceeds (operator can always retry).
-  try {
-    await deleteRegistryCredential(namespace, "request-secret");
-  } catch (err) {
-    console.warn(
-      "Failed to delete request-secret from Nango (reset):",
-      redactSensitive(err),
-    );
-  }
-  try {
-    await deleteRegistryCredential(namespace, "token");
-  } catch (err) {
-    console.warn(
-      "Failed to delete token from Nango (reset):",
-      redactSensitive(err),
-    );
+  // local slot reset still proceeds (operator can always retry). Request-scoped
+  // (cinatra#899): both deletes target only THIS terminal request's credentials,
+  // never a concurrent re-request's. A terminal row always carries a requestId;
+  // if it is somehow absent no request-scoped credential can exist, so skipping
+  // is fail-safe.
+  if (resetRequestId) {
+    try {
+      await deleteRegistryCredential(namespace, "request-secret", resetRequestId);
+    } catch (err) {
+      console.warn(
+        "Failed to delete request-secret from Nango (reset):",
+        redactSensitive(err),
+      );
+    }
+    try {
+      await deleteRegistryCredential(namespace, "token", resetRequestId);
+    } catch (err) {
+      console.warn(
+        "Failed to delete token from Nango (reset):",
+        redactSensitive(err),
+      );
+    }
   }
 
   // State-aware CAS (cinatra#850): only reset if the slot is STILL the SAME
@@ -595,10 +613,8 @@ export async function resetRemoteRegistryAction(): Promise<void> {
   // it to pending/connected — or a different terminal request replaced it — in
   // the window since our terminal read, do not clobber that newer request. The
   // sibling `local` slot and every other field are preserved by the CAS re-read.
-  //
-  // NOTE (cinatra#850 residual): the two namespace-keyed Nango credential deletes
-  // above are not request-scoped; the DB-row guard here never clobbers a newer
-  // request, but concurrent-request credential deletes are tracked in cinatra#899.
+  // The request-scoped credential deletes above (cinatra#899) compose with this
+  // guard: neither the credential nor the row can be mutated for another request.
   const resetOutcome = updateInstanceIdentityRegistries((registries) => {
     const fresh = registries.remote;
     const stillTerminal =

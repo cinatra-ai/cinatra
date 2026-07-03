@@ -1,18 +1,26 @@
 import "server-only";
 
 // -----------------------------------------------------------------------------
-// Namespace-keyed Nango facade for the public-registry credential lifecycle.
+// Request-scoped Nango facade for the public-registry credential lifecycle.
 //
 // Credential lifecycle:
 //   - The cinatra app DB stores ONLY non-secret metadata for the remote
 //     registry slot. The temporary `requestSecret` (during pending) and the
 //     long-lived npm token (after approval) live in Nango credentials, keyed
-//     per namespace + kind: `cinatra-registry-{kind}-{namespace}`.
+//     per namespace + kind + requestId:
+//     `cinatra-registry-{kind}-{namespace}-{requestId}`.
 //   - Two kinds: "request-secret" (created on POST /api/register success;
 //     deleted on terminal transitions or cancel) and "token" (created on
 //     approved-response; deleted on disconnect).
-//   - Callers NEVER assemble credential IDs by hand — only `(namespace, kind)`
-//     is exposed. `getRegistryCredentialRef` derives the persisted
+//   - Request-scoping (cinatra#899): including the `requestId` in the key means a
+//     stale teardown/worker for one access request can NEVER read, overwrite, or
+//     delete the credential belonging to a DIFFERENT (e.g. concurrently
+//     re-submitted) request for the same namespace. Cross-request isolation is
+//     fail-closed by construction — the key itself encodes the request identity,
+//     so a stale actor is physically unable to address another request's
+//     credential. (The DB-row lost update was closed separately in cinatra#850.)
+//   - Callers NEVER assemble credential IDs by hand — only `(namespace, kind,
+//     requestId)` is exposed. `getRegistryCredentialRef` derives the persisted
 //     `nangoCredentialRef` without duplicating the format string.
 //
 // Divergence from the generic Nango connection pattern:
@@ -30,9 +38,11 @@ import "server-only";
 //   the throw and route to their respective terminal paths. The verification
 //   is fully internal to this helper.
 //
-// Logging contract: this helper NEVER logs the value or the readback value.
-// On verification failure, only a generic message is thrown — secret content
-// is never reachable from any log sink.
+// Logging contract: this helper NEVER logs a credential value or a readback
+// value. On write-verification failure, only a generic message is thrown. On a
+// real delete failure it logs the connectionId + a redacted error (both
+// non-secret; the credential value is not even in scope for a delete) — secret
+// content is never reachable from any log sink.
 // -----------------------------------------------------------------------------
 
 import {
@@ -42,37 +52,54 @@ import {
   importNangoConnection,
   isNangoConfigured,
 } from "@/lib/nango-system";
+import { redactSensitive } from "@/lib/redact-sensitive";
 
 export type RegistryCredentialKind = "request-secret" | "token";
 
 const REGISTRY_PROVIDER_CONFIG_KEY = "cinatra-registry";
 
 /**
- * Internal credential-id assembly. Centralized here so callers cannot drift
- * by handcrafting `cinatra-registry-${kind}-${namespace}` template literals.
- * The exported `getRegistryCredentialRef` helper returns the same value for
- * call sites that need to persist the ref.
+ * Internal credential-id assembly. Centralized here so callers cannot drift by
+ * handcrafting `cinatra-registry-${kind}-${namespace}-${requestId}` template
+ * literals. The exported `getRegistryCredentialRef` helper returns the same
+ * value for call sites that need to persist the ref.
+ *
+ * Fail-closed: `namespace` and `requestId` MUST be non-empty strings. A blank or
+ * non-string component would collapse the key toward a namespace/request-agnostic
+ * form (e.g. `...-undefined`) and re-open the exact cross-request aliasing this
+ * scoping closes, so we throw rather than address an ambiguous credential.
  */
-function buildCredentialId(namespace: string, kind: RegistryCredentialKind): string {
-  return `cinatra-registry-${kind}-${namespace}`;
+function buildCredentialId(
+  namespace: string,
+  kind: RegistryCredentialKind,
+  requestId: string,
+): string {
+  if (typeof namespace !== "string" || namespace.length === 0) {
+    throw new Error("registry credential id requires a non-empty namespace.");
+  }
+  if (typeof requestId !== "string" || requestId.length === 0) {
+    throw new Error("registry credential id requires a non-empty requestId.");
+  }
+  return `cinatra-registry-${kind}-${namespace}-${requestId}`;
 }
 
 /**
- * Returns the Nango connectionId for the given namespace + kind, suitable for
- * persisting to `RemoteRegistryConnection.nangoCredentialRef` in the
- * instance-identity store. Always equal to the `connectionId` actually used
- * by `writeRegistryCredential`.
+ * Returns the Nango connectionId for the given namespace + kind + requestId,
+ * suitable for persisting to `RemoteRegistryConnection.nangoCredentialRef` in the
+ * instance-identity store. Always equal to the `connectionId` actually used by
+ * `writeRegistryCredential` for the same request.
  */
 export function getRegistryCredentialRef(
   namespace: string,
   kind: RegistryCredentialKind,
+  requestId: string,
 ): string {
-  return buildCredentialId(namespace, kind);
+  return buildCredentialId(namespace, kind, requestId);
 }
 
 /**
  * Reads the credential value (stripping the Nango envelope) for the given
- * namespace + kind. Returns null when:
+ * namespace + kind + requestId. Returns null when:
  *   - Nango is not configured (`isNangoConfigured()` === false)
  *   - Nango returns null (no such credential, or credential lookup failed)
  *   - The credential exists but does not carry an `apiKey` field
@@ -82,11 +109,12 @@ export function getRegistryCredentialRef(
 export async function readRegistryCredential(
   namespace: string,
   kind: RegistryCredentialKind,
+  requestId: string,
 ): Promise<string | null> {
   if (!isNangoConfigured()) return null;
   const credentials = await getNangoCredentials(
     REGISTRY_PROVIDER_CONFIG_KEY,
-    buildCredentialId(namespace, kind),
+    buildCredentialId(namespace, kind, requestId),
   );
   if (!credentials || typeof credentials !== "object") return null;
   const apiKey = (credentials as { apiKey?: unknown }).apiKey;
@@ -95,8 +123,8 @@ export async function readRegistryCredential(
 
 /**
  * Writes (creates or replaces) the credential value for the given namespace
- * + kind, then VERIFIES the write took by reading it back and asserting
- * string equality with the input. Throws on any of:
+ * + kind + requestId, then VERIFIES the write took by reading it back and
+ * asserting string equality with the input. Throws on any of:
  *   - Nango not configured, so callers learn that persistence failed
  *   - The Nango import call rejecting
  *   - The readback returning a different value or null
@@ -108,6 +136,7 @@ export async function readRegistryCredential(
 export async function writeRegistryCredential(
   namespace: string,
   kind: RegistryCredentialKind,
+  requestId: string,
   value: string,
 ): Promise<void> {
   if (!isNangoConfigured()) {
@@ -125,7 +154,7 @@ export async function writeRegistryCredential(
     displayName: "Cinatra Registry",
   });
 
-  const connectionId = buildCredentialId(namespace, kind);
+  const connectionId = buildCredentialId(namespace, kind, requestId);
   await importNangoConnection({
     // connectorKey omitted — see the per-namespace credential note above.
     providerConfigKey: REGISTRY_PROVIDER_CONFIG_KEY,
@@ -155,22 +184,66 @@ export async function writeRegistryCredential(
 }
 
 /**
- * Deletes the credential for the given namespace + kind. Idempotent — a
- * second call when the credential is already gone does not throw. The
- * underlying Nango wrapper already swallows missing-connection errors;
- * the extra try/catch here is defensive.
+ * True ONLY for a STRUCTURED HTTP 404 — the sole reliable, unambiguous signal
+ * that the connection is already absent (so an idempotent double-delete succeeds
+ * silently). Everything else — including message-only errors — is treated as a
+ * REAL delete failure and logged by the caller, so no config/auth/5xx failure
+ * can be misclassified as a benign missing connection.
+ *
+ * Deliberately NOT message/substring based: matching the word "connection" near
+ * a "not found" token repeatedly proved too broad (it swallowed real failures
+ * like "delete connection failed: provider config not found"). A structured 404
+ * cannot be spoofed by operation-context prose, so this is the safe predicate
+ * for a security-sensitive credential delete. (cinatra#899)
+ */
+function isMissingConnectionError(err: unknown): boolean {
+  if (err == null) return false;
+  const status = err as {
+    status?: unknown;
+    statusCode?: unknown;
+    response?: { status?: unknown };
+  };
+  return (
+    status.status === 404 ||
+    status.statusCode === 404 ||
+    status.response?.status === 404
+  );
+}
+
+/**
+ * Deletes the credential for the given namespace + kind + requestId. Idempotent
+ * for an ALREADY-ABSENT credential — a second call when the credential is gone
+ * does not throw.
+ *
+ * NEVER throws on a Nango-side failure: unwrapped one-shot callers (the
+ * poll-job's terminal branches — the queue enqueues with the default
+ * `attempts: 1`) rely on this helper resolving so they can still persist their
+ * terminal state; a throw here would fail the job BEFORE the terminal write and
+ * strand the slot at `pending`. A genuinely-absent credential (404/not-found) is
+ * swallowed silently; any OTHER failure (network/auth/5xx) leaves the credential
+ * IN PLACE, so it is LOGGED — connectionId + redacted error only, never the
+ * credential value — so a masked credential-delete failure (e.g. a failed
+ * orphaned-token reclaim) stays observable instead of silently swallowed
+ * (cinatra#899).
  */
 export async function deleteRegistryCredential(
   namespace: string,
   kind: RegistryCredentialKind,
+  requestId: string,
 ): Promise<void> {
   if (!isNangoConfigured()) return;
+  // Build (and validate) the id OUTSIDE the idempotency catch: a fail-closed key
+  // validation error is a programming bug that must surface, whereas a
+  // Nango-side delete failure is handled below.
+  const connectionId = buildCredentialId(namespace, kind, requestId);
   try {
-    await deleteNangoConnection(
-      REGISTRY_PROVIDER_CONFIG_KEY,
-      buildCredentialId(namespace, kind),
-    );
-  } catch {
-    // Idempotent: missing-credential or 404-equivalent is fine.
+    await deleteNangoConnection(REGISTRY_PROVIDER_CONFIG_KEY, connectionId);
+  } catch (err) {
+    if (!isMissingConnectionError(err)) {
+      console.warn(
+        "[registry-credentials] delete failed; credential may still be present",
+        redactSensitive({ connectionId, error: err }),
+      );
+    }
   }
 }

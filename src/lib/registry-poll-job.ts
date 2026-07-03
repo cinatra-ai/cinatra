@@ -75,10 +75,9 @@ const NOT_FOUND_REASON = "Request not recognized by registry.";
  * is a no-op. "exhausted" under sustained contention is logged and NOT
  * force-written; the next tick re-derives and re-persists.
  *
- * Documented residual: if approval was fetched and the npm token already written
- * to Nango in the SAME tick that the operator cancelled, the connected-persist
- * is skipped and that token is left orphaned in Nango (encrypted, not leaked).
- * Cleaning it up is follow-up work (cinatra#899).
+ * The approved branch does NOT use this helper — it needs to distinguish a real
+ * commit from the benign slot-moved-on no-op (both return "swapped") to drive the
+ * orphaned-token cleanup, so it uses `persistConnectedRemote` below.
  */
 function persistRemote(next: RemoteRegistryConnection): InstanceIdentityCasOutcome {
   const outcome = updateInstanceIdentityRegistries((registries) => {
@@ -95,6 +94,59 @@ function persistRemote(next: RemoteRegistryConnection): InstanceIdentityCasOutco
     );
   }
   return outcome;
+}
+
+/**
+ * Approved-branch persist that ALSO reports whether the connected transition
+ * actually applied and where the slot finally resolved (cinatra#899).
+ *
+ * `persistRemote` returns "swapped" for BOTH a real commit AND the benign
+ * slot-moved-on no-op — the CAS commits a byte-identical row when the mutator
+ * returns the slot unchanged — so the outcome alone cannot tell them apart. The
+ * approved branch MUST tell them apart: it has just written the npm `token` to
+ * Nango, and if the slot moved on (the operator cancelled or superseded the
+ * request in the approval window) that token is orphaned and must be cleaned up.
+ *
+ * Two side-channel signals, both captured inside the mutator so they reflect the
+ * FINAL CAS attempt (the one whose row was actually swapped):
+ *   - `applied`: this attempt wrote the `connected` state (the slot was still the
+ *     same in-flight pending request). `applied && outcome === "swapped"` means
+ *     THIS poll landed the connection.
+ *   - `finalSlotIsThisRequest`: the freshly re-read slot still carries THIS
+ *     request's `requestId` (any status). This guards the benign race where a
+ *     SIBLING poll (a BullMQ tick vs. the manual "Refresh status" action) already
+ *     connected the SAME request: `applied` is false but the token is LIVE, so it
+ *     must NOT be treated as an orphan. When the mutator never runs (a missing or
+ *     unusable identity row → "no-identity"/"aborted"), it stays false, so the
+ *     just-written token is correctly reclaimed.
+ */
+function persistConnectedRemote(next: RemoteRegistryConnection): {
+  outcome: InstanceIdentityCasOutcome;
+  applied: boolean;
+  finalSlotIsThisRequest: boolean;
+} {
+  let applied = false;
+  let finalSlotRequestId: string | null | undefined;
+  const outcome = updateInstanceIdentityRegistries((registries) => {
+    const fresh = registries.remote;
+    finalSlotRequestId = fresh?.requestId ?? null;
+    const sameInflight =
+      !!fresh && fresh.requestId === next.requestId && fresh.status === "pending";
+    applied = sameInflight;
+    if (!sameInflight) return registries; // slot moved on — do not resurrect/clobber
+    return { ...registries, remote: next };
+  });
+  if (outcome === "exhausted" || outcome === "unparseable") {
+    console.warn(
+      `[registry-poll] persistConnectedRemote could not commit registries.remote (${outcome}); ` +
+        `a reconciliation poll will re-derive and re-persist.`,
+    );
+  }
+  return {
+    outcome,
+    applied,
+    finalSlotIsThisRequest: finalSlotRequestId === next.requestId,
+  };
 }
 
 /**
@@ -249,8 +301,14 @@ export async function runRegistryPollJob(
     return;
   }
 
-  // Read requestSecret from Nango (never cached).
-  const requestSecret = await readRegistryCredential(remote.namespace, "request-secret");
+  // Read requestSecret from Nango (never cached). Request-scoped by
+  // `payload.requestId` (cinatra#899) — this handler only ever reads the secret
+  // for the request it validated at entry, never a concurrent re-request's.
+  const requestSecret = await readRegistryCredential(
+    remote.namespace,
+    "request-secret",
+    payload.requestId,
+  );
   if (!requestSecret) {
     console.warn(
       "[registry-poll] secret-missing",
@@ -386,11 +444,20 @@ export async function runRegistryPollJob(
       }
 
       try {
-        await writeRegistryCredential(remote.namespace, "token", token);
+        await writeRegistryCredential(
+          remote.namespace,
+          "token",
+          payload.requestId,
+          token,
+        );
       } catch (err) {
         // Drop token from process memory. No caching. No log emission of the token.
         try {
-          await deleteRegistryCredential(remote.namespace, "request-secret");
+          await deleteRegistryCredential(
+            remote.namespace,
+            "request-secret",
+            payload.requestId,
+          );
         } catch (cleanupErr) {
           console.warn(
             "[registry-poll] nango-failure-cleanup",
@@ -414,35 +481,94 @@ export async function runRegistryPollJob(
         return;
       }
 
-      // Nango write succeeded. NOW delete the request-secret.
-      await deleteRegistryCredential(remote.namespace, "request-secret");
+      // Nango write succeeded. NOW delete this request's OWN request-secret —
+      // request-scoped (cinatra#899), so this consumes only the secret for the
+      // request just approved, never a concurrent re-request's.
+      await deleteRegistryCredential(
+        remote.namespace,
+        "request-secret",
+        payload.requestId,
+      );
       const nowIso = new Date().toISOString();
-      const connectedOutcome = persistRemote({
-        ...remote,
-        status: "connected",
-        approvedAt: nowIso,
-        tokenUpdatedAt: nowIso,
-        nangoCredentialRef: getRegistryCredentialRef(remote.namespace, "token"),
-        denyReason: null,
-        terminalReason: null,
-      });
-      // Audit emission — event tag + requestId only. Never the token.
-      console.log("[registry-poll] approved", { requestId: payload.requestId });
-      // The token is already in Nango but the connected-persist may not have
-      // landed under sustained CAS contention; reconcile so the slot doesn't
-      // stay stuck at `pending` (the token stays namespace-scoped in Nango,
-      // orphan-cleanup tracked in cinatra#899).
+      const { outcome: connectedOutcome, applied: connectedApplied, finalSlotIsThisRequest } =
+        persistConnectedRemote({
+          ...remote,
+          status: "connected",
+          approvedAt: nowIso,
+          tokenUpdatedAt: nowIso,
+          nangoCredentialRef: getRegistryCredentialRef(
+            remote.namespace,
+            "token",
+            payload.requestId,
+          ),
+          denyReason: null,
+          terminalReason: null,
+        });
+
+      if (connectedApplied && connectedOutcome === "swapped") {
+        // This poll landed the connected transition. Audit emission — event tag
+        // + requestId only. Never the token.
+        console.log("[registry-poll] approved", { requestId: payload.requestId });
+        return;
+      }
+
+      // The connected transition did NOT apply on this attempt. If the slot no
+      // longer belongs to this request — cancelled (→ not_connected), superseded
+      // by a fresh re-request (→ a DIFFERENT requestId), or the identity row is
+      // gone/unusable — then the npm token we just wrote is orphaned (no slot
+      // references it) and must be cleaned up (cinatra#899). Request-scoped keying
+      // guarantees this delete only ever removes THIS request's token, never a
+      // concurrent request's — and `finalSlotIsThisRequest` guards the benign
+      // race where a SIBLING poller (a BullMQ tick vs. the manual "Refresh
+      // status" action) already connected THIS same request: that token is LIVE,
+      // so we must NOT delete it.
+      if (
+        !finalSlotIsThisRequest &&
+        (connectedOutcome === "swapped" ||
+          connectedOutcome === "no-identity" ||
+          connectedOutcome === "aborted")
+      ) {
+        await deleteRegistryCredential(
+          remote.namespace,
+          "token",
+          payload.requestId,
+        ).catch((cleanupErr) => {
+          console.warn(
+            "[registry-poll] orphan-token-cleanup-failed",
+            redactSensitive({ requestId: payload.requestId, error: cleanupErr }),
+          );
+        });
+        console.log("[registry-poll] approved-superseded", {
+          requestId: payload.requestId,
+        });
+        return;
+      }
+
+      // Otherwise the token is NOT orphaned:
+      //   - a sibling poller already connected THIS request (finalSlotIsThisRequest,
+      //     token is the live credential — keep it); or
+      //   - the CAS could not commit under sustained contention
+      //     (exhausted/unparseable) and the request may still be pending — keep the
+      //     token and schedule ONE reconciliation poll so a later tick re-derives
+      //     the terminal state (a re-poll re-writes the same token idempotently and
+      //     reaches connected). Matches the #850 terminal-reconcile contract;
+      //     `reconcileUncommittedTerminalPersist` is a no-op on a committed swap.
       await reconcileUncommittedTerminalPersist(
         payload.requestId,
         connectedOutcome,
         remote.expiresAt,
       );
+      console.log("[registry-poll] approved", { requestId: payload.requestId });
       return;
     }
 
     if (body.status === "denied") {
       const nowIso = new Date().toISOString();
-      await deleteRegistryCredential(remote.namespace, "request-secret");
+      await deleteRegistryCredential(
+        remote.namespace,
+        "request-secret",
+        payload.requestId,
+      );
       const deniedOutcome = persistRemote({
         ...remote,
         status: "denied",
@@ -478,7 +604,11 @@ export async function runRegistryPollJob(
   }
 
   if (status === 404) {
-    await deleteRegistryCredential(remote.namespace, "request-secret");
+    await deleteRegistryCredential(
+      remote.namespace,
+      "request-secret",
+      payload.requestId,
+    );
     const notFoundOutcome = persistRemote({
       ...remote,
       status: "error",
@@ -499,7 +629,11 @@ export async function runRegistryPollJob(
     } catch {
       body = {};
     }
-    await deleteRegistryCredential(remote.namespace, "request-secret");
+    await deleteRegistryCredential(
+      remote.namespace,
+      "request-secret",
+      payload.requestId,
+    );
     const goneOutcome =
       body.status === "expired"
         ? persistRemote({ ...remote, status: "expired" })

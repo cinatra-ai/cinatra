@@ -44,7 +44,8 @@ vi.mock("@/lib/registry-credentials", () => ({
   writeRegistryCredential: vi.fn(),
   deleteRegistryCredential: vi.fn(),
   getRegistryCredentialRef: vi.fn(
-    (ns: string, kind: string) => `cinatra-registry-${kind}-${ns}`,
+    (ns: string, kind: string, requestId: string) =>
+      `cinatra-registry-${kind}-${ns}-${requestId}`,
   ),
 }));
 vi.mock("@/lib/redact-sensitive", () => ({

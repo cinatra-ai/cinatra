@@ -50,7 +50,10 @@ vi.mock("@/lib/registry-credentials", () => ({
   readRegistryCredential: vi.fn(),
   writeRegistryCredential: vi.fn(),
   deleteRegistryCredential: vi.fn(),
-  getRegistryCredentialRef: vi.fn((namespace: string, kind: string) => `cinatra-registry-${kind}-${namespace}`),
+  getRegistryCredentialRef: vi.fn(
+    (namespace: string, kind: string, requestId: string) =>
+      `cinatra-registry-${kind}-${namespace}-${requestId}`,
+  ),
 }));
 vi.mock("@/lib/background-jobs", () => ({
   BACKGROUND_JOB_NAMES: {
@@ -295,8 +298,8 @@ describe("runRegistryPollJob — 200 approved (security-critical)", () => {
     // Ordering invariant: write token, then delete request-secret.
     expect(callOrder).toEqual(["write:token", "delete:request-secret"]);
 
-    expect(writeRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "token", TOKEN);
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(writeRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "token", REQUEST_ID, TOKEN);
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
 
     // Status flips to connected; nangoCredentialRef derived via the builder.
     const written = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)![0] as {
@@ -305,8 +308,10 @@ describe("runRegistryPollJob — 200 approved (security-critical)", () => {
     expect(written.registries.remote.status).toBe("connected");
     expect(written.registries.remote.approvedAt).toBeTypeOf("string");
     expect(written.registries.remote.tokenUpdatedAt).toBeTypeOf("string");
-    expect(getRegistryCredentialRef).toHaveBeenCalledWith(NAMESPACE, "token");
-    expect(written.registries.remote.nangoCredentialRef).toBe(`cinatra-registry-token-${NAMESPACE}`);
+    expect(getRegistryCredentialRef).toHaveBeenCalledWith(NAMESPACE, "token", REQUEST_ID);
+    expect(written.registries.remote.nangoCredentialRef).toBe(
+      `cinatra-registry-token-${NAMESPACE}-${REQUEST_ID}`,
+    );
 
     // No reschedule on approved.
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
@@ -336,7 +341,7 @@ describe("runRegistryPollJob — 200 approved (security-critical)", () => {
     expect(written.registries.remote.terminalReason).toMatch(/Token storage failed|fresh request/i);
 
     // Best-effort delete of request-secret still attempted.
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
 
     // The literal token MUST NOT appear in any captured log line.
     const flat = logs
@@ -355,7 +360,7 @@ describe("runRegistryPollJob — 200 denied", () => {
     mockFetchOnce(200, { status: "denied", reason: "spam suspicion" });
     await runRegistryPollJob({ requestId: REQUEST_ID });
 
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
 
     const written = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)![0] as {
@@ -378,7 +383,7 @@ describe("runRegistryPollJob — terminal persist reconciliation (cinatra#850)",
 
     await runRegistryPollJob({ requestId: REQUEST_ID });
 
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
     // The terminal (normally no-reschedule) branch enqueued a reconciliation poll.
     expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
     const opts = vi.mocked(enqueueBackgroundJob).mock.calls[0]![2] as { jobId: string };
@@ -397,7 +402,7 @@ describe("runRegistryPollJob — 410 expired", () => {
   it("flips status to expired, deletes secret, no reschedule", async () => {
     mockFetchOnce(410, { status: "expired" });
     await runRegistryPollJob({ requestId: REQUEST_ID });
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
     const written = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)![0] as {
       registries: { remote: { status: string } };
@@ -410,7 +415,7 @@ describe("runRegistryPollJob — 410 consumed", () => {
   it("flips status to error, deletes secret, no reschedule", async () => {
     mockFetchOnce(410, { status: "consumed" });
     await runRegistryPollJob({ requestId: REQUEST_ID });
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
     const written = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)![0] as {
       registries: { remote: { status: string; terminalReason: string | null } };
@@ -424,7 +429,7 @@ describe("runRegistryPollJob — 404 not_found", () => {
   it("flips status to error, deletes secret, no reschedule", async () => {
     mockFetchOnce(404, { error: { code: "not_found" } });
     await runRegistryPollJob({ requestId: REQUEST_ID });
-    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret");
+    expect(deleteRegistryCredential).toHaveBeenCalledWith(NAMESPACE, "request-secret", REQUEST_ID);
     expect(enqueueBackgroundJob).not.toHaveBeenCalled();
     const written = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)![0] as {
       registries: { remote: { status: string; terminalReason: string | null } };
