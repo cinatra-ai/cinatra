@@ -52,7 +52,7 @@ import "server-only";
 // (broker/token-authorized) install fetches its plan nodes through the SAME
 // broker grant and identity, never around it.
 
-import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as tar from "tar";
@@ -63,7 +63,7 @@ import {
   type MaterializationPlanNode,
 } from "@/lib/extension-materialization-plan-core";
 import { sriMatches } from "@/lib/extension-package-store-core";
-import { isAcceptedTarEntryType } from "@/lib/fs-safety";
+import { atomicReplaceDir, isAcceptedTarEntryType } from "@/lib/fs-safety";
 import type { FetchTarball } from "@/lib/extension-package-store";
 
 /** Thrown for EVERY executor refusal — callers fail closed. */
@@ -377,7 +377,16 @@ export async function executeMaterializationPlan(
         );
       }
       await mkdir(path.dirname(target), { recursive: true });
-      await rename(nodeDir, target);
+      // Promote the staged node dir into place. `nodeDir` is under `mkdtemp(tmpdir())`
+      // (OS temp) while `target` is under the `/data` extension store — a bare
+      // `rename` throws EXDEV across that mount boundary and crash-loops
+      // install/boot (cinatra#873, same class as cinatra#846). Route through the
+      // shared EXDEV-safe primitive (cinatra#798) exactly like the sibling
+      // `extension-package-store.ts` publish move: intra-fs rename fast path, and on
+      // EXDEV a copy → verify → atomic intra-fs swap → drop-source fallback. The
+      // target is guaranteed absent (the collision refusal above), so this is a pure
+      // move — no prior-dir backup path is taken.
+      await atomicReplaceDir(nodeDir, target);
     } finally {
       await rm(tmpRoot, { recursive: true, force: true }).catch(() => undefined);
     }
