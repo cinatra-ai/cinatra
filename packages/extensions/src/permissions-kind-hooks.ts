@@ -34,7 +34,13 @@ export type ExtensionKind =
   // table to dual-write, so their hooks are canonical-only.
   | "connector"
   | "artifact"
-  | "workflow";
+  | "workflow"
+  // Per-connection grants (cinatra#950/#951): a `connection` is an
+  // owner-bound entity in the `nango_connection` identity table
+  // (./connection-identity-store.ts); its polymorphic `resource_id` is that
+  // table's UUID. PERMISSIONS resource-kind vocabulary ONLY — deliberately
+  // NOT an `installed_extension.kind`, package-store kind, or manifest kind.
+  | "connection";
 
 export const ALL_EXTENSION_KINDS: ExtensionKind[] = [
   "agent_run",
@@ -44,6 +50,7 @@ export const ALL_EXTENSION_KINDS: ExtensionKind[] = [
   "connector",
   "artifact",
   "workflow",
+  "connection",
 ];
 
 export function isExtensionKind(value: unknown): value is ExtensionKind {
@@ -342,6 +349,29 @@ const connectorHooks = installedExtensionAnchoredHooks("connector", "/connectors
 const artifactHooks = installedExtensionAnchoredHooks("artifact", "/configuration/extensions");
 const workflowHooks = installedExtensionAnchoredHooks("workflow", "/configuration/extensions");
 
+// ---------------------------------------------------------------------------
+// Connection hooks (cinatra#950/#951). The polymorphic resource_id is the
+// `nango_connection` identity UUID. Canonical-only (no legacy access table):
+// resourceExists reads the LIVE identity row (a soft-deleted connection fails
+// closed — the auth gate denies and the loader 404s), and the connection's
+// OWNER is the implicit editor (owner-bound entity: the creator manages the
+// grant without first co-owning their own connection).
+// ---------------------------------------------------------------------------
+async function connectionHooks(): Promise<ExtensionKindHooks> {
+  const { readNangoConnectionById } = await import("./connection-identity-store");
+  return {
+    resourceExists: async (id) => {
+      const row = await readNangoConnectionById(id);
+      return row !== null;
+    },
+    extraEditors: async (id) => {
+      const row = await readNangoConnectionById(id);
+      return row ? [row.ownerUserId] : [];
+    },
+    selfRemoveRedirect: "/connectors",
+  };
+}
+
 const hookFactories: Record<ExtensionKind, () => Promise<ExtensionKindHooks>> = {
   agent_run: agentRunHooks,
   agent_template: agentTemplateHooks,
@@ -350,6 +380,7 @@ const hookFactories: Record<ExtensionKind, () => Promise<ExtensionKindHooks>> = 
   connector: connectorHooks,
   artifact: artifactHooks,
   workflow: workflowHooks,
+  connection: connectionHooks,
 };
 
 let cache: Partial<Record<ExtensionKind, ExtensionKindHooks>> = {};

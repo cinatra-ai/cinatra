@@ -13,7 +13,7 @@ import "server-only";
 // canonical store + grant store.
 
 import type { HostPortName } from "@cinatra-ai/sdk-extensions";
-import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
+import type { ExtensionDependency, ResolvedConnectorAccessDeclaration } from "@cinatra-ai/extensions/canonical-types";
 
 import { classifyExtensionTrust } from "@/lib/extension-trust";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
@@ -348,6 +348,43 @@ export type InstallPipelineDeps = {
     dependencies: ExtensionDependency[];
   }) => Promise<void>;
   /**
+   * Resolve the connector access declaration from the materialized store dir
+   * (cinatra#951) — the fail-closed read of `cinatra/config.json` through the
+   * SDK validator (`@cinatra-ai/sdk-extensions/access-config`,
+   * INSTALL-surface absence semantics). Returns null for non-connector
+   * kinds. Runs EARLY (with the host-compat gate, before any durable
+   * mutation, same inertness/GC contract as readDependencyEdges) so a refused
+   * declaration is fully inert; a throw aborts the install. Wired with a
+   * null-returning default in unit tests; the default factory always wires
+   * the host reader.
+   */
+  readAccessDeclaration: (storeDir: string) => Promise<ResolvedConnectorAccessDeclaration | null>;
+  /**
+   * Persist the resolved declaration onto the canonical install row at the
+   * SAME (package, org) scope, at the FINALIZE SEAM next to
+   * `persistDependencyEdges` (cinatra#951) — so no connector install-op
+   * reaches `finalized` without a cached declaration. The default factory
+   * wires the sanctioned canonical writer
+   * (`recordExtensionAccessDeclaration`).
+   */
+  persistAccessDeclaration: (input: {
+    packageName: string;
+    orgId: string | null;
+    declaration: ResolvedConnectorAccessDeclaration | null;
+  }) => Promise<void>;
+  /**
+   * Capture the CURRENT canonical row's cached declaration for the
+   * (package, org) BEFORE the finalize seam overwrites it — restored by BOTH
+   * unwind paths on a failed UPDATE, exactly like `readCurrentDependencies`
+   * (a failed update must never leave the NEW manifest's declaration cached
+   * against the still-live OLD install). Returns null when no live row / no
+   * cached declaration exists.
+   */
+  readCurrentAccessDeclaration: (
+    packageName: string,
+    orgId: string | null,
+  ) => Promise<ResolvedConnectorAccessDeclaration | null>;
+  /**
    * FORWARD install-closure gate (#180 item 5) for a FRESH install: after the
    * candidate's edges are persisted, refuse to finalize when an
    * install-blocking (required runtime/install-time) edge's target is not
@@ -385,7 +422,7 @@ export type InstallDurableRestoreFailureEvent = {
   packageName: string;
   orgId: string | null;
   /** Which durable axis failed to restore. */
-  step: "provenance" | "grant" | "dependencies" | "journal";
+  step: "provenance" | "grant" | "dependencies" | "journal" | "access-declaration";
   /** Which unwind path raised it. */
   scope: "pre-finalize" | "post-commit-rollback";
   reason: string;
@@ -602,6 +639,33 @@ export async function installExtensionFromRegistry(
     }
   }
 
+  // ACCESS-DECLARATION READ (cinatra#951) — the fail-closed resolve of the
+  // connector's `cinatra/config.json` over the materialized (SRI-verified)
+  // bytes, through the single SDK validator. Same EARLY placement + inertness
+  // contract as the dependency-edge read above: an invalid declaration
+  // (unknown keys anywhere, both/neither of default|only, a non-vocabulary
+  // scope, a protected-slug violation) THROWS here, BEFORE the first durable
+  // mutation — the install/update is refused fully inert and the
+  // just-materialized dir is GC'd (unless it IS the live install's dir).
+  // `null` = not a connector; the declaration PERSISTS late, at the finalize
+  // seam below.
+  let accessDeclaration: ResolvedConnectorAccessDeclaration | null = null;
+  if (deps.readAccessDeclaration) {
+    try {
+      accessDeclaration = await deps.readAccessDeclaration(mat.storeDir);
+    } catch (err) {
+      const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+      if (deps.gcStoreDir && !isLiveDigest) {
+        try {
+          await deps.gcStoreDir(mat.storeDir);
+        } catch {
+          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+        }
+      }
+      throw err;
+    }
+  }
+
   // Classify the in-process import trust tier (vendor-agnostic). The host
   // allowlist + bootstrap lever come from the trust-config seam (publicRegistryUrl
   // only — never the instance's own publish target). Computed PURELY (no mutation)
@@ -769,6 +833,13 @@ export async function installExtensionFromRegistry(
   const priorEdges = isUpdate
     ? (await deps.readCurrentDependencies?.(input.packageName, input.orgId)) ?? null
     : null;
+  // (e) the prior canonical row's cached access DECLARATION (cinatra#951) —
+  // the NEW declaration lands at the finalize seam below, so a failed update
+  // must restore this on BOTH unwind paths or the W2 resolver reads the
+  // failed version's declaration against the still-live OLD install.
+  const priorAccessDeclaration = isUpdate
+    ? (await deps.readCurrentAccessDeclaration?.(input.packageName, input.orgId)) ?? null
+    : null;
 
   let grantStatus: "approved" | "pending" = "pending";
   try {
@@ -893,6 +964,19 @@ export async function installExtensionFromRegistry(
         packageName: input.packageName,
         orgId: input.orgId,
         dependencies: dependencyEdges,
+      });
+    }
+
+    // DECLARATION PERSISTENCE at the FINALIZE SEAM (cinatra#951): the
+    // resolved connector access declaration (read EARLY above, fail-closed)
+    // lands on the canonical row with the same guarantees as the dependency
+    // edges — a `finalized` connector install-op implies a cached
+    // declaration. Non-connector kinds resolve null and skip the write.
+    if (accessDeclaration !== null && deps.persistAccessDeclaration) {
+      await deps.persistAccessDeclaration({
+        packageName: input.packageName,
+        orgId: input.orgId,
+        declaration: accessDeclaration,
       });
     }
 
@@ -1024,6 +1108,31 @@ export async function installExtensionFromRegistry(
           });
         }
       }
+      // ALSO restore the OLD cached access declaration (cinatra#951) — the
+      // finalize seam may have overwritten it with the NEW manifest's
+      // declaration; with the OLD install still live, leaving it would feed
+      // the W2 resolver the failed version's scope truth. Keyed on isUpdate,
+      // NOT on the prior value being non-null: a legacy row's prior
+      // declaration IS null and must be restored to null (the writer supports
+      // the explicit clear — codex diff round finding 2). Idempotent
+      // same-value rewrite when the write never ran.
+      if (accessDeclaration !== null && isUpdate && deps.persistAccessDeclaration) {
+        try {
+          await deps.persistAccessDeclaration({
+            packageName: input.packageName,
+            orgId: input.orgId,
+            declaration: priorAccessDeclaration,
+          });
+        } catch (restoreErr) {
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "access-declaration",
+            scope: "pre-finalize",
+            reason: restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+          });
+        }
+      }
     }
     throw err;
   }
@@ -1145,6 +1254,23 @@ export async function installExtensionFromRegistry(
           });
         } catch (e) {
           recordFailure("dependencies", e);
+        }
+      }
+      // (i-e) restore the OLD cached access DECLARATION (cinatra#951): the
+      // finalize seam persisted the NEW manifest's declaration; with the OLD
+      // version re-pinned, leaving it would corrupt the W2 resolver's cached
+      // scope truth for the still-live OLD install. Keyed on isUpdate — a
+      // prior NULL declaration (legacy row) is restored to null (codex diff
+      // round finding 2).
+      if (accessDeclaration !== null && isUpdate && deps.persistAccessDeclaration) {
+        try {
+          await deps.persistAccessDeclaration({
+            packageName: input.packageName,
+            orgId: input.orgId,
+            declaration: priorAccessDeclaration,
+          });
+        } catch (e) {
+          recordFailure("access-declaration", e);
         }
       }
       return failedSteps.length === 0
@@ -1394,6 +1520,15 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
       return edges;
     },
+    // ACCESS DECLARATION (cinatra#951): fail-closed resolve of the
+    // connector's cinatra/config.json over the materialized bytes through the
+    // single SDK validator (INSTALL-surface absence semantics).
+    readAccessDeclaration: async (storeDir) => {
+      const { readConnectorAccessDeclarationFromStore } = await import(
+        "@/lib/connector-access-config-host"
+      );
+      return readConnectorAccessDeclarationFromStore(storeDir);
+    },
     // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
     // canonical snapshot, scoped to the install's org.
     assertForwardInstallClosure: async (p) => {
@@ -1588,6 +1723,9 @@ export function makeTestInstallPipelineDeps(
     gcStoreDir: noop,
     readDependencyEdges: async () => [],
     persistDependencyEdges: noop,
+    readAccessDeclaration: async () => null,
+    persistAccessDeclaration: noop,
+    readCurrentAccessDeclaration: async () => null,
     assertForwardInstallClosure: noop,
     emitOperationalEvent: () => undefined,
   };

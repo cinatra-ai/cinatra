@@ -27,6 +27,8 @@ type CanonicalRowInstallDeps = Pick<
   | "readCurrentSource"
   | "readCurrentDependencies"
   | "persistDependencyEdges"
+  | "readCurrentAccessDeclaration"
+  | "persistAccessDeclaration"
 >;
 
 /**
@@ -160,6 +162,31 @@ export function makeCanonicalRowInstallDeps(opts: {
       await recordExtensionDependencies(target.id, p.dependencies, {
         actor: { source: "runtime-installer" },
         reason: `manifest dependency edges @ install`,
+      });
+    },
+    // CAPTURE (cinatra#951): the prior canonical row's cached connector access
+    // DECLARATION — restored by both unwind paths when an UPDATE fails after
+    // the finalize seam overwrote it (mirrors readCurrentDependencies).
+    readCurrentAccessDeclaration: async (packageName, orgId) => {
+      const target = await resolveTarget(packageName, orgId);
+      return target?.accessDeclaration ?? null;
+    },
+    // DECLARATION PERSISTENCE at the finalize seam (cinatra#951): the
+    // sanctioned canonical writer, bound to the SAME single (package, org)
+    // row the provenance write resolved.
+    persistAccessDeclaration: async (p) => {
+      const target = await resolveTarget(p.packageName, p.orgId);
+      if (!target) {
+        throw new Error(
+          `persistAccessDeclaration: expected exactly 1 active installed_extension row for ${p.packageName} in org ${p.orgId ?? "(global)"} (0 or ambiguous owner scope) — fail closed`,
+        );
+      }
+      const { recordExtensionAccessDeclaration } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      await recordExtensionAccessDeclaration(target.id, p.declaration, {
+        actor: { source: "runtime-installer" },
+        reason: `connector access declaration @ install`,
       });
     },
   };

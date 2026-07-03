@@ -48,6 +48,10 @@ const KIND_DEFAULT_ACCESS_POLICY: Record<ExtensionKind, AgentAuthPolicy> = {
   connector: WORKSPACE_DEFAULT,
   artifact: WORKSPACE_DEFAULT,
   workflow: WORKSPACE_DEFAULT,
+  // A connection is owner-bound (cinatra#950): creating one NEVER auto-shares —
+  // `default` in cinatra/config.json only pre-selects at connect time; the
+  // grant row starts owner-scoped and widens only by an explicit owner share.
+  connection: OWNER_DEFAULT,
 };
 
 export function defaultAccessPolicyForKind(kind: ExtensionKind): AgentAuthPolicy {

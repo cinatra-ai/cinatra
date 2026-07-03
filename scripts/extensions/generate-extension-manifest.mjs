@@ -208,6 +208,36 @@ export function sanitizeSvgToDataUri(svg) {
 // or null. Path-contained to the package via realpath on BOTH ends (a package-
 // local symlink that escapes the package is rejected); any read failure or
 // rejected content → null so the host falls back to its static icon map.
+/**
+ * Read a connector's RAW `cinatra/config.json` (cinatra#951) — parsed JSON
+ * pass-through carried on the record as `accessConfig`; the HOST resolves +
+ * validates it fail-closed through `@cinatra-ai/sdk-extensions/access-config`
+ * at registration (static-bundle lifecycle) — the generator does not own the
+ * schema. Absent file -> null (the host applies the absence rule). MALFORMED
+ * JSON fails the generator loudly: a broken declaration would fail-closed at
+ * every registration/install anyway, so the build is the earliest honest
+ * failure point. Non-connector kinds never call this.
+ */
+export function readConnectorAccessConfigRaw(dir) {
+  const abs = join(REPO_ROOT, dir, "cinatra", "config.json");
+  if (!existsSync(abs)) return null;
+  const raw = readFileSync(abs, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `[extension-manifest] ${dir}/cinatra/config.json is not valid JSON: ${err.message}`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      `[extension-manifest] ${dir}/cinatra/config.json must be a JSON object (got ${Array.isArray(parsed) ? "array" : typeof parsed}).`,
+    );
+  }
+  return parsed;
+}
+
 export function sanitizeLogoDataUri(dir, logoRel) {
   if (typeof logoRel !== "string" || !logoRel.trim().toLowerCase().endsWith(".svg")) return null;
   const pkgRoot = resolve(join(REPO_ROOT, dir));
@@ -1265,6 +1295,12 @@ export async function buildManifest() {
       vendor: resolveVendor(cin),
       // Generator-owned presence classification (see resolutionOf above).
       resolution: resolutionOf(x.name),
+      // RAW connector access-config pass-through (cinatra#951): the parsed
+      // `cinatra/config.json` bytes for kind=connector (null when absent /
+      // non-connector). The static-bundle lifecycle resolves + validates it
+      // through the SDK validator and caches the outcome on the registration
+      // record — the generated manifest carries DATA, never a verdict.
+      accessConfig: x.kind === "connector" ? readConnectorAccessConfigRaw(x.dir) : null,
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -1812,6 +1848,7 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
             logo: r.logo,
             vendor: r.vendor,
             resolution: r.resolution,
+            accessConfig: r.accessConfig,
           },
         )},`,
     )

@@ -106,6 +106,8 @@ const KIND_REVALIDATE_PATHS: Record<ExtensionKind, string[]> = {
   connector: ["/connectors"],
   artifact: ["/configuration/extensions"],
   workflow: ["/configuration/extensions"],
+  // Per-connection grants (cinatra#951) surface on the connectors screens.
+  connection: ["/connectors"],
 };
 
 // ---------------------------------------------------------------------------

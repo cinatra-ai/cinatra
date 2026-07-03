@@ -13,12 +13,13 @@ import { defaultAccessPolicyForKind } from "../install-access-contract";
 // ---------------------------------------------------------------------------
 
 describe("ExtensionKind union", () => {
-  it("includes the 4 legacy kinds + connector/artifact/workflow", () => {
+  it("includes the 4 legacy kinds + connector/artifact/workflow + connection (cinatra#951)", () => {
     expect([...ALL_EXTENSION_KINDS].sort()).toEqual(
       [
         "agent_run",
         "agent_template",
         "artifact",
+        "connection",
         "connector",
         "skill",
         "skill_package",

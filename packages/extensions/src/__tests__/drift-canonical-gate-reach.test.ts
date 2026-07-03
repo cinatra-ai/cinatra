@@ -62,6 +62,11 @@ const ALLOWED_FILES = [
   "packages/extensions/src/__tests__/drift-canonical-gate-reach.test.ts",
   // Primitive unit tests reference the direct-writer symbols.
   "packages/extensions/src/__tests__/lifecycle-primitive.test.ts",
+  // Access-declaration writer test (cinatra#951) — mocks the canonical-store
+  // writers (incl. _internalUpdateInstalledExtensionMetadata) in vi.mock
+  // fixtures to pin recordExtensionAccessDeclaration's re-validation; never a
+  // real write — same pattern as the primitive tests above.
+  "packages/extensions/src/__tests__/record-access-declaration.test.ts",
   // Teardown-cleanup test — mocks the canonical-store writers (incl.
   // _internalUpdateInstalledExtensionStatus) + builds fixture rows with a
   // `status` field; references the direct-writer symbols, like the test above.

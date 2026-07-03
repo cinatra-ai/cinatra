@@ -36,6 +36,8 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
 vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   installExtensionManifest: (...args: unknown[]) => installExtensionManifest(...args),
   sourceSwitchExtension: (...args: unknown[]) => sourceSwitchExtension(...args),
+  // cinatra#951: the access-declaration cache writer (not asserted here).
+  recordExtensionAccessDeclaration: async () => ({}),
 }));
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => isPackageRequiredInProd(pkg),

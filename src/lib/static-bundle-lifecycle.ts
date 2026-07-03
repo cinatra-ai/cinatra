@@ -134,6 +134,14 @@ export type StaticBundleLifecycleResult = {
    * whose contract is "no anchor could be ensured".
    */
   refreshFailed: string[];
+  /**
+   * Connector packages whose access DECLARATION (cinatra#951) could not be
+   * resolved (invalid bundled cinatra/config.json) or cached — logged loudly;
+   * the anchor itself is unaffected but the registration record keeps its
+   * previous (possibly null) cached declaration, so the W2 resolver stays on
+   * the last-known-good truth rather than a half-validated one.
+   */
+  accessDeclarationFailed: string[];
 };
 
 /**
@@ -154,13 +162,16 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
     refreshed: [],
     failed: [],
     refreshFailed: [],
+    accessDeclarationFailed: [],
   };
 
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
   );
-  const { installExtensionManifest, sourceSwitchExtension } = await import(
-    "@cinatra-ai/extensions/lifecycle-primitive"
+  const { installExtensionManifest, sourceSwitchExtension, recordExtensionAccessDeclaration } =
+    await import("@cinatra-ai/extensions/lifecycle-primitive");
+  const { parseConnectorAccessConfig, resolveAbsentConnectorAccessConfig } = await import(
+    "@cinatra-ai/sdk-extensions/access-config"
   );
   const { isStaticBundleAnchorSource, staticBundleAnchorSource } = await import(
     "@cinatra-ai/extensions/static-bundle-anchor"
@@ -188,6 +199,57 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
       return undefined;
     }
     return entry.digest;
+  };
+
+  // HOST CONFIG READER at boot registration (cinatra#951): resolve a bundled
+  // connector's access declaration from the generated record's RAW
+  // `accessConfig` pass-through (the SAME bytes the image ships — never a
+  // repo-path re-read), through the single SDK validator with INSTALL-surface
+  // absence semantics. Non-connector kinds resolve null. A throw is handled
+  // per-record below (loud, anchor-preserving, accessDeclarationFailed).
+  const resolveRecordAccessDeclaration = (rec: (typeof STATIC_EXTENSION_RECORDS)[number]) => {
+    if (rec.kind !== "connector") return null;
+    const raw = rec.accessConfig ?? null;
+    return raw === null
+      ? resolveAbsentConnectorAccessConfig({ packageName: rec.packageName, surface: "install" })
+      : parseConnectorAccessConfig(raw, { packageName: rec.packageName });
+  };
+  type DeclarationShape = {
+    formatVersion: number;
+    mode: string;
+    scope: string;
+    source: string;
+  };
+  const declarationsEqual = (
+    a: DeclarationShape | null | undefined,
+    b: DeclarationShape | null,
+  ): boolean =>
+    !!a && !!b && a.formatVersion === b.formatVersion && a.mode === b.mode &&
+    a.scope === b.scope && a.source === b.source;
+  // Cache the resolved declaration on the registration record when it drifts
+  // (once per image change — no per-boot write churn). Best-effort per record:
+  // a failure is loud + recorded, never an anchor/boot blocker.
+  const ensureDeclarationCached = async (
+    rec: (typeof STATIC_EXTENSION_RECORDS)[number],
+    rowId: string,
+    current: DeclarationShape | null | undefined,
+  ): Promise<void> => {
+    if (rec.kind !== "connector") return;
+    try {
+      const resolved = resolveRecordAccessDeclaration(rec);
+      if (resolved === null || declarationsEqual(current, resolved)) return;
+      await recordExtensionAccessDeclaration(rowId, resolved, {
+        actor: { source: "static-bundle-lifecycle" },
+        reason: "connector access declaration cache @ boot registration (cinatra#951)",
+      });
+    } catch (err) {
+      result.accessDeclarationFailed.push(rec.packageName);
+      console.error(
+        `[static-bundle-lifecycle] could not resolve/cache the access declaration for ` +
+          `${rec.packageName} — the registration record keeps its previous cached value:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   };
 
   // Base seed set: bundled serverEntry packages + bundled required-in-prod
@@ -235,6 +297,9 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         if (anchored.status !== "active" && anchored.status !== "locked") continue;
         const src = anchored.source;
         if (!isStaticBundleAnchorSource(src)) continue; // unreachable; narrows the type
+        // Keep the cached access declaration current on every live anchor
+        // (drift-gated write — see ensureDeclarationCached).
+        await ensureDeclarationCached(rec, anchored.id, anchored.accessDeclaration);
         const versionDrift = src.version !== version;
         const digestDrift = digest !== undefined && src.digest !== digest;
         if (!versionDrift && !digestDrift) continue;
@@ -282,6 +347,7 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
           ...actorOpts,
           reason: "static-bundle anchor adoption (existing platform row)",
         });
+        await ensureDeclarationCached(rec, platformRow.id, platformRow.accessDeclaration);
         const live = platformRow.status === "active" || platformRow.status === "locked";
         (live ? result.seededLive : result.seededArchived).push(rec.packageName);
         continue;
@@ -304,9 +370,10 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         );
       }
 
+      const seededId = `iext_${randomUUID().slice(0, 12)}`;
       await installExtensionManifest(
         {
-          id: `iext_${randomUUID().slice(0, 12)}`,
+          id: seededId,
           packageName: rec.packageName,
           ownerLevel: "platform",
           ownerId: null,
@@ -323,6 +390,7 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         },
         actorOpts,
       );
+      await ensureDeclarationCached(rec, seededId, null);
       (legacyRetired ? result.seededArchived : result.seededLive).push(rec.packageName);
     } catch (err) {
       // Concurrent boot may have anchored the package between our read and
