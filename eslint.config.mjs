@@ -296,22 +296,55 @@ const APP_ALIAS_BAN = [
 // .ts HTML-string builders (e.g. the chat markdown renderer) are covered
 // too. Only interpolated VALUES escape (`text-[${size}px]` still trips on
 // the `text-[` chunk).
+// ── Shared color-ban sub-patterns (cinatra#803) ──────────────────────────
+// The utilities whose COLOR values are gated. `border` optionally carries a
+// per-side/axis segment (border-l-…, border-x-…, border-t-…) so a per-side
+// color value is not a bypass. This ONE set is shared by the base
+// arbitrary-color ban AND the dark: override ban so the two utility lists
+// cannot drift — the dark list previously omitted caret/from/via/to, which let
+// `dark:from-red-500` / `dark:caret-red-500` through.
+const COLOR_UTIL =
+  "(?:text|bg|border(?:-[trblxyse])?|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)";
+// An ARBITRARY (bracket) color value after the utility's trailing `-`: a raw
+// color (`-[#…]`, `-[rgb(…)]`) OR the self-declaring `color:` type hint
+// (`-[color:var(--brand)]` is a color regardless of value shape, not a bypass).
+const ARBITRARY_COLOR_VALUE =
+  "-\\[(color:|#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()";
+// A NAMED Tailwind palette color after the utility's trailing `-`
+// (`-red-500`, `-slate-900`): a palette family followed by a numeric shade.
+// The semantic design tokens (bg-surface, text-foreground, border-line, …) are
+// NOT palette families and carry no numeric shade, so the approved #801 tokens
+// — including under `dark:` — stay allowed; only the raw palette that a manual
+// dark override reaches for is gated.
+const NAMED_PALETTE_COLOR =
+  "-(slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\\d";
+
 const TYPE_BAN_SPECS = [
   {
-    // Two alternatives after `-[`: a `color:` type hint (whatever the value
-    // — `bg-[color:var(--brand)]` self-declares as a color and must not be
-    // a bypass) OR a raw color value (`#…` / a color function).
-    pattern:
-      "(^|[^a-zA-Z0-9_-])(text|bg|border|ring|outline|fill|stroke|caret|divide|decoration|accent|from|via|to)-\\[(color:|#|(rgb|rgba|hsl|hsla|oklch|oklab|hwb|lab|lch|color)\\()",
+    // Base arbitrary-COLOR ban (non-dark): an arbitrary bracket color on any
+    // color utility — a `color:` type hint (whatever the value —
+    // `bg-[color:var(--brand)]` self-declares as a color and must not be a
+    // bypass) OR a raw color value (`#…` / a color function). Named palette
+    // colors are NOT gated here (only ARBITRARY values are, per the issue);
+    // the dark ban below is the one that also reaches named colors.
+    pattern: `(^|[^a-zA-Z0-9_-])${COLOR_UTIL}${ARBITRARY_COLOR_VALUE}`,
     message:
       "Arbitrary color value in a class string — use the semantic color tokens (text-foreground, bg-surface, text-muted-foreground, border-line, …) from @cinatra-ai/design.",
   },
   {
-    // `([a-zA-Z0-9-]*(\[[^\]]*\])?:)*` — any chain of further variants
-    // (hover:, focus-visible:, data-[state=open]:, [&>svg]:) between
-    // `dark:` and the color utility, so variant stacking is not a bypass.
-    pattern:
-      "(^|[^a-zA-Z0-9_-])dark:([a-zA-Z0-9-]*(\\[[^\\]]*\\])?:)*(text|bg|border|ring|fill|stroke|divide|outline|decoration|accent)-",
+    // Manual `dark:` color override. Fires ONLY when the color utility is
+    // followed by an actual COLOR value — an arbitrary bracket color OR a
+    // named palette color — so non-color dark utilities (dark:text-center,
+    // dark:text-lg, dark:border-2, dark:border-dashed, dark:ring-0,
+    // dark:outline-none, dark:divide-x, dark:decoration-2, dark:stroke-2) and
+    // the approved semantic tokens (dark:bg-surface, dark:text-foreground)
+    // are NOT gated. `([a-zA-Z0-9/-]*(\[[^\]]*\])?:)*` consumes any chain
+    // of further variants between `dark:` and the color utility — hover:,
+    // focus-visible:, data-[state=open]:, [&>svg]:, and slash group/peer
+    // variants (group-hover/item:, peer-checked/opt:) — so variant stacking
+    // is not a bypass. A literal "/" would close the selector regex, so it is
+    // emitted as SELECTOR_SEP inside the variant-chain class.
+    pattern: `(^|[^a-zA-Z0-9_-])dark:([a-zA-Z0-9${SELECTOR_SEP}-]*(\\[[^\\]]*\\])?:)*${COLOR_UTIL}(${ARBITRARY_COLOR_VALUE}|${NAMED_PALETTE_COLOR})`,
     message:
       "Manual dark: color override — the semantic tokens adapt to dark mode through the cascade; style with the token utilities instead of per-theme colors.",
   },
@@ -325,7 +358,10 @@ const TYPE_BAN_SPECS = [
       "Arbitrary text-[…] font size — use the named type-scale tokens (text-page-title-{sm,md,lg}, text-listing-title, text-badge-xs, text-badge-2xs) or the standard Tailwind sizes. See cinatra#886 for the migration of pre-existing sites.",
   },
   {
-    pattern: "(^|[^a-zA-Z0-9_-])tracking-\\[",
+    // The optional leading `-` covers the negative-tracking utility
+    // (`-tracking-[0.02em]`); the boundary before it still requires
+    // start-of-string or a non-word char, so it never matches mid-token.
+    pattern: "(^|[^a-zA-Z0-9_-])-?tracking-\\[",
     message:
       "Arbitrary tracking-[…] letter-spacing — use the named tracking tokens (tracking-title-tight, tracking-kicker, tracking-kicker-wide, tracking-page-label). See cinatra#886 for the migration of pre-existing sites.",
   },

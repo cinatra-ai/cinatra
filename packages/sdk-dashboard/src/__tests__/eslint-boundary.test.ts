@@ -347,6 +347,39 @@ describe("arbitrary color/type className bans (cinatra#803)", () => {
     expect(darkBans.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("flags per-side/axis border colors — border-l-[…] / border-x-[…] are not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    const colorBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Arbitrary color value"),
+    );
+    // The 3 color: hints + border-l-[#ff0000] + border-x-[rgb(0,0,0)] all fire.
+    expect(colorBans.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("flags dark: named-color overrides on caret/from/via/to (the color-utility set includes them)", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    // dark:from-red-500, dark:to-slate-900, dark:via-blue-500, dark:caret-red-500,
+    // on top of the two variant-chain overrides above.
+    const darkBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Manual dark: color override"),
+    );
+    expect(darkBans.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("flags dark: slash group/peer variant chains — the / in the variant segment is not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    // dark:group-hover/item:text-red-500 + dark:peer-checked/opt:bg-blue-500.
+    const darkBans = typeBanMessages(r).filter((m) =>
+      m.message.includes("Manual dark: color override"),
+    );
+    expect(darkBans.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("flags negative arbitrary tracking — -tracking-[…] is not a bypass", () => {
+    const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
+    expectTypeBan(r, "Arbitrary tracking-[…] letter-spacing");
+  });
+
   it("flags template-literal class strings — backticks are not a bypass", () => {
     const r = lintFile(path.join(REPO_ROOT, l1BypassForms));
     expectTypeBan(r, "Arbitrary text-[…] font size");
