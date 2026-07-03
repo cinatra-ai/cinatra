@@ -10,6 +10,7 @@ import {
   scanOasForStartNodeInputsWithoutRequired,
   scanOasForPackageVersionSync,
   scanAgentForRequiredLicense,
+  scanOasForArtifactParityFindings,
   type ReviewFinding,
 } from "@cinatra-ai/agents";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
@@ -63,7 +64,34 @@ const RULES_RUN = [
   "start_node_inputs_without_required",
   "package_version_drift",
   "required_license_missing",
+  // cinatra#924 — advisory artifact-parity family (OAS-RUNTIME-009..012).
+  // WARNING-only; never hard-gates a publish (the scanner emits no blockers).
+  "artifact_produces_materialization",
 ] as const;
+
+/**
+ * Tolerant read of `cinatra.produces` extension ids from a sibling package.json
+ * object (mirrors `readAgentProducesFromPackageManifest`; inlined to avoid a new
+ * route → @cinatra-ai/extensions import edge). Absent/malformed ⇒ null (the
+ * produces-coverage check is then skipped; the other parity checks still run).
+ */
+function readProducesExtensions(
+  packageJson: Record<string, unknown> | null,
+): string[] | null {
+  if (packageJson === null) return null;
+  const cinatra = packageJson.cinatra;
+  if (!cinatra || typeof cinatra !== "object") return null;
+  const produces = (cinatra as { produces?: unknown }).produces;
+  if (!Array.isArray(produces)) return null;
+  return produces
+    .map((r) =>
+      r && typeof r === "object" &&
+      typeof (r as { extension?: unknown }).extension === "string"
+        ? (r as { extension: string }).extension
+        : null,
+    )
+    .filter((e): e is string => typeof e === "string" && e.length > 0);
+}
 
 function asObject(value: string | Record<string, unknown> | undefined): Record<string, unknown> | null {
   if (value === undefined) return null;
@@ -144,6 +172,16 @@ export async function POST(req: Request): Promise<Response> {
     findings.push(...scanOasForPackageVersionSync(oas, packageJson));
     findings.push(...scanAgentForRequiredLicense(packageJson));
   }
+
+  // cinatra#924 — advisory artifact-parity family (OAS-RUNTIME-009..012).
+  // Runs unconditionally; the produces-coverage check reads sibling
+  // `cinatra.produces` (null when no/ malformed package.json ⇒ that check is
+  // skipped, the rest still run). All findings are WARNING severity.
+  findings.push(
+    ...scanOasForArtifactParityFindings(oas, {
+      produces: readProducesExtensions(packageJson),
+    }),
+  );
 
   const stamped = stampSource(findings);
 

@@ -228,6 +228,8 @@ export {
   parseAgentPackagePayload,
   isAgentPackageManifest,
   agentPackageRiskLevelSchema,
+  evaluateProducesMaterializationContract,
+  ARTIFACT_PRODUCES_ENFORCEMENT,
   type AgentPackageManifest,
   type AgentPackagePayload,
   type CinatraAgentPackageMetadata,
@@ -546,6 +548,9 @@ export type {
   ReviewFindingSeverity,
   ReviewFindingSource,
 } from "./validate-agent-json";
+// cinatra#924 — advisory artifact-parity scanner (OAS-RUNTIME-009..012),
+// surfaced fleet-wide via /api/oas-lint/scan-all. WARNING-only.
+export { scanOasForArtifactParityFindings } from "./validate-oas-runtime-invariants";
 
 // Shared review-merge helper used by the /api/review/merge route and the
 // agent_creation_review MCP primitive.
