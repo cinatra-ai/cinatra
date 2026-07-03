@@ -26,6 +26,7 @@ import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfi
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
+import { artifactDataRootGuardPhases } from "@/lib/boot/phases/artifact-data-root-guard";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
 import { systemServicesPhases } from "@/lib/boot/phases/system-services";
 import { systemLoopPhases } from "@/lib/boot/phases/system-loops";
@@ -105,6 +106,13 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // silently undetected. Retryable, non-blocking — the deficit is surfaced in
   // health degradedPhases + logs, never gates the deploy.
   await run(userStoreMountCheckPhases());
+
+  // ── artifact data-root stranded-bytes guard (cinatra#926) ────────────────────
+  // AFTER core boot (DB up, schema ensured), alongside the durable-mount checks:
+  // warn loudly when artifact_blobs rows exist but the resolved artifact root has
+  // no orgs/ dir (a mis-pointed root, not data loss). Read-only + retryable —
+  // never gates the deploy.
+  await run(artifactDataRootGuardPhases());
 
   await run(requiredExtensionMaterializePhases());
 

@@ -109,6 +109,16 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Reads the core migration ledger ONCE at boot (cinatra#789 item 4) to assert the DB schema is not behind the image before required-extension activation. Boot-time precondition, never a per-request path.",
   },
+  "src/lib/boot/phases/artifact-data-root-guard.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Probes artifact_blobs existence ONCE at boot (cinatra#926 stranded-bytes guard) to warn on a mis-pointed artifact data root. Boot-time, read-only, never a per-request path.",
+  },
+  "src/lib/artifacts/artifact-blob-verifier.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Admin/script-invoked DB↔blob verifier (cinatra#926): one artifact_blobs row scan per report run. Operator cold path, never boot-blocking, never a per-request path.",
+  },
   "src/lib/instance-identity-store.ts": {
     class: "migratable-background-setup",
     justification:
@@ -185,6 +195,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     class: "migratable-request-path",
     justification:
       "Artifact creation write on request paths. Migratable with the artifacts subsystem.",
+  },
+  "src/lib/artifacts/local-disk-blob-store.ts": {
+    class: "migratable-request-path",
+    justification:
+      "cinatra#926 fail-soft guards on blob request paths: the reachability probe before a content-addressed file delete (fail-safe keeps the file on error) and the optional org-quota usage read at put() (skipped unless the env knob is set). Migratable with the artifacts subsystem.",
   },
   "src/lib/artifacts/artifact-read.ts": {
     class: "migratable-request-path",

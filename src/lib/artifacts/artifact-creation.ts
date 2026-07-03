@@ -69,9 +69,12 @@ import {
 //   Single held-lock-tx with SQL-recomputed decision is the correct pattern.
 //
 // Dedupe-loser blob bytes are post-tx-deleted via `deleteByStorageKey`
-// best-effort. The byte-level orphan GC is `artifact_versions`-driven and
-// does not reclaim semantic dedupe-loser files; the retention rebuild is
-// the proper backstop.
+// best-effort — but ONLY when the loser key differs from the winner key.
+// With content-addressed keys (cinatra#926) a same-org semantic dedupe
+// lands on the SAME final file (nothing to remove; removing would unlink
+// the winner's bytes), and any content-addressed removal is reachability-
+// guarded inside the store. The verifier reports residual orphans; the
+// retention rebuild is the proper backstop.
 
 const ARTIFACT_BLOB_MAX_DEFAULT_BYTES = 100 * 1024 * 1024; // soft default
 
@@ -165,9 +168,12 @@ export async function createSemanticArtifact(
   const maxBytes = input.maxBytes ?? ARTIFACT_BLOB_MAX_DEFAULT_BYTES;
 
   // -------------------------------------------------------------------
-  // Pre-tx: write blob bytes to disk (orphan-safe). The scope used is
-  // the just-allocated (artifactId, representationRevisionId) — even if
-  // dedupe later wins, the path is unique and easy to garbage-collect.
+  // Pre-tx: write blob bytes to disk (orphan-safe). New writes land on the
+  // org-scoped CONTENT-ADDRESSED key (cinatra#926) — a semantic dedupe
+  // (same org + same substance/sha) therefore yields the SAME storage key
+  // as the winner, so the dedupe-loser cleanups below only fire when the
+  // keys actually differ (legacy-keyed winner), and any content-addressed
+  // removal is reachability-guarded inside deleteByStorageKey.
   // -------------------------------------------------------------------
   const blobStore = createLocalDiskBlobStore();
   const newBlob = await blobStore.put({
@@ -351,8 +357,11 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
       }
     }
   } catch (err) {
-    // Pre-tx-2 failure → the new blob bytes are unreferenced. Best-effort
-    // delete; if it fails the retention rebuild will reclaim it.
+    // Pre-tx-2 failure → the new blob bytes are (probably) unreferenced.
+    // Best-effort delete. The content-addressed file may pre-date this put
+    // (same-bytes reuse) and be owned by an existing row — the
+    // reachability-guarded deleteByStorageKey (cinatra#926) keeps
+    // referenced/young files; residuals are the verifier's to report.
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
       .catch(() => {});
@@ -675,7 +684,7 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     //    bytes were deleted). DO NOT delete — the artifact_blobs row
     //    owns the bytes for future dedupes; only the artifact rollup
     //    (objects + representation + audit) failed and is rolled back.
-    if (authoritative.isDedupe) {
+    if (authoritative.isDedupe && newBlob.storageKey !== authoritative.storageKey) {
       await blobStore
         .deleteByStorageKey({
           orgId: input.orgId,
@@ -689,10 +698,15 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
   // -------------------------------------------------------------------
   // Post-tx: if dedupe won, the new blob bytes on disk are an
   // unreferenced duplicate. Best-effort delete. The retention rebuild is the
-  // proper backstop for any residual disk leak; byte-level orphan GC is
-  // `artifact_versions`-driven and does not see semantic dedupe-loser files.
+  // proper backstop for any residual disk leak.
+  //
+  // Content-addressed keys (cinatra#926): same substance ⇒ same sha ⇒ the
+  // loser key can EQUAL the winner key (same final file — nothing to
+  // remove; deleting would unlink the winner's bytes). Skip on equality;
+  // any other content-addressed removal routes through the reachability-
+  // guarded deleteByStorageKey (which keeps young/referenced files).
   // -------------------------------------------------------------------
-  if (authoritative.isDedupe) {
+  if (authoritative.isDedupe && newBlob.storageKey !== authoritative.storageKey) {
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
       .catch(() => {});

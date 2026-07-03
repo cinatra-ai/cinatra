@@ -65,6 +65,11 @@ vi.mock("@/lib/boot/phases/user-store-mount-check", () => ({
     { name: "user-store-mount-check", policy: "retryable", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/artifact-data-root-guard", () => ({
+  artifactDataRootGuardPhases: () => [
+    { name: "artifact-data-root-guard", policy: "retryable", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/boot-degrade-probe", () => ({
   bootDegradeProbePhases: () => [
     { name: "boot-degrade-probe", policy: "degraded", run: async () => {} },
@@ -109,6 +114,7 @@ describe("runBoot orchestration", () => {
       "schema-version-precondition", // cinatra#789 item 4 — after core (migrations), before ext-activation
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
+      "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
@@ -141,6 +147,7 @@ describe("runBoot orchestration", () => {
       "schema-version-precondition", // cinatra#789 item 4 — runs in PROD (fatal on too-old)
       "ext-x",
       "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
+      "artifact-data-root-guard", // cinatra#926 — stranded-bytes warn, alongside the mount checks
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)

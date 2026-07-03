@@ -1,7 +1,15 @@
 import "server-only";
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, rename, rm, stat as fsStat, open as fsOpen } from "node:fs/promises";
+import {
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat as fsStat,
+  open as fsOpen,
+  utimes,
+} from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type {
@@ -12,16 +20,120 @@ import type {
   BlobPutInput,
 } from "@cinatra-ai/artifacts";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
+import { resolveArtifactDataRoot } from "./artifact-data-root";
 
 // Local-disk BlobStore. Bytes live ONLY here (never in objects.data).
-// Storage keys are server-generated and strictly scope-derived; client
-// filenames are never on a path. No-exec storage root (`data/artifacts`)
-// is served only via the authz'd serve route.
+// Storage keys are server-generated; client filenames are never on a path.
+// The no-exec storage root (configurable, cinatra#926 — env > DB metadata >
+// cwd-relative `data/artifacts` default) is served only via the authz'd
+// serve route. The path is never a trust input — DB rows + the serving
+// layer's authz are.
+//
+// KEY SHAPES (cinatra#926, epic #922):
+//  - NEW writes are org-scoped + CONTENT-ADDRESSED:
+//      `orgs/<orgId>/blobs/sha256/<aa>/<sha256>.bin`  (<aa> = first 2 hex)
+//    mirroring the true dedupe identity (org_id, sha256). The org stays IN
+//    the path (assertOrgPrefix defense-in-depth; no cross-org byte sharing);
+//    the artifact-extension name is NEVER in the path (semantic type is a
+//    mutable DB fact — same bytes can satisfy two extensions).
+//  - LEGACY keys (`orgs/<org>/artifacts/<aid>/versions/<rev>/<blobId>.bin`)
+//    stay readable FOREVER: every serve/read path is storage-key-keyed and
+//    key-shape-agnostic. No migration, no key rewrites.
+//
+// SHARED-FINAL-FILE SAFETY: a content-addressed final path can be SHARED
+// (a second same-bytes writer is answered with the existing file) and can
+// exist before its `artifact_blobs` row commits. Therefore no failure or
+// cleanup path may unlink a final content-addressed file directly:
+//  (a) a writer's error cleanup removes ONLY its own `.staging/<uuid>` file;
+//  (b) `deleteByStorageKey` on a content-addressed key is REACHABILITY-
+//      GUARDED: it deletes only when no live `artifact_blobs` row references
+//      the storage_key AND the file's mtime is older than a grace window
+//      (covering the rename-committed-but-row-not-yet-committed writer, and
+//      the keep-existing writer whose file mtime is refreshed on reuse).
+//      Legacy per-revision keys keep today's direct-delete semantics.
 
-// Lazy (not a module-load const) so it tracks process.cwd() and is
+// Lazy (not a module-load const) so it tracks the configured root and is
 // deterministically testable.
 function blobRoot(): string {
-  return path.join(process.cwd(), "data", "artifacts");
+  return resolveArtifactDataRoot();
+}
+
+/** Same-FS staging dir under the root (EXDEV-safe atomic tmp+rename). */
+export const ARTIFACT_STAGING_DIR_NAME = ".staging";
+
+function stagingDir(): string {
+  return path.join(blobRoot(), ARTIFACT_STAGING_DIR_NAME);
+}
+
+// ---------------------------------------------------------------------------
+// Env-tunable ops knobs (cinatra#926). WARN-first defaults: an unset quota
+// env disables that check entirely; `enforce` mode must be opted into.
+// ---------------------------------------------------------------------------
+
+/** Per-org byte quota (sum over artifact_blobs.size_bytes). Unset/0 = off. */
+export const ARTIFACT_ORG_QUOTA_BYTES_ENV = "CINATRA_ARTIFACT_ORG_QUOTA_BYTES";
+/** Staging-dir residency cap in bytes. Unset/0 = off. */
+export const ARTIFACT_STAGING_CAP_BYTES_ENV = "CINATRA_ARTIFACT_STAGING_CAP_BYTES";
+/** "warn" (default) logs and proceeds; "enforce" rejects the put. */
+export const ARTIFACT_QUOTA_MODE_ENV = "CINATRA_ARTIFACT_QUOTA_MODE";
+/** Grace window before an unreferenced content-addressed file may be deleted. */
+export const ARTIFACT_DELETE_GRACE_MS_ENV = "CINATRA_ARTIFACT_DELETE_GRACE_MS";
+export const DEFAULT_ARTIFACT_DELETE_GRACE_MS = 15 * 60 * 1000;
+
+export class ArtifactQuotaExceededError extends Error {
+  constructor(
+    public readonly kind: "org-quota" | "staging-cap",
+    public readonly limitBytes: number,
+    public readonly usedBytes: number,
+  ) {
+    super(`artifact ${kind} exceeded: ${usedBytes} bytes used, limit ${limitBytes}`);
+    this.name = "ArtifactQuotaExceededError";
+  }
+}
+
+function envBytes(name: string): number {
+  const raw = (process.env[name] ?? "").trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function quotaMode(): "warn" | "enforce" {
+  return (process.env[ARTIFACT_QUOTA_MODE_ENV] ?? "").trim().toLowerCase() === "enforce"
+    ? "enforce"
+    : "warn";
+}
+
+function deleteGraceMs(): number {
+  const n = envBytes(ARTIFACT_DELETE_GRACE_MS_ENV);
+  return n > 0 ? n : DEFAULT_ARTIFACT_DELETE_GRACE_MS;
+}
+
+/** Content-addressed new-write key shape (see module header). */
+export function isContentAddressedStorageKey(storageKey: string): boolean {
+  return /^orgs\/[A-Za-z0-9._-]+\/blobs\/sha256\/[a-f0-9]{2}\/[a-f0-9]{64}\.bin$/.test(
+    storageKey,
+  );
+}
+
+/** The sha256 embedded in a content-addressed key, or null. */
+export function sha256FromContentAddressedKey(storageKey: string): string | null {
+  const m = /\/sha256\/[a-f0-9]{2}\/([a-f0-9]{64})\.bin$/.exec(storageKey);
+  return m ? m[1] : null;
+}
+
+function contentAddressedKeyFor(orgId: string, sha256hex: string): string {
+  if (!/^[a-f0-9]{64}$/.test(sha256hex)) {
+    throw new Error(`invalid sha256 for content-addressed key: ${JSON.stringify(sha256hex)}`);
+  }
+  return path.posix.join(
+    "orgs",
+    safe(orgId, "orgId"),
+    "blobs",
+    "sha256",
+    sha256hex.slice(0, 2),
+    `${sha256hex}.bin`,
+  );
 }
 
 // Reject anything that could escape the scope-derived path. Scope ids are
@@ -34,6 +146,9 @@ function safe(seg: string, label: string): string {
   return seg;
 }
 
+// LEGACY key derivation — retained ONLY so the scope-keyed accessors keep
+// reading files written before the content-addressed cutover (cinatra#926).
+// New writes NEVER produce this shape.
 function keyFor(scope: BlobScope, blobId: string): string {
   // `scope.representationRevisionId` is the semantic contract name; the
   // on-disk path segment stays "versions" so existing dev/test fixtures
@@ -138,26 +253,202 @@ function sniffMime(head: Uint8Array, declared?: string): string {
     : "application/octet-stream";
 }
 
-export function createLocalDiskBlobStore(): BlobStore {
+/** Injectable seams (unit tests / future backends). All optional; the
+ *  defaults are the production DB-backed implementations. */
+export type LocalDiskBlobStoreOptions = {
+  /** Is this storage_key referenced by any live `artifact_blobs` row?
+   *  Used by the reachability-guarded content-addressed delete. The
+   *  default queries the DB and FAILS SAFE (treats errors as referenced). */
+  isStorageKeyReferenced?: (orgId: string, storageKey: string) => Promise<boolean> | boolean;
+  /** Current org byte usage for the quota check. Default sums
+   *  `artifact_blobs.size_bytes` for the org; errors skip the check. */
+  getOrgUsageBytes?: (orgId: string) => Promise<number | null> | number | null;
+};
+
+// Default reachability probe: any live artifact_blobs row carrying this
+// storage_key keeps the bytes. Dynamic imports keep the DB modules out of
+// the unit-test module graph; ANY failure returns `true` (fail-safe: when
+// we cannot prove unreachability, we keep the file — the verifier reports
+// residual orphans instead).
+async function defaultIsStorageKeyReferenced(
+  orgId: string,
+  storageKey: string,
+): Promise<boolean> {
+  try {
+    const { runPostgresQueriesSync } = await import("@/lib/postgres-sync");
+    const { getPostgresConnectionString, postgresSchema } = await import(
+      "@/lib/postgres-config"
+    );
+    const schema = postgresSchema.replaceAll('"', '""');
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT 1 FROM "${schema}"."artifact_blobs"
+WHERE org_id = $1 AND storage_key = $2 LIMIT 1`,
+          values: [orgId, storageKey],
+        },
+      ],
+    });
+    return (res?.rows?.length ?? 0) > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function defaultGetOrgUsageBytes(orgId: string): Promise<number | null> {
+  try {
+    const { runPostgresQueriesSync } = await import("@/lib/postgres-sync");
+    const { getPostgresConnectionString, postgresSchema } = await import(
+      "@/lib/postgres-config"
+    );
+    const schema = postgresSchema.replaceAll('"', '""');
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total
+FROM "${schema}"."artifact_blobs" WHERE org_id = $1`,
+          values: [orgId],
+        },
+      ],
+    });
+    const raw = res?.rows?.[0] as { total?: string | number } | undefined;
+    if (raw === undefined || raw.total === undefined) return null;
+    const n = typeof raw.total === "number" ? raw.total : Number(raw.total);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function stagingResidencyBytes(): Promise<number> {
+  let total = 0;
+  let entries: string[];
+  try {
+    entries = await readdir(stagingDir());
+  } catch {
+    return 0; // no staging dir yet
+  }
+  for (const name of entries) {
+    try {
+      const st = await fsStat(path.join(stagingDir(), name));
+      if (st.isFile()) total += st.size;
+    } catch {
+      // raced with a concurrent finalize/cleanup — skip
+    }
+  }
+  return total;
+}
+
+// ---------------------------------------------------------------------------
+// Per-storage-key critical section (codex round 2, cinatra#926).
+//
+// A content-addressed final file is SHARED: put()'s reuse/publish decision
+// and deleteByStorageKey()'s stale→probe→unlink sequence race on the same
+// path, and no mtime re-checking fully closes the interleaving where a
+// writer confirms reuse and discards its staged copy right before the
+// unlink lands (reachable via runResourceBlobGc, which deletes the rows
+// BEFORE the disk delete). Both sequences therefore run under a per-key
+// in-process mutex: whichever enters second observes the other's outcome
+// (file unlinked ⇒ the writer publishes its staged copy; mtime refreshed ⇒
+// the deleter keeps the file). Cross-process writers remain covered by the
+// grace window + the verifier backstop, matching the design's best-effort
+// contract there.
+// ---------------------------------------------------------------------------
+const storageKeyLocks = new Map<string, Promise<void>>();
+
+async function withStorageKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = storageKeyLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = prev.then(() => done);
+  storageKeyLocks.set(key, tail);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    // Drop the map entry when no waiter queued behind us (bounded memory).
+    if (storageKeyLocks.get(key) === tail) storageKeyLocks.delete(key);
+  }
+}
+
+/** WARN-first quota gate: logs in warn mode, throws in enforce mode. */
+function applyQuotaVerdict(
+  kind: "org-quota" | "staging-cap",
+  usedBytes: number,
+  limitBytes: number,
+): void {
+  if (usedBytes < limitBytes) return;
+  if (quotaMode() === "enforce") {
+    throw new ArtifactQuotaExceededError(kind, limitBytes, usedBytes);
+  }
+  console.warn(
+    `[artifact-blob-store] ${kind} at/over limit (used=${usedBytes}, limit=${limitBytes}) — ` +
+      `proceeding (mode=warn; set ${ARTIFACT_QUOTA_MODE_ENV}=enforce to reject)`,
+  );
+}
+
+export function createLocalDiskBlobStore(
+  options?: LocalDiskBlobStoreOptions,
+): BlobStore {
+  const isReferenced =
+    options?.isStorageKeyReferenced ?? defaultIsStorageKeyReferenced;
+  const orgUsageBytes = options?.getOrgUsageBytes ?? defaultGetOrgUsageBytes;
+
   return {
     async put(input: BlobPutInput): Promise<BlobRecord> {
-      const blobId = crypto.randomUUID();
-      const storageKey = keyFor(input, blobId);
-      const finalPath = absFor(storageKey);
-      const tmpPath = `${finalPath}.tmp-${process.pid}-${Date.now()}`;
-      await mkdir(path.dirname(finalPath), { recursive: true });
+      // The blobId stays a fresh UUID (it is the artifact_blobs row id);
+      // it is no longer part of the on-disk path for new writes.
+      const blobId = randomUUID();
+      safe(input.orgId, "orgId"); // reject traversal BEFORE any disk I/O
+
+      // WARN-first ops caps (cinatra#926). Both checks are skipped
+      // entirely when their env knob is unset; the org-usage read is
+      // fail-soft (a DB hiccup never blocks a write). In `enforce` mode the
+      // quota also bounds the INCOMING stream: the pre-check alone would let
+      // an org just under quota land an arbitrarily large blob, so the
+      // remaining headroom is enforced during streaming like maxBytes.
+      let enforcedRemainingBytes = Infinity;
+      const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
+      if (orgQuota > 0) {
+        const used = await orgUsageBytes(input.orgId);
+        if (typeof used === "number") {
+          applyQuotaVerdict("org-quota", used, orgQuota);
+          if (quotaMode() === "enforce") {
+            enforcedRemainingBytes = Math.max(0, orgQuota - used);
+          }
+        }
+      }
+      const stagingCap = envBytes(ARTIFACT_STAGING_CAP_BYTES_ENV);
+      if (stagingCap > 0) {
+        applyQuotaVerdict("staging-cap", await stagingResidencyBytes(), stagingCap);
+      }
+
+      // Stream to a same-FS staging file first (the final path is content-
+      // addressed, so it is unknowable until the stream is fully hashed).
+      const stagedPath = path.join(stagingDir(), randomUUID());
+      await mkdir(stagingDir(), { recursive: true });
 
       const hash = createHash("sha256");
       let size = 0;
       let head: Uint8Array = new Uint8Array(0);
-      const fh = await fsOpen(tmpPath, "wx");
+      const fh = await fsOpen(stagedPath, "wx");
       try {
         for await (const chunk of input.stream) {
           size += chunk.length;
           if (size > input.maxBytes) {
-            await fh.close();
-            await rm(tmpPath, { force: true });
             throw new BlobTooLargeError(input.maxBytes);
+          }
+          if (size > enforcedRemainingBytes) {
+            throw new ArtifactQuotaExceededError(
+              "org-quota",
+              orgQuota,
+              orgQuota - enforcedRemainingBytes + size,
+            );
           }
           hash.update(chunk);
           if (head.length < 16) {
@@ -171,20 +462,88 @@ export function createLocalDiskBlobStore(): BlobStore {
           }
           await fh.write(chunk);
         }
+        // Durability: fsync the staged bytes BEFORE the rename publishes
+        // them under the content-addressed key.
+        await fh.sync().catch(() => {});
+      } catch (err) {
+        // Error cleanup removes ONLY our own staged file — NEVER a final
+        // path (a content-addressed final file can be shared).
+        await fh.close().catch(() => {});
+        await rm(stagedPath, { force: true }).catch(() => {});
+        throw err;
       } finally {
         await fh.close().catch(() => {});
       }
-      // Write+rename file FIRST, DB commit by caller AFTER. Orphan file on
-      // later DB failure is preferable to a DB row pointing at a missing
-      // blob; orphan GC sweeps these.
-      await rename(tmpPath, finalPath);
-      return {
+
+      const sha256 = hash.digest("hex");
+      const storageKey = contentAddressedKeyFor(input.orgId, sha256);
+      const finalPath = absFor(storageKey);
+      const record: BlobRecord = {
         blobId,
         storageKey,
-        sha256: hash.digest("hex"),
+        sha256,
         sizeBytes: size,
         mimeDetected: sniffMime(head, input.declaredMime),
       };
+
+      try {
+        // Reuse-or-publish runs under the per-storage-key critical section,
+        // serialized against the guarded delete's stale→probe→unlink (see
+        // the storageKeyLocks header): entering second means observing the
+        // delete's outcome, never losing the caller's bytes.
+        return await withStorageKeyLock(storageKey, async () => {
+          await mkdir(path.dirname(finalPath), { recursive: true });
+          let alreadyExists = false;
+          try {
+            await fsStat(finalPath);
+            alreadyExists = true;
+          } catch {
+            alreadyExists = false;
+          }
+          if (alreadyExists) {
+            // Same org + same sha ⇒ same bytes already on disk. REFRESH the
+            // existing file's mtime FIRST so the reachability-guarded
+            // delete's grace window also covers THIS writer's
+            // not-yet-committed row, then VERIFY the file still exists
+            // before discarding the staged duplicate. A cross-process
+            // deleter could still unlink between stat and utimes — on any
+            // failure fall through and publish our staged copy instead: the
+            // caller's row must never point at missing bytes.
+            const now = new Date();
+            let reuseConfirmed = false;
+            try {
+              await utimes(finalPath, now, now);
+              await fsStat(finalPath);
+              reuseConfirmed = true;
+            } catch {
+              reuseConfirmed = false; // vanished under us — publish our copy
+            }
+            if (reuseConfirmed) {
+              await rm(stagedPath, { force: true }).catch(() => {});
+              return record;
+            }
+          }
+          // Atomic same-FS publish. A concurrent same-bytes racer that also
+          // renames to this path is benign: identical bytes, atomic replace.
+          await rename(stagedPath, finalPath);
+          // Durability: fsync the parent dir so the rename itself survives a
+          // crash (best-effort; not all platforms allow dir fsync).
+          try {
+            const dh = await fsOpen(path.dirname(finalPath), "r");
+            await dh.sync().catch(() => {});
+            await dh.close().catch(() => {});
+          } catch {
+            // best-effort only
+          }
+          // File published FIRST, DB commit by caller AFTER. An orphan file
+          // on later DB failure is preferable to a DB row pointing at a
+          // missing blob; the verifier reports residual orphans.
+          return record;
+        });
+      } catch (err) {
+        await rm(stagedPath, { force: true }).catch(() => {});
+        throw err;
+      }
     },
 
     async open(scope: BlobScope & { blobId: string }): Promise<BlobReadHandle> {
@@ -297,7 +656,46 @@ export function createLocalDiskBlobStore(): BlobStore {
       storageKey: string;
     }): Promise<void> {
       assertOrgPrefix(orgId, storageKey);
-      await rm(absFor(storageKey), { force: true });
+      const abs = absFor(storageKey);
+      if (isContentAddressedStorageKey(storageKey)) {
+        // REACHABILITY-GUARDED delete (cinatra#926): a content-addressed
+        // final file can back several resources/blobs rows and can exist
+        // before its row commits. Delete ONLY when
+        //  (1) the file's mtime is older than the grace window (covers the
+        //      rename-committed-but-row-not-yet-committed writer; the
+        //      keep-existing put() path refreshes mtime on reuse), AND
+        //  (2) no live artifact_blobs row references the storage_key
+        //      (fail-safe: an unanswerable probe keeps the file).
+        // The whole stale→probe→re-check→unlink sequence runs under the
+        // per-storage-key critical section, serialized against put()'s
+        // reuse/publish (see the storageKeyLocks header) — an in-process
+        // same-bytes writer can never confirm reuse between our probe and
+        // our unlink. A skipped delete leaves an orphan the verifier
+        // reports; GC stays DB-reachability-only.
+        await withStorageKeyLock(storageKey, async () => {
+          let st;
+          try {
+            st = await fsStat(abs);
+          } catch {
+            return; // nothing on disk — nothing to delete
+          }
+          if (Date.now() - st.mtimeMs < deleteGraceMs()) return;
+          if (await isReferenced(orgId, storageKey)) return;
+          // Re-check the mtime AFTER the (potentially slow) reachability
+          // probe: a CROSS-PROCESS put() that reused this file refreshes
+          // its mtime before committing a row — a young mtime here means a
+          // writer claimed the file while we probed, so keep it.
+          try {
+            const st2 = await fsStat(abs);
+            if (Date.now() - st2.mtimeMs < deleteGraceMs()) return;
+          } catch {
+            return; // already gone
+          }
+          await rm(abs, { force: true });
+        });
+        return;
+      }
+      await rm(abs, { force: true });
     },
   };
 }
