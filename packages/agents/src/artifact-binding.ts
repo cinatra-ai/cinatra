@@ -13,7 +13,7 @@
 //   "outputs": [{ "title": "draft", ...,
 //     "cinatra": { "artifact": {
 //       "extension": "@cinatra-ai/blog-post-artifact",  // ∈ package.json cinatra.produces
-//       "contentFrom": "draft",       // names an EndNode output (edge-sourced per OAS-RUNTIME-005)
+//       "contentFrom": "draft",       // names an EndNode output (edge-sourced per the runtime invariant)
 //       "declaredMime": "text/markdown",                 // XOR mimeFrom
 //       "titleFrom": "title"          // explicit — a title is never prompt-invented
 //     }}}]
@@ -105,13 +105,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /**
  * Collect + validate every `outputs[].cinatra.artifact` annotation on the
  * TOP-LEVEL EndNode components of an OAS Flow document (matching the scope
- * of the OAS-RUNTIME-005 EndNode scan — subflow EndNodes do not surface
+ * of the EndNode output-source runtime-invariant scan — subflow EndNodes do not surface
  * outputs through the run-completion sentinel and cannot bind).
  *
  * Validation performed here (grammar + graph-local references):
  *   - schema shape (strict; declaredMime XOR mimeFrom; authorable MIME);
  *   - `contentFrom` / `titleFrom` / `mimeFrom` each name a REAL output of
- *     the SAME EndNode (OAS-RUNTIME-005 then guarantees those outputs are
+ *     the SAME EndNode (the output-source runtime invariant then guarantees those outputs are
  *     edge-sourced);
  *   - when `produces` is provided (compile/install time — the sibling
  *     package.json is readable): `binding.extension ∈ produces`.

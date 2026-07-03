@@ -77,6 +77,7 @@
     { "alias": "@cinatra-ai/agents/integration/register-object-types", "target": "./packages/agents/src/integration/register-object-types.ts" },
     { "alias": "@cinatra-ai/agents/verdaccio/client", "target": "./packages/agents/src/verdaccio/client.ts" },
     { "alias": "@cinatra-ai/agents/verdaccio/publish-metadata", "target": "./packages/agents/src/verdaccio/publish-metadata.ts" },
+    { "alias": "@cinatra-ai/agents/artifact-binding", "target": "./packages/agents/src/artifact-binding.ts" },
     { "alias": "@cinatra-ai/connectors", "target": "./packages/connectors/src/index.ts" },
     { "alias": "@cinatra-ai/connectors/pages", "target": "./packages/connectors/src/pages.tsx" },
     { "alias": "@cinatra-ai/connectors/connectors-client", "target": "./packages/connectors/src/connectors-client.tsx" },
