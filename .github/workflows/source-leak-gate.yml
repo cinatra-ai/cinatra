@@ -18,4 +18,4 @@ jobs:
       # basename: they necessarily contain the version-comment markers they
       # enforce (same exemption cinatra-ai/ci applies to its own copy).
       config: .github/source-leak-gate.config.json
-      ref: 83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf
+      ref: 0de02f3ae7b30b9bf2b7a7e4a508c814bbc7c282
