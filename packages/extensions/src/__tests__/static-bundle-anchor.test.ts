@@ -133,6 +133,30 @@ describe("static-bundle anchor provenance helpers (pure, typed — cinatra#792)"
       }),
     ).toBeNull();
   });
+
+  it("carries the image-recorded digest when provided; omits the key otherwise (cinatra#795)", () => {
+    const digest = "ab".repeat(64);
+    expect(staticBundleAnchorSource(PKG, "0.1.0", digest)).toEqual({
+      type: "bundled",
+      packageName: PKG,
+      version: "0.1.0",
+      digest,
+    });
+    // No digest / empty digest → the key is ABSENT (never an empty string —
+    // validateExtensionSource would reject it, and "absent" is the documented
+    // "no image hash recorded" state).
+    expect(staticBundleAnchorSource(PKG, "0.1.0")).toEqual({
+      type: "bundled",
+      packageName: PKG,
+      version: "0.1.0",
+    });
+    expect(staticBundleAnchorSource(PKG, "0.1.0", "")).toEqual({
+      type: "bundled",
+      packageName: PKG,
+      version: "0.1.0",
+    });
+    expect(isStaticBundleAnchorSource(staticBundleAnchorSource(PKG, "0.1.0", digest))).toBe(true);
+  });
 });
 
 describe("archived-start tombstone seed (installExtensionManifest)", () => {

@@ -27,9 +27,14 @@ import "server-only";
 // The anchor is the durable "lifecycle-tracked" memory that lets "no row" be
 // read unambiguously, and it must NEVER resurrect an operator's
 // archive/uninstall decision. Per package:
-//   - anchor row exists (any status)   → authoritative — never touched (an
-//                                        archived tombstone from `uninstall`
-//                                        stays archived; lifecycle-primitive.ts);
+//   - anchor row exists (any status)   → authoritative lifecycle memory — the
+//                                        STATUS is never touched (an archived
+//                                        tombstone from `uninstall` stays
+//                                        archived; lifecycle-primitive.ts); a
+//                                        LIVE anchor's PROVENANCE is refreshed
+//                                        when the image's version/digest
+//                                        drifted (cinatra#795), so the row
+//                                        keeps describing the running image;
 //   - a platform-scoped NON-anchor row → ADOPTED as the anchor via
 //     exists (the platform identity      `sourceSwitchExtension` (STATUS
 //     slot is unique)                    PRESERVED: active stays active,
@@ -115,8 +120,20 @@ export type StaticBundleLifecycleResult = {
   seededLive: string[];
   /** Packages whose anchor was created/adopted archived (retired state preserved). */
   seededArchived: string[];
+  /**
+   * LIVE anchor rows whose provenance was refreshed to the image's current
+   * version/digest (cinatra#795) — status untouched.
+   */
+  refreshed: string[];
   /** Packages whose anchor could not be ensured (logged; boot continues). */
   failed: string[];
+  /**
+   * Packages whose EXISTING live anchor failed its provenance refresh — the
+   * package stays anchored (activation unaffected); the row keeps its stale
+   * version/digest until a later boot succeeds. Kept apart from `failed`,
+   * whose contract is "no anchor could be ensured".
+   */
+  refreshFailed: string[];
 };
 
 /**
@@ -131,7 +148,13 @@ export type StaticBundleLifecycleResult = {
  * either way.
  */
 export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundleLifecycleResult> {
-  const result: StaticBundleLifecycleResult = { seededLive: [], seededArchived: [], failed: [] };
+  const result: StaticBundleLifecycleResult = {
+    seededLive: [],
+    seededArchived: [],
+    refreshed: [],
+    failed: [],
+    refreshFailed: [],
+  };
 
   const { readInstalledExtensionsByPackageName } = await import(
     "@cinatra-ai/extensions/canonical-store"
@@ -145,6 +168,27 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   const { isPackageRequiredInProd } = await import("@cinatra-ai/extensions/required-in-prod");
   const { isExtensionKind } = await import("@cinatra-ai/extensions/canonical-types");
   const { randomUUID } = await import("node:crypto");
+
+  // Image-recorded bundled digests (cinatra#795) — the `<digest>` half of the
+  // bundled identity. Fail-soft empty map on dev boots / read problems (the
+  // reader never throws). The digest an anchor row carries must describe
+  // EXACTLY the payload the image ships, so a recorded entry is used only when
+  // its version AND kind match the generated record for the same tree.
+  const { readRecordedBundledDigests } = await import("@/lib/bundled-digests");
+  const recordedDigests = readRecordedBundledDigests();
+  const digestFor = (rec: (typeof STATIC_EXTENSION_RECORDS)[number]): string | undefined => {
+    const entry = recordedDigests.get(rec.packageName);
+    if (!entry) return undefined;
+    if (entry.version !== (rec.version ?? "0.0.0") || (entry.kind ?? null) !== (rec.kind ?? null)) {
+      console.warn(
+        `[static-bundle-lifecycle] recorded digest for ${rec.packageName} does not match the ` +
+          `generated record (recorded ${entry.kind ?? "?"}@${entry.version}, record ` +
+          `${rec.kind ?? "?"}@${rec.version ?? "0.0.0"}) — anchoring without a digest`,
+      );
+      return undefined;
+    }
+    return entry.digest;
+  };
 
   // Base seed set: bundled serverEntry packages + bundled required-in-prod
   // packages (unchanged from PR #204).
@@ -176,9 +220,55 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
   for (const rec of records) {
     try {
       const rows = await readInstalledExtensionsByPackageName(rec.packageName);
-      if (rows.some((r) => isStaticBundleAnchorSource(r.source))) continue; // anchored (any status)
+      const version = rec.version ?? "0.0.0";
+      const digest = digestFor(rec);
 
-      const anchorSource = staticBundleAnchorSource(rec.packageName, rec.version ?? "0.0.0");
+      // Already anchored (any status) — the anchor is authoritative lifecycle
+      // memory. STATUS is never touched here; but a LIVE anchor's PROVENANCE
+      // must keep describing the image actually running (cinatra#795): an
+      // image upgrade changes version/payload, and the required-in-prod
+      // verifier reads the anchored version. Refresh live rows on real drift
+      // only (once per image change, no per-boot write churn); archived
+      // TOMBSTONES are historical retirement records — never rewritten.
+      const anchored = rows.find((r) => isStaticBundleAnchorSource(r.source));
+      if (anchored) {
+        if (anchored.status !== "active" && anchored.status !== "locked") continue;
+        const src = anchored.source;
+        if (!isStaticBundleAnchorSource(src)) continue; // unreachable; narrows the type
+        const versionDrift = src.version !== version;
+        const digestDrift = digest !== undefined && src.digest !== digest;
+        if (!versionDrift && !digestDrift) continue;
+        // On a version bump with no (matching) recorded digest, the stale
+        // digest is DROPPED — a digest describing the previous payload would
+        // be a false identity claim. Same version + no recorded digest never
+        // reaches here (digestDrift is false), so a known-good digest is
+        // never stripped by a mere dev boot.
+        const nextDigest = digest ?? (versionDrift ? undefined : src.digest);
+        // Refresh failures are handled HERE (refreshFailed) and never fall
+        // through to the outer catch: its anchored-row re-read would misread
+        // "anchor exists" as a benign insert race and swallow the failure.
+        try {
+          await sourceSwitchExtension(
+            anchored.id,
+            staticBundleAnchorSource(rec.packageName, version, nextDigest),
+            {
+              ...actorOpts,
+              reason: "static-bundle anchor provenance refresh (image version/digest changed)",
+            },
+          );
+          result.refreshed.push(rec.packageName);
+        } catch (err) {
+          result.refreshFailed.push(rec.packageName);
+          console.error(
+            `[static-bundle-lifecycle] provenance refresh failed for ${rec.packageName} — the ` +
+              `anchor row stays live with stale version/digest until a later boot succeeds:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+        continue;
+      }
+
+      const anchorSource = staticBundleAnchorSource(rec.packageName, version, digest);
 
       // The platform identity slot (owner_level, owner_id, package_name) is
       // UNIQUE for organization_id IS NULL rows — if a platform-scoped row
@@ -258,6 +348,12 @@ export async function ensureStaticBundleLifecycleAnchors(): Promise<StaticBundle
         `bundled serverEntry/required-in-prod package(s)` +
         (result.seededLive.length ? ` live: ${result.seededLive.join(", ")}` : "") +
         (result.seededArchived.length ? ` archived: ${result.seededArchived.join(", ")}` : ""),
+    );
+  }
+  if (result.refreshed.length > 0) {
+    console.info(
+      `[static-bundle-lifecycle] refreshed anchor provenance (image version/digest) for ` +
+        `${result.refreshed.length} package(s): ${result.refreshed.join(", ")}`,
     );
   }
   if (result.failed.length > 0) {

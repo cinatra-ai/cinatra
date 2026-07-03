@@ -36,17 +36,24 @@ import type { ExtensionSource, ExtensionSourceBundled } from "./canonical-types"
  * Build the anchor row's typed source block. The bundled package version is a
  * first-class field so the required-in-prod verifier checks the pin against a
  * CONCRETE version instead of treating the anchor as an unverifiable
- * non-registry source. `digest` (the image-recorded content hash) is assigned
- * by the build/seed pipeline when it records one (cinatra#795).
+ * non-registry source. `digest` is the image-recorded content hash of the
+ * sealed payload (cinatra#795: recorded at image build by
+ * scripts/extensions/record-bundled-digests.mjs and stamped at boot by the
+ * lifecycle seeder) — it completes the `<kind>/<slug>/<digest>` identity
+ * parity with store-installed packages. Omitted (never an empty string) when
+ * no digest is known: every dev boot, and rows seeded before the image
+ * recorded one.
  */
 export function staticBundleAnchorSource(
   packageName: string,
   version: string,
+  digest?: string,
 ): ExtensionSourceBundled {
   return {
     type: "bundled",
     packageName,
     version,
+    ...(typeof digest === "string" && digest.length > 0 ? { digest } : {}),
   };
 }
 

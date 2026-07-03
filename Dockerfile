@@ -84,6 +84,18 @@ COPY . .
 RUN node scripts/extensions/generate-extension-manifest.mjs \
  && node scripts/extensions/generate-extension-manifest.mjs --check --self
 
+# Bundled-payload content digests (cinatra#795). Records the `<digest>` half of
+# the sealed bundled packages' `<kind>/<slug>/<digest>` identity: one
+# deterministic content hash per acquired extension payload (the same
+# contentHashOfEntries fold the runtime store's sidecar uses; the acquisition
+# marker, node_modules and symlinks are excluded). The static-bundle lifecycle
+# seeder reads this file at boot and stamps `source.digest` onto the platform
+# anchor rows — provenance parity with store-installed packages, with the
+# import path staying the sealed static manifest (no store read, no network).
+# Fail-closed: an empty/unreadable tree fails the image build loudly.
+RUN node scripts/extensions/record-bundled-digests.mjs \
+      --source /app/extensions --out /app/.cinatra-bundled-digests.json
+
 # Bundle the Better Auth migration runner into a SELF-CONTAINED .mjs (better-auth
 # + pg + the shared plugin factory inlined). The Next standalone runtime image
 # only ships server-traced node_modules, which excludes better-auth (used by the
@@ -183,6 +195,13 @@ COPY --from=build /app/scripts/better-auth-migrate.bundle.mjs ./scripts/better-a
 # is fail-closed in prod, so this COPY is load-bearing — without the seed a prod
 # boot aborts.
 COPY --from=build /app/.cinatra-required-oas-seed ./.cinatra-required-oas-seed
+
+# Image-recorded bundled-payload digests (cinatra#795, built above). The
+# static-bundle lifecycle seeder reads this at boot to stamp `source.digest`
+# onto the platform anchor rows (identity parity with store-installed
+# packages). FAIL-SOFT consumer: a missing file only means anchors carry no
+# digest — bundled activation itself never depends on it.
+COPY --from=build /app/.cinatra-bundled-digests.json ./.cinatra-bundled-digests.json
 
 EXPOSE 3000
 CMD ["node", "server.js"]
