@@ -7,8 +7,6 @@ import {
   installAgentFromPackage,
   installAgentPackageWithDependencies,
   isSagaOwnedFanoutActive,
-  extractAgentPackage,
-  cleanupExtractedAgentPackage,
   deleteAgentTemplate,
   readAgentTemplateByPackageName,
   updateAgentTemplate,
@@ -47,42 +45,45 @@ function slugify(value: string): string {
 }
 
 /**
- * Extract the root package, scan skills from tempDir/skills/ directory, and
- * upsert each into the skills catalog. Calls cleanupExtractedAgentPackage in
- * a finally block so the tempDir is always removed.
+ * Scan the ROOT package's bundled skills/ tree and upsert each into the skills
+ * catalog. cinatra#793: STORE-ONLY — this runs exclusively on the
+ * dispatcher-routed path (installAndRegisterSkills), whose root install just
+ * REQUIRED the finalized store payload, so the scan reads that payload in
+ * place (the SAME SRI-verified bytes the canonical row anchors; never mutated,
+ * never cleaned up). There is deliberately NO registry-extract fallback: a
+ * resolution miss / version mismatch here is an invariant violation, and
+ * falling back would re-open the registry TOCTOU the store routing closes.
  *
- * Throws on upsertSkill failure — the caller (installAndRegisterSkills) is
- * responsible for the compensating rollback.
- *
- * NOTE: extractAgentPackage re-fetches from Verdaccio (or pacote cache); we
- * must re-extract because installAgentPackageWithDependencies already cleaned
- * up its own tempDir before returning.
+ * Throws on resolution miss and on upsertSkill failure — the caller
+ * (installAndRegisterSkills) owns the compensating rollback.
  */
 async function registerSkillsFromPackage(
   packageName: string,
   version: string | undefined,
-  config: VerdaccioConfig,
+  anchorOrgId: string | null,
 ): Promise<void> {
-  // Hoist `extracted` so the outer try/finally cleans up
-  // any partial tempDir even if extractAgentPackage throws midway through
-  // extraction (disk full, tarball corruption). Today the registries
-  // package handles its own cleanup-on-throw, but this is a defense-in-depth
-  // boundary — any tempDir we know about gets reaped here.
-  let extracted: Awaited<ReturnType<typeof extractAgentPackage>> | null = null;
-  try {
-    extracted = await extractAgentPackage(
-      {
-        packageName,
-        packageVersion: version,
-      },
-      config,
+  const { resolveFinalizedStorePayload } = await import("@/lib/extension-store-payload");
+  const payload = await resolveFinalizedStorePayload({
+    packageName,
+    expectedKind: "agent",
+    orgId: anchorOrgId,
+  });
+  if (!payload || (version && payload.version !== version)) {
+    throw new Error(
+      `[agent-extension-handler] no FINALIZED store payload for ${packageName}` +
+        `${version ? `@${version}` : ""}` +
+        `${payload ? ` (found version ${payload.version ?? "unknown"})` : ""} — the bundled ` +
+        `skill scan consumes ONLY the store payload the dispatcher pipeline finalized; ` +
+        `refusing a registry re-extract.`,
     );
+  }
+  await upsertSkillsFromDir(join(payload.storeDir, "skills"), packageName);
+}
 
-    // Guard: if extraction returned nothing (e.g. package has no tarball yet),
-    // skip skill registration rather than crashing.
-    if (!extracted) return;
-
-    const skillsDir = join(extracted.tempDir, "skills");
+/** Scan `<skillsDir>/<entry>/SKILL.md` and upsert each into the skills catalog
+ *  (shared by the store-payload scan and the registry-extract fallback). */
+async function upsertSkillsFromDir(skillsDir: string, packageName: string): Promise<void> {
+  {
     let entries: { isDirectory(): boolean; name: string }[] = [];
     try {
       entries = await readdir(skillsDir, { withFileTypes: true, encoding: "utf8" }) as unknown as { isDirectory(): boolean; name: string }[];
@@ -113,10 +114,6 @@ async function registerSkillsFromPackage(
         prefillText: "-",
       });
     }
-  } finally {
-    if (extracted?.tempDir) {
-      await cleanupExtractedAgentPackage(extracted.tempDir);
-    }
   }
 }
 
@@ -129,7 +126,10 @@ async function registerSkillsFromPackage(
  * PluginDependencyCycleError from installAgentPackageWithDependencies
  * propagates without any rollback — no template was created.
  */
-async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "published" | "active"): Promise<{ rootTemplateId: string; installedTemplateIds: string[]; wayflowReload?: import("./wayflow-reload-client").ReloadResult }> {
+async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: "draft" | "published" | "active"): Promise<{ rootTemplateId: string; installedTemplateIds: string[]; wayflowReload?: import("./wayflow-reload-client").ReloadResult }> {
+  // cinatra#793: the store-payload anchor scope — the SAME org the dispatcher
+  // ensured the canonical row at (null = platform scope).
+  const anchorOrgId = actor.orgId ?? null;
   // Hold the per-package install lock
   // across the entire flow (install + skill registration + compensation) so
   // a concurrent install can't commit a newer state in the window between
@@ -144,7 +144,7 @@ async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "pub
   // The version is threaded so the gatekept-install path (when enabled) authorizes
   // the EXACT listed version; it is ignored on the legacy path. The resolved config
   // (broker + grant when gatekept) is reused for BOTH the dependency install and the
-  // skill-scan SECOND root fetch in registerSkillsFromPackage below.
+  // bundled-skill scan reads the FINALIZED store payload (no second registry fetch).
   let config: VerdaccioConfig;
   try {
     const installEnv = await resolveInstallEnvironment(ref.packageName, ref.version);
@@ -202,6 +202,10 @@ async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "pub
             packageName: ref.packageName,
             packageVersion: ref.version,
             status,
+            // cinatra#793: the dispatcher pipeline ran first — REQUIRE its
+            // finalized store payload (no registry-extract fallback).
+            anchorOrgId,
+            requireStorePayload: true,
           },
           config,
         );
@@ -220,12 +224,16 @@ async function installAndRegisterSkills(ref: PackageRef, status?: "draft" | "pub
           packageName: ref.packageName,
           packageVersion: ref.version,
           status,
+          // cinatra#793: the ROOT node is dispatcher-routed → require its
+          // finalized store payload; transitive deps keep the registry extract.
+          anchorOrgId,
+          requireStorePayloadForRoot: true,
         },
         config,
       );
 
   try {
-    await registerSkillsFromPackage(ref.packageName, ref.version, config);
+    await registerSkillsFromPackage(ref.packageName, ref.version, anchorOrgId);
   } catch (skillErr) {
     // Compensating rollback — root template + any partial-success skill rows
     // already upserted before the throw. Without the skill
@@ -308,12 +316,12 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
   return {
     typeId: "agent",
 
-    async install(ref: PackageRef, _actor: Actor) {
+    async install(ref: PackageRef, actor: Actor) {
       // Pass status:"active" so freshly installed extensions
       // appear in /agents/run (which filters by status IN ('active','published')).
       // installAgentPackageWithDependencies defaults to "draft", which would
       // exclude new installs from all readInstalledAgentTemplates queries.
-      const result = await installAndRegisterSkills(ref, "active");
+      const result = await installAndRegisterSkills(ref, actor, "active");
       // Queue an inline re-evaluation against this
       // newly-installed agent. Idempotent jobId via BullMQ pending-dedup
       // keeps repeated installs from duplicating work. Failures MUST NOT abort the install.
@@ -328,11 +336,11 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
       return result as unknown as void;
     },
 
-    async update(ref: PackageRef, _actor: Actor) {
+    async update(ref: PackageRef, actor: Actor) {
       // installAgentPackageWithDependencies performs a true upsert — existing
       // template rows are updated in-place (preserving run history and trigger
       // config). Skill registration re-upserts with new-version content.
-      const result = await installAndRegisterSkills(ref);
+      const result = await installAndRegisterSkills(ref, actor);
       // Re-evaluate the agent against current skills.
       try {
         await enqueueInlineForAgent(ref.packageName);

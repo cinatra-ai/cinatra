@@ -62,12 +62,21 @@ export function agentMountProjectionPhases(): BootPhase[] {
           await import("@cinatra-ai/agents");
         const mountRoot = resolveAgentRuntimeMountDir();
 
-        // One projection per package name (a package may have rows at several
-        // org scopes; the mount tree is package-keyed).
-        const packageNames = [...new Set(agentRows.map((r) => r.packageName))];
+        // One projection per package name; a package may have rows at several
+        // org scopes (the mount tree is package-keyed), so resolve the payload
+        // PER ROW at its EXACT org scope (a platform-global resolution fails
+        // closed on >1 live row across orgs, which would silently skip every
+        // multi-org package). Project only when every resolving row agrees on
+        // ONE digest dir; a cross-org digest conflict is reported, not guessed.
+        const rowsByPackage = new Map<string, typeof agentRows>();
+        for (const row of agentRows) {
+          const list = rowsByPackage.get(row.packageName) ?? [];
+          list.push(row);
+          rowsByPackage.set(row.packageName, list);
+        }
         let projected = 0;
         let present = 0;
-        for (const packageName of packageNames) {
+        for (const [packageName, pkgRows] of rowsByPackage) {
           try {
             // `@vendor/slug` → `<mount>/<vendor>/<slug>` (the materializer's
             // own naming rule; non-matching names are skipped by it anyway).
@@ -78,11 +87,28 @@ export function agentMountProjectionPhases(): BootPhase[] {
               present += 1;
               continue;
             }
-            const payload = await resolveFinalizedStorePayload({
-              packageName,
-              expectedKind: "agent",
-            });
-            if (!payload) continue; // no trusted finalized digest → nothing to project
+            const payloads: Awaited<ReturnType<typeof resolveFinalizedStorePayload>>[] = [];
+            for (const row of pkgRows) {
+              payloads.push(
+                await resolveFinalizedStorePayload({
+                  packageName,
+                  expectedKind: "agent",
+                  orgId: row.organizationId ?? null,
+                }),
+              );
+            }
+            const resolved = payloads.filter((x) => x !== null);
+            const distinctDirs = [...new Set(resolved.map((x) => x!.storeDir))];
+            if (distinctDirs.length === 0) continue; // no trusted finalized digest → nothing to project
+            if (distinctDirs.length > 1) {
+              console.warn(
+                `[agent-mount-projection] ${packageName}: rows at different org scopes pin ` +
+                  `DIFFERENT finalized digests (${distinctDirs.length}) — refusing to guess a ` +
+                  `mount projection; re-install one scope to reconcile.`,
+              );
+              continue;
+            }
+            const payload = resolved[0]!;
             // Stage a COPY (the materializer MOVES its input; the store payload
             // must never be consumed destructively), then run the same
             // materialize→commit pair the install path uses, under the same
@@ -118,7 +144,7 @@ export function agentMountProjectionPhases(): BootPhase[] {
         if (projected > 0) {
           console.info(
             `[agent-mount-projection] mount ${mountRoot}: projected=${projected} ` +
-              `already-present=${present} of ${packageNames.length} installed agent package(s)`,
+              `already-present=${present} of ${rowsByPackage.size} installed agent package(s)`,
           );
         }
         // No WayFlow reload here: the downstream agent-marker-backfill phase

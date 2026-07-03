@@ -3,7 +3,7 @@
 // path (when enabled) authorizes the EXACT listed version. On the legacy path
 // the version is simply ignored, so this is non-breaking. The resolved config
 // (broker + grant when gatekept) is reused for BOTH the dep install and the
-// skill-scan SECOND root fetch — covered here by asserting both
+// bundled-skill scan (store-payload, no second registry fetch) — covered here by asserting both
 // installAgentPackageWithDependencies and extractAgentPackage receive it.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -14,6 +14,23 @@ const { resolveInstallEnvironmentMock } = vi.hoisted(() => ({
 vi.mock("@cinatra-ai/extensions/destination-resolver", () => ({
   resolveInstallEnvironment: resolveInstallEnvironmentMock,
 }));
+
+// cinatra#793: registerSkillsFromPackage consumes the FINALIZED store payload
+// (store-only; no registry re-extract). Serve a version-matching payload whose
+// skills/ dir the fs mock resolves as absent (clean no-op scan).
+const { resolveFinalizedStorePayloadMock } = vi.hoisted(() => ({
+  resolveFinalizedStorePayloadMock: vi.fn(async (input: { packageName: string }) => ({
+    storeDir: `/tmp/store/agent/${input.packageName}/deadbeef`,
+    digest: "d".repeat(128),
+    version: "1.2.3",
+    registryUrl: null,
+  })),
+}));
+vi.mock("@/lib/extension-store-payload", () => ({
+  resolveFinalizedStorePayload: (...a: unknown[]) =>
+    resolveFinalizedStorePayloadMock(...(a as [never])),
+}));
+
 
 vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(async () => {
@@ -101,11 +118,17 @@ describe("createAgentExtensionHandler — gatekept version threading", () => {
 
   it("update threads ref.version into resolveInstallEnvironment", async () => {
     const handler = createAgentExtensionHandler();
+    resolveFinalizedStorePayloadMock.mockImplementationOnce(async (input: { packageName: string }) => ({
+      storeDir: `/tmp/store/agent/${input.packageName}/deadbeef`,
+      digest: "d".repeat(128),
+      version: "2.0.0",
+      registryUrl: null,
+    }));
     await handler.update({ packageName: "@scope/ext", version: "2.0.0" } as never, mockActor as never);
     expect(resolveInstallEnvironmentMock).toHaveBeenCalledWith("@scope/ext", "2.0.0");
   });
 
-  it("reuses the resolved (broker+grant) config for BOTH the dep install and the skill-scan root fetch", async () => {
+  it("passes the resolved (broker+grant) config to the dep install; the skill scan reads the STORE payload (no second registry fetch — cinatra#793)", async () => {
     const handler = createAgentExtensionHandler();
     await handler.install({ packageName: "@scope/ext", version: "1.2.3" } as never, mockActor as never);
 
@@ -117,12 +140,11 @@ describe("createAgentExtensionHandler — gatekept version threading", () => {
     expect(installCfg.registryUrl).toBe(BROKER_URL);
     expect(installCfg.token).toBe("opaque.grant");
 
-    // Skill-scan SECOND root fetch (extractAgentPackage) received the SAME config.
-    const extractCfg = vi.mocked(extractAgentPackage).mock.calls[0]?.[1] as {
-      registryUrl: string;
-      token: string;
-    };
-    expect(extractCfg.registryUrl).toBe(BROKER_URL);
-    expect(extractCfg.token).toBe("opaque.grant");
+    // The bundled-skill scan resolved the FINALIZED store payload (store-only)
+    // and never re-fetched the root from the registry.
+    expect(resolveFinalizedStorePayloadMock).toHaveBeenCalledWith(
+      expect.objectContaining({ packageName: "@scope/ext", expectedKind: "agent" }),
+    );
+    expect(vi.mocked(extractAgentPackage)).not.toHaveBeenCalled();
   });
 });

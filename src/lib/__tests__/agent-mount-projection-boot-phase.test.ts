@@ -38,8 +38,8 @@ import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projec
 
 let tmp: string;
 
-function row(packageName: string, kind = "agent", status = "active") {
-  return { packageName, kind, status, source: { type: "verdaccio" } };
+function row(packageName: string, kind = "agent", status = "active", organizationId: string | null = null) {
+  return { packageName, kind, status, organizationId, source: { type: "verdaccio" } };
 }
 
 beforeEach(() => {
@@ -81,9 +81,12 @@ describe("agent-mount-projection boot phase", () => {
 
     await runPhase();
 
+    // Resolved PER ROW at its EXACT org scope (platform-global would fail
+    // closed on multi-org packages).
     expect(resolveFinalizedStorePayload).toHaveBeenCalledWith({
       packageName: "@acme/writer",
       expectedKind: "agent",
+      orgId: null,
     });
     expect(materializeAgentPackageToDisk).toHaveBeenCalledTimes(1);
     const call = materializeAgentPackageToDisk.mock.calls[0][0] as {
@@ -122,6 +125,54 @@ describe("agent-mount-projection boot phase", () => {
 
     // Only the live agent row is even resolved; nothing is projected.
     expect(resolveFinalizedStorePayload).toHaveBeenCalledTimes(1);
+    expect(materializeAgentPackageToDisk).not.toHaveBeenCalled();
+  });
+
+  it("multi-org rows: projects when every org scope pins the SAME digest dir; refuses on conflict", async () => {
+    const storeDir = path.join(tmp, "store-multi");
+    mkdirSync(storeDir, { recursive: true });
+    writeFileSync(path.join(storeDir, "package.json"), "{}");
+    listInstalledExtensions.mockResolvedValue([
+      row("@acme/multi", "agent", "active", "org-1"),
+      row("@acme/multi", "agent", "active", "org-2"),
+    ]);
+    // Same digest dir for both org scopes → unambiguous → projected once.
+    resolveFinalizedStorePayload.mockResolvedValue({
+      storeDir,
+      digest: "f".repeat(128),
+      version: "1.0.0",
+      registryUrl: null,
+    });
+    materializeAgentPackageToDisk.mockResolvedValue({
+      materialized: true,
+      targetDir: path.join(MOUNT_ROOT, "acme", "multi"),
+      priorDirBackup: null,
+      wasReinstall: false,
+    });
+    await runPhase();
+    expect(resolveFinalizedStorePayload).toHaveBeenNthCalledWith(1, {
+      packageName: "@acme/multi",
+      expectedKind: "agent",
+      orgId: "org-1",
+    });
+    expect(resolveFinalizedStorePayload).toHaveBeenNthCalledWith(2, {
+      packageName: "@acme/multi",
+      expectedKind: "agent",
+      orgId: "org-2",
+    });
+    expect(materializeAgentPackageToDisk).toHaveBeenCalledTimes(1);
+
+    // CONFLICT: the two org scopes pin DIFFERENT digest dirs → refuse (no guess).
+    vi.clearAllMocks();
+    rmSync(path.join(MOUNT_ROOT, "acme"), { recursive: true, force: true });
+    listInstalledExtensions.mockResolvedValue([
+      row("@acme/multi", "agent", "active", "org-1"),
+      row("@acme/multi", "agent", "active", "org-2"),
+    ]);
+    resolveFinalizedStorePayload
+      .mockResolvedValueOnce({ storeDir, digest: "f".repeat(128), version: "1.0.0", registryUrl: null })
+      .mockResolvedValueOnce({ storeDir: storeDir + "-other", digest: "0".repeat(128), version: "2.0.0", registryUrl: null });
+    await runPhase();
     expect(materializeAgentPackageToDisk).not.toHaveBeenCalled();
   });
 

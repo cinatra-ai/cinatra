@@ -20,6 +20,23 @@ vi.mock("@cinatra-ai/extensions/destination-resolver", () => ({
   resolveInstallEnvironment: resolveInstallEnvironmentMock,
 }));
 
+// cinatra#793: registerSkillsFromPackage consumes the FINALIZED store payload
+// (store-only; no registry re-extract). Serve a version-matching payload whose
+// skills/ dir the fs mock resolves as absent (clean no-op scan).
+const { resolveFinalizedStorePayloadMock } = vi.hoisted(() => ({
+  resolveFinalizedStorePayloadMock: vi.fn(async (input: { packageName: string }) => ({
+    storeDir: `/tmp/store/agent/${input.packageName}/deadbeef`,
+    digest: "d".repeat(128),
+    version: "1.2.3",
+    registryUrl: null,
+  })),
+}));
+vi.mock("@/lib/extension-store-payload", () => ({
+  resolveFinalizedStorePayload: (...a: unknown[]) =>
+    resolveFinalizedStorePayloadMock(...(a as [never])),
+}));
+
+
 // No skills/ dir → registerSkillsFromPackage is a clean no-op.
 vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(async () => {
@@ -114,6 +131,12 @@ describe("createAgentExtensionHandler — #157 saga collapses the second resolve
   it("INSIDE the saga: update is also ROOT-ONLY", async () => {
     sagaActiveSpy.mockReturnValue(true);
     const handler = createAgentExtensionHandler();
+    resolveFinalizedStorePayloadMock.mockImplementationOnce(async (input: { packageName: string }) => ({
+      storeDir: `/tmp/store/agent/${input.packageName}/deadbeef`,
+      digest: "d".repeat(128),
+      version: "2.0.0",
+      registryUrl: null,
+    }));
     await handler.update({ packageName: "@scope/ext", version: "2.0.0" } as never, mockActor as never);
 
     expect(installAgentFromPackage).toHaveBeenCalledTimes(1);
@@ -132,6 +155,12 @@ describe("createAgentExtensionHandler — #157 saga collapses the second resolve
   it("OUTSIDE the saga: update keeps the full-tree resolver", async () => {
     sagaActiveSpy.mockReturnValue(false);
     const handler = createAgentExtensionHandler();
+    resolveFinalizedStorePayloadMock.mockImplementationOnce(async (input: { packageName: string }) => ({
+      storeDir: `/tmp/store/agent/${input.packageName}/deadbeef`,
+      digest: "d".repeat(128),
+      version: "2.0.0",
+      registryUrl: null,
+    }));
     await handler.update({ packageName: "@scope/ext", version: "2.0.0" } as never, mockActor as never);
 
     expect(installAgentPackageWithDependencies).toHaveBeenCalledTimes(1);

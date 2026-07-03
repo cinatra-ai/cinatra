@@ -75,7 +75,7 @@
       "@cinatra-ai/agents/pm-link-store": ["./packages/agents/src/pm-link-store.ts"],
       "@cinatra-ai/agents/trigger-store": ["./packages/agents/src/trigger-store.ts"],
       "@cinatra-ai/agents/auditor-apply": ["./packages/agents/src/auditor-apply.ts"],
-      "@cinatra-ai/agents/agent-install-path": ["./packages/agents/src/agent-install-path.ts"],
+      "@cinatra-ai/agents/agent-runtime-mount": ["./packages/agents/src/agent-runtime-mount.ts"],
       "@cinatra-ai/agents/client-entry": ["./packages/agents/src/client-entry.ts"],
       "@cinatra-ai/agents/cli": ["./packages/agents/src/cli/index.ts"],
       "@cinatra-ai/agents/auth-policy": ["./packages/agents/src/auth-policy.ts"],
