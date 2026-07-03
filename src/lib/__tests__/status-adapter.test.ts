@@ -88,13 +88,15 @@ describe("status-adapter — every domain enum value maps to a canonical StatusP
   });
 
   it("lifecycleStatusToPill covers every LifecycleStatus value", () => {
-    const all: LifecycleStatus[] = ["active", "archived"];
+    const all: LifecycleStatus[] = ["active", "archived", "locked"];
     for (const s of all) {
       const pill = lifecycleStatusToPill(s);
       expect(CANONICAL.has(pill)).toBe(true);
     }
     expect(lifecycleStatusToPill("active")).toBe("approved");
     expect(lifecycleStatusToPill("archived")).toBe("archived");
+    // A locked system extension IS live — active styling, never archived/red.
+    expect(lifecycleStatusToPill("locked")).toBe("approved");
   });
 
   it("connectionStatusToPill covers every ConnectionStatus value", () => {
