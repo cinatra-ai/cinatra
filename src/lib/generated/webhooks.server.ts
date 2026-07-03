@@ -6,6 +6,7 @@
 // remains the registration source for filesystem-loaded extension kinds;
 // parity is checked against the connector catalog descriptors.
 import "server-only";
+import { guardedExtensionImport } from "../extension-load-guard";
 import type { ExtensionResolution } from "@cinatra-ai/sdk-extensions";
 
 // "<vendor>/<slug>/<hook>" → inbound-webhook handler entry. The route
@@ -26,5 +27,5 @@ export type GeneratedWebhookHandlerEntry = {
 };
 
 export const GENERATED_WEBHOOK_HANDLERS: Record<string, GeneratedWebhookHandlerEntry> = {
-
+  "cinatra-ai/wordpress-mcp-connector/post-published": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/src/webhooks/post-published", () => import("@cinatra-ai/wordpress-mcp-connector/src/webhooks/post-published")), "packageName":"@cinatra-ai/wordpress-mcp-connector","factory":"createPostPublishedHandler","vendor":"cinatra-ai","slug":"wordpress-mcp-connector","hook":"post-published","label":"Post published","schemaVersion":1 },
 };
