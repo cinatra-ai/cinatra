@@ -102,11 +102,17 @@ export type ExtensionSourceLocal = {
  * first-class discriminant, so readers switch on `type` instead of parsing
  * path prefixes.
  *
- * `digest` is the image-recorded content hash of the bundled payload —
- * assigned when the build/seed pipeline records it (cinatra#795; staged
- * deviation from the epic's non-optional wording: the generated static
- * records carry no hash yet, and a placeholder value would be worse than an
- * absent field). Absent = seeded before the image hash existed.
+ * `digest` is the image-recorded content hash of the bundled payload
+ * (cinatra#795): the prod image build records one per sealed extension payload
+ * (scripts/extensions/record-bundled-digests.mjs) and the boot seeder stamps
+ * it here — completing `<kind>/<slug>/<digest>` identity parity with
+ * store-installed packages while the import path stays the sealed static
+ * manifest (no store read). STILL OPTIONAL by design (staged deviation from
+ * the epic's non-optional wording): a dev boot has no sealed image to hash,
+ * and a placeholder value would be worse than an absent field. Absent = a dev
+ * boot, or a row seeded before the image recorded a hash. When present it
+ * must satisfy BUNDLED_SOURCE_DIGEST_RE. Trust-neutral: never an activation
+ * or store-selection input.
  */
 export type ExtensionSourceBundled = {
   type: "bundled";
@@ -120,6 +126,16 @@ export type ExtensionSource =
   | ExtensionSourceGithub
   | ExtensionSourceLocal
   | ExtensionSourceBundled;
+
+/**
+ * The `bundled.digest` identity grammar — a LITERAL MIRROR of
+ * `isStoreDigestSegment` (src/lib/extension-package-store-core.ts): hex
+ * sha256..sha512 output lengths. This package cannot import the host store
+ * module, so the mirror is parity-tested
+ * (packages/extensions/src/__tests__/canonical-types-source-validators.test.ts)
+ * — do not change one without the other.
+ */
+export const BUNDLED_SOURCE_DIGEST_RE = /^[0-9a-f]{64,128}$/;
 
 export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;
 export type DependencyEdgeType = (typeof DEPENDENCY_EDGE_TYPES)[number];
@@ -201,9 +217,15 @@ export function isExtensionSource(value: unknown): value is ExtensionSource {
     case "local":
       return str(v.path) && str(v.resolvedCommitOrTreeHash);
     case "bundled":
-      // `digest` is OPTIONAL until the build records the image content hash
-      // (cinatra#795) — but when present it must be a real value.
-      return str(v.packageName) && str(v.version) && (v.digest === undefined || str(v.digest));
+      // `digest` is OPTIONAL (dev boots and pre-#795 rows carry none) — but
+      // when present it must satisfy the store digest-segment grammar: #795
+      // made it an IDENTITY field (the bundled half of `<kind>/<slug>/<digest>`
+      // parity), so a placeholder or truncated value must never validate.
+      return (
+        str(v.packageName) &&
+        str(v.version) &&
+        (v.digest === undefined || (typeof v.digest === "string" && BUNDLED_SOURCE_DIGEST_RE.test(v.digest)))
+      );
     default:
       return false;
   }
@@ -249,8 +271,14 @@ export function validateExtensionSource(value: unknown): string[] {
     case "bundled":
       if (!str(v.packageName)) errors.push("bundled.packageName");
       if (!str(v.version)) errors.push("bundled.version");
-      // `digest` is OPTIONAL until the image content hash is recorded (#795).
-      if (v.digest !== undefined && !str(v.digest)) errors.push("bundled.digest");
+      // `digest` is OPTIONAL; when present it must be a well-formed identity
+      // digest (#795) — see BUNDLED_SOURCE_DIGEST_RE.
+      if (
+        v.digest !== undefined &&
+        !(typeof v.digest === "string" && BUNDLED_SOURCE_DIGEST_RE.test(v.digest))
+      ) {
+        errors.push("bundled.digest");
+      }
       break;
     default:
       errors.push(`unknown source type '${String(v.type)}'`);

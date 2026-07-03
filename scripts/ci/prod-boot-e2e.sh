@@ -388,15 +388,32 @@ echo "==> fresh-DB assertion: static-bundle lifecycle anchor rows"
 ANCHOR_COUNTS=$(docker exec "$PG" psql -U postgres -d postgres -tA -F ' ' -c "
   SELECT count(*),
          count(*) FILTER (WHERE required_in_prod),
-         count(*) FILTER (WHERE status IN ('active','locked'))
+         count(*) FILTER (WHERE status IN ('active','locked')),
+         count(*) FILTER (WHERE source->>'digest' IS NULL
+                             OR source->>'digest' !~ '^[0-9a-f]{64,128}\$')
   FROM cinatra.installed_extension
   WHERE owner_level = 'platform'
     AND source->>'type' = 'bundled';
 ")
-read -r ANCHORS REQUIRED_ANCHORS LIVE_ANCHORS <<<"$ANCHOR_COUNTS"
-echo "    anchors=${ANCHORS} required_in_prod=${REQUIRED_ANCHORS} live=${LIVE_ANCHORS}"
+read -r ANCHORS REQUIRED_ANCHORS LIVE_ANCHORS DIGESTLESS_ANCHORS <<<"$ANCHOR_COUNTS"
+echo "    anchors=${ANCHORS} required_in_prod=${REQUIRED_ANCHORS} live=${LIVE_ANCHORS} digestless=${DIGESTLESS_ANCHORS}"
 if [ "${ANCHORS:-0}" -eq 0 ] || [ "${REQUIRED_ANCHORS:-0}" -eq 0 ] || [ "${LIVE_ANCHORS:-0}" -eq 0 ]; then
   fail "static-bundle anchor seeding left a zero count (anchors=${ANCHORS}, required=${REQUIRED_ANCHORS}, live=${LIVE_ANCHORS})."
+fi
+# cinatra#795 — every bundled anchor row on a fresh PROD boot must carry the
+# image-recorded content digest (source->>'digest', store digest-segment
+# grammar): the image build records one per acquired payload
+# (record-bundled-digests.mjs), the runtime stage ships the file, and the
+# seeder stamps it. A digest-less anchor here means that recorder→image→seeder
+# path broke (missing COPY, unreadable file, version/kind cross-check drift).
+if [ "${DIGESTLESS_ANCHORS:-0}" -ne 0 ]; then
+  docker exec "$PG" psql -U postgres -d postgres -c "
+    SELECT package_name, source->>'digest' AS digest
+    FROM cinatra.installed_extension
+    WHERE owner_level = 'platform' AND source->>'type' = 'bundled'
+      AND (source->>'digest' IS NULL OR source->>'digest' !~ '^[0-9a-f]{64,128}\$');
+  " || true
+  fail "bundled anchor rows missing the image-recorded content digest (count=${DIGESTLESS_ANCHORS})."
 fi
 
 # ── 6a-bis. Required-set EQUALITY (still data-driven; no extension-name

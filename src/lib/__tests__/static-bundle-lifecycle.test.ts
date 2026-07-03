@@ -24,6 +24,14 @@ vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => isPackageRequiredInProd(pkg),
 }));
+// Image-recorded bundled digests (cinatra#795). Default: empty map — the dev
+// boot shape; every pre-#795 case below is digest-free and unchanged by it.
+const readRecordedBundledDigests = vi.fn<() => Map<string, { version: string; kind: string | null; digest: string }>>(
+  () => new Map(),
+);
+vi.mock("@/lib/bundled-digests", () => ({
+  readRecordedBundledDigests: () => readRecordedBundledDigests(),
+}));
 vi.mock("@/lib/generated/extensions.server", () => ({
   STATIC_EXTENSION_RECORDS: [
     {
@@ -318,5 +326,167 @@ describe("ensureStaticBundleLifecycleAnchors", () => {
         requirement: "required",
       },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#795 — image-recorded digest stamping + live-anchor provenance refresh
+// ---------------------------------------------------------------------------
+describe("ensureStaticBundleLifecycleAnchors — bundled digest identity (cinatra#795)", () => {
+  const PKG = "@cinatra-ai/bundled-connector";
+  const DIGEST = "ab".repeat(64);
+  const NEW_DIGEST = "cd".repeat(64);
+
+  const recorded = (over: Partial<{ version: string; kind: string | null; digest: string }> = {}) =>
+    new Map([[PKG, { version: "0.1.0", kind: "connector" as string | null, digest: DIGEST, ...over }]]);
+
+  /** A live typed anchor row with explicit source fields. */
+  const typedAnchor = (
+    source: { version: string; digest?: string },
+    status: InstalledExtension["status"] = "active",
+  ): InstalledExtension =>
+    row({
+      id: "iext_anchor",
+      ownerLevel: "platform",
+      ownerId: null,
+      organizationId: null,
+      status,
+      source: { type: "bundled", packageName: PKG, ...source },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    // clearAllMocks keeps implementations — reset the required-in-prod
+    // predicate explicitly (an earlier describe re-implements it).
+    isPackageRequiredInProd.mockImplementation(() => false);
+    readRecordedBundledDigests.mockReturnValue(new Map());
+    installExtensionManifest.mockImplementation(async (r: Record<string, unknown>) => ({
+      ...row({}),
+      ...r,
+    }));
+    sourceSwitchExtension.mockImplementation(async (id: string) => row({ id }));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fresh seed carries the recorded digest (version + kind matched)", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    const result = await runSeeder();
+    expect(result.seededLive).toEqual([PKG]);
+    const arg = installExtensionManifest.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.source).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0", digest: DIGEST });
+  });
+
+  it("recorded VERSION mismatch → seeded WITHOUT a digest (warn; never a false identity claim)", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded({ version: "0.0.9" }));
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await runSeeder();
+    const arg = installExtensionManifest.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.source).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0" });
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("recorded KIND mismatch → seeded WITHOUT a digest", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded({ kind: "skill" }));
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await runSeeder();
+    const arg = installExtensionManifest.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.source).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0" });
+    warnSpy.mockRestore();
+  });
+
+  it("platform-row ADOPTION carries the digest", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([platformNonAnchorRow("active")]);
+    const result = await runSeeder();
+    expect(result.seededLive).toEqual([PKG]);
+    const [, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(newSource).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0", digest: DIGEST });
+  });
+
+  it("LIVE anchor with VERSION drift → provenance refreshed (new version + digest), status untouched", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      typedAnchor({ version: "0.0.9", digest: NEW_DIGEST }),
+    ]);
+    const result = await runSeeder();
+    expect(result.refreshed).toEqual([PKG]);
+    expect(result.seededLive).toEqual([]);
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(sourceSwitchExtension).toHaveBeenCalledTimes(1);
+    const [id, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(id).toBe("iext_anchor");
+    expect(newSource).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0", digest: DIGEST });
+  });
+
+  it("LIVE anchor, version bump but NO matching recorded digest → stale digest DROPPED", async () => {
+    readRecordedBundledDigests.mockReturnValue(new Map()); // dev boot / no record
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      typedAnchor({ version: "0.0.9", digest: NEW_DIGEST }),
+    ]);
+    const result = await runSeeder();
+    expect(result.refreshed).toEqual([PKG]);
+    const [, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(newSource).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0" });
+  });
+
+  it("LIVE anchor, same version, digest newly recorded → refresh ADDS the digest", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([typedAnchor({ version: "0.1.0" })]);
+    const result = await runSeeder();
+    expect(result.refreshed).toEqual([PKG]);
+    const [, newSource] = sourceSwitchExtension.mock.calls[0];
+    expect(newSource).toEqual({ type: "bundled", packageName: PKG, version: "0.1.0", digest: DIGEST });
+  });
+
+  it("LIVE anchor already identical (version + digest) → no write (no per-boot churn)", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      typedAnchor({ version: "0.1.0", digest: DIGEST }),
+    ]);
+    const result = await runSeeder();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
+    expect(result.refreshed).toEqual([]);
+  });
+
+  it("LIVE anchor with a digest, same version, NO recorded digest (dev boot) → digest never stripped", async () => {
+    readRecordedBundledDigests.mockReturnValue(new Map());
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      typedAnchor({ version: "0.1.0", digest: DIGEST }),
+    ]);
+    const result = await runSeeder();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
+    expect(result.refreshed).toEqual([]);
+  });
+
+  it("ARCHIVED anchor tombstone with drift → NEVER rewritten (historical retirement record)", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([
+      typedAnchor({ version: "0.0.9" }, "archived"),
+    ]);
+    const result = await runSeeder();
+    expect(sourceSwitchExtension).not.toHaveBeenCalled();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(result.refreshed).toEqual([]);
+    expect(result.seededArchived).toEqual([]);
+  });
+
+  it("refresh failure → refreshFailed[] (NOT failed[], NOT swallowed as an insert race)", async () => {
+    readRecordedBundledDigests.mockReturnValue(recorded());
+    readInstalledExtensionsByPackageName.mockResolvedValue([typedAnchor({ version: "0.0.9" })]);
+    sourceSwitchExtension.mockRejectedValueOnce(new Error("db down"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await runSeeder();
+    expect(result.refreshFailed).toEqual([PKG]);
+    expect(result.failed).toEqual([]);
+    expect(result.refreshed).toEqual([]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
