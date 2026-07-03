@@ -177,6 +177,27 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
         .filter((def) => live.has(def.type.split(":")[0]));
     },
 
+    // Archived twin of listActive (cinatra#948). The in-memory object-type
+    // registry DEREGISTERS a package's descriptors on archive (capability
+    // teardown), so no native archived rows exist to read. Fall back to
+    // package-level descriptors derived from the scope-visible archived
+    // manifests — exactly the visibility listActive applies for this kind (the
+    // shared owner-scope gate; the registry adds capability data, not
+    // per-actor visibility), so archived rows are never MORE visible than
+    // active ones. Display metadata is hydrated by the caller from the
+    // registry/marketplace summary, per the canonical-record contract.
+    async listArchived({
+      scope,
+      manifests,
+    }: {
+      actor: Actor;
+      scope: ExtensionDiscoveryScope;
+      manifests: ActiveExtensionManifest[];
+    }) {
+      const archivedVisible = visibleManifestPackageNames(manifests, scope);
+      return [...archivedVisible].map((packageName) => ({ packageName }));
+    },
+
     async validate(spec: unknown): Promise<ValidationResult> {
       const errors: string[] = [];
       const s = spec as

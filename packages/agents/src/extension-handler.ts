@@ -11,6 +11,7 @@ import {
   readAgentTemplateByPackageName,
   updateAgentTemplate,
   readActiveExtensionTemplates,
+  readArchivedExtensionTemplates,
 } from "@cinatra-ai/agents";
 import {
   upsertSkill,
@@ -433,6 +434,18 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
       const visibleActive = await readActiveExtensionTemplates(scope.vendorScope ?? undefined);
       return visibleActive.filter(
         (template) => template.packageName != null && livePackageNames.has(template.packageName),
+      );
+    },
+
+    // Archived twin of listActive (cinatra#948): the SAME visibility-correct
+    // native read (origin visibility + vendor scope + effective-status rule),
+    // intersected against the coarse archived-candidate manifest set.
+    async listArchived({ scope, manifests }) {
+      const archivedPackageNames = new Set(manifests.map((m) => m.packageName));
+      const visibleArchived = await readArchivedExtensionTemplates(scope.vendorScope ?? undefined);
+      return visibleArchived.filter(
+        (template) =>
+          template.packageName != null && archivedPackageNames.has(template.packageName),
       );
     },
   };
