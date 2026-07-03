@@ -121,7 +121,7 @@ vi.mock("../review-task-actions", () => ({ approveReviewTaskInternal: vi.fn() })
 vi.mock("@/lib/primitive-handlers", () => ({
   collectAllPrimitiveHandlers: vi.fn(() => ({})),
 }));
-vi.mock("../agent-install-path", () => ({ resolveAgentInstallDir: vi.fn() }));
+vi.mock("../agent-runtime-mount", () => ({ resolveAgentRuntimeMountDir: vi.fn(), resolveDevExtensionSourceRoot: vi.fn() }));
 
 // ---------------------------------------------------------------------------
 // Tests

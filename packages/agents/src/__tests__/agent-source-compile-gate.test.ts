@@ -88,12 +88,13 @@ vi.mock("../trigger-service", () => ({
   getRunTriggerForActor: vi.fn(),
   deleteRunTriggerForActor: vi.fn(),
 }));
-// Make resolveAgentInstallDir return process.cwd() so the handler's
+// Make resolveDevExtensionSourceRoot return process.cwd() so the handler's
 // rung-1 path is <tmpRoot>/cinatra/<slug>/cinatra/oas.json — which is where
 // our test fixture writes its file (handler at handlers.ts:1911 joins with
 // "cinatra" twice, matching our writeOasFixture path).
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: vi.fn(() => process.cwd()),
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: vi.fn(() => process.cwd()),
+  resolveDevExtensionSourceRoot: vi.fn(() => process.cwd()),
 }));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
 vi.mock("../oas-compiler", () => ({
@@ -164,8 +165,8 @@ let originalCwd: string;
 
 async function writeOasFixture(slug: string, oas: Record<string, unknown>): Promise<void> {
   // The handler's resolveAgentJsonPathForRead joins:
-  //   resolveAgentInstallDir() + "cinatra" + <slug> + "cinatra" + "oas.json"
-  // We mock resolveAgentInstallDir to process.cwd(), so the rung-1 path is
+  //   resolveDevExtensionSourceRoot() + "cinatra" + <slug> + "cinatra" + "oas.json"
+  // We mock resolveDevExtensionSourceRoot to process.cwd(), so the rung-1 path is
   // tmpRoot/cinatra/<slug>/cinatra/oas.json.
   const dir = path.join(tmpRoot, "cinatra-ai", slug, "cinatra");
   await fs.mkdir(dir, { recursive: true });

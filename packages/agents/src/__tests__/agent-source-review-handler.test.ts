@@ -108,7 +108,7 @@ vi.mock("../trigger-service", () => ({
   getRunTriggerForActor: vi.fn(),
   deleteRunTriggerForActor: vi.fn(),
 }));
-vi.mock("../agent-install-path", () => ({ resolveAgentInstallDir: vi.fn() }));
+vi.mock("../agent-runtime-mount", () => ({ resolveAgentRuntimeMountDir: vi.fn(), resolveDevExtensionSourceRoot: vi.fn() }));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
 vi.mock("../oas-compiler", () => ({ compileOasAgentJson: vi.fn() }));
 vi.mock("@/lib/background-jobs", () => ({

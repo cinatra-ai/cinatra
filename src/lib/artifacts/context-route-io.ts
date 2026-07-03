@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolveAgentInstallDir } from "@cinatra-ai/agents/agent-install-path";
+import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 import {
   readAgentRunById,
   readAgentRunByContextId,
@@ -46,7 +46,7 @@ async function readInstalledOas(
 ): Promise<Record<string, unknown> | null> {
   const slug = inRepoSlug(packageName);
   if (!slug) return null;
-  const root = resolveAgentInstallDir();
+  const root = resolveAgentRuntimeMountDir();
   const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
   if (!existsSync(oasPath)) return null;
   try {

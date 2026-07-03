@@ -43,8 +43,9 @@ vi.mock("@cinatra-ai/objects/auto-registrar", () => ({
   ensureDynamicObjectType: vi.fn(),
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: {} }));
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: vi.fn(() => "/tmp/agents"),
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: vi.fn(() => "/tmp/agents"),
+  resolveDevExtensionSourceRoot: vi.fn(() => "/tmp/agents"),
 }));
 vi.mock("../materialize-agent-package", () => ({
   materializeAgentPackageToDisk: vi.fn(),

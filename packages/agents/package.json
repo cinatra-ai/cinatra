@@ -7,7 +7,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./agent-install-path": "./src/agent-install-path.ts",
+    "./agent-runtime-mount": "./src/agent-runtime-mount.ts",
     "./runtime-install-gate": "./src/runtime-install-gate.ts",
     "./extension-handler": "./src/extension-handler.ts",
     "./extension-handler-rollback": "./src/extension-handler-rollback.ts",

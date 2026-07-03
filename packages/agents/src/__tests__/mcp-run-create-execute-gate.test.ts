@@ -173,7 +173,7 @@ vi.mock("../trigger-service", () => ({
   deleteRunTriggerForActor: vi.fn(),
 }));
 vi.mock("@cinatra-ai/objects", () => ({ createDeterministicObjectsClient: vi.fn(() => ({})) }));
-vi.mock("../agent-install-path", () => ({ resolveAgentInstallDir: vi.fn() }));
+vi.mock("../agent-runtime-mount", () => ({ resolveAgentRuntimeMountDir: vi.fn(), resolveDevExtensionSourceRoot: vi.fn() }));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
 vi.mock("../validate-agent-json", () => ({ validateOasAgentJson: vi.fn() }));
 vi.mock("../oas-compiler", () => ({ compileOasAgentJson: vi.fn() }));

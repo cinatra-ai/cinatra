@@ -42,10 +42,10 @@ export function agentMarkerBackfillPhases(): BootPhase[] {
         const { backfillPublishedMarkers, triggerWayflowReload } = await import(
           "@cinatra-ai/agents"
         );
-        const { resolveAgentInstallDir } = await import(
-          "@cinatra-ai/agents/agent-install-path"
+        const { resolveAgentRuntimeMountDir } = await import(
+          "@cinatra-ai/agents/agent-runtime-mount"
         );
-        const agentsDir = resolveAgentInstallDir();
+        const agentsDir = resolveAgentRuntimeMountDir();
 
         // Backfill `.cinatra-published.json` markers for every on-disk agent dir
         // BEFORE wayflow's loader scans. Idempotent; missing/stale markers are

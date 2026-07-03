@@ -172,6 +172,36 @@ describe("materializeRequiredExtensions", () => {
     ).toThrow(/user-install store/);
   });
 
+  it("cinatra#793: the agent RUNTIME MOUNT dot-dir inside the data root IS a sanctioned target", () => {
+    // The mount (`<root>/.agent-mount`) is the ONE in-root exception to the
+    // user-store guard: itself a reconstructable projection, invisible to the
+    // store's kind-dir discovery. An empty manifest reconcile must NOT throw.
+    // Pin the data root to the test tree via the env override (highest
+    // precedence) so the guard + the mkdir both act on the temp tree.
+    const prev = process.env.CINATRA_EXTENSION_DATA_ROOT;
+    process.env.CINATRA_EXTENSION_DATA_ROOT = path.join(root, "extensions-data");
+    try {
+      writeManifest([]);
+      const result = materializeRequiredExtensions({
+        installDir: path.join(root, "extensions-data", ".agent-mount"),
+        seedDir,
+        failClosed: true,
+      });
+      expect(result.changed).toBe(false);
+      // Any OTHER dot-dir under the root is still refused.
+      expect(() =>
+        materializeRequiredExtensions({
+          installDir: path.join(root, "extensions-data", ".staging"),
+          seedDir,
+          failClosed: true,
+        }),
+      ).toThrow(/user-install store/);
+    } finally {
+      if (prev === undefined) delete process.env.CINATRA_EXTENSION_DATA_ROOT;
+      else process.env.CINATRA_EXTENSION_DATA_ROOT = prev;
+    }
+  });
+
   it("an empty (zero-slug) seed manifest is a valid no-op, not a failure", () => {
     writeManifest([]);
     const result = materializeRequiredExtensions({ installDir, seedDir, failClosed: true });

@@ -52,8 +52,9 @@ const state = vi.hoisted(() => ({
 // import-export-actions) stays REAL.
 // ---------------------------------------------------------------------------
 
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: () => state.installDir,
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => state.installDir,
+  resolveDevExtensionSourceRoot: () => state.installDir,
   readAgentInstallPath: () => state.installDir,
   writeAgentInstallPath: () => {},
 }));

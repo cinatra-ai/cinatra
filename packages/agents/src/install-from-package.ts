@@ -54,7 +54,7 @@ import {
 import { compileOasAgentJson } from "./oas-compiler";
 import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import {
   materializeAgentPackageToDisk,
   commitMaterialize,
@@ -121,12 +121,73 @@ export async function installAgentFromPackage(
   );
 }
 
+// cinatra#793: STORE-FIRST payload acquisition. When the exact (package,
+// version) being installed is already MATERIALIZED + FINALIZED in the unified
+// content-addressed store (the dispatcher's store pipeline runs BEFORE the
+// agent handler, so the root package of every dispatcher install/update is),
+// consume THAT payload: copy the SRI-verified digest dir into a temp dir shaped
+// exactly like a registry extract, so every downstream step (validate → seed →
+// materialize-to-mount → cleanup) is unchanged and the store dir itself is
+// never mutated. Falls back to the registry extract for packages with no
+// finalized payload — the non-saga full-tree installer's TRANSITIVE dependency
+// nodes never pass the dispatcher, so they have no store payload (yet; the
+// batch saga path dispatches every member through the dispatcher and is fully
+// store-backed).
+async function acquireAgentPackagePayload(
+  input: { packageName: string; packageVersion?: string },
+  resolvedConfig: VerdaccioConfig,
+): Promise<Awaited<ReturnType<typeof extractAgentPackage>>> {
+  try {
+    const { resolveFinalizedStorePayload } = await import("@/lib/extension-store-payload");
+    const payload = await resolveFinalizedStorePayload({
+      packageName: input.packageName,
+      expectedKind: "agent",
+    });
+    if (payload && (!input.packageVersion || payload.version === input.packageVersion)) {
+      const { mkdtemp, cp, readFile, access } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { readAgentPayloadFromExtractedPackage } = await import("@cinatra-ai/registries");
+      const tempDir = await mkdtemp(join(tmpdir(), "cinatra-agent-store-payload-"));
+      await cp(payload.storeDir, tempDir, { recursive: true });
+      const manifest = JSON.parse(await readFile(join(tempDir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      // Same payload/readme resolution as extractAgentPackage (the OAS Flow
+      // document from cinatra/oas.json, legacy root agent.json fallback).
+      const oasPayload = await readAgentPayloadFromExtractedPackage(tempDir);
+      const readmePath = join(tempDir, "README.md");
+      const readme = (await access(readmePath).then(() => true).catch(() => false))
+        ? await readFile(readmePath, "utf8")
+        : null;
+      return {
+        packageName: input.packageName,
+        packageVersion:
+          payload.version ?? input.packageVersion ?? manifest.version ?? "0.0.0",
+        manifest,
+        payload: oasPayload,
+        readme,
+        tempDir,
+      };
+    }
+  } catch (err) {
+    console.warn(
+      `[installAgentFromPackage] store-payload read for ${input.packageName} failed — ` +
+        `falling back to the registry extract:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return extractAgentPackage(
+    { packageName: input.packageName, packageVersion: input.packageVersion },
+    resolvedConfig,
+  );
+}
+
 async function _installAgentFromPackageImpl(
   input: InstallAgentFromPackageInput,
   config?: VerdaccioConfig,
 ): Promise<InstallAgentFromPackageResult> {
   const resolvedConfig = ensureConfig(config, "installAgentFromPackage");
-  const extracted = await extractAgentPackage(
+  const extracted = await acquireAgentPackagePayload(
     {
       packageName: input.packageName,
       packageVersion: input.packageVersion,
@@ -268,7 +329,10 @@ async function _installAgentFromPackageImpl(
     const materializeResult = await materializeAgentPackageToDisk({
       extractedTempDir: extracted.tempDir,
       packageName: extracted.packageName,
-      agentInstallDir: resolveAgentInstallDir(),
+      // cinatra#793: runtime files project into the agent RUNTIME MOUNT
+      // (`<extension-data-root>/.agent-mount`) — the deploy-owned dir WayFlow
+      // mounts — never a standalone install dir.
+      agentInstallDir: resolveAgentRuntimeMountDir(),
     });
     if (!materializeResult.materialized) {
       console.warn(

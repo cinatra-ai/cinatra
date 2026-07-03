@@ -150,8 +150,8 @@ export type SkillExtensionDescriptor = {
 async function resolveExtensionRoots(): Promise<string[]> {
   const candidates: string[] = [path.join(process.cwd(), "extensions")];
   try {
-    const { resolveAgentInstallDir } = await import("@cinatra-ai/agents/agent-install-path");
-    candidates.push(resolveAgentInstallDir());
+    const { resolveAgentRuntimeMountDir } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    candidates.push(resolveAgentRuntimeMountDir());
   } catch {
     // Bundled root is sufficient for image-shipped extensions.
   }
@@ -266,7 +266,7 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
 // bundled extensions are not necessarily lifecycle-tracked, so an unseeded
 // prod row must never stop skill resolution. The status read goes through a
 // FAIL-SOFT dynamic import of `@cinatra-ai/extensions` (same posture as the
-// `@cinatra-ai/agents/agent-install-path` import above — skills must not
+// `@cinatra-ai/agents/agent-runtime-mount` import above — skills must not
 // hard-depend on the extensions package, which itself consumes skills);
 // any import/DB failure keeps every extension (fail-open, like the loader).
 //

@@ -18,8 +18,9 @@
 import { describe, it, expect, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: () => "/nonexistent",
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => "/nonexistent",
+  resolveDevExtensionSourceRoot: () => "/nonexistent",
 }));
 vi.mock("node:fs/promises", () => ({ readFile: vi.fn() }));
 vi.mock("node:fs", () => ({ existsSync: () => false }));

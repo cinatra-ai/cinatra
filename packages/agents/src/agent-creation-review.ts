@@ -47,7 +47,7 @@ import {
   scanAgentForRequiredLicense,
 } from "./validate-agent-json";
 import { scanOasForRuntimeInvariantFindings } from "./validate-oas-runtime-invariants";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
 import { requireAgentRole, agentRoleDirSlug } from "./agent-roles";
 import {
   mergeReviewLanes,
@@ -334,7 +334,7 @@ async function loadReviewerPrompt(
     skillIds = [];
   }
   } // end if preResolvedSkillIds === undefined
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   // Lane labels are stable security-semantic identities (wired into
   // normalizeReviewFindings + spoof-downgrade + tests) AND the role names —
   // the on-disk dir slug derives from the role-bound package name

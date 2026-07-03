@@ -3,7 +3,7 @@ import "server-only";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 
 /**
  * Runtime resolver for agent_templates.inputSchema.
@@ -49,7 +49,7 @@ function isCinatraInRepoSlug(packageName: string | null | undefined): string | n
 }
 
 function readDiskOas(slug: string): Record<string, unknown> | null {
-  const root = resolveAgentInstallDir();
+  const root = resolveAgentRuntimeMountDir();
   const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
   if (!existsSync(oasPath)) return null;
   try {
@@ -63,7 +63,7 @@ function readDiskOas(slug: string): Record<string, unknown> | null {
 }
 
 async function readDiskOasAsync(slug: string): Promise<Record<string, unknown> | null> {
-  const root = resolveAgentInstallDir();
+  const root = resolveAgentRuntimeMountDir();
   const oasPath = join(root, "cinatra-ai", slug, "cinatra", "oas.json");
   if (!existsSync(oasPath)) return null;
   try {

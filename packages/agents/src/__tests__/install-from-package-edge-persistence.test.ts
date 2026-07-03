@@ -137,7 +137,7 @@ vi.mock("../oas-compiler", () => ({
 }));
 vi.mock("@cinatra-ai/objects/auto-registrar", () => ({ ensureDynamicObjectType: async () => ({}) }));
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { has: () => false } }));
-vi.mock("../agent-install-path", () => ({ resolveAgentInstallDir: () => "/tmp/agents-fixture" }));
+vi.mock("../agent-runtime-mount", () => ({ resolveAgentRuntimeMountDir: () => "/tmp/agents-fixture", resolveDevExtensionSourceRoot: () => "/tmp/agents-fixture" }));
 
 const materialize = vi.fn(async () => {
   order.push("materialize");

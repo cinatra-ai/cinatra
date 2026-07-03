@@ -38,8 +38,9 @@ vi.mock("@cinatra-ai/extensions", () => ({
 // Pin the dynamically-installed extension root to the same fixture so the scan
 // has a single deterministic root (deduped by realpath against cwd/extensions).
 let fixtureRoot: string;
-vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
-  resolveAgentInstallDir: () => path.join(fixtureRoot, "extensions"),
+vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => path.join(fixtureRoot, "extensions"),
+  resolveDevExtensionSourceRoot: () => path.join(fixtureRoot, "extensions"),
 }));
 
 import { isWidgetChatSkillId } from "../extension-skill-resolver";

@@ -19,7 +19,7 @@ import path from "node:path";
 import { rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import { triggerWayflowReload } from "./wayflow-reload-client";
 
 const PACKAGE_NAME_RE = /^@([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*)$/;
@@ -40,7 +40,7 @@ export async function rmDirForRolledBackInstall(packageName: string): Promise<vo
     return;
   }
   const [, vendor, slug] = match;
-  const agentsRoot = path.resolve(resolveAgentInstallDir());
+  const agentsRoot = path.resolve(resolveAgentRuntimeMountDir());
   const targetDir = path.resolve(agentsRoot, vendor, slug);
   if (
     !targetDir.startsWith(agentsRoot + path.sep) &&
@@ -97,7 +97,7 @@ export function extensionDirPresent(packageName: string): boolean {
   const match = PACKAGE_NAME_RE.exec(packageName);
   if (!match) return false;
   const [, vendor, slug] = match;
-  const agentsRoot = path.resolve(resolveAgentInstallDir());
+  const agentsRoot = path.resolve(resolveAgentRuntimeMountDir());
   const targetDir = path.resolve(agentsRoot, vendor, slug);
   if (
     !targetDir.startsWith(agentsRoot + path.sep) &&
@@ -119,7 +119,7 @@ export async function strictPurgeExtensionDir(
     );
   }
   const [, vendor, slug] = match;
-  const agentsRoot = path.resolve(resolveAgentInstallDir());
+  const agentsRoot = path.resolve(resolveAgentRuntimeMountDir());
   const targetDir = path.resolve(agentsRoot, vendor, slug);
   if (
     !targetDir.startsWith(agentsRoot + path.sep) &&
@@ -180,7 +180,7 @@ export async function restoreExtensionDirFromTarball(input: {
     );
   }
   const [, vendor, slug] = match;
-  const agentsRoot = path.resolve(resolveAgentInstallDir());
+  const agentsRoot = path.resolve(resolveAgentRuntimeMountDir());
   const targetDir = path.resolve(agentsRoot, vendor, slug);
   if (
     !targetDir.startsWith(agentsRoot + path.sep) &&

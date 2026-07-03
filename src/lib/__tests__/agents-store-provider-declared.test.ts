@@ -45,8 +45,9 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 }));
 
 const resolveAgentInstallDirMock = vi.fn();
-vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
-  resolveAgentInstallDir: () => resolveAgentInstallDirMock(),
+vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => resolveAgentInstallDirMock(),
+  resolveDevExtensionSourceRoot: () => resolveAgentInstallDirMock(),
 }));
 
 // cinatra#538 (defect 2): the picker now enumerates the operator's OWN vendor

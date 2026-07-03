@@ -64,8 +64,9 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 }));
 
 // No filesystem provider-declared agents in these unit tests.
-vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
-  resolveAgentInstallDir: vi.fn(() => "/nonexistent-install-dir"),
+vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: vi.fn(() => "/nonexistent-install-dir"),
+  resolveDevExtensionSourceRoot: vi.fn(() => "/nonexistent-install-dir"),
 }));
 
 // cinatra#538 (defect 2): defensive mock — the provider-declared picker reads

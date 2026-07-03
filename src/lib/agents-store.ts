@@ -38,7 +38,7 @@ import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
 // DB-installed templates with the filesystem-provided agents so users see
 // agents like email-drafting-agent, web-scrape-agent, etc. Mirrors the
 // `handleAgentBuilderGitList` resolution order in packages/agents/src/mcp/handlers.ts.
-import { resolveAgentInstallDir } from "@cinatra-ai/agents/agent-install-path";
+import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 // cinatra#538 (defect 2 — approved≠runnable): the picker must enumerate the
 // operator's OWN vendor dir, not only the first-party "cinatra-ai" one. Post-#537,
 // user agents are written under `<installRoot>/<operator-vendor>/...` (e.g.
@@ -545,10 +545,10 @@ export function readProviderDeclaredAgents(
 ): PersistedAgent[] {
   let installRoot: string;
   try {
-    installRoot = resolveAgentInstallDir();
+    installRoot = resolveAgentRuntimeMountDir();
   } catch (err) {
     if (options.throwOnError) throw err;
-    console.warn("[agents-store] resolveAgentInstallDir failed:", err);
+    console.warn("[agents-store] resolveAgentRuntimeMountDir failed:", err);
     return [];
   }
 
