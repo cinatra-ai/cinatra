@@ -12,8 +12,10 @@ const PKG_ROOT = path.resolve(__dirname, "..", "..");
 const read = (rel: string) => readFileSync(path.join(PKG_ROOT, rel), "utf8");
 
 describe("chat undo chip wiring", () => {
-  it("chat-page mounts <UndoActionChip runId> in the agent_run branch", () => {
-    const src = read("src/chat-page.tsx");
+  it("the messages view mounts <UndoActionChip runId> in the agent_run branch", () => {
+    // cinatra#918: the agent_run render branch (OrderedPartsSection) moved from
+    // chat-page.tsx into the lazily-loaded conversation view.
+    const src = read("src/chat-messages-view.tsx");
     expect(src).toMatch(/import \{ UndoActionChip \} from "\.\/chat-undo-action-chip"/);
     // Mounted inside the agent_run tool_call branch (which has part.runId).
     expect(src).toMatch(/part\.name === "agent_run" && part\.runId/);

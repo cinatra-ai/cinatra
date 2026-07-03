@@ -98,7 +98,7 @@ import { DancingRobot } from "./dancing-robot";
 // client chunk splits.
 const ChatMessagesView = dynamic(
   () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
-  { loading: () => null },
+  { ssr: false, loading: () => null },
 );
 
 // Empty-state badge + caption selection live in ./chat-badges (pure +
@@ -669,21 +669,6 @@ export function ChatPage({ initialThreadId, userId, initialMention, initialMode,
   function pushChatUrl(threadId: string | null) {
     const url = threadId ? `/chat/${threadId}` : "/chat";
     window.history.pushState(null, "", url);
-  }
-
-  function startNewThread() {
-    setActiveThreadId(null);
-    setMessages([]);
-    setActiveAssistantHandle(undefined);
-    setPendingExternalHandle(null);
-    if (externalReplyTimerRef.current) {
-      clearTimeout(externalReplyTimerRef.current);
-      externalReplyTimerRef.current = null;
-    }
-    promptRef.current?.clear();
-    setGreeting(getGreeting());
-    titleUserEditedRef.current = false;
-    pushChatUrl(null);
   }
 
   // Register a stream in the registry and bump the count. Must only be called

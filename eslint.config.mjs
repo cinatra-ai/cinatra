@@ -401,6 +401,11 @@ const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
   "src/components/extensions/extensions-tab-select.tsx",
   "src/components/extensions/install-batch-panel.tsx",
   "packages/chat/src/chat-page.tsx",
+  // cinatra#918 moved the conversation renderer (and its pre-existing
+  // text-[15px]/text-[8px]/text-[0.8rem] sites) out of chat-page.tsx into
+  // the lazily-loaded view — same grandfathered sites, new file. The
+  // normalization stays tracked in cinatra#886.
+  "packages/chat/src/chat-messages-view.tsx",
   "packages/mcp-server/src/index.tsx",
   "packages/agents/src/campaign-recipients-review-renderer.tsx",
   "packages/agents/src/import-skill-from-github-form.tsx",
