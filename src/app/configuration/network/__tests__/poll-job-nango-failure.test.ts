@@ -47,7 +47,8 @@ vi.mock("@/lib/registry-credentials", () => ({
   writeRegistryCredential: vi.fn(),
   deleteRegistryCredential: vi.fn(),
   getRegistryCredentialRef: vi.fn(
-    (ns: string, kind: string) => `cinatra-registry-${kind}-${ns}`,
+    (ns: string, kind: string, requestId: string) =>
+      `cinatra-registry-${kind}-${ns}-${requestId}`,
   ),
 }));
 vi.mock("@/lib/redact-sensitive", () => ({
@@ -216,6 +217,7 @@ describe("REGISTRY_POLL — approved with Nango write failure", () => {
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
   });
 

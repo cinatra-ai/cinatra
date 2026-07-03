@@ -142,13 +142,17 @@ describe("resetRemoteRegistryAction â€” terminal states (denied/expired/error â†
         status,
         namespace: "test-ns",
         url: "https://registry.example",
+        // A terminal row always carries the requestId inherited from its pending
+        // origin; the request-scoped deletes (cinatra#899) key off it.
+        requestId: "req-t1",
       });
 
       const url = await captureRedirect(() => resetRemoteRegistryAction());
 
-      // Both Nango credentials are deleted (partial-write-success cleanup).
-      expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret");
-      expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token");
+      // Both Nango credentials are deleted (partial-write-success cleanup),
+      // request-scoped to this terminal request.
+      expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "req-t1");
+      expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token", "req-t1");
 
       // Slot reset to not_connected with no transient fields.
       expect(vi.mocked(writeInstanceIdentity)).toHaveBeenCalledTimes(1);

@@ -46,7 +46,8 @@ vi.mock("@/lib/registry-credentials", () => ({
   writeRegistryCredential: vi.fn(),
   deleteRegistryCredential: vi.fn(),
   getRegistryCredentialRef: vi.fn(
-    (ns: string, kind: string) => `cinatra-registry-${kind}-${ns}`,
+    (ns: string, kind: string, requestId: string) =>
+      `cinatra-registry-${kind}-${ns}-${requestId}`,
   ),
 }));
 vi.mock("@/lib/redact-sensitive", () => ({
@@ -163,11 +164,13 @@ describe("REGISTRY_POLL handler — happy paths", () => {
     expect(vi.mocked(writeRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "token",
+      "req-1",
       "tok-abc",
     );
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
     const writeOrder =
       vi.mocked(writeRegistryCredential).mock.invocationCallOrder[0]!;
@@ -189,6 +192,7 @@ describe("REGISTRY_POLL handler — happy paths", () => {
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
     const lastWrite = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)?.[0];
     const persisted = (lastWrite as InstanceIdentity).registries?.remote;
@@ -204,6 +208,7 @@ describe("REGISTRY_POLL handler — happy paths", () => {
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
     const lastWrite = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)?.[0];
     expect((lastWrite as InstanceIdentity).registries?.remote?.status).toBe(
@@ -219,6 +224,7 @@ describe("REGISTRY_POLL handler — happy paths", () => {
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
     const lastWrite = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)?.[0];
     const persisted = (lastWrite as InstanceIdentity).registries?.remote;
@@ -234,6 +240,7 @@ describe("REGISTRY_POLL handler — happy paths", () => {
     expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith(
       "test-ns",
       "request-secret",
+      "req-1",
     );
     const lastWrite = vi.mocked(writeInstanceIdentity).mock.calls.at(-1)?.[0];
     const persisted = (lastWrite as InstanceIdentity).registries?.remote;

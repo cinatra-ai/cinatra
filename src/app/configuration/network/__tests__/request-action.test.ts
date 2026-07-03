@@ -189,7 +189,7 @@ describe("requestRemoteAccessAction — 201 happy path", () => {
     await captureRedirect(() => requestRemoteAccessAction(buildValidFormData()));
     const writeCred = vi.mocked(writeRegistryCredential);
     const writeIdentity = vi.mocked(writeInstanceIdentity);
-    expect(writeCred).toHaveBeenCalledWith("test-ns", "request-secret", "secret-xyz");
+    expect(writeCred).toHaveBeenCalledWith("test-ns", "request-secret", "req-1", "secret-xyz");
     expect(writeIdentity).toHaveBeenCalled();
     const writeCredOrder = writeCred.mock.invocationCallOrder[0]!;
     const writeIdentityOrder = writeIdentity.mock.invocationCallOrder[0]!;

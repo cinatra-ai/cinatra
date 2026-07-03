@@ -161,7 +161,7 @@ describe("cancelRemoteRequestAction — state-aware", () => {
 
     const url = await captureRedirect(() => cancelRemoteRequestAction());
 
-    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret");
+    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "req-1");
     expect(lastWrittenRemote()).toEqual({
       url: "https://registry.example",
       namespace: "test-ns",
@@ -229,7 +229,7 @@ describe("disconnectRemoteRegistryAction — state-aware", () => {
 
     const url = await captureRedirect(() => disconnectRemoteRegistryAction());
 
-    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token");
+    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token", "req-c1");
     expect(lastWrittenRemote()).toEqual({
       url: "https://registry.example",
       namespace: "test-ns",
@@ -336,8 +336,8 @@ describe("requestRemoteAccessAction — pending-row persist failure", () => {
     const url = await captureRedirect(() => requestRemoteAccessAction(fd));
 
     // Nango secret written first, then rolled back because the row didn't persist.
-    expect(vi.mocked(writeRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "secret-xyz");
-    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret");
+    expect(vi.mocked(writeRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "req-1", "secret-xyz");
+    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "req-1");
     // No poll enqueued for a request with no local row, and NOT ok=requested.
     expect(vi.mocked(enqueueBackgroundJob)).not.toHaveBeenCalled();
     expect(url).not.toBeNull();
@@ -379,7 +379,7 @@ describe("teardown actions — CAS non-commit surfaces error", () => {
 
     const url = await captureRedirect(() => cancelRemoteRequestAction());
 
-    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret");
+    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "request-secret", "req-1");
     expect(url).not.toBeNull();
     expect(url!.includes("ok=cancelled")).toBe(false);
     expect(url!.includes("error=")).toBe(true);
@@ -397,7 +397,7 @@ describe("teardown actions — CAS non-commit surfaces error", () => {
 
     const url = await captureRedirect(() => disconnectRemoteRegistryAction());
 
-    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token");
+    expect(vi.mocked(deleteRegistryCredential)).toHaveBeenCalledWith("test-ns", "token", "req-1");
     expect(url).not.toBeNull();
     expect(url!.includes("ok=remote-disconnected")).toBe(false);
     expect(url!.includes("error=")).toBe(true);
