@@ -3371,13 +3371,13 @@ END $$` },
     },
 
     // -------------------------------------------------------------------
-    // agent_templates first_run_at trigger
+    // agent_templates first_run_at trigger — also stamps org_id from the run's org on first run (COALESCE never moves an already-set org_id; cinatra#847; full rationale in core__0013's manifest entry)
     // -------------------------------------------------------------------
     {
       text: `CREATE OR REPLACE FUNCTION "${schemaName.replaceAll('"', '""')}".set_agent_template_first_run() RETURNS trigger LANGUAGE plpgsql AS $body$
         BEGIN
           UPDATE "${schemaName.replaceAll('"', '""')}"."agent_templates"
-             SET first_run_at = NEW.created_at
+             SET first_run_at = NEW.created_at, org_id = COALESCE(org_id, NEW.org_id)
            WHERE id = NEW.template_id AND first_run_at IS NULL;
           RETURN NEW;
         END;
