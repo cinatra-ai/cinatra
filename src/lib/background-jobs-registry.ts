@@ -904,7 +904,11 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         return;
       }
 
-      const { deliverOutbound } = await import("@cinatra-ai/webhooks");
+      // Subpath import (route-graph pressure): deliverOutbound is the ONLY
+      // webhooks surface this registry needs — the barrel pulls the whole
+      // inbound verify/secret-service/registry graph onto every route that
+      // reaches the job registry.
+      const { deliverOutbound } = await import("@cinatra-ai/webhooks/outbound");
       const { recordOutboundDeadLetter, digestPayload, sanitizeError } =
         await import("@/lib/webhook-outbound-deadletter.server");
 

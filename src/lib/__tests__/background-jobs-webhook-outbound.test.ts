@@ -52,7 +52,9 @@ vi.mock("@/lib/notifications-host", () => ({}));
 
 // Lib delivery primitive — controlled per test.
 const deliverOutboundMock = vi.fn();
-vi.mock("@cinatra-ai/webhooks", () => ({
+// The dispatcher arm imports the SUBPATH (@cinatra-ai/webhooks/outbound —
+// route-graph pressure); mock that exact specifier.
+vi.mock("@cinatra-ai/webhooks/outbound", () => ({
   deliverOutbound: (...args: unknown[]) => deliverOutboundMock(...args),
 }));
 

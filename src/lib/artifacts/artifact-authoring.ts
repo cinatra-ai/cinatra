@@ -42,20 +42,32 @@ import {
 } from "./authoring-recursion-ledger";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { canAccessArtifactExtension } from "./artifact-extension-access";
+// WARN-phase cross-path dedupe (cinatra#923): the advisory ledger lookup +
+// the best-effort llm_emit provenance row.
+import { createHash } from "node:crypto";
+import {
+  findFinalizedDeclarativeMaterialization,
+  recordLlmEmitMaterialization,
+} from "./materialization-ledger";
 
 const ARTIFACT_TYPE_SUFFIX = ":artifact";
 
 /** 10 MB hard cap on authored content size — matches the upload-route
  *  default (`@/lib/artifacts/upload` ~ 10MB). Authoring should never
- *  produce huge content; this guards a runaway-LLM scenario. */
-const MAX_AUTHORED_CONTENT_BYTES = 10 * 1024 * 1024;
+ *  produce huge content; this guards a runaway-LLM scenario. Exported for
+ *  the declarative run-completion materializer (cinatra#923), which
+ *  enforces the SAME cap on binding-resolved content. */
+export const MAX_AUTHORED_CONTENT_BYTES = 10 * 1024 * 1024;
 
 /** Text-content authoring may ONLY emit text-shaped MIMEs. Binary
  *  types (image/png, application/pdf, etc.)
  *  cannot be authored as a UTF-8 string stream; the upload route is
  *  the right entry point for those. This set is intentionally
- *  narrower than `accepts.file.mimeTypes` may declare. */
-const TEXT_AUTHORING_COMPATIBLE_MIMES: ReadonlySet<string> = new Set([
+ *  narrower than `accepts.file.mimeTypes` may declare. Exported for the
+ *  declarative materializer (cinatra#923); set equality with the grammar
+ *  module's `ARTIFACT_BINDING_AUTHORABLE_MIMES` byte-mirror is pinned by
+ *  test. */
+export const TEXT_AUTHORING_COMPATIBLE_MIMES: ReadonlySet<string> = new Set([
   "text/markdown",
   "text/plain",
   "text/html",
@@ -118,8 +130,16 @@ export type AuthorArtifactSuccess = {
   /** Recursion depth at which this step was admitted (0 = root). */
   depth: number;
   /** The opaque step id; surface this back to the chat so a sub-
-   *  authoring within the SAME chain can use it as `parentStepId`. */
-  authoringStepId: string;
+   *  authoring within the SAME chain can use it as `parentStepId`.
+   *  `null` ONLY on the deduped-declarative path below (no authoring
+   *  step was opened — nothing was authored). */
+  authoringStepId: string | null;
+  /** Set when the emit was absorbed by the WARN-phase declarative dedupe
+   *  (cinatra#923): the run's declared binding already materialized these
+   *  exact bytes for this extension, so the emit is transcription residue
+   *  of the declared intent and the EXISTING refs are returned — no second
+   *  artifact. */
+  dedupedFromDeclarativeMaterialization?: true;
 };
 
 export type AuthorArtifactResult = AuthorArtifactSuccess | AuthorArtifactError;
@@ -174,6 +194,51 @@ export async function authorArtifact(
       reason: "access-denied",
       message: `You do not have access to author with extension "${input.extension}".`,
     };
+  }
+
+  // WARN-phase cross-path dedupe (cinatra#923). When this emit runs inside
+  // an agent run whose DECLARED EndNode binding already materialized these
+  // exact bytes for this same extension (a finalized `end_node_binding`
+  // ledger row of THIS run matches the content hash — only the declarative
+  // path writes that provenance), the emit is transcription residue of the
+  // declared intent: return the existing refs instead of creating a
+  // duplicate, and WARN (the signal feeds the #924 prose-strip lint). An
+  // emit for an extension the run has NO finalized binding row for is NEVER
+  // suppressed — legitimately distinct same-byte emits keep their own
+  // artifacts/titles. Deliberately placed BEFORE the authoring-skill
+  // refusal below so a residual prompt emit against a declarative-only
+  // extension is absorbed rather than erroring. Advisory: any lookup
+  // failure falls through to the normal emit path.
+  if (input.runId) {
+    try {
+      const contentHash = createHash("sha256")
+        .update(input.content, "utf8")
+        .digest("hex");
+      const finalized = await findFinalizedDeclarativeMaterialization({
+        orgId: input.orgId,
+        runId: input.runId,
+        extension: input.extension,
+        contentHash,
+      });
+      if (finalized) {
+        console.warn(
+          `[artifact-authoring] WARN double-path emit absorbed: run=${input.runId} extension=${input.extension} already materialized these bytes declaratively (artifact=${finalized.artifactId}) — strip the persistence prose from the agent's prompts (cinatra#923/#924)`,
+        );
+        return {
+          ok: true,
+          artifactId: finalized.artifactId,
+          representationRevisionId: finalized.representationRevisionId,
+          depth: 0,
+          authoringStepId: null,
+          dedupedFromDeclarativeMaterialization: true,
+        };
+      }
+    } catch (err) {
+      console.warn(
+        "[artifact-authoring] advisory declarative-dedupe lookup failed (continuing with the normal emit):",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   // Require the extension to declare at least one `skills.authoring`
@@ -323,6 +388,30 @@ export async function authorArtifact(
 
   // Ledger commit — the chain step finished cleanly.
   markAuthoringInvocationCommitted(input.orgId, ledger.stepId);
+
+  // Best-effort `llm_emit` provenance row in the materialization ledger
+  // (cinatra#923) — feeds the #924 double-path lint/dashboards. output_id =
+  // the authoring step id (unique per emit), so legitimately distinct
+  // same-byte emits never collide on the ledger's unique key. NEVER fails
+  // the emit.
+  if (input.runId) {
+    try {
+      await recordLlmEmitMaterialization({
+        orgId: input.orgId,
+        runId: input.runId,
+        authoringStepId: ledger.stepId,
+        extension: input.extension,
+        contentHash: createHash("sha256").update(input.content, "utf8").digest("hex"),
+        artifactId: result.artifactId,
+        representationRevisionId: result.representationRevisionId,
+      });
+    } catch (err) {
+      console.warn(
+        "[artifact-authoring] llm_emit materialization provenance row failed (emit already committed):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   return {
     ok: true,

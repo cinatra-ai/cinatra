@@ -14,6 +14,8 @@ const {
   markCommittedMock,
   markAbortedMock,
   tombstoneArtifactMock,
+  findFinalizedDeclarativeMock,
+  recordLlmEmitMock,
 } = vi.hoisted(() => ({
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -23,6 +25,8 @@ const {
   markCommittedMock: vi.fn(),
   markAbortedMock: vi.fn(),
   tombstoneArtifactMock: vi.fn(),
+  findFinalizedDeclarativeMock: vi.fn(async (): Promise<unknown> => null),
+  recordLlmEmitMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("@cinatra-ai/objects/registry", () => ({
@@ -51,12 +55,19 @@ vi.mock("../artifact-service", () => ({
 vi.mock("../artifact-extension-access", () => ({
   canAccessArtifactExtension: async () => true,
 }));
+// WARN-phase declarative dedupe (cinatra#923) — advisory ledger surface.
+vi.mock("../materialization-ledger", () => ({
+  findFinalizedDeclarativeMaterialization: findFinalizedDeclarativeMock,
+  recordLlmEmitMaterialization: recordLlmEmitMock,
+}));
 
 import {
   authorArtifact,
   searchArtifactExtensions,
   getArtifactExtension,
+  TEXT_AUTHORING_COMPATIBLE_MIMES,
 } from "../artifact-authoring";
+import { ARTIFACT_BINDING_AUTHORABLE_MIMES } from "@cinatra-ai/agents/artifact-binding";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 const ACTOR: ActorContext = {
@@ -555,5 +566,140 @@ describe("getArtifactExtension", () => {
       "@cinatra-ai/nonexistent-artifact",
     );
     expect(view).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WARN-phase declarative dedupe (cinatra#923).
+// ---------------------------------------------------------------------------
+
+describe("authorArtifact — WARN-phase declarative dedupe (cinatra#923)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findFinalizedDeclarativeMock.mockResolvedValue(null);
+    recordLlmEmitMock.mockResolvedValue(undefined);
+    createSemanticArtifactMock.mockResolvedValue({
+      objectId: "art-1",
+      artifactId: "art-1",
+      resourceId: "res-1",
+      representationRevisionId: "rep-1",
+      representationRevision: 1,
+      ref: { artifactId: "art-1", representationRevisionId: "rep-1" },
+    });
+    assertSemanticTypeMock.mockReturnValue({ inserted: true });
+    recordAuthoringInvocationMock.mockReturnValue({
+      ok: true,
+      stepId: "aut_root",
+      depth: 0,
+    });
+  });
+
+  const RUN_EMIT = {
+    orgId: "org-a",
+    actor: ACTOR,
+    extension: "@cinatra-ai/marketing-icp-artifact",
+    content: "declared bytes",
+    declaredMime: "text/markdown" as const,
+    title: "LLM transcription of the declared output",
+    runId: "run-1",
+  };
+
+  it("absorbs an in-run emit whose bytes a declared binding already materialized", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    findFinalizedDeclarativeMock.mockResolvedValue({
+      artifactId: "art-declared",
+      representationRevisionId: "rep-declared",
+    });
+    const res = await authorArtifact(RUN_EMIT);
+    expect(res).toEqual({
+      ok: true,
+      artifactId: "art-declared",
+      representationRevisionId: "rep-declared",
+      depth: 0,
+      authoringStepId: null,
+      dedupedFromDeclarativeMaterialization: true,
+    });
+    // NO second write path, NO authoring ledger step, NO typed assertion.
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(recordAuthoringInvocationMock).not.toHaveBeenCalled();
+    expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("absorbs BEFORE the authoring-skill refusal (declarative-only extension)", async () => {
+    // brand-voice declares NO authoring skill — a residual prompt emit
+    // against it must be absorbed, not errored, when the declarative row
+    // exists.
+    listArtifactsMock.mockReturnValue([makeNoAuthoringDef()]);
+    findFinalizedDeclarativeMock.mockResolvedValue({
+      artifactId: "art-declared",
+      representationRevisionId: "rep-declared",
+    });
+    const res = await authorArtifact({
+      ...RUN_EMIT,
+      extension: "@cinatra-ai/brand-voice-artifact",
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.dedupedFromDeclarativeMaterialization).toBe(true);
+  });
+
+  it("never suppresses without a finalized declarative row (distinct emits stay legitimate)", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    findFinalizedDeclarativeMock.mockResolvedValue(null);
+    const res = await authorArtifact(RUN_EMIT);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.dedupedFromDeclarativeMaterialization).toBeUndefined();
+    expect(res.artifactId).toBe("art-1");
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the lookup entirely for chat emits (no runId)", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    const res = await authorArtifact({ ...RUN_EMIT, runId: null });
+    expect(res.ok).toBe(true);
+    expect(findFinalizedDeclarativeMock).not.toHaveBeenCalled();
+    expect(recordLlmEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("a lookup failure is advisory — the normal emit proceeds", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    findFinalizedDeclarativeMock.mockRejectedValue(new Error("db down"));
+    const res = await authorArtifact(RUN_EMIT);
+    expect(res.ok).toBe(true);
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a best-effort llm_emit provenance row on a successful in-run emit", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    const res = await authorArtifact(RUN_EMIT);
+    expect(res.ok).toBe(true);
+    expect(recordLlmEmitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orgId: "org-a",
+        runId: "run-1",
+        authoringStepId: "aut_root",
+        extension: "@cinatra-ai/marketing-icp-artifact",
+        artifactId: "art-1",
+        representationRevisionId: "rep-1",
+      }),
+    );
+  });
+
+  it("a provenance-row failure never fails the committed emit", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    recordLlmEmitMock.mockRejectedValue(new Error("ledger down"));
+    const res = await authorArtifact(RUN_EMIT);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.artifactId).toBe("art-1");
+  });
+});
+
+describe("authorable-mime universe stays in lockstep (cinatra#923)", () => {
+  it("TEXT_AUTHORING_COMPATIBLE_MIMES equals the grammar module's byte-mirror", () => {
+    expect([...TEXT_AUTHORING_COMPATIBLE_MIMES].sort()).toEqual(
+      [...ARTIFACT_BINDING_AUTHORABLE_MIMES].sort(),
+    );
   });
 });

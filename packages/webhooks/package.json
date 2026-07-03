@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
+    "./outbound": "./src/outbound.ts",
     "./schema": "./src/schema.ts"
   },
   "scripts": {

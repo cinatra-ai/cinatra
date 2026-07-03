@@ -181,6 +181,12 @@ describe("Media route purge gate", () => {
       "blog-idea-artifact-materializer.ts",
       "blog-image-materializer.ts",
       "blog-post-artifact-materializer.ts",
+      // Declarative run-completion materializer (cinatra#923) — the
+      // SERVICE-LAYER module that pushes EndNode-binding-declared outputs
+      // through createSemanticArtifact under the idempotency ledger (the
+      // ledger finalize is tx-composed INTO the writer's own transaction).
+      // Part of the canonical write path, not an alternate writer.
+      "run-artifact-materializer.ts",
       // NOT an importer: the objects surface-inventory documents the writer
       // file in its raw-object-access allow-list as a string literal
       // ("src/lib/artifacts/artifact-creation.ts"). It contains no import of

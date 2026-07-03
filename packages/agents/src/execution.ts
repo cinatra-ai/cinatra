@@ -685,6 +685,52 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     return;
   }
 
+  // Declarative artifact materialization (cinatra#923) — runs BEFORE the
+  // one terminal transition so the per-output {artifactId,
+  // representationRevisionId} refs (or per-output failures) splice into the
+  // SAME stepResults payload: no second transition, no second write path.
+  // `materializeRunArtifacts` never throws by contract (every failure is a
+  // visible per-output outcome); the catch below is defense-in-depth. A
+  // materialization problem must NEVER flip a completed run to failed nor
+  // block the terminal transition. Dynamic import keeps the host artifact
+  // stack out of this module's static graph (same posture as the
+  // nango-system import below).
+  let artifactMaterializations: Array<Record<string, unknown>> = [];
+  try {
+    const { materializeRunArtifacts } = await import(
+      "@/lib/artifacts/run-artifact-materializer"
+    );
+    artifactMaterializations = (await materializeRunArtifacts({
+      runId,
+      orgId: run.orgId,
+      templateId: run.templateId,
+      packageVersion: run.packageVersion,
+      createdBy: run.runBy,
+      endNodeOutputs,
+    })) as unknown as Array<Record<string, unknown>>;
+    for (const outcome of artifactMaterializations) {
+      if (outcome.ok !== true) {
+        console.warn(
+          `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
+        );
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[artifact-materializer] run=${runId} materialization pass failed (recorded in stepResults; run still completes):`,
+      err instanceof Error ? err.message : err,
+    );
+    artifactMaterializations = [
+      {
+        ok: false,
+        outputId: "(materializer)",
+        nodeId: null,
+        extension: null,
+        error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    ];
+  }
+
   // Both terminal-success edges are legal:
   //   running          -> completed
   //   pending_approval -> completed
@@ -704,6 +750,12 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lossy text fields such as `failures`, `failureCode`, `items`, and
         // `extractionNotes`.
         ...(endNodeOutputs !== null ? { output_data: endNodeOutputs } : {}),
+        // Declarative artifact-materialization outcomes (cinatra#923): one
+        // entry per declared binding — success refs or a visible failure.
+        // Key absent when the run's package declares no bindings.
+        ...(artifactMaterializations.length > 0
+          ? { artifact_materializations: artifactMaterializations }
+          : {}),
         history: scrubbedHistory,
       },
     ],

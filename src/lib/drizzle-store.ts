@@ -173,64 +173,6 @@ function getPayloadTable(store: StoreTables, tableName: Exclude<TableName, "meta
 // ---------------------------------------------------------------------------
 // public."member" dedup ranking
 // ---------------------------------------------------------------------------
-// JS mirror of the window-CTE ORDER BY in buildCreateStoreSchemaQueries'
-// member dedup block. Source of truth is the SQL; this mirror exists so the
-// ranking strategy can be unit-tested on synthetic rows (the SQL byte-shape
-// is independently guarded by member-dedup-migration-shape.test.ts). Keep
-// the two in lockstep when either changes.
-
-export type MemberDedupRow = {
-  id: string;
-  role: string | null;
-  createdAt: Date | string | null;
-};
-
-// owner > admin > member > unknown/NULL, taken as the MAX across comma-split
-// role tokens. Better Auth stores multi-role membership as comma-joined text
-// ('owner,admin') and splits member.role on commas in its permission checks,
-// so 'owner,admin' is owner-capable and must rank as owner (3) — never 0,
-// which would let a plain 'member' row survive the dedup and the owner-capable
-// row be deleted. Unknown/custom tokens contribute 0. Mirrors the SQL
-// role_rank = MAX(CASE trim(tok) ...) over unnest(string_to_array(role, ',')).
-export function memberDedupRoleRank(role: string | null | undefined): number {
-  if (!role) return 0;
-  return role.split(",").reduce((max, raw) => {
-    const tok = raw.trim();
-    const rank = tok === "owner" ? 3 : tok === "admin" ? 2 : tok === "member" ? 1 : 0;
-    return rank > max ? rank : max;
-  }, 0);
-}
-
-// Mirrors `"createdAt" ASC NULLS LAST`: NULL/invalid createdAt sorts last.
-function memberDedupCreatedAtKey(createdAt: Date | string | null): number {
-  if (createdAt == null) return Number.POSITIVE_INFINITY;
-  const ms = createdAt instanceof Date ? createdAt.getTime() : new Date(createdAt).getTime();
-  return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
-}
-
-// Negative => a survives over b. Order: role rank DESC, createdAt ASC (NULLS
-// LAST), id ASC — identical to the SQL window ORDER BY.
-export function compareMemberDedup(a: MemberDedupRow, b: MemberDedupRow): number {
-  const rankDelta = memberDedupRoleRank(b.role) - memberDedupRoleRank(a.role);
-  if (rankDelta !== 0) return rankDelta;
-  // Compare keys directly (not by subtraction) so two NULLS-LAST rows
-  // (both Infinity) fall through to the id tie-break instead of producing
-  // NaN from Infinity - Infinity.
-  const ka = memberDedupCreatedAtKey(a.createdAt);
-  const kb = memberDedupCreatedAtKey(b.createdAt);
-  if (ka !== kb) return ka < kb ? -1 : 1;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-}
-
-// Returns the row that survives dedup for a single (organizationId, userId)
-// partition — i.e. the SQL window's rn = 1 row.
-export function pickSurvivingMemberRow<T extends MemberDedupRow>(rows: T[]): T {
-  if (rows.length === 0) {
-    throw new Error("pickSurvivingMemberRow: empty partition");
-  }
-  return [...rows].sort(compareMemberDedup)[0];
-}
-
 export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {
   const queries: QueryInput[] = [
     { text: `CREATE SCHEMA IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"` },
@@ -1988,6 +1930,42 @@ END;
 $body$` },
     { text: `DROP TRIGGER IF EXISTS trg_semantic_assertion_frozen ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion"` },
     { text: `CREATE TRIGGER trg_semantic_assertion_frozen BEFORE UPDATE ON "${schemaName.replaceAll('"', '""')}"."semantic_assertion" FOR EACH ROW EXECUTE FUNCTION "${schemaName.replaceAll('"', '""')}"."fn_semantic_assertion_frozen"()` },
+    // ---- artifact_materializations idempotency ledger (cinatra#923) ----
+
+    // Claim-then-write-then-finalize journal for declarative artifact
+    // materialization (the install-op-journal shape). One row per attempted
+    // materialization; the 4-part unique key is the RETRY-idempotency
+    // guarantee: a run re-drive (BullMQ retry / duplicate terminal dispatch)
+    // hits the same key, reads the finalized row's refs and returns them
+    // instead of writing a second artifact. `phase` transitions
+    // claimed→finalized INSIDE createSemanticArtifact's Tx2 (atomic with the
+    // artifact write — no window in which a committed artifact is invisible
+    // to the ledger). An unfinalized (crashed) claim is re-used by the next
+    // re-drive.
+    //
+    // `output_id` identity per path: the EndNode output name for
+    // `end_node_binding`; the calling node id for `materialize_tool` (#925);
+    // the authoring step id for `llm_emit` provenance rows (unique per emit,
+    // so legitimately distinct same-byte emits never collide on the key).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (
+  id                          text PRIMARY KEY,
+  org_id                      text NOT NULL,
+  run_id                      text NOT NULL,
+  output_id                   text NOT NULL,
+  node_id                     text,
+  path                        text NOT NULL CHECK (path IN ('end_node_binding','materialize_tool','llm_emit')),
+  extension                   text NOT NULL,
+  content_hash                text NOT NULL,
+  artifact_id                 text,
+  representation_revision_id  text,
+  phase                       text NOT NULL DEFAULT 'claimed' CHECK (phase IN ('claimed','finalized')),
+  created_at                  timestamptz NOT NULL DEFAULT now()
+)` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
+    // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
+    // declarative rows of one run by extension + content hash.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (run_id, extension, content_hash)` },
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${schemaName.replaceAll('"', '""')}"."artifact_materializations" (org_id, run_id)` },
     // ---- run_context_selections audit table ----
 
     // Append-only audit row written by the context-agent at every
