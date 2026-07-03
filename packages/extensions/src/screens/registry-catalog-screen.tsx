@@ -614,15 +614,18 @@ export async function RegistryCatalogScreen({
   // -------------------------------------------------------------------------
 
   const renderStatus = (row: InstalledCardRow) => {
+    // The lifecycle pill carries the row's TRUE status (cinatra#957):
+    // active → green check "Active"; locked → live/green styling with the
+    // distinct "Locked" label + tooltip (LifecycleBadge's locked mapping);
+    // archived → muted grey cross. The separate warning "Locked" badge is
+    // therefore redundant — only the "Required" annotation remains.
     const badges = row.canonical
-      ? lifecycleBadgesFor(row.canonical).filter(
-          (b) => b.key === "locked" || b.key === "required",
-        )
+      ? lifecycleBadgesFor(row.canonical).filter((b) => b.key === "required")
       : [];
     const riskLevel = riskLevelByPackageName.get(row.packageName);
     return (
       <>
-        <LifecycleBadge status={row.status === "archived" ? "archived" : "active"} />
+        <LifecycleBadge status={row.status} />
         {badges.map((b) => (
           <Badge key={b.key} variant={b.variant} title={b.title}>
             {b.label}
