@@ -285,6 +285,7 @@
     { "alias": "@cinatra-ai/notifications/perf-log", "target": "./packages/notifications/src/perf-log.ts" },
     { "alias": "@cinatra-ai/webhooks", "target": "./packages/webhooks/src/index.ts" },
     { "alias": "@cinatra-ai/webhooks/types", "target": "./packages/webhooks/src/types.ts" },
+    { "alias": "@cinatra-ai/webhooks/outbound", "target": "./packages/webhooks/src/outbound.ts" },
     { "alias": "@cinatra-ai/webhooks/schema", "target": "./packages/webhooks/src/schema.ts" },
     { "alias": "@cinatra-ai/streams", "target": "./packages/streams/src/index.ts" },
     { "alias": "@cinatra-ai/streams/event-log", "target": "./packages/streams/src/event-log.ts" },

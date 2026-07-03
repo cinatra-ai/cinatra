@@ -173,15 +173,6 @@ function getPayloadTable(store: StoreTables, tableName: Exclude<TableName, "meta
 // ---------------------------------------------------------------------------
 // public."member" dedup ranking
 // ---------------------------------------------------------------------------
-// Member-dedup ranking mirror — extracted vertical slice (file-size
-// ratchet); re-exported so existing import sites are unchanged.
-export {
-  memberDedupRoleRank,
-  compareMemberDedup,
-  pickSurvivingMemberRow,
-  type MemberDedupRow,
-} from "./drizzle-store-member-dedup";
-
 export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {
   const queries: QueryInput[] = [
     { text: `CREATE SCHEMA IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"` },

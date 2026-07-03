@@ -15,7 +15,7 @@ import {
   memberDedupRoleRank,
   pickSurvivingMemberRow,
   type MemberDedupRow,
-} from "@/lib/drizzle-store";
+} from "@/lib/drizzle-store-member-dedup";
 
 describe("memberDedupRoleRank", () => {
   it("ranks owner > admin > member > unknown/NULL", () => {

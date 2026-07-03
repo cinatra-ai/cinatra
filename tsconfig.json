@@ -297,6 +297,7 @@
       "@cinatra-ai/notifications/perf-log": ["./packages/notifications/src/perf-log.ts"],
       "@cinatra-ai/webhooks": ["./packages/webhooks/src/index.ts"],
       "@cinatra-ai/webhooks/types": ["./packages/webhooks/src/types.ts"],
+      "@cinatra-ai/webhooks/outbound": ["./packages/webhooks/src/outbound.ts"],
       "@cinatra-ai/webhooks/schema": ["./packages/webhooks/src/schema.ts"],
       "@cinatra-ai/streams": ["./packages/streams/src/index.ts"],
       "@cinatra-ai/streams/event-log": ["./packages/streams/src/event-log.ts"],
