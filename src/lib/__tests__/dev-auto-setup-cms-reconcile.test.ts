@@ -96,6 +96,8 @@ vi.mock("@/lib/external-mcp-registry", () => ({
   upsertExternalMcpServer: vi.fn(),
   resolveExternalMcpServerBearer: vi.fn(async () => null),
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY: "external-mcp",
+  TWENTY_WORKSPACE_ROW_ID: "twenty-workspace",
+  TWENTY_LAYER_B_CATALOG_TOOLS: ["find_companies", "find_people", "find_one_company", "find_one_person", "get_views"],
 }));
 vi.mock("@/lib/twenty-keygen.mjs", () => ({
   buildSeedDevArgs: vi.fn(() => []),

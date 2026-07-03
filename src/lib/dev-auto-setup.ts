@@ -47,6 +47,8 @@ import {
   upsertExternalMcpServer,
   resolveExternalMcpServerBearer,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+  TWENTY_WORKSPACE_ROW_ID,
+  TWENTY_LAYER_B_CATALOG_TOOLS,
 } from "@/lib/external-mcp-registry";
 import {
   buildSeedDevArgs,
@@ -88,20 +90,12 @@ const LOCAL_TWENTY = {
   containerName: "cinatra-twenty-1",
   serverUrl: "http://localhost:3300",
   mcpUrl: "http://localhost:3300/mcp",
-  rowId: "twenty-workspace",
+  rowId: TWENTY_WORKSPACE_ROW_ID,
   rowLabel: "Twenty CRM (local dev)",
-  // Layer B catalog allowlist — read tools only at first. Write verbs
-  // (`create_person`, `update_company`, ...) land with the agent-rewrite
-  // cutover. Native MCP tools (`execute_tool`, `get_tool_catalog`,
-  // `learn_tools`, `load_skills`, `search_help_center`) are controlled by
-  // Layer A `allowedTools`, NOT Layer B — never include them here.
-  allowedCatalogTools: [
-    "find_companies",
-    "find_people",
-    "find_one_company",
-    "find_one_person",
-    "get_views",
-  ] as string[],
+  // Layer B catalog allowlist — the shared read-tool allowlist, promoted to
+  // `external-mcp/twenty-catalog.ts` so the dev docker-mint path and the
+  // production UI connect flow (twenty-connection-service.ts) stay in lockstep.
+  allowedCatalogTools: [...TWENTY_LAYER_B_CATALOG_TOOLS] as string[],
 } as const;
 
 // Plane (project management) dev stack — `docker compose --profile plane up -d`.
