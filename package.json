@@ -217,6 +217,7 @@
     "build:auth-migrate-bundle": "node scripts/build-auth-migrate-bundle.mjs",
     "test:root": "vitest run --config vitest.config.ts --no-coverage",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
+    "test:e2e:marketplace-install": "playwright test -c tests/e2e/config/marketplace-install.config.ts",
     "test:e2e:dashboards": "playwright test -c tests/e2e/config/dashboards.config.ts",
     "test:e2e:agents-run": "playwright test -c tests/e2e/config/agents-run.config.ts",
     "test:e2e:notifications": "playwright test -c tests/e2e/config/notifications.config.ts",
