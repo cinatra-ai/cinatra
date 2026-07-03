@@ -7,6 +7,8 @@ import { getAuthSession } from "@/lib/auth-session";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
+import { ForgotPasswordBelowField } from "@/components/forgot-password-below-field";
+import { FORGOT_PASSWORD_LINK_CLASS } from "@/lib/reposition-forgot-password-link";
 
 export function generatePermissionsAuthStaticParams() {
   return Object.values(authViewPaths).map((path) => ({ path }));
@@ -81,12 +83,22 @@ export async function PermissionsAuthPage({
                 New account registration is closed on this instance. Contact your administrator to request access. Existing users can sign in below.
               </p>
             </div>
-            <AuthView path="sign-in" />
+            {/* cinatra#883: keep the "Forgot your password?" link directly
+                below the password field here too. */}
+            <ForgotPasswordBelowField>
+              <AuthView path="sign-in" classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
+            </ForgotPasswordBelowField>
           </div>
         ) : (
-          <PasswordToggleA11y>
-            <AuthView path={path} />
-          </PasswordToggleA11y>
+          // cinatra#883: reposition "Forgot your password?" below the
+          // password field (better-auth-ui hard-codes it inline with the
+          // label; classNames.form.forgotPasswordLink is only a style hook,
+          // not a position override).
+          <ForgotPasswordBelowField>
+            <PasswordToggleA11y>
+              <AuthView path={path} classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
+            </PasswordToggleA11y>
+          </ForgotPasswordBelowField>
         )}
       </div>
     </Main>
