@@ -24,12 +24,27 @@ import {
 } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
-// Wrap the `userResponse` text with the WayFlow `user_envelope` shape
-// when paperclip attachments are pending.
-// Mirror of `src/app/api/llm-bridge/user-envelope.ts:envelopeSchema`;
-// when there are no attachments the helper returns byte-identical
-// text (back-compat invariant).
-import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
+// Shared gate-submit payload builders (cinatra#853) — the WayFlow
+// user_envelope attachment wrap, the setup/grouped/mid-run resume-payload
+// discrimination, and the #817 context-selector envelope synthesis all
+// live in the pure module so this panel and the orchestrator stepper
+// submit byte-identical payloads.
+import {
+  applyAttachmentEnvelopeUserResponseOnly,
+  buildChatGateSubmitPayload,
+  isAlreadyResolvedError,
+  isGroupedSetupRenderer,
+  isSetupGateTaskId,
+  withContextSelectorEnvelope,
+  wrapPrimitiveSetupPayload,
+} from "./hitl-gate-submit";
+import {
+  applyJustSubmittedSuppression,
+  mapInterruptToHitlContext,
+  resolveStreamFirst,
+  statusBadgeVariant,
+  type HitlGateContext as HitlContext,
+} from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
@@ -38,7 +53,6 @@ import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
-import { GROUPED_SETUP_FORM_RENDERER_ID } from "./grouped-setup-form-renderer";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { humanizeFieldName } from "./humanize-field-name";
 
@@ -133,23 +147,9 @@ export type ChatGateDescriptor = {
   submit: (value: Record<string, unknown> | string | number | boolean) => Promise<void>;
 };
 
-type HitlContext = {
-  xRenderer: string;
-  childRunId: string | null;
-  reviewTaskId: string;
-  inputSchema: Record<string, unknown>;
-  currentValues: Record<string, unknown>;
-  /**
-   * Schema property name carried on INTERRUPT (5th arg of
-   * `AgUiAdapter.onInterrupt`). Set by the setup-loop in execution.ts — tells
-   * the workspace panel which key to wrap primitive onChange values into when
-   * calling `approveReviewTask({ [fieldName]: value }, fieldName)`.
-   * `undefined` for non-setup-loop INTERRUPTs (WayFlow A2A gates, output
-   * renderers) — those paths already operate on full schemas. Plumbed through
-   * from `streamResult.interruptContext.fieldName` (SSE path).
-   */
-  fieldName?: string;
-};
+// HitlContext (the panel-side gate shape) is the shared HitlGateContext
+// from ./run-surface-status — the poll endpoint already returns it and
+// SSE INTERRUPT frames are mapped into it via mapInterruptToHitlContext.
 
 type RunPollResponse = {
   status: string;
@@ -160,19 +160,8 @@ type RunPollResponse = {
   hitlContext?: HitlContext | null;
 };
 
-function statusBadgeVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "completed") return "default";
-  if (status === "failed") return "destructive";
-  if (status === "pending_approval") return "outline";
-  // Trigger-related run states.
-  // pending_trigger: form is open, awaiting submit (neutral / outline).
-  // armed:           trigger configured, waiting for the gate to fire (calm accent / secondary).
-  if (status === "pending_trigger") return "outline";
-  if (status === "armed") return "secondary";
-  return "secondary";
-}
+// statusBadgeVariant is shared with the orchestrator stepper — see
+// ./run-surface-status.
 
 // Render an inline lucide icon next to the status word for trigger-related
 // and failure states. Icons are aria-hidden; the badge retains its visible
@@ -356,10 +345,8 @@ export function AgenticRunPanel({
 
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
-  const status =
-    streamEnabled && streamResult.status !== null ? streamResult.status : pollStatus;
-  const error =
-    streamEnabled && streamResult.error !== null ? streamResult.error : pollError;
+  const status = resolveStreamFirst(streamEnabled, streamResult.status, pollStatus);
+  const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
   // External A2A runs (helloworld-style peers) emit
   // TEXT_MESSAGE_CONTENT deltas accumulated by useAgUiRunStream. Internal
@@ -381,44 +368,25 @@ export function AgenticRunPanel({
   const isPollPendingApproval = pollStatus === "pending_approval";
 
   // Prefer SSE-delivered interruptContext when the stream is enabled;
-  // fall back to polling-derived hitlContext otherwise. childRunId is not carried
-  // in the INTERRUPT event — the renderer does not read it, so null is safe here.
-  const rawEffectiveHitlContext: HitlContext | null = (() => {
-    if (streamEnabled && streamResult.interruptContext) {
-      return {
-        xRenderer: streamResult.interruptContext.xRenderer,
-        childRunId: null,
-        reviewTaskId: streamResult.interruptContext.reviewTaskId,
-        inputSchema: streamResult.interruptContext.schema,
-        currentValues: streamResult.interruptContext.values,
-        // Propagate fieldName from the AG-UI INTERRUPT event so the non-midRunHitl
-        // onChange branch can wrap primitive values into `{[fieldName]: value}`
-        // before approveReviewTask. Without this the setup-loop infinite-bounces
-        // because the server merge path drops primitives.
-        fieldName: streamResult.interruptContext.fieldName,
-      };
-    }
-    return hitlContext;
-  })();
+  // fall back to polling-derived hitlContext otherwise (the poll endpoint
+  // already returns the HitlContext shape).
+  const rawEffectiveHitlContext: HitlContext | null =
+    streamEnabled && streamResult.interruptContext
+      ? mapInterruptToHitlContext(streamResult.interruptContext)
+      : hitlContext;
 
   // Suppress re-showing the same HITL screen after Approve/Reject while the server
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
   // Clear suppression when a different xRenderer arrives (next step's HITL).
-  const effectiveHitlContext: HitlContext | null = (() => {
-    if (
-      rawEffectiveHitlContext !== null &&
-      justSubmittedXRendererRef.current !== null &&
-      rawEffectiveHitlContext.xRenderer === justSubmittedXRendererRef.current
-    ) {
-      return null;
-    }
-    if (rawEffectiveHitlContext !== null && justSubmittedXRendererRef.current !== null) {
-      // Different step arrived — clear the suppression
-      justSubmittedXRendererRef.current = null;
-    }
-    return rawEffectiveHitlContext;
-  })();
+  const suppression = applyJustSubmittedSuppression(
+    rawEffectiveHitlContext,
+    justSubmittedXRendererRef.current,
+  );
+  if (suppression.clearSuppression) {
+    justSubmittedXRendererRef.current = null;
+  }
+  const effectiveHitlContext: HitlContext | null = suppression.context;
 
   // -------------------------------------------------------------------------
   // Chat prompt-window HITL state lift.
@@ -450,101 +418,81 @@ export function AgenticRunPanel({
     }));
   }, [effectiveHitlContext]);
 
-  // Stable submit — empty deps, reads refs. Mirrors the form's three paths:
-  //   setup-loop primitive  → { [fieldName]: value }, fieldName arg set
-  //   mid-run / WayFlow gate → { ...buffer, ...obj, approved, approvedAt,
-  //                              userResponse } (WayFlow resume-text contract:
-  //                              review-task-actions picks values.userResponse
-  //                              → approvalNote → fallback)
+  // ---------------------------------------------------------------------------
+  // THE single gate-submit path (cinatra#853). Previously the panel had three
+  // near-duplicate approveReviewTask call clusters (submitActiveGate, the
+  // visible Continue button, the per-field onChange handlers) each owning its
+  // own isApproving/suppression/attachment/error plumbing. All of them now
+  // route through performGateSubmit; only the PAYLOAD construction differs per
+  // path (shared pure builders in ./hitl-gate-submit). The flags preserve each
+  // path's historical behavior exactly:
+  //   - trackApproving: drive the isApproving spinner state
+  //   - suppressGate: arm justSubmittedXRendererRef (stale-gate re-show guard)
+  //   - clearAttachmentsOnSuccess: consume pendingAttachmentsRef ONLY on a
+  //     true success (an "already resolved" race or a throw leaves them so
+  //     the user can retry without re-attaching)
+  //   - errorMode: "rethrow" (caller surfaces the error, e.g. the chat
+  //     composer / SchemaFieldRenderer.submitError) or "toast" (inline
+  //     Continue-style surfaces)
+  // An "already resolved" rejection is always swallowed and KEEPS the
+  // suppression armed — the gate really is gone.
+  // ---------------------------------------------------------------------------
+  const performGateSubmit = useCallback(
+    async (args: {
+      reviewTaskId: string;
+      xRenderer: string;
+      payload: unknown;
+      payloadFieldName?: string;
+      trackApproving: boolean;
+      suppressGate: boolean;
+      clearAttachmentsOnSuccess: boolean;
+      errorMode: "rethrow" | "toast";
+    }) => {
+      if (args.trackApproving) setIsApproving(true);
+      if (args.suppressGate) justSubmittedXRendererRef.current = args.xRenderer;
+      try {
+        await approveReviewTask(args.reviewTaskId, args.payload, args.payloadFieldName);
+        if (args.clearAttachmentsOnSuccess) pendingAttachmentsRef.current = [];
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        if (!isAlreadyResolvedError(msg)) {
+          if (args.suppressGate) justSubmittedXRendererRef.current = null;
+          if (args.errorMode === "rethrow") throw err;
+          toast.error("Could not continue this run.");
+        }
+      } finally {
+        if (args.trackApproving) setIsApproving(false);
+      }
+    },
+    [],
+  );
+
+  // Stable submit — empty deps, reads refs. The payload discrimination
+  // (setup single-field / grouped setup / mid-run WayFlow) lives in
+  // buildChatGateSubmitPayload (./hitl-gate-submit).
   const submitActiveGate = useCallback(
     async (value: Record<string, unknown> | string | number | boolean) => {
       const ctx = latestHitlContextRef.current;
       if (!ctx) return;
-      const buffered = bufferedHitlValueRef.current;
-      setIsApproving(true);
-      justSubmittedXRendererRef.current = ctx.xRenderer;
-      // Discriminate by reviewTaskId, not xRenderer.
-      // Setup gates use `setup-<runId>` reviewTaskIds. Two setup shapes:
-      //  - single-field setup-loop: ctx.fieldName set → wrap under that key
-      //    ONLY (no WayFlow approve/userResponse metadata; the server-side
-      //    setup merge keys off fieldName and would reject extra keys).
-      //  - grouped setup form: setup- prefix, NO fieldName → pass the field
-      //    object verbatim, also WITHOUT WayFlow metadata (review-task-
-      //    actions validates grouped keys against inputSchema.properties).
-      // Everything else is a mid-run / WayFlow gate → needs approved +
-      // userResponse (resume-text contract).
-      const isSetupGate = ctx.reviewTaskId.startsWith("setup-");
-      let payload: Record<string, unknown>;
-      let payloadFieldName: string | undefined;
-      if (isSetupGate && ctx.fieldName) {
-        const raw =
-          value !== null &&
-          typeof value === "object" &&
-          !Array.isArray(value) &&
-          ctx.fieldName in (value as Record<string, unknown>)
-            ? (value as Record<string, unknown>)[ctx.fieldName]
-            : value;
-        payload = { ...buffered, [ctx.fieldName]: raw };
-        payloadFieldName = ctx.fieldName;
-      } else if (isSetupGate) {
-        // Grouped setup form — field object, no WayFlow metadata.
-        const obj =
-          value !== null &&
-          typeof value === "object" &&
-          !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : {};
-        payload = { ...buffered, ...obj };
-        payloadFieldName = undefined;
-      } else {
-        const obj =
-          value !== null &&
-          typeof value === "object" &&
-          !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : {};
-        // Compute the `userResponse` text first, then wrap with the WayFlow
-        // envelope when paperclip attachments are pending. No attachments means
-        // the wrapper returns the text verbatim (back-compat invariant).
-        const legacyUserResponseText = JSON.stringify(
-          Object.keys(obj).length > 0
-            ? obj
-            : typeof value === "string" ||
-                typeof value === "number" ||
-                typeof value === "boolean"
-              ? value
-              : { approved: true },
-        );
-        const wrapped = wrapUserResponseWithAttachments(
-          legacyUserResponseText,
-          pendingAttachmentsRef.current,
-        );
-        payload = {
-          ...buffered,
-          ...obj,
-          approved: true,
-          approvedAt: new Date().toISOString(),
-          // WayFlow resume-text contract — without userResponse the server
-          // forwards only "[Approved by operator]" to the flow.
-          userResponse: wrapped.userResponse,
-        };
-      }
-      try {
-        await approveReviewTask(ctx.reviewTaskId, payload, payloadFieldName);
-        // Clear pending attachments only on successful submit. A throwing
-        // approveReviewTask leaves them so the user can retry without re-attaching.
-        pendingAttachmentsRef.current = [];
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "unknown";
-        if (!msg.toLowerCase().includes("already resolved")) {
-          justSubmittedXRendererRef.current = null;
-          throw err;
-        }
-      } finally {
-        setIsApproving(false);
-      }
+      const { payload, payloadFieldName } = buildChatGateSubmitPayload({
+        reviewTaskId: ctx.reviewTaskId,
+        fieldName: ctx.fieldName,
+        value,
+        buffered: bufferedHitlValueRef.current,
+        pendingAttachments: pendingAttachmentsRef.current,
+      });
+      await performGateSubmit({
+        reviewTaskId: ctx.reviewTaskId,
+        xRenderer: ctx.xRenderer,
+        payload,
+        payloadFieldName,
+        trackApproving: true,
+        suppressGate: true,
+        clearAttachmentsOnSuccess: true,
+        errorMode: "rethrow",
+      });
     },
-    [],
+    [performGateSubmit],
   );
 
   // Signature-gated publish: fire onActiveGateChange ONLY when gate identity
@@ -800,8 +748,6 @@ export function AgenticRunPanel({
         disabled={isApproving}
         className="gap-1.5"
         onClick={async () => {
-          setIsApproving(true);
-          justSubmittedXRendererRef.current = effectiveHitlContext.xRenderer;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
           // preserve any renderer-authored `userResponse` already on
@@ -813,73 +759,38 @@ export function AgenticRunPanel({
           //      (or omit if it wrote none; review-task-actions falls back to
           //      "[Approved by operator]");
           //   3. non-setup, attachments present => wrap the renderer's text (or
-          //      the server's default text) with the envelope.
-          const isSetupGateBtn =
-            effectiveHitlContext.reviewTaskId.startsWith("setup-");
+          //      the server's default text) with the envelope
+          //      (applyAttachmentEnvelopeUserResponseOnly).
           // Compute payload synchronously from current state to avoid a setState read race.
-          const nextBuffered: Record<string, unknown> = {
+          let nextBuffered: Record<string, unknown> = {
             ...bufferedHitlValue,
             approved: true,
             approvedAt: new Date().toISOString(),
           };
-          if (!isSetupGateBtn && pendingAttachmentsRef.current.length > 0) {
-            // Only enter the wrap path when there are attachments; otherwise
-            // leave `nextBuffered.userResponse` exactly as the renderer left it
-            // (or absent).
-            const existing =
-              typeof bufferedHitlValue.userResponse === "string"
-                ? (bufferedHitlValue.userResponse as string)
-                : "[Approved by operator]"; // server default — mirrors
-                                              // review-task-actions.ts:294
-            const wrapped = wrapUserResponseWithAttachments(
-              existing,
+          if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
+            nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
+              nextBuffered,
               pendingAttachmentsRef.current,
             );
-            nextBuffered.userResponse = wrapped.userResponse;
           }
-          // #817: context-selector gate — synthesize the selection envelope when
-          // the renderer emitted none. ContextSelectorRenderer only fires its
-          // `emit()` on a toggle/clear; a slot with ZERO eligible candidates
-          // gives the user nothing to toggle (the gate shows "run without
-          // context" + Continue), so `userResponse` is never buffered and
-          // /api/context-finalize 422s on the non-JSON value. Lift the trusted
-          // slotMeta + (pre-resolved) selectedRefs from the interrupt values
-          // into the envelope the finalize node forwards. A real toggle already
-          // set bufferedHitlValue.userResponse — PRESERVE it (only fill when absent).
-          if (
-            effectiveHitlContext.xRenderer.endsWith(":context-selector") &&
-            typeof nextBuffered.userResponse !== "string"
-          ) {
-            const vals = (effectiveHitlContext.currentValues ?? {}) as Record<string, unknown>;
-            const slotMeta = vals["slotMeta"] as
-              | { slotId?: unknown; resolutionMode?: unknown }
-              | undefined;
-            const selectedRefs = Array.isArray(vals["selectedRefs"]) ? vals["selectedRefs"] : [];
-            if (slotMeta && typeof slotMeta.slotId === "string") {
-              nextBuffered.userResponse = JSON.stringify({
-                slotId: slotMeta.slotId,
-                resolutionMode: slotMeta.resolutionMode,
-                selectedRefs,
-              });
-            }
-          }
-          try {
-            await approveReviewTask(
-              effectiveHitlContext.reviewTaskId,
-              nextBuffered,
-            );
-            // Clear on successful submit. Transition, already-resolved, and
-            // throw paths clear elsewhere via the gate-transition useEffect.
-            pendingAttachmentsRef.current = [];
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : "unknown";
-            if (!msg.toLowerCase().includes("already resolved")) {
-              justSubmittedXRendererRef.current = null;
-              toast.error("Could not continue this run.");
-            }
-          } finally {
-            setIsApproving(false);
-          }
+          // #817: context-selector gate — synthesize the selection envelope
+          // when the renderer emitted none (zero-candidate slot). A real
+          // toggle already set bufferedHitlValue.userResponse — the helper
+          // PRESERVES it (only fills when absent).
+          nextBuffered = withContextSelectorEnvelope(
+            effectiveHitlContext.xRenderer,
+            effectiveHitlContext.currentValues,
+            nextBuffered,
+          );
+          await performGateSubmit({
+            reviewTaskId: effectiveHitlContext.reviewTaskId,
+            xRenderer: effectiveHitlContext.xRenderer,
+            payload: nextBuffered,
+            trackApproving: true,
+            suppressGate: true,
+            clearAttachmentsOnSuccess: true,
+            errorMode: "toast",
+          });
         }}
       >
         {isApproving ? "Continuing…" : "Continue"}
@@ -951,9 +862,9 @@ export function AgenticRunPanel({
                 // Grouped-setup forms (x-renderer === GROUPED_SETUP_FORM_RENDERER_ID or
                 // its :output variant) have their own submit button — auto-approve after
                 // the form submits so the user sees exactly ONE Continue button.
-                const isGroupedSetup =
-                  effectiveHitlContext.xRenderer === GROUPED_SETUP_FORM_RENDERER_ID ||
-                  effectiveHitlContext.xRenderer.startsWith(`${GROUPED_SETUP_FORM_RENDERER_ID}:`);
+                const isGroupedSetup = isGroupedSetupRenderer(
+                  effectiveHitlContext.xRenderer,
+                );
                 // Chat-surface step-0 input gate (engineering#416). A `setup-`
                 // reviewTaskId is the STRUCTURAL identity of the StartNode
                 // step-0 input gate: oas-compiler hardcodes it
@@ -979,7 +890,7 @@ export function AgenticRunPanel({
                 // prompts.
                 const isChatSetupGate =
                   surface === "chat" &&
-                  effectiveHitlContext.reviewTaskId.startsWith("setup-");
+                  isSetupGateTaskId(effectiveHitlContext.reviewTaskId);
                 const hideSetupSubmitInChat =
                   isChatSetupGate && !isMidRunHitl && !isGroupedSetup;
                 return (
@@ -991,7 +902,7 @@ export function AgenticRunPanel({
                       value={{ ...effectiveHitlContext.currentValues, ...bufferedHitlValue }}
                       hideSubmit={hideSetupSubmitInChat}
                       onChange={isMidRunHitl ? async (next: unknown) => {
-                        // Compute nextBuffered synchronously, pass to approveReviewTask
+                        // Compute nextBuffered synchronously, pass to performGateSubmit
                         // for grouped-setup immediate-submit, then setState for the visual update.
                         let nextBuffered = bufferedHitlValue;
                         if (next && typeof next === "object" && !Array.isArray(next)) {
@@ -1002,22 +913,15 @@ export function AgenticRunPanel({
                         // Grouped-setup forms: approve immediately on form submit so the
                         // user only ever sees one Continue button (no separate row below).
                         if (isGroupedSetup) {
-                          setIsApproving(true);
-                          justSubmittedXRendererRef.current = effectiveHitlContext.xRenderer;
-                          try {
-                            await approveReviewTask(
-                              effectiveHitlContext.reviewTaskId,
-                              { ...nextBuffered, approved: true, approvedAt: new Date().toISOString() },
-                            );
-                          } catch (err) {
-                            const msg = err instanceof Error ? err.message : "unknown";
-                            if (!msg.toLowerCase().includes("already resolved")) {
-                              justSubmittedXRendererRef.current = null;
-                              toast.error("Could not continue this run.");
-                            }
-                          } finally {
-                            setIsApproving(false);
-                          }
+                          await performGateSubmit({
+                            reviewTaskId: effectiveHitlContext.reviewTaskId,
+                            xRenderer: effectiveHitlContext.xRenderer,
+                            payload: { ...nextBuffered, approved: true, approvedAt: new Date().toISOString() },
+                            trackApproving: true,
+                            suppressGate: true,
+                            clearAttachmentsOnSuccess: false,
+                            errorMode: "toast",
+                          });
                         }
                       } : async (next: unknown) => {
                         // Primitive onChange (setup-loop fallback) must be wrapped
@@ -1026,31 +930,20 @@ export function AgenticRunPanel({
                         // know which inputParams slot to fill; passing a raw
                         // primitive with fieldName=undefined silently no-ops
                         // and re-emits the same gate forever.
-                        const setupFieldName = effectiveHitlContext.fieldName;
-                        const isPrimitive =
-                          next === null ||
-                          next === undefined ||
-                          typeof next === "string" ||
-                          typeof next === "number" ||
-                          typeof next === "boolean" ||
-                          Array.isArray(next);
-                        let payload: unknown = next;
-                        let payloadFieldName: string | undefined = undefined;
-                        if (setupFieldName && isPrimitive) {
-                          payload = { [setupFieldName]: next };
-                          payloadFieldName = setupFieldName;
-                        }
-                        try {
-                          await approveReviewTask(
-                            effectiveHitlContext.reviewTaskId,
-                            payload,
-                            payloadFieldName,
-                          );
-                        } catch (err) {
-                          const msg = err instanceof Error ? err.message : "unknown";
-                          if (msg.toLowerCase().includes("already resolved")) return;
-                          throw err;
-                        }
+                        const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
+                          effectiveHitlContext.fieldName,
+                          next,
+                        );
+                        await performGateSubmit({
+                          reviewTaskId: effectiveHitlContext.reviewTaskId,
+                          xRenderer: effectiveHitlContext.xRenderer,
+                          payload,
+                          payloadFieldName,
+                          trackApproving: false,
+                          suppressGate: false,
+                          clearAttachmentsOnSuccess: false,
+                          errorMode: "rethrow",
+                        });
                       }}
                       context={hitlRendererEntry.context}
                       mode="edit"
@@ -1233,7 +1126,7 @@ export function AgenticRunPanel({
       // would never reach the flow.
       enableAttachments={
         !!effectiveHitlContext &&
-        !effectiveHitlContext.reviewTaskId.startsWith("setup-")
+        !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
       }
     />
     </>

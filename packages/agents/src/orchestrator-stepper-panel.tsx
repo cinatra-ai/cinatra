@@ -77,13 +77,23 @@ import { approveReviewTask } from "./hitl-actions";
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
 import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
+// Shared gate-submit payload builders (cinatra#853) — gate classification,
+// the setup-loop primitive wrap, the renderer approvalNote lifts, and the
+// #817 context-selector envelope synthesis are shared with
+// agentic-run-panel so both surfaces submit byte-identical payloads.
+import {
+  isAlreadyResolvedError,
+  isGroupedSetupRenderer,
+  isSetupGateTaskId,
+  liftRendererApprovalNote,
+  withContextSelectorEnvelope,
+  wrapPrimitiveSetupPayload,
+} from "./hitl-gate-submit";
+import { statusBadgeVariant } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
-import {
-  GROUPED_SETUP_FORM_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-} from "./agent-builder-ids";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -94,15 +104,7 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
 const EMPTY_SUBMISSION_MAP = new Map<number, SubmissionMapEntry>();
 const EMPTY_SUBMISSION_ENTRIES: SubmissionMapEntries = [];
 
-
-function statusBadgeVariant(
-  status: string,
-): "default" | "secondary" | "destructive" | "outline" {
-  if (status === "completed") return "default";
-  if (status === "failed") return "destructive";
-  if (status === "pending_approval") return "outline";
-  return "secondary";
-}
+// statusBadgeVariant is shared with AgenticRunPanel — see ./run-surface-status.
 
 // `pickLegacyResumeText` / `applyAttachmentEnvelope` live in the leaf module
 // `./attachment-envelope-payload` so the precedence rules can be unit-tested
@@ -318,8 +320,11 @@ function HitlApprovalCard({
   const pendingAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
 
   // Hoisted from useRef so onApply merges trigger a re-render.
+  // NOTE (cinatra#853): the card previously also carried a
+  // justSubmittedXRendererRef mirroring AgenticRunPanel's stale-gate
+  // suppression, but it was write-only here — this panel's re-show guard is
+  // the awaitingNextStep state in the parent — so it was removed.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
-  const justSubmittedXRendererRef = useRef<string | null>(null);
   // Reset the per-gate buffer when a new HITL gate opens (xRenderer changes).
   // Without this, gate N+1's handleContinue sends gate N's accumulated values
   // to approveReviewTask, leaking one gate's `userResponse` into the next gate's
@@ -383,7 +388,7 @@ function HitlApprovalCard({
   const withAttachmentEnvelope = (payload: unknown): unknown => {
     if (pendingAttachmentsRef.current.length === 0) return payload;
     if (!interruptContext) return payload;
-    if (interruptContext.reviewTaskId.startsWith("setup-")) return payload;
+    if (isSetupGateTaskId(interruptContext.reviewTaskId)) return payload;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       // Primitive / array payloads are renderer-shaped and don't have
       // a userResponse channel here; attachments captured under this path are
@@ -457,10 +462,9 @@ function HitlApprovalCard({
   const isOutputHitl =
     interruptContext.xRenderer.endsWith(":output") ||
     interruptContext.xRenderer.endsWith("-output");
-  const isGroupedSetup =
-    interruptContext.xRenderer === GROUPED_SETUP_FORM_RENDERER_ID ||
-    interruptContext.xRenderer.startsWith(GROUPED_SETUP_FORM_RENDERER_ID + ":") ||
-    interruptContext.xRenderer.endsWith(":setup-form");
+  const isGroupedSetup = isGroupedSetupRenderer(interruptContext.xRenderer, {
+    includeSetupFormSuffix: true,
+  });
 
   // Bottom-of-page prompt handler. Posts to hitl-assist, applies result to the
   // buffer (handleApply), and exposes the suggestion payload to the renderer via
@@ -547,7 +551,6 @@ function HitlApprovalCard({
     // onApproveRejected rolls back if the call fails.
     onApproved?.();
     setIsApproving(true);
-    justSubmittedXRendererRef.current = interruptContext.xRenderer;
     // Compute the payload synchronously from current state.
     // Calling approveReviewTask after a setState would risk reading stale `bufferedHitlValue`
     // because React batches updates. handleContinue is terminal (renderer unmounts on success),
@@ -557,112 +560,27 @@ function HitlApprovalCard({
       approved: true,
       approvedAt: new Date().toISOString(),
     };
-    if (interruptContext.xRenderer.endsWith(":list-picker")) {
-      // Lift the selected list into a structured approval payload so downstream
-      // stages can snapshot the list at approval time. The server re-resolves
-      // via crm_list_get (provider-agnostic CRM facade); the client-side
-      // listName/memberCount fields are advisory, not trusted.
-      const { listId, listName, memberCount } = bufferedHitlValue as {
-        listId?: string;
-        listName?: string;
-        memberCount?: number;
-      };
-      const accountScopeObj = {
-        type: "list" as const,
-        listId: listId ?? "",
-        listName: listName ?? "",
-        memberCount: memberCount ?? 0,
-        snapshotAt: new Date().toISOString(),
-      };
-      nextBuffered = { ...nextBuffered, approvalNote: JSON.stringify(accountScopeObj) };
-    }
-    if (interruptContext.xRenderer.endsWith(":setup-form")) {
-      const { offeringCompanyWebsite, callToAction, senderName } = bufferedHitlValue as {
-        offeringCompanyWebsite?: string; callToAction?: string; senderName?: string;
-      };
-      nextBuffered = { ...nextBuffered, approvalNote: JSON.stringify({ offeringCompanyWebsite, callToAction, senderName }) };
-    }
-    // Gate 1: scrape-schema-review. Lifts the operator-edited
-    // instructions + outputSchema + seedUrls into an approvalNote so the
-    // LLM continuation in the bridge can snapshot exactly what was approved
-    // at this gate.
-    if (interruptContext.xRenderer.endsWith(":scrape-schema-review")) {
-      const {
-        instructions = "",
-        outputSchema = { type: "object", properties: {} },
-        seedUrls = [],
-      } = bufferedHitlValue as {
-        instructions?: string;
-        outputSchema?: Record<string, unknown>;
-        seedUrls?: string[];
-      };
-      nextBuffered = {
-        ...nextBuffered,
-        approvalNote: JSON.stringify({
-          type: "scrape-schema",
-          instructions,
-          outputSchema,
-          seedUrls,
-          snapshotAt: new Date().toISOString(),
-        }),
-      };
-    }
-    // Gate 2: final-list-review. Lifts the operator-edited
-    // listName + the LLM-built memberRefs into an approvalNote so the
-    // continuation can construct the crm_list_create call (+ per-member
-    // crm_list_member_add loop) with exactly the approved snapshot.
-    // memberRefs is passed through unchanged; the server re-resolves
-    // members during crm_list_member_add.
-    if (interruptContext.xRenderer.endsWith(":final-list-review")) {
-      const {
-        listName = "",
-        memberRefs = [],
-        memberCount = 0,
-      } = bufferedHitlValue as {
-        listName?: string;
-        memberRefs?: Array<{ objectType: string; objectId: string }>;
-        memberCount?: number;
-      };
-      nextBuffered = {
-        ...nextBuffered,
-        approvalNote: JSON.stringify({
-          type: "final-list",
-          listName,
-          memberRefs,
-          memberCount,
-          snapshotAt: new Date().toISOString(),
-        }),
-      };
+    // Renderer-specific approvalNote lifts (list-picker / setup-form /
+    // scrape-schema-review / final-list-review) — snapshot exactly what was
+    // approved at this gate for the downstream continuation. Shared with
+    // agentic-run-panel via ./hitl-gate-submit.
+    const approvalNoteLift = liftRendererApprovalNote(
+      interruptContext.xRenderer,
+      bufferedHitlValue,
+    );
+    if (approvalNoteLift) {
+      nextBuffered = { ...nextBuffered, ...approvalNoteLift };
     }
     // #817: context-selector gate — synthesize the selection envelope when the
-    // renderer emitted none. ContextSelectorRenderer only fires its envelope
-    // `emit()` on a toggle/clear; when a slot has ZERO eligible candidates the
-    // user cannot toggle (the gate shows "run without context" + Continue), so
-    // `userResponse` is never buffered and /api/context-finalize 422s on the
-    // non-JSON value. Mirror the sibling gate branches above: lift the trusted
-    // slotMeta + (pre-resolved) selectedRefs from the interrupt values into the
-    // envelope /api/context-finalize expects. A real toggle already set
-    // bufferedHitlValue.userResponse — PRESERVE it (only fill when absent).
-    if (
-      interruptContext.xRenderer.endsWith(":context-selector") &&
-      typeof (nextBuffered as { userResponse?: unknown }).userResponse !== "string"
-    ) {
-      const vals = (interruptContext.values ?? {}) as Record<string, unknown>;
-      const slotMeta = vals["slotMeta"] as
-        | { slotId?: unknown; resolutionMode?: unknown }
-        | undefined;
-      const selectedRefs = Array.isArray(vals["selectedRefs"]) ? vals["selectedRefs"] : [];
-      if (slotMeta && typeof slotMeta.slotId === "string") {
-        nextBuffered = {
-          ...nextBuffered,
-          userResponse: JSON.stringify({
-            slotId: slotMeta.slotId,
-            resolutionMode: slotMeta.resolutionMode,
-            selectedRefs,
-          }),
-        };
-      }
-    }
+    // renderer emitted none (zero-candidate slot; /api/context-finalize would
+    // 422 on the non-JSON value). A real toggle already set
+    // bufferedHitlValue.userResponse — the helper PRESERVES it (only fills
+    // when absent).
+    nextBuffered = withContextSelectorEnvelope(
+      interruptContext.xRenderer,
+      interruptContext.values,
+      nextBuffered,
+    );
     // Wrap the legacy `userResponse` text with the WayFlow envelope when
     // paperclip attachments are pending. Skip wrap for setup gates because the
     // server path doesn't read userResponse there; only enter the wrap when
@@ -670,8 +588,7 @@ function HitlApprovalCard({
     // already on nextBuffered; clobbering it would change WayFlow text.
     // Fallback "[Approved by operator]" mirrors review-task-actions.ts
     // server default when no userResponse text exists.
-    const isSetupGate =
-      interruptContext.reviewTaskId.startsWith("setup-");
+    const isSetupGate = isSetupGateTaskId(interruptContext.reviewTaskId);
     if (!isSetupGate && pendingAttachmentsRef.current.length > 0) {
       // Share the precedence-and-wrap pure helper with the renderer-inline
       // submits. Server-side precedence userResponse → approvalNote → default
@@ -691,7 +608,7 @@ function HitlApprovalCard({
       onApprovalSubmitted?.(nextBuffered, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
-      if (msg.toLowerCase().includes("already resolved")) {
+      if (isAlreadyResolvedError(msg)) {
         didApprove = true;
         onApprovalSubmitted?.(nextBuffered, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
       } else if (isStaleGateRejection(msg)) {
@@ -702,10 +619,8 @@ function HitlApprovalCard({
         // panel instead of rolling the user back to a stale form. The
         // submitted values are NOT recorded via onApprovalSubmitted because
         // the server rejected the write.
-        justSubmittedXRendererRef.current = null;
         toast.info(STALE_GATE_MESSAGE);
       } else {
-        justSubmittedXRendererRef.current = null;
         onApproveRejected?.();
         toast.error("Could not continue this run.");
       }
@@ -774,17 +689,15 @@ function HitlApprovalCard({
                           approved: true,
                           approvedAt: new Date().toISOString(),
                         };
-                        if (interruptContext.xRenderer.endsWith(":setup-form")) {
-                          const { offeringCompanyWebsite, callToAction, senderName } =
-                            nextBuffered as {
-                              offeringCompanyWebsite?: string;
-                              callToAction?: string;
-                              senderName?: string;
-                            };
-                          approvalPayload = {
-                            ...approvalPayload,
-                            approvalNote: JSON.stringify({ offeringCompanyWebsite, callToAction, senderName }),
-                          };
+                        // Renderer approvalNote lift — for the grouped-setup
+                        // path only the `:setup-form` suffix matches (the
+                        // other lifted renderers are never grouped-setup).
+                        const groupedLift = liftRendererApprovalNote(
+                          interruptContext.xRenderer,
+                          nextBuffered,
+                        );
+                        if (groupedLift) {
+                          approvalPayload = { ...approvalPayload, ...groupedLift };
                         }
                         // Wrap renderer-inline submit with the attachment
                         // envelope. The helper is a no-op on setup-* gates
@@ -798,7 +711,7 @@ function HitlApprovalCard({
                         onApprovalSubmitted?.(wrappedApprovalPayload, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
                       } catch (err) {
                         const m = err instanceof Error ? err.message : "unknown";
-                        if (m.toLowerCase().includes("already resolved")) return;
+                        if (isAlreadyResolvedError(m)) return;
                         if (isStaleGateRejection(m)) {
                           // Stale-gate race (#811): keep the optimistic
                           // spinner from onApproved() and let the stream
@@ -825,19 +738,10 @@ function HitlApprovalCard({
                     // wrap as { [fieldName]: value } and pass fieldName so the
                     // single-field path in the handler runs.
                     const setupFieldName = (interruptContext as { fieldName?: string }).fieldName;
-                    const isPrimitive =
-                      next === null ||
-                      next === undefined ||
-                      typeof next === "string" ||
-                      typeof next === "number" ||
-                      typeof next === "boolean" ||
-                      Array.isArray(next);
-                    let payload: unknown = next;
-                    let payloadFieldName: string | undefined = undefined;
-                    if (setupFieldName && isPrimitive) {
-                      payload = { [setupFieldName]: next };
-                      payloadFieldName = setupFieldName;
-                    }
+                    const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
+                      setupFieldName,
+                      next,
+                    );
                     // Wrap setup-loop fallback submit with the attachment envelope.
                     // Setup-* gates short-circuit inside the helper because the
                     // paperclip is hidden there; for any non-setup path that
@@ -857,7 +761,7 @@ function HitlApprovalCard({
                       }
                     } catch (err) {
                       const m = err instanceof Error ? err.message : "unknown";
-                      if (m.toLowerCase().includes("already resolved")) return;
+                      if (isAlreadyResolvedError(m)) return;
                       if (isStaleGateRejection(m)) {
                         // Stale-gate race (#811): the run re-queued before this
                         // submit landed (the setup loop is processing the
@@ -919,7 +823,7 @@ function HitlApprovalCard({
       onSubmit={handlePromptSubmit}
       // Opt in to paperclip attachments. Setup gates hide the paperclip because
       // the setup-loop server omits userResponse.
-      enableAttachments={!interruptContext.reviewTaskId.startsWith("setup-")}
+      enableAttachments={!isSetupGateTaskId(interruptContext.reviewTaskId)}
     />
     </>
   );
