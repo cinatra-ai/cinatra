@@ -899,10 +899,12 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     await registry.disconnectTwentyConnectionAction(disconnectFd);
     expect(twentyActionCalls.disconnect.at(-1)).toBe(disconnectFd);
 
-    // POST-back resolution (production builds resolve an action id only
-    // within the posting route's module graph): the connector dispatch route
-    // must anchor the "use server" module into its graph. Pin the side-effect
-    // import so a refactor cannot silently drop it.
+    // RENDER + POST-back resolution: the connector dispatch route must import
+    // the server-reference BRIDGE (which reflects the route layer's
+    // compiler-minted reference metadata onto the boot-published instances AND
+    // anchors the "use server" module into the route graph so the action id
+    // resolves there). Pin both imports so a refactor cannot silently drop
+    // either half — dropping the bridge re-ships the twenty-connector#39 500.
     const dispatchPagePath = path.resolve(
       __dirname,
       "..",
@@ -916,8 +918,89 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     );
     const dispatchPageSource = fs.readFileSync(dispatchPagePath, "utf-8");
     expect(dispatchPageSource).toContain(
-      `import "@/app/campaigns/connector-setup-actions";`,
+      `import "@/lib/connector-setup-action-references.server";`,
     );
+    const bridgePath = path.resolve(
+      __dirname,
+      "..",
+      "connector-setup-action-references.server.ts",
+    );
+    const bridgeSource = fs.readFileSync(bridgePath, "utf-8");
+    expect(bridgeSource).toContain(
+      `from "@/app/campaigns/connector-setup-actions"`,
+    );
+  });
+
+  // --- twenty-connector#39 regression, part 2: the RSC-layer bridge reflects
+  // the compiler-minted server-reference metadata onto the boot-published
+  // instances. The boot (instrumentation) graph never runs the "use server"
+  // transform, so WITHOUT this reflection the connector's boot-captured deps
+  // members stay unmarked and the setup page 500s at form render even though
+  // they are exports of a genuine "use server" module. ----------------------
+  it("bridge reflects server-reference metadata ($$typeof/$$id) onto the published action instances — twenty-connector#39", async () => {
+    const { reflectConnectorSetupActionReferences, copyServerReferenceProps } =
+      await import("@/lib/connector-setup-action-references.server");
+
+    // Simulate the two compilations: an untransformed boot instance (what the
+    // registry publishes) and the route layer's transformed instance carrying
+    // the compiler-minted reference metadata.
+    const makePair = () => {
+      const bootInstance = (async () => {}) as (formData: FormData) => Promise<void>;
+      const transformed = (async () => {}) as (formData: FormData) => Promise<void>;
+      Object.defineProperties(transformed, {
+        $$typeof: { value: Symbol.for("react.server.reference") },
+        $$id: { value: "40deadbeef".padEnd(40, "0") },
+        $$bound: { value: null },
+      });
+      return { bootInstance, transformed };
+    };
+
+    const save = makePair();
+    const disconnect = makePair();
+    const impl: Record<string, unknown> = {
+      saveTwentyConnectionAction: save.bootInstance,
+      disconnectTwentyConnectionAction: disconnect.bootInstance,
+    };
+    reflectConnectorSetupActionReferences(impl, {
+      saveTwentyConnectionAction: save.transformed,
+      disconnectTwentyConnectionAction: disconnect.transformed,
+    });
+
+    // The PUBLISHED instances (the very objects the connector captured into
+    // its deps slot at boot) now carry the reference marker, in place.
+    for (const pair of [save, disconnect]) {
+      const decorated = pair.bootInstance as unknown as Record<string, unknown>;
+      expect(decorated.$$typeof).toBe(Symbol.for("react.server.reference"));
+      expect(decorated.$$id).toBe("40deadbeef".padEnd(40, "0"));
+      expect(decorated).not.toBe(pair.transformed);
+    }
+
+    // Fail-soft floors: an untransformed layer (no $$id) and an unpublished
+    // registry must both no-op, never throw.
+    const plainA = (async () => {}) as (formData: FormData) => Promise<void>;
+    const plainB = (async () => {}) as (formData: FormData) => Promise<void>;
+    reflectConnectorSetupActionReferences(
+      { saveTwentyConnectionAction: plainA },
+      { saveTwentyConnectionAction: plainB },
+    );
+    expect(
+      (plainA as unknown as Record<string, unknown>).$$id,
+    ).toBeUndefined();
+    expect(() =>
+      reflectConnectorSetupActionReferences(undefined, {}),
+    ).not.toThrow();
+
+    // copyServerReferenceProps copies every transform-added own prop but never
+    // clobbers length/name.
+    const target = (async () => {}) as (formData: FormData) => Promise<void>;
+    copyServerReferenceProps(
+      save.transformed as (formData: FormData) => Promise<void>,
+      target,
+    );
+    expect((target as unknown as Record<string, unknown>).$$id).toBe(
+      "40deadbeef".padEnd(40, "0"),
+    );
+    expect(target.name).toBe("target");
   });
 
   it("publishes @cinatra-ai/host:github-connection with the full connection-admin member set", async () => {
