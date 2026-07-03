@@ -147,9 +147,37 @@ export async function claimMaterialization(input: {
 }
 
 /**
+ * Error marker raised (via a failed cast) when the finalize guard fires —
+ * i.e. the claim was already finalized by a CONCURRENT writer by the time
+ * this transaction's UPDATE ran. Callers match on it to recover the
+ * winner's refs instead of reporting a failure.
+ */
+export const MATERIALIZATION_FINALIZE_CONFLICT_MARKER =
+  "materialization-finalize-conflict";
+
+/** True when an error is the finalize-conflict guard firing (the loser of a
+ *  concurrent double-drive; the winner's refs are readable in the ledger). */
+export function isMaterializationFinalizeConflict(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes(MATERIALIZATION_FINALIZE_CONFLICT_MARKER)
+  );
+}
+
+/**
  * Tx-composable finalize op. Splice into createSemanticArtifact's Tx2 (via
  * `additionalTx2Queries`) so claimed→finalized commits atomically with the
- * artifact write. Phase-guarded: only a `claimed` row transitions.
+ * artifact write.
+ *
+ * SINGLE-WINNER GUARD (codex round 0): two concurrent drives can both hold
+ * the same re-used `claimed` ledger id (claim re-use is what makes a
+ * CRASHED drive recoverable). The UPDATE's row lock serializes them: the
+ * second writer's `phase = 'claimed'` predicate re-evaluates after the
+ * first commit (READ COMMITTED) and matches ZERO rows — the CASE arm then
+ * forces a failed text→int cast carrying MATERIALIZATION_FINALIZE_CONFLICT_MARKER,
+ * which aborts the WHOLE Tx2 (the loser's artifact write rolls back; no
+ * second visible artifact). The caller recovers by re-reading the ledger
+ * row (now finalized with the winner's refs).
  */
 export function buildFinalizeMaterializationQuery(input: {
   ledgerId: string;
@@ -159,15 +187,58 @@ export function buildFinalizeMaterializationQuery(input: {
 }): { text: string; values: unknown[] } {
   const s = schema();
   return {
-    text: `UPDATE "${s}"."artifact_materializations"
-   SET phase = 'finalized', artifact_id = $3, representation_revision_id = $4
- WHERE id = $1 AND org_id = $2 AND phase = 'claimed'`,
+    text: `WITH finalized AS (
+  UPDATE "${s}"."artifact_materializations"
+     SET phase = 'finalized', artifact_id = $3, representation_revision_id = $4
+   WHERE id = $1 AND org_id = $2 AND phase = 'claimed'
+   RETURNING id
+)
+SELECT CASE
+  WHEN EXISTS (SELECT 1 FROM finalized) THEN 1
+  -- The concat with the CTE-dependent subquery keeps this cast out of
+  -- plan-time constant folding: it only evaluates (and fails, aborting the
+  -- whole Tx2) when the UPDATE transitioned zero rows.
+  ELSE ('${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: claim already finalized by a concurrent writer; rows=' || (SELECT count(*)::text FROM finalized))::int
+END`,
     values: [
       input.ledgerId,
       input.orgId,
       input.artifactId,
       input.representationRevisionId,
     ],
+  };
+}
+
+/**
+ * Read a ledger row's finalized refs (the concurrent-loser recovery read).
+ * Null when the row is missing or not finalized.
+ */
+export async function readFinalizedMaterialization(input: {
+  orgId: string;
+  ledgerId: string;
+}): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT artifact_id, representation_revision_id
+   FROM "${s}"."artifact_materializations"
+  WHERE id = $1 AND org_id = $2 AND phase = 'finalized'
+  LIMIT 1`,
+    [input.ledgerId, input.orgId],
+  );
+  const row = res.rows[0] as
+    | { artifact_id: string | null; representation_revision_id: string | null }
+    | undefined;
+  if (
+    !row ||
+    typeof row.artifact_id !== "string" ||
+    typeof row.representation_revision_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    artifactId: row.artifact_id,
+    representationRevisionId: row.representation_revision_id,
   };
 }
 

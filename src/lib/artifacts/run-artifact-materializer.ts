@@ -22,6 +22,8 @@ import { isArtifactExtensionWriteAllowed } from "./artifact-extension-access";
 import {
   claimMaterialization,
   buildFinalizeMaterializationQuery,
+  isMaterializationFinalizeConflict,
+  readFinalizedMaterialization,
 } from "./materialization-ledger";
 
 // ---------------------------------------------------------------------------
@@ -117,15 +119,17 @@ async function loadRunPackageBindings(input: {
     return empty;
   }
   // Defensive re-validation of binding↔produces parity at run time (the
-  // compile/install gate already enforced it for fresh publishes; an older
-  // package that predates the gate simply yields collection errors here,
-  // surfaced as visible per-output failures).
+  // compile/install gate already enforced it for fresh publishes). The
+  // reader's quietly-[] result for an absent/malformed manifest block is
+  // passed through AS the (empty) parity set — FAIL-CLOSED: a binding whose
+  // package declares no produces yields a visible per-output failure, never
+  // a skipped check (codex round 0).
   const produces = producesReader
     .readAgentProducesFromPackageManifest(pkg.manifest)
     .map((r) => r.extension);
   const result = collectArtifactBindingsFromOasDocument(
     payload as Record<string, unknown>,
-    { produces: produces.length > 0 ? produces : null },
+    { produces },
   );
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
@@ -345,33 +349,60 @@ export async function materializeRunArtifacts(input: {
         continue;
       }
 
-      const created = await createSemanticArtifact({
-        orgId: input.orgId,
-        createdBy: input.createdBy,
-        ownerLevel: "organization",
-        ownerId: input.orgId,
-        title,
-        declaredMime: mime,
-        originKind: "agent_generated",
-        stream: asUtf8Stream(content),
-        // Server-side provenance: the actually-executing run id. The
-        // existing cross-org validation inside the creation path yields
-        // validatedRunId:null on any mismatch — never a caller-smuggled id.
-        createdByRunId: input.runId,
-        // The producer assertion is the deterministic classification;
-        // scoped to THIS binding's extension (multi-produce agents must not
-        // stamp every declared type onto every output).
-        producerAssertionExtension: binding.extension,
-        skipFallbackClassification: true,
-        additionalTx2Queries: (ids) => [
-          buildFinalizeMaterializationQuery({
-            ledgerId: claim.ledgerId,
+      let created: { artifactId: string; representationRevisionId: string };
+      try {
+        created = await createSemanticArtifact({
+          orgId: input.orgId,
+          createdBy: input.createdBy,
+          ownerLevel: "organization",
+          ownerId: input.orgId,
+          title,
+          declaredMime: mime,
+          originKind: "agent_generated",
+          stream: asUtf8Stream(content),
+          // Server-side provenance: the actually-executing run id. The
+          // existing cross-org validation inside the creation path yields
+          // validatedRunId:null on any mismatch — never a caller-smuggled id.
+          createdByRunId: input.runId,
+          // The producer assertion is the deterministic classification;
+          // scoped to THIS binding's extension (multi-produce agents must
+          // not stamp every declared type onto every output).
+          producerAssertionExtension: binding.extension,
+          skipFallbackClassification: true,
+          additionalTx2Queries: (ids) => [
+            buildFinalizeMaterializationQuery({
+              ledgerId: claim.ledgerId,
+              orgId: input.orgId,
+              artifactId: ids.artifactId,
+              representationRevisionId: ids.representationRevisionId,
+            }),
+          ],
+        });
+      } catch (err) {
+        // Concurrent-double-drive loser (codex round 0): a parallel drive
+        // finalized this claim first; OUR Tx2 (artifact included) rolled
+        // back atomically. Recover the winner's refs — the output IS
+        // materialized, exactly once.
+        if (isMaterializationFinalizeConflict(err)) {
+          const winner = await readFinalizedMaterialization({
             orgId: input.orgId,
-            artifactId: ids.artifactId,
-            representationRevisionId: ids.representationRevisionId,
-          }),
-        ],
-      });
+            ledgerId: claim.ledgerId,
+          });
+          if (winner) {
+            outcomes.push({
+              ok: true,
+              outputId,
+              nodeId,
+              extension: binding.extension,
+              artifactId: winner.artifactId,
+              representationRevisionId: winner.representationRevisionId,
+              deduped: true,
+            });
+            continue;
+          }
+        }
+        throw err;
+      }
       outcomes.push({
         ok: true,
         outputId,

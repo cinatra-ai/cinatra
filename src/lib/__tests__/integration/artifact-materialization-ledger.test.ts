@@ -212,6 +212,93 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#923 materialization ledger (real DB)", ()
     expect(second).toEqual(first); // same ledger id — the claim is re-used
   });
 
+  it("the finalize guard ABORTS the loser's whole Tx2 (no second artifact) and the winner's refs are recoverable", async () => {
+    const {
+      claimMaterialization,
+      buildFinalizeMaterializationQuery,
+      isMaterializationFinalizeConflict,
+      readFinalizedMaterialization,
+    } = await import("@/lib/artifacts/materialization-ledger");
+    const { createSemanticArtifact } = await import("@/lib/artifacts/artifact-creation");
+
+    const raceHash = sha("concurrent double-drive bytes");
+    const claim = await claimMaterialization({
+      orgId: ORG,
+      runId: RUN,
+      outputId: "raced",
+      nodeId: "endNode",
+      path: "end_node_binding",
+      extension: EXT,
+      contentHash: raceHash,
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") return;
+
+    // Simulate the WINNER: finalize the claim out-of-band (as a concurrent
+    // drive's committed Tx2 would).
+    await client.query(
+      `UPDATE "${TEST_SCHEMA}"."artifact_materializations"
+          SET phase='finalized', artifact_id='art-winner', representation_revision_id='rep-winner'
+        WHERE id = $1`,
+      [claim.ledgerId],
+    );
+
+    const before = await client.query(
+      `SELECT count(*)::int AS n FROM "${TEST_SCHEMA}"."objects" WHERE org_id = $1`,
+      [ORG],
+    );
+
+    // The LOSER drives the write with the same (now-finalized) claim: the
+    // guard must abort the WHOLE Tx2 — artifact rows included.
+    let thrown: unknown = null;
+    try {
+      await createSemanticArtifact({
+        orgId: ORG,
+        createdBy: null,
+        ownerLevel: "organization",
+        ownerId: ORG,
+        title: "923 loser drive",
+        declaredMime: "text/plain",
+        originKind: "agent_generated",
+        skipFallbackClassification: true,
+        stream: bytes("concurrent double-drive bytes"),
+        additionalTx2Queries: (ids) => [
+          buildFinalizeMaterializationQuery({
+            ledgerId: claim.ledgerId,
+            orgId: ORG,
+            artifactId: ids.artifactId,
+            representationRevisionId: ids.representationRevisionId,
+          }),
+        ],
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
+    expect(isMaterializationFinalizeConflict(thrown)).toBe(true);
+
+    // No second artifact committed (objects count unchanged).
+    const after = await client.query(
+      `SELECT count(*)::int AS n FROM "${TEST_SCHEMA}"."objects" WHERE org_id = $1`,
+      [ORG],
+    );
+    expect(after.rows[0].n).toBe(before.rows[0].n);
+
+    // The winner's refs are recoverable through the loser's recovery read.
+    expect(
+      await readFinalizedMaterialization({ orgId: ORG, ledgerId: claim.ledgerId }),
+    ).toEqual({ artifactId: "art-winner", representationRevisionId: "rep-winner" });
+
+    // And the guard did NOT constant-fold: a still-claimed row finalizes
+    // fine through the same query shape (the happy path in the first test
+    // above already proved this; assert the raced row kept the winner's refs).
+    const row = await client.query(
+      `SELECT artifact_id FROM "${TEST_SCHEMA}"."artifact_materializations" WHERE id = $1`,
+      [claim.ledgerId],
+    );
+    expect(row.rows[0].artifact_id).toBe("art-winner");
+  });
+
   it("advisory lookup finds ONLY finalized end_node_binding rows", async () => {
     const {
       findFinalizedDeclarativeMaterialization,

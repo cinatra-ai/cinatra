@@ -172,6 +172,16 @@ describe("collectArtifactBindingsFromOasDocument", () => {
     expect(result.bindings).toHaveLength(1);
   });
 
+  it("fails CLOSED against an EMPTY produces set (declared but empty/malformed)", () => {
+    const doc = endNodeDoc([
+      { title: "draft", type: "string", cinatra: { artifact: VALID_BINDING } },
+      { title: "title", type: "string" },
+    ]);
+    const result = collectArtifactBindingsFromOasDocument(doc, { produces: [] });
+    expect(result.bindings).toEqual([]);
+    expect(result.errors[0]).toContain("cinatra.produces");
+  });
+
   it("collects one binding per annotated output across multiple outputs", () => {
     const secondBinding = {
       extension: "@cinatra-ai/brand-voice-artifact",

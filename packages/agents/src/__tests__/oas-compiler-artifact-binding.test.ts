@@ -153,6 +153,18 @@ describe("oas-compiler — artifact output bindings", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("fails CLOSED when the readable package.json declares NO cinatra.produces", async () => {
+    const result = await compile(
+      writeFixture({
+        binding: VALID_BINDING,
+        packageJson: { name: "@test/pkg", version: "1.0.0" },
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain("cinatra.produces");
+  });
+
   it("still compiles an un-annotated OAS (no bindings, no errors)", async () => {
     const result = await compile(writeFixture({ binding: null }));
     expect(result.ok).toBe(true);

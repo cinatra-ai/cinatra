@@ -651,9 +651,11 @@ async function readSiblingPackageJson(
   packageName: string | null;
   packageVersion: string | null;
   agentDependencies: Record<string, string>;
-  /** `cinatra.produces` extension ids; null when absent/malformed (quietly —
-   *  the produces reader contract; parity checks skip on null). */
-  produces: string[] | null;
+  /** `cinatra.produces` extension ids. A READABLE package.json with an
+   *  absent/malformed produces block yields [] — the binding parity check
+   *  is FAIL-CLOSED against it (a binding then errors). Only an unreadable
+   *  package.json (this function returning null) skips parity. */
+  produces: string[];
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -674,11 +676,12 @@ async function readSiblingPackageJson(
         version?: unknown;
         cinatra?: { agentDependencies?: Record<string, string>; produces?: unknown };
       };
-      // `cinatra.produces` — same quietly-tolerant posture as
-      // readAgentProducesFromPackageManifest: a malformed/absent block yields
-      // null (binding↔produces parity is then skipped here; the publish/install
-      // readers re-derive it from the authoritative manifest).
-      let produces: string[] | null = null;
+      // `cinatra.produces` — same tolerant PARSE as
+      // readAgentProducesFromPackageManifest (never throws), but the result
+      // is FAIL-CLOSED for binding parity: absent or malformed ⇒ [] (a
+      // declared binding then errors — production must be declared), never
+      // a silent skip (codex round 0).
+      let produces: string[] = [];
       const producesRaw = parsed.cinatra?.produces;
       if (Array.isArray(producesRaw)) {
         const collected = producesRaw

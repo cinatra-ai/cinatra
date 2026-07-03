@@ -185,10 +185,13 @@ export function collectArtifactBindingsFromOasDocument(
       }
       if (referenceError) continue;
 
-      if (
-        opts?.produces &&
-        !opts.produces.includes(binding.extension)
-      ) {
+      // Parity is FAIL-CLOSED against a known produces set (codex round 0):
+      // an EMPTY array (package.json readable but `cinatra.produces`
+      // absent/malformed) rejects every binding — a binding without its
+      // declared production is a contract violation, never a skip. Only
+      // null/undefined (the produces set is UNKNOWN — e.g. the builder path
+      // with no package.json on disk) skips the check.
+      if (opts?.produces != null && !opts.produces.includes(binding.extension)) {
         errors.push(
           `${where}.extension: "${binding.extension}" is not declared in ` +
             `package.json cinatra.produces ([${opts.produces.join(", ")}]) — ` +

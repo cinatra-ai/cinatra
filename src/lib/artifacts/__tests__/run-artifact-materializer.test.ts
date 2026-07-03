@@ -13,6 +13,7 @@ const {
   createSemanticArtifactMock,
   claimMaterializationMock,
   buildFinalizeMaterializationQueryMock,
+  readFinalizedMaterializationMock,
   isWriteAllowedMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
     text: "UPDATE finalize",
     values: [],
   })),
+  readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   isWriteAllowedMock: vi.fn(async () => true),
 }));
 
@@ -53,6 +55,11 @@ vi.mock("../artifact-creation", () => ({
 vi.mock("../materialization-ledger", () => ({
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
+  readFinalizedMaterialization: readFinalizedMaterializationMock,
+  // Real predicate logic (message-marker match) so the recovery path is
+  // exercised against the same contract the ledger module ships.
+  isMaterializationFinalizeConflict: (err: unknown) =>
+    err instanceof Error && err.message.includes("materialization-finalize-conflict"),
 }));
 vi.mock("../artifact-extension-access", () => ({
   isArtifactExtensionWriteAllowed: isWriteAllowedMock,
@@ -338,6 +345,56 @@ describe("materializeRunArtifacts", () => {
         error: expect.stringContaining("cinatra.produces"),
       }),
     ]);
+  });
+
+  it("fails CLOSED when the package manifest declares no produces at all", async () => {
+    getAgentPackageMock.mockResolvedValue(packageFixture({ produces: [] }));
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: false,
+        outputId: "(binding-validation)",
+        error: expect.stringContaining("cinatra.produces"),
+      }),
+    ]);
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+  });
+
+  it("recovers the winner's refs when a concurrent drive finalized the claim first", async () => {
+    createSemanticArtifactMock.mockRejectedValue(
+      new Error(
+        'invalid input syntax for type integer: "materialization-finalize-conflict: claim already finalized by a concurrent writer; rows=0"',
+      ),
+    );
+    readFinalizedMaterializationMock.mockResolvedValue({
+      artifactId: "art-winner",
+      representationRevisionId: "rep-winner",
+    });
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: true,
+        artifactId: "art-winner",
+        representationRevisionId: "rep-winner",
+        deduped: true,
+      }),
+    ]);
+    expect(readFinalizedMaterializationMock).toHaveBeenCalledWith({
+      orgId: "org-a",
+      ledgerId: "led-1",
+    });
+  });
+
+  it("a NON-conflict create failure stays a visible per-output failure", async () => {
+    createSemanticArtifactMock.mockRejectedValue(new Error("disk full"));
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: false,
+        error: expect.stringContaining("disk full"),
+      }),
+    ]);
+    expect(readFinalizedMaterializationMock).not.toHaveBeenCalled();
   });
 
   it("degrades a wholesale package-fetch failure to one visible outcome", async () => {
