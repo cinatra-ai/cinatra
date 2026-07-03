@@ -11,9 +11,10 @@ import "server-only";
 // direction). So the host INJECTS the saga via a `globalThis`-anchored slot —
 // the same pattern proven by `setExtensionCapabilityTeardownHook` /
 // `setLiveAgentManifestProvider` — and the workflow extension handler DELEGATES
-// to it when present, falling back to the legacy in-package
-// `installWorkflowExtension` (dev-checkout sourced) when no host hook is wired
-// (e.g. a worker that never loaded the host module, or a unit test).
+// to it when present, falling back to the in-package `installWorkflowExtension`
+// (finalized runtime-store sourced, with a development-only dev-tree authoring
+// fallback — cinatra#794) when no host hook is wired (e.g. a worker that never
+// loaded the host module, or a unit test).
 //
 // MODEL-B SAFE: the slot ships NO host code into the package; it only forwards a
 // `{ packageName, version, actor }` ref to a host function the host registered.

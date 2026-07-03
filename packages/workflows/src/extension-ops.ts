@@ -101,9 +101,11 @@ export type UninstallResult = { action: "archived" | "deleted" | "not_found" };
 // dashboards), so they are ORDERED idempotent writes (not one tx) — both are
 // idempotent on their unique keys, so a partial failure self-heals on retry.
 //
-// The package root resolves from the DEV extensions tree only; marketplace-fetch
-// unpack is a filed follow-up. Outside dev / when no local root is found we fail
-// closed.
+// The package root resolves from the unified content-addressed runtime store
+// (`<CINATRA_EXTENSION_DATA_ROOT>/workflow/<slug>/<digest>/`, cinatra#794) via
+// the journal-gated finalized-payload seam; the dev extensions tree remains an
+// authoring-only fallback (explicit `extensionsRoot` override, or dev mode when
+// no finalized payload exists). Otherwise we fail closed.
 // ─────────────────────────────────────────────────────────────────────────
 
 export class WorkflowExtensionError extends Error {
@@ -151,6 +153,88 @@ async function resolveDevExtensionPackageRoot(packageName: string, extensionsRoo
   return null;
 }
 
+/**
+ * Resolve the on-disk package root for a workflow-extension install (#794).
+ *
+ * Resolution order:
+ *  1. Explicit `extensionsRoot` override → dev-tree resolution under that root
+ *     ONLY (the hermetic test/tooling contract; the runtime store is never
+ *     consulted). Presence-checked explicitly so an override can never fall
+ *     through to the store by accident.
+ *  2. The FINALIZED unified runtime store — the digest dir the journal-gated
+ *     DB anchor pins under `<CINATRA_EXTENSION_DATA_ROOT>/workflow/<slug>/
+ *     <digest>/`, resolved through `@/lib/extension-store-payload` (the same
+ *     trust seam the skill/agent handlers consume; the writable store itself
+ *     is never a trust input). This is the canonical prod source: the
+ *     marketplace saga materialized + finalized the payload there. A finalized
+ *     payload whose version contradicts the requested version is a stale/wrong
+ *     anchor condition → VERSION_MISMATCH outside dev (this fallback path
+ *     cannot acquire a version the anchor has not finalized); in dev mode it
+ *     falls through to the authoring tree, which may hold the requested
+ *     version.
+ *  3. Dev-mode authoring fallback: the dev extensions tree (`<cwd>/extensions`)
+ *     — authoring-only, never consulted outside CINATRA_RUNTIME_MODE=development.
+ *
+ * Anything else fails closed (PACKAGE_ROOT_UNRESOLVED).
+ */
+async function resolveWorkflowInstallPackageRoot(
+  ref: { packageName: string; version?: string },
+  orgId: string,
+  opts: { extensionsRoot?: string },
+): Promise<string> {
+  if (opts.extensionsRoot !== undefined) {
+    const root = await resolveDevExtensionPackageRoot(ref.packageName, opts.extensionsRoot);
+    if (!root) {
+      throw new WorkflowExtensionError(
+        "PACKAGE_ROOT_UNRESOLVED",
+        `No on-disk package root for "${ref.packageName}" under the explicit extensions root.`,
+      );
+    }
+    return root;
+  }
+
+  const isDev = process.env.CINATRA_RUNTIME_MODE === "development";
+
+  // Unified runtime store (cinatra#794). The read seam is host code, so the
+  // import is dynamic (the same package→host discipline as the skill/agent
+  // handlers); an import or resolution failure reads as "no finalized payload"
+  // and the authoring fallback / fail-closed tail decides.
+  let payload: { storeDir: string; version: string | null } | null = null;
+  try {
+    const { resolveFinalizedStorePayload } = await import("@/lib/extension-store-payload");
+    payload = await resolveFinalizedStorePayload({
+      packageName: ref.packageName,
+      orgId,
+      expectedKind: "workflow",
+    });
+  } catch {
+    payload = null;
+  }
+  if (payload) {
+    // A null payload version (legacy row) defers to the extracted-manifest
+    // VERSION_MISMATCH guard in the caller.
+    if (!ref.version || payload.version === null || payload.version === ref.version) {
+      return payload.storeDir;
+    }
+    if (!isDev) {
+      throw new WorkflowExtensionError(
+        "VERSION_MISMATCH",
+        `Requested ${ref.packageName}@${ref.version} but the finalized runtime-store payload is ${payload.version}.`,
+      );
+    }
+  }
+
+  if (isDev) {
+    const root = await resolveDevExtensionPackageRoot(ref.packageName, join(process.cwd(), "extensions"));
+    if (root) return root;
+  }
+  throw new WorkflowExtensionError(
+    "PACKAGE_ROOT_UNRESOLVED",
+    `No finalized runtime-store payload for "${ref.packageName}" (kind "workflow") — ` +
+      `the dev extensions tree is a development-only authoring fallback.`,
+  );
+}
+
 function actorOrgGuard(actor: WorkflowExtensionActor): { userId: string; orgId: string } {
   if (!actor.orgId || !actor.userId) {
     throw new WorkflowExtensionError("MISSING_ORG_CONTEXT", "Missing organization context.");
@@ -176,20 +260,10 @@ export async function installWorkflowExtension(
 ): Promise<{ templateId: string; dashboardMaterialized: boolean }> {
   const { userId, orgId } = actorOrgGuard(actor);
 
-  // Resolve the package root from the DEV extensions tree only. Without an
-  // explicit override, require development mode — marketplace-fetch unpack is a
-  // filed follow-up, so we fail closed in prod rather than guess.
-  const explicitRoot = opts.extensionsRoot;
-  if (!explicitRoot && process.env.CINATRA_RUNTIME_MODE !== "development") {
-    throw new WorkflowExtensionError(
-      "PACKAGE_ROOT_UNRESOLVED",
-      "Workflow extension install requires the dev extensions tree (CINATRA_RUNTIME_MODE=development); marketplace-fetch unpack is not yet implemented.",
-    );
-  }
-  const root = await resolveDevExtensionPackageRoot(ref.packageName, explicitRoot ?? join(process.cwd(), "extensions"));
-  if (!root) {
-    throw new WorkflowExtensionError("PACKAGE_ROOT_UNRESOLVED", `No on-disk package root for "${ref.packageName}".`);
-  }
+  // Resolve the package root: finalized runtime-store payload first (the
+  // resolved digest path), dev extensions tree only as the authoring-only /
+  // explicit-override fallback (cinatra#794).
+  const root = await resolveWorkflowInstallPackageRoot(ref, orgId, opts);
 
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version?: string; cinatra?: Record<string, unknown> };
   if (ref.version && pkg.version && ref.version !== pkg.version) {
