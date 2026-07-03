@@ -34,9 +34,41 @@
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
+ *
+ * ---------------------------------------------------------------------------
+ * ADVISORY artifact-parity family (cinatra#924) — OAS-RUNTIME-009..012.
+ *
+ * These are emitted by the SEPARATE `scanOasForArtifactParityFindings` export,
+ * NOT by `scanOasForRuntimeInvariantFindings` above. Unlike the 001..008 mount
+ * invariants (all SEVERITY: BLOCKER, aggregated into `validateOasAgentJson`),
+ * the parity family is ADVISORY: every finding is SEVERITY: WARNING and the
+ * scanner is wired ONLY into `/api/oas-lint/scan-all` (the fleet dashboard).
+ * The genuine hard-fail for a NET-NEW malformed binding annotation is owned by
+ * the compile/publish gate (oas-compiler.ts step 10b/10c, which already rejects
+ * collector errors); Layer 3 only mirrors those as advisory visibility so an
+ * un-migrated agent repo is never reddened by this surface. See #922 design.
+ *
+ *   OAS-RUNTIME-009 — a declared `cinatra.produces` extension has no runnable
+ *                     materialization edge (EndNode `outputs[].cinatra.artifact`
+ *                     binding or an `artifact_materialize` passthrough ApiNode).
+ *   OAS-RUNTIME-010 — a passthrough object/artifact WRITE node
+ *                     (objects_save / objects_update / artifact_materialize)
+ *                     consumes an input with no declared DataFlowEdge.
+ *   OAS-RUNTIME-011 — `metadata.cinatra.riskClass:"read_only"` on a node that
+ *                     invokes a write tool (silently ungates a side effect).
+ *   OAS-RUNTIME-012 — prompt prose instructing a legacy persistence primitive
+ *                     (`artifact_authoring_emit` / `objects_save`); the
+ *                     declarative binding replaces prompt-driven persistence.
  */
 
 import type { ReviewFinding } from "./validate-agent-json";
+import {
+  collectArtifactBindingsFromOasDocument,
+  collectArtifactMaterializeNodesFromOasDocument,
+  ARTIFACT_MATERIALIZE_TOOL,
+  AGENTS_PASSTHROUGH_URL_MARKER,
+} from "./artifact-binding";
+import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 
 // pyagentspec's exact placeholder regex from
 // `pyagentspec/templating.TEMPLATE_PLACEHOLDER_REGEXP`. Filtered
@@ -724,6 +756,10 @@ interface FlowComponent {
     inputDefaults: Map<string, unknown>;
     inputsExplicit: boolean;
     placeholderSourceText: string;
+    /** ApiNode `url` (null when absent/non-string) — passthrough-route detection. */
+    url: string | null;
+    /** Literal `data.tool` selection (null when absent/non-string/templated). */
+    tool: string | null;
   }>;
   dfes: Array<{
     sourceNodeRef: string;
@@ -824,12 +860,18 @@ function extractFlow(
         if ("default" in desc) inputDefaults.set(desc.title, desc.default);
       }
     }
+    const url = typeof apiNode.url === "string" ? apiNode.url : null;
+    const dataBlock = isPlainObject(apiNode.data) ? apiNode.data : null;
+    const tool =
+      dataBlock !== null && typeof dataBlock.tool === "string" ? dataBlock.tool : null;
     apiNodes.push({
       id,
       inputTitles,
       inputDefaults,
       inputsExplicit,
       placeholderSourceText: serializeApiNodePlaceholderSources(apiNode),
+      url,
+      tool,
     });
   }
 
@@ -993,6 +1035,284 @@ function walkPropertyDescriptors(
   } else if (Array.isArray(obj)) {
     for (let i = 0; i < obj.length; i++) {
       walkPropertyDescriptors(obj[i], visit, `${path}[${i}]`);
+    }
+  }
+}
+
+// ===========================================================================
+// ADVISORY artifact-parity scanner (cinatra#924) — OAS-RUNTIME-009..012.
+//
+// SEPARATE from `scanOasForRuntimeInvariantFindings`: this export is wired ONLY
+// into `/api/oas-lint/scan-all` and emits WARNING-severity findings only, so it
+// can never hard-gate a publish (scan-all re-stamps findings to the
+// blocker-authorized `agent-lint-policy` source — a blocker here WOULD block, so
+// warnings-only is a hard invariant of this surface). It reuses the #923 binding
+// grammar as the SINGLE recognition source (no duplicate parser).
+// ===========================================================================
+
+/**
+ * Passthrough object/artifact WRITE tools. Mirrors the write subset of the
+ * `/api/agents/passthrough` `ALLOWED_TOOLS` (#925); read-only tools
+ * (`objects_classify`) are intentionally excluded. `trigger_config_set` is
+ * config plumbing, not an object/artifact write, so it is not listed.
+ */
+const ARTIFACT_PARITY_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  "objects_save",
+  "objects_update",
+  ARTIFACT_MATERIALIZE_TOOL,
+]);
+
+/**
+ * String fields whose NATURAL-LANGUAGE body can instruct an LLM to call a
+ * persistence primitive (the legacy prose pattern the declarative binding
+ * replaces). A `data.tool` value is a STRUCTURAL selection, not prose, and is
+ * deliberately absent here so a legitimate `objects_save` tool node is never
+ * flagged as prose. `description` is excluded — it documents intent, it does
+ * not instruct the model.
+ */
+const PROSE_PROMPT_KEYS: ReadonlySet<string> = new Set([
+  "system_prompt",
+  "prompt_template",
+  "instructions",
+  "task",
+  "taskSpec",
+  "system",
+  "user",
+  "message",
+]);
+
+/**
+ * Legacy persistence primitives whose PROSE instruction is the anti-pattern —
+ * a declarative EndNode binding (`outputs[].cinatra.artifact`) or an
+ * `artifact_materialize` passthrough node replaces prompt-driven persistence.
+ */
+const LEGACY_PERSISTENCE_PROSE_TOKENS = [
+  "artifact_authoring_emit",
+  "objects_save",
+] as const;
+
+/**
+ * Advisory artifact-parity scan (WARNING-only). Surfaced fleet-wide via
+ * `/api/oas-lint/scan-all`. `opts.produces` = the sibling package.json
+ * `cinatra.produces` extension ids (null/undefined ⇒ unknown ⇒ the coverage
+ * check is skipped; grammar/dataflow/riskClass/prose checks still run).
+ */
+export function scanOasForArtifactParityFindings(
+  parsed: Record<string, unknown>,
+  opts?: { produces?: readonly string[] | null },
+): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  const produces = opts?.produces ?? null;
+
+  // OAS-RUNTIME-009 — declared production ⇒ runnable materialization edge.
+  // Single grammar source: the #923 collectors.
+  const bindingResult = collectArtifactBindingsFromOasDocument(parsed, { produces });
+  const materializeResult = collectArtifactMaterializeNodesFromOasDocument(parsed, {
+    produces,
+  });
+
+  // (a) Advisory mirror of the grammar errors the compile/publish gate
+  // HARD-BLOCKS (oas-compiler step 10b/10c). WARNING here — Layer 3 is advisory.
+  for (const err of [...bindingResult.errors, ...materializeResult.errors]) {
+    findings.push({
+      code: "OAS-RUNTIME-009",
+      severity: "warning",
+      message:
+        `Artifact binding / artifact_materialize annotation is invalid and does not ` +
+        `count as a materialization edge (the compile/publish gate rejects it as a ` +
+        `hard error): ${err}`,
+      source: "deterministic",
+    });
+  }
+
+  // (b) Coverage — each declared produces extension needs at least one valid
+  // edge. WARNING (produces-without-materialization; existing repos trip this).
+  if (produces != null) {
+    const covered = new Set<string>();
+    for (const b of bindingResult.bindings) covered.add(b.binding.extension);
+    for (const n of materializeResult.nodes) covered.add(n.extension);
+    for (const ext of produces) {
+      if (covered.has(ext)) continue;
+      findings.push({
+        code: "OAS-RUNTIME-009",
+        severity: "warning",
+        message:
+          `package.json cinatra.produces declares "${ext}" but the OAS has no runnable ` +
+          `materialization edge for it. Add an EndNode output binding ` +
+          `(outputs[].cinatra.artifact with extension "${ext}") or an artifact_materialize ` +
+          `passthrough ApiNode targeting "${ext}". Until migrated, the declared artifact is ` +
+          `never persisted at run completion. (Advisory now; the publish contract flips this ` +
+          `to a republish BLOCK once the fleet migration completes — cinatra#924.)`,
+        source: "deterministic",
+      });
+    }
+  }
+
+  // OAS-RUNTIME-010 — passthrough write nodes must have declared dataflow deps.
+  for (const flow of iterFlowComponents(parsed)) {
+    findings.push(...scanPassthroughWriteDataflow(flow));
+  }
+
+  // OAS-RUNTIME-011 (riskClass mislabel) + OAS-RUNTIME-012 (legacy prose) walk
+  // the whole component tree — a node can carry metadata.cinatra.riskClass at any
+  // depth, and prose can live in any prompt field.
+  findings.push(...scanRiskClassMislabels(parsed));
+  findings.push(...scanLegacyPersistenceProse(parsed));
+
+  return findings;
+}
+
+// OAS-RUNTIME-010 — every passthrough object/artifact write node feeds each of
+// its consumed inputs from a declared DataFlowEdge (or an input default). Mirrors
+// the DFE-into checks of OAS-RUNTIME-004/005. WARNING-only.
+function scanPassthroughWriteDataflow(flow: FlowComponent): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  for (const node of flow.apiNodes) {
+    if (node.url === null || !node.url.includes(AGENTS_PASSTHROUGH_URL_MARKER)) continue;
+    if (node.tool === null || !ARTIFACT_PARITY_WRITE_TOOLS.has(node.tool)) continue;
+    // Parity only meaningful when inputs[] is explicitly declared; an absent
+    // inputs[] means pyagentspec auto-infers, and there is no declared input to
+    // require an edge for.
+    if (!node.inputsExplicit) continue;
+    const placeholders = inferPlaceholderSet(node.placeholderSourceText);
+    for (const input of node.inputTitles) {
+      // Only inputs actually consumed as a bare {{ name }} flow variable in the
+      // node body require a sourcing edge; a defaulted input is self-satisfying.
+      if (!placeholders.has(input)) continue;
+      if (node.inputDefaults.has(input)) continue;
+      const hasDfe = flow.dfes.some(
+        (e) => e.destinationNodeRef === node.id && e.destinationInput === input,
+      );
+      if (hasDfe) continue;
+      findings.push({
+        code: "OAS-RUNTIME-010",
+        severity: "warning",
+        message:
+          `Passthrough write node "${node.id}" (tool "${node.tool}") consumes input ` +
+          `"${input}" but no DataFlowEdge sources it and it has no default. A persistence ` +
+          `write should have a declared dataflow dependency edge for every input it writes ` +
+          `from, so the run's provenance graph is complete. Add a DataFlowEdge whose ` +
+          `destination_node is "${node.id}" and destination_input is "${input}".`,
+        location: `$referenced_components.${node.id} (Flow "${flow.flowId}")`,
+        source: "deterministic",
+      });
+    }
+  }
+  return findings;
+}
+
+// OAS-RUNTIME-011 — a node labeled read_only that invokes a write tool. The
+// Trigger/HITL gate reads riskClass to decide gating; a read_only label on a
+// write silently ungates a side effect. WARNING-only (the #924 ratchet keeps
+// this advisory day one — blog-pipeline's seam writes trip it).
+function scanRiskClassMislabels(parsed: Record<string, unknown>): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  walkComponentObjects(parsed, (node, path) => {
+    const meta = isPlainObject(node.metadata) ? node.metadata : null;
+    const cin = meta && isPlainObject(meta.cinatra) ? meta.cinatra : null;
+    const riskClass = cin && typeof cin.riskClass === "string" ? cin.riskClass : null;
+    if (riskClass !== "read_only") return;
+
+    const data = isPlainObject(node.data) ? node.data : null;
+    const tool = data && typeof data.tool === "string" ? data.tool : null;
+    if (tool === null) return;
+    const isWriteTool =
+      ARTIFACT_PARITY_WRITE_TOOLS.has(tool) ||
+      SIDE_EFFECT_PATTERNS.some((rx) => rx.test(tool));
+    if (!isWriteTool) return;
+
+    const id = typeof node.id === "string" ? node.id : "<unknown>";
+    findings.push({
+      code: "OAS-RUNTIME-011",
+      severity: "warning",
+      message:
+        `Node "${id}" at ${path} declares metadata.cinatra.riskClass:"read_only" but invokes ` +
+        `write tool "${tool}". A side-effecting write must not be labeled read_only — the ` +
+        `Trigger/HITL gate uses riskClass to decide gating, so a read_only label silently ` +
+        `ungates the write. Set an accurate write riskClass (e.g. "write_safe", or a ` +
+        `side-effecting class the approval gate recognizes).`,
+      location: path,
+      source: "deterministic",
+    });
+  });
+  return findings;
+}
+
+// OAS-RUNTIME-012 — prompt PROSE instructing a legacy persistence primitive.
+// The declarative binding replaces prompt-driven persistence; a straggler emit
+// racing the declarative materializer double-writes. WARNING-only.
+function scanLegacyPersistenceProse(
+  parsed: Record<string, unknown>,
+): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  walkKeyedStrings(parsed, (key, text, path) => {
+    if (!PROSE_PROMPT_KEYS.has(key)) return;
+    for (const token of LEGACY_PERSISTENCE_PROSE_TOKENS) {
+      if (!text.includes(token)) continue;
+      findings.push({
+        code: "OAS-RUNTIME-012",
+        severity: "warning",
+        message:
+          `Prompt field "${key}" at ${path} instructs the model to call the legacy ` +
+          `persistence primitive "${token}". The declarative EndNode artifact binding ` +
+          `(outputs[].cinatra.artifact) or an artifact_materialize passthrough node ` +
+          `replaces prompt-driven persistence — a prompt-driven emit racing the declarative ` +
+          `materializer double-writes. Remove the persistence instruction from the prompt and ` +
+          `declare the output via its binding instead.`,
+        location: path,
+        source: "deterministic",
+      });
+      break; // one finding per field
+    }
+  });
+  return findings;
+}
+
+/**
+ * Visit every plain-object node in the tree (component-shaped or not), with its
+ * `$`-rooted path. Used by the riskClass scan, which must find riskClass on a
+ * node at any depth. Cycle-safe via a visited set (`$component_ref` graphs can
+ * in principle revisit an object).
+ */
+function walkComponentObjects(
+  root: Record<string, unknown>,
+  visit: (node: Record<string, unknown>, path: string) => void,
+): void {
+  const seen = new Set<object>();
+  function go(value: unknown, path: string): void {
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) go(value[i], `${path}[${i}]`);
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    visit(value, path);
+    for (const [k, v] of Object.entries(value)) go(v, `${path}.${k}`);
+  }
+  go(root, "$");
+}
+
+/**
+ * Visit every string-valued property with its immediate KEY and `$`-rooted path.
+ * The key lets the prose scan target only prompt fields (unlike `walkStrings`,
+ * which loses the key context).
+ */
+function walkKeyedStrings(
+  root: unknown,
+  visit: (key: string, text: string, path: string) => void,
+  key = "$",
+  path = "$",
+): void {
+  if (typeof root === "string") {
+    visit(key, root, path);
+  } else if (Array.isArray(root)) {
+    for (let i = 0; i < root.length; i++) {
+      walkKeyedStrings(root[i], visit, key, `${path}[${i}]`);
+    }
+  } else if (isPlainObject(root)) {
+    for (const [k, v] of Object.entries(root)) {
+      walkKeyedStrings(v, visit, k, `${path}.${k}`);
     }
   }
 }
