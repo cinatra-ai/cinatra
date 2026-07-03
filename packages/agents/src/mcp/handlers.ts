@@ -59,7 +59,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
-import { resolveAgentInstallDir } from "../agent-install-path";
+import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
@@ -2632,7 +2632,7 @@ async function handleAgentBuilderGitList(
   // agents now live under <installDir>/<vendor>/<slug>/. Walk the operator's
   // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537), then
   // fall back to legacy <installDir>/<slug>/ for older installs.
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   const slugSet = new Set<string>();
 
   // New layout: <installDir>/<vendor>/<slug>/ — probe both the instance vendor
@@ -3191,7 +3191,7 @@ async function handleAgentBuilderGitWriteFiles(
   // Defense-in-depth: assert BOTH joined segments are single safe path segments
   // before the join (vendorName is identity-derived; packageSlug was checked for
   // separators above — this also rejects `~`/control/drive-like forms).
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   assertSafePathSegment(packageSlug, "packageSlug");
   const agentRoot = join(installRoot, vendorName, packageSlug);
   const packageJsonPath = join(agentRoot, "package.json");
@@ -4529,7 +4529,7 @@ export async function handleAgentRunTriggerDelete(
 // ===========================================================================
 
 function resolveWorkflowBpmnPathForRead(packageSlug: string): { path: string; rootDir: string } | null {
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   // Fail-closed slug guard + filesystem-safe vendor candidates (cinatra#537).
   if (!isSafePathSegment(packageSlug)) return null;
   for (const vendor of safeVendorSegmentsForRead()) {
@@ -4728,7 +4728,7 @@ async function handleWorkflowSourceWrite(
 
   await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
 
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   // Write under the operator's OWN vendor segment, not hardcoded cinatra-ai
   // (cinatra#537): disk dir === package.json#name vendor. Defense-in-depth:
   // assert packageSlug is a single safe segment before the join.
@@ -4987,7 +4987,7 @@ async function handleWorkflowSourcePublish(
 // ===========================================================================
 
 function resolveArtifactPackagePathForRead(packageSlug: string): { path: string; rootDir: string } | null {
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   // Fail-closed slug guard + filesystem-safe vendor candidates (cinatra#537).
   if (!isSafePathSegment(packageSlug)) return null;
   for (const vendor of safeVendorSegmentsForRead()) {
@@ -5170,7 +5170,7 @@ async function handleArtifactSourceWrite(
 
   await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
 
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   // Write under the operator's OWN vendor segment, not hardcoded cinatra-ai
   // (cinatra#537): disk dir === package.json#name vendor. Defense-in-depth:
   // assert packageSlug is a single safe segment before the join.
@@ -5311,7 +5311,7 @@ async function handleArtifactSourcePublish(
 // ===========================================================================
 
 function resolveSkillPackagePathForRead(packageSlug: string): { path: string; rootDir: string } | null {
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   // Fail-closed slug guard + filesystem-safe vendor candidates (cinatra#537).
   if (!isSafePathSegment(packageSlug)) return null;
   for (const vendor of safeVendorSegmentsForRead()) {
@@ -5528,7 +5528,7 @@ async function handleSkillSourceWrite(
 
   await emitWritingFilesIfThreaded(request.input.progressContext, request.actor, packageSlug);
 
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   // Write under the operator's OWN vendor segment, not hardcoded cinatra-ai
   // (cinatra#537): disk dir === package.json#name vendor. Defense-in-depth:
   // assert BOTH joined slugs are single safe segments before the join.

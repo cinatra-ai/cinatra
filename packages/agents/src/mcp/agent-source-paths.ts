@@ -8,7 +8,7 @@ import "server-only";
 
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
-import { resolveAgentInstallDir } from "../agent-install-path";
+import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
 
@@ -99,7 +99,7 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
    *  skills/) resolve against this so they cannot disagree with `path`. */
   rootDir: string;
 } | null {
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   // Fail-closed: never probe with a slug that isn't a single safe segment
   // (cinatra#537 hardening — a `..`/separator slug must not reach path.join).
   if (!isSafePathSegment(packageSlug)) return null;
@@ -153,7 +153,7 @@ export function resolveAgentJsonPathForWrite(packageSlug: string): {
   // root, package.json under the canonical vendor root) and broke the read-side
   // sibling lookup, which is exactly what #602 removes. Legacy installs stay
   // READABLE via resolveAgentJsonPathForRead's rungs 3–4; only writes converge.
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   const canonicalDir = join(root, resolveInstanceVendorSegment(), packageSlug, "cinatra");
   const canonicalPath = join(canonicalDir, "oas.json");
   return {

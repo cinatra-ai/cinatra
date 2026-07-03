@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 
 let FIXTURE_DIR = "";
 
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: () => {
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => {
     if (!FIXTURE_DIR) throw new Error("fixture dir unset");
     return FIXTURE_DIR;
   },

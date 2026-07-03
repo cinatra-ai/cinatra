@@ -18,7 +18,7 @@ import {
   type LlmTool,
   type LlmResponse,
 } from "@cinatra-ai/llm";
-import { resolveAgentInstallDir } from "@cinatra-ai/agents/agent-install-path";
+import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 import {
   getCustomSkillForCurrentUserAndAgent,
   registerExtensionSkill,
@@ -120,7 +120,7 @@ const RequestSchema = z.object({
   toolbox_ids: z.array(z.string()).optional(),
   // Structured output schema — passed through to the orchestration layer.
   output_schema: z.record(z.string(), z.unknown()).optional(),
-  // Explicit SKILL.md path on the host filesystem. Must be under process.cwd()
+  // Explicit SKILL.md path on the host filesystem. Must be under an allowed skill root
   // and end with SKILL.md (path traversal guard). When absent, the route
   // auto-discovers from agents/<agent_id>/skills/<agent_id>/SKILL.md.
   skill_source_path: z.string().optional(),
@@ -186,7 +186,7 @@ const RequestSchema = z.object({
 //
 // Reads SKILL.md content as a plain string for the Gemini media branch's
 // `system` prompt. Mirrors the path-traversal guard logic used by the legacy
-// text-dispatch branch (process.cwd() containment, realpathSync against
+// text-dispatch branch (allowed-skill-roots containment, realpathSync against
 // symlinks, *.md/SKILL.md suffix gate). Returns "" on any failure so the
 // caller can safely concatenate.
 //
@@ -196,17 +196,46 @@ const RequestSchema = z.object({
 // adapter, NOT through runResolvedSkillAwareDeterministicLlmTask) can still
 // inject SKILL.md instructions via `system`.
 // ---------------------------------------------------------------------------
+// Shared containment allowlist for bridge skill paths (cinatra#793): a
+// resolved SKILL.md must live under EITHER the dev/authoring tree (cwd — the
+// historical root; explicit skill_source_path inputs) OR the agent RUNTIME
+// MOUNT (`<extension-data-root>/.agent-mount` — where installed agents'
+// skills/ trees are projected, and where auto-discovery now resolves).
+// path.relative(root, p) escapes a root when it starts with ".." or is
+// absolute; empty rel ("" — candidate equals the root) counts as inside.
+// Conventional SKILL.md auto-discovery for an agent id (cinatra#793): probe
+// the agent RUNTIME MOUNT first (installed agents' projected skills/ trees),
+// then the dev/authoring tree (git-native dev agents that are never
+// mount-projected). Each root probes the canonical `<root>/cinatra-ai/<slug>/
+// skills/<slug>/SKILL.md` layout, then the legacy flat `<root>/<slug>/…`.
+// Returns the first EXISTING candidate; falls back to the mount-canonical path
+// (the downstream existsSync gate rejects it anyway).
+function discoverBridgeSkillPath(agentId: string): string {
+  const candidates: string[] = [];
+  for (const root of [resolveAgentRuntimeMountDir(), path.join(process.cwd(), "extensions")]) {
+    candidates.push(path.join(root, "cinatra-ai", agentId, "skills", agentId, "SKILL.md"));
+    candidates.push(path.join(root, agentId, "skills", agentId, "SKILL.md"));
+  }
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+function isInsideBridgeSkillRoots(resolvedPath: string): boolean {
+  const roots = [process.cwd(), resolveAgentRuntimeMountDir()];
+  return roots.some((root) => {
+    const rel = path.relative(root, resolvedPath);
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  });
+}
+
 async function resolveBridgeSkillContent(body: {
   agent_id?: string;
   skill_source_path?: string;
 }): Promise<string> {
   // Resolve a candidate path (explicit input OR conventional auto-discovery).
-  function autoDiscoverSkillPath(agentId: string): string {
-    const installDir = resolveAgentInstallDir();
-    const newCanonical = path.join(installDir, "cinatra-ai", agentId, "skills", agentId, "SKILL.md");
-    if (existsSync(newCanonical)) return newCanonical;
-    return path.join(installDir, agentId, "skills", agentId, "SKILL.md");
-  }
+  const autoDiscoverSkillPath = discoverBridgeSkillPath;
   const agentIdLooksLikePath =
     typeof body.agent_id === "string" &&
     (body.agent_id.includes("..") ||
@@ -219,19 +248,17 @@ async function resolveBridgeSkillContent(body: {
       : "";
   if (!candidateSkillPath) return "";
 
-  // Path-traversal guard: must resolve under cwd AND end with SKILL.md.
-  const cwd = process.cwd();
+  // Path-traversal guard: must resolve under an allowed skill root (the dev
+  // tree OR the agent runtime mount) AND end with SKILL.md.
   let resolvedPath: string;
   try {
     resolvedPath = realpathSync(path.resolve(candidateSkillPath));
   } catch {
     resolvedPath = path.resolve(candidateSkillPath);
   }
-  const rel = path.relative(cwd, resolvedPath);
-  const insideCwd = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
   if (
     !candidateSkillPath.endsWith("SKILL.md") ||
-    !insideCwd ||
+    !isInsideBridgeSkillRoots(resolvedPath) ||
     !existsSync(resolvedPath)
   ) {
     return "";
@@ -578,7 +605,7 @@ export async function POST(req: Request): Promise<Response> {
   // ---------------------------------------------------------------------------
   // Extra tools: explicit skill_source_path takes precedence; falls back to
   // the conventional agents/<agent_id>/skills/<agent_id>/SKILL.md discovery.
-  // Path traversal guard: must be under process.cwd() and end with SKILL.md.
+  // Path traversal guard: must be under an allowed skill root and end with SKILL.md.
   // ---------------------------------------------------------------------------
   const extraTools: LlmTool[] = [];
 
@@ -589,12 +616,7 @@ export async function POST(req: Request): Promise<Response> {
   // Auto-discovery probes the canonical layout first
   // (<installDir>/cinatra-ai/<slug>/skills/<slug>/SKILL.md), then the
   // fallback layout (<installDir>/<slug>/skills/<slug>/SKILL.md).
-  function autoDiscoverSkillPath(agentId: string): string {
-    const installDir = resolveAgentInstallDir();
-    const newCanonical = path.join(installDir, "cinatra-ai", agentId, "skills", agentId, "SKILL.md");
-    if (existsSync(newCanonical)) return newCanonical;
-    return path.join(installDir, agentId, "skills", agentId, "SKILL.md");
-  }
+  const autoDiscoverSkillPath = discoverBridgeSkillPath;
   // Slug guard for body.agent_id (defense-in-depth on top
   // of the path.relative containment check below). Matches the pattern in
   // packages/agents/src/mcp/handlers.ts so all agent-id-shaped inputs share
@@ -613,10 +635,10 @@ export async function POST(req: Request): Promise<Response> {
       : "";
 
   if (candidateSkillPath) {
-    const cwd = process.cwd();
-    // Path traversal containment.
-    // realpathSync resolves symlinks so a symlink inside cwd pointing outside
-    // cwd is caught by the path.relative check.
+    // Path traversal containment against the allowed skill roots (dev tree OR
+    // the agent runtime mount — cinatra#793).
+    // realpathSync resolves symlinks so a symlink inside a root pointing
+    // outside it is caught by the path.relative check.
     // Falls back to lexical path.resolve when the path doesn't exist yet
     // (existsSync below will reject it anyway).
     let resolvedPath: string;
@@ -625,13 +647,9 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       resolvedPath = path.resolve(candidateSkillPath);
     }
-    // path.relative returns ".." or absolute when the candidate escapes cwd.
-    // Empty rel ("" — candidate equals cwd exactly) is treated as inside.
-    const rel = path.relative(cwd, resolvedPath);
-    const insideCwd = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
     if (
       candidateSkillPath.endsWith("SKILL.md") &&
-      insideCwd &&
+      isInsideBridgeSkillRoots(resolvedPath) &&
       existsSync(resolvedPath)
     ) {
       const skillDirPath = path.dirname(resolvedPath);

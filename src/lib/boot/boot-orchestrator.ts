@@ -23,6 +23,7 @@ import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-versio
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
+import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
 import { requiredEnvNotePhases } from "@/lib/boot/phases/required-env-note";
 import { userStoreMountCheckPhases } from "@/lib/boot/phases/user-store-mount-check";
 import { bootDegradeProbePhases } from "@/lib/boot/phases/boot-degrade-probe";
@@ -96,7 +97,27 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // materialized tree. DEV: non-fail-closed no-op when no seed is baked (the dev
   // git-native scan owns the tree). `fatal` policy — the dev/prod split is in the
   // phase body, so it only aborts boot in production.
+  // ── user-store durable-mount check (cinatra#789 item 5) ──────────────────────
+  // Probe the durable extension data root BEFORE the required-set reconcile and
+  // the agent-mount projection below CREATE `<root>/.agent-mount` (cinatra#793):
+  // the mount now lives INSIDE the data root, so probing after them would see a
+  // dir the app itself just created and a missing durable mount would go
+  // silently undetected. Retryable, non-blocking — the deficit is surfaced in
+  // health degradedPhases + logs, never gates the deploy.
+  await run(userStoreMountCheckPhases());
+
   await run(requiredExtensionMaterializePhases());
+
+  // ── agent runtime-mount projection (cinatra#793) ──────────────────────────────
+  // The agent runtime mount (`<extension-data-root>/.agent-mount`) is a
+  // rebuildable projection of the unified content-addressed store. Self-heal it
+  // here: any installed (active|locked) agent-kind canonical row with a trusted
+  // finalized store digest whose mount slug dir is MISSING is re-projected
+  // store→mount (fresh volume / wiped mount / crash-between-finalize-and-
+  // materialize). AFTER the required-set reconcile above (same mount), BEFORE
+  // the marker backfill below (markers must cover the projected dirs before
+  // WayFlow reloads). `degraded`: per-package failures log and boot continues.
+  await run(agentMountProjectionPhases());
 
   // ── agent published-marker self-heal (engineering #418) ──────────────────────
   // PROD-SAFE, always-on (dev AND prod). AWAITED here — before the dev detached
@@ -133,13 +154,10 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // All NON-deploy-blocking (retryable) except the double-armed degrade probe:
   //   - required-env-soft-check: surfaces a missing soft-required var (bridge token)
   //     in the readiness surface (WayFlow deploy sees the deficit; boot not blocked).
-  //   - user-store-mount-check: warns clearly if the durable user store is
-  //     missing/not-writable (installs would be ephemeral) — retryable, non-blocking.
   //   - boot-degrade-probe: inert unless DOUBLE-armed (CINATRA_BOOT_E2E +
   //     CINATRA_BOOT_SIMULATE_DEGRADED) — a `degraded`-policy failure to PROVE the
   //     deploy health gate rejects a durable-degraded boot (e2e acceptance).
   await run(requiredEnvNotePhases());
-  await run(userStoreMountCheckPhases());
   await run(bootDegradeProbePhases());
 
   // Boot reached its serving prerequisites: the eager worker + runtime engines are

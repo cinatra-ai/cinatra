@@ -6,8 +6,7 @@
 // The V2 content-addressed layout lives UNDER this root, kind-segregated:
 // `<root>/<kind>/<slug>/<digest>/` (see extension-package-store-core.ts).
 //
-// Resolution precedence (mirrors `packages/agents/src/agent-install-path.ts`,
-// ops-deploy determinism rationale): the `CINATRA_EXTENSION_DATA_ROOT` env var,
+// Resolution precedence (ops-deploy determinism rationale, ops#436): the `CINATRA_EXTENSION_DATA_ROOT` env var,
 // when set non-empty, WINS over the DB metadata key and the default. The deploy
 // environment owns the on-disk runtime-store topology (the mounted data volume),
 // and a stale `extension_data_root` row left in the DB must never split the host

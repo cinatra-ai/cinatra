@@ -4,6 +4,7 @@ import { mkdir, writeFile, rm } from "fs/promises";
 import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
+import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 import { installedSkillPackages } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, isSkillSource, resolveSkillSource, type SkillSource } from "./skill-source";
@@ -320,6 +321,11 @@ export function getSkillStoreRootPath(): string {
   const { storePath } = readSkillsStorageConfig();
   return path.isAbsolute(storePath) ? storePath : path.join(process.cwd(), storePath);
 }
+
+// cinatra#793: the extension store's `skill/` subtree root lives in the
+// extracted slice ./extension-store-root (file-size ratchet). Re-exported so
+// existing importers keep one entry point.
+export { getExtensionStoreSkillRootPath };
 
 function getInstalledPackagesDir() {
   return getSkillsDataRootPath();
@@ -1567,31 +1573,37 @@ function assertLeafNotSymlink(leafPath: string): void {
  * skill roots cannot exfiltrate arbitrary local files. `readSkillFileContent`
  * and `readSkillContent` already use it internally.
  *
- * Accepts EITHER the new content-store root (`data/skill-store`,
- * canonical for new writes) OR the legacy `data/skills` root (compat fallback
- * — legacy rows' sourcePath stays valid until the store migration migrates
- * them). Out-of-both-roots → reject.
+ * Accepts the new content-store root (`data/skill-store`, canonical for new
+ * writes), the legacy `data/skills` root (compat fallback — legacy rows'
+ * sourcePath stays valid until the store migration migrates them), OR the
+ * unified extension store's `skill/` subtree (cinatra#793 — verdaccio skill
+ * packages' sourcePath points into the finalized store digest dir under
+ * `<CINATRA_EXTENSION_DATA_ROOT>/skill/<slug>/<digest>/`). Out-of-all-roots →
+ * reject.
  */
 export function assertSkillFilePathInsideRoot(filePath: string): void {
-  const storeRoot = path.resolve(getSkillStoreRootPath());
-  const legacyRoot = path.resolve(getSkillsDataRootPath());
   const resolved = path.resolve(filePath);
-  // Layer 1 — lexical containment (KEEP; defense in depth).
-  const insideStore =
-    resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
-  const insideLegacy =
-    resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
-  if (!insideStore && !insideLegacy) {
+  // Layer 1 — lexical containment (KEEP; defense in depth): the path must sit
+  // under at least one allowed root. Layer 2 — realpath containment (#300): a
+  // symlinked ANCESTOR under a root passes the lexical prefix check but the
+  // real path escapes it, so re-assert against the canonicalized root(s) the
+  // target lexically matched.
+  const lexicalRoots = allowedSkillRoots().filter(
+    (root) => resolved === root || resolved.startsWith(root + path.sep),
+  );
+  if (lexicalRoots.length === 0 || !lexicalRoots.some((root) => isRealpathContained(resolved, root))) {
     throw new Error("Skill file path is outside the allowed skill roots.");
   }
-  // Layer 2 — realpath containment (#300). A symlinked ANCESTOR under either
-  // root passes the lexical prefix check but the real path escapes the root.
-  // Re-assert against the canonicalized root(s) the target lexically matched.
-  const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
-  const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
-  if (!realpathInsideStore && !realpathInsideLegacy) {
-    throw new Error("Skill file path is outside the allowed skill roots.");
-  }
+}
+
+/** The read-allowlist roots: the canonical skill content store, the legacy
+ *  `data/skills` root, and the unified extension store's `skill/` subtree
+ *  (cinatra#793 — verdaccio skill payloads). Resolved per call (env/DB knobs
+ *  may change). */
+function allowedSkillRoots(): string[] {
+  return [getSkillStoreRootPath(), getSkillsDataRootPath(), getExtensionStoreSkillRootPath()].map(
+    (root) => path.resolve(root),
+  );
 }
 
 /**
@@ -1614,25 +1626,16 @@ export function assertSkillDirectoryInsideRoot(directoryPath: string): string {
   if (directoryPath.split(/[/\\]/).some((part) => part === ".." || part === ".")) {
     throw new Error("Skill directory path contains a traversal segment.");
   }
-  const storeRoot = path.resolve(getSkillStoreRootPath());
-  const legacyRoot = path.resolve(getSkillsDataRootPath());
   const resolved = path.resolve(directoryPath);
-  // Layer 2 — lexical containment (KEEP; defense in depth).
-  const insideStore =
-    resolved === storeRoot || resolved.startsWith(storeRoot + path.sep);
-  const insideLegacy =
-    resolved === legacyRoot || resolved.startsWith(legacyRoot + path.sep);
-  if (!insideStore && !insideLegacy) {
-    throw new Error("Skill directory path is outside the allowed skill roots.");
-  }
-  // Layer 3 — realpath containment (#300). A symlinked ANCESTOR under either
-  // root passes the lexical prefix check but resolves OUT of the root via the
-  // link target. Re-assert against the canonicalized root(s) the target
-  // lexically matched (nearest-existing-ancestor realpath handles a not-yet-
-  // created leaf without throwing).
-  const realpathInsideStore = insideStore && isRealpathContained(resolved, storeRoot);
-  const realpathInsideLegacy = insideLegacy && isRealpathContained(resolved, legacyRoot);
-  if (!realpathInsideStore && !realpathInsideLegacy) {
+  // Layer 2 — lexical containment (KEEP; defense in depth). Layer 3 — realpath
+  // containment (#300): a symlinked ANCESTOR under a root passes the lexical
+  // prefix check but resolves OUT of the root via the link target, so
+  // re-assert against the canonicalized root(s) the target lexically matched
+  // (nearest-existing-ancestor realpath handles a not-yet-created leaf).
+  const lexicalRoots = allowedSkillRoots().filter(
+    (root) => resolved === root || resolved.startsWith(root + path.sep),
+  );
+  if (lexicalRoots.length === 0 || !lexicalRoots.some((root) => isRealpathContained(resolved, root))) {
     throw new Error("Skill directory path is outside the allowed skill roots.");
   }
   return resolved;

@@ -94,8 +94,8 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
     const {
       ensureAgentPackageFromGitFile,
     } = await import("@cinatra-ai/agents");
-    const { resolveAgentInstallDir } = await import("@cinatra-ai/agents/agent-install-path");
-    const agentsDir = resolveAgentInstallDir();
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
+    const agentsDir = resolveDevExtensionSourceRoot();
 
     // NOTE: `.cinatra-published.json` marker backfill (+ post-backfill wayflow
     // reload) now runs in the always-on `agent-marker-backfill` boot phase
@@ -162,12 +162,12 @@ async function runDevAgentsAndSkillsScan(): Promise<void> {
   // only covers agent kind) AND start the recursive hot-reload watcher so live
   // edits/additions under extensions/ surface without a server restart.
   try {
-    const { resolveAgentInstallDir } = await import("@cinatra-ai/agents/agent-install-path");
+    const { resolveDevExtensionSourceRoot } = await import("@cinatra-ai/agents/agent-runtime-mount");
     const {
       loadAllSkillPackagesAtBoot,
       startDevExtensionsWatcher,
     } = await import("@/lib/extensions-dev-watcher");
-    const extRoot = resolveAgentInstallDir();
+    const extRoot = resolveDevExtensionSourceRoot();
     await loadAllSkillPackagesAtBoot(extRoot);
     startDevExtensionsWatcher(extRoot);
   } catch (err) {

@@ -5,7 +5,7 @@ import "server-only";
 // SOURCE B of the two-source binding registration (Source A is the generated
 // build-time map src/lib/generated/agent-bindings.ts): agent packages
 // installed at RUNTIME (marketplace/registry installs) are MATERIALIZED on
-// disk under `resolveAgentInstallDir()` (default `extensions/`) with their
+// disk under `resolveAgentRuntimeMountDir()` (the projected runtime mount) with their
 // package.json manifest — this module enumerates those manifests, validates
 // `cinatra.fieldRenderers` with the SAME shared validator the generator uses
 // (scripts/extensions/agent-binding-kinds.mjs) and returns normalized
@@ -29,7 +29,7 @@ import {
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
 } from "@/lib/generated/agent-bindings";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
@@ -57,7 +57,7 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
   const all: CollectedBinding[] = [];
   let installDir: string;
   try {
-    installDir = resolveAgentInstallDir();
+    installDir = resolveAgentRuntimeMountDir();
   } catch {
     return [];
   }

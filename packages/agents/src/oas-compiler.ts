@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
 // Operator-aware vendor dir for compile-time probes.
 // Reads the instance-identity store dynamically to avoid a hard import that
 // the unit-test transitive shim cannot stub. Missing store returns null and
@@ -394,7 +394,7 @@ async function loadGlobalRegistry(
   { strict = false }: { strict?: boolean } = {},
 ): Promise<Record<string, unknown>> {
   const path =
-    registryPath ?? join(resolveAgentInstallDir(), "_shared", "cinatra", "components.json");
+    registryPath ?? join(resolveDevExtensionSourceRoot(), "_shared", "cinatra", "components.json");
   if (_registryCache === null) _registryCache = new Map();
   const cached = _registryCache.get(path);
   if (cached !== undefined) return cached;
@@ -564,7 +564,7 @@ function resolveAgentJsonPath(packageName: string): string[] | null {
   // Vendor-dir probe walks the operator's instance
   // namespace first, then the shipped "cinatra" dir. Non-cinatra operators
   // could not publish chat-authored agents before this restore.
-  const root = resolveAgentInstallDir();
+  const root = resolveDevExtensionSourceRoot();
   const legacySlug = OAS_COMPILER_LEGACY_SLUG_MAP[slug] ?? slug;
   const candidates: string[] = [];
   for (const vendor of compilerVendorDirCandidates()) {

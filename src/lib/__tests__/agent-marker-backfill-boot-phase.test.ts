@@ -25,8 +25,9 @@ import { createHash } from "node:crypto";
 let FIXTURE_ROOT = "";
 
 // Seam 1: install-dir resolver (DB-backed in prod) → point at the fixture tree.
-vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
-  resolveAgentInstallDir: () => FIXTURE_ROOT,
+vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => FIXTURE_ROOT,
+  resolveDevExtensionSourceRoot: () => FIXTURE_ROOT,
 }));
 
 // Seam 2: wayflow reload client (HTTP to the wayflow container in prod). No

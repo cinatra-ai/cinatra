@@ -113,8 +113,9 @@ vi.mock("../trigger-service", () => ({
   getRunTriggerForActor: vi.fn(),
   deleteRunTriggerForActor: vi.fn(),
 }));
-vi.mock("../agent-install-path", () => ({
-  resolveAgentInstallDir: vi.fn(() => process.cwd()),
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: vi.fn(() => process.cwd()),
+  resolveDevExtensionSourceRoot: vi.fn(() => process.cwd()),
 }));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
 vi.mock("../oas-compiler", () => ({

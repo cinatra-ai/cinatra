@@ -10,9 +10,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 const agentInstallDirMock = vi.hoisted(() => ({
-  resolveAgentInstallDir: vi.fn(),
+  resolveAgentRuntimeMountDir: vi.fn(),
+  resolveDevExtensionSourceRoot: vi.fn(),
 }));
-vi.mock("../agent-install-path", () => agentInstallDirMock);
+vi.mock("../agent-runtime-mount", () => agentInstallDirMock);
 
 const fsMock = vi.hoisted(() => ({
   readFile: vi.fn(),
@@ -53,8 +54,8 @@ beforeEach(() => {
   // count (the "not called" assertions otherwise pick up prior tests' calls).
   fsMock.readFile.mockReset();
   existsSyncMock.existsSync.mockReset();
-  agentInstallDirMock.resolveAgentInstallDir.mockReset();
-  agentInstallDirMock.resolveAgentInstallDir.mockReturnValue("/repo/agents");
+  agentInstallDirMock.resolveAgentRuntimeMountDir.mockReset();
+  agentInstallDirMock.resolveAgentRuntimeMountDir.mockReturnValue("/repo/agents");
   existsSyncMock.existsSync.mockReturnValue(true);
   fsMock.readFile.mockResolvedValue(JSON.stringify(SAMPLE_OAS));
 });

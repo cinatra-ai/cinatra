@@ -34,6 +34,11 @@ vi.mock("@/lib/boot/phases/required-extension-materialize", () => ({
     { name: "required-extension-materialize", policy: "fatal", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/agent-mount-projection", () => ({
+  agentMountProjectionPhases: () => [
+    { name: "agent-mount-projection", policy: "degraded", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/agent-marker-backfill", () => ({
   agentMarkerBackfillPhases: () => [
     { name: "agent-marker-backfill", policy: "degraded", run: async () => {} },
@@ -103,7 +108,9 @@ describe("runBoot orchestration", () => {
       "core-x",
       "schema-version-precondition", // cinatra#789 item 4 — after core (migrations), before ext-activation
       "ext-x",
+      "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "required-extension-materialize", // cinatra-ai/ops#436 — after ext-activation, before marker backfill
+      "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
       "[detached] dev-agents-skills-scan", // dev block 1 — EARLY + detached
       "assistant-bootstrap",
@@ -113,7 +120,6 @@ describe("runBoot orchestration", () => {
       "anthropic-skill-sync-map",
       "loops-x",
       "required-env-soft-check", // cinatra#789 item 3 — deploy-robustness readiness signals
-      "user-store-mount-check", // cinatra#789 item 5
       "boot-degrade-probe", // cinatra#789 item 1 — inert unless double-armed
       "[detached] dev-auto-setup", // dev block 2 — LAST + detached
     ]);
@@ -134,7 +140,9 @@ describe("runBoot orchestration", () => {
       "core-x",
       "schema-version-precondition", // cinatra#789 item 4 — runs in PROD (fatal on too-old)
       "ext-x",
+      "user-store-mount-check", // cinatra#789 item 5 — BEFORE the reconcile/projection create the mount (cinatra#793)
       "required-extension-materialize", // cinatra-ai/ops#436 — runs in PROD (fail-closed)
+      "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
       "assistant-bootstrap",
       "otel-tracing",
@@ -143,7 +151,6 @@ describe("runBoot orchestration", () => {
       "anthropic-skill-sync-map",
       "loops-x",
       "required-env-soft-check", // cinatra#789 item 3
-      "user-store-mount-check", // cinatra#789 item 5
       "boot-degrade-probe", // cinatra#789 item 1
     ]);
     expect(markBootReady).toHaveBeenCalledTimes(1);

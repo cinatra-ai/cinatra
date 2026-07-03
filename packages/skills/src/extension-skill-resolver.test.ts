@@ -38,8 +38,9 @@ vi.mock("@cinatra-ai/extensions", () => ({
 // Avoid loading the real install-path module (it pulls @/lib/database). Point
 // the install dir at the bundled cwd/extensions so dedup-by-realpath collapses
 // it with the cwd scan; the fixture is reached via cwd/extensions (we chdir).
-vi.mock("@cinatra-ai/agents/agent-install-path", () => ({
-  resolveAgentInstallDir: () => path.join(process.cwd(), "extensions"),
+vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => path.join(process.cwd(), "extensions"),
+  resolveDevExtensionSourceRoot: () => path.join(process.cwd(), "extensions"),
 }));
 
 import {

@@ -33,8 +33,27 @@ vi.mock("../audit-log", () => ({
 // effective-status map (dependents default to "active" = fail-safe block).
 vi.mock("../canonical-store", () => ({
   readInstalledExtensionsByPackageName: vi.fn(async () => []),
+  readInstalledExtensionById: vi.fn(async () => null),
   listInstalledExtensions: vi.fn(async () => []),
   readEffectiveStatusByPackageNames: vi.fn(async () => new Map<string, "active" | "archived">()),
+}));
+
+// cinatra#793: the store-routed kinds (agent/skill/artifact/connector) ensure a
+// canonical row + fire the store pipeline on install/update. Mock the lifecycle
+// primitive + activate hook so these DISPATCH-contract tests stay DB-free (the
+// ordering/rollback/compensation semantics are pinned in
+// dispatcher-install-ordering.test.ts, not here).
+vi.mock("../lifecycle-primitive", () => ({
+  installExtensionManifest: vi.fn(async () => ({})),
+  transitionExtensionLifecycle: vi.fn(async () => null),
+  deleteNonFinalizedCanonicalRow: vi.fn(async () => {}),
+}));
+vi.mock("../activate-hook", () => ({
+  fireExtensionActivate: vi.fn(async () => ({
+    finalized: true,
+    activated: false,
+    reason: "metadata-only-kind",
+  })),
 }));
 
 import {

@@ -34,7 +34,7 @@ import {
 } from "@cinatra-ai/llm";
 
 import { buildActorContextFromPrimitive } from "./auth-policy";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
 import {
   resolveAgentCreationDispatch,
   AgentCreationDispatchAbortError,
@@ -71,7 +71,7 @@ const FALLBACK_AUTHOR_SYSTEM =
  * acceptable; the catalog skill is the source of truth for methodology).
  */
 async function loadAuthorAgentSystemPrompt(): Promise<string> {
-  const installRoot = resolveAgentInstallDir();
+  const installRoot = resolveDevExtensionSourceRoot();
   const oasPath = join(installRoot, "cinatra-ai", AUTHOR_AGENT_DIR_SLUG, "cinatra", "oas.json");
   if (!existsSync(oasPath)) {
     return FALLBACK_AUTHOR_SYSTEM;

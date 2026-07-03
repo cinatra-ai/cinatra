@@ -202,6 +202,136 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(installExtensionManifest).not.toHaveBeenCalled();
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#793 — METADATA-ONLY STORE-PIPELINE KINDS (agent/skill/artifact):
+  // the store pipeline (activate hook) fires BEFORE the native handler, gated on
+  // `finalized` ONLY; a handler failure after finalize runs the COMPENSATION.
+  // ---------------------------------------------------------------------------
+  it("cinatra#793: a fresh agent install fires the store pipeline BEFORE the native handler, gated on finalized ONLY", async () => {
+    const handler = makeHandler("agent");
+    (handler.install as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      callOrder.push("handler.install");
+    });
+    extensionRegistry.register(handler);
+    // Metadata-only payloads never hot-activate in-process — finalized alone is success.
+    fireExtensionActivate.mockImplementation(async () => {
+      callOrder.push("pipeline.fire");
+      return { finalized: true, activated: false, reason: "metadata-only-kind" };
+    });
+
+    await extensionRegistry.install("agent", makeRef("@v/store-agent"), orgActor);
+
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/store-agent", "org-1", "1.0.0");
+    const pipeIdx = callOrder.indexOf("pipeline.fire");
+    const handlerIdx = callOrder.indexOf("handler.install");
+    expect(pipeIdx).toBeGreaterThanOrEqual(0);
+    expect(handlerIdx).toBeGreaterThanOrEqual(0);
+    expect(pipeIdx, "store pipeline fires BEFORE the native handler").toBeLessThan(handlerIdx);
+    // The row was created before both.
+    const createIdx = callOrder.findIndex((e) => e.startsWith("createRow:"));
+    expect(createIdx).toBeLessThan(pipeIdx);
+  });
+
+  it("cinatra#793: a NON-finalizing pipeline on a fresh skill install ROLLS BACK the placeholder row + throws — the handler never runs", async () => {
+    const handler = makeHandler("skill");
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: false, activated: false, reason: "registry-unreachable" });
+
+    await expect(
+      extensionRegistry.install("skill", { registryUrl: "", packageName: "@v/bad-skill", version: "1.0.0" }, orgActor),
+    ).rejects.toThrow(/did not finalize the store install pipeline/);
+
+    expect(handler.install).not.toHaveBeenCalled();
+    expect(rows.filter((r) => r.packageName === "@v/bad-skill")).toHaveLength(0);
+    expect(_internalDeleteInstalledExtension).toHaveBeenCalledTimes(1);
+  });
+
+  it("cinatra#793: NO host hook wired (finalized undefined) on a fresh artifact install FAILS CLOSED + rolls back — no store payload for the handler", async () => {
+    const handler = makeHandler("artifact");
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ activated: false, reason: "no-host-hook" });
+
+    await expect(
+      extensionRegistry.install("artifact", makeRef("@v/x-artifact"), orgActor),
+    ).rejects.toThrow(/could not run the store install pipeline/);
+
+    expect(handler.install).not.toHaveBeenCalled();
+    expect(rows.filter((r) => r.packageName === "@v/x-artifact")).toHaveLength(0);
+  });
+
+  it("cinatra#793 COMPENSATION (fresh): a handler throw AFTER a finalized pipeline ARCHIVES the canonical row (never leaves it ACTIVE with no run surface)", async () => {
+    const handler = makeHandler("agent");
+    (handler.install as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("handler boom"));
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false, reason: "metadata-only-kind" });
+
+    await expect(
+      extensionRegistry.install("agent", makeRef("@v/comp-agent"), orgActor),
+    ).rejects.toThrow(/handler boom/);
+
+    // The finalized row is NOT deleted (its payload/provenance are real) — it is
+    // ARCHIVED via the lifecycle primitive so nothing ACTIVE lacks a run surface.
+    expect(_internalDeleteInstalledExtension).not.toHaveBeenCalled();
+    expect(transitionExtensionLifecycle).toHaveBeenCalledWith(
+      expect.any(String),
+      "archive",
+      expect.objectContaining({
+        reason: expect.stringMatching(/handler failed after store-pipeline finalize/),
+      }),
+    );
+  });
+
+  it("cinatra#793 COMPENSATION (update): a handler.update throw AFTER a finalized pipeline RE-FIRES the pipeline at the CAPTURED PRIOR version", async () => {
+    rows = [
+      {
+        id: "iext_prior",
+        packageName: "@v/upd-skill",
+        status: "active",
+        organizationId: "org-1",
+        source: { type: "verdaccio", integrity: "sha512-v1", version: "0.9.0" } as never,
+      },
+    ];
+    const handler = makeHandler("skill");
+    (handler.update as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("native swap boom"));
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false, reason: "metadata-only-kind" });
+
+    await expect(
+      extensionRegistry.update("skill", { registryUrl: "", packageName: "@v/upd-skill", version: "2.0.0" }, orgActor),
+    ).rejects.toThrow(/native swap boom/);
+
+    // First fire: the NEW version's pipeline. Second fire: the compensation's
+    // forward re-install of the CAPTURED PRIOR version (0.9.0).
+    expect(fireExtensionActivate).toHaveBeenNthCalledWith(1, "@v/upd-skill", "org-1", "2.0.0");
+    expect(fireExtensionActivate).toHaveBeenNthCalledWith(2, "@v/upd-skill", "org-1", "0.9.0");
+    // The previously-working row is never deleted.
+    expect(_internalDeleteInstalledExtension).not.toHaveBeenCalled();
+    expect(rows.find((r) => r.id === "iext_prior")).toBeDefined();
+  });
+
+  it("cinatra#793 COMPENSATION failure surfaces a MANUAL-RECOVERY aggregate error (original + compensation failure)", async () => {
+    rows = [
+      {
+        id: "iext_prior2",
+        packageName: "@v/upd2-skill",
+        status: "active",
+        organizationId: "org-1",
+        source: { type: "verdaccio", integrity: "sha512-v1", version: "0.9.0" } as never,
+      },
+    ];
+    const handler = makeHandler("skill");
+    (handler.update as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("native swap boom"));
+    extensionRegistry.register(handler);
+    // NEW pipeline finalizes; the compensation re-fire does NOT.
+    fireExtensionActivate
+      .mockResolvedValueOnce({ finalized: true, activated: false, reason: "metadata-only-kind" })
+      .mockResolvedValueOnce({ finalized: false, activated: false, reason: "registry-down" });
+
+    await expect(
+      extensionRegistry.update("skill", { registryUrl: "", packageName: "@v/upd2-skill", version: "2.0.0" }, orgActor),
+    ).rejects.toThrow(/compensation ALSO failed .*manual recovery required/);
+  });
+
   it("Finding 1: an already-finalized CONNECTOR row RE-FIRES the activate hook on install (idempotent re-activate; no new row, never deleted)", async () => {
     // A prior install committed (finalized, real provenance) but in-process
     // activation did not register the package — the row is healthy + anchorable.
@@ -388,9 +518,9 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(fireExtensionActivate).not.toHaveBeenCalled();
   });
 
-  it("a non-connector kind (agent) does NOT fire the package-store activate hook", async () => {
-    extensionRegistry.register(makeHandler("agent"));
-    await extensionRegistry.install("agent", makeRef("@v/g-agent"), orgActor);
+  it("a saga-owned kind (workflow) does NOT fire the package-store activate hook (its handler runs the pipeline itself)", async () => {
+    extensionRegistry.register(makeHandler("workflow"));
+    await extensionRegistry.install("workflow", makeRef("@v/g-workflow"), orgActor);
     expect(fireExtensionActivate).not.toHaveBeenCalled();
   });
 
@@ -425,15 +555,28 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(fireExtensionActivate).not.toHaveBeenCalled();
   });
 
-  it("Finding 1: a canonical-store read failure on a non-hot-loadable kind (agent) is GRANDFATHERED (legacy path) — no throw, no pipeline", async () => {
+  it("cinatra#793: a canonical-store read failure on a store-routed kind (agent) FAILS CLOSED (the handler needs the store payload)", async () => {
     readInstalledExtensionsByPackageName.mockRejectedValueOnce(new Error("canonical store unreachable"));
     const handler = makeHandler("agent");
     extensionRegistry.register(handler);
 
-    // The agent handler still ran (legacy per-handler install path); the dispatcher
-    // did NOT throw and did NOT create a placeholder row or fire the activate hook.
     await expect(
       extensionRegistry.install("agent", makeRef("@v/agent-store-down"), orgActor),
+    ).rejects.toThrow(/could not ensure its canonical install row/);
+    expect(handler.install).not.toHaveBeenCalled();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(fireExtensionActivate).not.toHaveBeenCalled();
+  });
+
+  it("Finding 1: a canonical-store read failure on a saga-owned kind (workflow) is GRANDFATHERED (legacy path) — no throw, no pipeline", async () => {
+    readInstalledExtensionsByPackageName.mockRejectedValueOnce(new Error("canonical store unreachable"));
+    const handler = makeHandler("workflow");
+    extensionRegistry.register(handler);
+
+    // The workflow handler still ran (its saga owns the pipeline); the dispatcher
+    // did NOT throw and did NOT create a placeholder row or fire the activate hook.
+    await expect(
+      extensionRegistry.install("workflow", makeRef("@v/wf-store-down"), orgActor),
     ).resolves.toBeUndefined();
     expect(handler.install).toHaveBeenCalledTimes(1);
     expect(installExtensionManifest).not.toHaveBeenCalled();
@@ -464,9 +607,10 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(fireExtensionActivate).not.toHaveBeenCalled();
   });
 
-  it("Finding 3: a verdaccio skill ref (@scope/pkg with a version) DOES create the canonical row (carve-out is github/local-only)", async () => {
+  it("Finding 3: a verdaccio skill ref (@scope/pkg with a version) DOES create the canonical row + fires the store pipeline (carve-out is github/local-only)", async () => {
     const handler = makeHandler("skill");
     extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false, reason: "metadata-only-kind" });
 
     await extensionRegistry.install(
       "skill",
@@ -475,11 +619,11 @@ describe("dispatcher host-install ordering + rollback", () => {
     );
 
     // A scoped verdaccio skill ref is NOT the github/local carve-out → a canonical
-    // row is created. (Skill is not in KINDS_USING_ACTIVATE_HOOK, so no pipeline.)
+    // row is created AND the store pipeline fires (cinatra#793) before the handler.
     expect(handler.install).toHaveBeenCalledTimes(1);
     expect(installExtensionManifest).toHaveBeenCalledTimes(1);
     expect(rows.filter((r) => r.packageName === "@acme/cool-skill")).toHaveLength(1);
-    expect(fireExtensionActivate).not.toHaveBeenCalled();
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@acme/cool-skill", "org-1", "2.0.0");
   });
 
   // -------------------------------------------------------------------------

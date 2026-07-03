@@ -2,7 +2,7 @@
 //
 // Reconciles the image-owned required-extension OAS SEED (built at image-build
 // time by scripts/extensions/build-required-oas-seed.mjs, baked into the runtime
-// image) into the live agent-install dir (`resolveAgentInstallDir()`) on every
+// image) into the live agent RUNTIME MOUNT (`resolveAgentRuntimeMountDir()`) on every
 // boot. This is what makes the required-extension set MATERIALIZABLE ON DEPLOY:
 // a new image tag carries a new seed, and this reconcile refreshes the on-disk
 // `<vendor>/<slug>/cinatra/oas.json` trees that BOTH WayFlow (`:/agents:ro`
@@ -41,6 +41,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { resolveExtensionDataRoot } from "@/lib/extension-data-root";
+import { AGENT_RUNTIME_MOUNT_DIRNAME } from "@cinatra-ai/agents/agent-runtime-mount";
 
 // Kept in sync with scripts/extensions/build-required-oas-seed.mjs (the build-
 // time producer). Duplicated as plain consts rather than imported because the
@@ -88,6 +89,14 @@ function isUnderUserStore(dir: string): boolean {
   const resolved = path.resolve(dir);
   const store = path.resolve(resolveUserStoreRoot());
   return resolved === store || resolved.startsWith(store + path.sep);
+}
+
+/** The agent RUNTIME MOUNT (`<root>/.agent-mount`, cinatra#793) — the one
+ *  sanctioned in-root materialize target (see the guard below). */
+function isAgentRuntimeMount(dir: string): boolean {
+  const resolved = path.resolve(dir);
+  const mount = path.join(path.resolve(resolveUserStoreRoot()), AGENT_RUNTIME_MOUNT_DIRNAME);
+  return resolved === mount || resolved.startsWith(mount + path.sep);
 }
 
 function readJsonOrNull<T>(file: string): T | null {
@@ -224,12 +233,16 @@ export function materializeRequiredExtensions(opts: {
     changed: false,
   };
 
-  // Guard: never materialize/prune into the durable user store.
-  if (isUnderUserStore(installDir)) {
+  // Guard: never materialize/prune into the durable user store's CONTENT
+  // subtrees (`<root>/<kind>/...` — the content-addressed payloads). The ONE
+  // sanctioned in-root target is the agent RUNTIME MOUNT dot-dir
+  // (`<root>/.agent-mount`, cinatra#793): itself a reconstructable cache
+  // projected from the store, and invisible to the store's kind-dir discovery.
+  if (isUnderUserStore(installDir) && !isAgentRuntimeMount(installDir)) {
     throw new Error(
       `[required-extension-materialize] refusing to materialize into the user-install store ` +
-        `(${installDir} is at or under ${resolveUserStoreRoot()}); the install dir must be a ` +
-        `separate, reconstructable required-set cache.`,
+        `(${installDir} is at or under ${resolveUserStoreRoot()} and is not the agent runtime ` +
+        `mount); the install dir must be a reconstructable required-set cache.`,
     );
   }
 

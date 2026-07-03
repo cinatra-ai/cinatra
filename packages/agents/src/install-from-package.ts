@@ -54,7 +54,7 @@ import {
 import { compileOasAgentJson } from "./oas-compiler";
 import { ensureDynamicObjectType } from "@cinatra-ai/objects/auto-registrar";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
-import { resolveAgentInstallDir } from "./agent-install-path";
+import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import {
   materializeAgentPackageToDisk,
   commitMaterialize,
@@ -72,6 +72,23 @@ export type InstallAgentFromPackageInput = {
   packageName: string;
   packageVersion?: string;
   orgId?: string;
+  /**
+   * cinatra#793: the org scope for the FINALIZED store-payload resolution
+   * (exact-org anchor resolution — the SAME scope the dispatcher ensured the
+   * canonical row at; `null` = platform scope). OMITTED (undefined) →
+   * platform-global resolution. Deliberately SEPARATE from `orgId` (the
+   * template-seed creator org) so payload anchoring never shifts row ownership.
+   */
+  anchorOrgId?: string | null;
+  /**
+   * cinatra#793: when true the FINALIZED store payload is REQUIRED — a
+   * resolution miss / version mismatch FAILS LOUD instead of falling back to a
+   * registry extract. The dispatcher-routed ROOT install sets this (its store
+   * pipeline ran first, so a miss is an invariant violation, and a silent
+   * registry fallback would reintroduce the registry TOCTOU the store routing
+   * closes). Saga-external transitive dependency nodes leave it unset.
+   */
+  requireStorePayload?: boolean;
   creatorId?: string;
   // Includes "active" so the install handler can pass status:"active" and
   // newly installed extensions appear in /agents/run (which filters by status
@@ -121,15 +138,102 @@ export async function installAgentFromPackage(
   );
 }
 
+// cinatra#793: STORE-FIRST payload acquisition. When the exact (package,
+// version) being installed is already MATERIALIZED + FINALIZED in the unified
+// content-addressed store (the dispatcher's store pipeline runs BEFORE the
+// agent handler, so the root package of every dispatcher install/update is),
+// consume THAT payload: copy the SRI-verified digest dir into a temp dir shaped
+// exactly like a registry extract, so every downstream step (validate → seed →
+// materialize-to-mount → cleanup) is unchanged and the store dir itself is
+// never mutated. Falls back to the registry extract for packages with no
+// finalized payload — the non-saga full-tree installer's TRANSITIVE dependency
+// nodes never pass the dispatcher, so they have no store payload (yet; the
+// batch saga path dispatches every member through the dispatcher and is fully
+// store-backed).
+async function acquireAgentPackagePayload(
+  input: {
+    packageName: string;
+    packageVersion?: string;
+    anchorOrgId?: string | null;
+    requireStorePayload?: boolean;
+  },
+  resolvedConfig: VerdaccioConfig,
+): Promise<Awaited<ReturnType<typeof extractAgentPackage>>> {
+  try {
+    const { resolveFinalizedStorePayload } = await import("@/lib/extension-store-payload");
+    const payload = await resolveFinalizedStorePayload({
+      packageName: input.packageName,
+      expectedKind: "agent",
+      ...(input.anchorOrgId !== undefined ? { orgId: input.anchorOrgId } : {}),
+    });
+    if (
+      input.requireStorePayload &&
+      (!payload || (input.packageVersion && payload.version !== input.packageVersion))
+    ) {
+      // Dispatcher-routed ROOT install: the store pipeline finalized this exact
+      // (package, version) BEFORE this handler ran — a miss here means the
+      // handler would install DIFFERENT bytes than the canonical row anchors.
+      throw new Error(
+        `[installAgentFromPackage] no FINALIZED store payload for ${input.packageName}` +
+          `${input.packageVersion ? `@${input.packageVersion}` : ""}` +
+          `${payload ? ` (found version ${payload.version ?? "unknown"})` : ""} — the ` +
+          `dispatcher's store pipeline must finalize before the agent handler consumes it; ` +
+          `refusing the registry-extract fallback.`,
+      );
+    }
+    if (payload && (!input.packageVersion || payload.version === input.packageVersion)) {
+      const { mkdtemp, cp, readFile, access } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { readAgentPayloadFromExtractedPackage } = await import("@cinatra-ai/registries");
+      const tempDir = await mkdtemp(join(tmpdir(), "cinatra-agent-store-payload-"));
+      await cp(payload.storeDir, tempDir, { recursive: true });
+      const manifest = JSON.parse(await readFile(join(tempDir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      // Same payload/readme resolution as extractAgentPackage (the OAS Flow
+      // document from cinatra/oas.json, legacy root agent.json fallback).
+      const oasPayload = await readAgentPayloadFromExtractedPackage(tempDir);
+      const readmePath = join(tempDir, "README.md");
+      const readme = (await access(readmePath).then(() => true).catch(() => false))
+        ? await readFile(readmePath, "utf8")
+        : null;
+      return {
+        packageName: input.packageName,
+        packageVersion:
+          payload.version ?? input.packageVersion ?? manifest.version ?? "0.0.0",
+        manifest,
+        payload: oasPayload,
+        readme,
+        tempDir,
+      };
+    }
+  } catch (err) {
+    if (input.requireStorePayload) throw err;
+    console.warn(
+      `[installAgentFromPackage] store-payload read for ${input.packageName} failed — ` +
+        `falling back to the registry extract:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return extractAgentPackage(
+    { packageName: input.packageName, packageVersion: input.packageVersion },
+    resolvedConfig,
+  );
+}
+
 async function _installAgentFromPackageImpl(
   input: InstallAgentFromPackageInput,
   config?: VerdaccioConfig,
 ): Promise<InstallAgentFromPackageResult> {
   const resolvedConfig = ensureConfig(config, "installAgentFromPackage");
-  const extracted = await extractAgentPackage(
+  const extracted = await acquireAgentPackagePayload(
     {
       packageName: input.packageName,
       packageVersion: input.packageVersion,
+      ...(input.anchorOrgId !== undefined ? { anchorOrgId: input.anchorOrgId } : {}),
+      ...(input.requireStorePayload !== undefined
+        ? { requireStorePayload: input.requireStorePayload }
+        : {}),
     },
     resolvedConfig,
   );
@@ -268,7 +372,10 @@ async function _installAgentFromPackageImpl(
     const materializeResult = await materializeAgentPackageToDisk({
       extractedTempDir: extracted.tempDir,
       packageName: extracted.packageName,
-      agentInstallDir: resolveAgentInstallDir(),
+      // cinatra#793: runtime files project into the agent RUNTIME MOUNT
+      // (`<extension-data-root>/.agent-mount`) — the deploy-owned dir WayFlow
+      // mounts — never a standalone install dir.
+      agentInstallDir: resolveAgentRuntimeMountDir(),
     });
     if (!materializeResult.materialized) {
       console.warn(
@@ -623,6 +730,13 @@ export type InstallAgentPackageWithDependenciesInput = {
   packageName: string;
   packageVersion?: string;
   orgId?: string;
+  /** cinatra#793: store-payload resolution scope for the ROOT node (see
+   *  InstallAgentFromPackageInput.anchorOrgId). */
+  anchorOrgId?: string | null;
+  /** cinatra#793: require the ROOT node's finalized store payload (the
+   *  dispatcher path); transitive dependency nodes always keep the registry
+   *  extract (they never routed through the dispatcher pipeline). */
+  requireStorePayloadForRoot?: boolean;
   creatorId?: string;
   // Includes "active"; mirrors InstallAgentFromPackageInput.
   status?: "draft" | "published" | "active";
@@ -707,6 +821,7 @@ async function _installAgentPackageWithDependenciesImpl(
     config: resolvedConfig,
     conflictPolicy: "prefer-newer",
     install: async (node) => {
+      const isRootNode = node.packageName === input.packageName;
       const res = await installAgentFromPackage(
         {
           packageName: node.packageName,
@@ -714,6 +829,12 @@ async function _installAgentPackageWithDependenciesImpl(
           orgId: input.orgId,
           creatorId: input.creatorId,
           status: input.status,
+          // cinatra#793: only the ROOT node is dispatcher-routed (its store
+          // payload is finalized); transitive nodes keep the registry extract.
+          ...(isRootNode && input.anchorOrgId !== undefined
+            ? { anchorOrgId: input.anchorOrgId }
+            : {}),
+          ...(isRootNode && input.requireStorePayloadForRoot ? { requireStorePayload: true } : {}),
           // Transitively-installed dependencies inherit the
           // root install's owner tuple. A team-owned root install means
           // team-owned dependencies; the team_admin who installed the root

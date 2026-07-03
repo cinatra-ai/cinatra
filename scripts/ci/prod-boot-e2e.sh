@@ -62,14 +62,19 @@ PG="${RUN_ID}-pg"
 REDIS="${RUN_ID}-redis"
 APP="${RUN_ID}-app"
 
-# Required-extension deploy-materialization (cinatra-ai/ops#436). The app boots
-# with a NON-DEFAULT agent-install dir (proving the CINATRA_AGENT_INSTALL_DIR
-# decoupling) backed by a named volume we pre-seed with STALE state, so the
-# assertions below prove: (i) the env override is honored, (ii) the boot phase
-# materializes the required-set OAS trees from the image seed into that dir,
-# (iii) a stale seed-owned dir is pruned, (iv) a coexisting user dir survives.
-AGENT_INSTALL_DIR="/srv/agents"
-AGENT_INSTALL_VOL="${RUN_ID}-agents"
+# Unified extension data root + agent runtime mount (cinatra#793 / ops#436).
+# The app boots with a NON-DEFAULT `CINATRA_EXTENSION_DATA_ROOT` (proving the
+# env decoupling) backed by a named volume. The agent runtime tree is the
+# PROJECTED mount `<root>/.agent-mount` — populated from the unified store +
+# the image's required-OAS seed, never from a standalone install-dir knob
+# (`CINATRA_AGENT_INSTALL_DIR` and the `agent_install_path` metadata are
+# DELETED). We pre-seed the mount with STALE state so the assertions below
+# prove: (i) the env override is honored, (ii) the boot phase materializes the
+# required-set OAS trees from the image seed into the mount, (iii) a stale
+# seed-owned dir is pruned, (iv) a coexisting user dir survives.
+EXTENSION_DATA_ROOT="/srv/extensions-data"
+AGENT_MOUNT_DIR="${EXTENSION_DATA_ROOT}/.agent-mount"
+AGENT_INSTALL_VOL="${RUN_ID}-extdata"
 
 # The app's public origin must EXACTLY match the origin the probes fetch
 # (Better Auth validates its base URL/origin; an origin mismatch is an
@@ -99,7 +104,7 @@ cleanup() {
   docker rm -f "$APP" "$APP_DEGRADED" "$APP_MISSING_ENV" "$APP_ROLLBACK" "$APP_NO_MOUNT" \
     "$PG" "$REDIS" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
-  docker volume rm "$AGENT_INSTALL_VOL" "${RUN_ID}-agents-nomount" >/dev/null 2>&1 || true
+  docker volume rm "$AGENT_INSTALL_VOL" >/dev/null 2>&1 || true
 }
 
 dump_logs() {
@@ -295,14 +300,14 @@ docker run --rm --network "$NET" \
 #     must NEVER touch it.
 # This proves the prune is ownership-bounded and user-installs are preserved.
 echo "==> pre-seeding agent-install volume with stale + user dirs"
-docker run --rm -v "${AGENT_INSTALL_VOL}:${AGENT_INSTALL_DIR}" "$IMAGE" sh -c "
+docker run --rm -v "${AGENT_INSTALL_VOL}:${EXTENSION_DATA_ROOT}" "$IMAGE" sh -c "
   set -e
-  mkdir -p '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/cinatra'
-  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/cinatra/oas.json'
+  mkdir -p '${AGENT_MOUNT_DIR}/zz-stale/gone-agent/cinatra'
+  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_MOUNT_DIR}/zz-stale/gone-agent/cinatra/oas.json'
   echo '{\"vendor\":\"zz-stale\",\"slug\":\"gone-agent\",\"kind\":\"required-oas-seed\"}' \
-    > '${AGENT_INSTALL_DIR}/zz-stale/gone-agent/.cinatra-required-seed.json'
-  mkdir -p '${AGENT_INSTALL_DIR}/acme/user-agent/cinatra'
-  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_INSTALL_DIR}/acme/user-agent/cinatra/oas.json'
+    > '${AGENT_MOUNT_DIR}/zz-stale/gone-agent/.cinatra-required-seed.json'
+  mkdir -p '${AGENT_MOUNT_DIR}/acme/user-agent/cinatra'
+  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_MOUNT_DIR}/acme/user-agent/cinatra/oas.json'
 "
 
 echo "==> booting app container"
@@ -321,8 +326,8 @@ docker run -d --name "$APP" --network "$NET" \
   -e NANGO_ENCRYPTION_KEY="prod-boot-e2e-placeholder-not-a-real-key" \
   -e OPENAI_API_KEY="sk-prod-boot-e2e-placeholder" \
   -e CINATRA_BRIDGE_TOKEN="$BRIDGE_TOKEN" \
-  -e CINATRA_AGENT_INSTALL_DIR="$AGENT_INSTALL_DIR" \
-  -v "${AGENT_INSTALL_VOL}:${AGENT_INSTALL_DIR}" \
+  -e CINATRA_EXTENSION_DATA_ROOT="$EXTENSION_DATA_ROOT" \
+  -v "${AGENT_INSTALL_VOL}:${EXTENSION_DATA_ROOT}" \
   "$IMAGE" >/dev/null
 
 # ── 4. Health gate: /api/health must answer 200 {"status":"ok"} ─────────────
@@ -439,18 +444,19 @@ done
 echo "    boot log OK (loader reported; no fatal markers)"
 
 # ── 6c. Required-extension deploy-materialization assertion (ops#436) ────────
-# The app booted with CINATRA_AGENT_INSTALL_DIR=${AGENT_INSTALL_DIR} (a
-# non-default, pre-seeded-stale dir). Prove the boot reconcile:
+# The app booted with CINATRA_EXTENSION_DATA_ROOT=${EXTENSION_DATA_ROOT}; the
+# agent runtime tree is the PROJECTED mount `<root>/.agent-mount` (cinatra#793 —
+# no CINATRA_AGENT_INSTALL_DIR env exists anymore). Prove the boot reconcile:
 #   (i)   honored the env override (the install dir is the one we set);
 #   (ii)  materialized the image seed's required agent OAS trees into it
 #         (the dir now mirrors /app/.cinatra-required-oas-seed's manifest);
 #   (iii) PRUNED the stale seed-owned dir (zz-stale/gone-agent);
 #   (iv)  PRESERVED the coexisting user dir (acme/user-agent, no marker).
-echo "==> ops#436 assertion: required-extension materialization into ${AGENT_INSTALL_DIR}"
+echo "==> ops#436/cinatra#793 assertion: required-extension materialization into ${AGENT_MOUNT_DIR}"
 MAT_CHECK=$(docker exec "$APP" node -e '
   const fs = require("fs");
   const path = require("path");
-  const installDir = process.env.CINATRA_AGENT_INSTALL_DIR;
+  const installDir = require("path").join(process.env.CINATRA_EXTENSION_DATA_ROOT, ".agent-mount");
   const seedDir = "/app/.cinatra-required-oas-seed";
   const manifest = JSON.parse(fs.readFileSync(path.join(seedDir, "manifest.json"), "utf8"));
   const slugs = manifest.slugs || [];
@@ -503,7 +509,7 @@ echo "    materialize OK (${MAT_CHECK})"
 echo "==> item 1 assertion: health gate REJECTS a durable-degraded boot"
 DEGRADED_RESULT=$(run_boot_case "$APP_DEGRADED" 90 \
   -e CINATRA_BOOT_E2E=1 -e CINATRA_BOOT_SIMULATE_DEGRADED=1 \
-  -e CINATRA_AGENT_INSTALL_DIR="$AGENT_INSTALL_DIR")
+  -e CINATRA_EXTENSION_DATA_ROOT="$EXTENSION_DATA_ROOT")
 DEGRADED_STATE="${DEGRADED_RESULT%% *}"        # first token: state
 DEGRADED_REST="${DEGRADED_RESULT#* }"          # drop state
 DEGRADED_CODE="${DEGRADED_REST%% *}"           # second token: HTTP code
@@ -592,12 +598,12 @@ echo "    missing required env fails boot early + clearly ([required-env-preflig
 # whose current, relatively-OLDER seed must PRUNE that newer seed-owned dir) while the
 # user dir survives. (cinatra#789 item 2.)
 echo "==> item 2 assertion: reverse rollback prunes a newer seed-owned dir, preserves user installs"
-docker run --rm -v "${AGENT_INSTALL_VOL}:${AGENT_INSTALL_DIR}" "$IMAGE" sh -c "
+docker run --rm -v "${AGENT_INSTALL_VOL}:${EXTENSION_DATA_ROOT}" "$IMAGE" sh -c "
   set -e
-  mkdir -p '${AGENT_INSTALL_DIR}/zz-newer/future-agent/cinatra'
-  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_INSTALL_DIR}/zz-newer/future-agent/cinatra/oas.json'
+  mkdir -p '${AGENT_MOUNT_DIR}/zz-newer/future-agent/cinatra'
+  echo '{\"openapi\":\"3.1.0\"}' > '${AGENT_MOUNT_DIR}/zz-newer/future-agent/cinatra/oas.json'
   echo '{\"vendor\":\"zz-newer\",\"slug\":\"future-agent\",\"kind\":\"required-oas-seed\"}' \
-    > '${AGENT_INSTALL_DIR}/zz-newer/future-agent/.cinatra-required-seed.json'
+    > '${AGENT_MOUNT_DIR}/zz-newer/future-agent/.cinatra-required-seed.json'
 "
 docker restart "$APP" >/dev/null
 echo "    waiting for app to become healthy again after restart (budget ${BOOT_TIMEOUT_SECS}s)"
@@ -619,7 +625,7 @@ done
 ROLLBACK_CHECK=$(docker exec "$APP" node -e '
   const fs = require("fs");
   const path = require("path");
-  const installDir = process.env.CINATRA_AGENT_INSTALL_DIR;
+  const installDir = require("path").join(process.env.CINATRA_EXTENSION_DATA_ROOT, ".agent-mount");
   const seedDir = "/app/.cinatra-required-oas-seed";
   const manifest = JSON.parse(fs.readFileSync(path.join(seedDir, "manifest.json"), "utf8"));
   const slugs = manifest.slugs || [];
@@ -642,18 +648,19 @@ ROLLBACK_CHECK=$(docker exec "$APP" node -e '
 echo "    reverse rollback OK (${ROLLBACK_CHECK})"
 
 # ── 7d. User-store durable-mount detection is not silent (cinatra#789 item 5) ────
-# Boot WITHOUT a durable /data/extensions/packages mount and assert the app STILL
+# Boot WITHOUT a durable extension-data-root mount and assert the app STILL
 # serves (the check is non-deploy-blocking) BUT the missing durable mount is DETECTED
 # — surfaced in health boot.degradedPhases (retryable failure) and named in the logs
 # — so user installs are never SILENTLY treated as ephemeral.
 echo "==> item 5 assertion: missing durable user-store mount is DETECTED (not silent)"
-# Give this case its own agent-install volume so the fail-closed materialize succeeds
-# (the seed reconciles fine); the point under test is the SEPARATE durable USER store
-# (/data/extensions/packages), which is deliberately NOT mounted here.
-NO_MOUNT_AGENT_VOL="${RUN_ID}-agents-nomount"
+# NO volume at all: the durable extension data root is deliberately not mounted.
+# The mount check runs BEFORE the required-set reconcile (which would otherwise
+# CREATE `<root>/.agent-mount` inside the data root and mask the missing mount —
+# cinatra#793), so it probes the pre-reconcile state; the reconcile then
+# materializes into the container-local dir and the boot stays healthy
+# (non-blocking deficit).
 NO_MOUNT_RESULT=$(run_boot_case "$APP_NO_MOUNT" 90 \
-  -e CINATRA_AGENT_INSTALL_DIR="$AGENT_INSTALL_DIR" \
-  -v "${NO_MOUNT_AGENT_VOL}:${AGENT_INSTALL_DIR}")
+  -e CINATRA_EXTENSION_DATA_ROOT="$EXTENSION_DATA_ROOT")
 NO_MOUNT_STATE="${NO_MOUNT_RESULT%% *}"       # state
 NO_MOUNT_REST="${NO_MOUNT_RESULT#* }"
 NO_MOUNT_CODE="${NO_MOUNT_REST%% *}"          # HTTP code
@@ -677,4 +684,4 @@ fi
 docker rm -f "$APP_NO_MOUNT" >/dev/null 2>&1 || true
 echo "    missing durable user-store mount DETECTED (health degradedPhases + logs; non-blocking)"
 
-echo "==> prod-boot e2e PASSED: the image boots and serves with only the lock-acquired required-extension set (no private extensions cloned); required-extension set materialized into the deploy-managed agent dir (ops#436); health gate rejects a durable-degraded boot; missing required env fails clearly; reverse rollback prunes newer seed-owned dirs and preserves user installs; missing durable user-store mount is detected (cinatra#789)."
+echo "==> prod-boot e2e PASSED: the image boots and serves with only the lock-acquired required-extension set (no private extensions cloned); required-extension set materialized into the projected agent runtime mount under the deploy-managed extension data root (ops#436/cinatra#793); health gate rejects a durable-degraded boot; missing required env fails clearly; reverse rollback prunes newer seed-owned dirs and preserves user installs; missing durable user-store mount is detected (cinatra#789)."

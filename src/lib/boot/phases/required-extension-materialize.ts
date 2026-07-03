@@ -4,8 +4,8 @@
 // agent-install dir BEFORE the agent published-marker backfill scans it and
 // BEFORE WayFlow's loader needs a fresh tree. This is the cinatra-image half of
 // making the required-extension set materializable on deploy (the ops half
-// points `CINATRA_AGENT_INSTALL_DIR` + the WayFlow `:/agents:ro` mount at a
-// deploy-refreshable dir instead of the frozen named volume over /app/extensions).
+// points the WayFlow `:/agents:ro` mount at the projected runtime mount
+// `<extension-data-root>/.agent-mount` instead of a frozen named volume).
 //
 // Policy:
 //   - PROD: `fatal` + fail-closed — a missing/unreadable/corrupt seed aborts
@@ -57,10 +57,10 @@ export function requiredExtensionMaterializePhases(): BootPhase[] {
         const { materializeRequiredExtensions } = await import(
           "@/lib/required-extension-materialize"
         );
-        const { resolveAgentInstallDir } = await import(
-          "@cinatra-ai/agents/agent-install-path"
+        const { resolveAgentRuntimeMountDir } = await import(
+          "@cinatra-ai/agents/agent-runtime-mount"
         );
-        const installDir = resolveAgentInstallDir();
+        const installDir = resolveAgentRuntimeMountDir();
 
         let result;
         try {
