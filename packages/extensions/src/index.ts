@@ -331,13 +331,14 @@ async function syncCanonicalManifestInstall(
     all = await readInstalledExtensionsByPackageName(packageName);
   } catch (err) {
     // Canonical store unreachable (canonical table not yet provisioned for this
-    // schema). For a hot-loadable-module kind (connector) this is fatal — a
-    // connector install REQUIRES a finalized canonical row + the real-integrity
-    // pipeline, so a swallowed read failure here would no-op the dispatcher into a
-    // false success (no row, no pipeline, no hot activation). Fail
-    // loud. For non-hot-loadable kinds the legacy per-handler path still ran, so
-    // skip the manifest sync (grandfather mid-migration).
-    if (KINDS_USING_ACTIVATE_HOOK.has(kind)) {
+    // schema). For every store-pipeline-routed kind (connector + the cinatra#793
+    // metadata-only kinds) this is fatal — the install REQUIRES a finalized
+    // canonical row + the real-integrity pipeline (the handler consumes the
+    // finalized store payload), so a swallowed read failure here would no-op the
+    // dispatcher into a false success (no row, no pipeline, no store payload).
+    // Fail loud. For the remaining kinds (workflow's saga path) the per-handler
+    // path still ran, so skip the manifest sync (grandfather mid-migration).
+    if (KINDS_ROUTED_THROUGH_STORE_PIPELINE.has(kind)) {
       throw new Error(
         `install of ${packageName} could not ensure its canonical install row ` +
           `(canonical store unreachable: ${err instanceof Error ? err.message : String(err)}) — ` +
@@ -483,13 +484,14 @@ async function syncCanonicalManifestInstall(
   } catch (err) {
     // A failure ROW-CREATING / RE-ACTIVATING the canonical row (e.g.
     // installExtensionManifest provenance validation throws, transition throws).
-    // For a hot-loadable-module kind (connector) this must NOT be swallowed into a
-    // false `needsPipeline:false` — that would no-op the dispatcher into a silent
-    // placeholder-as-success with no row, no pipeline, no hot activation
+    // For every store-pipeline-routed kind (connector + the cinatra#793
+    // metadata-only kinds) this must NOT be swallowed into a false
+    // `needsPipeline:false` — that would no-op the dispatcher into a silent
+    // placeholder-as-success with no row, no pipeline, no store payload
     // (Finding 1). Fail loud so the dispatch reports the truth + rolls nothing
-    // back (no row was ensured). For non-hot-loadable kinds the legacy
-    // per-handler path still ran, so swallow (grandfather mid-migration).
-    if (KINDS_USING_ACTIVATE_HOOK.has(kind)) {
+    // back (no row was ensured). For the remaining kinds (workflow's saga path)
+    // the per-handler path still ran, so swallow (grandfather mid-migration).
+    if (KINDS_ROUTED_THROUGH_STORE_PIPELINE.has(kind)) {
       throw new Error(
         `install of ${packageName} could not ensure its canonical install row ` +
           `(${err instanceof Error ? err.message : String(err)}) — a kind:"${kind}" install ` +
@@ -540,25 +542,125 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
   }
 }
 
-// The kinds whose handler ALREADY runs the full real-integrity pipeline
-// (materialize → provenance → finalize) itself, so the dispatcher must NOT also
-// fire the generic activate hook (that would double-materialize). `workflow`'s
-// host-injected saga (handler.install) does materialize+provenance+finalize +
-// the per-project dashboard fan-out. The other kinds (agent/skill/artifact) do
-// NOT hot-load a `register(ctx)` server module, so the generic package-store
-// activate path is skipped for them too — only kinds that ship a hot-loadable
-// runtime module need it. Today that is `connector` (model-B / schema-config).
+// ---------------------------------------------------------------------------
+// cinatra#793 COMPENSATION: a native-handler failure AFTER the store pipeline
+// FINALIZED must never strand an ACTIVE canonical row with no run surface (the
+// pipeline committed the store payload + provenance, but the handler never
+// projected the kind's run surface). Two branches:
+//   - fresh install (or a re-activated/retried row): ARCHIVE the row (the
+//     restorable lifecycle primitive — NOT a delete: the payload/provenance are
+//     real). A retry re-activates it, re-fires the (idempotent) pipeline, and
+//     re-runs the handler.
+//   - update of a previously-healthy install: RE-FIRE the pipeline for the
+//     CAPTURED PRIOR version — a forward re-install of OLD (re-materializes the
+//     OLD digest, re-records provenance/activeDigest, re-pins `current`,
+//     finalizes a new journal op) so the canonical row again matches the run
+//     surface the native store still holds.
+// Returns `{ ok:false, detail }` instead of throwing so the caller can surface
+// BOTH the original handler error and the compensation failure.
+// ---------------------------------------------------------------------------
+async function compensateHandlerFailureAfterFinalize(input: {
+  packageName: string;
+  orgId: string | null;
+  op: "install" | "update";
+  rowId: string;
+  ownsRollback: boolean;
+  capturedPriorVersion: string | null;
+  actor: Actor;
+}): Promise<{ ok: true } | { ok: false; detail: string }> {
+  // UPDATE of a previously-healthy install → forward re-install of OLD.
+  if (input.op === "update" && !input.ownsRollback) {
+    if (!input.capturedPriorVersion) {
+      return {
+        ok: false,
+        detail:
+          "the prior version could not be captured before the pipeline ran, so the OLD install " +
+          "cannot be re-pinned",
+      };
+    }
+    try {
+      const { fireExtensionActivate } = await import("./activate-hook");
+      const res = await fireExtensionActivate(
+        input.packageName,
+        input.orgId,
+        input.capturedPriorVersion,
+      );
+      if (res.finalized !== true) {
+        return {
+          ok: false,
+          detail: `re-install of the prior version ${input.capturedPriorVersion} did not finalize (${res.reason ?? "unknown"})`,
+        };
+      }
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        detail: `re-install of the prior version ${input.capturedPriorVersion} threw (${err instanceof Error ? err.message : String(err)})`,
+      };
+    }
+  }
+  // FRESH install / retried broken row / re-activated archived row → archive
+  // the finalized row so nothing ACTIVE is left without a run surface.
+  try {
+    const { transitionExtensionLifecycle } = await import("./lifecycle-primitive");
+    await transitionExtensionLifecycle(input.rowId, "archive", {
+      actor: { source: input.actor.source ?? "dispatcher", userId: input.actor.userId },
+      reason: "native handler failed after store-pipeline finalize (cinatra#793 compensation)",
+    });
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      detail: `archiving the finalized row failed (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+}
+
+// The kinds that ship a HOT-LOADABLE `register(ctx)` server module, whose
+// install/update success is gated on BOTH pipeline `finalized` AND in-process
+// hot-activation (the owner-locked no-restart invariant). Today that is
+// `connector` (model-B / schema-config). For these kinds the pipeline hook
+// fires AFTER the native handler (the handler is the requires-rebuild gate — a
+// refused bundled-react connector must refuse BEFORE anything materializes).
 const KINDS_USING_ACTIVATE_HOOK = new Set(["connector"]);
+
+// cinatra#793: the METADATA-ONLY kinds routed through the SHARED content-
+// addressed store pipeline. Their verdaccio install/update fires the SAME host
+// activate hook (= the real-integrity pipeline: materialize → provenance →
+// finalize into the unified store) but BEFORE the native handler, so the
+// handler consumes the finalized store payload as its source of truth (skill →
+// catalog rows, agent → agent_templates + runtime mount, artifact → object-type
+// rescan inside the hook). Success gates on `finalized` ONLY — these kinds ship
+// no hot-loadable server module, so the in-process activation half is
+// meaningless for them (the native handler IS their run-surface projection).
+// `workflow` stays saga-owned (its handler runs the pipeline itself); the
+// github/local skill carve-out never reaches this path (isVerdaccioBackedRef).
+const KINDS_WITH_STORE_PIPELINE_BEFORE_HANDLER = new Set(["agent", "skill", "artifact"]);
+
+// Every kind whose verdaccio install REQUIRES the canonical row + the shared
+// store pipeline (fail-loud when the canonical row cannot be ensured): the
+// hot-loadable kind (connector) plus the metadata-only store-routed kinds.
+const KINDS_ROUTED_THROUGH_STORE_PIPELINE = new Set([
+  ...KINDS_USING_ACTIVATE_HOOK,
+  ...KINDS_WITH_STORE_PIPELINE_BEFORE_HANDLER,
+]);
 
 // Kinds whose canonical `installed_extension` provenance (source.version + dep
 // edges) is rewritten by the kind's OWN materialize path, NOT by the dispatcher.
 // `connector` rewrites it via the real-integrity install pipeline
-// (sourceSwitchExtension); `workflow`'s host-injected saga rewrites it itself. The
-// hot-swap canonical reconcile (cinatra#670) is therefore SKIPPED for these kinds
-// (the dispatcher would otherwise double-write the source row). Every other kind
-// (agent / skill / artifact) only upserts a NATIVE store on update, so the
-// dispatcher must flip the canonical version for them.
-const KINDS_OWNING_CANONICAL_PROVENANCE = new Set(["connector", "workflow"]);
+// (sourceSwitchExtension); `workflow`'s host-injected saga rewrites it itself;
+// agent/skill/artifact (cinatra#793) now route through the SAME pipeline, which
+// rewrites the source at its tail. The hot-swap canonical reconcile (cinatra#670)
+// is therefore SKIPPED for all of these kinds (the dispatcher would otherwise
+// double-write the source row). The reconcile block below is retained for any
+// future native-store-only kind.
+const KINDS_OWNING_CANONICAL_PROVENANCE = new Set([
+  "connector",
+  "workflow",
+  "agent",
+  "skill",
+  "artifact",
+]);
 
 // ---------------------------------------------------------------------------
 // Extension type registry
@@ -617,27 +719,36 @@ class ExtensionRegistryImpl {
   // ---------------------------------------------------------------------------
   // The host installer OWNS the install/update sequence (NOT a per-handler
   // post-hook). For a verdaccio-source install or update it:
-  //   1. ensures EXACTLY ONE canonical row (idempotent; a never-finalized prior
-  //      row is RETRIED, not skipped) — at the actor's org scope so the native
-  //      handler/saga + the pipeline resolve the SAME row;
-  //   2. runs the native per-kind handler (`install`/`update`) — for workflow the
-  //      host-injected saga (which itself materializes + records provenance +
-  //      finalizes against the row from step 1) runs here; for connector the
-  //      handler is a model-B no-op / requires-rebuild gate;
-  //   3. for a kind that ships a hot-loadable runtime module (connector), fires
-  //      the host activate hook = the REAL-integrity pipeline (materialize →
-  //      provenance → finalize → in-process activate); and
-  //   4. if the pipeline did NOT finalize the row THIS attempt created/retried,
-  //      ROLLS BACK that placeholder row — so nothing is left active-but-non-
-  //      anchorable and a re-install re-runs the pipeline. The in-process
-  //      activation half stays best-effort (the boot loader is the durable path);
-  //      only the FINALIZE gate is authoritative for success.
+  //   1.   ensures EXACTLY ONE canonical row (idempotent; a never-finalized prior
+  //        row is RETRIED, not skipped) — at the actor's org scope so the native
+  //        handler/saga + the pipeline resolve the SAME row;
+  //   1.5. (cinatra#793) for the METADATA-ONLY store-routed kinds (agent/skill/
+  //        artifact), fires the host activate hook = the REAL-integrity pipeline
+  //        (materialize → provenance → finalize into the unified store) BEFORE
+  //        the native handler, gated on `finalized` ONLY — so the handler
+  //        consumes the finalized store payload;
+  //   2.   runs the native per-kind handler (`install`/`update`) — for workflow
+  //        the host-injected saga (which itself materializes + records provenance
+  //        + finalizes against the row from step 1) runs here; for connector the
+  //        handler is a model-B no-op / requires-rebuild gate. A handler throw
+  //        AFTER a finalized step-1.5 pipeline triggers the COMPENSATION
+  //        (archive a fresh row / re-fire the pipeline at the captured prior
+  //        version) so no ACTIVE row is left without a run surface;
+  //   3.   for a kind that ships a hot-loadable runtime module (connector), fires
+  //        the host activate hook = the REAL-integrity pipeline (materialize →
+  //        provenance → finalize → in-process activate); and
+  //   4.   if the pipeline did NOT finalize the row THIS attempt created/retried,
+  //        ROLLS BACK that placeholder row — so nothing is left active-but-non-
+  //        anchorable and a re-install re-runs the pipeline. The in-process
+  //        activation half stays best-effort (the boot loader is the durable
+  //        path); only the FINALIZE gate is authoritative for success.
   //
-  // Carve-outs preserved: restore/re-install (archived row re-activated, NO
-  // pipeline); add-from-chat (proposal-only, never reaches this dispatch);
+  // Carve-outs preserved: restore/re-install (archived row re-activated; for a
+  // store-routed kind the idempotent pipeline re-fires against the finalized
+  // digest); add-from-chat (proposal-only, never reaches this dispatch);
   // github/local skill installs (resolved INSIDE the handler from the ref source
-  // — the handler runs in step 2, the activate hook then no-ops because the
-  // package was never materialized into the verdaccio package store).
+  // — no canonical verdaccio row, no pipeline: the isVerdaccioBackedRef
+  // carve-out in syncCanonicalManifestInstall).
   // ---------------------------------------------------------------------------
   private async runHostInstall(
     typeId: string,
@@ -714,11 +825,106 @@ class ExtensionRegistryImpl {
     const orgId = actor.orgId ?? null;
     const ensure = await syncCanonicalManifestInstall(ref.packageName, typeId, ref, actor, orgId, op);
 
+    // 1.5 (cinatra#793) METADATA-ONLY STORE-PIPELINE KINDS (agent/skill/
+    //    artifact): fire the host activate hook (= the real-integrity pipeline:
+    //    materialize → provenance → finalize into the unified content-addressed
+    //    store) BEFORE the native handler, so the handler consumes the FINALIZED
+    //    store payload as its source of truth. Success gates on `finalized`
+    //    ONLY — these kinds ship no hot-loadable server module, so the
+    //    in-process activation half is meaningless (the native handler in step 2
+    //    IS their run-surface projection; the artifact object-type rescan runs
+    //    inside the hook). The connector keeps its handler-first order (step 3)
+    //    — its handler is the requires-rebuild refusal gate, which must refuse
+    //    BEFORE anything materializes.
+    let pipelineFinalizedBeforeHandler = false;
+    let capturedPriorVersion: string | null = null;
+    if (ensure.needsPipeline && KINDS_WITH_STORE_PIPELINE_BEFORE_HANDLER.has(typeId)) {
+      // Capture the HEALTHY prior install's version BEFORE the pipeline rewrites
+      // the row's provenance — the basis of the handler-failure compensation
+      // (forward re-install of OLD). Only meaningful for an update of a healthy
+      // live row (ownsRollback:false); a fresh/retried row has no prior version.
+      if (op === "update" && !ensure.ownsRollback && ensure.rowId) {
+        try {
+          const { readInstalledExtensionById } = await import("./canonical-store");
+          const prior = await readInstalledExtensionById(ensure.rowId);
+          const src = prior?.source as { type?: string; version?: string } | null | undefined;
+          if (src?.type === "verdaccio" && typeof src.version === "string" && src.version) {
+            capturedPriorVersion = src.version;
+          }
+        } catch {
+          /* capture is best-effort — compensation degrades to the loud manual-recovery signal */
+        }
+      }
+
+      const { fireExtensionActivate } = await import("./activate-hook");
+      // `ref.version` = the REQUESTED install/target version (see step 3's
+      // comment — on an UPDATE the row still carries the OLD version).
+      const result = await fireExtensionActivate(ref.packageName, orgId, ref.version);
+
+      if (result.finalized === false) {
+        // The pipeline did NOT finalize — the store payload does not exist, so
+        // the native handler must not run. Same rollback semantics as the
+        // connector gate: a row THIS attempt owns is rolled back so a re-install
+        // re-runs the pipeline; an update's previously-working install is left
+        // intact (the pipeline's own compensation already restored it).
+        if (ensure.ownsRollback && ensure.rowId) {
+          await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+          throw new Error(
+            `${op} of ${ref.packageName} did not finalize the store install pipeline ` +
+              `(${result.reason ?? "unknown"}) — no store payload was materialized; the placeholder ` +
+              `install row was rolled back so a re-install re-runs the pipeline.`,
+          );
+        }
+        throw new Error(
+          `${op} of ${ref.packageName} did not finalize the store install pipeline ` +
+            `(${result.reason ?? "unknown"}) — the new digest is not anchorable; the previous ` +
+            `install (if any) was left intact.`,
+        );
+      }
+
+      if (result.finalized === undefined) {
+        if (result.reason === "non-verdaccio-source") {
+          // Defensive carve-out: the resolved row is github/local-sourced — the
+          // handler owns that install entirely; nothing to gate here.
+        } else {
+          // No host hook wired in this worker (or the row could not resolve):
+          // fail CLOSED — without the pipeline there is no store payload for the
+          // native handler to consume, so proceeding would re-open the
+          // placeholder-as-success hole for these kinds.
+          if (ensure.ownsRollback && ensure.rowId) {
+            await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+          }
+          throw new Error(
+            `${op} of ${ref.packageName} could not run the store install pipeline ` +
+              `(${result.reason ?? "no-host-hook"}) — the runtime activate hook is not wired in ` +
+              `this worker, so no store payload exists for the ${typeId} handler to consume. Run ` +
+              `the op through a context that wires the host activate hook (the MCP / app-boot path).`,
+          );
+        }
+      } else {
+        // Defensive: the metadata-only pipeline deps never take the hot-update
+        // rollback path, but honor a rolledBack verdict truthfully if one ever
+        // surfaces — the update did NOT take.
+        if (result.rolledBack === true) {
+          throw new Error(
+            `${op} of ${ref.packageName} did NOT take — the new digest was rolled back ` +
+              `(${result.reason ?? "unknown"})${result.rollbackComplete === true ? "; the previous version is retained" : " and the durable rollback is INCOMPLETE — manual recovery required"}.`,
+          );
+        }
+        pipelineFinalizedBeforeHandler = true;
+      }
+    }
+
     // 2. Native per-kind handler. For workflow this is the host-injected saga,
     //    which materializes + records provenance + finalizes against the row from
-    //    step 1. A handler throw propagates — but first roll back a placeholder
-    //    row THIS attempt owns, so a failed handler never leaves a live-but-non-
-    //    anchorable row.
+    //    step 1; for the cinatra#793 store-routed kinds it consumes the FINALIZED
+    //    store payload from step 1.5. A handler throw propagates — but first:
+    //    - if the store pipeline ALREADY FINALIZED (step 1.5), run the
+    //      COMPENSATION: a finalized canonical row must never be left ACTIVE with
+    //      no run surface (fresh install → archive the row; update → re-fire the
+    //      pipeline for the captured PRIOR version);
+    //    - otherwise roll back a placeholder row THIS attempt owns, so a failed
+    //      handler never leaves a live-but-non-anchorable row.
     try {
       if (op === "update") {
         await handler.update(ref, actor);
@@ -726,7 +932,25 @@ class ExtensionRegistryImpl {
         await handler.install(ref, actor, options);
       }
     } catch (err) {
-      if (ensure.ownsRollback && ensure.rowId) {
+      if (pipelineFinalizedBeforeHandler && ensure.rowId) {
+        const comp = await compensateHandlerFailureAfterFinalize({
+          packageName: ref.packageName,
+          orgId,
+          op,
+          rowId: ensure.rowId,
+          ownsRollback: ensure.ownsRollback,
+          capturedPriorVersion,
+          actor,
+        });
+        if (!comp.ok) {
+          throw new Error(
+            `${op} of ${ref.packageName} failed in the ${typeId} handler AFTER the store ` +
+              `pipeline finalized (${err instanceof Error ? err.message : String(err)}) — AND the ` +
+              `dispatcher compensation ALSO failed (${comp.detail}); manual recovery required: the ` +
+              `canonical row may be ACTIVE with no run surface.`,
+          );
+        }
+      } else if (ensure.ownsRollback && ensure.rowId) {
         await rollbackNonFinalizedCanonicalRow(ensure.rowId);
       }
       throw err;

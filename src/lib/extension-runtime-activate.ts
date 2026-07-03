@@ -195,6 +195,18 @@ export async function verifyDigestImportsAndRegisters(
   storeRoot: string,
   currentStoreDir: string | undefined,
   trusted: { integrity: string; contentHash: string; approvedPorts: readonly string[] },
+  opts: {
+    /**
+     * cinatra#793: when true, a NEW digest whose manifest declares NO
+     * `cinatra.serverEntry` (a metadata-only payload — agent/skill/artifact)
+     * PASSES after the integrity re-verify WITHOUT the import/register probe:
+     * there is nothing to import, and probing would always refuse
+     * `no-server-entry`, wrongly failing every metadata-only update. A
+     * declared-but-invalid exports target still refuses (fail-closed parity
+     * with the loader). Default false — the strict connector semantics.
+     */
+    metadataOnlyOk?: boolean;
+  } = {},
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
     const { resolveServerEntry } = await import("@cinatra-ai/sdk-extensions");
@@ -216,6 +228,12 @@ export async function verifyDigestImportsAndRegisters(
       trustedContentHash: trusted.contentHash,
     });
     if (!integrityOk) return { ok: false, reason: "integrity-mismatch" };
+
+    // Metadata-only skip (cinatra#793): no declared serverEntry → nothing to
+    // import/register; the integrity re-verify above is the whole gate.
+    if (opts.metadataOnlyOk && !rec.invalidExportsTargetDeclared && resolveServerEntryPath(rec) === null) {
+      return { ok: true };
+    }
 
     // Import the module (realpath-bound) and confirm it exposes a server entry.
     // Importing only runs the module's top-level code (NOT `register(ctx)`).
@@ -793,6 +811,12 @@ async function cleanupEmptyQuarantineRoots(entries: QuarantineEntry[]): Promise<
   }
 }
 
+// cinatra#793: the kinds whose store payload is METADATA-ONLY (no hot-loadable
+// `register(ctx)` server module). Their pipeline runs with inert in-process
+// activation deps (see the override below); the dispatcher gates them on
+// `finalized` only and the NATIVE handler projects their run surface.
+const METADATA_ONLY_STORE_KINDS = new Set(["agent", "skill", "artifact"]);
+
 /**
  * The host activate-hook body. Records real provenance + activates a
  * verdaccio-source package in-process. Returns `{ activated, reason? }` for the
@@ -841,6 +865,25 @@ export async function runHostExtensionInstallAndActivate(
       "@/lib/extension-install-pipeline"
     );
     const deps = await makeDefaultInstallPipelineDeps();
+    // cinatra#793: the METADATA-ONLY store kinds (agent/skill/artifact) ship NO
+    // hot-loadable server module — the pipeline's in-process activation
+    // semantics are meaningless for them (their run surface is projected by the
+    // NATIVE handler after this hook returns / by the artifact rescan below).
+    //   - a FRESH install has nothing to import → an inert activateInProcess;
+    //   - an UPDATE must NOT durably roll back on the loader's inevitable
+    //     `no-server-entry` skip — instead the superseded OLD digest dir(s) are
+    //     GC'd (single-digest store per package) and the committed NEW digest
+    //     stands. The dispatcher gates these kinds on `finalized` ONLY.
+    if (METADATA_ONLY_STORE_KINDS.has(row.kind)) {
+      deps.activateInProcess = async () => ({ activated: false, reason: "metadata-only-kind" });
+      deps.activateUpdateWithRollback = async (i) => {
+        const storeRoot =
+          i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
+        const superseded = await discoverSupersededStoreDirs(i.packageName, storeRoot, i.storeDir);
+        await teardownAndGcSupersededDigests(i.packageName, storeRoot, i.storeDir, superseded, []);
+        return { activated: false, reason: "metadata-only-kind" };
+      };
+    }
     // cinatra#791: thread the canonical row's kind — it is AUTHORITATIVE for the
     // kind-segregated store placement (the DDL constrains it to the store kinds;
     // the guard keeps the type narrow, an invalid value falls back to the

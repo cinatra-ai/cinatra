@@ -1486,11 +1486,23 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const storeRoot = i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
       const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
       if (superseded.length === 0) return { supersedes: false };
-      const verdict = await verifyDigestImportsAndRegisters(i.packageName, storeRoot, i.storeDir, {
-        integrity: i.integrity,
-        contentHash: i.contentHash,
-        approvedPorts: i.approvedPorts,
-      });
+      const verdict = await verifyDigestImportsAndRegisters(
+        i.packageName,
+        storeRoot,
+        i.storeDir,
+        {
+          integrity: i.integrity,
+          contentHash: i.contentHash,
+          approvedPorts: i.approvedPorts,
+        },
+        // cinatra#793: a superseding UPDATE whose NEW manifest declares NO
+        // serverEntry (a metadata-only agent/skill/artifact payload) skips the
+        // import/register probe — nothing to import; the integrity re-verify
+        // remains the gate. The post-commit safety boundary is unchanged: a
+        // module-shipping kind (connector) still probes + still has the durable
+        // rollback behind it.
+        { metadataOnlyOk: true },
+      );
       return verdict.ok ? { supersedes: true, ok: true } : { supersedes: true, ok: false, reason: verdict.reason };
     },
     gcStoreDir: async (storeDir) => {
