@@ -36,7 +36,7 @@ permissions:
   contents: read
   pull-requests: read
   checks: read
-  # actions:read is required by the re-pinned reusable engine (ci@8eede102): it
+  # actions:read is required by the reusable engine (since ci@8eede102): it
   # resolves a reusable-workflow check-run to its Actions run (GET
   # /actions/runs/{id}) to verify referenced_workflows[] at the pinned SHA. A
   # called reusable workflow's permissions cannot EXCEED the caller's grant, so
@@ -45,7 +45,12 @@ permissions:
 
 jobs:
   truthful-attribution-gate:
-    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@83ca29ef8df0a33d11ba02568c61f2fdc56a3eaf # v0.1.0
+    # Double-pin per the workflow-pinning convention: the workflow ref (@<sha>)
+    # and the `ref` engine-checkout input below are pinned to the SAME
+    # cinatra-ai/ci commit, so the gate code is never pulled from mutable main.
+    # gate-suite.json requiredContexts[].pinned tracks this uses:@ SHA (the gate
+    # verifies referenced_workflows[] exactly) — bump them together.
+    uses: cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml@45826486a3965bc8ebd6203a26330ad0dc1ae511 # v0.1.2-next.4582648
     with:
       mode: enforce
-      ref: 0de02f3ae7b30b9bf2b7a7e4a508c814bbc7c282
+      ref: 45826486a3965bc8ebd6203a26330ad0dc1ae511 # same SHA as the workflow @ref
