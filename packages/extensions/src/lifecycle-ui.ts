@@ -93,7 +93,14 @@ function sourceBadge(type: ExtensionSourceType): LifecycleBadgeDescriptor {
   }
 }
 
-function sourceVersion(ext: InstalledExtension): string | null {
+/**
+ * Human-readable installed-version label for a canonical row (a semver with a
+ * `v` prefix, or `dev / <short-sha>` for dev builds). Exported for the
+ * Installed-extensions management surface (cinatra#948), which renders the
+ * installed version of non-agent kinds from the canonical row's source
+ * provenance (the registry summary only knows the LATEST published version).
+ */
+export function sourceVersion(ext: InstalledExtension): string | null {
   if (ext.source.type === "verdaccio") {
     // A dev recompile records a verdaccio version of `0.0.0-dev.<sha>`; render
     // it as the human-readable "dev / <short-sha>" instead of the raw string.

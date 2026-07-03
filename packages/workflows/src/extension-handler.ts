@@ -27,6 +27,7 @@
 import "server-only";
 
 import type {
+  ActiveExtensionManifest,
   Actor,
   ExtensionDiscoveryScope,
   ExtensionTypeHandler,
@@ -40,7 +41,7 @@ import {
   type WorkflowExtensionDeps,
 } from "./extension-ops";
 import { getWorkflowInstallSagaHook } from "./install-saga-hook";
-import { listWorkflowTemplates, listWorkflowTemplatesForOrgIds } from "./store";
+import { listWorkflowTemplates, listWorkflowTemplatesForOrgIds, type WorkflowTemplateRow } from "./store";
 import { filterReadable } from "./scope/resource-ref";
 
 // Safety cap on the platform-admin cross-org fan-out. A batch query handles
@@ -133,48 +134,72 @@ export function createWorkflowExtensionHandler(deps: WorkflowExtensionDeps = {})
     // org discovers across their member orgs via the injected orgListResolver
     // (a non-admin with no active org still discovers nothing).
     async listActive({ scope, manifests }) {
-      const orgIds = await resolveDiscoveryOrgIds(scope, deps.orgListResolver);
-      if (orgIds.length === 0) return [];
+      return listVisibleTemplatesForManifests(scope, manifests, deps.orgListResolver);
+    },
 
-      const rows =
-        orgIds.length === 1
-          ? await listWorkflowTemplates({ orgId: orgIds[0] })
-          : await listWorkflowTemplatesForOrgIds(orgIds);
-
-      // visibleManifestPackageNames must be evaluated with a SYNTHETIC per-org
-      // scope (org substituted), or org-owned live manifests stay invisible when
-      // the original scope has no active org. Cache per org.
-      const liveByOrg = new Map<string, Set<string>>();
-      const liveFor = (orgId: string): Set<string> => {
-        let set = liveByOrg.get(orgId);
-        if (!set) {
-          set = visibleManifestPackageNames(manifests, { ...scope, organizationId: orgId });
-          liveByOrg.set(orgId, set);
-        }
-        return set;
-      };
-
-      // filterReadable is the canonical row-level visibility gate; apply it
-      // per-row against that row's OWN org (a platform_admin sees all; otherwise
-      // ownership/team/user/project scoping is enforced within the matching org).
-      const out: typeof rows = [];
-      const seen = new Set<string>();
-      for (const t of rows) {
-        if (t.packageName == null || !liveFor(t.orgId).has(t.packageName)) continue;
-        const [readable] = filterReadable([t], {
-          userId: scope.userId,
-          organizationId: t.orgId,
-          teamIds: scope.teamIds,
-          projectIds: scope.projectIds,
-          platformRole: scope.platformRole,
-        });
-        if (!readable) continue;
-        const key = `${t.orgId}::${t.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(t);
-      }
-      return out;
+    // Archived twin of listActive (cinatra#948): the workflow_template store
+    // RETAINS rows for archived packages (archive transitions dashboards; it
+    // does not delete templates), so the exact same org-resolution +
+    // owner-scope manifest gate + per-row filterReadable visibility applies —
+    // only over the archived-candidate manifest set.
+    async listArchived({ scope, manifests }) {
+      return listVisibleTemplatesForManifests(scope, manifests, deps.orgListResolver);
     },
   };
+}
+
+/**
+ * Shared reader-facet body for listActive/listArchived: resolve the actor's
+ * discovery orgs, read the tenant-scoped templates, gate by the owner-scope
+ * visibility of the given candidate `manifests` (the LIFECYCLE side — active
+ * or archived — is decided by which manifest set the dispatcher passes), and
+ * apply the canonical row-level visibility gate per row.
+ */
+async function listVisibleTemplatesForManifests(
+  scope: ExtensionDiscoveryScope,
+  manifests: ActiveExtensionManifest[],
+  orgListResolver: WorkflowExtensionDeps["orgListResolver"],
+): Promise<WorkflowTemplateRow[]> {
+  const orgIds = await resolveDiscoveryOrgIds(scope, orgListResolver);
+  if (orgIds.length === 0) return [];
+
+  const rows =
+    orgIds.length === 1
+      ? await listWorkflowTemplates({ orgId: orgIds[0] })
+      : await listWorkflowTemplatesForOrgIds(orgIds);
+
+  // visibleManifestPackageNames must be evaluated with a SYNTHETIC per-org
+  // scope (org substituted), or org-owned live manifests stay invisible when
+  // the original scope has no active org. Cache per org.
+  const visibleByOrg = new Map<string, Set<string>>();
+  const visibleFor = (orgId: string): Set<string> => {
+    let set = visibleByOrg.get(orgId);
+    if (!set) {
+      set = visibleManifestPackageNames(manifests, { ...scope, organizationId: orgId });
+      visibleByOrg.set(orgId, set);
+    }
+    return set;
+  };
+
+  // filterReadable is the canonical row-level visibility gate; apply it
+  // per-row against that row's OWN org (a platform_admin sees all; otherwise
+  // ownership/team/user/project scoping is enforced within the matching org).
+  const out: typeof rows = [];
+  const seen = new Set<string>();
+  for (const t of rows) {
+    if (t.packageName == null || !visibleFor(t.orgId).has(t.packageName)) continue;
+    const [readable] = filterReadable([t], {
+      userId: scope.userId,
+      organizationId: t.orgId,
+      teamIds: scope.teamIds,
+      projectIds: scope.projectIds,
+      platformRole: scope.platformRole,
+    });
+    if (!readable) continue;
+    const key = `${t.orgId}::${t.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
 }

@@ -247,25 +247,35 @@ function ExtensionCardChip({
  * uses `font-display` italic-800; the shell-mode card is a plain `<div>` so the
  * visible name stays in the accessibility tree (the button-mode card carries an
  * explicit `aria-label`).
+ *
+ * EXPORTED (cinatra#948): the Installed-extensions card reuses this exact mark
+ * as its LEFT PANEL (the design system's installed-extensions card reuses the
+ * ListingCard mark at listing-card width) — `className` lets that caller
+ * constrain width/height without duplicating the mark's markup.
  */
-function ExtensionCardListingBanner({
+export function ExtensionCardListingBanner({
   name,
   accentColor,
   emblem,
   iconUrl,
   badges,
+  className,
 }: {
   name: string;
   accentColor: ExtensionAccent;
   emblem: React.ReactNode;
   iconUrl?: string | null;
   badges?: React.ReactNode;
+  className?: string;
 }) {
   const { bg, fg } = ACCENT_PALETTE[accentColor];
   return (
     <div
       data-slot="extension-card-banner"
-      className="relative flex min-h-[96px] items-center gap-3 p-[14px]"
+      className={cn(
+        "relative flex min-h-[96px] items-center gap-3 p-[14px]",
+        className,
+      )}
       style={{ background: bg, color: fg }}
     >
       {/* Square icon tile — 46×46, 11px radius, white ground, soft shadow,

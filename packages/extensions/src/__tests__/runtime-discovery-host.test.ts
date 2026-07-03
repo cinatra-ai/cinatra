@@ -15,7 +15,9 @@ import { extensionRegistry } from "../index";
 import { listInstalledExtensions } from "../canonical-store";
 import {
   readActiveManifestsFromStore,
+  readArchivedManifestsFromStore,
   discoverActiveExtensionCapabilities,
+  discoverArchivedExtensionCapabilities,
 } from "../runtime-discovery-host";
 import type { ExtensionTypeHandler } from "@cinatra-ai/extension-types";
 
@@ -85,6 +87,48 @@ describe("readActiveManifestsFromStore (coarse lifecycle status-candidate gate)"
   });
 });
 
+describe("readArchivedManifestsFromStore (archived twin — 'live wins')", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("returns archived-only identities; an identity with ANY live row is excluded", async () => {
+    vi.mocked(listInstalledExtensions).mockResolvedValue([
+      // Purely archived identity — a candidate.
+      row({ id: "1", packageName: "@x/a", status: "archived" }),
+      // Archived row whose SAME identity also has an active row — live wins,
+      // so a restored/reinstalled package never shows on the Archived side.
+      row({ id: "2", packageName: "@x/b", status: "archived" }),
+      row({ id: "3", packageName: "@x/b", status: "active" }),
+      // Locked also counts as live.
+      row({ id: "4", packageName: "@x/c", status: "archived" }),
+      row({ id: "5", packageName: "@x/c", status: "locked" }),
+      // Uninstalled-only identity is not archived.
+      row({ id: "6", packageName: "@x/d", status: "uninstalled" }),
+    ] as never);
+    const out = await readArchivedManifestsFromStore({ kind: "agent" });
+    expect(out.map((m) => m.packageName)).toEqual(["@x/a"]);
+    expect(out[0].status).toBe("archived");
+  });
+
+  it("SURFACES every distinct archived owner identity of the same package", async () => {
+    // A live PLATFORM install must not hide the archived ORG identity of the
+    // same package (distinct identities; the per-kind reader owns visibility).
+    vi.mocked(listInstalledExtensions).mockResolvedValue([
+      row({ id: "plat", packageName: "@x/shared", ownerLevel: "platform", ownerId: "__platform__", organizationId: null, status: "active" }),
+      row({ id: "org", packageName: "@x/shared", ownerLevel: "organization", ownerId: null, organizationId: "org-1", status: "archived" }),
+    ] as never);
+    const out = await readArchivedManifestsFromStore({ kind: "agent" });
+    expect(out).toHaveLength(1);
+    expect(out[0].ownerLevel).toBe("organization");
+    expect(out[0].organizationId).toBe("org-1");
+  });
+
+  it("returns [] for an unknown/invalid kind (no unfiltered scan)", async () => {
+    const out = await readArchivedManifestsFromStore({ kind: "not-a-kind" });
+    expect(out).toEqual([]);
+    expect(listInstalledExtensions).not.toHaveBeenCalled();
+  });
+});
+
 describe("discoverActiveExtensionCapabilities", () => {
   // The reader facet is the visibility authority — it receives the scope.
   const seenScopes: unknown[] = [];
@@ -112,5 +156,38 @@ describe("discoverActiveExtensionCapabilities", () => {
     expect(res.byKind.agent).toEqual([{ template: "@x/a1" }]);
     expect(res.unmigratedKinds).toEqual([]);
     expect(seenScopes).toEqual([scope]); // the reader received the resolved scope
+  });
+});
+
+describe("discoverArchivedExtensionCapabilities (cinatra#948)", () => {
+  const seenScopes: unknown[] = [];
+  // Distinct typeId from the active-describe's handler: extensionRegistry is
+  // module-global and registerIfAbsent would keep the earlier facet-less one.
+  const handler: ExtensionTypeHandler = {
+    typeId: "skill",
+    install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+    async listArchived({ scope: s, manifests }) {
+      seenScopes.push(s);
+      return manifests.map((m) => ({ archived: m.packageName }));
+    },
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    seenScopes.length = 0;
+    extensionRegistry.registerIfAbsent(handler);
+  });
+  afterEach(() => vi.resetAllMocks());
+
+  it("reads archived candidates (live wins), threads the SCOPE to listArchived, and dispatches", async () => {
+    vi.mocked(listInstalledExtensions).mockResolvedValue([
+      row({ id: "s1", packageName: "@x/s1", kind: "skill", status: "archived" }),
+      row({ id: "s2", packageName: "@x/s2", kind: "skill", status: "archived" }),
+      row({ id: "s2-live", packageName: "@x/s2", kind: "skill", status: "active" }),
+    ] as never);
+    const res = await discoverArchivedExtensionCapabilities({ kind: "skill", actor, scope });
+    expect(res.byKind.skill).toEqual([{ archived: "@x/s1" }]);
+    expect(res.unmigratedKinds).toEqual([]);
+    expect(seenScopes).toEqual([scope]);
   });
 });

@@ -27,7 +27,11 @@ import type { ExtensionKind } from "./canonical-types";
 import { EXTENSION_KINDS } from "./canonical-types";
 import { listInstalledExtensions } from "./canonical-store";
 import { extensionRegistry } from "./index";
-import { discoverActiveCapabilities, type DiscoveredCapabilities } from "./runtime-discovery";
+import {
+  discoverActiveCapabilities,
+  discoverArchivedCapabilities,
+  type DiscoveredCapabilities,
+} from "./runtime-discovery";
 
 function isExtensionKind(kind: string | undefined): kind is ExtensionKind {
   return kind !== undefined && (EXTENSION_KINDS as readonly string[]).includes(kind);
@@ -105,6 +109,76 @@ export async function discoverActiveExtensionCapabilities(input: {
     { kind: input.kind, actor: input.actor, scope: input.scope },
     {
       readActiveManifests: (i) => readActiveManifestsFromStore({ kind: i.kind }),
+      resolveHandler: (k) => extensionRegistry.tryResolve(k),
+    },
+  );
+}
+
+/**
+ * Read the lifecycle-ARCHIVED candidate manifests (optionally one kind) —
+ * the archived twin of `readActiveManifestsFromStore` (cinatra#948).
+ *
+ * Same COARSE-gate contract: one manifest per DISTINCT install identity
+ * `(kind, packageName, ownerLevel, ownerId, organizationId)` whose row is
+ * `archived`, with NO per-actor filtering (visibility is delegated to each
+ * kind's `listArchived` reader facet). "Live wins" per identity: an identity
+ * that ALSO has an `active`|`locked` row is not archived and is excluded, so
+ * a restored/reinstalled package never shows up on the Archived side.
+ */
+export async function readArchivedManifestsFromStore(input: {
+  kind?: string;
+}): Promise<ActiveExtensionManifest[]> {
+  if (input.kind !== undefined && !isExtensionKind(input.kind)) return [];
+  const kind = input.kind as ExtensionKind | undefined;
+  const rows = await listInstalledExtensions({ kind });
+
+  const identityKey = (row: { kind: string; packageName: string; ownerLevel: string; ownerId: string | null; organizationId: string | null }) =>
+    `${row.kind}::${row.packageName}::${row.ownerLevel}::${row.ownerId ?? ""}::${row.organizationId ?? ""}`;
+
+  // Identities with any live row — "live wins", never archived.
+  const liveIdentities = new Set<string>();
+  for (const row of rows) {
+    if (row.status === "active" || row.status === "locked") {
+      liveIdentities.add(identityKey(row));
+    }
+  }
+
+  const archived = new Map<string, ActiveExtensionManifest>();
+  for (const row of rows) {
+    if (row.status !== "archived") continue;
+    const key = identityKey(row);
+    if (liveIdentities.has(key)) continue;
+    if (archived.has(key)) continue;
+    archived.set(key, {
+      id: row.id,
+      packageName: row.packageName,
+      kind: row.kind,
+      ownerLevel: row.ownerLevel,
+      ownerId: row.ownerId,
+      organizationId: row.organizationId,
+      status: row.status,
+    });
+  }
+  return [...archived.values()];
+}
+
+/**
+ * The host archived-discovery entry point (cinatra#948) — the archived twin of
+ * `discoverActiveExtensionCapabilities`. Reads the archived candidate manifests
+ * and dispatches to each kind's `listArchived` reader facet, which applies the
+ * resolved visibility `scope`. Kinds without the facet land in
+ * `unmigratedKinds` so a management surface can fail loud instead of rendering
+ * a deceptively empty archived list.
+ */
+export async function discoverArchivedExtensionCapabilities(input: {
+  kind?: string;
+  actor: Actor;
+  scope: ExtensionDiscoveryScope;
+}): Promise<DiscoveredCapabilities> {
+  return discoverArchivedCapabilities(
+    { kind: input.kind, actor: input.actor, scope: input.scope },
+    {
+      readArchivedManifests: (i) => readArchivedManifestsFromStore({ kind: i.kind }),
       resolveHandler: (k) => extensionRegistry.tryResolve(k),
     },
   );
