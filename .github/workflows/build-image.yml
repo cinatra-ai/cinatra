@@ -1023,6 +1023,18 @@ jobs:
       - name: Extension dev-fixtures gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/dev-fixtures-gate.test.mjs
 
+      # Connector access-config + packlist gate (cinatra#951): a PRESENT
+      # cinatra/config.json must validate fail-closed (mirrors the SDK
+      # access-config validator; the test below pins the two in agreement)
+      # and must be packaged (package.json#files includes "cinatra");
+      # absence WARNs until the W4 fleet configs land (then the closing
+      # wave flips --require-present).
+      - name: Connector access-config gate
+        run: node scripts/audit/connector-access-config-gate.mjs
+
+      - name: Connector access-config gate tests
+        run: pnpm exec vitest run scripts/audit/__tests__/connector-access-config-gate.test.mjs
+
       # Verdaccio / registry.cinatra publish-EXECUTION ban gate.
       # Extensions publish ONLY through the marketplace proxy; the registry is
       # the install-backend behind a listing, never a publish target a workflow

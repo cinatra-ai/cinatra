@@ -28,12 +28,14 @@ import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
 import {
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
+  isResolvedConnectorAccessDeclaration,
   validateExtensionSource,
   type ExtensionDependency,
   type ExtensionLifecycleStatus,
   type ExtensionSource,
   type InstalledExtension,
   type LifecycleTransitionOp,
+  type ResolvedConnectorAccessDeclaration,
 } from "./canonical-types";
 import { validateExtensionDependencyShape } from "./manifest-dependencies";
 
@@ -429,4 +431,38 @@ export async function recordExtensionDependencies(
     }
   }
   return _internalUpdateInstalledExtensionMetadata(id, { dependencies });
+}
+
+/**
+ * Record the RESOLVED connector access declaration on a canonical row — the
+ * DECLARATION-PERSISTENCE writer (cinatra#951). The host config reader
+ * validates `cinatra/config.json` (fail-closed) at registration/materialize
+ * and calls this at the same finalize seam as `recordExtensionDependencies`,
+ * so a finalized connector install implies a cached declaration. Status /
+ * provenance are untouched (a metadata write, not a lifecycle transition);
+ * the value is re-validated structurally so a malformed declaration can never
+ * reach the row, no matter the caller. `null` explicitly clears the cache
+ * (non-connector kinds never set it).
+ */
+export async function recordExtensionAccessDeclaration(
+  id: string,
+  declaration: ResolvedConnectorAccessDeclaration | null,
+  opts: TransitionOpts,
+): Promise<InstalledExtension> {
+  const ext = await readInstalledExtensionById(id);
+  if (!ext) {
+    throw new LifecycleTransitionError(
+      "EXT_NOT_FOUND",
+      `installed_extension '${id}' not found`,
+    );
+  }
+  if (declaration !== null && !isResolvedConnectorAccessDeclaration(declaration)) {
+    throw new LifecycleTransitionError(
+      "INVALID_INPUT",
+      `recordExtensionAccessDeclaration refused for ${ext.packageName} — malformed ` +
+        `declaration ${JSON.stringify(declaration)} (actor: ${opts.actor.source}, reason: ${opts.reason})`,
+      { declaration },
+    );
+  }
+  return _internalUpdateInstalledExtensionMetadata(id, { accessDeclaration: declaration });
 }

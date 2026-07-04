@@ -38,6 +38,9 @@ export const installedExtensionTable = canonicalSchema.table("installed_extensio
   requiredInProd: boolean("required_in_prod").notNull().default(false),
   dependencies: jsonb("dependencies").notNull().default(sql`'[]'::jsonb`),
   manifestHash: text("manifest_hash"),
+  // Resolved connector access declaration (cinatra#951) — cached at
+  // registration/materialize; NULL for non-connector kinds / legacy rows.
+  accessDeclaration: jsonb("access_declaration"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -57,6 +60,8 @@ function rowToCanonical(row: InstalledExtensionRow): InstalledExtension {
     requiredInProd: row.requiredInProd,
     dependencies: (row.dependencies as ExtensionDependency[] | null) ?? [],
     manifestHash: row.manifestHash ?? null,
+    accessDeclaration:
+      (row.accessDeclaration as InstalledExtension["accessDeclaration"]) ?? null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -331,6 +336,7 @@ export async function _internalUpdateInstalledExtensionMetadata(
     dependencies?: ExtensionDependency[];
     requiredInProd?: boolean;
     manifestHash?: string | null;
+    accessDeclaration?: InstalledExtension["accessDeclaration"];
   },
 ): Promise<InstalledExtension> {
   const db = await getDb();
@@ -338,6 +344,7 @@ export async function _internalUpdateInstalledExtensionMetadata(
   if (patch.dependencies !== undefined) setClause.dependencies = patch.dependencies;
   if (patch.requiredInProd !== undefined) setClause.requiredInProd = patch.requiredInProd;
   if (patch.manifestHash !== undefined) setClause.manifestHash = patch.manifestHash;
+  if (patch.accessDeclaration !== undefined) setClause.accessDeclaration = patch.accessDeclaration;
   const result = await db
     .update(installedExtensionTable)
     .set(setClause)

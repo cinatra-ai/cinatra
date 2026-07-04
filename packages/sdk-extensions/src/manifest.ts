@@ -247,6 +247,17 @@ export type NormalizedExtensionRecord = {
    * `"required"` (fail-closed).
    */
   resolution?: ExtensionResolution;
+  /**
+   * RAW parsed `cinatra/config.json` pass-through for `kind:"connector"`
+   * records (cinatra#951 — the connector access-scoping declaration), or
+   * null when the package ships none / for non-connector kinds. OPTIONAL on
+   * the type (strictly additive); the manifest generator emits it on EVERY
+   * record. Carried UNVALIDATED as data: the host resolves + validates it
+   * fail-closed through `./access-config` at registration/materialize and
+   * caches the resolved declaration on the registration record — a consumer
+   * must never trust this field without that validation.
+   */
+  accessConfig?: Record<string, unknown> | null;
 };
 
 export function isUiSurfaceKind(value: unknown): value is UiSurfaceKind {

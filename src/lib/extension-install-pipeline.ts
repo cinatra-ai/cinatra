@@ -16,6 +16,13 @@ import type { HostPortName } from "@cinatra-ai/sdk-extensions";
 import type { ExtensionDependency } from "@cinatra-ai/extensions/canonical-types";
 
 import { classifyExtensionTrust } from "@/lib/extension-trust";
+import {
+  readAccessDeclarationInertly,
+  persistAccessDeclarationAtFinalize,
+  restorePriorAccessDeclaration,
+  readConnectorAccessDeclarationFromStore,
+  type ConnectorAccessDeclarationInstallDeps,
+} from "@/lib/connector-access-config-host";
 import { resolveSignatureVerdict } from "@/lib/extension-signature";
 import {
   computeClosureHash,
@@ -374,7 +381,10 @@ export type InstallPipelineDeps = {
    * spy. Required (the test factory supplies an inert default).
    */
   emitOperationalEvent: (event: InstallDurableRestoreFailureEvent) => void;
-};
+  // The access-declaration vertical slice (cinatra#951) lives in
+  // connector-access-config-host.ts: readAccessDeclaration /
+  // persistAccessDeclaration / readCurrentAccessDeclaration.
+} & ConnectorAccessDeclarationInstallDeps;
 
 /**
  * Structured operational event for a FAILED durable-restore step (cinatra#158).
@@ -385,7 +395,7 @@ export type InstallDurableRestoreFailureEvent = {
   packageName: string;
   orgId: string | null;
   /** Which durable axis failed to restore. */
-  step: "provenance" | "grant" | "dependencies" | "journal";
+  step: "provenance" | "grant" | "dependencies" | "journal" | "access-declaration";
   /** Which unwind path raised it. */
   scope: "pre-finalize" | "post-commit-rollback";
   reason: string;
@@ -602,6 +612,17 @@ export async function installExtensionFromRegistry(
     }
   }
 
+  // ACCESS-DECLARATION READ (cinatra#951) — the fail-closed resolve of the
+  // connector's `cinatra/config.json` over the materialized (SRI-verified)
+  // bytes, through the single SDK validator. Same EARLY placement + inertness
+  // contract as the dependency-edge read above (see the helper's contract);
+  // the declaration PERSISTS late, at the finalize seam below.
+  const accessDeclaration = await readAccessDeclarationInertly(
+    deps,
+    mat.storeDir,
+    priorOp?.phase === "finalized" && priorOp.digest === mat.digest,
+  );
+
   // Classify the in-process import trust tier (vendor-agnostic). The host
   // allowlist + bootstrap lever come from the trust-config seam (publicRegistryUrl
   // only — never the instance's own publish target). Computed PURELY (no mutation)
@@ -769,6 +790,11 @@ export async function installExtensionFromRegistry(
   const priorEdges = isUpdate
     ? (await deps.readCurrentDependencies?.(input.packageName, input.orgId)) ?? null
     : null;
+  // (e) the prior canonical row's cached access DECLARATION (cinatra#951),
+  // restored on BOTH unwind paths (see restorePriorAccessDeclaration).
+  const priorAccessDeclaration = isUpdate
+    ? (await deps.readCurrentAccessDeclaration?.(input.packageName, input.orgId)) ?? null
+    : null;
 
   let grantStatus: "approved" | "pending" = "pending";
   try {
@@ -895,6 +921,14 @@ export async function installExtensionFromRegistry(
         dependencies: dependencyEdges,
       });
     }
+
+    // DECLARATION PERSISTENCE at the FINALIZE SEAM (cinatra#951) — same
+    // guarantees as the dependency edges above; null (non-connector) skips.
+    await persistAccessDeclarationAtFinalize(deps, {
+      packageName: input.packageName,
+      orgId: input.orgId,
+      declaration: accessDeclaration,
+    });
 
     // FORWARD INSTALL GATE (#180 item 5) — FRESH installs only: with the
     // candidate's edges persisted, refuse to finalize when an
@@ -1024,6 +1058,21 @@ export async function installExtensionFromRegistry(
           });
         }
       }
+      // ALSO restore the OLD cached access declaration (cinatra#951) — the
+      // helper owns the contract (keyed on isUpdate; a prior NULL is restored
+      // to null).
+      await restorePriorAccessDeclaration(
+        deps,
+        { packageName: input.packageName, orgId: input.orgId, accessDeclaration, isUpdate, prior: priorAccessDeclaration },
+        (reason) =>
+          emitDurableRestoreFailure(deps, {
+            packageName: input.packageName,
+            orgId: input.orgId,
+            step: "access-declaration",
+            scope: "pre-finalize",
+            reason,
+          }),
+      );
     }
     throw err;
   }
@@ -1147,6 +1196,14 @@ export async function installExtensionFromRegistry(
           recordFailure("dependencies", e);
         }
       }
+      // (i-e) restore the OLD cached access DECLARATION (cinatra#951) — with
+      // the OLD version re-pinned, the NEW declaration would corrupt the W2
+      // resolver's cached scope truth (helper contract as above).
+      await restorePriorAccessDeclaration(
+        deps,
+        { packageName: input.packageName, orgId: input.orgId, accessDeclaration, isUpdate, prior: priorAccessDeclaration },
+        (reason) => recordFailure("access-declaration", reason),
+      );
       return failedSteps.length === 0
         ? { complete: true }
         : { complete: false, reason: `failed restore steps: ${failedSteps.join(", ")}` };
@@ -1220,49 +1277,6 @@ export async function installExtensionFromRegistry(
 }
 
 /**
- * Read the materialized package's declared `cinatra.requestedHostPorts` from its
- * on-disk `package.json` (absent/non-array → no ports requested). Defensive
- * parse — the manifest is structurally validated at materialize time; this only
- * surfaces the ports the grant request is recorded against.
- */
-async function readRequestedHostPortsFromStore(storeDir: string): Promise<string[]> {
-  const { readFile } = await import("node:fs/promises");
-  const path = await import("node:path");
-  let raw: string;
-  try {
-    raw = await readFile(path.join(storeDir, "package.json"), "utf8");
-  } catch {
-    return [];
-  }
-  let manifest: { cinatra?: { requestedHostPorts?: unknown } };
-  try {
-    manifest = JSON.parse(raw) as typeof manifest;
-  } catch {
-    return [];
-  }
-  const ports = manifest.cinatra?.requestedHostPorts;
-  return Array.isArray(ports) ? ports.filter((p): p is string => typeof p === "string") : [];
-}
-
-/**
- * Resolve the FINAL registry identity URL — the deployment's PUBLIC registry
- * base (`registry.cinatra.ai`). This is the URL recorded as the package origin
- * (provenance) and used to classify trust, on BOTH the legacy and the gatekept
- * paths.
- *
- * It is a PUBLIC, credential-free URL: `loadDeploymentRegistryConfig()` carries
- * the read credential in the separate `publicReadToken` field, never in
- * `publicRegistryUrl`. Resolving the final identity this way (instead of via
- * `loadVerdaccioConfigForServer()`, which requires decryptable server creds)
- * keeps a gatekept consumer-only install free of any server-credential
- * dependency.
- */
-async function getFinalRegistryIdentityUrl(): Promise<string> {
-  const { loadDeploymentRegistryConfig } = await import("@/lib/deployment-registry-config");
-  return loadDeploymentRegistryConfig().publicRegistryUrl;
-}
-
-/**
  * Wire the production install-pipeline defaults (the seam writer):
  *  - `resolveIntegrity` → `resolveExtensionDistIntegrity` (sha512 SRI root +
  *    additive sha256), authed via `loadVerdaccioConfigForServer()` on the legacy
@@ -1288,7 +1302,7 @@ async function getFinalRegistryIdentityUrl(): Promise<string> {
 export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineDeps> {
   const { resolveExtensionDistIntegrity } = await import("@cinatra-ai/registries");
   const { materializePackageToStore } = await import("@/lib/extension-package-store");
-  const { recordRequestedGrant, approveGrant, readGrantForScope, restoreGrant } = await import("@/lib/extension-host-port-grants");
+  const { recordRequestedGrant, approveGrant, readGrantForScope, restoreGrant, readRequestedHostPortsFromStore } = await import("@/lib/extension-host-port-grants");
   const { beginInstallOp, advanceInstallOpPhase, finalizeInstallOp, readInstallOp } = await import("@/lib/extension-install-ops");
   const { makeCanonicalRowInstallDeps } = await import("@/lib/extension-install-canonical-row-deps");
   const { isGatekeptInstallEnabled, resolveGatekeptInstallConfig } = await import("@/lib/gatekept-install");
@@ -1308,7 +1322,8 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
   // (which DOES require server creds) is only loaded LAZILY inside the legacy
   // flag-OFF branches below — so the flag-OFF path is byte-for-byte unchanged
   // and the flag-ON path stays credential-free.
-  const finalRegistryUrl = await getFinalRegistryIdentityUrl();
+  const { getPublicRegistryIdentityUrl } = await import("@/lib/deployment-registry-config");
+  const finalRegistryUrl = getPublicRegistryIdentityUrl();
 
   // Lazy server-cred loader for the legacy (flag-OFF) direct-read path ONLY.
   // Never invoked when gatekept install is ON.
@@ -1394,6 +1409,9 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
       const { edges } = await readManifestDependencyEdgesFromStore(storeDir);
       return edges;
     },
+    // ACCESS DECLARATION (cinatra#951): the host reader — fail-closed resolve
+    // of cinatra/config.json through the single SDK validator.
+    readAccessDeclaration: (storeDir) => readConnectorAccessDeclarationFromStore(storeDir),
     // FORWARD INSTALL GATE (#180 item 5): edgeType-aware closure check over the
     // canonical snapshot, scoped to the install's org.
     assertForwardInstallClosure: async (p) => {
@@ -1480,34 +1498,11 @@ export async function makeDefaultInstallPipelineDeps(): Promise<InstallPipelineD
     // cinatra#158: the SUPERSESSION seam — atomic demote-OLD + promote-NEW.
     finalizeInstallOp: (id) => finalizeInstallOp(id).then(() => undefined),
     readInstallOp: (pkg, oid) => readInstallOp(pkg, oid),
+    // The HOT-UPDATE pre-finalize probe default: supersession detection + the
+    // inert import/register probe (cinatra#793 metadata-only rule inside).
     verifyActivatableBeforeFinalize: async (i) => {
-      // Detect supersession: any materialized store dir for this package that is
-      // NOT the just-installed current digest = a prior digest (an UPDATE). A
-      // fresh install has none → no pre-finalize gate (supersedes:false).
-      const { discoverSupersededStoreDirsForPackage, verifyDigestImportsAndRegisters } = await import(
-        "@/lib/extension-runtime-activate"
-      );
-      const storeRoot = i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
-      const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
-      if (superseded.length === 0) return { supersedes: false };
-      const verdict = await verifyDigestImportsAndRegisters(
-        i.packageName,
-        storeRoot,
-        i.storeDir,
-        {
-          integrity: i.integrity,
-          contentHash: i.contentHash,
-          approvedPorts: i.approvedPorts,
-        },
-        // cinatra#793: a superseding UPDATE whose NEW manifest declares NO
-        // serverEntry (a metadata-only agent/skill/artifact payload) skips the
-        // import/register probe — nothing to import; the integrity re-verify
-        // remains the gate. The post-commit safety boundary is unchanged: a
-        // module-shipping kind (connector) still probes + still has the durable
-        // rollback behind it.
-        { metadataOnlyOk: true },
-      );
-      return verdict.ok ? { supersedes: true, ok: true } : { supersedes: true, ok: false, reason: verdict.reason };
+      const { probeUpdateActivatableBeforeFinalize } = await import("@/lib/extension-runtime-activate");
+      return probeUpdateActivatableBeforeFinalize(i);
     },
     gcStoreDir: async (storeDir) => {
       const { rm } = await import("node:fs/promises");
@@ -1588,6 +1583,9 @@ export function makeTestInstallPipelineDeps(
     gcStoreDir: noop,
     readDependencyEdges: async () => [],
     persistDependencyEdges: noop,
+    readAccessDeclaration: async () => null,
+    persistAccessDeclaration: noop,
+    readCurrentAccessDeclaration: async () => null,
     assertForwardInstallClosure: noop,
     emitOperationalEvent: () => undefined,
   };

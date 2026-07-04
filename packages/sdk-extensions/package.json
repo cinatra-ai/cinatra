@@ -17,6 +17,7 @@
     "./email-contract": "./src/email-connector-contract.ts",
     "./register": "./src/register.ts",
     "./manifest": "./src/manifest.ts",
+    "./access-config": "./src/access-config.ts",
     "./dependencies": "./src/dependencies.ts",
     "./social-contract": "./src/social-media-connector-contract.ts",
     "./blog-contract": "./src/blog-connector-contract.ts",

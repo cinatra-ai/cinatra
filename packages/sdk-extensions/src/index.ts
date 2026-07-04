@@ -218,6 +218,21 @@ export type {
 } from "./external-mcp-toolbox-contract";
 export { parseDevFixtures, DevFixtureValidationError, DEV_FIXTURE_SURFACES } from "./dev-fixtures";
 export type { DevFixture, DevFixtureFile, DevFixtureSetting, DevFixtureObject } from "./dev-fixtures";
+export {
+  CONNECTOR_ACCESS_SCOPES,
+  CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,
+  PROTECTED_CONNECTOR_SLUGS,
+  ConnectorAccessConfigError,
+  connectorAccessSlugFromPackageName,
+  parseConnectorAccessConfig,
+  resolveAbsentConnectorAccessConfig,
+  isResolvedConnectorAccessDeclaration,
+} from "./access-config";
+export type {
+  ConnectorAccessScope,
+  ConnectorAccessConfig,
+  ResolvedConnectorAccessDeclaration,
+} from "./access-config";
 
 export {
   EXTENSION_KINDS,

@@ -10,6 +10,7 @@ import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types"
 const readInstalledExtensionsByPackageName = vi.fn();
 const installExtensionManifest = vi.fn();
 const sourceSwitchExtension = vi.fn();
+const recordExtensionAccessDeclaration = vi.fn();
 const isPackageRequiredInProd = vi.fn<(pkg: string) => boolean>(() => false);
 
 vi.mock("server-only", () => ({}));
@@ -20,6 +21,9 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
 vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
   installExtensionManifest: (...args: unknown[]) => installExtensionManifest(...args),
   sourceSwitchExtension: (...args: unknown[]) => sourceSwitchExtension(...args),
+  // cinatra#951: the access-declaration cache writer (drift-gated per record).
+  recordExtensionAccessDeclaration: (...args: unknown[]) =>
+    recordExtensionAccessDeclaration(...args),
 }));
 vi.mock("@cinatra-ai/extensions/required-in-prod", () => ({
   isPackageRequiredInProd: (pkg: string) => isPackageRequiredInProd(pkg),
@@ -488,5 +492,88 @@ describe("ensureStaticBundleLifecycleAnchors — bundled digest identity (cinatr
     expect(result.refreshed).toEqual([]);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// cinatra#951 — connector access-declaration caching at boot registration.
+// The seeder resolves each connector record's raw `accessConfig` through the
+// SDK validator (absence rule at install surface) and caches the outcome on
+// the registration record via recordExtensionAccessDeclaration — drift-gated
+// (no per-boot write churn), loud + anchor-preserving on failure.
+// ---------------------------------------------------------------------------
+describe("ensureStaticBundleLifecycleAnchors — access-declaration caching (cinatra#951)", () => {
+  const PKG = "@cinatra-ai/bundled-connector";
+  const ABSENT_RESOLVED = { formatVersion: 1, mode: "default", scope: "admin", source: "absent" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "development");
+    installExtensionManifest.mockImplementation(async (r: Record<string, unknown>) => ({
+      ...row({}),
+      ...r,
+    }));
+    sourceSwitchExtension.mockImplementation(async (id: string) => row({ id }));
+    recordExtensionAccessDeclaration.mockResolvedValue(row({}));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("fresh seed caches the ABSENCE-rule declaration (no accessConfig on the record)", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    const result = await runSeeder();
+    expect(result.accessDeclarationFailed).toEqual([]);
+    const call = recordExtensionAccessDeclaration.mock.calls.find((c) => c[1] !== null);
+    expect(call).toBeTruthy();
+    expect(call![1]).toEqual(ABSENT_RESOLVED);
+    expect((call![2] as { actor: { source: string } }).actor.source).toBe("static-bundle-lifecycle");
+  });
+
+  it("LIVE anchor whose cached declaration already matches → NO write (drift-gated)", async () => {
+    const anchored = {
+      ...anchorRow("active"),
+      accessDeclaration: ABSENT_RESOLVED,
+    } as InstalledExtension;
+    readInstalledExtensionsByPackageName.mockResolvedValue([anchored]);
+    await runSeeder();
+    expect(recordExtensionAccessDeclaration).not.toHaveBeenCalled();
+  });
+
+  it("LIVE anchor with a DRIFTED cached declaration → re-cached", async () => {
+    const anchored = {
+      ...anchorRow("active"),
+      accessDeclaration: { formatVersion: 1, mode: "default", scope: "user", source: "declared" },
+    } as InstalledExtension;
+    readInstalledExtensionsByPackageName.mockResolvedValue([anchored]);
+    await runSeeder();
+    expect(recordExtensionAccessDeclaration).toHaveBeenCalledWith(
+      "iext_anchor",
+      ABSENT_RESOLVED,
+      expect.anything(),
+    );
+  });
+
+  it("cache-write failure → accessDeclarationFailed[] (loud, anchor unaffected)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    readInstalledExtensionsByPackageName.mockResolvedValue([anchorRow("active")]);
+    recordExtensionAccessDeclaration.mockRejectedValue(new Error("db down"));
+    const result = await runSeeder();
+    expect(result.accessDeclarationFailed).toEqual([PKG]);
+    expect(result.failed).toEqual([]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("non-connector records never trigger a declaration write", async () => {
+    // ui-only-ext is a connector in the fixture set but is not seeded (no
+    // serverEntry, not required-in-prod) — the only seeded record is the
+    // bundled connector, asserted above. This pins the kind gate directly:
+    readInstalledExtensionsByPackageName.mockResolvedValue([]);
+    await runSeeder();
+    for (const call of recordExtensionAccessDeclaration.mock.calls) {
+      expect(call[1]).toEqual(ABSENT_RESOLVED);
+    }
   });
 });

@@ -269,3 +269,18 @@ export function loadDeploymentRegistryConfig(): DeploymentRegistryConfig {
   }
   return config;
 }
+
+/**
+ * The FINAL registry identity URL — the deployment's PUBLIC registry base
+ * (`registry.cinatra.ai`). This is the URL the install pipeline records as
+ * the package origin (provenance) and classifies trust from, on BOTH the
+ * legacy and the gatekept paths. It is PUBLIC and credential-free: the read
+ * credential lives in the separate `publicReadToken` field, never in
+ * `publicRegistryUrl`. Resolving the identity this way (instead of via
+ * `loadVerdaccioConfigForServer()`, which requires decryptable server creds)
+ * keeps a gatekept consumer-only install free of any server-credential
+ * dependency.
+ */
+export function getPublicRegistryIdentityUrl(): string {
+  return loadDeploymentRegistryConfig().publicRegistryUrl;
+}

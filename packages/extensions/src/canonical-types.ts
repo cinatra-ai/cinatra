@@ -161,6 +161,50 @@ export type ExtensionDependency = {
   requirement: DependencyRequirement;
 };
 
+/**
+ * The RESOLVED connector access declaration cached on the canonical row at
+ * registration/materialize (cinatra#951) — the validated `cinatra/config.json`
+ * outcome. STRUCTURAL MIRROR of `ResolvedConnectorAccessDeclaration` in
+ * `@cinatra-ai/sdk-extensions/access-config` (this package deliberately
+ * imports no SDK module — same decoupling as BUNDLED_SOURCE_DIGEST_RE); the
+ * two are pinned in agreement by
+ * packages/extensions/src/__tests__/access-declaration-mirror.test.ts —
+ * do not change one without the other.
+ */
+export const CONNECTOR_ACCESS_DECLARATION_SCOPES = [
+  "user",
+  "project",
+  "team",
+  "organization",
+  "workspace",
+  "admin",
+] as const;
+export type ConnectorAccessDeclarationScope =
+  (typeof CONNECTOR_ACCESS_DECLARATION_SCOPES)[number];
+
+export type ResolvedConnectorAccessDeclaration = {
+  formatVersion: 1;
+  mode: "default" | "only";
+  scope: ConnectorAccessDeclarationScope;
+  source: "declared" | "absent";
+};
+
+/** Structural guard for a persisted declaration (jsonb round-trip). */
+export function isResolvedConnectorAccessDeclaration(
+  value: unknown,
+): value is ResolvedConnectorAccessDeclaration {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.formatVersion === 1 &&
+    (v.mode === "default" || v.mode === "only") &&
+    typeof v.scope === "string" &&
+    (CONNECTOR_ACCESS_DECLARATION_SCOPES as readonly string[]).includes(v.scope) &&
+    (v.source === "declared" || v.source === "absent") &&
+    Object.keys(v).length === 4
+  );
+}
+
 export type InstalledExtension = {
   id: string;
   packageName: string;
@@ -173,6 +217,13 @@ export type InstalledExtension = {
   requiredInProd: boolean;
   dependencies: ExtensionDependency[];
   manifestHash: string | null;
+  /**
+   * The RESOLVED connector access declaration (cinatra#951), cached by the
+   * host config reader at registration/materialize. `null` for non-connector
+   * kinds and for rows persisted before the reader ran. OPTIONAL on the type
+   * (strictly additive field).
+   */
+  accessDeclaration?: ResolvedConnectorAccessDeclaration | null;
   createdAt: Date;
   updatedAt: Date;
 };

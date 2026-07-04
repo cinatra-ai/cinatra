@@ -103,7 +103,10 @@ export type PermissionsFormResourceKind =
   // imported from it).
   | "connector"
   | "artifact"
-  | "workflow";
+  | "workflow"
+  // Per-connection grants (cinatra#950/#951): resource_id is the
+  // nango_connection identity UUID.
+  | "connection";
 
 export type PermissionsFormResult =
   | { ok: true }

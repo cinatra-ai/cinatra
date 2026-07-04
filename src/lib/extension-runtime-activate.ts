@@ -1102,6 +1102,46 @@ export async function discoverSupersededStoreDirsForPackage(
 }
 
 /**
+ * The install pipeline's `verifyActivatableBeforeFinalize` DEFAULT (the
+ * HOT-UPDATE pre-finalize probe). Detects supersession — any materialized
+ * store dir for this package that is NOT the just-installed current digest =
+ * a prior digest (an UPDATE); a fresh install has none → no pre-finalize gate
+ * (`supersedes:false`). A superseding update probes that the NEW digest
+ * imports + integrity-verifies + its `register(ctx)` succeeds against an
+ * inert probe ctx. cinatra#793: a NEW manifest that declares NO serverEntry
+ * (a metadata-only agent/skill/artifact payload) skips the import/register
+ * probe — nothing to import; the integrity re-verify remains the gate, and
+ * the post-commit durable rollback stays the safety boundary for
+ * module-shipping kinds (connector).
+ */
+export async function probeUpdateActivatableBeforeFinalize(i: {
+  packageName: string;
+  orgId: string | null;
+  storeDir: string;
+  integrity: string;
+  contentHash: string;
+  approvedPorts: readonly string[];
+  storeRoot?: string;
+}): Promise<{ supersedes: false } | { supersedes: true; ok: true } | { supersedes: true; ok: false; reason: string }> {
+  const storeRoot =
+    i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
+  const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
+  if (superseded.length === 0) return { supersedes: false };
+  const verdict = await verifyDigestImportsAndRegisters(
+    i.packageName,
+    storeRoot,
+    i.storeDir,
+    {
+      integrity: i.integrity,
+      contentHash: i.contentHash,
+      approvedPorts: i.approvedPorts,
+    },
+    { metadataOnlyOk: true },
+  );
+  return verdict.ok ? { supersedes: true, ok: true } : { supersedes: true, ok: false, reason: verdict.reason };
+}
+
+/**
  * Discover the materialized store records for `packageName` whose store dir is
  * NOT `keepStoreDir` (the just-installed current digest). These are the
  * superseded digests a hot-update must tear down + GC.

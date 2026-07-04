@@ -170,6 +170,22 @@ function getPayloadTable(store: StoreTables, tableName: Exclude<TableName, "meta
   return store[tableName];
 }
 
+// Idempotent ADD CONSTRAINT fragment for the bootstrap DO blocks below:
+// Postgres has no `ADD CONSTRAINT IF NOT EXISTS`, so the ALTER is gated on
+// the constraint's own absence in information_schema (re-runs are no-ops).
+function addConstraintIfAbsentSql(schemaName: string, table: string, constraint: string, ddl: string): string {
+  return `IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
+            AND table_name = '${table}'
+            AND constraint_name = '${constraint}'
+        ) THEN
+          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."${table}"
+            ADD CONSTRAINT ${constraint}
+            ${ddl};
+        END IF;`;
+}
+
 // ---------------------------------------------------------------------------
 // public."member" dedup ranking
 // ---------------------------------------------------------------------------
@@ -397,43 +413,18 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS extension_co_owners_resource_idx ON "${schemaName.replaceAll('"', '""')}"."extension_co_owners" (resource_kind, resource_id)` },
     { text: `DO $$
       BEGIN
-        -- Broaden resource_kind to cover connector/artifact/workflow.
-        -- The DO block does NOT auto-rebuild an existing IN-list, so the
-        -- constraint NAME is bumped to _v2 and the old check is dropped. Both
-        -- statements are idempotent: DROP IF EXISTS is a no-op once gone, and
-        -- the v2 ADD is gated on its own absence.
-        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners"
-          DROP CONSTRAINT IF EXISTS extension_co_owners_kind_check;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'extension_co_owners'
-            AND constraint_name = 'extension_co_owners_kind_check_v2'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners"
-            ADD CONSTRAINT extension_co_owners_kind_check_v2
-            CHECK (resource_kind IN ('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'workflow'));
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'extension_co_owners'
-            AND constraint_name = 'extension_co_owners_user_id_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners"
-            ADD CONSTRAINT extension_co_owners_user_id_fkey
-            FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'extension_co_owners'
-            AND constraint_name = 'extension_co_owners_granted_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners"
-            ADD CONSTRAINT extension_co_owners_granted_by_fkey
-            FOREIGN KEY (granted_by) REFERENCES public."user"(id);
-        END IF;
+        -- resource_kind broadened to connector/artifact/workflow (_v2), then
+        -- 'connection' (_v3, cinatra#951 — per-connection grants). A bump must
+        -- RENAME the check (the DO block does not rebuild an existing IN-list)
+        -- and drop the older ones; every statement here is idempotent.
+        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners" DROP CONSTRAINT IF EXISTS extension_co_owners_kind_check;
+        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_co_owners" DROP CONSTRAINT IF EXISTS extension_co_owners_kind_check_v2;
+        ${addConstraintIfAbsentSql(schemaName, "extension_co_owners", "extension_co_owners_kind_check_v3",
+          `CHECK (resource_kind IN ('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'workflow', 'connection'))`)}
+        ${addConstraintIfAbsentSql(schemaName, "extension_co_owners", "extension_co_owners_user_id_fkey",
+          `FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE`)}
+        ${addConstraintIfAbsentSql(schemaName, "extension_co_owners", "extension_co_owners_granted_by_fkey",
+          `FOREIGN KEY (granted_by) REFERENCES public."user"(id)`)}
       END $$;` },
 
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."extension_access_policy" (
@@ -447,31 +438,15 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS extension_access_policy_installed_by_idx ON "${schemaName.replaceAll('"', '""')}"."extension_access_policy" (installed_by_user_id)` },
     { text: `DO $$
       BEGIN
-        -- Broaden resource_kind to cover connector/artifact/workflow.
-        -- Constraint NAME bumped to _v2 + old check dropped (the DO block does
-        -- not rebuild an existing IN-list). Both statements idempotent.
-        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_access_policy"
-          DROP CONSTRAINT IF EXISTS extension_access_policy_kind_check;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'extension_access_policy'
-            AND constraint_name = 'extension_access_policy_kind_check_v2'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_access_policy"
-            ADD CONSTRAINT extension_access_policy_kind_check_v2
-            CHECK (resource_kind IN ('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'workflow'));
-        END IF;
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.table_constraints
-          WHERE table_schema = '${schemaName.replaceAll("'", "''")}'
-            AND table_name = 'extension_access_policy'
-            AND constraint_name = 'extension_access_policy_installed_by_fkey'
-        ) THEN
-          ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_access_policy"
-            ADD CONSTRAINT extension_access_policy_installed_by_fkey
-            FOREIGN KEY (installed_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
-        END IF;
+        -- Same _v2 → _v3 broadening as extension_co_owners above (cinatra#951:
+        -- the per-connection grant rows live in THIS polymorphic table — no
+        -- new policy tables).
+        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_access_policy" DROP CONSTRAINT IF EXISTS extension_access_policy_kind_check;
+        ALTER TABLE "${schemaName.replaceAll('"', '""')}"."extension_access_policy" DROP CONSTRAINT IF EXISTS extension_access_policy_kind_check_v2;
+        ${addConstraintIfAbsentSql(schemaName, "extension_access_policy", "extension_access_policy_kind_check_v3",
+          `CHECK (resource_kind IN ('agent_run', 'agent_template', 'skill_package', 'skill', 'connector', 'artifact', 'workflow', 'connection'))`)}
+        ${addConstraintIfAbsentSql(schemaName, "extension_access_policy", "extension_access_policy_installed_by_fkey",
+          `FOREIGN KEY (installed_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL`)}
       END $$;` },
 
     // -----------------------------------------------------------------------
@@ -537,6 +512,36 @@ END $$` },
             ADD CONSTRAINT connector_access_policy_owner_fkey
             FOREIGN KEY (owner_user_id) REFERENCES public."user"(id);
         END IF;
+      END $$;` },
+
+    // Connection identity (cinatra#950/#951): one row per saved external
+    // connection, OWNED by its creator (owner_user_id NOT NULL by contract —
+    // the core__0014 backfill resolves legacy owners, aborting over NULL).
+    // The legacy Nango blob (metadata 'connector_config:nango_connections')
+    // stays the TOKEN VAULT; the GRANT is a per-connection row in the
+    // polymorphic extension_access_policy (the _v3 bump above), never a
+    // column here. deleted_at soft-deletes (readers see live rows only); the
+    // partial-unique index keys live rows on (connector_key, connection_id).
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."nango_connection" (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      organization_id text,
+      connector_package_id text NOT NULL,
+      connector_key text NOT NULL,
+      connection_id text NOT NULL,
+      owner_user_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      deleted_at timestamptz
+    )` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS nango_connection_live_identity_idx
+  ON "${schemaName.replaceAll('"', '""')}"."nango_connection" (connector_key, connection_id)
+  WHERE deleted_at IS NULL` },
+    { text: `CREATE INDEX IF NOT EXISTS nango_connection_owner_idx ON "${schemaName.replaceAll('"', '""')}"."nango_connection" (owner_user_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS nango_connection_org_idx ON "${schemaName.replaceAll('"', '""')}"."nango_connection" (organization_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS nango_connection_package_idx ON "${schemaName.replaceAll('"', '""')}"."nango_connection" (connector_package_id)` },
+    { text: `DO $$
+      BEGIN
+        ${addConstraintIfAbsentSql(schemaName, "nango_connection", "nango_connection_owner_fkey",
+          `FOREIGN KEY (owner_user_id) REFERENCES public."user"(id) ON DELETE CASCADE`)}
       END $$;` },
 
     // Runtime installer — admin-approved host-port grants. The runtime
@@ -2720,6 +2725,9 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 )` },
+    // The RESOLVED connector access declaration cache (cinatra#951); NULL for
+    // non-connector kinds / pre-reader rows. Additive → bootstrap ADD COLUMN.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."installed_extension" ADD COLUMN IF NOT EXISTS access_declaration jsonb` },
     // Identity is (organization_id, owner_level, owner_id, package_name).
     // organization_id may be NULL for platform-wide rows (sentinel '__platform__'
     // in owner_id). Postgres treats NULLs as distinct in unique constraints by

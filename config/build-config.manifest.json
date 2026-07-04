@@ -169,6 +169,7 @@
     { "alias": "@cinatra-ai/sdk-extensions/blog-contract", "target": "./packages/sdk-extensions/src/blog-connector-contract.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/mcp-contract", "target": "./packages/sdk-extensions/src/mcp-connector-contract.ts" },
     { "alias": "@cinatra-ai/sdk-extensions/artifact-contract", "target": "./packages/sdk-extensions/src/artifact-contract.ts" },
+    { "alias": "@cinatra-ai/sdk-extensions/access-config", "target": "./packages/sdk-extensions/src/access-config.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard", "target": "./packages/sdk-dashboard/src/index.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/types", "target": "./packages/sdk-dashboard/src/types/index.ts" },
     { "alias": "@cinatra-ai/sdk-dashboard/adapters/drizzle-cube", "target": "./packages/sdk-dashboard/src/adapters/drizzle-cube/index.ts" },
