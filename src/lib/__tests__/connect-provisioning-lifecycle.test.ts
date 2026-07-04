@@ -573,3 +573,217 @@ describe("cinatra#974 — per-site Drupal STANDARD webhook binding at connect ti
     errSpy.mockRestore();
   });
 });
+
+describe("cinatra#974 — WordPress standard-contract negotiation (webhook_contract)", () => {
+  const verifier = "verifier-" + "z".repeat(40);
+  const challenge = sha256Base64Url(verifier);
+
+  function wpRow() {
+    return {
+      codeHash: "h",
+      grantType: "auth_code",
+      client: "wordpress",
+      redirectUri: WP_CALLBACK,
+      widgetOrigin: "https://shop.example.com",
+      callbackOrigin: "https://shop.example.com",
+      codeChallenge: challenge,
+      adminUserId: "u1",
+      orgId: "o1",
+      scope: CONNECT_SCOPE,
+      createdAt: "t0",
+      expiresAt: "t1",
+      consumedAt: "t2",
+    };
+  }
+
+  function wpInstallRow() {
+    return { ...wpRow(), grantType: "install_code", codeChallenge: null, redirectUri: null };
+  }
+
+  function wpSite(siteId: string, credentialVersion: number) {
+    return {
+      siteId,
+      client: "wordpress",
+      widgetOrigin: "https://shop.example.com",
+      callbackOrigin: "https://shop.example.com",
+      credentialHash: "hash",
+      credentialVersion,
+      webhookSecretHash: null,
+      adminUserId: "u1",
+      orgId: "o1",
+      createdAt: "t0",
+      lastExchangedAt: "t0",
+      lastUsedAt: null,
+      revokedAt: null,
+      revokedBy: null,
+    };
+  }
+
+  it('webhook_contract:"standard-webhooks" mints a STANDARD binding with a fresh whsec_ secret and echoes the contract', async () => {
+    store.consumeAuthorizationCode.mockReturnValue(wpRow());
+    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-std-1", 2));
+    webhookSecretServiceMock.upsertStandard.mockImplementation(
+      async (input: { secret: string }) => ({
+        bindingId: "wh-binding-wp-std-1",
+        secret: input.secret,
+      }),
+    );
+    const r = await exchangeAuthorizationCode({
+      code: "plaintext-code",
+      client: "wordpress",
+      redirectUri: WP_CALLBACK,
+      codeVerifier: verifier,
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+      webhookContract: "standard-webhooks",
+    });
+    expect(r.ok).toBe(true);
+    // The STANDARD upsert ran on the WordPress connector tuple; the legacy
+    // bridge was NOT touched.
+    expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
+    expect(webhookSecretServiceMock.upsertStandard).toHaveBeenCalledWith({
+      vendor: "cinatra-ai",
+      slug: "wordpress-mcp-connector",
+      hook: "post-published",
+      siteId: "site-std-1",
+      secret: expect.stringMatching(/^whsec_/),
+    });
+    if (r.ok) {
+      // Paired write + echo: fresh whsec_ (never the shared secret), the
+      // bindingId, and the contract echo the plugin keys its persistence on.
+      expect(r.response.webhookBindingId).toBe("wh-binding-wp-std-1");
+      expect(r.response.webhookSecret).toMatch(/^whsec_/);
+      expect(r.response.webhookSecret).not.toBe("shared-legacy-secret");
+      expect(r.response.webhookContract).toBe("standard-webhooks");
+      // The connect-site row received the HASH of the minted secret.
+      const upsertArg = store.upsertConnectSiteCredential.mock.calls[0][0];
+      expect(upsertArg.webhookSecretHash).toBe(sha256Hex(r.response.webhookSecret!));
+    }
+  });
+
+  it("the signal rides the install_code fallback path identically", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(wpInstallRow());
+    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-std-ic", 1));
+    webhookSecretServiceMock.upsertStandard.mockImplementation(
+      async (input: { secret: string }) => ({
+        bindingId: "wh-binding-wp-std-ic",
+        secret: input.secret,
+      }),
+    );
+    const r = await exchangeInstallCode({
+      installCode: "cci_abc",
+      client: "wordpress",
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+      webhookContract: "standard-webhooks",
+    });
+    expect(r.ok).toBe(true);
+    expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
+    if (r.ok) {
+      expect(r.response.webhookBindingId).toBe("wh-binding-wp-std-ic");
+      expect(r.response.webhookSecret).toMatch(/^whsec_/);
+      expect(r.response.webhookContract).toBe("standard-webhooks");
+    }
+  });
+
+  it("PAIRED WRITE + ECHO-ON-FAILURE: a standard upsert failure omits BOTH secret and bindingId but STILL echoes the contract (codex — the echo tells the plugin to keep its pair)", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(wpRow());
+    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-std-x", 3));
+    webhookSecretServiceMock.upsertStandard.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await exchangeAuthorizationCode({
+      code: "plaintext-code",
+      client: "wordpress",
+      redirectUri: WP_CALLBACK,
+      codeVerifier: verifier,
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+      webhookContract: "standard-webhooks",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.response.credential).toMatch(/^cnx_site-std-x_/);
+      expect(r.response.webhookBindingId).toBeUndefined();
+      expect(r.response.webhookSecret).toBeUndefined();
+      // The echo survives the failure arm: without it the plugin would read
+      // this response as "host does not speak the contract" and discard a
+      // still-working pair.
+      expect(r.response.webhookContract).toBe("standard-webhooks");
+    }
+    // The failure is logged WITHOUT leaking any secret.
+    expect(errSpy).toHaveBeenCalled();
+    const logged = errSpy.mock.calls.flat().map(String).join(" ");
+    expect(logged).not.toContain("whsec_");
+    expect(logged).not.toContain("shared-legacy-secret");
+    errSpy.mockRestore();
+  });
+
+  it("no webhook_contract → byte-identical legacy behavior with NO echo (old plugins)", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(wpRow());
+    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-legacy-1", 2));
+    const r = await exchangeAuthorizationCode({
+      code: "plaintext-code",
+      client: "wordpress",
+      redirectUri: WP_CALLBACK,
+      codeVerifier: verifier,
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+    });
+    expect(r.ok).toBe(true);
+    expect(webhookSecretServiceMock.upsertStandard).not.toHaveBeenCalled();
+    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalledWith(
+      expect.objectContaining({ legacySecret: "shared-legacy-secret" }),
+    );
+    if (r.ok) {
+      expect(r.response.webhookSecret).toBe("shared-legacy-secret");
+      expect(r.response.webhookContract).toBeUndefined();
+    }
+  });
+
+  it("an UNKNOWN webhook_contract value degrades to the legacy behavior (never an error)", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(wpRow());
+    store.upsertConnectSiteCredential.mockReturnValue(wpSite("site-legacy-2", 1));
+    const r = await exchangeAuthorizationCode({
+      code: "plaintext-code",
+      client: "wordpress",
+      redirectUri: WP_CALLBACK,
+      codeVerifier: verifier,
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+      webhookContract: "some-future-contract",
+    });
+    expect(r.ok).toBe(true);
+    expect(webhookSecretServiceMock.upsertStandard).not.toHaveBeenCalled();
+    expect(webhookSecretServiceMock.upsertLegacy).toHaveBeenCalled();
+    if (r.ok) {
+      expect(r.response.webhookSecret).toBe("shared-legacy-secret");
+      expect(r.response.webhookContract).toBeUndefined();
+    }
+  });
+
+  it("drupal responses are unchanged: standard pair, no webhookContract echo", async () => {
+    store.consumeAuthorizationCode.mockReturnValue({
+      ...wpRow(),
+      client: "drupal",
+      grantType: "install_code",
+      codeChallenge: null,
+      redirectUri: null,
+    });
+    store.upsertConnectSiteCredential.mockReturnValue({
+      ...wpSite("site-d-echo", 1),
+      client: "drupal",
+    });
+    const r = await exchangeInstallCode({
+      installCode: "cci_abc",
+      client: "drupal",
+      webhookSecret: "shared-legacy-secret",
+      tokenBrokerAvailable: false,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.response.webhookBindingId).toBe("wh-binding-drupal-1");
+      expect(r.response.webhookSecret).toMatch(/^whsec_/);
+      expect(r.response.webhookContract).toBeUndefined();
+    }
+  });
+});

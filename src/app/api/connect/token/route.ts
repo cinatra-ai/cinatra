@@ -84,6 +84,10 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const grantType = typeof body.grant_type === "string" ? body.grant_type : "";
+  // cinatra#974: optional sender capability signal ("standard-webhooks"). Old
+  // plugins never send it; the value is validated in provisioning (an unknown
+  // value degrades to the legacy behavior, never an error).
+  const webhookContract = typeof body.webhook_contract === "string" ? body.webhook_contract : undefined;
 
   if (grantType === "authorization_code") {
     const code = typeof body.code === "string" ? body.code : "";
@@ -108,6 +112,7 @@ export async function POST(request: Request): Promise<Response> {
         codeVerifier,
         webhookSecret: resolveWebhookSecret(),
         tokenBrokerAvailable: tokenBrokerAvailable(),
+        webhookContract,
       });
     } catch (err) {
       console.error("[connect/token] authorization_code exchange threw:", err instanceof Error ? err.message : err);
@@ -153,6 +158,7 @@ export async function POST(request: Request): Promise<Response> {
         client,
         webhookSecret: resolveWebhookSecret(),
         tokenBrokerAvailable: tokenBrokerAvailable(),
+        webhookContract,
       });
     } catch (err) {
       console.error("[connect/token] install_code exchange threw:", err instanceof Error ? err.message : err);
