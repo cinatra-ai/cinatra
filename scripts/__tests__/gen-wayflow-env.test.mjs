@@ -33,9 +33,16 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 
-// The three keys the wayflow container needs from host secrets. Kept in sync
+// The keys the wayflow container needs from host secrets. Kept in sync
 // with WAYFLOW_KEYS in the generator (asserted indirectly via buildWayflowEnv).
-const WAYFLOW_KEYS = ["CINATRA_BRIDGE_TOKEN", "OPENAI_API_KEY", "WAYFLOW_BASE_URL"];
+// CINATRA_CONTEXT_ATTEST_KEY (#907) is the dedicated per-node context-callback
+// signing key.
+const WAYFLOW_KEYS = [
+  "CINATRA_BRIDGE_TOKEN",
+  "OPENAI_API_KEY",
+  "WAYFLOW_BASE_URL",
+  "CINATRA_CONTEXT_ATTEST_KEY",
+];
 
 describe("gen-wayflow-env — parseDotenv", () => {
   it("parses KEY=VALUE and strips surrounding quotes", () => {
@@ -50,6 +57,7 @@ describe("gen-wayflow-env — buildWayflowEnv", () => {
       CINATRA_BRIDGE_TOKEN: "tok-123",
       OPENAI_API_KEY: "sk-abc",
       WAYFLOW_BASE_URL: "http://localhost:3010",
+      CINATRA_CONTEXT_ATTEST_KEY: "attest-xyz",
       // Sensitive keys that must NEVER reach the wayflow container:
       BETTER_AUTH_SECRET: "nope",
       CINATRA_ENCRYPTION_KEY: "nope",
@@ -59,6 +67,7 @@ describe("gen-wayflow-env — buildWayflowEnv", () => {
     expect(Object.keys(env).sort()).toEqual([...WAYFLOW_KEYS].sort());
     expect(env.CINATRA_BRIDGE_TOKEN).toBe("tok-123");
     expect(env.OPENAI_API_KEY).toBe("sk-abc");
+    expect(env.CINATRA_CONTEXT_ATTEST_KEY).toBe("attest-xyz");
     expect(env).not.toHaveProperty("BETTER_AUTH_SECRET");
     expect(env).not.toHaveProperty("PORT");
   });
@@ -70,6 +79,9 @@ describe("gen-wayflow-env — buildWayflowEnv", () => {
     // OPENAI_API_KEY absent → reported missing, never defaulted.
     expect(missing).toContain("OPENAI_API_KEY");
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
+    // CINATRA_CONTEXT_ATTEST_KEY absent → reported missing, never defaulted.
+    expect(missing).toContain("CINATRA_CONTEXT_ATTEST_KEY");
+    expect(env).not.toHaveProperty("CINATRA_CONTEXT_ATTEST_KEY");
   });
 
   it("treats a whitespace-only bridge token as MISSING", () => {

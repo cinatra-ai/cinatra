@@ -385,6 +385,21 @@ def _patch_api_call_step_bridge_token() -> None:
         )
         return
 
+    # #907: dedicated per-node context-callback signing key. DISTINCT from the
+    # bridge token so a caller holding only the run's shared bridge auth cannot
+    # forge an attestation. Read once at patch time (env is stable at runtime).
+    # Unset ⇒ warn + skip minting; the server fails CLOSED on the composed-child
+    # path (context resolution for composed children stops working until it is
+    # provisioned), so this is loud-by-consequence, not silent.
+    attest_key = os.environ.get("CINATRA_CONTEXT_ATTEST_KEY")
+    if not attest_key:
+        print(
+            "[agent_loader] CINATRA_CONTEXT_ATTEST_KEY unset — per-node context "
+            "attestation NOT injected. Composed-child context resolution "
+            "(/api/context-resolve, /api/context-finalize) will be REJECTED (403) "
+            "by the server until this key is set here AND on the app."
+        )
+
     try:
         from wayflowcore.steps import ApiCallStep  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover
@@ -424,6 +439,30 @@ def _patch_api_call_step_bridge_token() -> None:
             or "/auditor/apply" in _ctx_url
         ):
             request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
+        # #907: mint the per-node context-callback attestation for the internal
+        # context-resolution ApiNodes. `self` IS the executing compiled step;
+        # `self.id` is the inlined context node's id (`ctx-<slotId>-<kind>`,
+        # e.g. `ctx-ideaContext-resolve_context`) — the AUTHORITATIVE
+        # execution-position identity the OAS author cannot substitute at
+        # callback time. Sign `(contextId, nodeId)` with the dedicated key so
+        # the server can prove WHICH child is calling (a composed child cannot
+        # obtain an attestation for a sibling's node without executing it). The
+        # server re-anchors nodeId against the run OAS structure, so the id
+        # SHAPE is not trusted — only a genuine, uniquely-marked context node
+        # for the claimed slot passes.
+        if (
+            attest_key
+            and _ctx_id
+            and ("context-resolve" in _ctx_url or "context-finalize" in _ctx_url)
+        ):
+            _node_id = getattr(self, "id", "") or ""
+            if _node_id:
+                _material = f"v1\n{_ctx_id}\n{_node_id}".encode("utf-8")
+                _sig = hmac.new(
+                    attest_key.encode("utf-8"), _material, hashlib.sha256
+                ).hexdigest()
+                request["headers"]["X-Cinatra-Context-Node"] = _node_id
+                request["headers"]["X-Cinatra-Context-Attestation"] = f"v1:{_sig}"
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
         # Default httpx timeout is 5 s. Real-world ApiNode calls span:
