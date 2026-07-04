@@ -353,11 +353,11 @@ const widgetAuthCalls: Record<string, number> = { read: 0, generate: 0 };
 vi.mock("@/lib/drupal-widget-auth", () => ({
   readDrupalWidgetAuthConfig: () => {
     widgetAuthCalls.read += 1;
-    return { apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" };
+    return { apiKey: "k-existing", webhookSecret: "s-existing", generatedAt: "2026-01-01T00:00:00Z" };
   },
   generateDrupalWidgetAuthConfig: () => {
     widgetAuthCalls.generate += 1;
-    return { apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" };
+    return { apiKey: "k-fresh", webhookSecret: "s-fresh", generatedAt: "2026-01-02T00:00:00Z" };
   },
 }));
 
@@ -571,8 +571,8 @@ describe("drupal instance-admin + widget-auth services (cinatra#172 Stage H2)", 
     expect(HOST_CONNECTOR_SERVICE_CAPABILITIES.drupalWidgetAuth).toBe(
       "@cinatra-ai/host:drupal-widget-auth",
     );
-    expect(widgetAuth.read()).toEqual({ apiKey: "k-existing", generatedAt: "2026-01-01T00:00:00Z" });
-    expect(widgetAuth.generate()).toEqual({ apiKey: "k-fresh", generatedAt: "2026-01-02T00:00:00Z" });
+    expect(widgetAuth.read()).toEqual({ apiKey: "k-existing", webhookSecret: "s-existing", generatedAt: "2026-01-01T00:00:00Z" });
+    expect(widgetAuth.generate()).toEqual({ apiKey: "k-fresh", webhookSecret: "s-fresh", generatedAt: "2026-01-02T00:00:00Z" });
     expect(widgetAuthCalls.read).toBe(1);
     expect(widgetAuthCalls.generate).toBe(1);
   });

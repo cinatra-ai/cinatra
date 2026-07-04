@@ -90,6 +90,10 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
     expect(guardSource).toMatch(/"\/api\/webhooks\/wordpress"/);
   });
 
+  it("exempts /api/webhooks/drupal (drupal-module#72; in-handler HMAC), the WordPress twin", () => {
+    expect(guardSource).toMatch(/"\/api\/webhooks\/drupal"/);
+  });
+
   it("does NOT exempt /connect/authorize (the consent screen stays session-gated)", () => {
     // The authorize page is a server component behind the normal auth-route
     // guard — it must never appear in the public-path list.

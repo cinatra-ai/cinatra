@@ -233,14 +233,21 @@ export type HostDrupalMcpService = {
  *
  * TRUST (cinatra#172 Stage H2): read and write share this ONE in-process
  * capability id (server-side registry only). The WRITER is `generate()` — it
- * MINTS AND PERSISTS a fresh widget API key, immediately invalidating the
- * previous one. AUTHORIZATION GATING STAYS EXTENSION-SIDE: the connector's
- * "use server" generate action keeps its `requireExtensionAction(<pkg>,
- * "manage")` gate — the identical posture the static import carried. */
+ * MINTS AND PERSISTS a fresh widget API key + webhook secret, immediately
+ * invalidating the previous one. AUTHORIZATION GATING STAYS EXTENSION-SIDE: the
+ * connector's "use server" generate action keeps its `requireExtensionAction(<pkg>,
+ * "manage")` gate — the identical posture the static import carried.
+ *
+ * `webhookSecret` is the single shared HMAC secret the host `/api/webhooks/drupal`
+ * receiver verifies inbound `node_published` notifications against (mirrors the
+ * WordPress twin — see HostWordPressWidgetAuthService). Server-side only; never
+ * client-resolvable. A widget-auth row persisted before the webhook contract
+ * landed may lack it at runtime despite this type (the read is a JSON cast); the
+ * receiver fails closed when it is absent. */
 export type HostDrupalWidgetAuthService = {
-  read(): { apiKey: string; generatedAt: string } | null;
-  /** WRITER — mint + persist a fresh widget API key (invalidates the old). */
-  generate(): { apiKey: string; generatedAt: string };
+  read(): { apiKey: string; webhookSecret: string; generatedAt: string } | null;
+  /** WRITER — mint + persist a fresh key + webhook secret (invalidates the old). */
+  generate(): { apiKey: string; webhookSecret: string; generatedAt: string };
 };
 
 /** Structural WordPress instance row threading through the wordpress
