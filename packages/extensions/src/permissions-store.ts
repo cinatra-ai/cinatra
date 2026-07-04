@@ -169,6 +169,38 @@ export async function writeExtensionAccessPolicy(
 }
 
 /**
+ * ATOMIC insert-if-absent policy seed (cinatra#952 W2 save seam). Unlike
+ * `writeExtensionAccessPolicy` (ON CONFLICT DO UPDATE — an intentional
+ * overwrite for the sanctioned policy-write path), this seeds the row ONLY
+ * when none exists (`ON CONFLICT DO NOTHING`), so a reconnect's seed can
+ * NEVER clobber a concurrent widen/narrow that landed between the caller's
+ * read and this write. Returns true when this call created the row.
+ */
+export async function seedExtensionAccessPolicyIfAbsent(
+  resourceKind: ExtensionKind,
+  resourceId: string,
+  policy: AgentAuthPolicy,
+  installedByUserId: string | null,
+): Promise<boolean> {
+  const connectionString = getPostgresConnectionString();
+  const schema = postgresSchema;
+  const [result] = runPostgresQueriesSync({
+    connectionString,
+    queries: [
+      {
+        text: `INSERT INTO "${schema.replaceAll('"', '""')}"."extension_access_policy"
+                 (resource_kind, resource_id, policy, installed_by_user_id, updated_at)
+               VALUES ($1, $2, $3::jsonb, $4, now())
+               ON CONFLICT (resource_kind, resource_id) DO NOTHING
+               RETURNING resource_id`,
+        values: [resourceKind, resourceId, JSON.stringify(policy), installedByUserId ?? null],
+      },
+    ],
+  });
+  return ((result?.rows ?? []) as unknown[]).length === 1;
+}
+
+/**
  * Atomically write the canonical install-time access for a resource: the
  * access policy (+ installer pointer) and any seed co-owners in ONE
  * transaction (BEGIN/COMMIT/ROLLBACK via runPostgresQueriesSync). Either every

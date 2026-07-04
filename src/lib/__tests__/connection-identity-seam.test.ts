@@ -15,14 +15,19 @@ vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
   readNangoConnectionByNaturalKey: (...a: unknown[]) => readNangoConnectionByNaturalKey(...a),
 }));
 
-const setExtensionInstallAccess = vi.fn(async (_input: Record<string, unknown>) => {});
+const OWNER_POLICY = {
+  runListVisibility: "owner",
+  runDataVisibility: "owner",
+  runExecuteVisibility: "owner",
+  allowRunSharing: false,
+};
 vi.mock("@cinatra-ai/extensions/install-access-contract", () => ({
-  setExtensionInstallAccess: (input: Record<string, unknown>) => setExtensionInstallAccess(input),
+  defaultAccessPolicyForKind: () => OWNER_POLICY,
 }));
 
-const readExtensionAccessPolicy = vi.fn();
+const seedExtensionAccessPolicyIfAbsent = vi.fn(async (..._a: unknown[]) => true);
 vi.mock("@cinatra-ai/extensions/permissions-store", () => ({
-  readExtensionAccessPolicy: (...a: unknown[]) => readExtensionAccessPolicy(...a),
+  seedExtensionAccessPolicyIfAbsent: (...a: unknown[]) => seedExtensionAccessPolicyIfAbsent(...a),
 }));
 
 const deleteNangoConnection = vi.fn(async (..._a: unknown[]) => {});
@@ -54,7 +59,7 @@ const baseRow = {
 beforeEach(() => {
   vi.clearAllMocks();
   insertNangoConnection.mockResolvedValue(baseRow);
-  readExtensionAccessPolicy.mockResolvedValue(null);
+  seedExtensionAccessPolicyIfAbsent.mockResolvedValue(true);
 });
 
 describe("HOST_CONNECTOR_KEY_TO_PACKAGE lockstep", () => {
@@ -67,18 +72,19 @@ describe("HOST_CONNECTOR_KEY_TO_PACKAGE lockstep", () => {
 });
 
 describe("registerSavedConnectionIdentity", () => {
-  it("inserts + seeds OWNER default when no policy row exists", async () => {
+  it("inserts + seeds the OWNER default via the ATOMIC if-absent seeder", async () => {
     await registerSavedConnectionIdentity({
       connectorKey: "github",
       connectionId: "c-1",
       ownerUserId: "user-1",
       organizationId: "org-1",
     });
-    expect(setExtensionInstallAccess).toHaveBeenCalledWith({
-      kind: "connection",
-      resourceId: "conn-uuid",
-      installedByUserId: "user-1",
-    });
+    expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
+      "connection",
+      "conn-uuid",
+      OWNER_POLICY,
+      "user-1",
+    );
   });
 
   it("seeds workspace visibility for org-admin APP-scope saves", async () => {
@@ -89,27 +95,45 @@ describe("registerSavedConnectionIdentity", () => {
       organizationId: "org-1",
       seed: "workspace",
     });
-    expect(setExtensionInstallAccess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        policy: expect.objectContaining({ runDataVisibility: "workspace" }),
-      }),
+    expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
+      "connection",
+      "conn-uuid",
+      expect.objectContaining({ runDataVisibility: "workspace" }),
+      "user-1",
     );
   });
 
-  it("NEVER resets a widened policy on reconnect (seed idempotency, round-2 finding 4)", async () => {
-    readExtensionAccessPolicy.mockResolvedValue({
-      runListVisibility: "workspace",
-      runDataVisibility: "workspace",
-      runExecuteVisibility: "workspace",
-      allowRunSharing: false,
-    });
+  it("force-seeds OWNER for a null-org identity row even when workspace was requested", async () => {
+    insertNangoConnection.mockResolvedValue({ ...baseRow, organizationId: null });
     await registerSavedConnectionIdentity({
       connectorKey: "github",
       connectionId: "c-1",
       ownerUserId: "user-1",
-      organizationId: "org-1",
+      organizationId: null,
+      seed: "workspace",
     });
-    expect(setExtensionInstallAccess).not.toHaveBeenCalled();
+    expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
+      "connection",
+      "conn-uuid",
+      OWNER_POLICY,
+      "user-1",
+    );
+  });
+
+  it("NEVER resets a widened policy on reconnect (atomic if-absent seed, round-2 finding 4)", async () => {
+    // An existing (possibly widened) policy row: the atomic seeder's ON
+    // CONFLICT DO NOTHING reports false and the reconnect succeeds without
+    // any overwriting write path being invoked.
+    seedExtensionAccessPolicyIfAbsent.mockResolvedValue(false);
+    await expect(
+      registerSavedConnectionIdentity({
+        connectorKey: "github",
+        connectionId: "c-1",
+        ownerUserId: "user-1",
+        organizationId: "org-1",
+      }),
+    ).resolves.toMatchObject({ id: "conn-uuid" });
+    expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledTimes(1);
   });
 
   it("HARD-FAILS when the existing live row belongs to a different user", async () => {
@@ -122,7 +146,7 @@ describe("registerSavedConnectionIdentity", () => {
         organizationId: "org-1",
       }),
     ).rejects.toBeInstanceOf(ConnectionIdentityConflictError);
-    expect(setExtensionInstallAccess).not.toHaveBeenCalled(); // never seeds the foreign row
+    expect(seedExtensionAccessPolicyIfAbsent).not.toHaveBeenCalled(); // never seeds the foreign row
   });
 
   it("HARD-FAILS on a non-null org mismatch; tolerates a null-org legacy row for its owner", async () => {

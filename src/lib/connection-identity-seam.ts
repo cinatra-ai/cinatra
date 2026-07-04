@@ -29,8 +29,8 @@ import {
   readNangoConnectionByNaturalKey,
   type NangoConnectionIdentity,
 } from "@cinatra-ai/extensions/connection-identity-store";
-import { setExtensionInstallAccess } from "@cinatra-ai/extensions/install-access-contract";
-import { readExtensionAccessPolicy } from "@cinatra-ai/extensions/permissions-store";
+import { defaultAccessPolicyForKind } from "@cinatra-ai/extensions/install-access-contract";
+import { seedExtensionAccessPolicyIfAbsent } from "@cinatra-ai/extensions/permissions-store";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import {
   deleteNangoConnection,
@@ -136,31 +136,25 @@ export async function registerSavedConnectionIdentity(input: {
     );
   }
 
-  // One-time grant seed. Seed-idempotency: only when NO policy row exists
-  // (round-2 finding 4 — a reconnect must never reset a widened policy).
-  // NULL-ORG NARROWING (codex diff-round finding 1): a null-org identity row
-  // must NEVER gain a workspace grant — `workspace` has no cross-org guard to
-  // contain it — so a null-org row is force-seeded owner-only regardless of
-  // the requested seed.
+  // One-time grant seed. Seed-idempotency is ATOMIC (codex diff-round-2
+  // finding 1): `seedExtensionAccessPolicyIfAbsent` inserts with ON CONFLICT
+  // DO NOTHING, so a reconnect's seed can never clobber a concurrent
+  // widen/narrow (round-2 finding 4: a reconnect must never reset a widened
+  // policy). NULL-ORG NARROWING (codex diff-round finding 1): a null-org
+  // identity row must NEVER gain a workspace grant — `workspace` has no
+  // cross-org guard to contain it — so a null-org row is force-seeded
+  // owner-only regardless of the requested seed.
   const effectiveSeed = row.organizationId === null ? "owner" : input.seed;
-  const existingPolicy = await readExtensionAccessPolicy("connection", row.id);
-  if (existingPolicy === null) {
-    await setExtensionInstallAccess({
-      kind: "connection",
-      resourceId: row.id,
-      installedByUserId: ownerUserId,
-      ...(effectiveSeed === "workspace"
-        ? {
-            policy: {
-              runListVisibility: "workspace",
-              runDataVisibility: "workspace",
-              runExecuteVisibility: "workspace",
-              allowRunSharing: false,
-            },
-          }
-        : {}),
-    });
-  }
+  const policy =
+    effectiveSeed === "workspace"
+      ? {
+          runListVisibility: "workspace" as const,
+          runDataVisibility: "workspace" as const,
+          runExecuteVisibility: "workspace" as const,
+          allowRunSharing: false,
+        }
+      : defaultAccessPolicyForKind("connection");
+  await seedExtensionAccessPolicyIfAbsent("connection", row.id, policy, ownerUserId);
   return row;
 }
 

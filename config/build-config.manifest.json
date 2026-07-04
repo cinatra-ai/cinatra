@@ -258,6 +258,7 @@
     { "alias": "@cinatra-ai/extensions/purge", "target": "./packages/extensions/src/purge.ts" },
     { "alias": "@cinatra-ai/extensions/purge-deps", "target": "./packages/extensions/src/purge-deps.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-actions", "target": "./packages/extensions/src/permissions-actions.ts" },
+    { "alias": "@cinatra-ai/extensions/connection-identity-store", "target": "./packages/extensions/src/connection-identity-store.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-store", "target": "./packages/extensions/src/permissions-store.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-kind-hooks", "target": "./packages/extensions/src/permissions-kind-hooks.ts" },
     { "alias": "@cinatra-ai/extensions/enforce-extension-access", "target": "./packages/extensions/src/enforce-extension-access.ts" },
