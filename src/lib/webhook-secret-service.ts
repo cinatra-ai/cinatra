@@ -36,6 +36,7 @@ import {
   type MintBindingInput,
   type MintedBinding,
   type UpsertLegacyBindingInput,
+  type UpsertStandardBindingInput,
 } from "@cinatra-ai/webhooks";
 
 // Bounded dual-secret rotation window: the previous secret stays valid this
@@ -224,6 +225,127 @@ export const webhookSecretService: WebhookSecretService = {
       );
       await client.query("COMMIT");
       return { bindingId, secret: input.legacySecret };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+
+  // Tuple-scoped idempotent STANDARD-binding upsert (cinatra#974 — the Drupal
+  // node-publish sender; Standard-Webhooks from day one, no legacy arm).
+  // Provisioning has only the (vendor, slug, hook, site) tuple — never an
+  // existing bindingId — so a reconnect/credential-rotation cannot address an
+  // existing binding by id. This INSERTs a fresh active binding storing the
+  // PROVIDED whsec_ secret when none exists, or installs the provided secret as
+  // the active binding's new current via the same bounded dual-secret window
+  // `rotate` uses (outgoing current → previous, previous_expires_at stamped) so
+  // a webhook in flight signed under the old secret still verifies (codex:
+  // clearing previous_* would cause avoidable in-flight 401s). The bindingId is
+  // preserved so the module's stored inbound URL stays valid across reconnects.
+  async upsertStandard(input: UpsertStandardBindingInput): Promise<MintedBinding> {
+    if (typeof input.secret !== "string" || input.secret.length === 0) {
+      throw new Error("[webhook-secret-service] upsertStandard requires a non-empty secret");
+    }
+    const pool = getPool();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Lock the existing active row for this tuple (if any). The partial-unique
+      // active index guarantees at most one.
+      const { rows } = await client.query<{
+        binding_id: string;
+        legacy_enabled: boolean;
+        current_secret_ciphertext: string;
+        current_secret_iv: string;
+      }>(
+        `SELECT binding_id, legacy_enabled, current_secret_ciphertext, current_secret_iv
+           FROM ${table()}
+          WHERE vendor = $1 AND slug = $2 AND hook = $3 AND site_id = $4
+            AND revoked_at IS NULL
+          FOR UPDATE`,
+        [input.vendor, input.slug, input.hook, input.siteId],
+      );
+      const existing = rows[0];
+      if (existing) {
+        const newEnc = encryptSecret(input.secret, aad(existing.binding_id, "current"));
+        if (existing.legacy_enabled) {
+          // Converting a LEGACY row to standard: its current column holds an
+          // UNUSED placeholder (never handed to any sender), so there is nothing
+          // meaningful to keep verifying — do NOT move it into previous. Clear
+          // the legacy columns and window in the same statement.
+          await client.query(
+            `UPDATE ${table()}
+                SET current_secret_ciphertext = $2,
+                    current_secret_iv = $3,
+                    previous_secret_ciphertext = NULL,
+                    previous_secret_iv = NULL,
+                    previous_expires_at = NULL,
+                    legacy_enabled = false,
+                    legacy_secret_ciphertext = NULL,
+                    legacy_secret_iv = NULL,
+                    rotated_at = now()
+              WHERE binding_id = $1`,
+            [existing.binding_id, newEnc.ciphertext, newEnc.iv],
+          );
+        } else {
+          // Dual-window rotation with the PROVIDED secret as the new current.
+          // Decrypt-then-re-encrypt the outgoing current under the previous AAD
+          // (the field-scoped AAD invariant: a current blob must never sit in
+          // the previous column under the current AAD).
+          const outgoing = decryptSecret(
+            {
+              ciphertext: existing.current_secret_ciphertext,
+              iv: existing.current_secret_iv,
+            },
+            aad(existing.binding_id, "current"),
+          );
+          const prevEnc = encryptSecret(outgoing, aad(existing.binding_id, "previous"));
+          await client.query(
+            `UPDATE ${table()}
+                SET previous_secret_ciphertext = $2,
+                    previous_secret_iv = $3,
+                    previous_expires_at = now() + ($4 || ' seconds')::interval,
+                    current_secret_ciphertext = $5,
+                    current_secret_iv = $6,
+                    rotated_at = now()
+              WHERE binding_id = $1`,
+            [
+              existing.binding_id,
+              prevEnc.ciphertext,
+              prevEnc.iv,
+              String(ROTATION_WINDOW_SECONDS),
+              newEnc.ciphertext,
+              newEnc.iv,
+            ],
+          );
+        }
+        await client.query("COMMIT");
+        return { bindingId: existing.binding_id, secret: input.secret };
+      }
+      // No active binding — INSERT a fresh standard binding storing the
+      // provided secret as current.
+      const bindingId = mintBindingId();
+      const enc = encryptSecret(input.secret, aad(bindingId, "current"));
+      await client.query(
+        `INSERT INTO ${table()}
+           (binding_id, vendor, slug, hook, site_id,
+            current_secret_ciphertext, current_secret_iv,
+            legacy_enabled, legacy_secret_ciphertext, legacy_secret_iv, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, false, NULL, NULL, now())`,
+        [
+          bindingId,
+          input.vendor,
+          input.slug,
+          input.hook,
+          input.siteId,
+          enc.ciphertext,
+          enc.iv,
+        ],
+      );
+      await client.query("COMMIT");
+      return { bindingId, secret: input.secret };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

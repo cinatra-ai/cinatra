@@ -22,6 +22,8 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 
+import { mintWebhookSecret } from "@cinatra-ai/webhooks";
+
 import { ensureInstanceId } from "@/lib/instance-identity-store";
 import { webhookSecretService } from "@/lib/webhook-secret-service";
 import {
@@ -631,15 +633,27 @@ export type ConnectTokenResponse = {
   cinatraInstanceId: string;
   credential: string;
   credentialVersion: number;
-  webhookSecret: string;
+  // The webhook signing secret for the CMS-side publish emitter.
+  //   - wordpress (#343): the per-connector SHARED legacy secret, always
+  //     present (the in-field plugin signs `X-Cinatra-Sig-256: sha256=<hmac>`).
+  //   - drupal (#974): the PER-BINDING Standard-Webhooks `whsec_` secret,
+  //     present ONLY together with `webhookBindingId` (a paired write — codex:
+  //     returning a secret whose binding upsert failed would poison an existing
+  //     module-side secret/binding pair). Absent when the binding upsert
+  //     failed; the module keeps its previous pair and the next reconnect
+  //     re-mints.
+  webhookSecret?: string;
   contractVersion: string;
   capabilities: { tokenBroker: boolean; supportedContractVersions: string[] };
-  // cinatra#343: the per-site inbound-webhook binding id, present ONLY for the
-  // WordPress client (the connector that declares cinatra.webhooks). The plugin
-  // POSTs publish events to
-  // /webhook/cinatra-ai/wordpress-mcp-connector/post-published/<webhookBindingId>
-  // signed with the bespoke `X-Cinatra-Sig-256: sha256=<hmac>` over webhookSecret
-  // (the #343 legacy bridge). Absent for clients with no webhook declaration.
+  // The per-site inbound-webhook binding id for clients whose connector
+  // declares cinatra.webhooks. The CMS sender POSTs publish events to
+  // /webhook/<vendor>/<slug>/<hook>/<webhookBindingId>:
+  //   - wordpress (#343): the legacy bridge — the plugin signs the bespoke
+  //     `X-Cinatra-Sig-256: sha256=<hmac>` over webhookSecret.
+  //   - drupal (#974): Standard-Webhooks headers (webhook-id / -timestamp /
+  //     -signature) over the paired `whsec_` webhookSecret.
+  // Absent for clients with no webhook declaration, and for drupal when the
+  // binding upsert failed (see the webhookSecret pairing above).
   webhookBindingId?: string;
 };
 
@@ -650,6 +664,17 @@ const WORDPRESS_WEBHOOK_BINDING = {
   vendor: "cinatra-ai",
   slug: "wordpress-mcp-connector",
   hook: "post-published",
+} as const;
+
+// cinatra#974: the Drupal connector's inbound-webhook tuple (it declares
+// cinatra.webhooks with the node-published hook). vendor/slug must match the
+// connector package name (cinatra-ai/drupal-mcp-connector). Data only — core
+// never imports the connector (the generic /webhook route dispatches through
+// the generated registry).
+const DRUPAL_WEBHOOK_BINDING = {
+  vendor: "cinatra-ai",
+  slug: "drupal-mcp-connector",
+  hook: "node-published",
 } as const;
 
 /**
@@ -719,33 +744,55 @@ async function provisionFromGrant(input: {
   const ensured = await ensureInstanceId();
   if (!ensured || !ensured.instanceId) return { ok: false };
 
+  // The webhook secret this exchange will hand to the CMS sender:
+  //   - wordpress (#343): the caller-provided per-connector SHARED legacy
+  //     secret (the in-field plugin's bespoke `X-Cinatra-Sig-256` signing).
+  //   - drupal (#974): a FRESH per-binding Standard-Webhooks `whsec_` secret
+  //     minted here (no legacy fleet exists, so drupal signs Standard-Webhooks
+  //     against the generic /webhook route from day one; the shared secret the
+  //     token route passes in is never handed to drupal).
+  const clientWebhookSecret =
+    input.row.client === "drupal" ? mintWebhookSecret() : input.webhookSecret;
+
+  // NOTE: the connect-site row's webhook_secret_hash is written before the
+  // binding upsert below (the binding needs site.siteId). If the drupal upsert
+  // then fails, the row's hash refers to a secret that was never returned —
+  // stale until the next successful reconnect. Accepted: nothing verifies
+  // against webhook_secret_hash today (it exists for a future migration), and
+  // the WordPress path has the same window.
   const { credential, site } = upsertConnectSiteAndMintCredential({
     client: input.row.client,
     widgetOrigin: input.row.widgetOrigin,
     callbackOrigin: input.row.callbackOrigin,
-    webhookSecretHash: sha256Hex(input.webhookSecret),
+    webhookSecretHash: sha256Hex(clientWebhookSecret),
     adminUserId: input.row.adminUserId,
     orgId: input.row.orgId,
   });
 
-  // cinatra#343: mint (or rotate-in-place) the per-site inbound-webhook binding
-  // ONLY for the WordPress client (the connector that declares cinatra.webhooks).
-  // The shared webhookSecret is bridged as the legacy HMAC secret (D3c option A)
-  // so the in-field plugin keeps its `X-Cinatra-Sig-256` signing. upsertLegacy is
-  // tuple-scoped + idempotent across reconnects / credential rotations (a
-  // reconnect re-issues a fresh webhookSecret here; the binding's stored secret
-  // is updated in place, preserving its bindingId so the plugin's inbound URL
-  // stays valid). No binding is minted for any other client.
+  // Mint (or rotate-in-place) the per-site inbound-webhook binding for the
+  // clients whose connector declares cinatra.webhooks:
+  //   - wordpress (#343): the shared webhookSecret is bridged as the legacy
+  //     HMAC secret (D3c option A) so the in-field plugin keeps its
+  //     `X-Cinatra-Sig-256` signing.
+  //   - drupal (#974): a STANDARD binding storing the fresh per-binding
+  //     `whsec_` secret; the module signs Standard-Webhooks.
+  // Both upserts are tuple-scoped + idempotent across reconnects / credential
+  // rotations (a reconnect re-issues a fresh secret here; the binding's stored
+  // secret is updated in place — dual-window for standard — preserving its
+  // bindingId so the sender's inbound URL stays valid).
   //
   // BEST-EFFORT, non-fatal: the connect-site credential above is
   // already committed in its own transaction. A binding-mint failure (transient
   // DB error / concurrent-insert race) must NOT fail the whole exchange and
   // strand the client with a rotated-but-unreturned credential — the auth code
   // is single-use and already consumed. On failure we log and return WITHOUT a
-  // webhookBindingId; the binding is re-minted IDEMPOTENTLY (upsertLegacy
-  // preserves/re-creates the tuple's active binding) on the next reconnect, and
-  // until the generic /webhook path is live the in-field plugin still posts to
-  // the existing /api/webhooks/wordpress route, so no delivery is lost.
+  // webhookBindingId; the binding is re-minted IDEMPOTENTLY on the next
+  // reconnect. For WordPress the in-field plugin still posts to the existing
+  // /api/webhooks/wordpress route until the generic path is live, so no
+  // delivery is lost. For drupal the response then ALSO omits webhookSecret —
+  // the secret and bindingId are a PAIRED write (codex): returning a fresh
+  // secret without its binding would overwrite the module's previously working
+  // secret while its stored bindingId still points at the old binding.
   let webhookBindingId: string | undefined;
   if (input.row.client === "wordpress") {
     try {
@@ -754,7 +801,7 @@ async function provisionFromGrant(input: {
         slug: WORDPRESS_WEBHOOK_BINDING.slug,
         hook: WORDPRESS_WEBHOOK_BINDING.hook,
         siteId: site.siteId,
-        legacySecret: input.webhookSecret,
+        legacySecret: clientWebhookSecret,
       });
       webhookBindingId = binding.bindingId;
     } catch (err) {
@@ -764,7 +811,30 @@ async function provisionFromGrant(input: {
         err instanceof Error ? err.message : err,
       );
     }
+  } else if (input.row.client === "drupal") {
+    try {
+      const binding = await webhookSecretService.upsertStandard({
+        vendor: DRUPAL_WEBHOOK_BINDING.vendor,
+        slug: DRUPAL_WEBHOOK_BINDING.slug,
+        hook: DRUPAL_WEBHOOK_BINDING.hook,
+        siteId: site.siteId,
+        secret: clientWebhookSecret,
+      });
+      webhookBindingId = binding.bindingId;
+    } catch (err) {
+      // NEVER log the secret or the binding material — only the failure reason.
+      console.error(
+        "[connect/provisioning] Drupal webhook binding upsert failed (credential still issued; secret+binding pair omitted; re-minted on next reconnect):",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
+
+  // Paired write (drupal): the secret is returned ONLY alongside its binding.
+  // WordPress keeps its always-present shared secret (the in-field plugin
+  // verifies against /api/webhooks/wordpress even without a binding).
+  const includeWebhookSecret =
+    input.row.client !== "drupal" || webhookBindingId !== undefined;
 
   const url = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
   return {
@@ -775,7 +845,7 @@ async function provisionFromGrant(input: {
       cinatraInstanceId: ensured.instanceId,
       credential,
       credentialVersion: site.credentialVersion,
-      webhookSecret: input.webhookSecret,
+      ...(includeWebhookSecret ? { webhookSecret: clientWebhookSecret } : {}),
       contractVersion: CONNECT_CONTRACT_VERSION,
       capabilities: {
         tokenBroker: input.tokenBrokerAvailable,

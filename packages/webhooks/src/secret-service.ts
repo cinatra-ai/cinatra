@@ -83,6 +83,31 @@ export interface UpsertLegacyBindingInput {
   readonly legacySecret: string;
 }
 
+/**
+ * The narrow tuple-scoped STANDARD-binding upsert used at PROVISIONING time
+ * (cinatra#974 — the Drupal node-publish sender, which has no legacy fleet and
+ * signs Standard-Webhooks from day one).
+ *
+ * Same shape of problem `upsertLegacy` solves: provisioning has only the
+ * (vendor, slug, hook, site) tuple — never an existing `bindingId` — so a
+ * reconnect / credential-rotation cannot address an existing binding by id.
+ * `upsertStandard` is idempotent over the active tuple: it INSERTs a fresh
+ * Standard-Webhooks binding when none is active, or installs the PROVIDED
+ * secret as the active binding's new current secret via the same bounded
+ * dual-secret window `rotate` uses (outgoing current → previous, valid until
+ * `previousExpiresAt`) so a webhook in flight signed under the old secret
+ * still verifies. The `bindingId` is preserved so the module's stored inbound
+ * URL stays valid across reconnects.
+ */
+export interface UpsertStandardBindingInput {
+  readonly vendor: string;
+  readonly slug: string;
+  readonly hook: string;
+  readonly siteId: string;
+  /** The `whsec_` Standard-Webhooks secret to (re)store for the active binding. */
+  readonly secret: string;
+}
+
 export interface MintedBinding {
   readonly bindingId: string;
   /** The plaintext secret to hand to the connected site at provisioning time. */
@@ -113,6 +138,15 @@ export interface WebhookSecretService {
    * (stable-or-new) `bindingId` + the stored legacy secret.
    */
   upsertLegacy(input: UpsertLegacyBindingInput): Promise<MintedBinding>;
+  /**
+   * Tuple-scoped idempotent upsert of a STANDARD (Standard-Webhooks) binding
+   * (cinatra#974). INSERTs a fresh binding storing the provided secret when no
+   * active binding exists for the tuple; otherwise installs the provided
+   * secret as the new current via the bounded dual-secret rotation window
+   * (stable `bindingId`, in-flight deliveries keep verifying). Returns the
+   * (stable-or-new) `bindingId` + the stored secret.
+   */
+  upsertStandard(input: UpsertStandardBindingInput): Promise<MintedBinding>;
 }
 
 // Standard-Webhooks secrets are base64; the `whsec_` prefix is the convention

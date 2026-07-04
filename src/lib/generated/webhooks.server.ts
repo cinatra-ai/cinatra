@@ -27,5 +27,6 @@ export type GeneratedWebhookHandlerEntry = {
 };
 
 export const GENERATED_WEBHOOK_HANDLERS: Record<string, GeneratedWebhookHandlerEntry> = {
+  "cinatra-ai/drupal-mcp-connector/node-published": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/src/webhooks/node-published", () => import("@cinatra-ai/drupal-mcp-connector/src/webhooks/node-published")), "packageName":"@cinatra-ai/drupal-mcp-connector","factory":"createNodePublishedHandler","vendor":"cinatra-ai","slug":"drupal-mcp-connector","hook":"node-published","label":"Node published","schemaVersion":1 },
   "cinatra-ai/wordpress-mcp-connector/post-published": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/wordpress-mcp-connector/src/webhooks/post-published", () => import("@cinatra-ai/wordpress-mcp-connector/src/webhooks/post-published")), "packageName":"@cinatra-ai/wordpress-mcp-connector","factory":"createPostPublishedHandler","vendor":"cinatra-ai","slug":"wordpress-mcp-connector","hook":"post-published","label":"Post published","schemaVersion":1 },
 };

@@ -123,6 +123,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTERNAL_MCP_TOOLBOXES", key: "wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_WIDGET_STREAM_AGENTS", key: "drupal-content-editor", resolution: "guardedOptional" },
   { map: "GENERATED_WIDGET_STREAM_AGENTS", key: "wordpress-content-editor", resolution: "guardedOptional" },
+  { map: "GENERATED_WEBHOOK_HANDLERS", key: "cinatra-ai/drupal-mcp-connector/node-published", resolution: "guardedOptional" },
   { map: "GENERATED_WEBHOOK_HANDLERS", key: "cinatra-ai/wordpress-mcp-connector/post-published", resolution: "guardedOptional" },
   { map: "GENERATED_CHAT_WIDGET_MODULES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CHAT_WIDGET_MANIFEST_MODULES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },

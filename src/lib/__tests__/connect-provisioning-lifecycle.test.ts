@@ -21,9 +21,12 @@ vi.mock("@/lib/instance-identity-store", () => ({
 }));
 
 // cinatra#343: the WordPress grant mints a per-site legacy-bridge webhook binding
-// via the host secret service. Mock it (the real impl needs a DB + secretsCodec).
+// via the host secret service; cinatra#974: the Drupal grant mints a per-site
+// STANDARD (Standard-Webhooks) binding. Mock it (the real impl needs a DB +
+// secretsCodec).
 const webhookSecretServiceMock = vi.hoisted(() => ({
   upsertLegacy: vi.fn(),
+  upsertStandard: vi.fn(),
   mint: vi.fn(),
   resolveByBindingId: vi.fn(),
   rotate: vi.fn(),
@@ -57,6 +60,12 @@ beforeEach(() => {
     bindingId: "wh-binding-1",
     secret: "hex32",
   });
+  webhookSecretServiceMock.upsertStandard.mockImplementation(
+    async (input: { secret: string }) => ({
+      bindingId: "wh-binding-drupal-1",
+      secret: input.secret,
+    }),
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -338,10 +347,30 @@ describe("install-code flow", () => {
     if (r.ok) expect(r.response.credential).toMatch(/^cnx_site-d_/);
     // grant type used for consume was install_code.
     expect(store.consumeAuthorizationCode.mock.calls[0][0].grantType).toBe("install_code");
-    // cinatra#343: a non-WordPress (Drupal) client mints NO webhook binding and
-    // surfaces no bindingId (only the WP connector declares cinatra.webhooks).
+    // cinatra#974: the Drupal client mints a STANDARD (Standard-Webhooks)
+    // binding — never the WP legacy bridge — with a FRESH per-binding whsec_
+    // secret (the shared secret passed into the exchange is never handed to
+    // drupal), and the response carries the secret+bindingId PAIR.
     expect(webhookSecretServiceMock.upsertLegacy).not.toHaveBeenCalled();
-    if (r.ok) expect(r.response.webhookBindingId).toBeUndefined();
+    expect(webhookSecretServiceMock.upsertStandard).toHaveBeenCalledWith({
+      vendor: "cinatra-ai",
+      slug: "drupal-mcp-connector",
+      hook: "node-published",
+      siteId: "site-d",
+      secret: expect.stringMatching(/^whsec_/),
+    });
+    if (r.ok) {
+      expect(r.response.webhookBindingId).toBe("wh-binding-drupal-1");
+      expect(r.response.webhookSecret).toMatch(/^whsec_/);
+      expect(r.response.webhookSecret).not.toBe("w");
+      // The returned secret is exactly the one stored on the binding.
+      expect(r.response.webhookSecret).toBe(
+        webhookSecretServiceMock.upsertStandard.mock.calls[0][0].secret,
+      );
+      // The connect-site row received the HASH of that same secret.
+      const upsertArg = store.upsertConnectSiteCredential.mock.calls[0][0];
+      expect(upsertArg.webhookSecretHash).toBe(sha256Hex(r.response.webhookSecret!));
+    }
   });
 
   it("install_code single-use: a second redeem fails generically", async () => {
@@ -447,6 +476,100 @@ describe("cinatra#343 — per-site WordPress webhook binding at connect time", (
     expect(errSpy).toHaveBeenCalled();
     const logged = errSpy.mock.calls.flat().map(String).join(" ");
     expect(logged).not.toContain("hex32");
+    errSpy.mockRestore();
+  });
+});
+
+describe("cinatra#974 — per-site Drupal STANDARD webhook binding at connect time", () => {
+  function drupalRow() {
+    return {
+      codeHash: "h",
+      grantType: "install_code",
+      client: "drupal",
+      redirectUri: null,
+      widgetOrigin: "https://news.example.com",
+      callbackOrigin: null,
+      codeChallenge: null,
+      adminUserId: "u1",
+      orgId: "o1",
+      scope: CONNECT_SCOPE,
+      createdAt: "t0",
+      expiresAt: "t1",
+      consumedAt: "t2",
+    };
+  }
+
+  function drupalSite(siteId: string, credentialVersion: number) {
+    return {
+      siteId,
+      client: "drupal",
+      widgetOrigin: "https://news.example.com",
+      callbackOrigin: null,
+      credentialHash: "hash",
+      credentialVersion,
+      webhookSecretHash: null,
+      adminUserId: "u1",
+      orgId: "o1",
+      createdAt: "t0",
+      lastExchangedAt: "t0",
+      lastUsedAt: null,
+      revokedAt: null,
+      revokedBy: null,
+    };
+  }
+
+  it("reconnect path: upsertStandard preserves the stable bindingId and rotates in a fresh whsec_ secret", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(drupalRow());
+    store.upsertConnectSiteCredential.mockReturnValue(drupalSite("site-d-stable", 2));
+    webhookSecretServiceMock.upsertStandard.mockImplementation(
+      async (input: { secret: string }) => ({
+        bindingId: "wh-binding-d-stable",
+        secret: input.secret,
+      }),
+    );
+    const r = await exchangeInstallCode({
+      installCode: "cci_abc",
+      client: "drupal",
+      webhookSecret: "shared-never-used-for-drupal",
+      tokenBrokerAvailable: false,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.response.credentialVersion).toBe(2);
+      expect(r.response.webhookBindingId).toBe("wh-binding-d-stable");
+      expect(r.response.webhookSecret).toMatch(/^whsec_/);
+      expect(r.response.webhookSecret).not.toBe("shared-never-used-for-drupal");
+    }
+    expect(webhookSecretServiceMock.upsertStandard).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: "site-d-stable" }),
+    );
+  });
+
+  it("PAIRED WRITE: a binding-upsert FAILURE omits BOTH webhookSecret and webhookBindingId (codex — a lone fresh secret would poison the module's working pair)", async () => {
+    store.consumeAuthorizationCode.mockReturnValue(drupalRow());
+    store.upsertConnectSiteCredential.mockReturnValue(drupalSite("site-d-x", 2));
+    webhookSecretServiceMock.upsertStandard.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await exchangeInstallCode({
+      installCode: "cci_abc",
+      client: "drupal",
+      webhookSecret: "shared-never-used-for-drupal",
+      tokenBrokerAvailable: false,
+    });
+    // The exchange SUCCEEDS (the already-committed credential is never
+    // stranded); the module keeps its previously working secret/binding pair
+    // and the next reconnect re-mints idempotently.
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.response.credential).toMatch(/^cnx_site-d-x_/);
+      expect(r.response.webhookBindingId).toBeUndefined();
+      expect(r.response.webhookSecret).toBeUndefined();
+    }
+    // The failure is logged WITHOUT leaking any secret.
+    expect(errSpy).toHaveBeenCalled();
+    const logged = errSpy.mock.calls.flat().map(String).join(" ");
+    expect(logged).not.toContain("whsec_");
+    expect(logged).not.toContain("shared-never-used-for-drupal");
     errSpy.mockRestore();
   });
 });
