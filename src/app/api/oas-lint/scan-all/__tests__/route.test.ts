@@ -28,6 +28,7 @@ vi.mock("@cinatra-ai/agents", () => ({
   scanOasForStartNodeInputsWithoutRequired: vi.fn(() => []),
   scanOasForPackageVersionSync: vi.fn(() => []),
   scanAgentForRequiredLicense: vi.fn(() => []),
+  scanOasForArtifactParityFindings: vi.fn(() => []),
 }));
 
 import { POST } from "../route";
@@ -37,6 +38,7 @@ import {
   scanOasForUntrustedUrls,
   scanAgentForRequiredLicense,
   scanOasForPackageVersionSync,
+  scanOasForArtifactParityFindings,
   type ReviewFinding,
 } from "@cinatra-ai/agents";
 
@@ -45,6 +47,7 @@ const scanOasForLiteralSecretsMock = vi.mocked(scanOasForLiteralSecrets);
 const scanOasForUntrustedUrlsMock = vi.mocked(scanOasForUntrustedUrls);
 const scanAgentForRequiredLicenseMock = vi.mocked(scanAgentForRequiredLicense);
 const scanOasForPackageVersionSyncMock = vi.mocked(scanOasForPackageVersionSync);
+const scanOasForArtifactParityFindingsMock = vi.mocked(scanOasForArtifactParityFindings);
 
 function makeReq(body: unknown): Request {
   return new Request("http://localhost:3000/api/oas-lint/scan-all", {
@@ -57,6 +60,11 @@ function makeReq(body: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   isAuthorizedBridgeRequestMock.mockReturnValue(true);
+  // clearAllMocks resets call history but NOT implementations set via
+  // mockReturnValue, so re-establish the artifact-parity scanner's empty
+  // default before every test (a per-test mockReturnValue would otherwise
+  // leak into later assertions on total finding counts).
+  scanOasForArtifactParityFindingsMock.mockReturnValue([]);
 });
 
 describe("POST /api/oas-lint/scan-all — auth", () => {
@@ -124,6 +132,48 @@ describe("POST /api/oas-lint/scan-all — response shape", () => {
     // renders it into conversation history for A2A consumption).
     expect(typeof body.findings).toBe("string");
     expect(JSON.parse(body.findings)).toEqual([]);
+  });
+
+  it("wires the cinatra#924 artifact-parity scanner: rulesRun advertises it, its findings surface stamped, and produces is threaded from packageJson", async () => {
+    scanOasForArtifactParityFindingsMock.mockReturnValue([
+      {
+        code: "OAS-RUNTIME-009",
+        severity: "warning",
+        message: "declares produces X but has no materialization edge",
+        source: "deterministic",
+      },
+    ]);
+    const pkg = {
+      name: "@cinatra-ai/blog-draft-writer-agent",
+      version: "0.1.0",
+      license: "Apache-2.0",
+      cinatra: { produces: [{ extension: "@cinatra-ai/blog-post-artifact" }] },
+    };
+    const res = await POST(
+      makeReq({ oasJson: "{}", packageJson: JSON.stringify(pkg) }),
+    );
+    const body = (await res.json()) as { rulesRun: string[]; findings: string };
+    expect(body.rulesRun).toContain("artifact_produces_materialization");
+    // produces extension ids are threaded from the sibling package.json.
+    expect(scanOasForArtifactParityFindingsMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      { produces: ["@cinatra-ai/blog-post-artifact"] },
+    );
+    const findings = JSON.parse(body.findings) as ReviewFinding[];
+    const parity = findings.find((f) => f.code === "OAS-RUNTIME-009");
+    expect(parity).toBeDefined();
+    // Advisory only — the scanner emits no blockers, and the source is
+    // re-stamped to the policy identity like every other finding.
+    expect(parity?.severity).toBe("warning");
+    expect(parity?.source).toBe("agent-lint-policy");
+  });
+
+  it("runs the artifact-parity scanner even without packageJson (produces: null)", async () => {
+    await POST(makeReq({ oasJson: "{}" }));
+    expect(scanOasForArtifactParityFindingsMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      { produces: null },
+    );
   });
 
   it("stamps source: 'agent-lint-policy' on every finding (even ones the scanners emit as `deterministic`)", async () => {

@@ -6,6 +6,7 @@ import {
   disabledActionReason,
   lifecycleBadgesFor,
   matchesLifecycleFilter,
+  pickLifecycleBadgeStatus,
 } from "../lifecycle-ui";
 
 function ext(
@@ -99,5 +100,52 @@ describe("filter/search", () => {
     expect(matchesLifecycleFilter(gh, { search: "github" })).toBe(true);
     expect(matchesLifecycleFilter(gh, { search: "cinatra-ai/foo" })).toBe(true);
     expect(matchesLifecycleFilter(gh, { search: "nonsense" })).toBe(false);
+  });
+});
+
+describe("pickLifecycleBadgeStatus (cinatra#957 — per-row lifecycle badge)", () => {
+  it("locked wins over everything — a locked system extension is never shown as plain Active", () => {
+    expect(pickLifecycleBadgeStatus([{ status: "locked" }])).toBe("locked");
+    expect(
+      pickLifecycleBadgeStatus([{ status: "active" }, { status: "locked" }]),
+    ).toBe("locked");
+    expect(
+      pickLifecycleBadgeStatus([{ status: "archived" }, { status: "locked" }]),
+    ).toBe("locked");
+  });
+
+  it("live-wins: any active row makes the badge Active even with archived siblings", () => {
+    expect(pickLifecycleBadgeStatus([{ status: "active" }])).toBe("active");
+    expect(
+      pickLifecycleBadgeStatus([{ status: "archived" }, { status: "active" }]),
+    ).toBe("active");
+  });
+
+  it("all-archived rows read as Archived", () => {
+    expect(pickLifecycleBadgeStatus([{ status: "archived" }])).toBe("archived");
+    expect(
+      pickLifecycleBadgeStatus([{ status: "archived" }, { status: "archived" }]),
+    ).toBe("archived");
+  });
+
+  it("fail-lives to Active for no rows / undefined / unknown statuses (row already passed the active gate)", () => {
+    expect(pickLifecycleBadgeStatus([])).toBe("active");
+    expect(pickLifecycleBadgeStatus(undefined)).toBe("active");
+    expect(pickLifecycleBadgeStatus([{ status: "bogus" }])).toBe("active");
+  });
+
+  it("returns only canonical lifecycle statuses", () => {
+    const combos: Array<Array<{ status: string }>> = [
+      [],
+      [{ status: "active" }],
+      [{ status: "archived" }],
+      [{ status: "locked" }],
+      [{ status: "active" }, { status: "archived" }, { status: "locked" }],
+    ];
+    for (const rows of combos) {
+      expect(["active", "archived", "locked"]).toContain(
+        pickLifecycleBadgeStatus(rows),
+      );
+    }
   });
 });

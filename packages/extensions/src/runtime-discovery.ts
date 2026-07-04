@@ -80,7 +80,48 @@ export async function discoverActiveCapabilities(
       // reader (the other half of the split-brain guard).
       (!input.kind || m.kind === input.kind),
   );
+  return dispatchToReaderFacet(manifests, "listActive", input, deps, options);
+}
 
+/**
+ * Archived twin of `discoverActiveCapabilities` (cinatra#948).
+ *
+ * Same pure dispatch shape, but over the ARCHIVED manifest candidate set and
+ * the `listArchived` reader facet. The injected `readArchivedManifests` must
+ * return only manifests whose effective status is `archived` ("live wins" —
+ * an identity with any live row is not archived); this dispatcher defensively
+ * re-filters to `status === "archived"` so a leaked live row can never reach
+ * an archived reader. A kind whose handler lacks `listArchived` is recorded in
+ * `unmigratedKinds` (never silently dropped), mirroring the active path.
+ */
+export async function discoverArchivedCapabilities(
+  input: { kind?: string; actor: Actor; scope: ExtensionDiscoveryScope },
+  deps: {
+    readArchivedManifests(input: { kind?: string }): Promise<ActiveExtensionManifest[]>;
+    resolveHandler(kind: string): ExtensionTypeHandler | null;
+  },
+  options?: { onError?: (kind: string, error: unknown) => void },
+): Promise<DiscoveredCapabilities> {
+  const manifests = (await deps.readArchivedManifests({ kind: input.kind })).filter(
+    (m) => m.status === "archived" && (!input.kind || m.kind === input.kind),
+  );
+  return dispatchToReaderFacet(
+    manifests,
+    "listArchived",
+    input,
+    { resolveHandler: deps.resolveHandler },
+    options,
+  );
+}
+
+/** Shared group-by-kind → reader-facet dispatch for active/archived discovery. */
+async function dispatchToReaderFacet(
+  manifests: ActiveExtensionManifest[],
+  facet: "listActive" | "listArchived",
+  input: { actor: Actor; scope: ExtensionDiscoveryScope },
+  deps: { resolveHandler(kind: string): ExtensionTypeHandler | null },
+  options?: { onError?: (kind: string, error: unknown) => void },
+): Promise<DiscoveredCapabilities> {
   const byKindManifests = new Map<string, ActiveExtensionManifest[]>();
   for (const m of manifests) {
     const list = byKindManifests.get(m.kind);
@@ -94,16 +135,17 @@ export async function discoverActiveCapabilities(
   for (const [kind, kindManifests] of byKindManifests) {
     const handler = deps.resolveHandler(kind);
     if (!handler) {
-      // Unknown kind in an active manifest — not fatal; record as unmigrated.
+      // Unknown kind in a manifest — not fatal; record as unmigrated.
       unmigratedKinds.push(kind);
       continue;
     }
-    if (typeof handler.listActive !== "function") {
+    const reader = handler[facet];
+    if (typeof reader !== "function") {
       unmigratedKinds.push(kind);
       continue;
     }
     try {
-      const descriptors = await handler.listActive({
+      const descriptors = await reader.call(handler, {
         actor: input.actor,
         scope: input.scope,
         manifests: kindManifests,

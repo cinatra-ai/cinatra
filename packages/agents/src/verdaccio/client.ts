@@ -29,6 +29,10 @@ import { ensureConfig, registryScopedAuthOptions } from "@cinatra-ai/registries"
 import { buildRegistryAuthArgs } from "./cli-flags";
 import { buildAgentPackageFiles, type BuildAgentPackageInput } from "./package-files";
 import { compileOasAgentJson } from "../oas-compiler";
+import {
+  ARTIFACT_PRODUCES_ENFORCEMENT,
+  evaluateProducesMaterializationContract,
+} from "./package-contract";
 
 export type PublishAgentPackageInput = BuildAgentPackageInput;
 
@@ -344,6 +348,26 @@ export async function publishAgentPackageFromGitDir(
   // must be emitted explicitly into distManifest.cinatra below — otherwise the
   // backfilled field is lost on publish.
   const cinatraDeps = ((gitPkgJson.cinatra as Record<string, unknown> | undefined)?.dependencies ?? []) as unknown[];
+  // Carry the source `cinatra.produces` declaration through the generated
+  // distribution manifest. The closed `cinatraAgentPackageMetadataSchema`
+  // strips unknown keys, and this path BUILDS a fresh cinatra block (it does
+  // not spread the source), so — like `dependencies`/`kind` above — `produces`
+  // must be emitted explicitly or it is lost on publish. Losing it breaks the
+  // run-completion materializer, which reads `cinatra.produces` from the
+  // INSTALLED manifest to authorize each declared artifact (cinatra#923/#924).
+  // Tolerant parse: only well-formed `{ extension: string }` entries survive.
+  const producesRaw = (gitPkgJson.cinatra as Record<string, unknown> | undefined)?.produces;
+  const producesEntries: Array<{ extension: string }> = Array.isArray(producesRaw)
+    ? producesRaw
+        .map((r) =>
+          r && typeof r === "object" &&
+          typeof (r as { extension?: unknown }).extension === "string" &&
+          ((r as { extension: string }).extension).length > 0
+            ? { extension: (r as { extension: string }).extension }
+            : null,
+        )
+        .filter((e): e is { extension: string } => e !== null)
+    : [];
   const hasApprovalGates = approvalPolicy.steps.some((s) => s.requiresApproval);
   const publishedAt = new Date().toISOString();
 
@@ -386,6 +410,7 @@ export async function publishAgentPackageFromGitDir(
       ...(Object.keys(agentDeps).length > 0 ? { agentDependencies: agentDeps } : {}),
       ...(Object.keys(connectorDeps).length > 0 ? { connectorDependencies: connectorDeps } : {}),
       ...(Array.isArray(cinatraDeps) && cinatraDeps.length > 0 ? { dependencies: cinatraDeps } : {}),
+      ...(producesEntries.length > 0 ? { produces: producesEntries } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,
@@ -398,6 +423,35 @@ export async function publishAgentPackageFromGitDir(
       apiVersion: "cinatra.ai/v1",
     },
   };
+
+  // Layer 2 (cinatra#924) — publish-time produces-materialization contract.
+  // Phase 1 is ADVISORY: a produces-declaring package with no materialization
+  // edge logs a WARN and still publishes (the compile gate already hard-blocks
+  // a malformed binding; an un-migrated repo is never refused here). The
+  // Phase-2 flip to BLOCK is a one-line owner-gated change of
+  // `ARTIFACT_PRODUCES_ENFORCEMENT` in package-contract.ts, after the fleet
+  // migration completes.
+  if (producesEntries.length > 0) {
+    const contractFindings = evaluateProducesMaterializationContract({
+      produces: producesEntries.map((e) => e.extension),
+      oasDoc: gitAgentJson,
+    });
+    if (contractFindings.length > 0) {
+      const summary = contractFindings
+        .map((f) => `${f.code}: ${f.message}`)
+        .join(" | ");
+      if (ARTIFACT_PRODUCES_ENFORCEMENT === "block") {
+        throw new Error(
+          `publishAgentPackageFromGitDir: produces-materialization contract failed for ` +
+            `${packageName}@${packageVersion} (cinatra#924 BLOCK phase): ${summary}`,
+        );
+      }
+      console.warn(
+        `[artifact-produces-contract] ${packageName}@${packageVersion}: ` +
+          `${contractFindings.length} advisory finding(s) (WARN phase — cinatra#924): ${summary}`,
+      );
+    }
+  }
 
   // Build distribution-format agent.json (satisfies AgentPackagePayload schema)
   const distPayload: Record<string, unknown> = {

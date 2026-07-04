@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 import {
   diffAgainstBaseline,
   baselineGrowth,
+  validateAbsorbRecords,
+  classifyRaises,
+  isStructurallyValidAbsorbRecord,
 } from "../route-graph-ratchet.mjs";
 import { FIXED_ROUTES, analyzeRoute } from "../../route-graph.mjs";
 
@@ -103,6 +106,153 @@ test("baselineGrowth: dropping a tracked route is allowed (route removed from FI
   assert.deepEqual(baselineGrowth(base, committed), []);
 });
 
+// ---------------------------------------------------------------------------
+// Annotated-absorb mechanism (sanctioned ceiling raises).
+// Shorthand: a well-formed absorb record.
+// ---------------------------------------------------------------------------
+const rec = (from, to, extra = {}) => ({ from, to, reason: "sanctioned growth (#999): test", pr: 999, ...extra });
+
+test("classifyRaises: a raise WITHOUT an absorb record FAILS (silent raise)", () => {
+  const base = { routes: { "/a": 100 } };
+  const committed = { routes: { "/a": 120 } };
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(absorbed, []);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0].route, "/a");
+  assert.match(violations[0].reason, /NO absorb record/);
+});
+
+test("classifyRaises: a raise with an EXACTLY-matching record is ABSORBED (passes, reported loud)", () => {
+  const base = { routes: { "/a": 100 } };
+  const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+  assert.equal(absorbed.length, 1);
+  assert.deepEqual(absorbed[0], { route: "/a", from: 100, to: 120, reason: "sanctioned growth (#999): test", pr: 999 });
+});
+
+test("classifyRaises: a record whose from/to does NOT match the raise delta FAILS", () => {
+  const base = { routes: { "/a": 100 } };
+  // record claims 90 -> 120 but the actual base ceiling is 100
+  let out = classifyRaises(base, { routes: { "/a": 120 }, absorbs: { "/a": rec(90, 120) } });
+  assert.equal(out.absorbed.length, 0);
+  assert.equal(out.violations.length, 1);
+  assert.match(out.violations[0].reason, /does not exactly match/);
+  // record's to (110) does not reach the committed ceiling (120)
+  out = classifyRaises(base, { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 110) } });
+  assert.equal(out.absorbed.length, 0);
+  assert.ok(out.violations.length >= 1);
+});
+
+test("classifyRaises: a record WITHOUT a raise (pre-planted orphan) FAILS", () => {
+  const base = { routes: { "/a": 100 } };
+  const committed = { routes: { "/a": 100 }, absorbs: { "/a": rec(90, 100) } };
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(absorbed, []);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].reason, /orphan|stale/i);
+});
+
+test("classifyRaises: an identical carried-forward record at its ceiling is OK (no notice, no violation)", () => {
+  // Post-merge steady state: base (main) already contains the record.
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+  assert.deepEqual(absorbed, []);
+});
+
+test("classifyRaises: DELETING a carried-forward record while keeping the raised ceiling FAILS (annotation preservation)", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/a": 120 } }; // record silently dropped, ceiling kept
+  const { violations } = classifyRaises(base, committed);
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].reason, /deleted\/altered/);
+});
+
+test("classifyRaises: ALTERING a carried-forward record while keeping the ceiling FAILS", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120, { reason: "rewritten history" }) } };
+  const { violations } = classifyRaises(base, committed);
+  assert.ok(violations.length >= 1);
+  assert.ok(violations.every((v) => v.route === "/a"));
+});
+
+test("classifyRaises: LOWERING an absorbed ceiling retires the record (record removed → OK)", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/a": 105 } }; // narrowed below the absorbed ceiling; record removed
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+  assert.deepEqual(absorbed, []);
+});
+
+test("classifyRaises: a NEW annotated raise on an already-absorbed route replaces the old record", () => {
+  const base = { routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/a": 130 }, absorbs: { "/a": rec(120, 130) } };
+  const { violations, absorbed } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+  assert.equal(absorbed.length, 1);
+  assert.deepEqual([absorbed[0].from, absorbed[0].to], [120, 130]);
+});
+
+test("classifyRaises: dropping a tracked route retires its record (no violation)", () => {
+  const base = { routes: { "/a": 120, "/b": 50 }, absorbs: { "/a": rec(100, 120) } };
+  const committed = { routes: { "/b": 50 } };
+  const { violations } = classifyRaises(base, committed);
+  assert.deepEqual(violations, []);
+});
+
+test("classifyRaises: a NET-NEW route needs no record; a net-new route WITH a record is an orphan (fails)", () => {
+  const base = { routes: { "/a": 100 } };
+  // net-new without record → fine (coverage expansion)
+  let out = classifyRaises(base, { routes: { "/a": 100, "/b": 500 } });
+  assert.deepEqual(out.violations, []);
+  // net-new WITH a record → orphan (a coverage expansion is not a raise)
+  out = classifyRaises(base, { routes: { "/a": 100, "/b": 500 }, absorbs: { "/b": rec(400, 500) } });
+  assert.equal(out.violations.length, 1);
+  assert.equal(out.violations[0].route, "/b");
+});
+
+test("validateAbsorbRecords: absent absorbs is fine; well-formed matching records pass", () => {
+  assert.deepEqual(validateAbsorbRecords({ routes: { "/a": 100 } }), []);
+  assert.deepEqual(validateAbsorbRecords({ routes: { "/a": 120 }, absorbs: { "/a": rec(100, 120) } }), []);
+});
+
+test("validateAbsorbRecords: MALFORMED records fail closed (missing key, extra key, bad types, to<=from, empty reason)", () => {
+  const cases = [
+    { "/a": { from: 100, to: 120, reason: "x" } },                        // missing pr
+    { "/a": { ...rec(100, 120), extra: true } },                          // extra key
+    { "/a": rec("100", 120) },                                            // non-integer from
+    { "/a": rec(100, 120, { pr: "959" }) },                               // non-integer pr
+    { "/a": rec(120, 120) },                                              // to == from (not a raise)
+    { "/a": rec(130, 120) },                                              // to < from
+    { "/a": rec(100, 120, { reason: "   " }) },                           // blank reason
+    { "/a": null },                                                       // not an object
+    { "/a": [100, 120] },                                                 // array
+  ];
+  for (const absorbs of cases) {
+    const errors = validateAbsorbRecords({ routes: { "/a": 120 }, absorbs });
+    assert.ok(errors.length >= 1, `expected a structural error for ${JSON.stringify(absorbs)}`);
+  }
+  // the whole map malformed
+  assert.equal(validateAbsorbRecords({ routes: {}, absorbs: [] }).length, 1);
+});
+
+test("validateAbsorbRecords: a record for an untracked route and a STALE record (to != current ceiling) fail", () => {
+  let errors = validateAbsorbRecords({ routes: { "/a": 120 }, absorbs: { "/gone": rec(100, 120) } });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].reason, /not tracked/);
+  errors = validateAbsorbRecords({ routes: { "/a": 110 }, absorbs: { "/a": rec(100, 120) } });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].reason, /stale/);
+});
+
+test("isStructurallyValidAbsorbRecord: accepts a well-formed record, rejects shape drift", () => {
+  assert.equal(isStructurallyValidAbsorbRecord(rec(100, 120)), true);
+  assert.equal(isStructurallyValidAbsorbRecord(undefined), false);
+  assert.equal(isStructurallyValidAbsorbRecord({}), false);
+});
+
 // --- End-to-end fixture: at-baseline passes; a +1 growth FAILS. ---
 test("FIXTURE: at-baseline is clean and a one-route growth is caught", () => {
   const baseline = { routes: { "/x": 10, "/y": 20 } };
@@ -134,4 +284,9 @@ test("INTEGRATION: the committed baseline covers exactly FIXED_ROUTES, each a re
     const ceiling = baseline.routes[route];
     assert.ok(r.moduleCount <= ceiling, `route ${route} is ${r.moduleCount} modules, over the committed ceiling ${ceiling} — narrow the graph or regenerate`);
   }
+  // The committed absorb records (if any) must be strictly valid against the
+  // committed routes map — the same fail-closed structural check the gate runs
+  // unconditionally.
+  const errors = validateAbsorbRecords(baseline);
+  assert.deepEqual(errors, [], `committed absorb records must validate: ${JSON.stringify(errors)}`);
 });

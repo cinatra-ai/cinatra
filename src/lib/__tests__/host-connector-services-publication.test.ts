@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 // Host per-concern service publication (register-host-connector-services):
 // pins (a) the `@cinatra-ai/host:connector-config` PHYSICAL `delete` member
@@ -64,6 +66,7 @@ vi.mock("@/lib/external-mcp-registry", () => ({
 // service. Stub the heavy "use server" actions module + the auth/nango edges so
 // the boot-time auto-run completes in a unit context.
 const extMcpActionCalls: Record<string, FormData[]> = { create: [], delete: [] };
+const twentyActionCalls: Record<string, FormData[]> = { save: [], disconnect: [] };
 vi.mock("@/app/campaigns/actions", () => ({
   createExternalMcpServerAction: async (fd: FormData) => {
     extMcpActionCalls.create.push(fd);
@@ -71,7 +74,19 @@ vi.mock("@/app/campaigns/actions", () => ({
   deleteExternalMcpServerAction: async (fd: FormData) => {
     extMcpActionCalls.delete.push(fd);
   },
+  saveTwentyConnectionAction: async (fd: FormData) => {
+    twentyActionCalls.save.push(fd);
+  },
+  disconnectTwentyConnectionAction: async (fd: FormData) => {
+    twentyActionCalls.disconnect.push(fd);
+  },
 }));
+// The REAL "use server" wrapper module (deliberately NOT mocked): the
+// server-reference regression below pins the published deps to ITS exports by
+// identity. It is feather-weight (no static imports; the heavy
+// `@/app/campaigns/actions` graph is lazy-imported per invocation, and the
+// vi.mock above intercepts that dynamic import).
+import * as connectorSetupActions from "@/app/campaigns/connector-setup-actions";
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: async () => ({ user: { id: "viewer-1", role: "user,admin" } }),
   isPlatformAdmin: (s: { user?: { role?: string | null } } | null | undefined) =>
@@ -767,6 +782,8 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
     type ExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
       createServerAction(formData: FormData): Promise<void>;
       deleteServerAction(formData: FormData): Promise<void>;
+      saveTwentyConnectionAction(formData: FormData): Promise<void>;
+      disconnectTwentyConnectionAction(formData: FormData): Promise<void>;
       resolveViewerContext(): Promise<{ isAdmin: boolean; userId: string }>;
       isConnectionServiceReady(): boolean;
       isPrivateUrl(serverUrl: string): boolean;
@@ -814,6 +831,176 @@ describe("transport-tail connection services (cinatra#172 Stage H4)", () => {
 
     // isPrivateUrl — the LLM-reachability guard (mocked false here).
     expect(registry.isPrivateUrl("https://mcp.example.com")).toBe(false);
+  });
+
+  // --- twenty-connector#39 regression: the published setup-page actions must
+  // be REAL server-action references, not adapter closures. -----------------
+  //
+  // The connectors bind these members DIRECTLY into `<form action={…}>`; React
+  // only serializes a function into the RSC client payload when it carries a
+  // server-reference marker, which the Next compiler attaches to exports of a
+  // `"use server"` module. A closure defined in the (non-"use server") binder
+  // rendered the twenty setup page a deterministic 500 for every admin
+  // (digest 1769553696) while every unit suite passed — nothing asserted the
+  // reference identity. The vitest pipeline does not run the Next "use server"
+  // transform (so `$$typeof`/`$$id` cannot be asserted here directly); the
+  // equivalent unit-fidelity pin is IDENTITY to the exports of a module whose
+  // FIRST statement is the `"use server"` directive — exactly the two facts
+  // the compiler needs to mint the marker. The live/browser fidelity lives in
+  // tests/e2e/render-smoke (connector setup routes).
+  it("publishes the setup-page form actions AS the exports of the 'use server' connector-setup-actions module (identity, not wrappers) — twenty-connector#39", async () => {
+    type ExternalMcpRegistrySetupSurface = HostExternalMcpRegistryService & {
+      createServerAction(formData: FormData): Promise<void>;
+      deleteServerAction(formData: FormData): Promise<void>;
+      saveTwentyConnectionAction(formData: FormData): Promise<void>;
+      disconnectTwentyConnectionAction(formData: FormData): Promise<void>;
+    };
+    const registry = resolveSingle<ExternalMcpRegistrySetupSurface>(
+      HOST_CONNECTOR_SERVICE_CAPABILITIES.externalMcpRegistry,
+    );
+
+    // Identity — a re-wrapping closure (`async (fd) => …`) would fail these
+    // even though it is `typeof === "function"` and behaviorally identical in
+    // a unit context. This is the assertion that was missing when the bug
+    // shipped.
+    expect(registry.createServerAction).toBe(
+      connectorSetupActions.createExternalMcpServerAction,
+    );
+    expect(registry.deleteServerAction).toBe(
+      connectorSetupActions.deleteExternalMcpServerAction,
+    );
+    expect(registry.saveTwentyConnectionAction).toBe(
+      connectorSetupActions.saveTwentyConnectionAction,
+    );
+    expect(registry.disconnectTwentyConnectionAction).toBe(
+      connectorSetupActions.disconnectTwentyConnectionAction,
+    );
+
+    // The module those exports come from must be compiled as a server-action
+    // module: its FIRST statement is the "use server" directive.
+    const actionsModulePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "app",
+      "campaigns",
+      "connector-setup-actions.ts",
+    );
+    const actionsSource = fs.readFileSync(actionsModulePath, "utf-8");
+    expect(actionsSource.startsWith(`"use server";`)).toBe(true);
+
+    // Behavior parity: the references still lazy-load + forward to the real
+    // campaign actions on invocation (the vi.mock intercepts the inner dynamic
+    // import) — the twenty members were previously untested here at all.
+    const saveFd = new FormData();
+    await registry.saveTwentyConnectionAction(saveFd);
+    expect(twentyActionCalls.save.at(-1)).toBe(saveFd);
+    const disconnectFd = new FormData();
+    await registry.disconnectTwentyConnectionAction(disconnectFd);
+    expect(twentyActionCalls.disconnect.at(-1)).toBe(disconnectFd);
+
+    // RENDER + POST-back resolution: the connector dispatch route must import
+    // the server-reference BRIDGE (which reflects the route layer's
+    // compiler-minted reference metadata onto the boot-published instances AND
+    // anchors the "use server" module into the route graph so the action id
+    // resolves there). Pin both imports so a refactor cannot silently drop
+    // either half — dropping the bridge re-ships the twenty-connector#39 500.
+    const dispatchPagePath = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "app",
+      "connectors",
+      "[vendor]",
+      "[slug]",
+      "[subroute]",
+      "page.tsx",
+    );
+    const dispatchPageSource = fs.readFileSync(dispatchPagePath, "utf-8");
+    expect(dispatchPageSource).toContain(
+      `import "@/lib/connector-setup-action-references.server";`,
+    );
+    const bridgePath = path.resolve(
+      __dirname,
+      "..",
+      "connector-setup-action-references.server.ts",
+    );
+    const bridgeSource = fs.readFileSync(bridgePath, "utf-8");
+    expect(bridgeSource).toContain(
+      `from "@/app/campaigns/connector-setup-actions"`,
+    );
+  });
+
+  // --- twenty-connector#39 regression, part 2: the RSC-layer bridge reflects
+  // the compiler-minted server-reference metadata onto the boot-published
+  // instances. The boot (instrumentation) graph never runs the "use server"
+  // transform, so WITHOUT this reflection the connector's boot-captured deps
+  // members stay unmarked and the setup page 500s at form render even though
+  // they are exports of a genuine "use server" module. ----------------------
+  it("bridge reflects server-reference metadata ($$typeof/$$id) onto the published action instances — twenty-connector#39", async () => {
+    const { reflectConnectorSetupActionReferences, copyServerReferenceProps } =
+      await import("@/lib/connector-setup-action-references.server");
+
+    // Simulate the two compilations: an untransformed boot instance (what the
+    // registry publishes) and the route layer's transformed instance carrying
+    // the compiler-minted reference metadata.
+    const makePair = () => {
+      const bootInstance = (async () => {}) as (formData: FormData) => Promise<void>;
+      const transformed = (async () => {}) as (formData: FormData) => Promise<void>;
+      Object.defineProperties(transformed, {
+        $$typeof: { value: Symbol.for("react.server.reference") },
+        $$id: { value: "40deadbeef".padEnd(40, "0") },
+        $$bound: { value: null },
+      });
+      return { bootInstance, transformed };
+    };
+
+    const save = makePair();
+    const disconnect = makePair();
+    const impl: Record<string, unknown> = {
+      saveTwentyConnectionAction: save.bootInstance,
+      disconnectTwentyConnectionAction: disconnect.bootInstance,
+    };
+    reflectConnectorSetupActionReferences(impl, {
+      saveTwentyConnectionAction: save.transformed,
+      disconnectTwentyConnectionAction: disconnect.transformed,
+    });
+
+    // The PUBLISHED instances (the very objects the connector captured into
+    // its deps slot at boot) now carry the reference marker, in place.
+    for (const pair of [save, disconnect]) {
+      const decorated = pair.bootInstance as unknown as Record<string, unknown>;
+      expect(decorated.$$typeof).toBe(Symbol.for("react.server.reference"));
+      expect(decorated.$$id).toBe("40deadbeef".padEnd(40, "0"));
+      expect(decorated).not.toBe(pair.transformed);
+    }
+
+    // Fail-soft floors: an untransformed layer (no $$id) and an unpublished
+    // registry must both no-op, never throw.
+    const plainA = (async () => {}) as (formData: FormData) => Promise<void>;
+    const plainB = (async () => {}) as (formData: FormData) => Promise<void>;
+    reflectConnectorSetupActionReferences(
+      { saveTwentyConnectionAction: plainA },
+      { saveTwentyConnectionAction: plainB },
+    );
+    expect(
+      (plainA as unknown as Record<string, unknown>).$$id,
+    ).toBeUndefined();
+    expect(() =>
+      reflectConnectorSetupActionReferences(undefined, {}),
+    ).not.toThrow();
+
+    // copyServerReferenceProps copies every transform-added own prop but never
+    // clobbers length/name.
+    const target = (async () => {}) as (formData: FormData) => Promise<void>;
+    copyServerReferenceProps(
+      save.transformed as (formData: FormData) => Promise<void>,
+      target,
+    );
+    expect((target as unknown as Record<string, unknown>).$$id).toBe(
+      "40deadbeef".padEnd(40, "0"),
+    );
+    expect(target.name).toBe("target");
   });
 
   it("publishes @cinatra-ai/host:github-connection with the full connection-admin member set", async () => {

@@ -234,6 +234,17 @@ export function createConnectorExtensionHandler(
       const live = visibleManifestPackageNames(manifests, scope);
       return listConnectorDescriptors().filter((d) => live.has(d.packageId));
     },
+
+    // Archived twin of listActive (cinatra#948): identical visibility (the
+    // shared owner-scope gate — the catalog carries no per-owner visibility of
+    // its own), intersected against the archived-candidate manifest set. A
+    // RUNTIME-only connector (no build-time catalog descriptor) is not listable
+    // here for either lifecycle; the management surface unions those rows from
+    // the canonical gate under the same owner-scope visibility.
+    async listArchived({ scope, manifests }) {
+      const archivedVisible = visibleManifestPackageNames(manifests, scope);
+      return listConnectorDescriptors().filter((d) => archivedVisible.has(d.packageId));
+    },
   };
 }
 

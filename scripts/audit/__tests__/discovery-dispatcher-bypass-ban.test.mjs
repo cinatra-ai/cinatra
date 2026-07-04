@@ -32,18 +32,24 @@ describe("discovery-dispatcher-bypass-ban gate (zero-tolerance, #36)", () => {
     expect(scanBypassFiles()).toEqual([]);
   });
 
-  it("sanctioned readers are documented, never counted — incl. the two justified install-state screens", () => {
+  it("sanctioned readers are documented, never counted — incl. the justified install-state screen", () => {
     const files = scanBypassFiles();
     for (const sanctioned of [
       "packages/agents/src/store.ts", // defines the readers
       "packages/agents/src/index.ts", // barrel re-export
       "packages/agents/src/extension-handler.ts", // the dispatcher's reader facet
       "packages/extensions/src/screens/extensions-marketplace-screen.tsx", // install-state read model
-      "packages/extensions/src/screens/registry-catalog-screen.tsx", // archived-only install-state read
     ]) {
       expect(SANCTIONED_READERS.has(sanctioned), sanctioned).toBe(true);
       expect(files).not.toContain(sanctioned);
     }
+    // cinatra#948: registry-catalog-screen.tsx routes BOTH lifecycles through
+    // the dispatcher now — it must be OFF the allowlist (a dormant entry would
+    // re-bless a later direct-read reintroduction) and never a bypass.
+    expect(
+      SANCTIONED_READERS.has("packages/extensions/src/screens/registry-catalog-screen.tsx"),
+    ).toBe(false);
+    expect(files).not.toContain("packages/extensions/src/screens/registry-catalog-screen.tsx");
   });
 
   it("the committed baseline file is PINNED EMPTY (zero-tolerance: nothing is tolerated outside the sanctioned allowlist)", () => {

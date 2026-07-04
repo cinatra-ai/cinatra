@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ActiveExtensionManifest, ExtensionTypeHandler } from "@cinatra-ai/extension-types";
-import { discoverActiveCapabilities, isDiscoverableStatus } from "../runtime-discovery";
+import {
+  discoverActiveCapabilities,
+  discoverArchivedCapabilities,
+  isDiscoverableStatus,
+} from "../runtime-discovery";
 
 function manifest(over: Partial<ActiveExtensionManifest> & Pick<ActiveExtensionManifest, "id" | "kind">): ActiveExtensionManifest {
   return {
@@ -148,5 +152,122 @@ describe("discoverActiveCapabilities", () => {
     expect(isDiscoverableStatus("locked")).toBe(true);
     expect(isDiscoverableStatus("archived")).toBe(false);
     expect(isDiscoverableStatus("uninstalled")).toBe(false);
+  });
+});
+
+// The archived twin (cinatra#948) mirrors the active dispatcher's guarantees
+// over the `listArchived` reader facet.
+describe("discoverArchivedCapabilities", () => {
+  function archivedReaderHandler(typeId: string): ExtensionTypeHandler {
+    return {
+      typeId,
+      install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+      async listArchived({ manifests }) {
+        return manifests.map((m) => ({ archived: m.packageName }));
+      },
+    };
+  }
+
+  it("groups archived manifests by kind and dispatches to each kind's listArchived facet", async () => {
+    const handlers: Record<string, ExtensionTypeHandler> = {
+      agent: archivedReaderHandler("agent"),
+      skill: archivedReaderHandler("skill"),
+    };
+    const res = await discoverArchivedCapabilities(
+      { actor, scope },
+      {
+        readArchivedManifests: async () => [
+          manifest({ id: "a1", kind: "agent", status: "archived" }),
+          manifest({ id: "s1", kind: "skill", status: "archived" }),
+        ],
+        resolveHandler: (k) => handlers[k] ?? null,
+      },
+    );
+    expect(res.byKind.agent).toEqual([{ archived: "@cinatra-ai/a1" }]);
+    expect(res.byKind.skill).toEqual([{ archived: "@cinatra-ai/s1" }]);
+    expect(res.unmigratedKinds).toEqual([]);
+  });
+
+  it("NEVER passes a live (or uninstalled) manifest to an archived reader — the defensive re-filter", async () => {
+    const seen: string[] = [];
+    const handler: ExtensionTypeHandler = {
+      typeId: "agent", install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+      async listArchived({ manifests }) { manifests.forEach((m) => seen.push(m.id)); return manifests; },
+    };
+    await discoverArchivedCapabilities(
+      { actor, scope },
+      {
+        // A leaky provider returns live rows alongside archived ones; the
+        // dispatcher must drop them so a live row can never render as archived.
+        readArchivedManifests: async () => [
+          manifest({ id: "archived1", kind: "agent", status: "archived" }),
+          manifest({ id: "active1", kind: "agent", status: "active" }),
+          manifest({ id: "locked1", kind: "agent", status: "locked" }),
+          manifest({ id: "uninstalled1", kind: "agent", status: "uninstalled" }),
+        ],
+        resolveHandler: () => handler,
+      },
+    );
+    expect(seen).toEqual(["archived1"]);
+  });
+
+  it("records a kind whose handler lacks listArchived as unmigrated (no crash, no silent drop)", async () => {
+    const activeOnlyHandler: ExtensionTypeHandler = {
+      typeId: "connector", install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+      async listActive({ manifests }) { return manifests; },
+      // no listArchived
+    };
+    const res = await discoverArchivedCapabilities(
+      { actor, scope },
+      {
+        readArchivedManifests: async () => [manifest({ id: "c1", kind: "connector", status: "archived" })],
+        resolveHandler: () => activeOnlyHandler,
+      },
+    );
+    expect(res.unmigratedKinds).toEqual(["connector"]);
+    expect(res.all).toEqual([]);
+  });
+
+  it("NEVER routes a wrong-kind manifest to a reader when a kind is requested", async () => {
+    const seen: string[] = [];
+    const agentHandler: ExtensionTypeHandler = {
+      typeId: "agent", install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+      async listArchived({ manifests }) { manifests.forEach((m) => seen.push(`${m.kind}:${m.id}`)); return manifests; },
+    };
+    const res = await discoverArchivedCapabilities(
+      { actor, scope, kind: "agent" },
+      {
+        readArchivedManifests: async () => [
+          manifest({ id: "a1", kind: "agent", status: "archived" }),
+          manifest({ id: "s1", kind: "skill", status: "archived" }),
+        ],
+        resolveHandler: () => agentHandler,
+      },
+    );
+    expect(seen).toEqual(["agent:a1"]);
+    expect(res.byKind.skill).toBeUndefined();
+  });
+
+  it("isolates a throwing archived reader to its own kind via onError", async () => {
+    const onError = vi.fn();
+    const boom: ExtensionTypeHandler = {
+      typeId: "skill", install: vi.fn(), update: vi.fn(), uninstall: vi.fn(), archive: vi.fn(), restore: vi.fn(),
+      async listArchived() { throw new Error("native store down"); },
+    };
+    const ok = archivedReaderHandler("agent");
+    const res = await discoverArchivedCapabilities(
+      { actor, scope },
+      {
+        readArchivedManifests: async () => [
+          manifest({ id: "a1", kind: "agent", status: "archived" }),
+          manifest({ id: "s1", kind: "skill", status: "archived" }),
+        ],
+        resolveHandler: (k) => (k === "skill" ? boom : ok),
+      },
+      { onError },
+    );
+    expect(res.byKind.agent).toEqual([{ archived: "@cinatra-ai/a1" }]);
+    expect(res.byKind.skill).toEqual([]);
+    expect(onError).toHaveBeenCalledWith("skill", expect.any(Error));
   });
 });

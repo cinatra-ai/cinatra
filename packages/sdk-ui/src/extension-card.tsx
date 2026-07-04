@@ -221,26 +221,33 @@ function ExtensionCardChip({
  * icon → vendor-logo → kind-emblem before passing `iconUrl`/`emblem`).
  *
  * `badges` (kind + commerce) overlay the top-right corner so the icon+name row
- * stays the §IV layout. Mirrors the app's src/components/extension-card.tsx.
+ * stays the §IV layout. Mirrors the app's src/components/extension-card.tsx
+ * (including the cinatra#948 export + `className` seam, which lets an
+ * installed-extensions card reuse the mark as a width-constrained left panel).
  */
-function ExtensionCardListingBanner({
+export function ExtensionCardListingBanner({
   name,
   accentColor,
   emblem,
   iconUrl,
   badges,
+  className,
 }: {
   name: string;
   accentColor: ExtensionAccent;
   emblem: React.ReactNode;
   iconUrl?: string | null;
   badges?: React.ReactNode;
+  className?: string;
 }) {
   const { bg, fg } = ACCENT_PALETTE[accentColor];
   return (
     <div
       data-slot="extension-card-banner"
-      className="relative flex min-h-[96px] items-center gap-3 p-[14px]"
+      className={cn(
+        "relative flex min-h-[96px] items-center gap-3 p-[14px]",
+        className,
+      )}
       style={{ background: bg, color: fg }}
     >
       <span
