@@ -96,6 +96,13 @@ if [ ! -f .env.local ]; then
   # (which now hard-fails on a missing token via gen-wayflow-env.mjs
   # --require-bridge-token) would abort. Mint it here, like BETTER_AUTH_SECRET.
   BRIDGE_TOKEN=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32 | head -1)
+  # #907: the dedicated per-node context-callback signing key. The wayflow
+  # runtime signs an HMAC attestation with it on /api/context-resolve +
+  # /api/context-finalize calls so the app can bind the callback to the
+  # actually-executing composed child (a composed child cannot resolve a
+  # sibling's slot). DISTINCT from CINATRA_BRIDGE_TOKEN by design. The app fails
+  # CLOSED on the composed-child path when it is missing, so mint it here too.
+  ATTEST_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p -c 64 | head -1)
   # Replace by KEY, not by placeholder text: .env.example ships an empty
   # `BETTER_AUTH_SECRET=` line (no placeholder), so the old
   # `s/replace-with-a-random-32-byte-hex-secret/.../` substitution was a no-op
@@ -107,12 +114,20 @@ if [ ! -f .env.local ]; then
     sed -i '' "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i '' "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
     sed -i '' "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
+    sed -i '' "s|^# *CINATRA_CONTEXT_ATTEST_KEY=.*|CINATRA_CONTEXT_ATTEST_KEY=$ATTEST_KEY|" .env.local
   else
     sed -i "s|^BETTER_AUTH_SECRET=.*|BETTER_AUTH_SECRET=$SECRET|" .env.local
     sed -i "s/^CINATRA_RUNTIME_MODE=.*/CINATRA_RUNTIME_MODE=$RESOLVED_MODE/" .env.local
     sed -i "s|^# *CINATRA_BRIDGE_TOKEN=.*|CINATRA_BRIDGE_TOKEN=$BRIDGE_TOKEN|" .env.local
+    sed -i "s|^# *CINATRA_CONTEXT_ATTEST_KEY=.*|CINATRA_CONTEXT_ATTEST_KEY=$ATTEST_KEY|" .env.local
   fi
-  info ".env.local created with a random BETTER_AUTH_SECRET, CINATRA_BRIDGE_TOKEN, and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
+  # Append-if-missing fallback: .env.example may not ship a commented
+  # `# CINATRA_CONTEXT_ATTEST_KEY=` line (the sed above is then a no-op), so
+  # guarantee the key exists in a fresh .env.local. Idempotent.
+  if ! grep -q '^CINATRA_CONTEXT_ATTEST_KEY=' .env.local; then
+    printf '\n# Per-node context-callback signing key (#907). Distinct from CINATRA_BRIDGE_TOKEN.\nCINATRA_CONTEXT_ATTEST_KEY=%s\n' "$ATTEST_KEY" >> .env.local
+  fi
+  info ".env.local created with a random BETTER_AUTH_SECRET, CINATRA_BRIDGE_TOKEN, CINATRA_CONTEXT_ATTEST_KEY, and CINATRA_RUNTIME_MODE=$RESOLVED_MODE."
 else
   # If the user picked a mode that differs from what's in .env.local, refuse
   # to silently mutate the file — surface the conflict so they can resolve it.

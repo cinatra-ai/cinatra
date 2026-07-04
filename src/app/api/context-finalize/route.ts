@@ -46,7 +46,7 @@ export async function POST(req: Request): Promise<Response> {
   }
   const body = parsed.data;
   try {
-    const ctx = await deriveContextRouteContext(req, body);
+    const ctx = await deriveContextRouteContext(req, body, "finalize");
     // Load the slot from the VERIFIED owner (the run package, or the composed
     // child that the run package's own OAS binds to this slotId), never the body.
     // Actor + audit-store scoping below stays on the run package (trustedPackageName).

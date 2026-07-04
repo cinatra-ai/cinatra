@@ -28,6 +28,12 @@ import {
   normalizeProjectId,
   type ContextCandidate,
 } from "./context-route-support";
+import {
+  CONTEXT_NODE_HEADER,
+  CONTEXT_ATTESTATION_HEADER,
+  evaluateContextAttestation,
+  type ContextNodeKind,
+} from "./context-attestation";
 
 // ---------------------------------------------------------------------------
 // Heavy IO for the context routes: auth + run + actor derivation (reuses the
@@ -106,11 +112,52 @@ export type DerivedContext = {
   trustedSlotPackageName: string;
 };
 
+/** #907 — enforce the per-node context-callback attestation on the composed-
+ *  child path. Binds the callback to the ACTUALLY-EXECUTING context-resolution
+ *  node (`nodeId` = the compiled `ctx-<slotId>-<kind>` ApiCallStep id the
+ *  WayFlow runtime signs), so a composed child cannot resolve a SIBLING's slot
+ *  by supplying the sibling's (package, slot) in the body.
+ *
+ *  Fails CLOSED via ContextRouteError(403) on: a missing trusted context-id
+ *  binding, an unconfigured signing key, missing/malformed headers, a bad
+ *  signature, an unrecognized/duplicated node (OAS provenance), or a slot/kind
+ *  the attested node does not structurally own. `runOas` is the run package's
+ *  own installed OAS (the trust root the #825 walk keys on). */
+function enforceContextAttestation(input: {
+  req: Request;
+  a2aContextId: string | null;
+  runOas: Record<string, unknown> | null;
+  slotId: string;
+  expectedKind: ContextNodeKind;
+}): void {
+  const { req, a2aContextId, runOas, slotId, expectedKind } = input;
+  // The full fail-closed decision (context-id binding required, dedicated key
+  // required, signature verify, OAS provenance re-anchor, slot + endpoint-kind
+  // match) is a PURE function so it is exhaustively unit-testable. Here we only
+  // supply the trusted context-id, the dedicated key, and the raw headers.
+  const result = evaluateContextAttestation({
+    key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+    contextId: a2aContextId,
+    nodeIdHeader: req.headers.get(CONTEXT_NODE_HEADER),
+    attestationHeader: req.headers.get(CONTEXT_ATTESTATION_HEADER),
+    runOas,
+    slotId,
+    expectedKind,
+  });
+  if (!result.ok) {
+    throw new ContextRouteError(403, result.code, result.message);
+  }
+}
+
 /** Authorize the request, resolve the parent run (preferring the auth-injected
  *  context-id over the body, like /api/llm-bridge), build the run-user actor,
  *  and reject any caller-supplied parentPackageName that disagrees with the
  *  run's TEMPLATE package (forged-body defense). Throws ContextRouteError on
- *  any failure. */
+ *  any failure.
+ *
+ *  `expectedKind` is the endpoint this call serves ("resolve" for
+ *  /api/context-resolve, "finalize" for /api/context-finalize) — bound into the
+ *  #907 attestation so a resolve attestation cannot be replayed on finalize. */
 export async function deriveContextRouteContext(
   req: Request,
   body: {
@@ -119,6 +166,7 @@ export async function deriveContextRouteContext(
     slotId: string;
     projectId?: unknown;
   },
+  expectedKind: ContextNodeKind,
 ): Promise<DerivedContext> {
   // 1. Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   if (!isAuthorizedBridgeRequest(req)) {
@@ -211,6 +259,18 @@ export async function deriveContextRouteContext(
   let trustedSlotPackageName = runPackageName;
   if (body.parentPackageName !== runPackageName) {
     const runOas = await readInstalledOas(runPackageName);
+    // #907: bind the callback to the ACTUALLY-EXECUTING context node before
+    // trusting the structural (package, slot) binding. This closes the residual
+    // where any holder of the shared run auth could resolve ANY structurally-
+    // bound (package, slot) in the run (e.g. a composed child reading a
+    // sibling's slot). Fails closed on any attestation failure.
+    enforceContextAttestation({
+      req,
+      a2aContextId,
+      runOas,
+      slotId: body.slotId,
+      expectedKind,
+    });
     const boundChildPackage = runOas
       ? findBoundChildPackageForSlot(runOas, body.slotId)
       : null;
