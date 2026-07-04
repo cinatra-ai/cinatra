@@ -214,8 +214,52 @@ async function ensureGitHubIntegration(settings: GitHubOAuthSettings) {
 
 export async function getGitHubAccessToken(input?: {
   connectionId?: string;
+  /**
+   * Owner-aware resolution (cinatra#952 W2): when the caller carries an
+   * actor, the connection is resolved through the grant-following resolver
+   * (own connection first, else the SINGLE granted shared connection — more
+   * than one authorized shared candidate HARD-FAILS, never picks) and every
+   * use is gated + AUDITED (allow and deny; deny pre-fetch). An explicit
+   * `connectionId` + actor is gated through the per-connection use-gate (no
+   * candidate selection). Actor-less calls keep the legacy primary-record
+   * behavior and are pinned as W3 migration residue in the raw-reader
+   * inventory ratchet.
+   */
+  actor?: import("@/lib/authz").ActorContext;
+  runId?: string;
 }) {
-  const savedConnection = resolveSavedGitHubConnection(input?.connectionId);
+  let resolvedConnectionId = input?.connectionId;
+  if (input?.actor) {
+    const { enforceConnectionUse, connectionSubjectUserId } = await import(
+      "@/lib/connection-use-gate"
+    );
+    if (resolvedConnectionId) {
+      const { readNangoConnectionByNaturalKey } = await import(
+        "@cinatra-ai/extensions/connection-identity-store"
+      );
+      const identity = await readNangoConnectionByNaturalKey("github", resolvedConnectionId);
+      if (!identity) {
+        throw new Error("This GitHub connection is not registered (or was revoked).");
+      }
+      await enforceConnectionUse({
+        identity,
+        actor: input.actor,
+        subjectUserId: connectionSubjectUserId(input.actor),
+        runId: input.runId,
+        source: "github-api",
+      });
+    } else {
+      const { resolveConnectionForUse } = await import("@/lib/connection-credential-resolver");
+      const resolved = await resolveConnectionForUse({
+        connectorKey: "github",
+        actor: input.actor,
+        runId: input.runId,
+        source: "github-api",
+      });
+      resolvedConnectionId = resolved.connectionId;
+    }
+  }
+  const savedConnection = resolveSavedGitHubConnection(resolvedConnectionId);
 
   if (savedConnection) {
     const connection = await getNangoConnection(

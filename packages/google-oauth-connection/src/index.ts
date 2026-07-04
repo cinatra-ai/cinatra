@@ -145,11 +145,37 @@ export async function saveGoogleOAuthSettings(input: {
   return nextSettings;
 }
 
+/** Soft-delete the `nango_connection` identity row for a connection so the
+ * cinatra#952 use-gate fails closed on the next resolution (revocation
+ * ordering: identity FIRST, then upstream token, then pointer records).
+ * Best-effort in degraded/unit contexts where the identity store is not
+ * provisioned. */
+async function softDeleteConnectionIdentity(
+  connectorKey: string,
+  connectionId: string | undefined,
+): Promise<void> {
+  if (!connectionId) return;
+  try {
+    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    const identity = await readNangoConnectionByNaturalKey(connectorKey, connectionId);
+    if (identity) await softDeleteNangoConnection(identity.id);
+  } catch {
+    // Identity store unavailable (unit env) — the delete below still removes
+    // the credential itself.
+  }
+}
+
 export async function clearGoogleOAuthConnection() {
   writeStoredSettings({
     redirectUri: getNangoOAuthCallbackUrl(),
   });
   const savedConnection = getPrimarySavedNangoConnection("googleOAuth");
+  // Revocation ordering (cinatra#952 W2): soft-delete the identity row FIRST
+  // so the per-connection use-gate fails closed on the very next resolution,
+  // then the upstream token, then the pointer records below.
+  await softDeleteConnectionIdentity("googleOAuth", savedConnection?.connectionId);
   await deleteNangoConnection(
     savedConnection?.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
     savedConnection?.connectionId ?? "cinatra-google-oauth",
@@ -164,6 +190,8 @@ export async function clearUserGoogleOAuthConnection(userId: string) {
   });
 
   if (savedConnection) {
+    // Same revocation ordering as the org-level clear: identity row first.
+    await softDeleteConnectionIdentity("googleOAuth", savedConnection.connectionId);
     await deleteNangoConnection(
       savedConnection.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
       savedConnection.connectionId,

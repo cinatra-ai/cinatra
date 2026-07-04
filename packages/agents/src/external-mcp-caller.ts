@@ -2,36 +2,26 @@ import "server-only";
 
 import {
   listEnabledGlobalExternalMcpServers,
-  EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
+  resolveExternalMcpServerBearer,
+  type ExternalMcpServerRecord,
 } from "@/lib/external-mcp-registry";
-import { getNangoCredentials, isNangoConfigured } from "@/lib/nango-system";
 
 // ---------------------------------------------------------------------------
-// Internal helper — resolve API key for a server's Nango connection if available
+// Internal helper — resolve the bearer for a server row. Routed through the
+// registry's `resolveExternalMcpServerBearer` (cinatra#952 W2), which gates
+// EVERY external-MCP credential mint through the per-connection use-gate
+// (identity row, audited InternalWorker bound to the row's organization) —
+// this module no longer touches the raw credential fetch primitives.
 // ---------------------------------------------------------------------------
 
 async function resolveAuthHeader(
-  nangoConnectionId: string | null,
+  row: ExternalMcpServerRecord,
 ): Promise<{ Authorization: string } | undefined> {
-  if (!nangoConnectionId || !isNangoConfigured()) {
-    return undefined;
-  }
   try {
-    const credentials = await getNangoCredentials(
-      EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
-      nangoConnectionId,
-    );
-    const apiKey =
-      credentials && typeof credentials === "object" && "apiKey" in credentials
-        ? (credentials as { apiKey: string }).apiKey
-        : typeof credentials === "string"
-          ? credentials
-          : null;
-    if (apiKey) {
-      return { Authorization: `Bearer ${apiKey}` };
-    }
+    const bearer = await resolveExternalMcpServerBearer(row);
+    if (bearer) return { Authorization: `Bearer ${bearer}` };
   } catch {
-    // Nango unavailable — proceed without auth header
+    // Nango/identity store unavailable — proceed without auth header
   }
   return undefined;
 }
@@ -50,7 +40,7 @@ export async function fetchExternalMcpToolNames(): Promise<string[]> {
 
   for (const row of servers) {
     try {
-      const authHeader = await resolveAuthHeader(row.nangoConnectionId);
+      const authHeader = await resolveAuthHeader(row);
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "Accept": "application/json",
@@ -111,7 +101,7 @@ export async function callExternalMcpTool(
   for (const row of servers) {
     let authHeader: { Authorization: string } | undefined;
     try {
-      authHeader = await resolveAuthHeader(row.nangoConnectionId);
+      authHeader = await resolveAuthHeader(row);
     } catch {
       // Proceed without auth header
     }

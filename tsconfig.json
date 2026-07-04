@@ -270,6 +270,7 @@
       "@cinatra-ai/extensions/purge": ["./packages/extensions/src/purge.ts"],
       "@cinatra-ai/extensions/purge-deps": ["./packages/extensions/src/purge-deps.ts"],
       "@cinatra-ai/extensions/permissions-actions": ["./packages/extensions/src/permissions-actions.ts"],
+      "@cinatra-ai/extensions/connection-identity-store": ["./packages/extensions/src/connection-identity-store.ts"],
       "@cinatra-ai/extensions/permissions-store": ["./packages/extensions/src/permissions-store.ts"],
       "@cinatra-ai/extensions/permissions-kind-hooks": ["./packages/extensions/src/permissions-kind-hooks.ts"],
       "@cinatra-ai/extensions/enforce-extension-access": ["./packages/extensions/src/enforce-extension-access.ts"],

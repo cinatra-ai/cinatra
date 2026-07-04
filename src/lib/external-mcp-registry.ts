@@ -200,6 +200,45 @@ export function getExternalMcpServerByIdFresh(id: string): ExternalMcpServerReco
   return rows.length > 0 ? toRecord(rows[0]) : null;
 }
 
+/** Gate one external-MCP row's connection use (cinatra#952 W2). Returns true
+ * when the use-gate ALLOWS; false when the identity row is missing or the
+ * gate denies (both fail closed to "no bearer"). Deny/allow are audited by
+ * the gate; the deny row is durable + flood-controlled and lands BEFORE this
+ * returns. */
+async function gateExternalMcpConnectionUse(row: ExternalMcpServerRecord): Promise<boolean> {
+  if (!row.nangoConnectionId) return false;
+  const { readNangoConnectionByNaturalKey } = await import(
+    "@cinatra-ai/extensions/connection-identity-store"
+  );
+  const { enforceConnectionUse, ConnectionUseDeniedError } = await import(
+    "@/lib/connection-use-gate"
+  );
+  const { POLICY_VERSION } = await import("@/lib/authz/actor-context");
+  const identity = await readNangoConnectionByNaturalKey("externalMcp", row.nangoConnectionId);
+  if (!identity) return false;
+  try {
+    await enforceConnectionUse({
+      identity,
+      actor: {
+        principalType: "InternalWorker",
+        principalId: `worker:external-mcp:${row.id}`,
+        organizationId: identity.organizationId ?? undefined,
+        teamIds: [],
+        projectGrants: [],
+        projectIds: [],
+        authSource: "worker",
+        policyVersion: POLICY_VERSION,
+      },
+      subjectUserId: undefined,
+      source: "external-mcp-registry",
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof ConnectionUseDeniedError) return false;
+    throw err;
+  }
+}
+
 /**
  * Resolve the upstream bearer for an external MCP server row via Nango. Used
  * by both the LLM-side injection (when the row has no catalog allowlist and
@@ -216,6 +255,16 @@ export async function resolveExternalMcpServerBearer(
 ): Promise<string | null> {
   if (!row.nangoConnectionId) return null;
   if (!isNangoConfigured()) return null;
+  // Per-connection use-gate (cinatra#952 W2, external-MCP identity special
+  // case): external-MCP connections carry identity rows (connector_key
+  // "externalMcp") but NO blob pointer record — they are connection-ADDRESSED
+  // (use-gate only; no candidate selection; no blob lookup). The mint is
+  // audited as an InternalWorker BOUND to the identity row's organization. A
+  // missing identity row (pre-seed deployments run core__0015) or a deny
+  // fails CLOSED into the callers' `null = no auth header` contract — no
+  // credential is ever fetched past a deny.
+  const gated = await gateExternalMcpConnectionUse(row);
+  if (!gated) return null;
   try {
     const credentials = await getNangoCredentials(
       EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
@@ -823,6 +872,9 @@ export function getTwentyConnectionState(): TwentyConnectionState {
 export async function saveTwentyConnection(input: {
   instanceUrl: string;
   apiKey: string;
+  /** The connecting admin (cinatra#952 W2): owns the connection's identity
+   * row. Threaded from the acting session by the server action. */
+  owner?: { userId: string; organizationId: string | null };
 }): Promise<void> {
   const apiKey = (input.apiKey ?? "").trim();
   if (!apiKey) throw new TwentyConnectionError("Enter your Twenty API key.");
@@ -893,8 +945,40 @@ export async function saveTwentyConnection(input: {
     allowedCatalogTools: [...TWENTY_LAYER_B_CATALOG_TOOLS],
   });
 
-  // (5) After a URL change, best-effort remove the PREVIOUS instance's Nango key.
+  // (5) Identity-seam insert (cinatra#952 W2): the external-MCP connection
+  // gets its identity row (connector_key "externalMcp", owner = the
+  // connecting admin) + the owner-scoped grant seed. Without an owner
+  // (legacy programmatic path) the row is left for the core__0015 seed.
+  if (input.owner) {
+    const { registerSavedConnectionIdentity } = await import(
+      "@/lib/connection-identity-seam"
+    );
+    await registerSavedConnectionIdentity({
+      connectorKey: "externalMcp",
+      connectionId,
+      ownerUserId: input.owner.userId,
+      organizationId: input.owner.organizationId,
+      // The Twenty workspace row is admin-created instance-global by
+      // construction — behavior-preserving workspace seed (an owner-only
+      // grant would deny the org-bound InternalWorker mint).
+      seed: "workspace",
+    });
+  }
+
+  // (6) After a URL change, best-effort remove the PREVIOUS instance's Nango
+  // key — identity row FIRST (revocation-next-use), then the upstream token.
   if (priorConnectionId && priorConnectionId !== connectionId) {
+    // Identity row FIRST (revocation-next-use), each step independently best-effort so a
+    // degraded identity store never blocks the upstream token removal.
+    try {
+      const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+        "@cinatra-ai/extensions/connection-identity-store"
+      );
+      const prior = await readNangoConnectionByNaturalKey("externalMcp", priorConnectionId);
+      if (prior) await softDeleteNangoConnection(prior.id);
+    } catch {
+      // Best-effort: identity store unavailable — the token delete still runs.
+    }
     try {
       await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, priorConnectionId);
     } catch {
@@ -912,6 +996,23 @@ export async function disconnectTwentyConnection(): Promise<void> {
   const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
   deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
   if (row?.nangoConnectionId && isNangoConfigured()) {
+    // Revocation ordering (cinatra#952 W2): soft-delete the identity row
+    // FIRST — the use-gate fails closed on the very next resolution — then
+    // best-effort delete the upstream token. Each step is independently
+    // best-effort so a degraded identity store never blocks the token
+    // removal. External-MCP rows have no blob pointer record to remove.
+    try {
+      const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
+        "@cinatra-ai/extensions/connection-identity-store"
+      );
+      const identity = await readNangoConnectionByNaturalKey(
+        "externalMcp",
+        row.nangoConnectionId,
+      );
+      if (identity) await softDeleteNangoConnection(identity.id);
+    } catch {
+      // Best-effort: identity store unavailable — the token delete still runs.
+    }
     try {
       await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, row.nangoConnectionId);
     } catch {

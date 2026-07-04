@@ -4,6 +4,10 @@ import type { NangoConnectionSavedHook } from "@cinatra-ai/sdk-extensions";
 import { NANGO_CONNECTION_SAVED_CAPABILITY } from "@cinatra-ai/sdk-extensions/internal";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { getAuthSession, isPlatformAdmin, resolveOrgRoleForSession } from "@/lib/auth-session";
+import {
+  registerSavedConnectionIdentity,
+  ConnectionIdentityConflictError,
+} from "@/lib/connection-identity-seam";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +59,39 @@ export async function POST(request: Request) {
   const result = await nango.handleNangoConnectionSaveRequest(request, {
     userId: session.user.id,
   });
+
+  // Identity-seam insert (cinatra#952 W2, step A2): a successfully saved
+  // connection gets its `nango_connection` identity row (owner = the
+  // VALIDATED session user; org = the session's active organization) plus the
+  // one-time OWNER-scoped grant seed — never auto-shared, never resetting a
+  // previously widened policy. A conflict with a FOREIGN identity row
+  // hard-fails the save (fail-closed) — the connection was saved to the vault
+  // but is NOT usable until the ownership conflict is resolved.
+  if (result.body.success === true && body?.connectorKey && session.user.id) {
+    const savedConnection = (result.body as { connection?: { connectionId?: unknown } })
+      .connection;
+    const savedConnectionId =
+      typeof savedConnection?.connectionId === "string" ? savedConnection.connectionId : null;
+    if (savedConnectionId) {
+      try {
+        await registerSavedConnectionIdentity({
+          connectorKey: body.connectorKey,
+          connectionId: savedConnectionId,
+          ownerUserId: session.user.id,
+          organizationId: session.session?.activeOrganizationId ?? null,
+          // APP-scope saves are org-admin-gated above and org-shared BY
+          // CONSTRUCTION (pre-#950 semantics) — behavior-preserving workspace
+          // seed. USER-scope saves get the never-auto-share OWNER default.
+          seed: scope === "app" ? "workspace" : "owner",
+        });
+      } catch (err) {
+        if (err instanceof ConnectionIdentityConflictError) {
+          return NextResponse.json({ error: err.message }, { status: 409 });
+        }
+        throw err;
+      }
+    }
+  }
 
   // Registration-driven post-save hooks: a connector that needs to react to a
   // saved connection (e.g. a mailbox provider refreshing its send-as aliases)

@@ -730,22 +730,31 @@ function twentyConnectorSetupHref(): string {
   );
 }
 
-async function requireTwentyConnectManager(): Promise<boolean> {
+async function requireTwentyConnectManager(): Promise<
+  { userId: string; organizationId: string | null } | null
+> {
   const session = await requireAuthSession();
   const orgRole = await resolveOrgRoleForSession(session);
-  return isPlatformAdmin(session) || orgRole === "org_owner" || orgRole === "org_admin";
+  const allowed =
+    isPlatformAdmin(session) || orgRole === "org_owner" || orgRole === "org_admin";
+  if (!allowed) return null;
+  return {
+    userId: session.user.id,
+    organizationId: session.session?.activeOrganizationId ?? null,
+  };
 }
 
 export async function saveTwentyConnectionAction(formData: FormData): Promise<void> {
   const base = twentyConnectorSetupHref();
-  if (!(await requireTwentyConnectManager())) {
+  const owner = await requireTwentyConnectManager();
+  if (!owner) {
     redirect(`${base}?error=${encodeURIComponent("Only an administrator can connect Twenty.")}`);
   }
   const instanceUrl = String(formData.get("instanceUrl") ?? "");
   const apiKey = String(formData.get("apiKey") ?? "");
   let errorMessage: string | null = null;
   try {
-    await saveTwentyConnection({ instanceUrl, apiKey });
+    await saveTwentyConnection({ instanceUrl, apiKey, owner });
   } catch (err) {
     // Only surface our OWN vetted messages (TwentyConnectionError, which never
     // carries the key or a readback value). Any other error may embed the
