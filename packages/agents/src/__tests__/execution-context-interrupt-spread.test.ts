@@ -211,4 +211,84 @@ describe("execution.ts — generic interrupt-output spread", () => {
     expect(values.output).not.toBe("INJECTED");
     expect(typeof values.output).toBe("string");
   });
+
+  // #839: an InputMessageNode gate's declared DFE inputs (e.g. idea_selection_gate's
+  // `ideas[]`) arrive via task.metadata.pendingApproval and must reach the renderer
+  // EVEN WHEN history text is present (which otherwise wins the `output` slot).
+  it("#839: surfaces a gate's pendingApproval inputs (ideas) alongside prose history", async () => {
+    const run = makeRun();
+    const ideas = [{ title: "Alpha" }, { title: "Beta" }];
+    const task = {
+      id: "task-idea-1",
+      contextId: "ctx-idea-1",
+      status: { state: "input-required", message: { parts: [] } },
+      metadata: { pendingApproval: { ideas, agent_run_id: "run-ctx-1" } },
+      // Non-JSON history: interruptOutput = this prose, spreadFromOutput = {},
+      // so `ideas` is reachable ONLY via the pendingApproval gate-input merge.
+      history: [
+        { role: "agent", parts: [{ kind: "text", text: "Ideas are ready for review." }] },
+      ],
+    };
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
+    expect(values.ideas).toEqual(ideas);
+    expect(values.agent_run_id).toBe("run-ctx-1");
+    // history-derived output is preserved (not clobbered by the gate inputs).
+    expect(values.output).toBe("Ideas are ready for review.");
+  });
+
+  it("#839: strips host-reserved envelope keys from surfaced gate inputs", async () => {
+    const run = makeRun();
+    const task = {
+      id: "task-idea-2",
+      contextId: "ctx-idea-2",
+      status: { state: "input-required", message: { parts: [] } },
+      metadata: {
+        pendingApproval: {
+          ideas: [{ title: "Alpha" }],
+          contentType: "evil",
+          summary: "evil",
+          contentBundle: { text: "evil" },
+        },
+      },
+      history: [
+        { role: "agent", parts: [{ kind: "text", text: "prose only" }] },
+      ],
+    };
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
+    expect(values.ideas).toBeDefined();
+    // Reserved envelope keys from pendingApproval must NOT leak in (they would
+    // disable reviewer-output envelope synthesis / shadow a real bundle).
+    expect(values.contentType).not.toBe("evil");
+    expect(values.summary).not.toBe("evil");
+    expect(values.contentBundle).toBeUndefined();
+  });
+
+  // #839: the strip must ALSO cover the history-EMPTY fallback, where
+  // interruptOutput = JSON.stringify(pendingApproval) and spreadFromOutput
+  // re-parses the whole (unfiltered) pendingApproval.
+  it("#839: strips reserved keys even when history is empty (pendingApproval fallback)", async () => {
+    const run = makeRun();
+    const task = {
+      id: "task-idea-3",
+      contextId: "ctx-idea-3",
+      status: { state: "input-required", message: { parts: [] } },
+      metadata: {
+        pendingApproval: {
+          ideas: [{ title: "Alpha" }],
+          contentType: "evil",
+          summary: "evil",
+          contentBundle: { text: "evil" },
+        },
+      },
+      history: [], // EMPTY → spreadFromOutput = parsed pendingApproval (unfiltered)
+    };
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task });
+    const values = onInterruptSpy.mock.calls[0]![2] as Record<string, unknown>;
+    expect(values.ideas).toEqual([{ title: "Alpha" }]);
+    expect(values.contentType).not.toBe("evil");
+    expect(values.summary).not.toBe("evil");
+    expect(values.contentBundle).toBeUndefined();
+  });
 });

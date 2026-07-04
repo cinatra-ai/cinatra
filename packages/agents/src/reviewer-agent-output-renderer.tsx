@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { SchemaFieldRenderer } from "./schema-field-renderer";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 // Condition: the reviewer-agent manifest binding (kind "reviewer-output") and
 // the host-registered legacy-scope alias each resolve to this component with
@@ -46,6 +47,37 @@ export function ReviewerAgentOutputRenderer(props: FieldRendererProps) {
   };
   const contentType = value.contentType;
   const summary = value.summary;
+  // #839: idea-selection gate. When the compiled InputMessageNode schema
+  // requires a `selectedIdeaJson` string AND the gate's `ideas[]` render input
+  // is present (surfaced from pendingApproval by execution.ts), render an idea
+  // chooser INSTEAD of the reviewer text envelope — whose mount auto-commit
+  // would otherwise post a placeholder userResponse as the gate's
+  // selectedIdeaJson output and yield an empty draft. Strictly gated on the
+  // selectedIdeaJson schema so pure-approval reviewer gates and the #824
+  // context-selector path are untouched.
+  const schema = (props.schema ?? {}) as {
+    required?: unknown;
+    properties?: Record<string, { type?: string } | undefined>;
+  };
+  const requiresSelectedIdeaJson =
+    Array.isArray(schema.required) &&
+    schema.required.includes("selectedIdeaJson") &&
+    schema.properties?.selectedIdeaJson?.type === "string";
+  const ideas = Array.isArray(value.ideas)
+    ? (value.ideas as Array<Record<string, unknown>>)
+    : null;
+  if (requiresSelectedIdeaJson && ideas && ideas.length > 0) {
+    return (
+      <>
+        <SummaryLine summary={summary} />
+        <IdeaChooserRenderer
+          ideas={ideas}
+          onChange={props.onChange}
+          disabled={props.disabled}
+        />
+      </>
+    );
+  }
   const innerProps: FieldRendererProps = {
     ...props,
     value: value.contentBundle ?? {},
@@ -186,6 +218,93 @@ function ReviewerTextEnvelope(args: {
       <div className="rounded-control border border-line bg-surface-muted p-3 whitespace-pre-wrap text-sm">
         {bundle.text ?? summary ?? "(no review content)"}
       </div>
+    </div>
+  );
+}
+
+/**
+ * #839 idea-selection chooser for blog-pipeline's `idea_selection_gate`.
+ *
+ * The gate is an InputMessageNode whose one string output (`selectedIdeaJson`)
+ * becomes the WayFlow resume text (`userResponse`). We render a radio list of
+ * the generated ideas and commit the chosen idea as
+ * `JSON.stringify(idea)` into BOTH `selectedIdeaJson` (seam clarity) and
+ * `userResponse` (the load-bearing resume text). The gate still PAUSES the run
+ * (a real HITL interrupt); this replaces the placeholder-committing text
+ * envelope so a human's pick actually reaches the draft writer.
+ *
+ * A default selection (ideas[0]) is committed on mount so the buffered value is
+ * always a valid, offered idea — the seam validates it by title and the run can
+ * never resume with an empty/placeholder selection. The user may change the
+ * pick before pressing the panel's Continue.
+ */
+function IdeaChooserRenderer({
+  ideas,
+  onChange,
+  disabled,
+}: {
+  ideas: Array<Record<string, unknown>>;
+  onChange: (next: unknown) => void;
+  disabled?: boolean;
+}) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const commit = (idx: number) => {
+    const json = JSON.stringify(ideas[idx]);
+    void onChange({ selectedIdeaJson: json, userResponse: json });
+  };
+  // Commit the default selection once on mount (an effect — never call the
+  // parent setter during render). Uses the mount-time `onChange`, which is
+  // valid; radio changes below re-commit via the current-render closure.
+  useEffect(() => {
+    commit(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const ideaLabel = (idea: Record<string, unknown>, idx: number) =>
+    (typeof idea.title === "string" && idea.title.trim().length > 0
+      ? idea.title
+      : `Idea ${idx + 1}`);
+  const ideaSummary = (idea: Record<string, unknown>) =>
+    (typeof idea.summary === "string" && idea.summary) ||
+    (typeof idea.angle === "string" && idea.angle) ||
+    (typeof idea.description === "string" && idea.description) ||
+    "";
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-muted-foreground">
+        Select one blog idea to draft.
+      </p>
+      <RadioGroup
+        aria-label="Select one blog idea to draft"
+        value={String(selectedIndex)}
+        disabled={disabled}
+        onValueChange={(v) => {
+          const idx = Number(v);
+          setSelectedIndex(idx);
+          commit(idx);
+        }}
+        className="flex flex-col gap-2"
+      >
+        {ideas.map((idea, idx) => {
+          const selected = idx === selectedIndex;
+          const sub = ideaSummary(idea);
+          return (
+            <label
+              key={idx}
+              className={`flex cursor-pointer items-start gap-2 rounded-control border p-3 text-sm ${
+                selected ? "border-primary bg-surface-muted" : "border-line"
+              } ${disabled ? "pointer-events-none opacity-60" : ""}`}
+            >
+              <RadioGroupItem value={String(idx)} className="mt-1" />
+              <span className="flex flex-col gap-0.5">
+                <span className="font-medium">{ideaLabel(idea, idx)}</span>
+                {sub ? (
+                  <span className="text-muted-foreground">{sub}</span>
+                ) : null}
+              </span>
+            </label>
+          );
+        })}
+      </RadioGroup>
     </div>
   );
 }
