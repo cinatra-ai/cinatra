@@ -43,6 +43,25 @@ export interface A2AConnectionProvider {
   ): Promise<unknown>;
   /** Remove a connection record. */
   removeConnectionRecord(connectorKey: "a2aServer", connectionId: string): Promise<unknown>;
+  /**
+   * Authoritatively scrub the stored Nango credential for this A2A connection —
+   * the API_KEY bearer that `importConnection` wrote into the vault at add time.
+   * `removeConnectionRecord` only drops the local pointer row; the bearer itself
+   * lives in Nango and must be deleted here or it is orphaned.
+   *
+   * FAIL-CLOSED: PROPAGATES a real failure — including when the connection
+   * service (Nango) is unreachable/unconfigured, where the scrub CANNOT be
+   * confirmed — so the caller aborts and RETAINS its local record for retry
+   * instead of dropping it while the bearer lingers in the vault. An already
+   * absent / 404 connection resolves successfully (idempotent). Mirrors the
+   * tailscale authoritative disconnect (cinatra-ai/tailscale-connector#23,
+   * Design C): scrub first, drop the local record only after this resolves.
+   */
+  deleteConnection(input: {
+    connectorKey: "a2aServer";
+    providerConfigKey: string;
+    connectionId: string;
+  }): Promise<void>;
   /** Upsert the external-agent-template row backing this A2A connection. */
   upsertExternalAgentTemplate(input: {
     connectorSlug: string;
