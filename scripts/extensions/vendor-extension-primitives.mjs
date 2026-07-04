@@ -59,10 +59,9 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/crm-connector",
     uiItems: ["field", "input-group"],
   },
-  {
-    extensionDir: "extensions/cinatra-ai/gemini-connector",
-    uiItems: ["button", "input", "label"],
-  },
+  // gemini-connector converted its setup/settings UI to the schema-config DSL
+  // (0.1.4, uiSurface "schema-config") — same conversion as openai-connector
+  // below; it no longer ships or imports any design-registry primitives.
   {
     extensionDir: "extensions/cinatra-ai/github-connector",
     uiItems: ["button", "input", "label"],
@@ -71,10 +70,8 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/gmail-connector",
     uiItems: ["alert", "button"],
   },
-  {
-    extensionDir: "extensions/cinatra-ai/apify-connector",
-    uiItems: ["alert", "button", "field", "input"],
-  },
+  // apify-connector converted its setup UI to the schema-config DSL (0.1.4,
+  // uiSurface "schema-config") — no vendored primitives remain.
   {
     extensionDir: "extensions/cinatra-ai/mcp-client-connector",
     uiItems: ["alert", "button"],
@@ -99,9 +96,12 @@ const VENDOR_MANIFEST = [
     extensionDir: "extensions/cinatra-ai/nango-connector",
     uiItems: ["alert", "button", "card", "field", "input", "input-group", "label"],
   },
+  // apollo-connector converted its setup/settings UI to the schema-config DSL
+  // (0.1.4, uiSurface "schema-config"); its remaining vendored primitives are
+  // the people-search widget's table stack (paginated-table closure) + input/label.
   {
     extensionDir: "extensions/cinatra-ai/apollo-connector",
-    uiItems: ["alert", "button", "field", "input", "label", "table", "paginated-table"],
+    uiItems: ["input", "label", "paginated-table"],
   },
   // openai-connector converted its setup/settings UI to the schema-config DSL
   // (0.1.6, uiSurface "schema-config"): the host renders from configSchema, so
