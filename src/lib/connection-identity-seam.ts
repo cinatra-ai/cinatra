@@ -167,7 +167,16 @@ export async function registerSavedConnectionIdentity(input: {
   // cross-org guard to contain it — so a null-org row is force-seeded
   // owner-only regardless of the requested seed.
   const effectiveSeed = row.organizationId === null ? "owner" : input.seed;
-  const policy =
+  // SEED-PROVENANCE MARKER (cinatra#953 W3, codex round-0 finding 1): the
+  // seeded policy jsonb carries `seededDefault: true` so the share surface
+  // can distinguish "untouched seed" (pre-select the connector's
+  // `access.scope.default` recommendation) from an EXPLICIT owner save. Every
+  // explicit save flows through `saveExtensionAccessPolicy`'s zod parse
+  // (`AgentAuthPolicySchema` strips unknown keys), so the first owner save —
+  // even re-choosing owner-only — durably clears the marker and the picker
+  // thereafter always shows the stored choice. Readers of the policy consume
+  // named fields only; the extra key is inert to evaluation.
+  const basePolicy =
     effectiveSeed === "workspace"
       ? {
           runListVisibility: "workspace" as const,
@@ -176,6 +185,7 @@ export async function registerSavedConnectionIdentity(input: {
           allowRunSharing: false,
         }
       : defaultAccessPolicyForKind("connection");
+  const policy = { ...basePolicy, seededDefault: true };
   await seedExtensionAccessPolicyIfAbsent("connection", row.id, policy, ownerUserId);
   return row;
 }

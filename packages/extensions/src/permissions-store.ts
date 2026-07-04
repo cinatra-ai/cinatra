@@ -79,33 +79,58 @@ export async function readExtensionAccessPolicy(
   resourceKind: ExtensionKind,
   resourceId: string,
 ): Promise<AgentAuthPolicy | null> {
+  // Delegates to the batch reader (cinatra#953 W3) — ONE sync-bridge call
+  // site serves both the single and the batch shape (the sync-bridge
+  // inventory is a shrinking ratchet; this refactor keeps the file's call
+  // count flat).
+  const policies = await readExtensionAccessPolicies(resourceKind, [resourceId]);
+  return policies.get(resourceId) ?? null;
+}
+
+/**
+ * Batch policy read for LIST surfaces (cinatra#953 W3 — the `/connectors`
+ * scope filter reads every candidate connection's grant in ONE query instead
+ * of N). Returns a map keyed by resource_id; ids without a policy row are
+ * simply absent (the caller applies the kind's fail-closed default). A
+ * malformed jsonb string row is treated as absent (fail-closed) — pg returns
+ * jsonb as a parsed object via node-postgres, but be defensive against a
+ * string fallback (some drivers / cast permutations).
+ * `readExtensionAccessPolicy` (the single-id shape) delegates here.
+ */
+export async function readExtensionAccessPolicies(
+  resourceKind: ExtensionKind,
+  resourceIds: string[],
+): Promise<Map<string, AgentAuthPolicy>> {
+  const out = new Map<string, AgentAuthPolicy>();
+  if (resourceIds.length === 0) return out;
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
   const [result] = runPostgresQueriesSync({
     connectionString,
     queries: [
       {
-        text: `SELECT policy
+        text: `SELECT resource_id, policy
                FROM "${schema.replaceAll('"', '""')}"."extension_access_policy"
-               WHERE resource_kind = $1 AND resource_id = $2`,
-        values: [resourceKind, resourceId],
+               WHERE resource_kind = $1 AND resource_id = ANY($2)`,
+        values: [resourceKind, resourceIds],
       },
     ],
   });
-  type Row = { policy: AgentAuthPolicy | string };
-  const rows = (result?.rows ?? []) as Row[];
-  if (rows.length === 0) return null;
-  const raw = rows[0]!.policy;
-  // pg returns jsonb as a parsed object via node-postgres, but be defensive
-  // against a string fallback (some drivers / cast permutations).
-  if (typeof raw === "string") {
-    try {
-      return JSON.parse(raw) as AgentAuthPolicy;
-    } catch {
-      return null;
+  type Row = { resource_id: string; policy: AgentAuthPolicy | string };
+  for (const r of (result?.rows ?? []) as Row[]) {
+    let policy: AgentAuthPolicy | null;
+    if (typeof r.policy === "string") {
+      try {
+        policy = JSON.parse(r.policy) as AgentAuthPolicy;
+      } catch {
+        policy = null;
+      }
+    } else {
+      policy = r.policy;
     }
+    if (policy) out.set(r.resource_id, policy);
   }
-  return raw;
+  return out;
 }
 
 export async function readExtensionInstalledBy(

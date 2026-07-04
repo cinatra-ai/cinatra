@@ -26,9 +26,10 @@ export type NormalizedResourceScope = {
   locus: "personal" | "team" | "organization" | "project" | "workspace";
   /**
    * The id of the owning team/org/project, when the resource is tied to a
-   * specific one. Omit it for resources that are locus-level but not bound to a
-   * particular id (e.g. connectors that are "organization-level" workspace-wide
-   * rather than scoped to one org) — those match any selection of that locus.
+   * specific one. A resource WITHOUT a `locusId` matches NOTHING under an
+   * id-carrying org/team/project selection (fail-closed, cinatra#953 W3) —
+   * locus-level-but-unbound resources appear only under the default
+   * ("workspace") view.
    */
   locusId?: string;
   /** True when the resource is restricted to workspace admins. */
@@ -51,9 +52,12 @@ export function comboboxValueToScopeToken(value: string): ScopeToken {
  * - `workspace` (default) → everything (the broadest view)
  * - `personal` → personal-locus resources
  * - `admin` → admin-only resources (visibility tier, NOT "any non-personal")
- * - `org:<id>` / `team:<id>` / `project:<id>` → resources of that locus; if the
- *   resource carries a `locusId`, it must match the selected id, otherwise a
- *   locus-level resource matches any id of that locus.
+ * - `org:<id>` / `team:<id>` / `project:<id>` → resources of that locus whose
+ *   CONCRETE `locusId` equals the selected id. FAIL-CLOSED (cinatra#953 W3):
+ *   a resource WITHOUT a `locusId` matches NOTHING under an id-carrying
+ *   selection, and a bare id-less locus token matches nothing — an org/team/
+ *   project selection means "genuinely granted to THAT locus", never "any
+ *   resource that merely lives at that locus level" (the killed overmatch).
  */
 export function scopeSelectionMatches(
   token: ScopeToken,
@@ -67,6 +71,6 @@ export function scopeSelectionMatches(
   if (locus !== "org" && locus !== "team" && locus !== "project") return false;
   const expectedLocus = locus === "org" ? "organization" : locus;
   if (resource.locus !== expectedLocus) return false;
-  if (resource.locusId === undefined || id === undefined) return true;
+  if (resource.locusId === undefined || id === undefined) return false;
   return resource.locusId === id;
 }

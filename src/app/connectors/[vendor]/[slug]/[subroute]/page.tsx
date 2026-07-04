@@ -43,6 +43,7 @@ import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 
 export const dynamic = "force-dynamic";
 
@@ -167,6 +168,14 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     />
   );
 
+  // HOST-owned per-connection share surface (cinatra#953 W3): rendered on
+  // EVERY branch of this route (schema-config, invalid-schema-config, the
+  // rebuild states, and the bundled-react page) so the owner of a saved
+  // connection always reaches the six-scope picker here. The section renders
+  // NOTHING when the actor owns no connection for this connector or the
+  // connector declares `only:"user"` (never shareable).
+  const sharingSection = <ConnectionSharingSection packageId={packageId} />;
+
   if (render.kind === "schema-config") {
     // Resolve the addressable install id so named actions / status probes can
     // POST to /api/extensions/{installId}/actions/...; when the connector isn't
@@ -191,6 +200,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           ) : (
             <InstallActivateCta displayName={displayName} />
           )}
+          {sharingSection}
         </PageContent>
       </Main>
     );
@@ -215,6 +225,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
               fixed and republished before it can be configured.
             </AlertDescription>
           </Alert>
+          {sharingSection}
         </PageContent>
       </Main>
     );
@@ -238,6 +249,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
             <AlertTitle>This connector requires a rebuild</AlertTitle>
             <AlertDescription>{rebuild.message}</AlertDescription>
           </Alert>
+          {sharingSection}
         </PageContent>
       </Main>
     );
@@ -283,6 +295,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
             <AlertTitle>This connector requires a rebuild</AlertTitle>
             <AlertDescription>{rebuild.message}</AlertDescription>
           </Alert>
+          {sharingSection}
         </PageContent>
       </Main>
     );
@@ -311,6 +324,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         searchParams={searchParams}
         ctx={ctx}
       />
+      {sharingSection}
     </div>
   );
 }

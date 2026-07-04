@@ -58,6 +58,13 @@ export type ExtensionPermissionsClientProps = {
   /** Optional helper-text overrides forwarded verbatim. */
   accessHelperText?: string;
   ownershipHelperText?: string;
+  /** cinatra#953 W3: pre-selection / per-scope lock, forwarded verbatim to
+   * PermissionsForm (the connection share surface computes them server-side
+   * from the connector's declared access ceiling). */
+  accessValueOverride?: string;
+  accessDisabledScopes?: string[];
+  accessDisabledReasons?: Record<string, string>;
+  accessScopeNote?: string;
 };
 
 export function ExtensionPermissionsClient({
@@ -74,6 +81,10 @@ export function ExtensionPermissionsClient({
   selfRemoveRedirect,
   accessHelperText,
   ownershipHelperText,
+  accessValueOverride,
+  accessDisabledScopes,
+  accessDisabledReasons,
+  accessScopeNote,
 }: ExtensionPermissionsClientProps) {
   return (
     <PermissionsForm
@@ -88,6 +99,10 @@ export function ExtensionPermissionsClient({
       selfRemoveRedirect={selfRemoveRedirect}
       accessHelperText={accessHelperText}
       ownershipHelperText={ownershipHelperText}
+      accessValueOverride={accessValueOverride}
+      accessDisabledScopes={accessDisabledScopes}
+      accessDisabledReasons={accessDisabledReasons}
+      accessScopeNote={accessScopeNote}
       actions={{
         savePolicy: (policy) =>
           saveExtensionAccessPolicy(kind, resourceId, policy),

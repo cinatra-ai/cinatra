@@ -1586,6 +1586,9 @@ importers:
       '@cinatra-ai/connectors-catalog':
         specifier: workspace:*
         version: link:../connectors-catalog
+      '@cinatra-ai/extensions':
+        specifier: workspace:*
+        version: link:../extensions
       '@cinatra-ai/google-oauth-connection':
         specifier: workspace:*
         version: link:../google-oauth-connection

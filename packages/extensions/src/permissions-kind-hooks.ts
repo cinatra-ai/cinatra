@@ -89,6 +89,22 @@ export type ExtensionKindHooks = {
   allowSharing?: (resourceId: string) => Promise<string | null | undefined>;
 
   /**
+   * Per-kind WRITE-TIME policy veto (cinatra#953 W3). Runs in
+   * `saveExtensionAccessPolicy` AFTER the auth gate (canEditExtension) and
+   * BEFORE any write. Returning a string error code REJECTS the save with
+   * that typed code; null/undefined allows. This is the ENFORCEMENT half of
+   * the connector `access.scope.only` lock: the UI's disabled picker rows are
+   * an affordance — this hook is what actually refuses an out-of-ceiling
+   * grant (`scope_locked_by_connector`) or a grant against a locus outside
+   * the saving actor's real memberships (`invalid_locus`).
+   */
+  validatePolicyWrite?: (
+    resourceId: string,
+    policy: AgentAuthPolicy,
+    ctx: { userId: string },
+  ) => Promise<string | null | undefined>;
+
+  /**
    * Fires AFTER a successful policy write. Used for kind-specific
    * projections — e.g. skills also write (level, scope) into the legacy
    * payload column so matching/visibility readers continue to work until
@@ -359,6 +375,19 @@ const workflowHooks = installedExtensionAnchoredHooks("workflow", "/configuratio
 // ---------------------------------------------------------------------------
 async function connectionHooks(): Promise<ExtensionKindHooks> {
   const { readNangoConnectionById } = await import("./connection-identity-store");
+
+  // The connector's declared access ceiling, from the W1 registration CACHE —
+  // resolved through the SAME resolution the W2 use-gate clamps with, so the
+  // write rejection and the read clamp can never disagree. Dynamic import:
+  // the use-gate module is server-only and already sits in the routes that
+  // carry this hook's callers.
+  const resolveDeclaration = async (
+    identity: import("./connection-identity-store").NangoConnectionIdentity,
+  ) => {
+    const { resolveConnectionAccessDeclaration } = await import("@/lib/connection-use-gate");
+    return resolveConnectionAccessDeclaration(identity);
+  };
+
   return {
     resourceExists: async (id) => {
       const row = await readNangoConnectionById(id);
@@ -367,6 +396,122 @@ async function connectionHooks(): Promise<ExtensionKindHooks> {
     extraEditors: async (id) => {
       const row = await readNangoConnectionById(id);
       return row ? [row.ownerUserId] : [];
+    },
+    // Write-time enforcement of the connector's `access.scope.only` ceiling +
+    // real-locus validation (cinatra#953 W3). The UI lock is an affordance;
+    // THIS is the enforcement — a direct action call with a broader grant is
+    // rejected with a typed code before any write.
+    validatePolicyWrite: async (id, policy, ctx) => {
+      const identity = await readNangoConnectionById(id);
+      if (!identity) return "not_found";
+
+      const visibilities = [
+        policy.runListVisibility,
+        policy.runDataVisibility,
+        policy.runExecuteVisibility,
+      ];
+      const ownerOnly = visibilities.every((v) => v === "owner");
+
+      // 1. The `only` ceiling (fail-closed). package_unresolved = the ceiling
+      // cannot be read → refuse everything except an owner-only policy.
+      const resolution = await resolveDeclaration(identity);
+      if (resolution.kind === "package_unresolved") {
+        return ownerOnly ? null : "scope_locked_by_connector";
+      }
+      const declaration = resolution.declaration;
+      if (declaration?.mode === "only") {
+        const { visibilityWithinCeiling } = await import("@/lib/connection-use-gate");
+        const withinCeiling = visibilities.every((v) =>
+          visibilityWithinCeiling(v, declaration.scope, identity.organizationId),
+        );
+        if (!withinCeiling) return "scope_locked_by_connector";
+      }
+      if (ownerOnly) return null; // narrowing to owner-only is always a real locus
+
+      // 2. REAL-LOCI validation (all modes): every collective token must name
+      // a concrete locus of the identity's own org that the SAVING actor
+      // actually holds (org membership / team membership / project access) —
+      // grants are issued against real loci, never invented ids (codex
+      // round-0 findings 2+4: project org-containment via readProjectById +
+      // actor access via the membership union; bare legacy "org" and
+      // `workspace`-on-null-org are refused).
+      const collective = [...new Set(visibilities.filter((v) => v !== "owner"))];
+      const needsMemberships = collective.some(
+        (v) => v.startsWith("org:") || v.startsWith("team:") || v.startsWith("project:"),
+      );
+      let actorOrgs: Array<{ id: string; teams: Array<{ id: string }> }> = [];
+      let actorProjectIds = new Set<string>();
+      if (needsMemberships) {
+        const { readOrgsWithTeamsForUser, readProjectsForUser } = await import(
+          "@/lib/better-auth-db"
+        );
+        actorOrgs = await readOrgsWithTeamsForUser(ctx.userId);
+        if (identity.organizationId) {
+          actorProjectIds = new Set(
+            (await readProjectsForUser(ctx.userId, identity.organizationId)).map((p) => p.id),
+          );
+        }
+      }
+      for (const v of collective) {
+        if (v === "admin") continue; // admin tier is owner-org-anchored, not id-carrying
+        if (v === "workspace") {
+          // A null-org connection must never gain a workspace grant — there
+          // is no cross-org guard to contain it (mirrors the seam's null-org
+          // narrowing).
+          if (identity.organizationId === null) return "invalid_locus";
+          continue;
+        }
+        if (v === "org") return "invalid_locus"; // legacy bare token — never a concrete locus
+        if (v.startsWith("org:")) {
+          const orgId = v.slice("org:".length);
+          if (identity.organizationId === null || orgId !== identity.organizationId) {
+            return "invalid_locus";
+          }
+          if (!actorOrgs.some((o) => o.id === orgId)) return "invalid_locus";
+          continue;
+        }
+        if (v.startsWith("team:")) {
+          const teamId = v.slice("team:".length);
+          // readOrgsWithTeamsForUser joins team.organizationId, so a hit under
+          // the identity's org proves BOTH containment and actor membership.
+          const owningOrg = actorOrgs.find((o) => o.teams.some((t) => t.id === teamId));
+          if (!owningOrg || owningOrg.id !== identity.organizationId) return "invalid_locus";
+          continue;
+        }
+        if (v.startsWith("project:")) {
+          const projectId = v.slice("project:".length);
+          if (!actorProjectIds.has(projectId)) return "invalid_locus";
+          const { readProjectById } = await import("@/lib/projects-store");
+          const project = await readProjectById(projectId);
+          if (!project || project.organizationId !== identity.organizationId) {
+            return "invalid_locus";
+          }
+          continue;
+        }
+        return "invalid_locus"; // unknown token shape — fail closed
+      }
+      return null;
+    },
+    // Person-grant (co-owner) writes under an `only` ceiling: the read-side
+    // clamp strips person-grants wherever the declaration's collective
+    // dimension cannot be verified for a person (user/team/project), so
+    // adding one would create a DEAD grant — refuse it at write time.
+    // `only:"user"` additionally means the connection is never shareable.
+    allowSharing: async (id) => {
+      const identity = await readNangoConnectionById(id);
+      if (!identity) return "sharing_disabled";
+      const resolution = await resolveDeclaration(identity);
+      if (resolution.kind === "package_unresolved") return "sharing_disabled";
+      const declaration = resolution.declaration;
+      if (
+        declaration?.mode === "only" &&
+        (declaration.scope === "user" ||
+          declaration.scope === "team" ||
+          declaration.scope === "project")
+      ) {
+        return "sharing_disabled";
+      }
+      return null;
     },
     selfRemoveRedirect: "/connectors",
   };

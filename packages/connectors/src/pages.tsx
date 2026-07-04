@@ -20,6 +20,9 @@ import {
   scopeSelectionMatches,
   type NormalizedResourceScope,
 } from "@/lib/scope-filter";
+import { buildConnectionScopeEntries } from "@/lib/connection-scope-entries";
+import { listNangoConnectionsForScopeFilter } from "@cinatra-ai/extensions/connection-identity-store";
+import { readExtensionAccessPolicies } from "@cinatra-ai/extensions/permissions-store";
 // Readiness comes from the registry's per-connector probes; importing the
 // built-in probe module registers them (side effect).
 import "@/lib/connector-readiness.server";
@@ -41,24 +44,13 @@ type ConnectorsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-// Scope tag per connector slug. Today, connector "scope" is a
-// derived attribute of the configuration (user OAuth vs. org-level API key /
-// instance list). The map below captures the practical scope each connector
-// can be configured at; the scope filter on /connectors restricts the visible
-// card set based on this assignment + the actor's accessible scopes.
-const SCOPE_BY_SLUG: Record<string, "personal" | "organization"> = {
-  "gmail-connector": "personal",
-  "google-calendar-connector": "personal",
-  "linkedin-connector": "personal",
-  "youtube-connector": "personal",
-  "google-oauth-connector": "personal",
-  // Everything else defaults to organization scope (API keys + instance lists
-  // configured at /configuration/llm, /connectors/{drupal,wordpress}, etc.).
-};
-
-function scopeForSlug(slug: string): "personal" | "organization" {
-  return SCOPE_BY_SLUG[slug] ?? "organization";
-}
+// cinatra#953 (W3): the scope filter matches REAL granted connections — the
+// actor-visible `nango_connection` identity rows and their per-connection
+// grant rows — via `buildConnectionScopeEntries`. The former SCOPE_BY_SLUG
+// pseudo-scope map (a hardcoded personal/organization tag per slug) is
+// deleted: Team/Project/Org selections now genuinely narrow to connections
+// granted to that concrete locus, and Personal shows the actor's own
+// connections.
 
 export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const session = await requireAuthSession();
@@ -105,19 +97,32 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
       ? requestedScope
       : DEFAULT_SCOPE_TOKEN;
 
-  // Each connector carries two independent scope axes: its credential/config
-  // locus (personal user-OAuth vs. organization-level keys) and its visibility
-  // tier (admin-only vs. workspace). The normalized shape keeps both so the
-  // shared predicate can answer "Personal", "Workspace: Admins only", etc.
-  // without collapsing them into one bucket.
-  function normalizedScopeForConnector(
-    slug: string,
+  // REAL granted-connection entries (cinatra#953 W3): one batched identity
+  // read (the actor's org's rows + the actor's OWN rows — foreign null-org
+  // rows are excluded fail-closed) + one batched grant read, folded into
+  // per-connector NormalizedResourceScope entries. Each card also keeps its
+  // catalog visibility-tier axis (admin-only cards match the Admin filter) —
+  // that legacy `defaultVisibility` axis is the W5 closing wave's concern.
+  const connectionRows = actorUserId
+    ? await listNangoConnectionsForScopeFilter(activeOrgId, actorUserId)
+    : [];
+  const connectionPolicies = await readExtensionAccessPolicies(
+    "connection",
+    connectionRows.map((row) => row.id),
+  );
+  const scopeEntriesByPackage = buildConnectionScopeEntries(
+    connectionRows,
+    connectionPolicies,
+    actorUserId,
+  );
+  function connectorScopeEntries(
+    packageId: string,
     defaultVisibility: "admin" | "workspace",
-  ): NormalizedResourceScope {
-    return {
-      locus: scopeForSlug(slug) === "personal" ? "personal" : "organization",
-      adminOnly: defaultVisibility === "admin",
-    };
+  ): NormalizedResourceScope[] {
+    const entries = scopeEntriesByPackage.get(packageId) ?? [];
+    return defaultVisibility === "admin"
+      ? [...entries, { locus: "workspace", adminOnly: true }]
+      : entries;
   }
 
   // Readiness resolves through each registry entry's probe (registered by the
@@ -141,11 +146,12 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   const visibleEntries = catalogEntries
     .filter((entry) => installedCatalogIds.has(entry.packageId))
     .filter((entry) => isConnectorVisibleToActor(entry.packageId, actor))
-    .filter((entry) =>
-      scopeSelectionMatches(
-        effectiveScope,
-        normalizedScopeForConnector(entry.slug, entry.defaultVisibility),
-      ),
+    .filter(
+      (entry) =>
+        effectiveScope === DEFAULT_SCOPE_TOKEN ||
+        connectorScopeEntries(entry.packageId, entry.defaultVisibility).some(
+          (scopeEntry) => scopeSelectionMatches(effectiveScope, scopeEntry),
+        ),
     );
   // Runtime-ONLY connectors (installed at runtime, NO build-time catalog
   // descriptor) — resolved behind the full trust gate (anchor → integrity →

@@ -79,10 +79,13 @@ describe("registerSavedConnectionIdentity", () => {
       ownerUserId: "user-1",
       organizationId: "org-1",
     });
+    // cinatra#953 W3: the seed carries the seededDefault provenance marker so
+    // the share surface can distinguish the untouched seed from an explicit
+    // owner save (the zod parse on every explicit save strips it).
     expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
       "connection",
       "conn-uuid",
-      OWNER_POLICY,
+      { ...OWNER_POLICY, seededDefault: true },
       "user-1",
     );
   });
@@ -98,7 +101,7 @@ describe("registerSavedConnectionIdentity", () => {
     expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
       "connection",
       "conn-uuid",
-      expect.objectContaining({ runDataVisibility: "workspace" }),
+      expect.objectContaining({ runDataVisibility: "workspace", seededDefault: true }),
       "user-1",
     );
   });
@@ -115,7 +118,7 @@ describe("registerSavedConnectionIdentity", () => {
     expect(seedExtensionAccessPolicyIfAbsent).toHaveBeenCalledWith(
       "connection",
       "conn-uuid",
-      OWNER_POLICY,
+      { ...OWNER_POLICY, seededDefault: true },
       "user-1",
     );
   });
