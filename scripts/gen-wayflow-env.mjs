@@ -55,7 +55,17 @@ const repoRoot = path.resolve(__dirname, "..");
 // `environment:` block — they are not secrets and not interpolated, so they
 // never hit the empty-override trap and must NOT appear here (PORT especially:
 // .env.local's PORT is the app's 3000 and must never reach this container).
-const WAYFLOW_KEYS = ["CINATRA_BRIDGE_TOKEN", "OPENAI_API_KEY", "WAYFLOW_BASE_URL"];
+// CINATRA_CONTEXT_ATTEST_KEY (#907): the dedicated per-node context-callback
+// signing key. The wayflow runtime mints an HMAC attestation with it on
+// /api/context-resolve + /api/context-finalize calls so the app can bind the
+// callback to the actually-executing composed child. Secret (no default);
+// missing → degraded (the app fails closed on the composed-child path).
+const WAYFLOW_KEYS = [
+  "CINATRA_BRIDGE_TOKEN",
+  "OPENAI_API_KEY",
+  "WAYFLOW_BASE_URL",
+  "CINATRA_CONTEXT_ATTEST_KEY",
+];
 
 // Defaults applied when the key is absent from .env.local. Only for the
 // non-secret WAYFLOW_BASE_URL (mirrors the compose default that used to live in
