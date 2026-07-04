@@ -7,5 +7,5 @@
 // namespace; the route owns the declared/undeclared 404 verdict). Inert
 // until #343 (empty until an extension declares cinatra.webhooks).
 export const GENERATED_WEBHOOK_PUBLIC_PREFIXES: readonly string[] = [
-
+  "/webhook/cinatra-ai/wordpress-mcp-connector/post-published",
 ];
