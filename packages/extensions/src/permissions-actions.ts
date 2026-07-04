@@ -274,6 +274,16 @@ export async function saveExtensionAccessPolicy(
     }
   }
 
+  // Per-kind write-time veto (cinatra#953 W3): the `connection` kind rejects
+  // grants past a connector's declared `access.scope.only` ceiling
+  // ("scope_locked_by_connector") and grants against loci outside the saving
+  // actor's real memberships ("invalid_locus") — BEFORE any write. The UI's
+  // disabled picker rows are an affordance; this veto is the enforcement.
+  const writeVeto = await hooks.validatePolicyWrite?.(resourceId, validatedPolicy, {
+    userId,
+  });
+  if (writeVeto) return { ok: false, error: writeVeto };
+
   await writeExtensionAccessPolicy(kind, resourceId, validatedPolicy);
 
   // Per-kind post-write side effects (e.g. skill's compatibility projection

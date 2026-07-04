@@ -151,6 +151,37 @@ export async function listNangoConnectionsByConnector(
 }
 
 /**
+ * Live identity rows feeding the `/connectors` SCOPE FILTER (cinatra#953 W3):
+ * the rows whose grants may narrow the actor's card set — the actor's active
+ * org's rows plus the actor's OWN rows. FAIL-CLOSED for null-org rows
+ * (codex round-0 finding 3): a FOREIGN null-org row is never returned —
+ * null-org rows are owner-only by construction (the seam force-seeds them
+ * "owner") and must not contribute filter entries for anyone but their owner.
+ * An org-less actor sees only their own rows.
+ */
+export async function listNangoConnectionsForScopeFilter(
+  organizationId: string | null,
+  ownerUserId: string,
+): Promise<NangoConnectionIdentity[]> {
+  const pool = await getPool();
+  const result = organizationId
+    ? await pool.query<RawRow>(
+        `SELECT ${COLUMNS} FROM ${TABLE}
+          WHERE deleted_at IS NULL
+            AND (organization_id = $1 OR owner_user_id = $2)
+          ORDER BY created_at ASC`,
+        [organizationId, ownerUserId],
+      )
+    : await pool.query<RawRow>(
+        `SELECT ${COLUMNS} FROM ${TABLE}
+          WHERE deleted_at IS NULL AND owner_user_id = $1
+          ORDER BY created_at ASC`,
+        [ownerUserId],
+      );
+  return result.rows.map(toIdentity);
+}
+
+/**
  * Read ONE live identity row by its natural identity `(connector_key,
  * connection_id)` — the address every connection-ADDRESSED caller already
  * holds (instance flows, external-MCP rows). Soft-deleted rows return null

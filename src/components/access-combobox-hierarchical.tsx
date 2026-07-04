@@ -58,6 +58,18 @@ export type AccessComboboxHierarchicalProps = {
    * pass false so admin-only scopes are never selectable by them.
    */
   showAdmin?: boolean;
+  /**
+   * PER-SCOPE disable (cinatra#953 W3 — mirrors the flat access-combobox
+   * contract): option VALUES ("owner" | "workspace" | "admin" | `org:<id>` |
+   * `team:<id>` | `project:<id>`) rendered non-selectable. Used by the
+   * connection share surface to render a connector's `access.scope.only`
+   * ceiling as a locked picker — the disable is an AFFORDANCE; the server
+   * write path independently rejects out-of-ceiling grants.
+   */
+  disabledScopes?: string[];
+  /** Tooltip text per disabled value (shown via a wrapper span — a disabled
+   * CommandItem suppresses pointer events on its own content). */
+  disabledReasons?: Record<string, string>;
 };
 
 export function AccessComboboxHierarchical({
@@ -67,6 +79,8 @@ export function AccessComboboxHierarchical({
   disabled = false,
   id,
   showAdmin = true,
+  disabledScopes,
+  disabledReasons,
 }: AccessComboboxHierarchicalProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -104,6 +118,42 @@ export function AccessComboboxHierarchical({
           )}
         />
       </div>
+    );
+  };
+
+  // ONE selectable-row builder for every scope class so the per-scope disable
+  // semantics stay uniform. A disabled row wraps the entire disabled
+  // CommandItem in a <span> (the wrapper span is what receives hover/focus —
+  // a disabled CommandItem suppresses pointer events on its content) carrying
+  // the disabledReasons tooltip, and sets aria-disabled.
+  const renderSelectableItem = (itemValue: string) => {
+    if (disabledScopes?.includes(itemValue)) {
+      const reason = disabledReasons?.[itemValue];
+      return (
+        <span key={itemValue} title={reason} className="block cursor-not-allowed">
+          <CommandItem
+            value={itemValue}
+            disabled
+            aria-disabled="true"
+            className="rounded-none px-3 py-2 bg-surface-strong text-muted-foreground opacity-60"
+          >
+            {renderRow(itemValue)}
+          </CommandItem>
+        </span>
+      );
+    }
+    return (
+      <CommandItem
+        key={itemValue}
+        value={itemValue}
+        onSelect={() => {
+          onChange(itemValue);
+          setOpen(false);
+        }}
+        className={itemClass(itemValue)}
+      >
+        {renderRow(itemValue)}
+      </CommandItem>
     );
   };
 
@@ -200,16 +250,7 @@ export function AccessComboboxHierarchical({
             <CommandEmpty>No matches.</CommandEmpty>
             {showOnlyMe && (
               <CommandGroup className="p-0">
-                <CommandItem
-                  value="owner"
-                  onSelect={() => {
-                    onChange("owner");
-                    setOpen(false);
-                  }}
-                  className={itemClass("owner")}
-                >
-                  {renderRow("owner")}
-                </CommandItem>
+                {renderSelectableItem("owner")}
               </CommandGroup>
             )}
 
@@ -217,22 +258,7 @@ export function AccessComboboxHierarchical({
               <>
                 {showOnlyMe && <CommandSeparator />}
                 <CommandGroup className="p-0">
-                  {filteredProjects.map((p) => {
-                    const itemValue = `project:${p.id}`;
-                    return (
-                      <CommandItem
-                        key={p.id}
-                        value={itemValue}
-                        onSelect={() => {
-                          onChange(itemValue);
-                          setOpen(false);
-                        }}
-                        className={itemClass(itemValue)}
-                      >
-                        {renderRow(itemValue)}
-                      </CommandItem>
-                    );
-                  })}
+                  {filteredProjects.map((p) => renderSelectableItem(`project:${p.id}`))}
                 </CommandGroup>
               </>
             )}
@@ -241,22 +267,7 @@ export function AccessComboboxHierarchical({
               <>
                 {(showOnlyMe || filteredProjects.length > 0) && <CommandSeparator />}
                 <CommandGroup className="p-0">
-                  {filteredTeams.map(({ org, t }) => {
-                    const itemValue = `team:${t.id}`;
-                    return (
-                      <CommandItem
-                        key={t.id}
-                        value={itemValue}
-                        onSelect={() => {
-                          onChange(itemValue);
-                          setOpen(false);
-                        }}
-                        className={itemClass(itemValue)}
-                      >
-                        {renderRow(itemValue)}
-                      </CommandItem>
-                    );
-                  })}
+                  {filteredTeams.map(({ t }) => renderSelectableItem(`team:${t.id}`))}
                 </CommandGroup>
               </>
             )}
@@ -265,22 +276,7 @@ export function AccessComboboxHierarchical({
               <>
                 {(showOnlyMe || filteredProjects.length > 0 || filteredTeams.length > 0) && <CommandSeparator />}
                 <CommandGroup className="p-0">
-                  {filteredOrgs.map((org) => {
-                    const itemValue = `org:${org.id}`;
-                    return (
-                      <CommandItem
-                        key={org.id}
-                        value={itemValue}
-                        onSelect={() => {
-                          onChange(itemValue);
-                          setOpen(false);
-                        }}
-                        className={itemClass(itemValue)}
-                      >
-                        {renderRow(itemValue)}
-                      </CommandItem>
-                    );
-                  })}
+                  {filteredOrgs.map((org) => renderSelectableItem(`org:${org.id}`))}
                 </CommandGroup>
               </>
             )}
@@ -290,16 +286,7 @@ export function AccessComboboxHierarchical({
                 {(showOnlyMe || filteredProjects.length > 0 || filteredTeams.length > 0 || filteredOrgs.length > 0) && <CommandSeparator />}
                 <CommandGroup className="p-0">
                   {showWorkspaceAll && (scopes.canGrantWorkspace ? (
-                    <CommandItem
-                      value="workspace"
-                      onSelect={() => {
-                        onChange("workspace");
-                        setOpen(false);
-                      }}
-                      className={itemClass("workspace")}
-                    >
-                      {renderRow("workspace")}
-                    </CommandItem>
+                    renderSelectableItem("workspace")
                   ) : (
                     <CommandItem
                       value="workspace"
@@ -309,18 +296,7 @@ export function AccessComboboxHierarchical({
                       {renderRow("workspace")}
                     </CommandItem>
                   ))}
-                  {showAdminsOnly && (
-                    <CommandItem
-                      value="admin"
-                      onSelect={() => {
-                        onChange("admin");
-                        setOpen(false);
-                      }}
-                      className={itemClass("admin")}
-                    >
-                      {renderRow("admin")}
-                    </CommandItem>
-                  )}
+                  {showAdminsOnly && renderSelectableItem("admin")}
                 </CommandGroup>
               </>
             )}

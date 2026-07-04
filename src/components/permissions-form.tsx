@@ -169,6 +169,22 @@ export type PermissionsFormProps = {
    * Optional.
    */
   ownershipHelperText?: string;
+  /**
+   * Value the access picker OPENS on instead of the stored policy value
+   * (cinatra#953 W3): the connection share surface passes the connector's
+   * `access.scope.default` recommendation while the stored policy is the
+   * untouched connect-time seed, or the canonical only-value under a lock.
+   * PRE-SELECTION ONLY — nothing changes until the user explicitly saves.
+   */
+  accessValueOverride?: string;
+  /** Per-scope disabled option values forwarded to the access picker
+   * (the connector `only:*` lock affordance — the server re-rejects). */
+  accessDisabledScopes?: string[];
+  /** Tooltip per disabled option value. */
+  accessDisabledReasons?: Record<string, string>;
+  /** Rendered under the picker: the lock note ("Locked by this connector…")
+   * or the default-recommendation note. */
+  accessScopeNote?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -213,6 +229,10 @@ export function PermissionsForm({
   selfRemoveRedirect,
   accessHelperText = "Choose who can find and view it.",
   ownershipHelperText = "Owners have full rights such as view, edit, delete, manage permissions.",
+  accessValueOverride,
+  accessDisabledScopes,
+  accessDisabledReasons,
+  accessScopeNote,
 }: PermissionsFormProps) {
   const router = useRouter();
 
@@ -220,21 +240,22 @@ export function PermissionsForm({
   // Access form (locksteps runListVisibility / runDataVisibility /
   // runExecuteVisibility to a single value)
   // -------------------------------------------------------------------------
+  const effectiveAccessValue = accessValueOverride ?? initialPolicy.runListVisibility;
   const [isSavingPolicy, startSavePolicy] = useTransition();
   const { control, handleSubmit, reset: resetAccessForm } = useForm<AccessFormValues>({
     resolver: zodResolver(AccessFormSchema),
-    defaultValues: { access: initialPolicy.runListVisibility },
+    defaultValues: { access: effectiveAccessValue },
   });
 
   // `useForm.defaultValues` is captured only at mount. If the parent
   // re-renders with a new `initialPolicy` (e.g. after
   // a router.refresh() following a save, or when the same form widget is
   // re-used across resource-kind transitions), the form keeps showing the
-  // stale access value. Reset on every `initialPolicy.runListVisibility`
-  // change so the form always reflects the persisted state.
+  // stale access value. Reset on every effective-value change so the form
+  // always reflects the persisted state (or the explicit pre-selection).
   useEffect(() => {
-    resetAccessForm({ access: initialPolicy.runListVisibility });
-  }, [initialPolicy.runListVisibility, resetAccessForm]);
+    resetAccessForm({ access: effectiveAccessValue });
+  }, [effectiveAccessValue, resetAccessForm]);
 
   const onSubmit = (values: AccessFormValues) => {
     startSavePolicy(async () => {
@@ -249,6 +270,17 @@ export function PermissionsForm({
       if (result.ok) {
         toast.success("Access policy saved.");
         router.refresh();
+      } else if (result.error === "scope_locked_by_connector") {
+        // Typed server rejection (cinatra#953 W3): the connector's declared
+        // access ceiling refused the grant — the disabled rows are the
+        // affordance, this is the enforcement surfacing.
+        toast.error(
+          "This connector locks its sharing scope — the selected scope is outside its allowed access.",
+        );
+      } else if (result.error === "invalid_locus") {
+        toast.error(
+          "The selected scope is not one of your organizations, teams, or projects.",
+        );
       } else {
         toast.error("Could not save access policy. Try again.");
       }
@@ -463,6 +495,8 @@ export function PermissionsForm({
                   value={f.value}
                   onChange={f.onChange}
                   scopes={availableScopes}
+                  disabledScopes={accessDisabledScopes}
+                  disabledReasons={accessDisabledReasons}
                 />
               )}
             />
@@ -473,6 +507,12 @@ export function PermissionsForm({
                 availableScopes,
               )}
             </span>
+          )}
+          {accessScopeNote && (
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Lock className="size-3 shrink-0" aria-hidden="true" />
+              {accessScopeNote}
+            </p>
           )}
           <p className="text-xs text-muted-foreground">{accessHelperText}</p>
         </div>

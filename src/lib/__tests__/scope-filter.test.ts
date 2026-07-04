@@ -47,22 +47,32 @@ describe("scopeSelectionMatches", () => {
     expect(scopeSelectionMatches("admin", personal)).toBe(false);
   });
 
-  it("org:<id> matches organization-locus resources (locus-level resources match any id)", () => {
-    expect(scopeSelectionMatches("org:any", orgWorkspace)).toBe(true);
-    expect(scopeSelectionMatches("org:any", orgAdmin)).toBe(true);
+  it("org:<id> matches ONLY resources bound to that concrete id — an unbound locus-level resource matches NOTHING (fail-closed, cinatra#953)", () => {
+    const orgBound: NormalizedResourceScope = { locus: "organization", locusId: "o1" };
+    expect(scopeSelectionMatches("org:o1", orgBound)).toBe(true);
+    expect(scopeSelectionMatches("org:other", orgBound)).toBe(false);
+    // The killed overmatch: undefined locusId used to match ANY org selection.
+    expect(scopeSelectionMatches("org:any", orgWorkspace)).toBe(false);
+    expect(scopeSelectionMatches("org:any", orgAdmin)).toBe(false);
     expect(scopeSelectionMatches("org:any", personal)).toBe(false);
     expect(scopeSelectionMatches("org:any", teamBound)).toBe(false);
   });
 
-  it("team/project tokens require a matching locusId when the resource is bound", () => {
+  it("team/project tokens require a matching CONCRETE locusId", () => {
     expect(scopeSelectionMatches("team:t1", teamBound)).toBe(true);
     expect(scopeSelectionMatches("team:other", teamBound)).toBe(false);
     expect(scopeSelectionMatches("project:p1", projectBound)).toBe(true);
     expect(scopeSelectionMatches("project:other", projectBound)).toBe(false);
+    // Fail-closed: an unbound team/project-locus resource matches nothing.
+    expect(scopeSelectionMatches("team:t1", { locus: "team" })).toBe(false);
+    expect(scopeSelectionMatches("project:p1", { locus: "project" })).toBe(false);
   });
 
-  it("rejects malformed / unknown tokens", () => {
+  it("rejects malformed / unknown / bare locus tokens", () => {
     expect(scopeSelectionMatches("bogus", orgWorkspace)).toBe(false);
     expect(scopeSelectionMatches("", orgWorkspace)).toBe(false);
+    // Bare id-less locus tokens match nothing (fail-closed).
+    expect(scopeSelectionMatches("team", teamBound)).toBe(false);
+    expect(scopeSelectionMatches("org", { locus: "organization", locusId: "o1" })).toBe(false);
   });
 });

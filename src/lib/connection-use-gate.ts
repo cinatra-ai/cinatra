@@ -125,8 +125,13 @@ export async function resolveConnectionAccessDeclaration(
 
 type ClampedMaterial = "visibility" | "coOwner" | "installer" | "platformAdminBypass";
 
-/** Is the STORED visibility token within the declared ceiling? */
-function visibilityWithinCeiling(
+/** Is the STORED visibility token within the declared ceiling?
+ *
+ * EXPORTED (cinatra#953 W3): the write path (`saveExtensionAccessPolicy`'s
+ * `connection` kind hook) rejects out-of-ceiling grants with the SAME rule the
+ * read-side clamp applies — one source of truth for "within the `only`
+ * ceiling" on both the read clamp and the write rejection. */
+export function visibilityWithinCeiling(
   visibility: AgentAuthPolicyVisibility,
   scope: ResolvedConnectorAccessDeclaration["scope"],
   owningOrganizationId: string | null,
