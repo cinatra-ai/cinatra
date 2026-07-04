@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   }
   // Normalize scope BEFORE authz (missing scope === privileged *app* default).
   const body = (await request.clone().json().catch(() => null)) as
-    | { connectorKey?: string; scope?: string }
+    | { connectorKey?: string; scope?: string; connectionId?: string }
     | null;
   const scope = body?.scope ?? "app";
 
@@ -56,6 +56,39 @@ export async function POST(request: Request) {
     }
   }
 
+  // PRE-save foreign-identity guard (codex diff-round finding 3): when the
+  // request addresses a connection that is already registered to a DIFFERENT
+  // user (or a different non-null org), reject BEFORE the vault/blob write —
+  // the 409 must be a true fail-closed boundary, not a post-hoc flag on an
+  // already-mutated vault. The post-save hard-fail below stays as defense in
+  // depth (races, server-derived connection ids).
+  const activeOrganizationId = session.session?.activeOrganizationId ?? null;
+  if (body?.connectorKey && typeof body.connectionId === "string" && body.connectionId) {
+    const { readNangoConnectionByNaturalKey } = await import(
+      "@cinatra-ai/extensions/connection-identity-store"
+    );
+    const existing = await readNangoConnectionByNaturalKey(
+      body.connectorKey,
+      body.connectionId,
+    );
+    if (
+      existing &&
+      (existing.ownerUserId !== session.user.id ||
+        (existing.organizationId != null &&
+          activeOrganizationId != null &&
+          existing.organizationId !== activeOrganizationId))
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            `This ${body.connectorKey} connection is already registered to a different ` +
+            `owner or workspace — disconnect the existing connection first.`,
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   const result = await nango.handleNangoConnectionSaveRequest(request, {
     userId: session.user.id,
   });
@@ -67,18 +100,25 @@ export async function POST(request: Request) {
   // previously widened policy. A conflict with a FOREIGN identity row
   // hard-fails the save (fail-closed) — the connection was saved to the vault
   // but is NOT usable until the ownership conflict is resolved.
+  // The connection id comes from the response echo when present, else from
+  // the request body (codex diff-round finding 2: the RouteResult does not
+  // CONTRACT the echo — a successful save must never be born identity-less).
   if (result.body.success === true && body?.connectorKey && session.user.id) {
     const savedConnection = (result.body as { connection?: { connectionId?: unknown } })
       .connection;
     const savedConnectionId =
-      typeof savedConnection?.connectionId === "string" ? savedConnection.connectionId : null;
+      typeof savedConnection?.connectionId === "string"
+        ? savedConnection.connectionId
+        : typeof body.connectionId === "string" && body.connectionId
+          ? body.connectionId
+          : null;
     if (savedConnectionId) {
       try {
         await registerSavedConnectionIdentity({
           connectorKey: body.connectorKey,
           connectionId: savedConnectionId,
           ownerUserId: session.user.id,
-          organizationId: session.session?.activeOrganizationId ?? null,
+          organizationId: activeOrganizationId,
           // APP-scope saves are org-admin-gated above and org-shared BY
           // CONSTRUCTION (pre-#950 semantics) — behavior-preserving workspace
           // seed. USER-scope saves get the never-auto-share OWNER default.

@@ -260,6 +260,17 @@ export async function getGitHubAccessToken(input?: {
     }
   }
   const savedConnection = resolveSavedGitHubConnection(resolvedConnectionId);
+  // A GATED resolution (actor-carrying) is connection-ADDRESSED: the decision
+  // audited by the use-gate covers exactly ONE connection, so a missing blob
+  // record or an unavailable Nango token must HARD-FAIL — never silently
+  // substitute the instance-global PAT (a different credential the gate never
+  // authorized; codex diff-round finding 4).
+  const gated = Boolean(input?.actor);
+  if (gated && !savedConnection) {
+    throw new Error(
+      "The authorized GitHub connection has no saved connection record — reconnect GitHub or remove the stale connection.",
+    );
+  }
 
   if (savedConnection) {
     const connection = await getNangoConnection(
@@ -284,6 +295,11 @@ export async function getGitHubAccessToken(input?: {
         accessToken: credentials.access_token,
         connection: savedConnection,
       };
+    }
+    if (gated) {
+      throw new Error(
+        "Unable to load the access token for the authorized GitHub connection — reconnect GitHub.",
+      );
     }
   }
 

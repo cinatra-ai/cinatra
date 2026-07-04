@@ -138,13 +138,18 @@ export async function registerSavedConnectionIdentity(input: {
 
   // One-time grant seed. Seed-idempotency: only when NO policy row exists
   // (round-2 finding 4 — a reconnect must never reset a widened policy).
+  // NULL-ORG NARROWING (codex diff-round finding 1): a null-org identity row
+  // must NEVER gain a workspace grant — `workspace` has no cross-org guard to
+  // contain it — so a null-org row is force-seeded owner-only regardless of
+  // the requested seed.
+  const effectiveSeed = row.organizationId === null ? "owner" : input.seed;
   const existingPolicy = await readExtensionAccessPolicy("connection", row.id);
   if (existingPolicy === null) {
     await setExtensionInstallAccess({
       kind: "connection",
       resourceId: row.id,
       installedByUserId: ownerUserId,
-      ...(input.seed === "workspace"
+      ...(effectiveSeed === "workspace"
         ? {
             policy: {
               runListVisibility: "workspace",
