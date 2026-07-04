@@ -33,6 +33,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `extension-import-ban.mjs` | extensions importing host `@/` modules, other extensions, or non-SDK first-party packages | `extension -> module` edges in 3 dimensions | `extension-import-ban.baseline.json` — **PINNED EMPTY** |
 | `required-extensions-cover-host-imports.mjs` | the prod bootable DECLARATION vs the live code surface | packages | live-derived (no baseline) + the **declaration equality guard** |
 | `identity-coupling-gate.mjs` | IDENTITY surface — auth-route-guard public-route exemptions naming a concrete extension; host `src/` re-declaring an SDK-owned capability id literal | dangerous-class findings | **stateless** (no baseline; every finding is a hard fail) |
+| `vendor-token-core-gate.mjs` | VENDOR tokens in core (`src/` + `packages/`) — vendor-named file/route path segments and import specifiers, independent of any extension package lexeme | `file :: path :: token` / `file :: import :: specifier` occurrences | `vendor-token-core-gate.baseline.json` — **shrink-only residual floor** (cinatra#973, epic cinatra-ai/cinatra#978; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -236,6 +237,79 @@ since the cinatra#172 flip, so a stripper correction there that reveals
 edges must land WITH those edges' removal in the same PR — the identical
 fix-with-the-reveal policy, with no floor that can rise.)
 
+## Vendor-token core gate — the shrink-only residual floor (cinatra#973, epic cinatra-ai/cinatra#978)
+
+The lexeme + identity gates above pin references to extension PACKAGES. What
+none of them saw (PR #969 proved the gap) is core code that names the VENDOR
+directly — a new `src/app/api/webhooks/<vendor>/` route, a new
+`src/lib/<vendor>-api.ts`, a new `from "@/lib/<vendor>-api"` edge — without
+ever spelling an extension package name. Epic cinatra-ai/cinatra#978's
+doctrine ("core owns integration MECHANISM, never vendor CODE") makes that a
+boundary violation in its own right; `vendor-token-core-gate.mjs` enforces it.
+
+**Scan surfaces** (exactly the three the gap analysis named — arbitrary
+string/JSX/prompt literals are deliberately out of scope; vendor WORDS in UI
+copy are not code coupling):
+
+1. **file paths** — filenames AND directory/route segments under `src/` +
+   `packages/` (a vendor-named Next.js route dir counts for every file under it);
+2. **import specifiers** — static import / export-from, side-effect imports,
+   dynamic `import()`, `require()`, after the shared lexical comment stripper.
+
+**Token set** (frozen in-gate as `VENDOR_TOKENS`): `wordpress`, `wp`,
+`drupal`, `linkedin`, `github`, `youtube`, `resend`, `google`, `twenty`,
+`apollo` — grounded in the epic #978 residual clusters. Tokens match path /
+specifier sub-tokens exactly (camelCase-split, so `wordpressApi` counts);
+tokens of five or more characters also match as a segment substring (so a
+squashed `wordpressapi.ts` evasion counts). Explicit NON-members, mirroring
+the epic's non-goals: `nango` (the sanctioned credential-broker MECHANISM —
+the model core code is pointed AT) and the LLM-provider names
+`openai`/`anthropic`/`gemini` (the `packages/llm` provider layer plus its
+`/configuration` + `/setup` surfaces are core-owned model mechanism, not
+connector vendor code; extension-package coupling there is still policed by
+the pinned-empty lexeme gates). Growing or shrinking the token set is a
+reviewed change to the gate and its tests.
+
+**Sanctioned surfaces excluded from the scan** (the epic #978 categories
+(a)–(e); each is either byte-pinned, pure identity data, or the surface that
+polices/documents the boundary):
+
+| Exclusion | Category | Why |
+| --- | --- | --- |
+| the generator-emitted manifest file list (`PERMANENT_EXEMPT_FILES` — explicit list, never a directory prefix) | (a) | build-generated, byte-pinned by `generate-extension-manifest.mjs --check`; a hand-added extra file under `src/lib/generated/` is still counted |
+| `packages/sdk-extensions/` | (c) | the frozen ABI type-contract surface (e.g. the google-oauth-connection / nango-system wire contracts); pinned by its own gates (`sdk-public-surface-ban`, `sdk-abi-readme-gate`) |
+| `packages/connectors-catalog/` | (b) | the ONE sanctioned hand-maintained slug→packageId identity catalog (see the identity-surface section) |
+| `packages/agents/src/reserved-workspace-slugs.ts` | (b) | reserved-slug identity data, never logic |
+| tests / mocks (`*.test.*`, `*.spec.*`, `__tests__/`, `__mocks__/`, `tests/`) and docs (`*.md`) | (d) | the surfaces that police and document the boundary |
+| sanctioned import specifiers: `next/font/google`, `@google/genai` (exact), `@icons-pack/react-simple-icons/` (prefix) | — | framework font loader; the LLM-provider SDK consumed by core-owned `packages/llm` (the LLM non-goal above); brand LOGOS (presentation identity data). A vendor-named FILE next to these imports still counts |
+
+The dev/required extension locks (`cinatra-*-extensions.lock.json`) and the
+`docker/` fixtures — categories (b)/(e) — live outside the `src/` +
+`packages/` scan roots and need no in-gate carve-out.
+
+**Ratchet mechanics** (the `exdev-rename-gate` /
+`host-peer-value-import-ban` shape, hardened): the committed baseline
+(`vendor-token-core-gate.baseline.json`) enumerates TODAY'S residual vendor
+floor — the epic #978 clusters (the vendor API-client layer and its ~15 core
+import sites including the named defect
+`src/lib/register-host-connector-services.ts`, the vendor-literal
+routes/pages and dead `bundle.js` routes, the blog vendor lifecycles + the
+two vendor HITL renderers, the `wp-drupal-contract` category-(c) residue, the
+`dev-auto-setup.ts` provisioning blocks, the skills-from-GitHub cluster, the
+google-oauth glue, the twenty external-MCP proxy). The floor only shrinks:
+
+- a NEW occurrence (new key, or a grown count on an existing key) fails CI
+  immediately with the doctrine pointer at epic cinatra-ai/cinatra#978;
+- a REMOVED occurrence makes the baseline STALE and fails CI until
+  `--write-baseline` ratchets it down (no silent headroom to re-spend);
+- `--write-baseline` REFUSES growth vs the committed baseline;
+- the `VENDOR_TOKEN_BASE` monotonic guard refuses a committed baseline that
+  grew vs the base branch, failing CLOSED on flag-like/unresolvable refs.
+
+As the epic waves (#974–#977, #979) evict each cluster into its owning
+extension, the floor ratchets toward the sanctioned-surface set; the baseline
+file is the authoritative current count.
+
 ## Pinned floors — the zero-floor end-state (cinatra#151 Stage 7 + the cinatra#172 flip)
 
 | Gate | Pinned floor | Direction |
@@ -361,6 +435,7 @@ node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 node scripts/audit/extension-import-ban.mjs --strict-sdk-only
 node scripts/audit/host-peer-value-import-ban.mjs
 node scripts/audit/identity-coupling-gate.mjs                   # identity-surface dangerous-class guard (stateless)
+node scripts/audit/vendor-token-core-gate.mjs                   # vendor-token residual floor (shrink-only, cinatra#973)
 node scripts/audit/required-extensions-cover-host-imports.mjs   # 8 == 8 == 8
 node scripts/extensions/generate-extension-manifest.mjs --check # fail-closed integrity of the exempt generated tree
 
@@ -369,6 +444,7 @@ CORE_EXT_INSTANCE_BAN_BASE=origin/main node scripts/audit/core-extension-instanc
 CORE_EXT_BAN_BASE=origin/main node scripts/audit/core-extension-import-ban.mjs
 DISCOVERY_BYPASS_BASE=origin/main node scripts/audit/discovery-dispatcher-bypass-ban.mjs
 IMPORT_BAN_BASE=origin/main node scripts/audit/extension-import-ban.mjs --strict-sdk-only
+VENDOR_TOKEN_BASE=origin/main node scripts/audit/vendor-token-core-gate.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
