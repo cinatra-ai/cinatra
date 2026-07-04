@@ -99,6 +99,32 @@ export function computeRequestedPortsHash(ports: readonly string[]): string {
   return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
+/**
+ * Read the materialized package's declared `cinatra.requestedHostPorts` from
+ * its on-disk `package.json` (absent/non-array → no ports requested).
+ * Defensive parse — the manifest is structurally validated at materialize
+ * time; this only surfaces the ports the grant request is recorded against
+ * (the install pipeline's `readRequestedPorts` default).
+ */
+export async function readRequestedHostPortsFromStore(storeDir: string): Promise<string[]> {
+  const { readFile } = await import("node:fs/promises");
+  const path = await import("node:path");
+  let raw: string;
+  try {
+    raw = await readFile(path.join(storeDir, "package.json"), "utf8");
+  } catch {
+    return [];
+  }
+  let manifest: { cinatra?: { requestedHostPorts?: unknown } };
+  try {
+    manifest = JSON.parse(raw) as typeof manifest;
+  } catch {
+    return [];
+  }
+  const ports = manifest.cinatra?.requestedHostPorts;
+  return Array.isArray(ports) ? ports.filter((p): p is string => typeof p === "string") : [];
+}
+
 function normalizePorts(ports: readonly string[]): string[] {
   return Array.from(new Set(ports.map((p) => String(p)))).sort();
 }

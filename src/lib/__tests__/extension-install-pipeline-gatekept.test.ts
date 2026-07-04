@@ -46,6 +46,9 @@ vi.mock("@/lib/deployment-registry-config", () => ({
   // creds). publicRegistryUrl carries NO token (the read token is a separate
   // field) — so a gatekept consumer-only install never needs server creds.
   loadDeploymentRegistryConfig: h.loadDeploymentRegistryConfig,
+  // The identity accessor the pipeline factory wires (delegates to the same
+  // spy so the credential-free sourcing assertions keep observing it).
+  getPublicRegistryIdentityUrl: () => h.loadDeploymentRegistryConfig().publicRegistryUrl,
 }));
 vi.mock("@/lib/extension-package-store", () => ({
   materializePackageToStore: h.materializePackageToStore,
@@ -59,6 +62,9 @@ vi.mock("@/lib/extension-host-port-grants", () => ({
   // Design B durable-rollback grant restorer (wired by makeDefaultInstallPipelineDeps);
   // never invoked on a fresh gatekept install (no superseding update).
   restoreGrant: vi.fn(async () => {}),
+  // The manifest requestedHostPorts reader (the pipeline's readRequestedPorts
+  // default) — no ports requested in these fixtures.
+  readRequestedHostPortsFromStore: vi.fn(async () => []),
 }));
 vi.mock("@/lib/extension-install-ops", () => ({
   beginInstallOp: vi.fn(async () => {}),
