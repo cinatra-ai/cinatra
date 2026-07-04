@@ -1,8 +1,6 @@
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-  clearNangoConnectionRecords,
-  deleteNangoConnection,
   ensureNangoIntegration,
   getNangoConnection,
   getNangoOAuthCallbackUrl,
@@ -16,10 +14,18 @@ import {
 // settings-form → settings-panel, behind the manage-gated save action). Keeping
 // the barrel free of any "use client" form also keeps the @/app/campaigns/actions
 // graph (-> agents/objects/mcp) out of every server consumer of this barrel.
+//
+// The DISCONNECT surface (clearGoogleOAuthConnection / clearUserGoogleOAuthConnection)
+// lives in ./disconnect (alias @cinatra-ai/google-oauth-connection/disconnect) and is
+// deliberately NOT re-exported here: its cinatra#952 revocation ordering imports the
+// connection-identity-store, and re-exporting it would put that edge on the static
+// graph of EVERY barrel consumer — including /sign-in, whose route-graph-ratchet
+// ceiling (132) is a fought-for dev-perf budget.
 
 type GoogleScopedConnectorKey = "googleOAuth" | "gmail" | "googleCalendar" | "youtube";
 
-type GoogleOAuthStoredSettings = {
+/** INTERNAL (shared with ./disconnect): shape of the stored `google_oauth` settings row. */
+export type GoogleOAuthStoredSettings = {
   redirectUri?: string;
   clientId?: string;
   clientSecret?: string;
@@ -44,7 +50,9 @@ function readStoredSettings(): GoogleOAuthStoredSettings {
   return readConnectorConfigFromDatabase<GoogleOAuthStoredSettings>("google_oauth", {});
 }
 
-function writeStoredSettings(value: GoogleOAuthStoredSettings) {
+/** INTERNAL (shared with ./disconnect): single-sourced writer for the stored
+ * `google_oauth` settings row — not part of the public facade. */
+export function writeStoredGoogleOAuthSettings(value: GoogleOAuthStoredSettings) {
   writeConnectorConfigToDatabase("google_oauth", value);
 }
 
@@ -137,71 +145,12 @@ export async function saveGoogleOAuthSettings(input: {
     redirectUri: normalizedRedirectUri,
   };
   await ensureGoogleOAuthIntegration(nextSettings);
-  writeStoredSettings({
+  writeStoredGoogleOAuthSettings({
     redirectUri: nextSettings.redirectUri,
     clientId: nextSettings.clientId,
     clientSecret: nextSettings.clientSecret,
   });
   return nextSettings;
-}
-
-/** Soft-delete the `nango_connection` identity row for a connection so the
- * cinatra#952 use-gate fails closed on the next resolution (revocation
- * ordering: identity FIRST, then upstream token, then pointer records).
- * Best-effort in degraded/unit contexts where the identity store is not
- * provisioned. */
-async function softDeleteConnectionIdentity(
-  connectorKey: string,
-  connectionId: string | undefined,
-): Promise<void> {
-  if (!connectionId) return;
-  try {
-    const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
-      "@cinatra-ai/extensions/connection-identity-store"
-    );
-    const identity = await readNangoConnectionByNaturalKey(connectorKey, connectionId);
-    if (identity) await softDeleteNangoConnection(identity.id);
-  } catch {
-    // Identity store unavailable (unit env) — the delete below still removes
-    // the credential itself.
-  }
-}
-
-export async function clearGoogleOAuthConnection() {
-  writeStoredSettings({
-    redirectUri: getNangoOAuthCallbackUrl(),
-  });
-  const savedConnection = getPrimarySavedNangoConnection("googleOAuth");
-  // Revocation ordering (cinatra#952 W2): soft-delete the identity row FIRST
-  // so the per-connection use-gate fails closed on the very next resolution,
-  // then the upstream token, then the pointer records below.
-  await softDeleteConnectionIdentity("googleOAuth", savedConnection?.connectionId);
-  await deleteNangoConnection(
-    savedConnection?.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
-    savedConnection?.connectionId ?? "cinatra-google-oauth",
-  );
-  await clearNangoConnectionRecords("googleOAuth");
-}
-
-export async function clearUserGoogleOAuthConnection(userId: string) {
-  const savedConnection = getPrimarySavedNangoConnection("googleOAuth", {
-    scope: "user",
-    userId,
-  });
-
-  if (savedConnection) {
-    // Same revocation ordering as the org-level clear: identity row first.
-    await softDeleteConnectionIdentity("googleOAuth", savedConnection.connectionId);
-    await deleteNangoConnection(
-      savedConnection.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
-      savedConnection.connectionId,
-    );
-  }
-
-  await clearNangoConnectionRecords("googleOAuth", {
-    scope: "user",
-    userId,
-  });
 }
 
 export async function refreshGoogleOAuthAccessTokenIfNeeded(input?: { userId?: string; connectorKey?: GoogleScopedConnectorKey }) {

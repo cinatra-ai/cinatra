@@ -251,6 +251,7 @@
       "@cinatra-ai/google-calendar-connector/mcp-module": ["./extensions/cinatra-ai/google-calendar-connector/src/mcp/module.ts"],
       "@cinatra-ai/google-calendar-connector/mcp-handlers": ["./extensions/cinatra-ai/google-calendar-connector/src/mcp/handlers.ts"],
       "@cinatra-ai/google-oauth-connection": ["./packages/google-oauth-connection/src/index.ts"],
+      "@cinatra-ai/google-oauth-connection/disconnect": ["./packages/google-oauth-connection/src/disconnect.ts"],
       "@cinatra-ai/mcp-server": ["./packages/mcp-server/src/index.tsx"],
       "@cinatra-ai/mcp-server/auth-plugins": ["./packages/mcp-server/src/auth-plugins.ts"],
       "@cinatra-ai/mcp-server/credentials": ["./packages/mcp-server/src/llm-credentials.ts"],

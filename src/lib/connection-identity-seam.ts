@@ -31,6 +31,7 @@ import {
 } from "@cinatra-ai/extensions/connection-identity-store";
 import { defaultAccessPolicyForKind } from "@cinatra-ai/extensions/install-access-contract";
 import { seedExtensionAccessPolicyIfAbsent } from "@cinatra-ai/extensions/permissions-store";
+import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import {
   deleteNangoConnection,
@@ -39,29 +40,49 @@ import {
 } from "@/lib/nango-system";
 
 /**
- * connectorKey → owning connector package. MUST stay a superset of the W1
- * backfill's map (`migrations/core/core__0014_nango-connection-identity-backfill.mjs`,
- * `CONNECTOR_KEY_TO_PACKAGE`) — pinned by a consistency test. `externalMcp`
- * is host vocabulary (external MCP servers are host rows, not marketplace
- * packages) and maps to the sentinel the use-gate special-cases.
+ * connectorKey → connector-catalog SLUG (host vocabulary only — NO package
+ * literal lives in this core file; true-IoC per the
+ * core-extension-instance-coupling-ban gate, same pattern as
+ * `connector-instance-write-authority`'s kind→slug map). The package id is
+ * DERIVED below through the single sanctioned connector-catalog registry
+ * (`getConnectorDescriptorBySlug`). `externalMcp` is host vocabulary
+ * (external MCP servers are host rows, not marketplace packages) and maps to
+ * the sentinel the use-gate special-cases, so it has no catalog slug.
+ */
+const HOST_CONNECTOR_KEY_TO_CATALOG_SLUG: Readonly<Record<string, string>> = Object.freeze({
+  a2aServer: "a2a-server-connector",
+  apify: "apify-connector",
+  apollo: "apollo-connector",
+  claude: "anthropic-connector",
+  drupal: "drupal-mcp-connector",
+  gemini: "gemini-connector",
+  github: "github-connector",
+  gmail: "gmail-connector",
+  googleCalendar: "google-calendar-connector",
+  googleOAuth: "google-oauth-connector",
+  linkedin: "linkedin-connector",
+  openai: "openai-connector",
+  tailscale: "tailscale-connector",
+  tailscaleOauth: "tailscale-connector",
+  wordpress: "wordpress-mcp-connector",
+  youtube: "youtube-connector",
+});
+
+/**
+ * connectorKey → owning connector package id, REGISTRY-DERIVED from the
+ * slug map above (a slug the catalog does not cover simply drops out, so the
+ * load-bearing lookup hard-fails on it — fail-closed). MUST stay a superset
+ * of the W1 backfill's map
+ * (`migrations/core/core__0014_nango-connection-identity-backfill.mjs`,
+ * `CONNECTOR_KEY_TO_PACKAGE`) — pinned by a consistency test.
  */
 export const HOST_CONNECTOR_KEY_TO_PACKAGE: Readonly<Record<string, string>> = Object.freeze({
-  a2aServer: "@cinatra-ai/a2a-server-connector",
-  apify: "@cinatra-ai/apify-connector",
-  apollo: "@cinatra-ai/apollo-connector",
-  claude: "@cinatra-ai/anthropic-connector",
-  drupal: "@cinatra-ai/drupal-mcp-connector",
-  gemini: "@cinatra-ai/gemini-connector",
-  github: "@cinatra-ai/github-connector",
-  gmail: "@cinatra-ai/gmail-connector",
-  googleCalendar: "@cinatra-ai/google-calendar-connector",
-  googleOAuth: "@cinatra-ai/google-oauth-connector",
-  linkedin: "@cinatra-ai/linkedin-connector",
-  openai: "@cinatra-ai/openai-connector",
-  tailscale: "@cinatra-ai/tailscale-connector",
-  tailscaleOauth: "@cinatra-ai/tailscale-connector",
-  wordpress: "@cinatra-ai/wordpress-mcp-connector",
-  youtube: "@cinatra-ai/youtube-connector",
+  ...Object.fromEntries(
+    Object.entries(HOST_CONNECTOR_KEY_TO_CATALOG_SLUG).flatMap(([key, slug]) => {
+      const packageId = getConnectorDescriptorBySlug(slug)?.packageId;
+      return packageId ? [[key, packageId] as const] : [];
+    }),
+  ),
   externalMcp: EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL,
 });
 
@@ -103,7 +124,8 @@ export async function registerSavedConnectionIdentity(input: {
   if (!connectorPackageId) {
     throw new ConnectionIdentityConflictError(
       `No connector package is known for connector key "${connectorKey}" — extend ` +
-        `HOST_CONNECTOR_KEY_TO_PACKAGE before connections of this kind can be registered.`,
+        `HOST_CONNECTOR_KEY_TO_CATALOG_SLUG (registry-derived) before connections of ` +
+        `this kind can be registered.`,
     );
   }
 
