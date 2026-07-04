@@ -809,11 +809,14 @@ describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
     ).toBe(false);
   });
 
-  it("the real tree emits exactly the declared cinatra.webhooks hooks (wordpress-mcp post-published since 0.1.5)", async () => {
+  it("the real tree emits exactly the declared cinatra.webhooks hooks (wordpress-mcp post-published since 0.1.5; drupal-mcp node-published since cinatra#974)", async () => {
     const { webhookHooks } = await buildManifest();
     expect(
       webhookHooks.map((h) => `${h.vendor}/${h.slug}/${h.hook}`).sort(),
-    ).toEqual(["cinatra-ai/wordpress-mcp-connector/post-published"]);
+    ).toEqual([
+      "cinatra-ai/drupal-mcp-connector/node-published",
+      "cinatra-ai/wordpress-mcp-connector/post-published",
+    ]);
   });
 });
 
