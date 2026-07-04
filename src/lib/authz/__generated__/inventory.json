@@ -223,16 +223,6 @@
       "line": 14
     },
     {
-      "primitiveName": "apollo_jobs_execution_run",
-      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
-      "line": 26
-    },
-    {
-      "primitiveName": "apollo_jobs_optimization_run",
-      "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
-      "line": 30
-    },
-    {
       "primitiveName": "apollo_people_search",
       "file": "extensions/cinatra-ai/apollo-connector/src/mcp/registry.ts",
       "line": 22
@@ -740,27 +730,27 @@
     {
       "primitiveName": "gmail_aliases_list",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
-      "line": 10
+      "line": 21
     },
     {
       "primitiveName": "gmail_aliases_refresh",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
-      "line": 14
+      "line": 25
     },
     {
       "primitiveName": "gmail_email_find_reply",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
-      "line": 22
+      "line": 33
     },
     {
       "primitiveName": "gmail_email_send",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
-      "line": 18
+      "line": 29
     },
     {
       "primitiveName": "gmail_status",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
-      "line": 5
+      "line": 16
     },
     {
       "primitiveName": "google_calendar_appointments_list",
@@ -770,22 +760,22 @@
     {
       "primitiveName": "linkedin_accounts_list",
       "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
-      "line": 17
+      "line": 20
     },
     {
       "primitiveName": "linkedin_destinations_list",
       "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
-      "line": 21
+      "line": 24
     },
     {
       "primitiveName": "linkedin_post_publish",
       "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
-      "line": 25
+      "line": 28
     },
     {
       "primitiveName": "linkedin_status",
       "file": "extensions/cinatra-ai/linkedin-connector/src/mcp/registry.ts",
-      "line": 12
+      "line": 15
     },
     {
       "primitiveName": "media_feed_podcast_list",
