@@ -30,13 +30,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Body of the `handler: async ...` immediately following `id: "<actionId>"`. */
-function extractActionHandlerBody(source: string, actionId: string): string {
-  const idAt = source.indexOf(`id: "${actionId}"`);
-  if (idAt === -1) throw new Error(`action ${actionId} not found`);
-  const handlerAt = source.indexOf("handler: async", idAt);
-  if (handlerAt === -1) throw new Error(`handler for ${actionId} not found`);
-  let i = source.indexOf("{", source.indexOf("=>", handlerAt));
+/** Brace-matched block body starting at the first `{` at/after `from`. */
+function extractBraceBlock(source: string, from: number): string {
+  let i = source.indexOf("{", from);
   const bodyStart = i;
   let depth = 0;
   for (; i < source.length; i++) {
@@ -47,6 +43,22 @@ function extractActionHandlerBody(source: string, actionId: string): string {
     }
   }
   return source.slice(bodyStart + 1, i);
+}
+
+/** Body of the `const requireManage = async ... => { ... }` arrow. */
+function extractRequireManageBody(source: string): string {
+  const at = source.indexOf("const requireManage = async");
+  if (at === -1) throw new Error("requireManage not found");
+  return extractBraceBlock(source, source.indexOf("=>", at));
+}
+
+/** Body of the `handler: async ...` immediately following `id: "<actionId>"`. */
+function extractActionHandlerBody(source: string, actionId: string): string {
+  const idAt = source.indexOf(`id: "${actionId}"`);
+  if (idAt === -1) throw new Error(`action ${actionId} not found`);
+  const handlerAt = source.indexOf("handler: async", idAt);
+  if (handlerAt === -1) throw new Error(`handler for ${actionId} not found`);
+  return extractBraceBlock(source, source.indexOf("=>", handlerAt));
 }
 
 /**
@@ -79,9 +91,24 @@ const SOURCE = readFileSync(
 
 describe("apollo connection actions — register.ts manage gate", () => {
   it("requireManage resolves the host action-guard and FAILS CLOSED when it is absent", () => {
-    expect(SOURCE).toContain('"@cinatra-ai/host:extension-action-guard"');
-    expect(SOURCE).toContain("host action-guard service is not registered");
-    expect(SOURCE).toContain('await guard.require(PACKAGE_NAME, "manage");');
+    const body = extractRequireManageBody(SOURCE);
+    expect(body).toContain('"@cinatra-ai/host:extension-action-guard"');
+
+    // Pin the fail-closed BRANCH structurally, not by substring: the
+    // missing-guard check's block must open with a `throw` (a logged
+    // early-return would pass a substring check while silently allowing the
+    // ungated write to proceed).
+    const checkAt = body.indexOf("if (!guard || typeof guard.require !== \"function\")");
+    expect(checkAt, "missing-guard check present").toBeGreaterThanOrEqual(0);
+    const branch = extractBraceBlock(body, checkAt);
+    expect(
+      firstExecutableStatement(branch).startsWith("throw new Error("),
+      "missing-guard branch throws (fail-closed, never a logged skip)",
+    ).toBe(true);
+
+    // ...and the delegation to the guard happens AFTER the fail-closed check.
+    const delegateAt = body.indexOf('await guard.require(PACKAGE_NAME, "manage");');
+    expect(delegateAt, "manage delegation present").toBeGreaterThan(checkAt);
   });
 
   for (const actionId of ["saveConnection", "clearConnection"]) {
