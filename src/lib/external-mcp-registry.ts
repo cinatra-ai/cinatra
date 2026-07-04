@@ -904,6 +904,33 @@ export async function saveTwentyConnection(input: {
   //     record; the resolver reads the raw connection. The connection id is
   //     DERIVED FROM THE URL so a URL change never reuses the prior URL's key.
   const connectionId = twentyConnectionIdFor(restBase);
+  // PRE-write foreign-identity guard (codex diff-round-3 finding 1): when the
+  // URL-derived connection id already has a LIVE identity owned by a
+  // different user/org, refuse BEFORE the vault import / row upsert mutate
+  // anything (the same fail-closed boundary the generic save route enforces).
+  if (input.owner) {
+    try {
+      const { readNangoConnectionByNaturalKey } = await import(
+        "@cinatra-ai/extensions/connection-identity-store"
+      );
+      const existing = await readNangoConnectionByNaturalKey("externalMcp", connectionId);
+      if (
+        existing &&
+        (existing.ownerUserId !== input.owner.userId ||
+          (existing.organizationId != null &&
+            input.owner.organizationId != null &&
+            existing.organizationId !== input.owner.organizationId))
+      ) {
+        throw new TwentyConnectionError(
+          "This Twenty instance is already connected under a different owner or workspace — disconnect it there first.",
+        );
+      }
+    } catch (err) {
+      if (err instanceof TwentyConnectionError) throw err;
+      // Identity store unavailable (degraded/unit contexts): the post-import
+      // seam still hard-fails a foreign row before any grant is seeded.
+    }
+  }
   const priorConnectionId =
     getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID)?.nangoConnectionId ?? null;
   await ensureNangoIntegration({
@@ -994,13 +1021,11 @@ export async function saveTwentyConnection(input: {
  */
 export async function disconnectTwentyConnection(): Promise<void> {
   const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
-  deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
-  if (row?.nangoConnectionId && isNangoConfigured()) {
-    // Revocation ordering (cinatra#952 W2): soft-delete the identity row
-    // FIRST — the use-gate fails closed on the very next resolution — then
-    // best-effort delete the upstream token. Each step is independently
-    // best-effort so a degraded identity store never blocks the token
-    // removal. External-MCP rows have no blob pointer record to remove.
+  // Revocation ordering (codex diff-round-3 finding 2): soft-delete the
+  // IDENTITY row before the registry row — cross-worker row caches can keep
+  // serving the row for up to the cache TTL, and the identity soft-delete is
+  // what makes the use-gate deny those stale mints immediately.
+  if (row?.nangoConnectionId) {
     try {
       const { readNangoConnectionByNaturalKey, softDeleteNangoConnection } = await import(
         "@cinatra-ai/extensions/connection-identity-store"
@@ -1011,8 +1036,14 @@ export async function disconnectTwentyConnection(): Promise<void> {
       );
       if (identity) await softDeleteNangoConnection(identity.id);
     } catch {
-      // Best-effort: identity store unavailable — the token delete still runs.
+      // Best-effort: identity store unavailable — the row + token deletes below still run.
     }
+  }
+  deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
+  if (row?.nangoConnectionId && isNangoConfigured()) {
+    // The identity row was soft-deleted above (before the row delete); the
+    // upstream token delete stays best-effort. External-MCP rows have no blob
+    // pointer record to remove.
     try {
       await deleteNangoConnection(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, row.nangoConnectionId);
     } catch {
