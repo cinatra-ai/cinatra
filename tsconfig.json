@@ -162,6 +162,7 @@
       "@cinatra-ai/drupal-mcp-connector/mcp-toolbox": ["./extensions/cinatra-ai/drupal-mcp-connector/src/mcp/toolbox.ts"],
       "@cinatra-ai/drupal-mcp-connector/mcp-module": ["./extensions/cinatra-ai/drupal-mcp-connector/src/mcp/module.ts"],
       "@cinatra-ai/drupal-mcp-connector/widget-chat-tool": ["./extensions/cinatra-ai/drupal-mcp-connector/src/widget-chat-tool.ts"],
+      "@cinatra-ai/drupal-mcp-connector/src/webhooks/node-published": ["./extensions/cinatra-ai/drupal-mcp-connector/src/webhooks/node-published.ts"],
       "@cinatra-ai/wordpress-assistant-connector": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/index.ts"],
       "@cinatra-ai/wordpress-assistant-connector/register": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/register.ts"],
       "@cinatra-ai/wordpress-assistant-connector/deps": ["./extensions/cinatra-ai/wordpress-assistant-connector/src/deps.ts"],

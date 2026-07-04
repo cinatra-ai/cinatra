@@ -69,6 +69,7 @@ export type {
   MintBindingInput,
   MintedBinding,
   UpsertLegacyBindingInput,
+  UpsertStandardBindingInput,
 } from "./secret-service";
 
 export { createWebhookTables } from "./schema";
