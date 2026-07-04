@@ -339,8 +339,16 @@ describe("manifest generator", () => {
     );
     expect(withUi).toBeDefined();
     expect(withUi.uiSurface).toBe("bundled-react");
+    // A schema-config connector (declared cinatra.uiSurface, host-rendered from
+    // configSchema — the 0.1.4+ conversions) is NOT a facade even without pages.
+    const schemaConfig = records.find(
+      (r) => r.kind === "connector" && !r.hasSetupPage && !r.hasSettingsPage && r.configSchema,
+    );
+    expect(schemaConfig).toBeDefined();
+    expect(schemaConfig.uiSurface).toBe("schema-config");
     const facade = records.find(
-      (r) => r.kind === "connector" && !r.hasSetupPage && !r.hasSettingsPage,
+      (r) =>
+        r.kind === "connector" && !r.hasSetupPage && !r.hasSettingsPage && !r.configSchema,
     );
     expect(facade).toBeDefined();
     expect(facade.uiSurface).toBe(null);
@@ -801,9 +809,11 @@ describe("inbound-webhook declaration (cinatra.webhooks, cinatra#340)", () => {
     ).toBe(false);
   });
 
-  it("the real tree emits an EMPTY webhook map (inert until #343 — no extension declares cinatra.webhooks)", async () => {
+  it("the real tree emits exactly the declared cinatra.webhooks hooks (wordpress-mcp post-published since 0.1.5)", async () => {
     const { webhookHooks } = await buildManifest();
-    expect(webhookHooks).toEqual([]);
+    expect(
+      webhookHooks.map((h) => `${h.vendor}/${h.slug}/${h.hook}`).sort(),
+    ).toEqual(["cinatra-ai/wordpress-mcp-connector/post-published"]);
   });
 });
 
