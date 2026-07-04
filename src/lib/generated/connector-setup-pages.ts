@@ -24,12 +24,8 @@ export type GeneratedPageEntry = {
 
 export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry> = {
   "a2a-server-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/a2a-server-connector/setup-page", () => import("@cinatra-ai/a2a-server-connector/setup-page")) },
-  "anthropic-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/anthropic-connector/setup-page", () => import("@cinatra-ai/anthropic-connector/setup-page")) },
-  "apify-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apify-connector/setup-page", () => import("@cinatra-ai/apify-connector/setup-page")) },
-  "apollo-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apollo-connector/setup-page", () => import("@cinatra-ai/apollo-connector/setup-page")) },
   "drupal-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-assistant-connector/setup-page", () => import("@cinatra-ai/drupal-assistant-connector/setup-page")) },
   "drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/setup-page", () => import("@cinatra-ai/drupal-mcp-connector/setup-page")) },
-  "gemini-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/gemini-connector/setup-page", () => import("@cinatra-ai/gemini-connector/setup-page")) },
   "github-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/github-connector/setup-page", () => import("@cinatra-ai/github-connector/setup-page")) },
   "gmail-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/gmail-connector/setup-page", () => import("@cinatra-ai/gmail-connector/setup-page")) },
   "google-calendar-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/google-calendar-connector/setup-page", () => import("@cinatra-ai/google-calendar-connector/setup-page")) },
@@ -47,8 +43,6 @@ export const GENERATED_CONNECTOR_SETUP_PAGES: Record<string, GeneratedPageEntry>
 };
 
 export const GENERATED_CONNECTOR_SETTINGS_PAGES: Record<string, GeneratedPageEntry> = {
-  "anthropic-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/anthropic-connector/settings-page", () => import("@cinatra-ai/anthropic-connector/settings-page")) },
-  "apollo-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/apollo-connector/settings-page", () => import("@cinatra-ai/apollo-connector/settings-page")) },
   "drupal-assistant-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-assistant-connector/settings-page", () => import("@cinatra-ai/drupal-assistant-connector/settings-page")) },
   "drupal-mcp-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/drupal-mcp-connector/settings-page", () => import("@cinatra-ai/drupal-mcp-connector/settings-page")) },
   "github-connector": { resolution: "guardedOptional", load: guardedExtensionImport("@cinatra-ai/github-connector/settings-page", () => import("@cinatra-ai/github-connector/settings-page")) },

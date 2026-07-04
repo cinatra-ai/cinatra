@@ -14,5 +14,6 @@ export type GeneratedWebhookRegistryMeta = {
 };
 
 export const GENERATED_WEBHOOK_REGISTRY_META: readonly GeneratedWebhookRegistryMeta[] = [
-
+  {"scope":"cinatra-ai/drupal-mcp-connector/node-published","vendor":"cinatra-ai","slug":"drupal-mcp-connector","hook":"node-published","label":"Node published","schemaVersion":1},
+  {"scope":"cinatra-ai/wordpress-mcp-connector/post-published","vendor":"cinatra-ai","slug":"wordpress-mcp-connector","hook":"post-published","label":"Post published","schemaVersion":1},
 ];

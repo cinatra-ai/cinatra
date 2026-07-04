@@ -41,7 +41,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
   try {
-    const ctx = await deriveContextRouteContext(req, parsed.data);
+    const ctx = await deriveContextRouteContext(req, parsed.data, "resolve");
     // Load the slot from the VERIFIED owner (the run package, or the composed
     // child that the run package's own OAS binds to this slotId), never the body.
     const slot = await loadTrustedSlot(
