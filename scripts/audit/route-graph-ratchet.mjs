@@ -44,10 +44,24 @@
  *  - A tracked route with no baseline ceiling → FAIL (FIXED_ROUTES / baseline
  *    drift: a route added to FIXED_ROUTES without regenerating the baseline).
  *  - Base-ref ratchet (ROUTE_GRAPH_RATCHET_BASE / CI base ref): the committed
- *    baseline may only ever SHRINK or stay equal vs the base branch. A ceiling
- *    RAISED for any route (the regenerate-to-pass bypass) FAILS. A net-new route
- *    (expands coverage) or a dropped route (a route removed from FIXED_ROUTES) is
- *    allowed. Fail-closed if the ref can't be resolved.
+ *    baseline may never be raised SILENTLY vs the base branch. An UNANNOTATED
+ *    ceiling raise (the regenerate-to-pass bypass) FAILS in every context (PR
+ *    arm vs origin/<base>, push arm vs the previous tip). A net-new route
+ *    (expands coverage) or a dropped route (a route removed from FIXED_ROUTES)
+ *    is allowed. Fail-closed if the ref can't be resolved.
+ *  - ANNOTATED absorb (sanctioned raise): the committed baseline may carry a
+ *    structured per-route record in a sibling `absorbs` map —
+ *    `route -> { from, to, reason, pr }`. A ceiling raise passes ONLY when the
+ *    committed record exactly matches the raise delta (`from` === the base
+ *    ceiling, `to` === the committed ceiling); the gate then emits a LOUD
+ *    NOTICE line for the absorbed raise so it is visible in the run log.
+ *    Records are validated strictly and fail closed: a malformed record, a
+ *    record whose `to` no longer equals the route's current ceiling (stale), a
+ *    record neither matched by a raise nor carried forward identically from
+ *    the base (orphan), and deleting/altering a carried-forward record while
+ *    keeping its raised ceiling all FAIL. Lowering the ceiling (or dropping
+ *    the route) is the only way to retire a record — `--write-baseline` does
+ *    that automatically.
  *
  * Node-builtins-only + offline (imports route-graph.mjs, which is also
  * node-builtins-only; the base-ref ratchet shells out to `git`). No third-party
@@ -69,6 +83,11 @@ import { FIXED_ROUTES, analyzeRoute } from "../route-graph.mjs";
 
 const REPO_ROOT = process.cwd();
 const BASELINE_FILE = join(REPO_ROOT, "scripts/audit/route-graph-ratchet.baseline.json");
+
+// Single source for the baseline's self-describing prose (kept in the gate so
+// `--write-baseline` regenerations cannot drift the documented contract).
+const BASELINE_NOTE =
+  "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.";
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested in __tests__/route-graph-ratchet.test.mjs)
@@ -141,6 +160,150 @@ export function baselineGrowth(baseBaseline, committedBaseline) {
   return grew.sort((a, b) => a.route.localeCompare(b.route));
 }
 
+// The exact key set of a well-formed absorb record.
+const ABSORB_RECORD_KEYS = ["from", "pr", "reason", "to"];
+
+/** Structural check for ONE absorb record (shape only, no baseline context). */
+export function isStructurallyValidAbsorbRecord(rec) {
+  if (rec === null || typeof rec !== "object" || Array.isArray(rec)) return false;
+  const keys = Object.keys(rec).sort();
+  if (keys.length !== ABSORB_RECORD_KEYS.length || keys.some((k, i) => k !== ABSORB_RECORD_KEYS[i])) return false;
+  if (!Number.isInteger(rec.from) || rec.from <= 0) return false;
+  if (!Number.isInteger(rec.to) || rec.to <= 0) return false;
+  if (rec.to <= rec.from) return false; // a record documents a RAISE
+  if (typeof rec.reason !== "string" || rec.reason.trim() === "") return false;
+  if (!Number.isInteger(rec.pr) || rec.pr <= 0) return false;
+  return true;
+}
+
+/** Deep equality of two structurally-valid absorb records. */
+function absorbRecordsEqual(a, b) {
+  return a.from === b.from && a.to === b.to && a.reason === b.reason && a.pr === b.pr;
+}
+
+/**
+ * STRICT structural validation of a baseline's `absorbs` map (runs
+ * UNCONDITIONALLY, even without a base ref — a malformed annotation must fail
+ * closed everywhere). Returns sorted `{ route, reason }` errors; `absorbs`
+ * absent is fine (empty result).
+ *
+ * A record must: be an object with EXACTLY the keys { from, to, reason, pr };
+ * carry positive integers `from` < `to` and `pr`; carry a non-empty `reason`;
+ * name a route tracked in `routes`; and have `to` equal to that route's
+ * CURRENT ceiling (a record that no longer describes the current ceiling is
+ * stale and must be removed by the change that lowered/re-raised the ceiling).
+ */
+export function validateAbsorbRecords(baseline) {
+  const errors = [];
+  const absorbs = baseline?.absorbs;
+  if (absorbs === undefined) return errors;
+  if (absorbs === null || typeof absorbs !== "object" || Array.isArray(absorbs)) {
+    return [{ route: "(absorbs)", reason: '"absorbs" must be an object map of route -> { from, to, reason, pr }' }];
+  }
+  const routes = baseline?.routes ?? {};
+  for (const [route, rec] of Object.entries(absorbs)) {
+    if (!isStructurallyValidAbsorbRecord(rec)) {
+      errors.push({ route, reason: "malformed absorb record — must be an object with EXACTLY { from, to, reason, pr }: positive integers from < to, non-empty reason string, positive integer pr" });
+      continue;
+    }
+    if (!(route in routes)) {
+      errors.push({ route, reason: 'absorb record for a route not tracked in "routes" (orphan — remove it)' });
+      continue;
+    }
+    if (routes[route] !== rec.to) {
+      errors.push({ route, reason: `stale absorb record — "to" (${rec.to}) must equal the route's current ceiling (${routes[route]}); the change that moved the ceiling must retire/replace the record` });
+    }
+  }
+  return errors.sort((a, b) => a.route.localeCompare(b.route));
+}
+
+/**
+ * Base-ref classification of ceiling raises + absorb-record lifecycle.
+ * Both baselines are the PARSED committed files (base = the base ref's copy).
+ * Assumes the COMMITTED baseline already passed validateAbsorbRecords.
+ *
+ * Returns { violations: [{ route, reason }], absorbed: [{ route, from, to, reason, pr }] }:
+ *  - A raise (committed ceiling > base ceiling) with a committed record that
+ *    EXACTLY matches the delta (from === base, to === committed) → absorbed
+ *    (allowed; caller emits the LOUD notice). Any other raise → violation
+ *    (silent raise / mismatched record).
+ *  - A committed record NOT consumed by a raise is valid ONLY as a
+ *    carried-forward historical record: the base must contain a DEEP-EQUAL
+ *    record for that route AND the committed ceiling must equal record.to.
+ *    Anything else (pre-planted record with no raise, record for a net-new
+ *    route, record surviving a lower) → violation (orphan/stale).
+ *  - Base-side preservation: a base record whose route still exists at the
+ *    SAME (raised) ceiling must be carried forward deep-equal — deleting or
+ *    altering the annotation while keeping the raised ceiling → violation.
+ *    (Dropping the route, lowering the ceiling, or a new annotated raise
+ *    retires the record.)
+ */
+export function classifyRaises(baseBaseline, committedBaseline) {
+  const committedRoutes = committedBaseline?.routes ?? {};
+  const baseAbsorbs = baseBaseline?.absorbs ?? {};
+  const committedAbsorbs = committedBaseline?.absorbs ?? {};
+  const violations = [];
+  const absorbed = [];
+  const consumed = new Set();
+
+  // 1. Every raise vs the base must be exactly matched by a committed record.
+  for (const g of baselineGrowth(baseBaseline, committedBaseline)) {
+    const rec = committedAbsorbs[g.route];
+    if (rec && isStructurallyValidAbsorbRecord(rec) && rec.from === g.base && rec.to === g.committed) {
+      absorbed.push({ route: g.route, from: rec.from, to: rec.to, reason: rec.reason, pr: rec.pr });
+      consumed.add(g.route);
+    } else if (rec) {
+      violations.push({ route: g.route, reason: `ceiling raised ${g.base} -> ${g.committed} but the absorb record does not exactly match the raise delta (record from=${rec?.from} to=${rec?.to})` });
+      consumed.add(g.route);
+    } else {
+      violations.push({ route: g.route, reason: `ceiling RAISED ${g.base} -> ${g.committed} with NO absorb record (silent raise / regenerate-to-pass bypass)` });
+    }
+  }
+
+  // 2. A committed record not consumed by a raise must be an identical
+  //    carried-forward record still describing the current ceiling.
+  for (const [route, rec] of Object.entries(committedAbsorbs)) {
+    if (consumed.has(route)) continue;
+    const baseRec = baseAbsorbs[route];
+    const carried =
+      baseRec !== undefined &&
+      isStructurallyValidAbsorbRecord(baseRec) &&
+      isStructurallyValidAbsorbRecord(rec) &&
+      absorbRecordsEqual(baseRec, rec) &&
+      committedRoutes[route] === rec.to;
+    if (!carried) {
+      violations.push({ route, reason: "orphan/stale absorb record — not matched by a ceiling raise vs the base and not an identical carried-forward record at its ceiling" });
+    }
+  }
+
+  // 3. Base-side preservation: the annotation of a still-raised ceiling may
+  //    not be deleted or altered (codex round-0 finding).
+  for (const [route, baseRec] of Object.entries(baseAbsorbs)) {
+    if (!isStructurallyValidAbsorbRecord(baseRec)) continue; // malformed base record cannot constrain (committed side is validated separately)
+    const committedCeiling = committedRoutes[route];
+    if (committedCeiling === undefined) continue; // route dropped → record retires
+    if (committedCeiling !== baseRec.to) continue; // lowered or re-raised → retired/replaced (a re-raise is checked in (1))
+    const rec = committedAbsorbs[route];
+    if (!rec || !isStructurallyValidAbsorbRecord(rec) || !absorbRecordsEqual(baseRec, rec)) {
+      violations.push({ route, reason: `absorb record deleted/altered while its raised ceiling (${baseRec.to}) is kept — the annotation may only be retired by lowering the ceiling, dropping the route, or a new annotated raise` });
+    }
+  }
+
+  // De-duplicate (a route can trip (2) and (3) with the same root cause).
+  const seen = new Set();
+  const uniqueViolations = violations.filter((v) => {
+    const key = `${v.route} ${v.reason}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return {
+    violations: uniqueViolations.sort((a, b) => a.route.localeCompare(b.route)),
+    absorbed: absorbed.sort((a, b) => a.route.localeCompare(b.route)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Measurement (reuses the route-graph analyzer)
 // ---------------------------------------------------------------------------
@@ -194,16 +357,44 @@ function main() {
       }
       routes[route] = info.moduleCount;
     }
+    // Carry forward ONLY the absorb records that still exactly describe a
+    // tracked route's (re)written ceiling; a lowered/re-raised/dropped route
+    // retires its record here automatically. A raise this write smuggles in
+    // WITHOUT a matching record is still blocked by the base-ref ratchet.
+    let absorbs;
+    if (existsSync(BASELINE_FILE)) {
+      try {
+        const prior = JSON.parse(readFileSync(BASELINE_FILE, "utf8"));
+        const kept = Object.entries(prior?.absorbs ?? {})
+          .filter(([route, rec]) => isStructurallyValidAbsorbRecord(rec) && routes[route] === rec.to)
+          .sort(([a], [b]) => a.localeCompare(b));
+        if (kept.length) absorbs = Object.fromEntries(kept);
+      } catch {
+        // Unparseable prior baseline → write a records-free baseline (any
+        // raise it would need is still caught by the base-ref ratchet).
+      }
+    }
     const baseline = {
-      note: "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, never raised. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+      note: BASELINE_NOTE,
       routes,
+      ...(absorbs ? { absorbs } : {}),
     };
     writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2) + "\n");
-    console.log(`[route-graph-ratchet] wrote baseline: ${FIXED_ROUTES.length} tracked route(s).`);
+    console.log(`[route-graph-ratchet] wrote baseline: ${FIXED_ROUTES.length} tracked route(s)${absorbs ? `, ${Object.keys(absorbs).length} absorb record(s) carried forward` : ""}.`);
     return;
   }
 
   const baseline = existsSync(BASELINE_FILE) ? JSON.parse(readFileSync(BASELINE_FILE, "utf8")) : { routes: {} };
+
+  // Structural validation of the committed absorb records runs UNCONDITIONALLY
+  // (report mode and no-base-ref local runs included): a malformed, stale, or
+  // orphan annotation fails closed everywhere.
+  const recordErrors = validateAbsorbRecords(baseline);
+  if (recordErrors.length) {
+    console.error(`[route-graph-ratchet] FAIL — ${recordErrors.length} invalid absorb record(s) in the committed baseline:`);
+    for (const e of recordErrors) console.error(`  ${e.route}: ${e.reason}`);
+    process.exit(1);
+  }
 
   if (report) {
     console.log(`[route-graph-ratchet] ${FIXED_ROUTES.length} tracked route(s); current count vs ceiling:`);
@@ -222,11 +413,14 @@ function main() {
     return;
   }
 
-  // Base-ref ratchet: block the regenerate-to-pass bypass (raise a ceiling +
-  // `--write-baseline` in the same PR). When ROUTE_GRAPH_RATCHET_BASE is set
-  // (wired from the CI base ref), fail if the committed baseline raised any
-  // existing route's ceiling vs the base-branch baseline. Mirrors the sibling
-  // no-new-rot gates; fail-closed if the ref can't be resolved.
+  // Base-ref ratchet: block the SILENT regenerate-to-pass bypass (raise a
+  // ceiling + `--write-baseline` in the same PR with no annotation). When
+  // ROUTE_GRAPH_RATCHET_BASE is set (wired from the CI base ref: PR arm →
+  // origin/<base>, push arm → the previous tip), every ceiling raise vs the
+  // base-branch baseline must be exactly matched by a committed absorb record
+  // (then it passes with a LOUD notice); orphan/stale records and a deleted
+  // still-raised annotation also fail. Mirrors the sibling no-new-rot gates;
+  // fail-closed if the ref can't be resolved.
   const baseRef = process.env.ROUTE_GRAPH_RATCHET_BASE;
   if (baseRef) {
     if (baseRef.startsWith("-")) {
@@ -249,10 +443,21 @@ function main() {
       baseText = null; // ref resolves but file absent → introducing PR, no constraint
     }
     if (baseText) {
-      const grew = baselineGrowth(JSON.parse(baseText), baseline);
-      if (grew.length) {
-        console.error(`[route-graph-ratchet] FAIL — committed baseline RAISED a ceiling vs ${baseRef} (regenerate-to-pass bypass):`);
-        grew.forEach((g) => console.error(`  + ${g.route}: ${g.base} -> ${g.committed}`));
+      let baseBaseline = null;
+      try {
+        baseBaseline = JSON.parse(baseText);
+      } catch {
+        console.error(`[route-graph-ratchet] FAIL — base baseline at ${baseRef} is not valid JSON. Failing closed.`);
+        process.exit(1);
+      }
+      const { violations, absorbed } = classifyRaises(baseBaseline, baseline);
+      for (const a of absorbed) {
+        console.log(`[route-graph-ratchet] NOTICE — ABSORBED ceiling raise ${a.route}: ${a.from} -> ${a.to} (${a.reason}; PR #${a.pr})`);
+      }
+      if (violations.length) {
+        console.error(`[route-graph-ratchet] FAIL — committed baseline vs ${baseRef}: ${violations.length} unannotated raise(s) / invalid absorb record(s):`);
+        violations.forEach((v) => console.error(`  + ${v.route}: ${v.reason}`));
+        console.error(`A ceiling is never raised silently: a sanctioned raise needs a committed absorbs record { from, to, reason, pr } exactly matching the raise (see the baseline note).`);
         process.exit(1);
       }
     }
