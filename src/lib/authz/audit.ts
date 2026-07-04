@@ -287,6 +287,37 @@ export async function logAuditEventStrict(
 }
 
 // ---------------------------------------------------------------------------
+// logDeniedAuditEventStrictWithCooldown — durable DENY writes WITH the
+// denied-event flood control (cinatra#952 W2, codex round-1 finding 1 of the
+// W2 convergence).
+//
+// The two existing helpers each miss one property the per-connection use-gate
+// needs for its DENY rows:
+//   • logAuditEvent respects the cooldown but SWALLOWS insert failures — a
+//     deny could proceed un-audited.
+//   • logAuditEventStrict is durable but SKIPS the cooldown entirely — a
+//     retry loop would flood audit_events.
+//
+// This helper lives HERE (not in the use-gate) because the cooldown map is
+// module-private: check the cooldown first (cooling → skip the write, the
+// caller still denies), else AWAIT the strict insert and register the
+// cooldown key ONLY after the durable insert succeeded. An insert failure
+// registers nothing (the next deny retries the durable write) and propagates
+// — the caller treats a failed deny-audit write as a hard error and still
+// denies.
+// ---------------------------------------------------------------------------
+
+export async function logDeniedAuditEventStrictWithCooldown(
+  input: AuditEventInput,
+): Promise<{ id: string } | { skipped: true }> {
+  const key = deniedCooldownKey({ ...input, decision: "denied" });
+  if (isDeniedCoolingDown(key)) return { skipped: true };
+  const result = await logAuditEventStrict({ ...input, decision: "denied" });
+  _deniedCooldown.set(key, Date.now() + DENIED_COOLDOWN_MS);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Durable audit-log retention.
 //
 // Authz audit events are retained for a default of 12 months. The window is

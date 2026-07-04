@@ -115,6 +115,62 @@ export async function listNangoConnectionsByOwner(
 }
 
 /**
+ * All live identity rows for a connector within an organization (cinatra#952
+ * W2 resolver candidate discovery).
+ *
+ * Org narrowing is deliberate (codex W2 round-2 finding 6 of the pre-stage):
+ *   • organizationId non-null → rows of THAT org plus `organization_id IS
+ *     NULL` legacy rows. Null-org rows are returned so the resolver can
+ *     own-match them for their OWNER, but they must NEVER become shared
+ *     candidates (the resolver enforces that; `workspace` grants have no
+ *     cross-org guard to contain a null-org row).
+ *   • organizationId null → ONLY null-org rows (an org-less actor never
+ *     discovers org-owned rows).
+ */
+export async function listNangoConnectionsByConnector(
+  organizationId: string | null,
+  connectorKey: string,
+): Promise<NangoConnectionIdentity[]> {
+  const pool = await getPool();
+  const result = organizationId
+    ? await pool.query<RawRow>(
+        `SELECT ${COLUMNS} FROM ${TABLE}
+          WHERE connector_key = $1 AND deleted_at IS NULL
+            AND (organization_id = $2 OR organization_id IS NULL)
+          ORDER BY created_at ASC`,
+        [connectorKey, organizationId],
+      )
+    : await pool.query<RawRow>(
+        `SELECT ${COLUMNS} FROM ${TABLE}
+          WHERE connector_key = $1 AND deleted_at IS NULL
+            AND organization_id IS NULL
+          ORDER BY created_at ASC`,
+        [connectorKey],
+      );
+  return result.rows.map(toIdentity);
+}
+
+/**
+ * Read ONE live identity row by its natural identity `(connector_key,
+ * connection_id)` — the address every connection-ADDRESSED caller already
+ * holds (instance flows, external-MCP rows). Soft-deleted rows return null
+ * (fail closed at the use-gate).
+ */
+export async function readNangoConnectionByNaturalKey(
+  connectorKey: string,
+  connectionId: string,
+): Promise<NangoConnectionIdentity | null> {
+  const pool = await getPool();
+  const result = await pool.query<RawRow>(
+    `SELECT ${COLUMNS} FROM ${TABLE}
+      WHERE connector_key = $1 AND connection_id = $2 AND deleted_at IS NULL`,
+    [connectorKey, connectionId],
+  );
+  const row = result.rows[0];
+  return row ? toIdentity(row) : null;
+}
+
+/**
  * Insert an identity row for a freshly-saved connection. Idempotent on the
  * live identity (connector_key, connection_id): a conflicting live row wins
  * (ON CONFLICT DO NOTHING against the partial-unique index) and the existing

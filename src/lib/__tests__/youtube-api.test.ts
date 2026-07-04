@@ -4,7 +4,32 @@
 // into the global media-feeds runtime, and the legacy default provider/
 // connection ids must NOT be minted as a fallback.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// cinatra#952 W2: the mint is now gated through the per-connection use-gate.
+// These pins target the SCOPE-filter behavior, so the identity row + gate are
+// stubbed permissive here; the gate's own deny/allow matrix lives in
+// connection-use-gate.test.ts.
+vi.mock("@cinatra-ai/extensions/connection-identity-store", () => ({
+  readNangoConnectionByNaturalKey: vi.fn(async (connectorKey: string, connectionId: string) => ({
+    id: `identity-${connectionId}`,
+    organizationId: "org-1",
+    connectorPackageId: "@cinatra-ai/youtube-connector",
+    connectorKey,
+    connectionId,
+    ownerUserId: "owner-1",
+    createdAt: new Date(),
+    deletedAt: null,
+  })),
+}));
+vi.mock("@/lib/connection-use-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/connection-use-gate")>();
+  return {
+    ...actual,
+    enforceConnectionUse: vi.fn(async () => ({ allowed: true })),
+  };
+});
+
 import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,

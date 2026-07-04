@@ -1,0 +1,281 @@
+// core__0015 — one-shot per-connection GRANT seed + external-MCP identity
+// seed (cinatra-ai/cinatra#952, W2 of the connector access-scoping epic #950).
+//
+// W1 (core__0014) created identity rows for every legacy blob connection but
+// NO `extension_access_policy` rows: under W2's fail-closed use-gate (explicit
+// OWNER_DEFAULT fallback — no policy row = owner-only) every legacy
+// `scope:"app"` connection would silently stop working for everyone but its
+// backfilled owner. This migration is the BEHAVIOR-PRESERVING seed (epic
+// decision 3's legacy handling — preserving, not broadening):
+//
+//   • Phase A: every LIVE `nango_connection` row whose legacy blob entry is
+//     `scope:"app"` (org-shared by construction pre-epic) AND whose
+//     `organization_id` is NON-NULL gets ONE workspace-visibility policy row
+//     — ONLY when no policy row exists (never resets a widened/narrowed
+//     policy). `scope:"user"` rows and ALL `organization_id IS NULL` rows get
+//     NOTHING (owner-only via the gate's fail-closed fallback; a null-org row
+//     must never gain a `workspace` grant — `workspace` has no cross-org
+//     guard to contain it).
+//
+//   • Phase B: `external_mcp_servers` rows carrying a `nango_connection_id`
+//     get their identity rows (connector_key `externalMcp`, the host sentinel
+//     package id — external-MCP connections have NO blob record and are NOT
+//     in the 0014 key→package map). Owner resolution mirrors 0014 fail-closed:
+//     (1) the row's recorded user_id (verified), (2) the earliest owner/admin
+//     of the row's org, (3) the earliest owner/admin of the deployment's sole
+//     organization; otherwise ABORT. Non-`user`-scope rows with a NON-NULL
+//     resolved org additionally get the workspace policy seed (instance-global
+//     by construction — the org-bound InternalWorker mint needs it).
+//
+// Same transaction model as core__0014 (owned BEGIN/COMMIT under
+// pgm.noTransaction, SHARE ROW EXCLUSIVE locks) and the same provenance
+// contract: a review report is written to metadata IN the transaction;
+// down() deletes exactly the report-named rows.
+
+export const BLOB_METADATA_KEY = "connector_config:nango_connections";
+export const REPORT_METADATA_KEY = "connection_grant_seed_report:v1";
+export const EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL = "@cinatra-ai/host:external-mcp";
+
+const WORKSPACE_POLICY = Object.freeze({
+  runListVisibility: "workspace",
+  runDataVisibility: "workspace",
+  runExecuteVisibility: "workspace",
+  allowRunSharing: false,
+});
+
+/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
+export async function up(pgm) {
+  pgm.noTransaction(); // owned transaction (core__0014 model).
+
+  await pgm.db.query("BEGIN");
+  try {
+    await pgm.db.query("LOCK TABLE nango_connection IN SHARE ROW EXCLUSIVE MODE");
+    await pgm.db.query("LOCK TABLE extension_access_policy IN SHARE ROW EXCLUSIVE MODE");
+
+    const report = {
+      version: 1,
+      migratedAt: new Date().toISOString(),
+      policyRows: [],
+      externalMcpIdentities: [],
+      counts: { policiesSeeded: 0, externalMcpIdentities: 0, skipped: 0 },
+    };
+
+    // The deployment's sole organization (0014 semantics): NULL when zero or
+    // multiple orgs exist.
+    const orgRes = await pgm.db.query('SELECT id FROM public."organization"');
+    const soleOrgId = orgRes.rows.length === 1 ? orgRes.rows[0].id : null;
+
+    async function earliestOrgAdmin(orgId) {
+      if (!orgId) return null;
+      const m = await pgm.db.query(
+        `SELECT m."userId" AS user_id
+           FROM public.member m
+           JOIN public."user" u ON u.id = m."userId"
+          WHERE m."organizationId" = $1 AND m.role IN ('owner','admin')
+          ORDER BY m."createdAt" ASC
+          LIMIT 1`,
+        [orgId],
+      );
+      return m.rows.length === 1 ? m.rows[0].user_id : null;
+    }
+
+    async function seedWorkspacePolicy(connectionRowId, installedByUserId, provenance) {
+      const ins = await pgm.db.query(
+        `INSERT INTO extension_access_policy (resource_kind, resource_id, policy, installed_by_user_id)
+         VALUES ('connection', $1, $2::jsonb, $3)
+         ON CONFLICT (resource_kind, resource_id) DO NOTHING
+         RETURNING resource_id`,
+        [connectionRowId, JSON.stringify(WORKSPACE_POLICY), installedByUserId],
+      );
+      if (ins.rows.length === 1) {
+        report.counts.policiesSeeded += 1;
+        report.policyRows.push({ resourceId: connectionRowId, ...provenance });
+      } else {
+        report.counts.skipped += 1;
+      }
+    }
+
+    // ----------------------------------------------------------------------
+    // Phase A — legacy blob scope:"app" rows (non-null org only).
+    // ----------------------------------------------------------------------
+    const blobRes = await pgm.db.query("SELECT value FROM metadata WHERE key = $1", [
+      BLOB_METADATA_KEY,
+    ]);
+    /** @type {Record<string, Array<Record<string, unknown>>>} */
+    let connections = {};
+    if (blobRes.rows.length > 0) {
+      let blob;
+      try {
+        blob = JSON.parse(blobRes.rows[0].value);
+      } catch (err) {
+        throw new Error(
+          `[core__0015] the legacy nango connections blob is not valid JSON — refusing: ${err.message}`,
+        );
+      }
+      const shapeOk =
+        blob && typeof blob === "object" && !Array.isArray(blob) &&
+        (blob.connections === undefined ||
+          (typeof blob.connections === "object" && blob.connections !== null && !Array.isArray(blob.connections)));
+      if (!shapeOk) {
+        throw new Error(
+          "[core__0015] the legacy nango connections blob is present but not the expected shape — refusing (fail-closed).",
+        );
+      }
+      connections = blob.connections ?? {};
+    }
+
+    const legacyScopeByIdentity = new Map(); // `${connectorKey}::${connectionId}` → "app"|"user"
+    for (const [connectorKey, entries] of Object.entries(connections)) {
+      if (!Array.isArray(entries)) continue;
+      for (const entry of entries) {
+        if (typeof entry?.connectionId !== "string") continue;
+        legacyScopeByIdentity.set(
+          `${connectorKey}::${entry.connectionId}`,
+          entry.scope === "user" ? "user" : "app",
+        );
+      }
+    }
+
+    const identityRows = await pgm.db.query(
+      `SELECT id, connector_key, connection_id, owner_user_id, organization_id
+         FROM nango_connection WHERE deleted_at IS NULL`,
+    );
+    for (const row of identityRows.rows) {
+      const legacyScope = legacyScopeByIdentity.get(
+        `${row.connector_key}::${row.connection_id}`,
+      );
+      if (legacyScope !== "app") continue; // user-scope / non-blob rows: owner-only fallback
+      if (row.organization_id === null) continue; // null-org NEVER gains workspace
+      await seedWorkspacePolicy(row.id, row.owner_user_id, {
+        phase: "legacy-app-blob",
+        connectorKey: row.connector_key,
+        connectionId: row.connection_id,
+      });
+    }
+
+    // ----------------------------------------------------------------------
+    // Phase B — external-MCP identity + grant seed.
+    // ----------------------------------------------------------------------
+    const mcpRows = await pgm.db.query(
+      `SELECT id, label, nango_connection_id, scope, org_id, user_id
+         FROM external_mcp_servers WHERE nango_connection_id IS NOT NULL`,
+    );
+    for (const server of mcpRows.rows) {
+      const connectionId = server.nango_connection_id;
+      let ownerUserId = null;
+      let ownerRule = null;
+      if (typeof server.user_id === "string" && server.user_id.length > 0) {
+        const u = await pgm.db.query('SELECT id FROM public."user" WHERE id = $1', [
+          server.user_id,
+        ]);
+        if (u.rows.length === 1) {
+          ownerUserId = server.user_id;
+          ownerRule = "row-user";
+        }
+      }
+      const organizationId = server.org_id ?? soleOrgId;
+      if (!ownerUserId) {
+        ownerUserId = await earliestOrgAdmin(server.org_id);
+        if (ownerUserId) ownerRule = "row-org-admin";
+      }
+      if (!ownerUserId) {
+        ownerUserId = await earliestOrgAdmin(soleOrgId);
+        if (ownerUserId) ownerRule = "sole-org-admin";
+      }
+      if (!ownerUserId) {
+        throw new Error(
+          `[core__0015] cannot resolve a NON-NULL owner for external MCP server ` +
+            `"${server.label}" (${server.id}) — ABORTING (fail-closed; owner_user_id is the contract).`,
+        );
+      }
+
+      const ins = await pgm.db.query(
+        `INSERT INTO nango_connection
+           (organization_id, connector_package_id, connector_key, connection_id, owner_user_id)
+         VALUES ($1, $2, 'externalMcp', $3, $4)
+         ON CONFLICT (connector_key, connection_id) WHERE deleted_at IS NULL
+         DO NOTHING
+         RETURNING id`,
+        [organizationId, EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL, connectionId, ownerUserId],
+      );
+      let identityId;
+      if (ins.rows.length === 1) {
+        identityId = ins.rows[0].id;
+        report.counts.externalMcpIdentities += 1;
+        report.externalMcpIdentities.push({
+          id: identityId,
+          serverId: server.id,
+          connectionId,
+          organizationId,
+          ownerUserId,
+          ownerRule,
+          scope: server.scope,
+        });
+      } else {
+        report.counts.skipped += 1;
+        const existing = await pgm.db.query(
+          `SELECT id FROM nango_connection
+            WHERE connector_key = 'externalMcp' AND connection_id = $1 AND deleted_at IS NULL`,
+          [connectionId],
+        );
+        identityId = existing.rows[0]?.id;
+      }
+
+      // Instance-global rows (anything but user scope) with a NON-NULL org:
+      // behavior-preserving workspace grant so the org-bound InternalWorker
+      // mint keeps working. user-scope / null-org rows: owner-only fallback.
+      if (identityId && server.scope !== "user" && organizationId !== null) {
+        await seedWorkspacePolicy(identityId, ownerUserId, {
+          phase: "external-mcp",
+          serverId: server.id,
+          connectionId,
+        });
+      }
+    }
+
+    await pgm.db.query(
+      `INSERT INTO metadata (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [REPORT_METADATA_KEY, JSON.stringify(report)],
+    );
+
+    await pgm.db.query("COMMIT");
+  } catch (err) {
+    await pgm.db.query("ROLLBACK");
+    throw err;
+  }
+}
+
+/** @param {import("node-pg-migrate").MigrationBuilder} pgm */
+export async function down(pgm) {
+  pgm.noTransaction();
+  await pgm.db.query("BEGIN");
+  try {
+    const reportRes = await pgm.db.query("SELECT value FROM metadata WHERE key = $1", [
+      REPORT_METADATA_KEY,
+    ]);
+    if (reportRes.rows.length > 0) {
+      /** @type {{policyRows?: Array<{resourceId: string}>, externalMcpIdentities?: Array<{id: string}>}} */
+      let report = {};
+      try {
+        report = JSON.parse(reportRes.rows[0].value);
+      } catch {
+        report = {};
+      }
+      for (const p of report.policyRows ?? []) {
+        await pgm.db.query(
+          `DELETE FROM extension_access_policy WHERE resource_kind = 'connection' AND resource_id = $1`,
+          [p.resourceId],
+        );
+      }
+      for (const ident of report.externalMcpIdentities ?? []) {
+        await pgm.db.query(`DELETE FROM nango_connection WHERE id = $1`, [ident.id]);
+      }
+      await pgm.db.query(`DELETE FROM metadata WHERE key = $1`, [REPORT_METADATA_KEY]);
+    }
+    await pgm.db.query("COMMIT");
+  } catch (err) {
+    await pgm.db.query("ROLLBACK");
+    throw err;
+  }
+}

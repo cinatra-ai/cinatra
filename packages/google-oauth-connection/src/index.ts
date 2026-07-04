@@ -1,8 +1,6 @@
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import {
   CINATRA_NANGO_PROVIDER_CONFIG_KEYS,
-  clearNangoConnectionRecords,
-  deleteNangoConnection,
   ensureNangoIntegration,
   getNangoConnection,
   getNangoOAuthCallbackUrl,
@@ -16,10 +14,18 @@ import {
 // settings-form → settings-panel, behind the manage-gated save action). Keeping
 // the barrel free of any "use client" form also keeps the @/app/campaigns/actions
 // graph (-> agents/objects/mcp) out of every server consumer of this barrel.
+//
+// The DISCONNECT surface (clearGoogleOAuthConnection / clearUserGoogleOAuthConnection)
+// lives in ./disconnect (alias @cinatra-ai/google-oauth-connection/disconnect) and is
+// deliberately NOT re-exported here: its cinatra#952 revocation ordering imports the
+// connection-identity-store, and re-exporting it would put that edge on the static
+// graph of EVERY barrel consumer — including /sign-in, whose route-graph-ratchet
+// ceiling (132) is a fought-for dev-perf budget.
 
 type GoogleScopedConnectorKey = "googleOAuth" | "gmail" | "googleCalendar" | "youtube";
 
-type GoogleOAuthStoredSettings = {
+/** INTERNAL (shared with ./disconnect): shape of the stored `google_oauth` settings row. */
+export type GoogleOAuthStoredSettings = {
   redirectUri?: string;
   clientId?: string;
   clientSecret?: string;
@@ -44,7 +50,9 @@ function readStoredSettings(): GoogleOAuthStoredSettings {
   return readConnectorConfigFromDatabase<GoogleOAuthStoredSettings>("google_oauth", {});
 }
 
-function writeStoredSettings(value: GoogleOAuthStoredSettings) {
+/** INTERNAL (shared with ./disconnect): single-sourced writer for the stored
+ * `google_oauth` settings row — not part of the public facade. */
+export function writeStoredGoogleOAuthSettings(value: GoogleOAuthStoredSettings) {
   writeConnectorConfigToDatabase("google_oauth", value);
 }
 
@@ -137,43 +145,12 @@ export async function saveGoogleOAuthSettings(input: {
     redirectUri: normalizedRedirectUri,
   };
   await ensureGoogleOAuthIntegration(nextSettings);
-  writeStoredSettings({
+  writeStoredGoogleOAuthSettings({
     redirectUri: nextSettings.redirectUri,
     clientId: nextSettings.clientId,
     clientSecret: nextSettings.clientSecret,
   });
   return nextSettings;
-}
-
-export async function clearGoogleOAuthConnection() {
-  writeStoredSettings({
-    redirectUri: getNangoOAuthCallbackUrl(),
-  });
-  const savedConnection = getPrimarySavedNangoConnection("googleOAuth");
-  await deleteNangoConnection(
-    savedConnection?.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
-    savedConnection?.connectionId ?? "cinatra-google-oauth",
-  );
-  await clearNangoConnectionRecords("googleOAuth");
-}
-
-export async function clearUserGoogleOAuthConnection(userId: string) {
-  const savedConnection = getPrimarySavedNangoConnection("googleOAuth", {
-    scope: "user",
-    userId,
-  });
-
-  if (savedConnection) {
-    await deleteNangoConnection(
-      savedConnection.providerConfigKey ?? CINATRA_NANGO_PROVIDER_CONFIG_KEYS.googleOAuth,
-      savedConnection.connectionId,
-    );
-  }
-
-  await clearNangoConnectionRecords("googleOAuth", {
-    scope: "user",
-    userId,
-  });
 }
 
 export async function refreshGoogleOAuthAccessTokenIfNeeded(input?: { userId?: string; connectorKey?: GoogleScopedConnectorKey }) {

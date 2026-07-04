@@ -5,6 +5,10 @@ import {
   getPrimarySavedNangoConnection,
   isNangoConfigured,
 } from "@/lib/nango-system";
+import { POLICY_VERSION } from "@/lib/authz/actor-context";
+import type { ActorContext } from "@/lib/authz";
+import { readNangoConnectionByNaturalKey } from "@cinatra-ai/extensions/connection-identity-store";
+import { enforceConnectionUse, ConnectionUseDeniedError } from "@/lib/connection-use-gate";
 
 // The runtime YouTube mint is a GLOBAL, actor-less reader: its single
 // consumer is the in-process media-feeds scraper service
@@ -25,6 +29,39 @@ export async function getConfiguredYouTubeAccessToken() {
   const savedConnection = getPrimarySavedNangoConnection("youtube", YOUTUBE_APP_SCOPE);
   if (!savedConnection) {
     return null;
+  }
+
+  // Per-connection use-gate (cinatra#952 W2): the in-process scraper mint is
+  // audited as an InternalWorker BOUND to the identity row's organization (so
+  // the cross-org guard and a workspace grant evaluate correctly). Legacy
+  // app-scope connections stay usable via the core__0015 workspace grant
+  // seed, not an exemption; a deny (or a connection with no identity row)
+  // fails CLOSED to the same null contract as a missing connection.
+  const identity = await readNangoConnectionByNaturalKey(
+    "youtube",
+    savedConnection.connectionId,
+  );
+  if (!identity) return null;
+  const workerActor: ActorContext = {
+    principalType: "InternalWorker",
+    principalId: "worker:media-feeds-scraper",
+    organizationId: identity.organizationId ?? undefined,
+    teamIds: [],
+    projectGrants: [],
+    projectIds: [],
+    authSource: "worker",
+    policyVersion: POLICY_VERSION,
+  };
+  try {
+    await enforceConnectionUse({
+      identity,
+      actor: workerActor,
+      subjectUserId: undefined,
+      source: "youtube-api",
+    });
+  } catch (err) {
+    if (err instanceof ConnectionUseDeniedError) return null;
+    throw err;
   }
 
   const connection = await getNangoConnection(
