@@ -460,20 +460,28 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // Checking interruptPayload first would cause the recipients review renderer to
     // see {agent_run_id, accountScope} instead of the confirmedRecipients JSON, leaving
     // the list empty even when objects_save also failed.
-    const interruptOutput: string | undefined = (() => {
-      // Always try history first — it contains the preceding ApiNode's LLM output.
+    // The preceding ApiNode's LLM output (history-derived), if any. Tracked
+    // separately (#839) from `interruptOutput` so the enrichedValues merge below
+    // can tell whether a parsed `spreadFromOutput` came from history (a real
+    // envelope — preserved) or from the pendingApproval fallback (a gate's own
+    // inputs — reserved keys stripped).
+    const historyText: string | undefined = (() => {
       const history = (task as { history?: ReadonlyArray<{ role?: string; parts?: readonly unknown[] }> }).history;
       const lastAgent = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
       const text = (lastAgent?.parts as Array<{ kind?: string; text?: string }> | undefined)
         ?.filter((p) => p.kind === "text" && typeof p.text === "string")
         .map((p) => p.text!)
         .join("");
-      if (text && text.length > 0) return text;
-      // Fall back to pendingApproval when history is empty (e.g. FlowNode gates or
-      // InputMessageNodes that carry their own approval payload rather than LLM output).
-      if (Object.keys(interruptPayload).length > 0) return JSON.stringify(interruptPayload);
-      return undefined;
+      return text && text.length > 0 ? text : undefined;
     })();
+    const interruptOutput: string | undefined =
+      // History first — it contains the preceding ApiNode's LLM output. Fall back
+      // to pendingApproval when history is empty (e.g. FlowNode gates or
+      // InputMessageNodes that carry their own approval payload rather than LLM output).
+      historyText ??
+      (Object.keys(interruptPayload).length > 0
+        ? JSON.stringify(interruptPayload)
+        : undefined);
     // Generic interrupt-value pass-through: when the gate's upstream node
     // emitted a flat JSON object as `output` (e.g. an OutputMessageNode like
     // the context-selection-agent's `emit_context_payload`, or any future
@@ -533,9 +541,40 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     } catch {
       // non-fatal — fallback renderer is acceptable
     }
+    // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
+    // WayFlow runtime propagates through task.metadata.pendingApproval
+    // (interruptPayload) — to the renderer. blog-pipeline's idea_selection_gate
+    // needs its `ideas[]` render input present to show an idea chooser (see
+    // reviewer-agent-output-renderer.tsx). Merged BELOW spreadFromOutput and the
+    // explicit stepNumber/output so history-derived output still WINS: data-review
+    // gates that parse `output` are unaffected.
+    //
+    // Reserved host-synthesized envelope keys (set by the reviewer-output
+    // envelope synthesis below) must never be SOURCED from a gate's
+    // pendingApproval — else a gate input could disable synthesis or shadow a
+    // real content bundle. Strip them from ALL pendingApproval-derived values:
+    // the explicit gate-input merge AND the `spreadFromOutput` fallback that
+    // re-parses pendingApproval when history is empty. A `spreadFromOutput`
+    // derived from HISTORY (a subflow that really emits {contentType,...}) is
+    // preserved (`historyText !== undefined`).
+    const RESERVED_ENRICHED_KEYS = new Set([
+      "contentType",
+      "contentBundle",
+      "summary",
+      "output",
+      "stepNumber",
+    ]);
+    const stripReserved = (o: Record<string, unknown>): Record<string, unknown> =>
+      Object.fromEntries(
+        Object.entries(o).filter(([k]) => !RESERVED_ENRICHED_KEYS.has(k)),
+      );
+    const gateInputValues = stripReserved(interruptPayload);
+    const spreadSafe =
+      historyText === undefined ? stripReserved(spreadFromOutput) : spreadFromOutput;
     const enrichedValues: Record<string, unknown> = {
       ...(run.inputParams ?? {}),
-      ...spreadFromOutput,
+      ...gateInputValues,
+      ...spreadSafe,
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
       ...(interruptOutput !== undefined ? { output: interruptOutput } : {}),
     };
