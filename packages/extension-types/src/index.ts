@@ -108,6 +108,26 @@ export interface ExtensionTypeHandler {
     manifests: ActiveExtensionManifest[];
   }): Promise<unknown[]>;
 
+  /**
+   * Archived twin of `listActive` (cinatra#948 — the Installed-extensions
+   * management surface lists archived rows for every kind, not just agents).
+   * Return this kind's descriptors that are BOTH visible to `scope` AND
+   * lifecycle-ARCHIVED per `manifests` (the coarse archived-candidate set,
+   * already excluding identities that are still live elsewhere — "live wins").
+   * The same visibility-authority contract as `listActive` applies: the reader
+   * owns "may this actor see this row"; it must never trust `manifests` for
+   * visibility. A kind whose native store retains no archived rows (e.g. the
+   * in-memory artifact registry, which deregisters on archive) may fall back to
+   * package-level descriptors derived from the scope-visible manifests — that
+   * preserves exactly the visibility its `listActive` applies (the shared
+   * owner-scope gate), so archived rows are never MORE visible than active ones.
+   */
+  listArchived?(input: {
+    actor: Actor;
+    scope: ExtensionDiscoveryScope;
+    manifests: ActiveExtensionManifest[];
+  }): Promise<unknown[]>;
+
   /** Return the native descriptor for a single lifecycle-live manifest if it is
    *  visible to `scope`, else null. */
   readActive?(input: {

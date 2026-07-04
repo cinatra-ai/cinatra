@@ -105,10 +105,12 @@ function StatusIcon({ status }: { status: StatusPillStatus }) {
         </svg>
       );
     case "archived":
+      // Cross (✕) per design system §VI — archived reads as "crossed out",
+      // muted grey (colour comes from the pill variant, not the glyph).
       return (
-        <svg {...common} strokeWidth="2.2">
-          <path d="M21 8v13H3V8" />
-          <path d="M1 3h22v5H1z" />
+        <svg {...common} strokeWidth="2.4">
+          <path d="M18 6 6 18" />
+          <path d="m6 6 12 12" />
         </svg>
       );
     case "failed":

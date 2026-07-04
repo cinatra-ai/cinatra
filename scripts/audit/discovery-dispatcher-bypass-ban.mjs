@@ -69,10 +69,11 @@ export const SANCTIONED_READERS = new Map([
     "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
     "marketplace install-state read model, NOT capability discovery: active+archived templates keyed by packageName to resolve the Install/Update/Installed/Restore CTA; lifecycle (installed_extension) reconciliation happens INSIDE the readers and the read is vendor-scope guarded; the dispatcher has no archived/install-state surface (owner ruling on cinatra-ai/cinatra#36)",
   ],
-  [
-    "packages/extensions/src/screens/registry-catalog-screen.tsx",
-    "routes ACTIVE discovery through discoverActiveExtensionCapabilities (the sanctioned path) and reads ONLY archived templates directly for install-state display — archived templates are not active capabilities and the dispatcher has no archived surface (owner ruling on cinatra-ai/cinatra#36)",
-  ],
+  // registry-catalog-screen.tsx was removed from this allowlist by cinatra#948:
+  // the Installed-extensions screen now routes BOTH active and archived
+  // discovery through the dispatcher (discoverActiveExtensionCapabilities /
+  // discoverArchivedExtensionCapabilities + the per-kind listArchived facets),
+  // so it no longer references a gated reader directly.
 ]);
 
 // Roots scanned: app core + workspace packages (discovery surfaces live in both).

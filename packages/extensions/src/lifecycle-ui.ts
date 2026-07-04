@@ -93,7 +93,14 @@ function sourceBadge(type: ExtensionSourceType): LifecycleBadgeDescriptor {
   }
 }
 
-function sourceVersion(ext: InstalledExtension): string | null {
+/**
+ * Human-readable installed-version label for a canonical row (a semver with a
+ * `v` prefix, or `dev / <short-sha>` for dev builds). Exported for the
+ * Installed-extensions management surface (cinatra#948), which renders the
+ * installed version of non-agent kinds from the canonical row's source
+ * provenance (the registry summary only knows the LATEST published version).
+ */
+export function sourceVersion(ext: InstalledExtension): string | null {
   if (ext.source.type === "verdaccio") {
     // A dev recompile records a verdaccio version of `0.0.0-dev.<sha>`; render
     // it as the human-readable "dev / <short-sha>" instead of the raw string.
@@ -112,6 +119,33 @@ function sourceVersion(ext: InstalledExtension): string | null {
   // A bundled (image-compiled) anchor row carries the bundled version directly.
   if (ext.source.type === "bundled") return `v${ext.source.version}`;
   return null;
+}
+
+/**
+ * Pick the lifecycle badge status for a catalog row from its canonical install
+ * rows (cinatra#957). Live-wins semantics mirroring
+ * `aggregateEffectiveStatusByPackageName`, but WITHOUT collapsing locked into
+ * active — the badge distinguishes a locked system extension from a plain
+ * active one:
+ *   any row locked   → "locked"
+ *   else any active  → "active"
+ *   else any archived→ "archived"
+ *   no rows          → "active" (fail-live: the row reached the active surface
+ *                      through the installed_extension (active|locked) gate)
+ */
+export function pickLifecycleBadgeStatus(
+  rows: ReadonlyArray<{ status: string }> | undefined,
+): ExtensionLifecycleStatus {
+  let sawActive = false;
+  let sawArchived = false;
+  for (const row of rows ?? []) {
+    if (row.status === "locked") return "locked";
+    if (row.status === "active") sawActive = true;
+    else if (row.status === "archived") sawArchived = true;
+  }
+  if (sawActive) return "active";
+  if (sawArchived) return "archived";
+  return "active";
 }
 
 export type LifecycleAction = "archive" | "activate" | "uninstall" | "force_delete" | "purge";

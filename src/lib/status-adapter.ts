@@ -86,11 +86,13 @@ export function approvalStatusToPill(status: ApprovalStatus): StatusPillStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle status (active / archived) — re-exported for completeness;
-// the LifecycleBadge wrapper carries the mapping inline.
+// Lifecycle status (active / archived / locked) — mirrors the canonical
+// EXTENSION_LIFECYCLE_STATUSES (packages/extensions/src/canonical-types.ts).
+// Re-exported for completeness; the LifecycleBadge wrapper carries the
+// mapping inline. "locked" is a live system extension → active styling.
 // ---------------------------------------------------------------------------
 
-export type LifecycleStatus = "active" | "archived";
+export type LifecycleStatus = "active" | "archived" | "locked";
 
 export function lifecycleStatusToPill(status: LifecycleStatus): StatusPillStatus {
   return status === "archived" ? "archived" : "approved";

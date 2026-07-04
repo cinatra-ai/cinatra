@@ -161,5 +161,19 @@ export function createSkillExtensionHandler(): ExtensionTypeHandler {
         .filter((s) => s.packageName != null && live.has(s.packageName))
         .filter((s) => skillVisibleToScope(s, scope));
     },
+
+    // Archived twin of listActive (cinatra#948). The catalog RETAINS rows for
+    // archived packages (archive is a canonical-lifecycle transition; the
+    // per-kind archive() hook is a no-op), so the exact same two-stage
+    // visibility applies: shared owner-scope manifest gate ∩ the per-row skill
+    // visibility predicate — an archived scoped skill never leaks outside its
+    // owning scope.
+    async listArchived({ scope, manifests }) {
+      const archivedVisible = visibleManifestPackageNames(manifests, scope);
+      const skills = await listInstalledSkills();
+      return skills
+        .filter((s) => s.packageName != null && archivedVisible.has(s.packageName))
+        .filter((s) => skillVisibleToScope(s, scope));
+    },
   };
 }
