@@ -40,16 +40,16 @@
     {
       "packageName": "@cinatra-ai/nango-connector",
       "repo": "cinatra-ai/nango-connector",
-      "resolvedSha": "a1f325c2dd3ae3776dee4cd0fb9743a65a13116b",
-      "packageVersion": "0.1.5",
-      "treeSha256": "d06da924d7e0ed84d2a7a43ea0ee73ca789380593135382bcf555307bbdbe8cb"
+      "resolvedSha": "3c7886bfd45efd6cd8985c785609550dd4e5d3df",
+      "packageVersion": "0.1.6",
+      "treeSha256": "03e972a42835c25699b8a0fc55507734b4a291417ae2bbb804e8192953a622f8"
     },
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "36a4beacb6aefb492a4641fa86b6026151266ecc",
-      "packageVersion": "0.1.7",
-      "treeSha256": "5504140131973211f9c53deb7156c4b2a2bafdfd21dc2cb977d4848149bb01d9"
+      "resolvedSha": "bff43bd5e3881e3f0e5bece3b324dd09b62c744a",
+      "packageVersion": "0.1.8",
+      "treeSha256": "9581c9c9c44cfcac26d624df624355dbe61a55b701378a765074320d7436f517"
     },
     {
       "packageName": "@cinatra-ai/planner-agent",

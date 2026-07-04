@@ -1,32 +1,38 @@
 /**
- * Security regression: saveApolloConnectionAction + clearApolloConnectionAction
- * MUST gate on requireExtensionAction("@cinatra-ai/apollo-connector", "manage")
- * as the FIRST executable statement. These actions write/clear the Apollo API
- * connection credentials, so an unprivileged caller must not be able to
- * overwrite or wipe them.
+ * Security regression: the apollo-connector's credential WRITE actions
+ * (`saveConnection` / `clearConnection`, registered via ctx.ui.registerAction in
+ * src/register.ts) MUST gate on the host action-guard service's
+ * `guard.require(PACKAGE_NAME, "manage")` as the FIRST executable statement of
+ * each handler, and the guard resolution MUST fail closed when the host service
+ * is absent. The actions write/clear the Apollo API connection credentials, so an unprivileged
+ * caller must not be able to overwrite or wipe them.
  *
- * These actions live in the connector and gate on the SDK's
- * requireExtensionAction(..., "manage") gate
- * (org_owner/org_admin/platform_admin, fail-closed). The connector action is
- * THE security boundary.
+ * At 0.1.4 the connector converted its setup/settings UI to the schema-config DSL and
+ * retired src/actions.ts: the manage boundary now lives in register.ts as a
+ * lazily resolved host action-guard (the same value the SDK
+ * `requireExtensionAction` slot binds — SDK VALUE imports are rejected in a
+ * runtime serverEntry graph). This test pins that boundary the same way the
+ * openai gate test pins its register.ts guard layer:
+ *   1. requireManage resolves "@cinatra-ai/host:extension-action-guard" and
+ *      THROWS when the service is missing (fail-closed, never a silent skip);
+ *   2. requireManage delegates to `guard.require(PACKAGE_NAME, "manage")`;
+ *   3. every credential WRITE handler's FIRST executable statement is
+ *      `await requireManage();`;
+ *   4. PACKAGE_NAME resolves to the apollo-connector package id.
  *
- * This test lives under src/ (a root-vitest-covered path) — NOT co-located in
- * the extension — so the security invariant is actually ENFORCED in CI (the root
- * vitest `include` does not cover extensions/**). It asserts against the
- * connector source text by repo-relative path.
- *
- * The connector references the package id via an APOLLO_PACKAGE_ID constant
- * rather than an inline string literal, so the gate assertion matches that form.
+ * This test lives under src/ (a root-vitest-covered, CI-pinned path) — NOT
+ * co-located in the extension (the root vitest `include` does not cover
+ * extensions/**) — so the security invariant is actually ENFORCED in CI. It
+ * asserts against the connector source text by repo-relative path, using the
+ * stronger firstExecutableStatement check (mirrors openai/github/linkedin).
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-function extractFunctionBody(source: string, fnName: string): string {
-  const marker = `export async function ${fnName}`;
-  const start = source.indexOf(marker);
-  if (start === -1) throw new Error(`fn ${fnName} not found`);
-  let i = source.indexOf("{", start);
+/** Brace-matched block body starting at the first `{` at/after `from`. */
+function extractBraceBlock(source: string, from: number): string {
+  let i = source.indexOf("{", from);
   const bodyStart = i;
   let depth = 0;
   for (; i < source.length; i++) {
@@ -37,6 +43,22 @@ function extractFunctionBody(source: string, fnName: string): string {
     }
   }
   return source.slice(bodyStart + 1, i);
+}
+
+/** Body of the `const requireManage = async ... => { ... }` arrow. */
+function extractRequireManageBody(source: string): string {
+  const at = source.indexOf("const requireManage = async");
+  if (at === -1) throw new Error("requireManage not found");
+  return extractBraceBlock(source, source.indexOf("=>", at));
+}
+
+/** Body of the `handler: async ...` immediately following `id: "<actionId>"`. */
+function extractActionHandlerBody(source: string, actionId: string): string {
+  const idAt = source.indexOf(`id: "${actionId}"`);
+  if (idAt === -1) throw new Error(`action ${actionId} not found`);
+  const handlerAt = source.indexOf("handler: async", idAt);
+  if (handlerAt === -1) throw new Error(`handler for ${actionId} not found`);
+  return extractBraceBlock(source, source.indexOf("=>", handlerAt));
 }
 
 /**
@@ -63,16 +85,40 @@ function firstExecutableStatement(body: string): string {
 }
 
 const SOURCE = readFileSync(
-  join(process.cwd(), "extensions/cinatra-ai/apollo-connector/src/actions.ts"),
+  join(process.cwd(), "extensions/cinatra-ai/apollo-connector/src/register.ts"),
   "utf-8",
 );
-const GATE = `requireExtensionAction(APOLLO_PACKAGE_ID, "manage")`;
 
-describe("apollo connection actions — extension manage gate", () => {
-  for (const fnName of ["saveApolloConnectionAction", "clearApolloConnectionAction"]) {
-    it(`${fnName}: the FIRST executable statement is the requireExtensionAction manage gate`, () => {
-      const body = extractFunctionBody(SOURCE, fnName);
-      expect(firstExecutableStatement(body).startsWith(`await ${GATE};`)).toBe(true);
+describe("apollo connection actions — register.ts manage gate", () => {
+  it("requireManage resolves the host action-guard and FAILS CLOSED when it is absent", () => {
+    const body = extractRequireManageBody(SOURCE);
+    expect(body).toContain('"@cinatra-ai/host:extension-action-guard"');
+
+    // Pin the fail-closed BRANCH structurally, not by substring: the
+    // missing-guard check's block must open with a `throw` (a logged
+    // early-return would pass a substring check while silently allowing the
+    // ungated write to proceed).
+    const checkAt = body.indexOf("if (!guard || typeof guard.require !== \"function\")");
+    expect(checkAt, "missing-guard check present").toBeGreaterThanOrEqual(0);
+    const branch = extractBraceBlock(body, checkAt);
+    expect(
+      firstExecutableStatement(branch).startsWith("throw new Error("),
+      "missing-guard branch throws (fail-closed, never a logged skip)",
+    ).toBe(true);
+
+    // ...and the delegation to the guard happens AFTER the fail-closed check.
+    const delegateAt = body.indexOf('await guard.require(PACKAGE_NAME, "manage");');
+    expect(delegateAt, "manage delegation present").toBeGreaterThan(checkAt);
+  });
+
+  for (const actionId of ["saveConnection", "clearConnection"]) {
+    it(`${actionId}: the FIRST executable statement is the requireManage gate`, () => {
+      const body = extractActionHandlerBody(SOURCE, actionId);
+      expect(firstExecutableStatement(body).startsWith("await requireManage();")).toBe(true);
     });
   }
+
+  it("the gate targets the apollo-connector package id", () => {
+    expect(SOURCE).toContain('const PACKAGE_NAME = "@cinatra-ai/apollo-connector";');
+  });
 });

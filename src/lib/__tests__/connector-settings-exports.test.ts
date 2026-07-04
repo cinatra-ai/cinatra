@@ -10,11 +10,13 @@ vi.mock("server-only", () => ({}));
 
 import { getConnectorSettingsPageLoader } from "@/lib/connector-setup-pages";
 
+// apollo-connector (ApolloSettingsPage) and anthropic-connector
+// (AnthropicSettingsContent) left this list at 0.1.4: both converted to the
+// schema-config DSL and retired their React settings pages (no generated
+// settings loader remains — the host renders from configSchema).
 const CONSUMED_SETTINGS_EXPORTS: Array<[slug: string, exportName: string]> = [
-  ["apollo-connector", "ApolloSettingsPage"],
   ["youtube-connector", "YouTubeSettingsPage"],
   ["linkedin-connector", "LinkedInSettingsPage"],
-  ["anthropic-connector", "AnthropicSettingsContent"],
 ];
 
 describe("generated settings-page loaders expose the exports the host consumes", () => {
