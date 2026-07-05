@@ -18,7 +18,7 @@
 // is the browse-card "More details" experience only.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useState, type ReactElement } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import {
@@ -87,11 +87,19 @@ export type MarketplaceDetailModalInitialLoad =
 
 export interface MarketplaceDetailModalProps {
   card: MarketplaceCardData;
-  /** The card's 4-state CTA — its `disabled` already encodes registry state. */
-  cta: MarketplaceCardCta;
-  installAction: BoundLifecycleAction;
-  updateAction: BoundLifecycleAction;
-  restoreAction: BoundLifecycleAction;
+  /**
+   * The card's install-lifecycle CTA. Optional (cinatra#948 reopen,
+   * 2026-07-05): the Marketplace browse card passes it and the footer renders
+   * its 6-state install CTA; the §VI Installed-extensions modal is
+   * DETAILS-ONLY and passes NONE of the footer props, so the footer bar is not
+   * rendered at all (owner ruling: an installed extension's modal shows no
+   * install/uninstall/manage buttons and no footer info). The footer renders
+   * only when the full CTA + lifecycle actions are all provided.
+   */
+  cta?: MarketplaceCardCta;
+  installAction?: BoundLifecycleAction;
+  updateAction?: BoundLifecycleAction;
+  restoreAction?: BoundLifecycleAction;
   /**
    * Detail loader override — defaults to the admin-gated marketplace server
    * action. Injectable so the /design-fixtures harness can seed a
@@ -109,20 +117,17 @@ export interface MarketplaceDetailModalProps {
   /** See {@link MarketplaceDetailModalInitialLoad}. */
   initialLoad?: MarketplaceDetailModalInitialLoad;
   /**
-   * Optional management-actions slot, left-aligned in the footer beside the
-   * install-lifecycle CTA (cinatra#948 reopen, 2026-07-05: the §VI card
-   * sanctions only Settings + More details on the card itself — no
-   * Update/Uninstall/Restore/Reinstall/admin-overflow buttons there. Update
-   * and Restore are already covered by this footer's own CTA states; there is
-   * no other §VI/§V-sanctioned surface for the remaining per-item management
-   * actions (Uninstall; the admin-only agent Promote/Demote overflow), so the
-   * Installed-page caller relocates them here, inside the "More details"
-   * surface the spec already names, rather than inventing new card UI or
-   * silently dropping the capability). The Marketplace browse-card caller
-   * never passes this — its footer stays the single right-aligned CTA the §V
-   * drawing shows.
+   * Installed-page (§VI) "More details" affordance: a real `<a>` element (the
+   * published §VI drawing renders More details as `<a class="btn link">`, never
+   * a button). When set, the modal renders this anchor as its opener instead of
+   * the browse card's `<DialogTrigger>` button — `variant:"link"` for an active
+   * row (underlined indigo link), `variant:"ghost"` for an archived row (muted
+   * ghost text). The `href` is the package's marketplace-detail path, a
+   * progressive-enhancement fallback: JS intercepts the click to open the modal
+   * IN PLACE (no navigation); without JS the anchor still resolves to a real
+   * page. The browse card omits this and keeps its `<DialogTrigger>` button.
    */
-  manageActions?: ReactNode;
+  linkTrigger?: { variant: "link" | "ghost"; href: string };
 }
 
 export function MarketplaceDetailModal({
@@ -134,7 +139,7 @@ export function MarketplaceDetailModal({
   loadDetail = getPublicMarketplaceDetailAction,
   trigger,
   initialLoad,
-  manageActions,
+  linkTrigger,
 }: MarketplaceDetailModalProps) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
@@ -182,13 +187,38 @@ export function MarketplaceDetailModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button size="sm" variant="outline" className="flex-1">
-            More details
-          </Button>
-        )}
-      </DialogTrigger>
+      {linkTrigger ? (
+        // §VI Installed-page opener: a real <a> (never a button — the spec is
+        // explicit). Rendered OUTSIDE <DialogTrigger> so the controlled Dialog
+        // opens via onOpenChange while the click's default navigation is
+        // suppressed (the href is only the no-JS fallback).
+        // eslint-disable-next-line no-restricted-syntax -- §VI design spec + owner ruling (2026-07-05): "More details" MUST be a real <a> styled as a link, NEVER a shadcn <Button>/<Button asChild><Link/></Button>; it opens the §V modal in place via onClick with the href as the no-JS fallback.
+        <a
+          href={linkTrigger.href}
+          data-slot="installed-more-details"
+          aria-haspopup="dialog"
+          className={cn(
+            buttonVariants({ variant: linkTrigger.variant, size: "sm" }),
+            linkTrigger.variant === "link"
+              ? "underline underline-offset-3"
+              : "text-muted-foreground",
+          )}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenChange(true);
+          }}
+        >
+          More details
+        </a>
+      ) : (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button size="sm" variant="outline" className="flex-1">
+              More details
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       {/* Overlay stops below the navbar (top-16). Portalled so it escapes any
           transformed card ancestor and dims the whole viewport below the nav. */}
       <DialogPortal>
@@ -246,24 +276,26 @@ export function MarketplaceDetailModal({
         </div>
 
         {/* Footer — the six-state install CTA, right-aligned per the §V
-            drawing (hairline separator, 15px/26px padding). When the caller
-            passes `manageActions` (cinatra#948 reopen: the §VI card itself
-            cannot carry them), they render left-aligned in the same row. */}
-        <div
-          className={cn(
-            "flex shrink-0 items-center border-t border-line px-6.5 py-3.75",
-            manageActions ? "justify-between gap-3" : "justify-end",
-          )}
-        >
-          {manageActions}
-          <ModalFooterCta
-            card={card}
-            cta={cta}
-            installAction={installAction}
-            updateAction={updateAction}
-            restoreAction={restoreAction}
-          />
-        </div>
+            drawing (hairline separator, 15px/26px padding). Rendered ONLY for
+            the Marketplace browse card (all four footer props supplied). The
+            §VI Installed-extensions modal supplies none of them, so the footer
+            bar is omitted entirely: an installed extension's "More details" is
+            details-only, with no install/uninstall/manage buttons and no
+            footer info (owner ruling, 2026-07-05). */}
+        {cta != null &&
+        installAction != null &&
+        updateAction != null &&
+        restoreAction != null ? (
+          <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
+            <ModalFooterCta
+              card={card}
+              cta={cta}
+              installAction={installAction}
+              updateAction={updateAction}
+              restoreAction={restoreAction}
+            />
+          </div>
+        ) : null}
       </DialogContent>
     </Dialog>
   );
@@ -414,9 +446,13 @@ function ModalHero({
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {/* §V title: Archivo (display) italic 800 23px ink — the named
-            `text-modal-title` token (globals.css @theme). */}
+            `text-modal-title` token (globals.css @theme). Prefer the
+            caller-supplied human-readable name (the Installed page hydrates it
+            from the per-kind manifest displayName); the fetched storefront
+            title is the fallback. Never the raw package slug (owner ruling:
+            the modal shows the human name, not the package name). */}
         <h2 className="font-display text-modal-title font-extrabold italic text-foreground">
-          {detail.displayName}
+          {card.displayName || detail.displayName}
         </h2>
         {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
             vendor as a semibold primary link (no underline at rest) out to

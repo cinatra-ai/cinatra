@@ -54,17 +54,10 @@ export type InstalledExtensionCardProps = {
    */
   status?: ReactNode;
   /**
-   * Operational chips (visibility / required / risk …) — deliberately OFF the
-   * §VI spec version line, rendered as a subdued row beneath it. A documented
-   * operational-necessity addition to the drawing (the reopen keeps the chips
-   * but moves them out of the spec line).
-   */
-  chips?: ReactNode;
-  /**
-   * Right-panel actions — exactly the §VI drawing's two: Settings (where a
-   * configuration surface exists) then More details. No management actions
-   * (Update/Uninstall/Restore/Reinstall/admin-overflow) belong here — the
-   * caller relocates those into the "More details" §V modal.
+   * Right-panel actions — exactly the §VI drawing's two: Settings then More
+   * details, ALWAYS both (owner ruling, 2026-07-05). No management actions
+   * (Update/Uninstall/Restore/Reinstall/admin-overflow) and no chips belong
+   * on the card.
    */
   actions?: ReactNode;
   /**
@@ -131,7 +124,6 @@ export function InstalledExtensionCard({
   description,
   version,
   status,
-  chips,
   actions,
   archived = false,
   className,
@@ -212,17 +204,6 @@ export function InstalledExtensionCard({
           )}
           {status}
         </div>
-        {chips && (
-          <div
-            data-slot="installed-extension-operational-chips"
-            className={cn(
-              "flex flex-wrap items-center gap-x-1.5 gap-y-1.5",
-              archived && "opacity-70",
-            )}
-          >
-            {chips}
-          </div>
-        )}
       </div>
 
       {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
