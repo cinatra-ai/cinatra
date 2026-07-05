@@ -10,7 +10,7 @@ vi.mock("@/lib/drupal-api", () => ({
   getDrupalAPISettings: vi.fn(),
 }));
 
-vi.mock("@/lib/wordpress-mcp-connection", () => ({
+vi.mock("@/lib/url-policy", () => ({
   isPrivateUrl: vi.fn((u: string) => /localhost|127\.0\.0\.1|::1/.test(u)),
 }));
 
