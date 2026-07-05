@@ -18,8 +18,17 @@ vi.mock("@/lib/nango-system", () => ({
   buildBearerAuthHeaderFromNango: vi.fn(),
 }));
 
+// cinatra#967: the owner-aware instance-gating seam. `null` (default) means
+// "no identity resolved/seeded" — the probe falls through to the pre-#967
+// ungated Bearer resolution, same as every other test in this file.
+vi.mock("@/lib/instance-connection-actor", () => ({
+  enforceInstanceConnectionUse: vi.fn(async () => null),
+}));
+
 import { getDrupalAPISettings } from "@/lib/drupal-api";
 import { buildBearerAuthHeaderFromNango } from "@/lib/nango-system";
+import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
+import { ConnectionUseDeniedError } from "@/lib/connection-use-gate";
 import {
   getDrupalMcpInstanceStatuses,
   probeDrupalMcp,
@@ -100,5 +109,63 @@ describe("getDrupalMcpInstanceStatuses — Nango-backed probe", () => {
       "https://status-ok.example.com/_mcp_tools",
       expect.objectContaining({ method: "HEAD", headers: { Authorization: "Bearer token-a" } }),
     );
+  });
+
+  it("cinatra#967: gates each instance's Bearer resolution via enforceInstanceConnectionUse, threading its {orgId, runBy} binding, BEFORE the raw Nango read", async () => {
+    const instanceWithBinding = { ...inst("status-gated", "https://status-gated.example.com"), orgId: "org-1", runBy: "user-1" };
+    vi.mocked(getDrupalAPISettings).mockReturnValue({ instances: [instanceWithBinding] });
+    const callOrder: string[] = [];
+    vi.mocked(enforceInstanceConnectionUse).mockImplementationOnce(async () => {
+      callOrder.push("gate");
+      return null;
+    });
+    vi.mocked(buildBearerAuthHeaderFromNango).mockImplementationOnce(async () => {
+      callOrder.push("readback");
+      return { Authorization: "Bearer token-a" };
+    });
+
+    await getDrupalMcpInstanceStatuses();
+
+    expect(vi.mocked(enforceInstanceConnectionUse)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectorKey: "drupal",
+        connectionId: "status-gated",
+        binding: { orgId: "org-1", runBy: "user-1" },
+        source: "drupal-mcp-connection",
+      }),
+    );
+    expect(callOrder).toEqual(["gate", "readback"]);
+  });
+
+  it("cinatra#967: a ConnectionUseDeniedError for one instance surfaces as auth_error and does not abort the sweep for other instances", async () => {
+    vi.mocked(getDrupalAPISettings).mockReturnValue({
+      instances: [
+        inst("denied-instance", "https://denied.example.com"),
+        inst("ok-instance", "https://ok-instance.example.com"),
+      ],
+    });
+    vi.mocked(enforceInstanceConnectionUse)
+      .mockRejectedValueOnce(
+        new ConnectionUseDeniedError({ statusCode: 403, reason: "forbidden", message: "denied" }),
+      )
+      .mockResolvedValueOnce(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const statuses = await getDrupalMcpInstanceStatuses();
+
+    expect(statuses).toHaveLength(2);
+    expect(statuses.find((s) => s.id === "denied-instance")?.status).toBe("auth_error");
+    expect(statuses.find((s) => s.id === "ok-instance")?.status).toBe("registered");
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("cinatra#967: a NON-deny error (e.g. a DB/identity-seeding failure) stays LOUD — rethrown, never swallowed into a status code", async () => {
+    class DbFailure extends Error {}
+    vi.mocked(getDrupalAPISettings).mockReturnValue({
+      instances: [inst("db-failure-instance", "https://db-failure.example.com")],
+    });
+    vi.mocked(enforceInstanceConnectionUse).mockRejectedValueOnce(new DbFailure("db down"));
+
+    await expect(getDrupalMcpInstanceStatuses()).rejects.toThrow(DbFailure);
   });
 });
