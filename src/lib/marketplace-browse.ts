@@ -27,6 +27,8 @@ import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { VendorCredentialsMissingError } from "@/lib/marketplace-credentials";
 import {
   emptyRatingSummary,
+  normalizeDetailChangelog,
+  normalizeDetailDependencies,
   safeHttpUrl,
   type MarketplaceDetailLoadResult,
   type MarketplaceDetailView,
@@ -194,6 +196,16 @@ function toDetailView(
     // detail.iconAssetUrl is a raw passthrough, so a non-http(s) asset URL would
     // otherwise reach the modal's <img src>. safeHttpUrl drops it to null.
     iconUrl: safeHttpUrl(detail.iconUrl ?? detail.iconAssetUrl),
+    // Scheme-guard the banner too: the wire mapper passes bannerUrl through
+    // verbatim, so this projection is where a non-http(s) value is dropped
+    // before it can reach the modal-hero <img src> (#739).
+    bannerUrl: safeHttpUrl(detail.bannerUrl),
+    // §V Changelog tab + Dependencies section (cinatra#989). The storefront
+    // detail endpoint does not serve either field yet (marketplace#190
+    // workstream C) — the normalizers degrade absent/malformed values to the
+    // spec empty states (empty-state tab / omitted section).
+    changelog: normalizeDetailChangelog(detail.changelog),
+    dependencies: normalizeDetailDependencies(detail.dependencies),
     ratingSummary: detail.ratingSummary ?? emptyRatingSummary(),
     reviews: detail.reviews ?? [],
     vendor: detail.vendor ?? null,

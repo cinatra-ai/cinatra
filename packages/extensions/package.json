@@ -37,6 +37,7 @@
     "./destination-resolver": "./src/destination-resolver.ts",
     "./license-detection": "./src/license-detection.ts",
     "./screens": "./src/screens/index.ts",
+    "./screens/marketplace-detail-modal": "./src/screens/marketplace-detail-modal.tsx",
     "./mcp-module": "./src/mcp/module.ts",
     "./components/publish-destination-picker": "./src/components/publish-destination-picker.tsx",
     "./components/license-warning-dialog": "./src/components/license-warning-dialog.tsx"

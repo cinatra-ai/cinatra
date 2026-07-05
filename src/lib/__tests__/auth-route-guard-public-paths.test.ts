@@ -269,3 +269,30 @@ describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)
     expect(res.headers.get("location")).toContain("/sign-in");
   });
 });
+
+describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harness routes", () => {
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+
+  // NODE_ENV is "test" here (non-production), the same branch the dev server
+  // takes; the production-standalone CI harness takes the
+  // CINATRA_E2E_SETUP_BYPASS branch of the same helper.
+  it("/design-fixtures stays public in non-production (pixel-diff harness)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("/design-fixtures/marketplace-detail-modal is public in non-production (§V modal harness, cinatra#989/#739)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/marketplace-detail-modal"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("CONTROL: an arbitrary /design-fixtures/* sibling is NOT public (exact-path list, no prefix wildcard)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+});

@@ -149,6 +149,49 @@ export interface ExtensionDetail extends ExtensionCard {
   reviews?: MarketplaceReview[];
   /** Vendor public store identity (name, slug, sanitized store URL). */
   vendor?: MarketplaceVendorRef | null;
+  /**
+   * The extension's root `CHANGELOG`, for the §V modal Changelog tab: either
+   * already parsed to per-version entries (newest first) or the raw CHANGELOG
+   * text for the client to parse (marketplace#190 workstream C serves one of
+   * the two). OPTIONAL/null — absent until the storefront detail endpoint
+   * ships the field; the modal then renders its "No changelog available"
+   * empty state.
+   */
+  changelog?: MarketplaceChangelogEntry[] | string | null;
+  /**
+   * The OTHER Cinatra extensions this extension declares in
+   * `cinatra.dependencies` — never its npm packages (§V Dependencies list).
+   * OPTIONAL/null — absent until the storefront detail endpoint ships the
+   * field (marketplace#190 workstream C); the modal then omits the
+   * Dependencies section.
+   */
+  dependencies?: MarketplaceExtensionDependency[] | null;
+}
+
+/** One per-version entry of the extension's root CHANGELOG (newest first). */
+export interface MarketplaceChangelogEntry {
+  /** The released version, without decoration (e.g. "0.4.2"). */
+  version: string;
+  /** ISO-8601 release date, or null when the CHANGELOG carries none. */
+  date: string | null;
+  /** Plain-text release-note lines (rendered one list item each). */
+  notes: string[];
+}
+
+/**
+ * One declared `cinatra.dependencies` entry — another Cinatra extension the
+ * listing depends on (kind emblem + display name + version range in the §V
+ * Dependencies list). Distinct from npm `dependencies` by contract.
+ */
+export interface MarketplaceExtensionDependency {
+  /** Scoped npm name of the depended-on extension. */
+  packageName: string;
+  /** Human display name; upstream falls back to `packageName` when unknown. */
+  name: string;
+  /** Extension kind driving the emblem, or null when the catalog can't say. */
+  kind: ExtensionKind | null;
+  /** Declared semver range verbatim (e.g. "^1.2.0"); "" when undeclared. */
+  versionRange: string;
 }
 
 /** Commerce badge on the detail contract — cost / open-source + SPDX id. */
@@ -253,6 +296,40 @@ export interface MarketplaceExtensionGetWire {
     text?: string | null;
   }> | null;
   vendor?: { name?: string | null; slug?: string | null; store_url?: string | null } | null;
+  /**
+   * Root-CHANGELOG release notes (marketplace#190 workstream C): a per-version
+   * entry array, the raw CHANGELOG text, or absent. Entry `notes` accepts a
+   * string[] or a single string; `date`/`released_at` both accepted.
+   */
+  changelog?:
+    | Array<{
+        version?: string | null;
+        date?: string | null;
+        released_at?: string | null;
+        notes?: unknown;
+      }>
+    | string
+    | null;
+  /**
+   * Manifest `cinatra.dependencies` (marketplace#190 workstream C): either an
+   * enriched entry array or the raw manifest name→range map. Never the npm
+   * `dependencies` of the package.
+   */
+  dependencies?:
+    | Array<{
+        package_name?: string | null;
+        packageName?: string | null;
+        name?: string | null;
+        display_name?: string | null;
+        kind?: string | null;
+        version_range?: string | null;
+        versionRange?: string | null;
+        /** Canonical sdk-extensions edge: a {range}|{version}|{ref} object. */
+        version_constraint?: unknown;
+        versionConstraint?: unknown;
+      }>
+    | Record<string, string>
+    | null;
 }
 
 // ---------------------------------------------------------------------------

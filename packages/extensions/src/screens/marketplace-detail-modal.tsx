@@ -4,12 +4,13 @@
 // MarketplaceDetailModal — the in-app extension-detail modal.
 //
 // Clicking "More details" on a browse card opens this dialog instead of
-// navigating. Its body embeds the marketplace listing detail (hero + Details /
-// Reviews tabs + share row) stripped of storefront chrome; the footer carries
-// the per-instance install CTA (the six visual states of the design spec §IV,
-// assembled from the existing pieces). The marketplace detail is fetched
-// on-demand via an admin-gated server action (the marketplace MCP client stays
-// server-only), projected into the client-safe MarketplaceDetailView.
+// navigating. Its body embeds the marketplace listing detail (banner-capable
+// hero + Details / Reviews / Changelog tabs + share row, per design spec §V)
+// stripped of storefront chrome; the footer carries the per-instance install
+// CTA (the six visual states of the design spec §IV, assembled from the
+// existing pieces). The marketplace detail is fetched on-demand via an
+// admin-gated server action (the marketplace MCP client stays server-only),
+// projected into the client-safe MarketplaceDetailView.
 //
 // The full-page detail route is intentionally KEPT — it remains the deep-link
 // target of the agent/instance page header and the registry catalog. This modal
@@ -18,7 +19,7 @@
 
 import { useCallback, useState } from "react";
 import Link from "next/link";
-import { XIcon, Star, BadgeCheck, Loader2 } from "lucide-react";
+import { XIcon, Star, BadgeCheck, FileX, Loader2 } from "lucide-react";
 
 import {
   Dialog,
@@ -31,9 +32,12 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { extensionKindEmblem } from "@/components/extension-kind-emblem";
+import {
+  extensionKindEmblem,
+  type ExtensionEmblemKind,
+} from "@/components/extension-kind-emblem";
+import { ACCENT_PALETTE, deriveExtensionAccent } from "@/lib/extension-accent";
 import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import {
@@ -47,6 +51,9 @@ import {
   formatInstallations,
   resolveModalInstallState,
   safeHttpUrl,
+  type MarketplaceDetailChangelogEntry,
+  type MarketplaceDetailDependency,
+  type MarketplaceDetailLoadResult,
   type MarketplaceDetailView,
   type MarketplaceDetailReview,
   type ShareNetwork,
@@ -71,6 +78,13 @@ export interface MarketplaceDetailModalProps {
   installAction: BoundLifecycleAction;
   updateAction: BoundLifecycleAction;
   restoreAction: BoundLifecycleAction;
+  /**
+   * Detail loader override — defaults to the admin-gated marketplace server
+   * action. Injectable so the /design-fixtures harness can seed a
+   * deterministic MarketplaceDetailView without a storefront round-trip;
+   * production callers never pass it.
+   */
+  loadDetail?: (packageName: string) => Promise<MarketplaceDetailLoadResult>;
 }
 
 export function MarketplaceDetailModal({
@@ -79,6 +93,7 @@ export function MarketplaceDetailModal({
   installAction,
   updateAction,
   restoreAction,
+  loadDetail = getPublicMarketplaceDetailAction,
 }: MarketplaceDetailModalProps) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LoadStatus>("idle");
@@ -87,7 +102,7 @@ export function MarketplaceDetailModal({
   const load = useCallback(async () => {
     setStatus("loading");
     try {
-      const result = await getPublicMarketplaceDetailAction(card.packageName);
+      const result = await loadDetail(card.packageName);
       if (result.ok) {
         setDetail(result.detail);
         setStatus("loaded");
@@ -99,7 +114,7 @@ export function MarketplaceDetailModal({
       // browse route; render the retryable error state instead.
       setStatus("error");
     }
-  }, [card.packageName]);
+  }, [card.packageName, loadDetail]);
 
   const onOpenChange = useCallback(
     (next: boolean) => {
@@ -133,8 +148,10 @@ export function MarketplaceDetailModal({
         // centered dialog into a below-navbar, internally-scrolling panel.
         aria-describedby={undefined}
         className={cn(
-          "top-20 flex max-h-[calc(100vh-6rem)] w-[calc(100%-2rem)] max-w-3xl translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl",
-          "bg-surface-strong",
+          // §V chrome: 720px wide on the page surface (`--paper`/background),
+          // not the white `surface-strong` card level.
+          "top-20 flex max-h-[calc(100vh-6rem)] w-[calc(100%-2rem)] max-w-[720px] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[720px]",
+          "bg-background",
         )}
       >
         <DialogTitle className="sr-only">{card.displayName}</DialogTitle>
@@ -227,47 +244,7 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Hero: icon tile + title + "{Type} by {Vendor}" + cost. */}
-      <div className="flex items-start gap-4">
-        <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-card border border-line bg-surface-muted">
-          {iconUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- sanitized hosted raster URL from the marketplace card model.
-            <img src={iconUrl} alt="" className="size-full object-cover" />
-          ) : (
-            extensionKindEmblem(card.kindSlug, "size-7 text-muted-foreground")
-          )}
-        </div>
-        <div className="flex min-w-0 flex-col gap-1">
-          <h2 className="text-lg leading-tight font-semibold text-foreground">{detail.displayName}</h2>
-          <p className="text-sm text-muted-foreground">
-            {detail.kindLabel}
-            {detail.vendor ? (
-              <>
-                {" by "}
-                {detail.vendor.storeUrl ? (
-                  <Link
-                    href={detail.vendor.storeUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-medium text-foreground underline underline-offset-2 hover:text-primary"
-                  >
-                    {detail.vendor.name || detail.vendor.slug}
-                  </Link>
-                ) : (
-                  <span className="font-medium text-foreground">
-                    {detail.vendor.name || detail.vendor.slug}
-                  </span>
-                )}
-              </>
-            ) : null}
-          </p>
-          {detail.cost && (
-            <span className="mt-0.5 w-fit">
-              <Badge variant="outline">{detail.cost}</Badge>
-            </span>
-          )}
-        </div>
-      </div>
+      <ModalHero card={card} detail={detail} iconUrl={iconUrl} />
 
       <Tabs defaultValue="details" className="gap-4">
         <TabsList>
@@ -275,6 +252,7 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
           <TabsTrigger value="reviews">
             Reviews{reviewCount > 0 ? ` (${reviewCount})` : ""}
           </TabsTrigger>
+          <TabsTrigger value="changelog">Changelog</TabsTrigger>
         </TabsList>
 
         <TabsContent value="details">
@@ -282,6 +260,9 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
         </TabsContent>
         <TabsContent value="reviews">
           <ReviewsTab detail={detail} />
+        </TabsContent>
+        <TabsContent value="changelog">
+          <ChangelogTab entries={detail.changelog} />
         </TabsContent>
       </Tabs>
 
@@ -299,6 +280,133 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
               <ShareGlyph network={link.network} />
             </Link>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The modal hero: icon tile + title + "{Type} by {Vendor}" + right-aligned
+ * price (§V header tokens). When the listing carries a hosted `bannerUrl`, the
+ * hero row renders over the banner image with the MarketplaceDetailHeader
+ * treatment — the accent colour stays the ground (graceful while the image
+ * loads), a `foreground`-token scrim keeps the name legible, and the text
+ * flips to the contrasting `background` token (#739). Absent/blank banner →
+ * the plain §V hero, nothing extra.
+ */
+function ModalHero({
+  card,
+  detail,
+  iconUrl,
+}: {
+  card: MarketplaceCardData;
+  detail: MarketplaceDetailView;
+  iconUrl: string | null;
+}) {
+  // Same trim-guard as MarketplaceDetailHeader; the http(s) scheme guard
+  // already ran in the server projection (toDetailView → safeHttpUrl).
+  const banner =
+    typeof detail.bannerUrl === "string" && detail.bannerUrl.trim() !== ""
+      ? detail.bannerUrl.trim()
+      : null;
+  const accent = deriveExtensionAccent(card.packageName);
+  const { bg, fg } = ACCENT_PALETTE[accent];
+
+  return (
+    <div
+      data-slot="marketplace-modal-hero"
+      data-has-banner={banner ? "true" : "false"}
+      className={cn(
+        "flex items-start gap-4",
+        banner && "relative overflow-hidden rounded-card border border-line p-5",
+      )}
+      // The accent colour is always the ground behind a banner image while it
+      // loads (a failed/slow image never leaves a bare panel) — the same
+      // fallback contract as MarketplaceDetailHeader.
+      style={banner ? { background: bg, color: fg } : undefined}
+    >
+      {banner && (
+        <>
+          {/* Hosted banner image — sanitized hosted raster per the marketplace
+              contract (never a raw SVG blob). Decorative: the h2 carries the
+              accessible name. */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- sanitized hosted raster URL from the marketplace detail payload. */}
+          <img
+            data-slot="marketplace-modal-banner"
+            src={banner}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover"
+            loading="lazy"
+            decoding="async"
+          />
+          {/* Scrim so the tile + name + byline + price stay legible over an
+              arbitrary banner image. Semantic `foreground` token — tracks the
+              theme, no raw palette. */}
+          <div aria-hidden="true" className="absolute inset-0 bg-foreground/55" />
+        </>
+      )}
+      {/* §V logo tile: 64×64, radius 15, white surface, hairline + soft shadow. */}
+      <div
+        data-slot="marketplace-modal-tile"
+        className="relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-line bg-surface-strong shadow-sm"
+      >
+        {iconUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- sanitized hosted raster URL from the marketplace card model.
+          <img src={iconUrl} alt="" className="size-full object-cover" />
+        ) : (
+          extensionKindEmblem(card.kindSlug, "size-8 text-muted-foreground")
+        )}
+      </div>
+      <div className="relative flex min-w-0 flex-1 flex-col gap-2">
+        {/* §V title: Archivo (display) italic 800 23px ink — the named
+            `text-modal-title` token (globals.css @theme). Plain string concat,
+            NOT cn(): the app tailwind-merge classifies unknown custom `text-*`
+            utilities as colors and would strip the size token when the
+            banner's `text-background` follows in the same merge. */}
+        <h2
+          className={
+            "font-display text-modal-title font-extrabold italic " +
+            (banner ? "text-background" : "text-foreground")
+          }
+        >
+          {detail.displayName}
+        </h2>
+        <p className={cn("text-sm text-muted-foreground", banner && "text-background/85")}>
+          {detail.kindLabel}
+          {detail.vendor ? (
+            <>
+              {" by "}
+              {detail.vendor.storeUrl ? (
+                <Link
+                  href={detail.vendor.storeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    "font-medium text-foreground underline underline-offset-2 hover:text-primary",
+                    banner && "text-background hover:text-background/80",
+                  )}
+                >
+                  {detail.vendor.name || detail.vendor.slug}
+                </Link>
+              ) : (
+                <span className={cn("font-medium text-foreground", banner && "text-background")}>
+                  {detail.vendor.name || detail.vendor.slug}
+                </span>
+              )}
+            </>
+          ) : null}
+        </p>
+      </div>
+      {/* §V price: right-aligned in the header, sans 700 15px ink. */}
+      {detail.cost && (
+        <div
+          className={cn(
+            "relative shrink-0 pt-1 text-sm font-bold text-foreground",
+            banner && "text-background",
+          )}
+        >
+          {detail.cost}
         </div>
       )}
     </div>
@@ -332,8 +440,141 @@ function DetailsTab({ detail }: { detail: MarketplaceDetailView }) {
           </dd>
         </div>
         <SpecRow label="Installations" value={installs ?? "—"} />
+        {detail.dependencies.length > 0 && (
+          <DependenciesSection dependencies={detail.dependencies} />
+        )}
       </dl>
     </div>
+  );
+}
+
+/**
+ * §V: the specs column closes with the extension's Dependencies — the other
+ * Cinatra extensions declared in `cinatra.dependencies` (kind emblem + name +
+ * version range), a read-only list in-app, never the npm packages. Rendered
+ * only when the listing declares at least one dependency; a none-declared
+ * listing's specs column simply ends at Installations.
+ */
+function DependenciesSection({ dependencies }: { dependencies: MarketplaceDetailDependency[] }) {
+  return (
+    <div
+      data-slot="marketplace-modal-dependencies"
+      className="flex flex-col gap-2 border-t border-line pt-3"
+    >
+      <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Dependencies
+      </dt>
+      <dd>
+        <ul className="flex flex-col gap-2.5">
+          {dependencies.map((dep) => (
+            <li key={dep.packageName} className="flex items-start gap-2">
+              <span
+                aria-hidden="true"
+                className="mt-0.5 shrink-0"
+                // The dependency's own stable accent colours its emblem —
+                // the same accent system the browse cards / detail hero use.
+                style={{ color: ACCENT_PALETTE[deriveExtensionAccent(dep.packageName)].bg }}
+              >
+                {extensionKindEmblem(dependencyEmblemKind(dep.kind), "size-3.5")}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm leading-snug text-foreground">{dep.name}</span>
+                {dep.versionRange !== "" && (
+                  <span className="mt-px block font-mono text-badge-xs text-muted-foreground">
+                    {dep.versionRange}
+                  </span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </dd>
+    </div>
+  );
+}
+
+/** Map a wire kind slug onto the emblem union; anything unknown → generic. */
+function dependencyEmblemKind(kind: string | null): ExtensionEmblemKind {
+  switch (kind) {
+    case "agent":
+    case "skill":
+    case "connector":
+    case "artifact":
+    case "workflow":
+      return kind;
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * §V Changelog tab: the extension's root CHANGELOG as per-version release
+ * notes — mono version chip, the release date, a "Latest" badge on the newest
+ * entry — or the spec's "No changelog available" empty state when the
+ * extension ships no CHANGELOG (which is also the graceful state while the
+ * storefront detail endpoint does not serve the field).
+ */
+function ChangelogTab({ entries }: { entries: MarketplaceDetailChangelogEntry[] }) {
+  if (entries.length === 0) {
+    return (
+      <div
+        data-slot="marketplace-modal-changelog-empty"
+        className="flex flex-col items-center py-12 text-center"
+      >
+        <FileX className="size-8 text-muted-foreground opacity-60" aria-hidden="true" />
+        <p className="mt-3 text-sm font-bold text-foreground">No changelog available</p>
+      </div>
+    );
+  }
+  return (
+    <div data-slot="marketplace-modal-changelog">
+      {entries.map((entry, i) => (
+        <ChangelogEntryRow
+          key={`${entry.version}-${i}`}
+          entry={entry}
+          isLatest={i === 0}
+          isLast={i === entries.length - 1}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ChangelogEntryRow({
+  entry,
+  isLatest,
+  isLast,
+}: {
+  entry: MarketplaceDetailChangelogEntry;
+  isLatest: boolean;
+  isLast: boolean;
+}) {
+  const date = formatChangelogDate(entry.date);
+  return (
+    // Dividers go BETWEEN entries — the last entry drops its bottom border.
+    <section className={cn("py-4", !isLast && "border-b border-line")}>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="rounded-md bg-surface-muted px-2 py-0.5 font-mono text-sm font-bold text-foreground">
+          {entry.version}
+        </span>
+        {date && <span className="font-mono text-xs text-muted-foreground">{date}</span>}
+        {isLatest && (
+          <span className="rounded-sm border border-success px-1.5 font-mono text-badge-2xs font-bold text-success uppercase">
+            Latest
+          </span>
+        )}
+      </div>
+      {entry.notes.length > 0 && (
+        <ul className="mt-2 list-disc pl-4.5">
+          {entry.notes.map((note, j) => (
+            // Tag-stripped plain text — rendered as escaped text, never HTML.
+            <li key={j} className="text-sm leading-relaxed text-muted-foreground">
+              {note}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -523,6 +764,23 @@ function formatDate(iso: string | null): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+/**
+ * Format a changelog release date in UTC. CHANGELOG stamps are usually
+ * date-only ("YYYY-MM-DD"), which `new Date` parses as UTC midnight — local
+ * formatting would render them one day early in timezones west of UTC.
+ */
+function formatChangelogDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 // Compact brand monograms for the icon-only share row. Deliberately text

@@ -24,8 +24,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 
 import { MarketplaceMcpError, type MarketplaceMcpClient } from "./client";
 import type {
+  ExtensionKind,
   ExtensionVisibility,
+  MarketplaceChangelogEntry,
   MarketplaceDetailBadge,
+  MarketplaceExtensionDependency,
   MarketplaceRatingSummary,
   MarketplaceReview,
   MarketplaceVendorRef,
@@ -532,6 +535,8 @@ function mapExtensionGetWire(
     ratingSummary: mapDetailRatingSummary(wire.rating_summary),
     reviews: mapDetailReviews(wire.reviews),
     vendor: mapDetailVendor(wire.vendor),
+    changelog: mapDetailChangelog(wire.changelog),
+    dependencies: mapDetailDependencies(wire.dependencies),
   };
 }
 
@@ -612,6 +617,101 @@ function mapDetailVendor(v: MarketplaceExtensionGetWire["vendor"]): MarketplaceV
   const storeUrl = safeDetailHttpUrl(v.store_url);
   if (name === "" && slug === "" && storeUrl === null) return null;
   return { name, slug, storeUrl };
+}
+
+const DETAIL_DEPENDENCY_KINDS = new Set<ExtensionKind>([
+  "agent",
+  "skill",
+  "connector",
+  "artifact",
+  "workflow",
+]);
+
+/**
+ * Normalize the wire `changelog` (marketplace#190 workstream C). A raw
+ * CHANGELOG string passes through verbatim (the app-side view projection owns
+ * the parse); an entry array is normalized entry-by-entry (version required —
+ * versionless rows are dropped; `notes` accepts string[] or a single string).
+ */
+function mapDetailChangelog(
+  raw: MarketplaceExtensionGetWire["changelog"],
+): MarketplaceChangelogEntry[] | string | null {
+  if (typeof raw === "string") {
+    return raw.trim() === "" ? null : raw;
+  }
+  if (!Array.isArray(raw)) return null;
+  const out: MarketplaceChangelogEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== "object") continue;
+    const version = normDetailString(e.version);
+    if (version === null) continue;
+    const date = normDetailString(e.date) ?? normDetailString(e.released_at);
+    const notesRaw = (e as { notes?: unknown }).notes;
+    const notes = (
+      Array.isArray(notesRaw) ? notesRaw : typeof notesRaw === "string" ? [notesRaw] : []
+    ).filter((n): n is string => typeof n === "string" && n.trim() !== "");
+    out.push({ version: version.trim(), date, notes });
+  }
+  return out;
+}
+
+/**
+ * Normalize the wire `dependencies` — the manifest `cinatra.dependencies`
+ * (marketplace#190 workstream C), NEVER npm deps. Accepts the enriched entry
+ * array or the raw manifest name→range map (map entries carry no kind/display
+ * name; the modal degrades to the generic emblem + package name).
+ */
+function mapDetailDependencies(
+  raw: MarketplaceExtensionGetWire["dependencies"],
+): MarketplaceExtensionDependency[] | null {
+  if (!raw || typeof raw !== "object") return null;
+  const out: MarketplaceExtensionDependency[] = [];
+  if (Array.isArray(raw)) {
+    for (const d of raw) {
+      if (!d || typeof d !== "object") continue;
+      const packageName = normDetailString(d.package_name) ?? normDetailString(d.packageName);
+      if (packageName === null) continue;
+      const kindRaw = normDetailString(d.kind);
+      out.push({
+        packageName: packageName.trim(),
+        name:
+          normDetailString(d.display_name) ?? normDetailString(d.name) ?? packageName.trim(),
+        kind: DETAIL_DEPENDENCY_KINDS.has(kindRaw as ExtensionKind)
+          ? (kindRaw as ExtensionKind)
+          : null,
+        versionRange:
+          normDetailString(d.version_range) ??
+          normDetailString(d.versionRange) ??
+          normDependencyConstraint(d.version_constraint ?? d.versionConstraint) ??
+          "",
+      });
+    }
+    return out;
+  }
+  for (const [packageName, range] of Object.entries(raw)) {
+    if (packageName.trim() === "") continue;
+    out.push({
+      packageName: packageName.trim(),
+      name: packageName.trim(),
+      kind: null,
+      versionRange: typeof range === "string" ? range.trim() : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * The canonical sdk-extensions dependency edge carries a discriminated
+ * `versionConstraint` OBJECT ({range} | {version} | {ref}); a plain string
+ * passes through. Anything else → null.
+ */
+function normDependencyConstraint(v: unknown): string | null {
+  if (typeof v === "string") return normDetailString(v);
+  if (v && typeof v === "object") {
+    const c = v as { range?: unknown; version?: unknown; ref?: unknown };
+    return normDetailString(c.range) ?? normDetailString(c.version) ?? normDetailString(c.ref);
+  }
+  return null;
 }
 
 /** Methods whose backing marketplace ability does not exist yet. */
