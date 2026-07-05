@@ -325,9 +325,13 @@ export default defineConfig({
       // (gatekept-install-no-direct-registry, actions-pin-gate,
       // workspace-phantom-deps, workspace-dep-cycles, file-size-ratchet,
       // route-graph-ratchet, crm-pointer-gate, schema-migration-gate,
-      // sdk-abi-readme-gate), NOT as vitest tests.
+      // sdk-abi-readme-gate, merge-group-gate-coverage — engineering#484's
+      // new merge_group required-gate trigger guard, run via `node --test` in
+      // its own step in build-image.yml's merge-group-gate-coverage job), NOT
+      // as vitest tests.
       "scripts/audit/__tests__/gatekept-install-no-direct-registry.test.mjs",
       "scripts/audit/__tests__/actions-pinned-gate.test.mjs",
+      "scripts/audit/__tests__/merge-group-gate-coverage.test.mjs",
       "scripts/audit/__tests__/workspace-phantom-deps.test.mjs",
       "scripts/audit/__tests__/workspace-dep-cycles.test.mjs",
       "scripts/audit/__tests__/file-size-ratchet.test.mjs",
