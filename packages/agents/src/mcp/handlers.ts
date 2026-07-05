@@ -5019,11 +5019,9 @@ function validateArtifactManifestContent(
 // validateArtifactManifestContent over the `artifact` block. Used by compile/
 // publish where the package is materialized on disk (the pre-write content
 // validator only sees the incoming JSON string).
-// Mirrors the install-time artifact handler's cinatra-block allowlist
-// (packages/extensions/src/artifact-handler.ts) so a chat-authored package that
-// compiles/publishes here can never be REJECTED or silently skipped at install.
-// Canonical source: @cinatra-ai/sdk-extensions/artifact-contract (cinatra#979 —
-// no more hand-duplicated copy; see that module's doc comment).
+// ARTIFACT_ALLOWED_CINATRA_KEYS (imported above from @cinatra-ai/sdk-extensions/artifact-contract,
+// cinatra#979) is the canonical cinatra-block allowlist — mirrored by the install-time artifact
+// handler (packages/extensions/src/artifact-handler.ts) so a package here can't be rejected/skipped.
 
 async function validateArtifactPackageOnDisk(
   packageRoot: string,
