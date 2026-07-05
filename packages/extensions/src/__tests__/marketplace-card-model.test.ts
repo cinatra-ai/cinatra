@@ -28,12 +28,17 @@ function catalogEntry(over: Partial<MarketplaceCatalogEntry> = {}): MarketplaceC
 }
 
 describe("catalogEntryToCardData — listing-card fields (install count, icon/vendor URLs, ABI range)", () => {
-  it("maps a clean install count, icon URL, vendor-logo URL, and ABI range", () => {
+  it("maps a clean install count, icon URL, vendor-logo URL (WP-media descriptor shape), and ABI range", () => {
+    // The LIVE storefront catalog serves icon_url/vendor_logo_url as a
+    // {url, width, height} descriptor — the same WP-media shape the public
+    // detail endpoint's icon_url already carries (cinatra#1003) — not a bare
+    // string. A prior bare-string-only mapping silently discarded every real
+    // asset on every listing.
     const card = catalogEntryToCardData(
       catalogEntry({
         install_count: 2147,
-        icon_url: "https://assets.example/icon.png",
-        vendor_logo_url: "https://assets.example/vendor.png",
+        icon_url: { url: "https://assets.example/icon.png", width: 256, height: 256 },
+        vendor_logo_url: { url: "https://assets.example/vendor.png", width: 256, height: 256 },
         sdk_abi_range: "^2",
       }),
     );
@@ -41,6 +46,28 @@ describe("catalogEntryToCardData — listing-card fields (install count, icon/ve
     expect(card!.iconUrl).toBe("https://assets.example/icon.png");
     expect(card!.vendorLogoUrl).toBe("https://assets.example/vendor.png");
     expect(card!.sdkAbiRange).toBe("^2");
+  });
+
+  it("still accepts a bare string icon/vendor-logo URL (a pre-descriptor catalog build)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        icon_url: "https://assets.example/icon.png",
+        vendor_logo_url: "https://assets.example/vendor.png",
+      }),
+    );
+    expect(card!.iconUrl).toBe("https://assets.example/icon.png");
+    expect(card!.vendorLogoUrl).toBe("https://assets.example/vendor.png");
+  });
+
+  it("degrades a descriptor with a blank/absent `url` field to null (never a broken-image placeholder)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        icon_url: { url: null, width: 256, height: 256 },
+        vendor_logo_url: { width: 256, height: 256 },
+      }),
+    );
+    expect(card!.iconUrl).toBeNull();
+    expect(card!.vendorLogoUrl).toBeNull();
   });
 
   it("degrades every new field to null when the marketplace omits them (older catalog)", () => {

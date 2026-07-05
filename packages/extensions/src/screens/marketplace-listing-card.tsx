@@ -1,12 +1,12 @@
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { CircleCheck, Star } from "lucide-react";
+import { Check, CircleCheck, CircleHelp, Star, TriangleAlert } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
-import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { ACCENT_PALETTE, type ExtensionAccent } from "@/lib/extension-accent";
+import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { safeHttpUrl } from "@/lib/marketplace-detail-view";
 import { cn } from "@/lib/utils";
 import type { MarketplaceCardData } from "./marketplace-card-model";
@@ -35,9 +35,14 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 // one source of truth for the card anatomy.
 // ---------------------------------------------------------------------------
 
-/** First non-null link of the icon fallback chain: icon → vendor logo. */
+/**
+ * First non-null link of the icon fallback chain: icon → vendor logo.
+ * Scheme-guarded here (`safeHttpUrl`) — same defence-in-depth as the detail
+ * modal's `iconUrl` — so a non-http(s) URL never reaches the tile's `<img
+ * src>` even though the storefront already sanitizes upstream.
+ */
 export function resolveCardIconUrl(card: MarketplaceCardData): string | null {
-  return card.iconUrl ?? card.vendorLogoUrl ?? null;
+  return safeHttpUrl(card.iconUrl) ?? safeHttpUrl(card.vendorLogoUrl) ?? null;
 }
 
 /** "Updated N ago" freshness label, or null for a missing/invalid date. */
@@ -80,11 +85,13 @@ function scopeFromPackageName(packageName: string): string {
 }
 
 /**
- * Stars + numeric average + (count) — the LEFT meta column's rating row
- * (spec §IV L477). Stars fill to the rounded average; colours stay on the
- * semantic ink/muted tokens (the app's star treatment everywhere, incl. the
- * detail modal) rather than the spec drawing's raw gold hex, which the
- * design-token lint deliberately bans outside the token files.
+ * Stars + numeric average + (count) — the LEFT meta column's rating row (spec
+ * §IV L477: filled `#f5a623` amber / empty `#d0cbbd` warm-grey). Stars fill to
+ * the rounded average, using the named `text-rating-star` /
+ * `text-rating-star-muted` tokens (globals.css `@theme inline`, cinatra#1003)
+ * — the SAME dedicated rating-colour tokens the §V detail-modal review stars
+ * already use (marketplace-detail-modal.tsx), not the semantic ink/muted
+ * tokens (which read as plain grey, not the spec's amber rating colour).
  */
 function RatingRow({
   rating,
@@ -97,12 +104,16 @@ function RatingRow({
       className="flex items-center gap-1.5 whitespace-nowrap"
       aria-label={`Rated ${rating.average} out of 5`}
     >
-      <span className="flex gap-px text-foreground">
+      <span className="flex gap-px">
         {[1, 2, 3, 4, 5].map((i) => (
           <Star
             key={i}
             aria-hidden="true"
-            className={cn("size-3", i <= filled ? "fill-current" : "opacity-40")}
+            // Plain concat, not cn(): `text-rating-star*` are custom color
+            // utilities tailwind-merge doesn't recognize as a "text-*" group,
+            // so cn() would keep both classes anyway — concat matches the
+            // §V modal's own rating-star treatment for the identical reason.
+            className={"size-3 fill-current " + (i <= filled ? "text-rating-star" : "text-rating-star-muted")}
           />
         ))}
       </span>
@@ -169,6 +180,45 @@ function PublisherLine({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The RIGHT footer-meta compat verdict (spec §IV L481 "Compatible" / L631
+ * "Incompatible") — a PLAIN mono-10px row, icon + label, right-aligned. NEVER
+ * a badge/pill: the pinned drawing renders this identically to "Updated N ago"
+ * beneath it, just a coloured icon + text, no chrome (cinatra#1003 — the same
+ * rule the §V detail-modal fix already applied to its own "Compatible up to"
+ * row, #995). Compatible: small check in the accent-link colour, label in
+ * ink. Incompatible: warning triangle + label both in the destructive red —
+ * exact spec colours. Unknown (no declared ABI range) has no drawing example;
+ * it keeps the same plain anatomy in the neutral muted tone (never green).
+ */
+function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined }) {
+  const state = deriveExtensionCompatState(sdkAbiRange);
+  const Icon = state === "compatible" ? Check : state === "incompatible" ? TriangleAlert : CircleHelp;
+  const label = state === "compatible" ? "Compatible" : state === "incompatible" ? "Incompatible" : "Unknown";
+  const textColor =
+    state === "incompatible" ? "text-destructive" : state === "unknown" ? "text-muted-foreground" : "text-foreground";
+  return (
+    <span
+      data-slot="extension-card-compat"
+      data-compat-state={state}
+      // Plain concat, not cn(): the app's plain tailwind-merge `cn` (imported
+      // above from @/lib/utils, not the sdk-ui EXTENDED merge) does not know
+      // `text-badge-xs` is a font-SIZE token, not a color — merging it with a
+      // text-color class in the same cn() call silently drops `text-badge-xs`
+      // (verified: `twMerge("font-mono text-badge-xs", "text-foreground")` →
+      // `"font-mono text-foreground"`). Same trap `extension-card.tsx` and
+      // RatingRow above already route around; codex-caught (cinatra#1003).
+      className={"flex items-center gap-1 whitespace-nowrap font-mono text-badge-xs " + textColor}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn("size-[11px]", state === "compatible" && "text-primary")}
+      />
+      {label}
+    </span>
   );
 }
 
@@ -254,9 +304,9 @@ export function MarketplaceListingCard({
           <div className="flex shrink-0 flex-col items-end gap-1">
             {/* 3-state in-instance ABI compatibility verdict, derived locally
                 from the catalog's declared sdkAbiRange (absent → neutral
-                "Unknown", never green). Red-triangle Incompatible treatment
-                lives in ExtensionCompatBadge (destructive variant). */}
-            <ExtensionCompatBadge sdkAbiRange={card.sdkAbiRange} />
+                "Unknown", never green) — a PLAIN meta row (spec §IV L481/
+                L631), not a badge; see CompatMeta above. */}
+            <CompatMeta sdkAbiRange={card.sdkAbiRange} />
             {freshness && (
               <span className="whitespace-nowrap font-mono text-badge-xs text-muted-foreground">
                 {freshness}

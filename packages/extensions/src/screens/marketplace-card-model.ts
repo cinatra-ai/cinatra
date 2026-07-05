@@ -103,6 +103,27 @@ function normalizeOptionalString(raw: unknown): string | null {
 }
 
 /**
+ * Extract + normalize a catalog asset URL (icon/vendor-logo). The live
+ * storefront catalog serves these as a WP-media descriptor `{url, width,
+ * height}` — the SAME shape the public detail endpoint's `icon_url` already
+ * carries (cinatra#1003: a bare-`string` type here previously discarded every
+ * real asset, since `normalizeOptionalString` rejects a non-string outright,
+ * silently nulling the vendor logo on every listing). A pre-descriptor
+ * catalog build may still emit a bare string, so both shapes degrade
+ * correctly; anything else (missing `url`, blank, wrong type) → null, the
+ * next link in the icon fallback chain.
+ */
+function normalizeCatalogAssetUrl(raw: unknown): string | null {
+  if (typeof raw === "string") {
+    return normalizeOptionalString(raw);
+  }
+  if (raw && typeof raw === "object" && "url" in raw) {
+    return normalizeOptionalString((raw as { url?: unknown }).url);
+  }
+  return null;
+}
+
+/**
  * Map the catalog entry's OPTIONAL vendor block into the card's publisher
  * ref. The wire shape mirrors the public REST detail's `vendor` object
  * (`{name, slug, store_url}`); every field is optional/nullable, so this
@@ -235,8 +256,8 @@ export function catalogEntryToCardData(
     // New OPTIONAL catalog fields — every one degrades gracefully when the
     // marketplace build predates the field (absent → null, no broken UI).
     installCount: normalizeInstallCount(entry.install_count),
-    iconUrl: normalizeOptionalString(entry.icon_url),
-    vendorLogoUrl: normalizeOptionalString(entry.vendor_logo_url),
+    iconUrl: normalizeCatalogAssetUrl(entry.icon_url),
+    vendorLogoUrl: normalizeCatalogAssetUrl(entry.vendor_logo_url),
     sdkAbiRange: normalizeOptionalString(entry.sdk_abi_range),
     vendor: normalizeCardVendor(entry.vendor),
   };

@@ -399,18 +399,27 @@ export interface MarketplaceCatalogEntry {
    */
   install_count?: number | null;
   /**
-   * Sanitized hosted URL for the extension's own square icon (never a raw SVG
-   * blob — the marketplace rasterizes/sanitizes before exposing). OPTIONAL;
-   * absent until the asset-upload field ships, so the card falls back to the
-   * vendor logo and then the kind emblem.
+   * Sanitized square-icon descriptor {url,width,height} (never a raw SVG blob
+   * — the marketplace rasterizes/sanitizes before exposing), the SAME WP-media
+   * shape the public detail endpoint's `icon_url` already carries — NOT a bare
+   * string (cinatra#1003: the catalog list endpoint was found to serve this
+   * identical descriptor shape live; a bare-string type here silently
+   * discarded every real asset). A pre-descriptor catalog build may still emit
+   * a bare string, so both shapes are accepted. OPTIONAL; absent until the
+   * asset-upload field ships, so the card falls back to the vendor logo and
+   * then the kind emblem.
    */
-  icon_url?: string | null;
+  icon_url?: { url?: string | null; width?: number; height?: number } | string | null;
   /**
-   * Sanitized hosted URL for the vendor's brand logo (never a raw SVG blob).
-   * OPTIONAL; the older catalog exposes only `vendor_logo_key`, so this is the
-   * second link in the card's icon fallback chain.
+   * Sanitized vendor-brand-logo descriptor {url,width,height} (never a raw SVG
+   * blob), same WP-media shape as `icon_url` above (cinatra#1003 — the live
+   * catalog serves this as an object, e.g. the WordPress attachment JSON, not
+   * a bare string; a pre-descriptor catalog build may still emit one, so both
+   * shapes are accepted). OPTIONAL; the older catalog exposes only
+   * `vendor_logo_key`, so this is the second link in the card's icon fallback
+   * chain.
    */
-  vendor_logo_url?: string | null;
+  vendor_logo_url?: { url?: string | null; width?: number; height?: number } | string | null;
   /**
    * The extension's declared host/SDK ABI range (`cinatra.sdkAbiRange`, e.g.
    * "^2"), surfaced so a NOT-installed listing can be evaluated for the

@@ -156,8 +156,9 @@ export async function ExtensionsMarketplaceScreen({
         // now for a not-installed listing, Update now for an installed-older
         // one whose newer catalog version is incompatible). The
         // pointer-events override keeps the native title tooltip reachable on
-        // a disabled button. The red-triangle Incompatible badge renders in
-        // the footer meta (ExtensionCompatBadge).
+        // a disabled button. The red-triangle Incompatible verdict renders as
+        // the plain footer-meta row (CompatMeta in marketplace-listing-card.tsx —
+        // spec §IV L631 is not a badge).
         <Button
           size="sm"
           disabled
