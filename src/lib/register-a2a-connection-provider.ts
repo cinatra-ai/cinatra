@@ -14,6 +14,7 @@ import {
   importNangoConnection,
   saveNangoConnectionRecord,
   removeNangoConnectionRecord,
+  deleteNangoConnectionStrict,
 } from "@/lib/nango-system";
 import {
   upsertExternalAgentTemplate,
@@ -30,6 +31,14 @@ setA2AConnectionProvider({
     saveNangoConnectionRecord(connectorKey, record, opts),
   removeConnectionRecord: (connectorKey, connectionId) =>
     removeNangoConnectionRecord(connectorKey, connectionId),
+  // Authoritative scrub of the imported API_KEY bearer. UNCONDITIONAL (no
+  // `isNangoConfigured` short-circuit): the strict delete propagates a real
+  // failure — including Nango-unconfigured, where the scrub can't be confirmed —
+  // so the connector's remove action aborts and retains its record rather than
+  // dropping it while the bearer lingers. Idempotent on an already-absent
+  // connection. (Same posture as the tailscale OAuth authoritative disconnect.)
+  deleteConnection: ({ providerConfigKey, connectionId }) =>
+    deleteNangoConnectionStrict(providerConfigKey, connectionId),
   upsertExternalAgentTemplate: (input) => upsertExternalAgentTemplate(input),
   deleteExternalAgentTemplatesByConnectorSlug: (slug) =>
     deleteExternalAgentTemplatesByConnectorSlug(slug),

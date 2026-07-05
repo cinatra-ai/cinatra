@@ -127,6 +127,23 @@ export const deleteNangoConnection: NangoSystemSurface["deleteNangoConnection"] 
   providerConfigKey,
   connectionId,
 ) => requireNangoSystem().deleteNangoConnection(providerConfigKey, connectionId);
+// Authoritative (fail-closed) connection delete — the nango gateway's runtime
+// surface impl exposes `deleteNangoConnectionStrict` (cinatra-ai/
+// tailscale-connector#23, Design C: propagates non-404 failures, incl.
+// Nango-unconfigured, so a caller can retain its pointer instead of falsely
+// reporting a scrub; idempotent on 404). The `NangoSystemSurface` TYPE does not
+// yet declare it, so we reach it through a cast — same cast-at-boundary the
+// tailscale connector's `register.ts` uses. Distinct export from the best-effort
+// `deleteNangoConnection` above so credential-scrub call sites opt in explicitly.
+export const deleteNangoConnectionStrict = (
+  providerConfigKey: string,
+  connectionId: string,
+): Promise<void> =>
+  (
+    requireNangoSystem() as unknown as {
+      deleteNangoConnectionStrict(pck: string, connId: string): Promise<void>;
+    }
+  ).deleteNangoConnectionStrict(providerConfigKey, connectionId);
 export const getNangoOAuth2IntegrationCredentials: NangoSystemSurface["getNangoOAuth2IntegrationCredentials"] =
   (providerConfigKey) => requireNangoSystem().getNangoOAuth2IntegrationCredentials(providerConfigKey);
 export const createNangoConnectSession: NangoSystemSurface["createNangoConnectSession"] = (

@@ -16,6 +16,7 @@ function stubProvider(over: Partial<A2AConnectionProvider> = {}): A2AConnectionP
     importConnection: async () => ({ ok: true }),
     saveConnectionRecord: async () => undefined,
     removeConnectionRecord: async () => undefined,
+    deleteConnection: async () => undefined,
     upsertExternalAgentTemplate: async () => ({ id: "tmpl-1" }),
     deleteExternalAgentTemplatesByConnectorSlug: async () => 1,
     ...over,
@@ -53,5 +54,37 @@ describe("a2a-connection-contract — host-injected DI provider", () => {
     expect(p.providerConfigKeyFor("a2aServer")).toBe("cinatra-a2a-server");
     await p.saveConnectionRecord("a2aServer", { connectionId: "c1", providerConfigKey: "k" }, { multiple: true });
     expect(save).toHaveBeenCalledWith("a2aServer", { connectionId: "c1", providerConfigKey: "k" }, { multiple: true });
+  });
+
+  it("forwards deleteConnection to the bound impl (the credential-scrub path)", async () => {
+    const del = vi.fn(async () => undefined);
+    setA2AConnectionProvider(stubProvider({ deleteConnection: del }));
+    await requireA2AConnectionProvider().deleteConnection({
+      connectorKey: "a2aServer",
+      providerConfigKey: "cinatra-a2a-server",
+      connectionId: "c1",
+    });
+    expect(del).toHaveBeenCalledWith({
+      connectorKey: "a2aServer",
+      providerConfigKey: "cinatra-a2a-server",
+      connectionId: "c1",
+    });
+  });
+
+  it("deleteConnection is fail-closed — a scrub failure PROPAGATES (never swallowed)", async () => {
+    setA2AConnectionProvider(
+      stubProvider({
+        deleteConnection: async () => {
+          throw new Error("Nango connection delete failed.");
+        },
+      }),
+    );
+    await expect(
+      requireA2AConnectionProvider().deleteConnection({
+        connectorKey: "a2aServer",
+        providerConfigKey: "cinatra-a2a-server",
+        connectionId: "c1",
+      }),
+    ).rejects.toThrow(/delete failed/);
   });
 });
