@@ -1,9 +1,5 @@
-import type { Metadata } from "next";
 import { Loader2 } from "lucide-react";
 
-import { Main } from "@/components/layout/main";
-import { PageHeader } from "@/components/page-header";
-import { PageContent } from "@/components/page-content";
 import { Button } from "@/components/ui/button";
 import type { ExtensionAccent } from "@/lib/extension-accent";
 import {
@@ -11,15 +7,11 @@ import {
   type MarketplaceCardData,
 } from "@cinatra-ai/extensions/screens";
 
-export const metadata: Metadata = {
-  title: "Marketplace Card Fixtures — Cinatra",
-  description:
-    "Internal route rendering the design spec §IV marketplace ListingCard with seeded fixtures — one card per six-state CTA state.",
-};
-
 // ---------------------------------------------------------------------------
-// /design-fixtures/marketplace — the §IV "Extensions" ListingCard fixture grid
-// (cinatra#988).
+// MarketplaceListingFixture — the §IV "Extensions" ListingCard fixture grid
+// (cinatra#988), a section of /design-fixtures (the auth-guard's allowlisted
+// design-verification route — a separate subroute would need its own
+// DEV_ONLY_PUBLIC_EXACT_PATHS entry on the high-risk auth surface).
 //
 // STATIC (no DB, no auth, no marketplace fetch): renders the REAL
 // MarketplaceListingCard — the exact component the live
@@ -211,35 +203,26 @@ const FIXTURES: FixtureSpec[] = [
   },
 ];
 
-export default function MarketplaceCardFixturesPage() {
+export function MarketplaceListingFixture() {
   return (
-    <Main className="min-h-screen">
-      <PageHeader
-        label="Design system"
-        title="Marketplace listing cards (§IV)"
-        description="Internal — the §IV ListingCard over seeded fixtures, one card per six-state CTA state. CTA controls are inert lookalikes; the card anatomy is the production component."
-      />
-      <PageContent className="pb-12">
-        <div
-          data-testid="marketplace-card-grid"
-          className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-        >
-          {FIXTURES.map((f) => (
-            <div key={f.card.packageName} className="flex h-full flex-col gap-2">
-              <div className="font-mono text-badge-xs font-bold uppercase tracking-widest text-muted-foreground">
-                {f.label}
-              </div>
-              <MarketplaceListingCard
-                card={f.card}
-                accentColor={f.accent}
-                ctaControl={f.cta}
-                detailsControl={<DetailsLookalike />}
-                className="flex-1"
-              />
-            </div>
-          ))}
+    <div
+      data-testid="marketplace-card-grid"
+      className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+    >
+      {FIXTURES.map((f) => (
+        <div key={f.card.packageName} className="flex h-full flex-col gap-2">
+          <div className="font-mono text-badge-xs font-bold uppercase tracking-widest text-muted-foreground">
+            {f.label}
+          </div>
+          <MarketplaceListingCard
+            card={f.card}
+            accentColor={f.accent}
+            ctaControl={f.cta}
+            detailsControl={<DetailsLookalike />}
+            className="flex-1"
+          />
         </div>
-      </PageContent>
-    </Main>
+      ))}
+    </div>
   );
 }

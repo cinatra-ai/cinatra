@@ -1,7 +1,7 @@
 /**
  * §IV marketplace ListingCard conformance harness (cinatra#988).
  *
- * Drives `/design-fixtures/marketplace` — the STATIC fixture route rendering
+ * Drives the §IV fixture section of `/design-fixtures` — the STATIC page rendering
  * the REAL `MarketplaceListingCard` over seeded catalog fixtures (one card per
  * six-state CTA state; `display_name ≠ package_name`; a hosted icon URL; an
  * unsatisfiable `sdkAbiRange`) — and asserts the card anatomy against the
@@ -22,7 +22,7 @@
  */
 import { test, expect } from "@playwright/test";
 
-const FIXTURE_PATH = "/design-fixtures/marketplace";
+const FIXTURE_PATH = "/design-fixtures";
 
 // The primary action colour + muted slate, as computed-style rgb() strings.
 // Neither is a §IV categorical banner accent (the wrong-token class).
@@ -54,14 +54,15 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
   });
 
   test("renders all six seeded cards", async ({ page }) => {
-    const cards = page.locator('[data-slot="extension-card"]');
-    await expect(cards).toHaveCount(6);
+    const grid = page.getByTestId("marketplace-card-grid");
+    await expect(grid.locator('[data-slot="extension-card"]')).toHaveCount(6);
   });
 
   test("banner contains ONLY the icon tile + name — no badge overlay (stale-element class)", async ({
     page,
   }) => {
-    const banners = page.locator('[data-slot="extension-card-banner"]');
+    const grid = page.getByTestId("marketplace-card-grid");
+    const banners = grid.locator('[data-slot="extension-card-banner"]');
     await expect(banners).toHaveCount(6);
     for (const banner of await banners.all()) {
       // Exactly two children: the 46×46 icon tile and the name block.
@@ -72,39 +73,43 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
       // The kind pill / commerce badge must never resurrect inside the banner.
       await expect(banner.locator('[data-slot="badge"]')).toHaveCount(0);
     }
-    // Kind + commerce copy live in the body now, not the banner.
-    for (const label of ["Connector", "Artifact", "Open source"]) {
-      await expect(
-        page.locator('[data-slot="extension-card-banner"]', { hasText: label }),
-      ).toHaveCount(0);
-    }
+    // Commerce copy lives in the price row now, never the banner. (Kind WORDS
+    // can legitimately appear inside an extension NAME — the Restore fixture's
+    // "…Connector for Confluence…" — so the kind-pill check is the structural
+    // badge-slot + child-count assertion above, not a text match.)
+    await expect(
+      grid.locator('[data-slot="extension-card-banner"]', { hasText: "Open source" }),
+    ).toHaveCount(0);
   });
 
   test("every card carries the {Type} by {Vendor} publisher line (missing-functionality class)", async ({
     page,
   }) => {
-    const publishers = page.locator('[data-slot="extension-card-publisher"]');
+    const grid = page.getByTestId("marketplace-card-grid");
+    const publishers = grid.locator('[data-slot="extension-card-publisher"]');
     await expect(publishers).toHaveCount(6);
     await expect(
-      page.locator('[data-slot="extension-card-publisher"]', { hasText: "Agent by Cinatra" }),
+      grid.locator('[data-slot="extension-card-publisher"]', { hasText: "Agent by Cinatra" }),
     ).toHaveCount(2);
     await expect(
-      page.locator('[data-slot="extension-card-publisher"]', { hasText: "Skill by Foundry" }),
+      grid.locator('[data-slot="extension-card-publisher"]', { hasText: "Skill by Foundry" }),
     ).toHaveCount(1);
     // Vendor renders as a real link when the catalog carries a store URL…
-    const foundryLink = page.getByRole("link", { name: "Foundry" });
+    const foundryLink = grid.getByRole("link", { name: "Foundry" });
     await expect(foundryLink).toHaveAttribute(
       "href",
       "https://marketplace.cinatra.ai/store/foundry",
     );
     // …and every catalog-carried vendor shows the circled VERIFIED check.
-    await expect(page.locator('[data-slot="extension-card-verified"]')).toHaveCount(6);
+    await expect(grid.locator('[data-slot="extension-card-verified"]')).toHaveCount(6);
   });
 
   test("every card carries the centred price row with the spec strings (missing-functionality class)", async ({
     page,
   }) => {
-    const prices = page.locator('[data-slot="extension-card-price"]');
+    const prices = page
+      .getByTestId("marketplace-card-grid")
+      .locator('[data-slot="extension-card-price"]');
     await expect(prices).toHaveCount(6);
     await expect(prices.filter({ hasText: "Free, Open Source" })).toHaveCount(2);
     await expect(prices.filter({ hasText: /^Free$/ })).toHaveCount(2);
@@ -115,7 +120,9 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
   test("banner grounds draw ONLY from the §IV categorical accents — never the primary action colour or muted slate (wrong-token class)", async ({
     page,
   }) => {
-    const banners = page.locator('[data-slot="extension-card-banner"]');
+    const banners = page
+      .getByTestId("marketplace-card-grid")
+      .locator('[data-slot="extension-card-banner"]');
     for (const banner of await banners.all()) {
       const bg = await banner.evaluate((el) => getComputedStyle(el).backgroundColor);
       expect(bg).not.toBe(PRIMARY_ACTION_RGB);
@@ -164,7 +171,9 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
   test("description block reserves 86px and grid rows lock to equal heights", async ({
     page,
   }) => {
-    const cards = page.locator('[data-slot="extension-card"]');
+    const cards = page
+      .getByTestId("marketplace-card-grid")
+      .locator('[data-slot="extension-card"]');
     const heights: number[] = [];
     for (const card of await cards.all()) {
       const box = await card.boundingBox();
@@ -176,7 +185,9 @@ test.describe("§IV marketplace ListingCard (cinatra#988)", () => {
       expect(Math.abs(h - heights[0])).toBeLessThanOrEqual(1);
     }
     // min-height 86px description block on every card (spec §IV L466).
-    const publisherBlocks = page.locator('[data-slot="extension-card-publisher"]');
+    const publisherBlocks = page
+      .getByTestId("marketplace-card-grid")
+      .locator('[data-slot="extension-card-publisher"]');
     for (const block of await publisherBlocks.all()) {
       const minHeight = await block.evaluate(
         (el) => getComputedStyle(el.parentElement!).minHeight,
