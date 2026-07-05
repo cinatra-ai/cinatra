@@ -100,8 +100,14 @@ describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", 
 
   it("clamps the description to 2 lines (not §VI's default 3)", () => {
     const html = renderAgentCard();
-    expect(html).toContain("line-clamp-2");
-    expect(html).not.toContain("line-clamp-3");
+    // The description <p> carries line-clamp-2. The banner's ITALIC NAME
+    // (e.g. "Research Assistant") always renders line-clamp-3 regardless of
+    // descriptionLineClamp — that's ExtensionCardListingBanner's own
+    // (unrelated) title clamp, so assert on the description paragraph
+    // specifically rather than the whole card's markup.
+    const descriptionParagraph = html.match(/<p class="[^"]*">[^<]*<\/p>/)?.[0];
+    expect(descriptionParagraph).toContain("line-clamp-2");
+    expect(descriptionParagraph).not.toContain("line-clamp-3");
   });
 
   it("defaults to the §VI 3-line clamp when descriptionLineClamp is not passed", () => {
