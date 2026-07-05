@@ -8,6 +8,7 @@ import {
   scanExtensionsForFsImports,
   violationsOf,
   staleAllowlistEntries,
+  staleBaselineEntries,
   FS_IMPORT_ALLOWLIST,
 } from "../extension-fs-import-ban.mjs";
 
@@ -125,5 +126,59 @@ describe("violationsOf / staleAllowlistEntries (self-policing carve-out)", () =>
 
   it("the real FS_IMPORT_ALLOWLIST is not empty (documents the one known residual, cinatra#979)", () => {
     expect(FS_IMPORT_ALLOWLIST.size).toBeGreaterThan(0);
+  });
+});
+
+// NO-NEW-ROT RATCHET (temporary, shrink-only): a hit tolerated by the
+// committed BASELINE (migration debt already fixed upstream, pending a
+// lock-pin bump) never violates; a hit OUTSIDE both the baseline and the
+// permanent allowlist still fails immediately — the acceptance-criterion
+// "a seeded fs-logger fails CI" case.
+describe("violationsOf with a baseline (temporary migration-debt ratchet)", () => {
+  it("a baselined hit never violates", () => {
+    const hits = { "@cinatra-ai/gemini-connector": ["src/index.ts"] };
+    const baseline = new Set(["@cinatra-ai/gemini-connector::src/index.ts"]);
+    expect(violationsOf(hits, new Set(), baseline)).toEqual([]);
+  });
+
+  it("a NEW hit outside both the baseline and the allowlist still fails (seeded-logger acceptance case)", () => {
+    const hits = {
+      "@cinatra-ai/gemini-connector": ["src/index.ts"],
+      "@acme/seeded-connector": ["src/index.ts"],
+    };
+    const baseline = new Set(["@cinatra-ai/gemini-connector::src/index.ts"]);
+    expect(violationsOf(hits, new Set(), baseline)).toEqual(["@acme/seeded-connector::src/index.ts"]);
+  });
+
+  it("staleBaselineEntries reports (does not fail on) migrated-away debt", () => {
+    const hits = {};
+    const baseline = new Set(["@cinatra-ai/gemini-connector::src/index.ts"]);
+    expect(staleBaselineEntries(hits, baseline)).toEqual(["@cinatra-ai/gemini-connector::src/index.ts"]);
+  });
+
+  it("the real committed baseline covers exactly the three cinatra#981-migrated connectors' pre-migration logging files (not the permanently-allowlisted openai-skills.ts)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const { dirname, join } = await import("node:path");
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const baselinePath = join(__dirname, "..", "extension-fs-import-ban.baseline.json");
+    const doc = JSON.parse(readFileSync(baselinePath, "utf8"));
+    const keys = new Set();
+    for (const [ext, files] of Object.entries(doc.hits ?? {})) {
+      for (const f of files) keys.add(`${ext}::${f}`);
+    }
+    for (const allowlisted of FS_IMPORT_ALLOWLIST) {
+      expect(keys.has(allowlisted)).toBe(false);
+    }
+    expect(keys).toEqual(
+      new Set([
+        "@cinatra-ai/gemini-connector::src/index.ts",
+        "@cinatra-ai/gemini-connector::src/log-retention.ts",
+        "@cinatra-ai/openai-connector::src/index.ts",
+        "@cinatra-ai/openai-connector::src/log-retention.ts",
+        "@cinatra-ai/apollo-connector::src/index.ts",
+        "@cinatra-ai/apollo-connector::src/log-retention.ts",
+      ]),
+    );
   });
 });

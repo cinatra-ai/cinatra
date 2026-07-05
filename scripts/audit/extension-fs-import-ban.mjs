@@ -11,6 +11,23 @@
 // clearing — the exact hazard #981 fixed. This gate keeps it fixed: an
 // extension that regresses back to direct filesystem access fails CI.
 //
+// NO-NEW-ROT RATCHET (temporary, shrink-only — mirrors extension-import-ban.mjs's
+// pre-cinatra#172 staged rollout): this gate lands BEFORE the three migrated
+// connectors' `cinatra-required-extensions.lock.json` /
+// `cinatra-dev-extensions.lock.json` pins can be bumped (that requires their
+// companion PRs to MERGE first — gemini-connector#42, openai-connector#56,
+// apollo-connector#45 — the lock-bump tooling (`scripts/extensions/update-
+// {required,dev}-extension-lock.mjs`) always resolves the CURRENT `main` tip,
+// so it cannot pin to an unmerged branch). Until those pins move, the
+// materialized `extensions/` tree still contains the PRE-migration connector
+// source, which this gate would otherwise flag on day one. The committed
+// BASELINE (`extension-fs-import-ban.baseline.json`) tolerates that KNOWN,
+// already-fixed-upstream debt; any hit OUTSIDE the baseline (a genuinely NEW
+// regression) still fails immediately. Once the lock pins bump, regenerate the
+// baseline with `--write-baseline` — it should shrink to empty (the three
+// connectors are clean in their own repos as of this gate's introduction) and
+// this comment block's staged-rollout framing can be deleted.
+//
 // SCOPE: every extension's SOURCE tree (kind-agnostic — `src/`, `cinatra/`,
 // `skills/`, `widgets/`, … — the whole extension package directory), MINUS:
 //   - `extension-kind-gate.mjs` — the self-contained, zero-dependency
@@ -30,16 +47,16 @@
 //     a different, non-hazardous class.
 //
 // ALLOWLIST (owner-ruled, self-policing, mirrors extension-import-ban.mjs's
-// STRICT_SDK_ONLY_ALLOWLIST shape): an edge-level carve-out for a SPECIFIC
-// (extension, file) pair with an inline rationale. Unlike the logging writers
-// #981 eliminated, a carve-out here is for a read-only/non-logging fs use that
-// has no host-port equivalent yet — NOT a re-hosted logging bypass. Stale
-// entries (the edge no longer exists) are a hard CI failure, forcing the
-// allowlist to shrink the moment its rationale is resolved.
+// STRICT_SDK_ONLY_ALLOWLIST shape): a PERMANENT edge-level carve-out for a
+// SPECIFIC (extension, file) pair with an inline rationale — unlike the
+// BASELINE above (temporary migration debt), this is for a read-only/
+// non-logging fs use that has no host-port equivalent yet. Stale entries (the
+// edge no longer exists) are a hard CI failure, forcing the allowlist to
+// shrink the moment its rationale is resolved.
 //
 // Usage:
-//   node scripts/audit/extension-fs-import-ban.mjs                  # check (exit 1 on any non-allowlisted hit)
-//   node scripts/audit/extension-fs-import-ban.mjs --write-baseline # regenerate the recorded-hits doc (informational; the allowlist is what gates)
+//   node scripts/audit/extension-fs-import-ban.mjs                  # check (exit 1 on any hit outside baseline+allowlist)
+//   node scripts/audit/extension-fs-import-ban.mjs --write-baseline # regenerate the baseline from CURRENT hits (minus allowlisted keys)
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
@@ -75,11 +92,12 @@ export function scanFsImportsInText(rawText) {
   return hits;
 }
 
-// OWNER-RULED edge-level carve-out (EMPTY by default; add ONLY with an inline
+// OWNER-RULED PERMANENT edge-level carve-out (add ONLY with an inline
 // rationale + a follow-up reference). Keys are `${extensionName}::${posix
 // relative path from the extension root}`. Self-policing: a stale entry (the
 // file/specifier is no longer there) is a hard CI failure — see
-// staleAllowlistEntries.
+// staleAllowlistEntries. NEVER use this for a temporary migration-debt hit —
+// that belongs in the committed BASELINE (shrink-only ratchet) instead.
 export const FS_IMPORT_ALLOWLIST = new Set([
   // @cinatra-ai/openai-connector — `openai-skills.ts` uses `existsSync` to
   // validate a LOCAL skill-directory mount path for the sandboxed shell tool
@@ -156,9 +174,21 @@ function flatten(hits) {
   return out;
 }
 
-/** Non-allowlisted (extension, file) violations. Exported for unit tests. */
-export function violationsOf(hits, allowlist = FS_IMPORT_ALLOWLIST) {
-  return [...flatten(hits)].filter((k) => !allowlist.has(k)).sort();
+function readBaseline() {
+  if (!existsSync(BASELINE_PATH)) return new Set();
+  try {
+    const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    return flatten(doc.hits ?? {});
+  } catch {
+    return new Set();
+  }
+}
+
+/** Non-tolerated (extension, file) violations — outside BOTH the permanent
+ *  allowlist and the temporary migration-debt baseline. Exported for unit
+ *  tests. */
+export function violationsOf(hits, allowlist = FS_IMPORT_ALLOWLIST, baseline = new Set()) {
+  return [...flatten(hits)].filter((k) => !allowlist.has(k) && !baseline.has(k)).sort();
 }
 
 /** Allowlist entries whose (extension, file) hit no longer exists — the
@@ -168,62 +198,90 @@ export function staleAllowlistEntries(hits, allowlist = FS_IMPORT_ALLOWLIST) {
   return [...allowlist].filter((k) => !current.has(k)).sort();
 }
 
+/** Baseline entries whose (extension, file) hit no longer exists — the
+ *  migrated-away debt, reported (not failed) so a maintainer knows the
+ *  baseline can shrink. Exported for unit tests. */
+export function staleBaselineEntries(hits, baseline) {
+  const current = flatten(hits);
+  return [...baseline].filter((k) => !current.has(k)).sort();
+}
+
 async function main() {
   const args = process.argv.slice(2);
   assertExtensionsPresent(REPO_ROOT, "extension-fs-import-ban");
   const hits = scanExtensionsForFsImports(listExtensionDirs());
 
   if (args.includes("--write-baseline")) {
-    // Informational record of the CURRENT (already-allowlisted) hits, for
-    // human review — NOT consulted by the check below (the allowlist is the
-    // only thing that gates; a re-generated baseline can never widen it).
+    // Regenerate the shrink-only ratchet baseline from CURRENT hits, minus
+    // anything already covered by the PERMANENT allowlist (kept disjoint from
+    // the baseline so the two carve-out mechanisms never overlap/confuse).
+    const allowlisted = FS_IMPORT_ALLOWLIST;
+    const nextHits = {};
+    for (const [ext, files] of Object.entries(hits)) {
+      const kept = files.filter((f) => !allowlisted.has(`${ext}::${f}`));
+      if (kept.length) nextHits[ext] = kept;
+    }
     writeFileSync(
       BASELINE_PATH,
       JSON.stringify(
         {
           note:
-            "extension-fs-import-ban — INFORMATIONAL record of current node:fs hits in extension " +
-            "source, for human review only. The gate's actual pass/fail is FS_IMPORT_ALLOWLIST in " +
-            "extension-fs-import-ban.mjs (owner-ruled, self-policing) — this file is never read by " +
-            "the check.",
-          hits,
+            "extension-fs-import-ban — TEMPORARY shrink-only ratchet baseline (see the gate's module " +
+            "header for the staged-rollout rationale: the three cinatra#981-migrated connectors' lock " +
+            "pins can't bump until their companion PRs merge). A hit here is TOLERATED debt, already " +
+            "fixed upstream in the connector repo, pending a lock-pin bump — NOT a permanent exemption " +
+            "(that's FS_IMPORT_ALLOWLIST in extension-fs-import-ban.mjs). Regenerate via --write-baseline " +
+            "after any lock-pin bump; it should trend toward (and eventually reach) empty.",
+          hits: nextHits,
         },
         null,
         2,
       ) + "\n",
     );
-    console.log("[extension-fs-import-ban] baseline (informational) written.");
+    console.log("[extension-fs-import-ban] baseline written.");
     return;
   }
 
-  const stale = staleAllowlistEntries(hits);
-  if (stale.length) {
+  const baseline = readBaseline();
+
+  const staleCarveOuts = staleAllowlistEntries(hits);
+  if (staleCarveOuts.length) {
     console.error(
       "[extension-fs-import-ban] FAIL — STALE allowlist entr" +
-        (stale.length === 1 ? "y" : "ies") +
+        (staleCarveOuts.length === 1 ? "y" : "ies") +
         " (the node:fs hit is gone; remove from FS_IMPORT_ALLOWLIST so a later reintroduction " +
         "can't silently ride the forgotten carve-out):",
     );
-    for (const s of stale) console.error("  + " + s);
+    for (const s of staleCarveOuts) console.error("  + " + s);
     process.exit(1);
   }
 
-  const violations = violationsOf(hits);
+  const violations = violationsOf(hits, FS_IMPORT_ALLOWLIST, baseline);
   if (violations.length) {
     console.error(
       "[extension-fs-import-ban] FAIL — extension source imports node:fs/node:fs/promises " +
-        "outside the owner-ruled FS_IMPORT_ALLOWLIST (cinatra#979/#981 — route request/response " +
-        "logging through ctx.logger.capture(channel, entry); route any other on-disk need through " +
-        "a host port, or get an owner-ruled allowlist entry):",
+        "outside the owner-ruled FS_IMPORT_ALLOWLIST and the tolerated migration-debt baseline " +
+        "(cinatra#979/#981 — route request/response logging through ctx.logger.capture(channel, " +
+        "entry); route any other on-disk need through a host port, or get an owner-ruled allowlist " +
+        "entry):",
     );
     for (const v of violations) console.error("  + " + v);
     process.exit(1);
   }
 
+  const staleDebt = staleBaselineEntries(hits, baseline);
+  if (staleDebt.length) {
+    console.log(
+      `[extension-fs-import-ban] NOTE — ${staleDebt.length} baseline entr` +
+        (staleDebt.length === 1 ? "y is" : "ies are") +
+        " migrated away (no longer present); run --write-baseline to shrink the ratchet:",
+    );
+    for (const s of staleDebt) console.log("  - " + s);
+  }
+
   console.log(
-    `[extension-fs-import-ban] OK — 0 non-allowlisted node:fs import(s) across the extension fleet ` +
-      `(${FS_IMPORT_ALLOWLIST.size} owner-ruled allowlist entr${FS_IMPORT_ALLOWLIST.size === 1 ? "y" : "ies"}, ` +
-      `self-policed).`,
+    `[extension-fs-import-ban] OK — 0 node:fs import(s) outside the owner-ruled FS_IMPORT_ALLOWLIST ` +
+      `(${FS_IMPORT_ALLOWLIST.size}) and the tolerated migration-debt baseline (${baseline.size}).`,
   );
 }
 
