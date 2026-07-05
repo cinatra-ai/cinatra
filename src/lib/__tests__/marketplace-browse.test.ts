@@ -225,6 +225,130 @@ describe("loadPublicMarketplaceDetail", () => {
     expect(res.detail.iconUrl).toBe("https://cdn.example/i.png");
   });
 
+  it("projects compatibleUpTo/changelog/dependencies (§V modal fields, cinatra#989)", async () => {
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      // "v"-prefixed on the wire; the projection stores the bare version
+      // (the "Cinatra v" prefix is presentation, applied at the render).
+      compatibleUpTo: ["v", "0.2.0"].join(""),
+      changelog: [
+        { version: "3.1.0", date: "2026-06-20", notes: ["Hourly forecasts."] },
+      ],
+      dependencies: [
+        {
+          packageName: "@cinatra-ai/geo-connector",
+          name: "Geo Connector",
+          kind: "connector",
+          versionRange: "^1.0.0",
+        },
+      ],
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.compatibleUpTo).toBe("0.2.0");
+    expect(res.detail.changelog).toEqual([
+      { version: "3.1.0", date: "2026-06-20", notes: ["Hourly forecasts."] },
+    ]);
+    expect(res.detail.dependencies).toEqual([
+      {
+        packageName: "@cinatra-ai/geo-connector",
+        name: "Geo Connector",
+        kind: "connector",
+        versionRange: "^1.0.0",
+      },
+    ]);
+  });
+
+  it("degrades absent §V fields safely: no compatibleUpTo, empty changelog, no dependencies (today's storefront payload)", async () => {
+    // The live storefront detail endpoint serves none of these fields yet
+    // (marketplace#190 workstream C) — the projection must yield the spec
+    // empty states, never crash and never fabricate content.
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.compatibleUpTo).toBeNull();
+    expect(res.detail.changelog).toEqual([]);
+    expect(res.detail.dependencies).toEqual([]);
+  });
+
+  it("never projects a banner: a wire bannerUrl does not reach the client-safe view (the §V modal has no banner surface)", async () => {
+    // Owner-flagged invention guard (PR #995 review): the §V drawing has no
+    // banner / coloured ground in the modal. `bannerUrl` stays an unused wire
+    // field (the full-page route header keeps its own path); the modal's
+    // client-safe projection must not carry it at all.
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      bannerUrl: "https://cdn.example/banner.png",
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect("bannerUrl" in res.detail).toBe(false);
+  });
+
+  it("wrong-data-field guard: a raw cinatra.dependencies map projects as kindless rows (only this field is ever read — a packument npm-deps block has no wire field)", async () => {
+    publicDetailMock.mockResolvedValue({
+      packageName: "@vendor/weather-agent",
+      name: "@vendor/weather-agent",
+      kind: "agent",
+      currentVisibility: "public",
+      displayName: "Weather Agent",
+      kindLabel: "Agent",
+      latestVersion: "3.1.0",
+      // The raw manifest map form (marketplace#190 may serve it unenriched).
+      dependencies: { "@cinatra-ai/geo-connector": "^1.0.0" },
+      ratingSummary: { average: 0, total: 0, counts: { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 } },
+      reviews: [],
+      vendor: null,
+    });
+
+    const res = await loadPublicMarketplaceDetail("@vendor/weather-agent");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.detail.dependencies).toEqual([
+      {
+        packageName: "@cinatra-ai/geo-connector",
+        name: "@cinatra-ai/geo-connector",
+        kind: null,
+        versionRange: "^1.0.0",
+      },
+    ]);
+  });
+
   it("scheme-guards the icon fallback: a non-http(s) iconAssetUrl is dropped to null (never reaches <img src>)", async () => {
     // iconUrl is sanitized upstream, but iconAssetUrl is a raw passthrough; the
     // projection must drop a non-http(s) fallback so it cannot reach the modal.

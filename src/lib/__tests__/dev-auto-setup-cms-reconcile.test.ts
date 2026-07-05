@@ -170,6 +170,28 @@ describe("parseDrupalRemoteKey", () => {
     expect(parseDrupalRemoteKey(`${FRESH_BEARER}\n[notice] key created.`)).toBeNull();
   });
 
+  it("extracts the labeled `API Key:` line despite the trailing human notice (mcp_tools 1.0.0-beta14)", () => {
+    const out = [
+      "[notice] Created new remote API key.",
+      ` API Key: ${FRESH_BEARER}`,
+      "Store this API key now; it cannot be shown again.",
+    ].join("\n");
+    expect(parseDrupalRemoteKey(out)).toBe(FRESH_BEARER);
+  });
+
+  it("rejects a labeled `API Key:` line whose value is not token-shaped", () => {
+    expect(parseDrupalRemoteKey("API Key: not a single token")).toBeNull();
+  });
+
+  it("stays linear on newline-heavy input for the labeled parse (ReDoS guard)", () => {
+    // A `^\s*`-style labeled regex would backtrack across line starts here
+    // (superlinear); the horizontal-whitespace anchors must keep this fast.
+    const evil = " \n".repeat(80_000) + "API Key";
+    const start = Date.now();
+    expect(parseDrupalRemoteKey(evil)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
   it("rejects a token shorter than 16 chars", () => {
     expect(parseDrupalRemoteKey("short")).toBeNull();
   });

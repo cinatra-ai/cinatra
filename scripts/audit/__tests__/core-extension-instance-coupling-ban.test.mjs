@@ -224,9 +224,10 @@ describe("core-extension-instance-coupling-ban gate", () => {
       "src/app/plugins-registry.tsx",
       "src/app/api/app/setup-status/route.ts",
       "src/app/configuration/llm/apis-page.tsx",
+      // The two legacy vendor mounts are drupal-style redirect shells since
+      // cinatra#977 (their vendor-specific UI/actions were evicted).
       "src/app/connectors/wordpress/page.tsx",
       "src/app/connectors/resend/page.tsx",
-      "src/app/connectors/resend/actions.ts",
     ]) {
       const keys = Object.keys(occ).filter((k) => k.startsWith(`${file} ::`));
       expect(keys, `expected ${file} to stay de-coupled`).toEqual([]);

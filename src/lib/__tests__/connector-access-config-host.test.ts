@@ -64,24 +64,18 @@ describe("readConnectorAccessDeclarationFromStore (cinatra#951)", () => {
     await expect(readConnectorAccessDeclarationFromStore(dir)).resolves.toBeNull();
   });
 
-  it("absent file → default:admin (source absent) for a non-protected slug", async () => {
+  it("absent file REFUSES at install for a non-protected slug (cinatra#955 — the W1 leniency is deleted)", async () => {
     writePkg({ name: "@cinatra-ai/github-connector", kind: "connector" });
-    await expect(readConnectorAccessDeclarationFromStore(dir)).resolves.toEqual({
-      formatVersion: 1,
-      mode: "default",
-      scope: "admin",
-      source: "absent",
-    });
+    await expect(readConnectorAccessDeclarationFromStore(dir)).rejects.toThrow(
+      /absence is not accepted at install/,
+    );
   });
 
-  it("absent file on a PROTECTED slug resolves the FORCED only:admin at install (never looser)", async () => {
+  it("absent file on a PROTECTED slug REFUSES at install, naming the forced declaration", async () => {
     writePkg({ name: "@cinatra-ai/openai-connector", kind: "connector" });
-    await expect(readConnectorAccessDeclarationFromStore(dir)).resolves.toEqual({
-      formatVersion: 1,
-      mode: "only",
-      scope: "admin",
-      source: "absent",
-    });
+    await expect(readConnectorAccessDeclarationFromStore(dir)).rejects.toThrow(
+      /protected slug "openai"/,
+    );
   });
 
   it("FAIL-CLOSED: the misspelled nested key throws (never a silent default)", async () => {

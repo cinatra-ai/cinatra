@@ -5,6 +5,10 @@
 // change one validator without the other.
 
 import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
   validateAccessConfig,
@@ -86,6 +90,97 @@ describe("connector-access-config-gate — mirror rules", () => {
       const label = `${pkg} ${JSON.stringify(raw)}`;
       expect(gateErrors.length === 0, `gate verdict for ${label}`).toBe(ok);
       expect(sdkOk, `sdk verdict for ${label}`).toBe(ok);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEEDED-VIOLATION PROOF (cinatra#955 closing wave): the gate hard-fails on a
+// config-less connector — no flag, no WARN staging. Spawn the real gate
+// against a synthetic extensions/ tree.
+// ---------------------------------------------------------------------------
+
+const GATE = resolve(process.cwd(), "scripts/audit/connector-access-config-gate.mjs");
+
+function runGateAgainst(build) {
+  const root = mkdtempSync(join(tmpdir(), "cacg-955-"));
+  try {
+    const dir = join(root, "extensions", "test-scope", "foo-connector");
+    mkdirSync(dir, { recursive: true });
+    build(dir);
+    const out = spawnSync(process.execPath, [GATE], { cwd: root, encoding: "utf8" });
+    return { status: out.status, stdout: out.stdout, stderr: out.stderr };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("connector-access-config-gate — absence hard-fails (no staging flag)", () => {
+  it("FAILS (exit 1) when a kind=connector package ships no cinatra/config.json", () => {
+    const { status, stderr } = runGateAgainst((dir) => {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "@test-scope/foo-connector", cinatra: { kind: "connector" } }),
+      );
+    });
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/cinatra\/config\.json is MISSING for kind=connector/);
+  });
+
+  it("PASSES (exit 0) when the config is shipped and valid", () => {
+    const { status, stdout } = runGateAgainst((dir) => {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "@test-scope/foo-connector", cinatra: { kind: "connector" } }),
+      );
+      mkdirSync(join(dir, "cinatra"));
+      writeFileSync(
+        join(dir, "cinatra", "config.json"),
+        JSON.stringify({ formatVersion: 1, access: { scope: { default: "workspace" } } }),
+      );
+    });
+    expect(status).toBe(0);
+    expect(stdout).toMatch(/OK/);
+  });
+
+  it("FAILS (exit 1) when package.json#files omits the cinatra dir (packlist presence)", () => {
+    const { status, stderr } = runGateAgainst((dir) => {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          name: "@test-scope/foo-connector",
+          files: ["dist"],
+          cinatra: { kind: "connector" },
+        }),
+      );
+      mkdirSync(join(dir, "cinatra"));
+      writeFileSync(
+        join(dir, "cinatra", "config.json"),
+        JSON.stringify({ formatVersion: 1, access: { scope: { default: "workspace" } } }),
+      );
+    });
+    expect(status).toBe(1);
+    expect(stderr).toMatch(/does not include "cinatra"/);
+  });
+
+  it("FAILS (exit 1) on a protected-slug violation in a SHIPPED config", () => {
+    const root = mkdtempSync(join(tmpdir(), "cacg-955p-"));
+    try {
+      const dir = join(root, "extensions", "test-scope", "openai-connector");
+      mkdirSync(join(dir, "cinatra"), { recursive: true });
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ name: "@test-scope/openai-connector", cinatra: { kind: "connector" } }),
+      );
+      writeFileSync(
+        join(dir, "cinatra", "config.json"),
+        JSON.stringify({ formatVersion: 1, access: { scope: { default: "workspace" } } }),
+      );
+      const out = spawnSync(process.execPath, [GATE], { cwd: root, encoding: "utf8" });
+      expect(out.status).toBe(1);
+      expect(out.stderr).toMatch(/protected slug "openai"/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

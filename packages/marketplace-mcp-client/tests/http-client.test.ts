@@ -265,6 +265,7 @@ describe("createHttpMarketplaceMcpClient", () => {
           permalink: "https://marketplace.cinatra.ai/product/weather-agent",
           badge: { text: "Open source", variant: "oss", license: "MIT" },
           icon_url: { url: "https://cdn.example/i.png", width: 46, height: 46 },
+          compatible_up_to: "0.2.0",
           rating_summary: { average: 4.5, total: 2, counts: { "5": 1, "4": 1 } },
           reviews: [
             { author: "Grace", verified_owner: true, date: "2026-06-21T08:00:00Z", rating: 5, text: "Accurate." },
@@ -289,6 +290,8 @@ describe("createHttpMarketplaceMcpClient", () => {
       expect(out.installCount).toBe(128);
       expect(out.permalink).toBe("https://marketplace.cinatra.ai/product/weather-agent");
       expect(out.iconUrl).toBe("https://cdn.example/i.png");
+      // §V "Compatible up to" specs row source (snake_case wire mapping).
+      expect(out.compatibleUpTo).toBe("0.2.0");
       expect(out.ratingSummary).toEqual({
         average: 4.5,
         total: 2,
@@ -336,6 +339,7 @@ describe("createHttpMarketplaceMcpClient", () => {
       expect(out.reviews).toEqual([]);
       expect(out.installCount).toBeNull();
       expect(out.commerceBadge).toBeNull();
+      expect(out.compatibleUpTo).toBeNull();
       // displayName falls back to name when display_name is absent.
       expect(out.displayName).toBe("@vendor/plain-agent");
     } finally {

@@ -38,6 +38,31 @@ export interface MarketplaceDetailVendor {
   storeUrl: string | null;
 }
 
+/** One per-version entry of the §V Changelog tab (newest first). */
+export interface MarketplaceDetailChangelogEntry {
+  /** Released version, undecorated (e.g. "0.4.2") — the mono chip text. */
+  version: string;
+  /** ISO-8601 release date, or null (the date column is then omitted). */
+  date: string | null;
+  /** Plain-text release-note lines — rendered ESCAPED, one list item each. */
+  notes: string[];
+}
+
+/**
+ * One row of the §V Dependencies list — another Cinatra extension declared in
+ * the manifest `cinatra.dependencies` (kind emblem + name + version range).
+ * Never an npm package dependency.
+ */
+export interface MarketplaceDetailDependency {
+  packageName: string;
+  /** Display label; equals `packageName` when the catalog knows no better. */
+  name: string;
+  /** Kind slug for the emblem ("agent" | "skill" | …), or null → generic. */
+  kind: string | null;
+  /** Declared semver range verbatim; "" renders no range line. */
+  versionRange: string;
+}
+
 /**
  * The client-safe projection of the marketplace detail the modal renders. Every
  * field is a primitive / plain object so it crosses the server-action boundary
@@ -60,6 +85,28 @@ export interface MarketplaceDetailView {
   longDescription: string | null;
   description: string | null;
   iconUrl: string | null;
+  /**
+   * The storefront-computed "Compatible up to" Cinatra version (bare, no "v"
+   * prefix — e.g. "0.2.0"), or null while the storefront detail endpoint does
+   * not serve the field yet (marketplace#190 workstream C). Rendered as the
+   * §V plain specs row "Compatible up to · Cinatra v{version}"; null → "—".
+   * NOTE: deliberately NOT derived from `sdkAbiRange` — that is the SDK ABI
+   * version space (e.g. "^2"), not the Cinatra product version the spec row
+   * names.
+   */
+  compatibleUpTo: string | null;
+  /**
+   * §V Changelog-tab entries (newest first). [] renders the spec's
+   * "No changelog available" empty state — the storefront detail endpoint
+   * does not serve the field yet (marketplace#190 workstream C).
+   */
+  changelog: MarketplaceDetailChangelogEntry[];
+  /**
+   * §V Dependencies rows (`cinatra.dependencies`, never npm deps). [] omits
+   * the section — both for a none-declared listing and while the storefront
+   * detail endpoint does not serve the field (marketplace#190 workstream C).
+   */
+  dependencies: MarketplaceDetailDependency[];
   ratingSummary: MarketplaceDetailRatingSummary;
   reviews: MarketplaceDetailReview[];
   vendor: MarketplaceDetailVendor | null;
@@ -82,6 +129,18 @@ const ZERO_COUNTS: MarketplaceDetailRatingSummary["counts"] = {
 /** A well-formed zeroed rating summary (never a missing field). */
 export function emptyRatingSummary(): MarketplaceDetailRatingSummary {
   return { average: 0, total: 0, counts: { ...ZERO_COUNTS } };
+}
+
+/**
+ * Normalize the wire "Compatible up to" Cinatra version to a bare version
+ * string: trims, strips a single leading "v"/"V", and degrades anything
+ * non-string/empty to null (the row renders "—"). Presentation (the
+ * "Cinatra v" prefix) is applied at the render, never stored.
+ */
+export function normalizeCompatibleUpTo(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().replace(/^[vV]/, "");
+  return trimmed === "" ? null : trimmed;
 }
 
 /**
@@ -225,9 +284,9 @@ export function ratingBars(summary: MarketplaceDetailRatingSummary): RatingBar[]
 }
 
 /**
- * Compact install-count label ("2.1k installations"). Null count → null (no
- * line). Mirrors the browse card's install-count formatting so the modal and
- * the card agree.
+ * Compact install-count VALUE ("950", "2.1k") for the §V specs column — the
+ * drawing renders the bare figure under the "Installations" row label, so the
+ * label is never repeated inside the value. Null count → null (no line).
  */
 export function formatInstallations(count: number | null): string | null {
   if (count === null || !Number.isFinite(count) || count < 0) {
@@ -235,12 +294,12 @@ export function formatInstallations(count: number | null): string | null {
   }
   const n = Math.floor(count);
   if (n < 1000) {
-    return `${n} ${n === 1 ? "installation" : "installations"}`;
+    return `${n}`;
   }
   const thousands = n / 1000;
   const rounded = Math.round(thousands * 10) / 10;
   const text = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
-  return `${text}k installations`;
+  return `${text}k`;
 }
 
 /** Up-to-two-letter initials for a review author's avatar. "" → "?". */
@@ -253,4 +312,160 @@ export function reviewInitials(author: string): string {
     return parts[0].slice(0, 2).toUpperCase();
   }
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+// --- §V Changelog + Dependencies normalizers (marketplace#190 wire) ----------
+// Structurally typed over `unknown` (no marketplace-client import — this module
+// must stay client-safe/pure) and fully defensive: the storefront endpoint does
+// not serve these fields yet, so the projection must degrade any absent,
+// partial, or malformed value to the spec's empty states, never crash.
+
+/** A CHANGELOG heading line, e.g. "## [0.4.2] - 2026-06-28" / "## 0.4.2". */
+const CHANGELOG_HEADING_RE = /^#{1,4}\s+(.*)$/;
+/** The version token inside a heading (optionally bracketed / v-prefixed). */
+const CHANGELOG_VERSION_RE = /\[?\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.-]+)?)\]?/;
+/** An ISO-ish date token inside a heading, e.g. "2026-06-28". */
+const CHANGELOG_DATE_RE = /(\d{4}-\d{2}-\d{2})/;
+
+/**
+ * Parse a raw root-CHANGELOG text into §V per-version entries. Recognizes the
+ * common heading shapes ("## [0.4.2] - 2026-06-28", "## 0.4.2 (2026-06-28)",
+ * "# 0.4.2", keep-a-changelog). Note lines are the bullet/paragraph lines
+ * under each heading (markdown list markers stripped; deeper "###" section
+ * headings like "Added"/"Fixed" become their own note line). Returns [] when
+ * no version heading is found — the tab then renders the spec empty state.
+ */
+export function parseChangelogText(raw: string): MarketplaceDetailChangelogEntry[] {
+  const entries: MarketplaceDetailChangelogEntry[] = [];
+  let current: MarketplaceDetailChangelogEntry | null = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const heading = CHANGELOG_HEADING_RE.exec(line.trim());
+    if (heading) {
+      const version = CHANGELOG_VERSION_RE.exec(heading[1])?.[1] ?? null;
+      if (version) {
+        current = { version, date: CHANGELOG_DATE_RE.exec(heading[1])?.[1] ?? null, notes: [] };
+        entries.push(current);
+        continue;
+      }
+      // A non-version heading ("# Changelog", "### Fixed"): before any version
+      // entry it is preamble (skip); inside one it becomes a note line.
+      if (current) {
+        const text = heading[1].trim();
+        if (text !== "") current.notes.push(text);
+      }
+      continue;
+    }
+    if (!current) continue; // preamble before the first version heading
+    const note = line.trim().replace(/^[-*+]\s+/, "").trim();
+    if (note !== "") current.notes.push(note);
+  }
+  return entries;
+}
+
+/**
+ * Project the wire `changelog` field into view entries: a pre-parsed entry
+ * array is sanitized entry-by-entry (a version is required; `notes` accepts a
+ * string[] or a single string), a raw CHANGELOG string is parsed via
+ * {@link parseChangelogText}, anything else → [] (the spec empty state).
+ */
+export function normalizeDetailChangelog(raw: unknown): MarketplaceDetailChangelogEntry[] {
+  if (typeof raw === "string") {
+    return parseChangelogText(raw);
+  }
+  if (!Array.isArray(raw)) return [];
+  const out: MarketplaceDetailChangelogEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== "object") continue;
+    const entry = e as { version?: unknown; date?: unknown; released_at?: unknown; notes?: unknown };
+    const version = typeof entry.version === "string" ? entry.version.trim() : "";
+    if (version === "") continue;
+    const dateRaw =
+      typeof entry.date === "string" && entry.date.trim() !== ""
+        ? entry.date
+        : typeof entry.released_at === "string" && entry.released_at.trim() !== ""
+          ? entry.released_at
+          : null;
+    const notes = (
+      Array.isArray(entry.notes)
+        ? entry.notes
+        : typeof entry.notes === "string"
+          ? [entry.notes]
+          : []
+    ).filter((n): n is string => typeof n === "string" && n.trim() !== "");
+    out.push({ version, date: dateRaw, notes });
+  }
+  return out;
+}
+
+const DETAIL_DEPENDENCY_KIND_SLUGS = new Set(["agent", "skill", "connector", "artifact", "workflow"]);
+
+/**
+ * Project the wire `dependencies` field (`cinatra.dependencies` — NEVER the
+ * npm deps) into §V view rows. Accepts the enriched entry array or the raw
+ * manifest name→range map; anything else → [] (section omitted).
+ */
+export function normalizeDetailDependencies(raw: unknown): MarketplaceDetailDependency[] {
+  if (!raw || typeof raw !== "object") return [];
+  const out: MarketplaceDetailDependency[] = [];
+  if (Array.isArray(raw)) {
+    for (const d of raw) {
+      if (!d || typeof d !== "object") continue;
+      const dep = d as {
+        packageName?: unknown;
+        package_name?: unknown;
+        name?: unknown;
+        display_name?: unknown;
+        kind?: unknown;
+        versionRange?: unknown;
+        version_range?: unknown;
+        versionConstraint?: unknown;
+        version_constraint?: unknown;
+      };
+      const packageName = firstNonEmptyString(dep.packageName, dep.package_name);
+      if (packageName === null) continue;
+      const kind = firstNonEmptyString(dep.kind);
+      out.push({
+        packageName,
+        name: firstNonEmptyString(dep.display_name, dep.name) ?? packageName,
+        kind: kind !== null && DETAIL_DEPENDENCY_KIND_SLUGS.has(kind) ? kind : null,
+        versionRange:
+          firstNonEmptyString(dep.versionRange, dep.version_range) ??
+          dependencyConstraintString(dep.versionConstraint ?? dep.version_constraint) ??
+          "",
+      });
+    }
+    return out;
+  }
+  for (const [packageName, range] of Object.entries(raw as Record<string, unknown>)) {
+    if (packageName.trim() === "") continue;
+    out.push({
+      packageName: packageName.trim(),
+      name: packageName.trim(),
+      kind: null,
+      versionRange: typeof range === "string" ? range.trim() : "",
+    });
+  }
+  return out;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | null {
+  for (const v of values) {
+    if (typeof v === "string" && v.trim() !== "") return v.trim();
+  }
+  return null;
+}
+
+/**
+ * Render a canonical `cinatra.dependencies` version constraint as a display
+ * string. The canonical edge (sdk-extensions ExtensionDependency) carries a
+ * discriminated `versionConstraint` OBJECT ({range} | {version} | {ref}); a
+ * plain string passes through. Anything else → null.
+ */
+function dependencyConstraintString(v: unknown): string | null {
+  if (typeof v === "string") return firstNonEmptyString(v);
+  if (v && typeof v === "object") {
+    const c = v as { range?: unknown; version?: unknown; ref?: unknown };
+    return firstNonEmptyString(c.range, c.version, c.ref);
+  }
+  return null;
 }

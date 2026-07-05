@@ -158,34 +158,24 @@ describe("parseConnectorAccessConfig — protected slugs (validator-forced)", ()
   });
 });
 
-describe("resolveAbsentConnectorAccessConfig — absence rule per surface", () => {
-  it("resolves default:admin for a non-protected slug at both surfaces", () => {
+describe("resolveAbsentConnectorAccessConfig — absence refused at EVERY surface (cinatra#955)", () => {
+  it("hard-fails a non-protected slug at both surfaces (the W1 install leniency is deleted)", () => {
     for (const surface of ["submit", "install"] as const) {
-      expect(resolveAbsentConnectorAccessConfig({ packageName: PKG.packageName, surface })).toEqual({
-        formatVersion: 1,
-        mode: "default",
-        scope: "admin",
-        source: "absent",
-      });
+      expect(() =>
+        resolveAbsentConnectorAccessConfig({ packageName: PKG.packageName, surface }),
+      ).toThrow(new RegExp(`absence is not accepted at ${surface}`));
     }
   });
 
-  it("hard-fails a protected slug at SUBMIT (the file is required)", () => {
-    expect(() =>
-      resolveAbsentConnectorAccessConfig({
-        packageName: "@cinatra-ai/anthropic-connector",
-        surface: "submit",
-      }),
-    ).toThrow(/absence is not accepted at submit/);
-  });
-
-  it("resolves the FORCED only:admin (never looser) for a protected slug at INSTALL", () => {
-    expect(
-      resolveAbsentConnectorAccessConfig({
-        packageName: "@cinatra-ai/anthropic-connector",
-        surface: "install",
-      }),
-    ).toEqual({ formatVersion: 1, mode: "only", scope: "admin", source: "absent" });
+  it("hard-fails a protected slug at both surfaces, naming the forced declaration", () => {
+    for (const surface of ["submit", "install"] as const) {
+      expect(() =>
+        resolveAbsentConnectorAccessConfig({
+          packageName: "@cinatra-ai/anthropic-connector",
+          surface,
+        }),
+      ).toThrow(/only:"admin".*protected slug "anthropic"|protected slug "anthropic"/);
+    }
   });
 });
 

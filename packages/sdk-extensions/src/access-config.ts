@@ -25,18 +25,18 @@
 //   - `formatVersion` must be EXACTLY 1 (an unknown future version fails
 //     closed rather than being half-understood).
 //
-// ABSENCE semantics: an absent file / absent `access.scope` resolves to
-// `default:"admin"` (pre-selected, changeable) — EXCEPT for the protected
-// slugs below.
+// ABSENCE semantics (closing wave, cinatra#955): an absent FILE hard-fails at
+// EVERY surface — submit and install. The W1 staging leniency (install-surface
+// absence resolving `default:"admin"` / the forced protected value) existed
+// only so pre-config tarballs stayed installable until the W4 fleet republish;
+// the 29-connector fleet now ships `cinatra/config.json`, so absence is a
+// refusal, not a default. A PRESENT file that validates but declares no
+// `access.scope` still resolves `default:"admin"` (the strictest tier —
+// fail-closed by construction; protected slugs must still DECLARE).
 //
 // PROTECTED SLUGS (validator-forced): `openai`, `anthropic`, `gemini` MUST
 // declare `only:"admin"` — a declaration with anything else hard-fails at
-// every surface. Absence is surface-dependent (W1 staging, codex round-0
-// finding 7): at SUBMIT (the marketplace/kind gates) the file is REQUIRED for
-// a protected slug; at INSTALL an absent file resolves to the FORCED
-// `only:"admin"` — never looser — so already-published protected tarballs
-// (which predate `cinatra/config.json`) stay installable while W4 republishes
-// the fleet.
+// every surface.
 //
 // This module is the shared source for the host (install pipeline +
 // registration/materialize reader) and the marketplace submit gate. The
@@ -108,8 +108,8 @@ export type ConnectorAccessConfig = z.infer<typeof configFileSchema>;
  * The RESOLVED declaration the host caches on the registration record
  * (`installed_extension.access_declaration`) at registration/materialize.
  * `source` records HOW it resolved: `"declared"` from a shipped file,
- * `"absent"` from the absence rule (`default:"admin"`, or the forced
- * protected value at install).
+ * `"absent"` from the pre-cutover absence rule (only on rows cached before
+ * cinatra#955 — the absence rule now refuses instead of resolving).
  */
 export type ResolvedConnectorAccessDeclaration = {
   formatVersion: typeof CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION;
@@ -224,48 +224,54 @@ export function parseConnectorAccessConfig(
 }
 
 /**
- * Resolve the declaration for a connector that ships NO `cinatra/config.json`.
+ * The absence rule, post-cutover (closing wave, cinatra#955): a
+ * `kind:"connector"` package that ships NO `cinatra/config.json` is REFUSED at
+ * every surface — submit (marketplace/kind gates) and install
+ * (host install/registration) alike. The W1 install-surface leniency
+ * (absence resolving `default:"admin"` / the forced protected value so
+ * pre-config tarballs stayed installable) is deliberately deleted now that the
+ * W4 fleet republish ships a declared config on all 29 finals.
  *
- *  - `surface:"submit"` (marketplace/kind gates): a protected slug WITHOUT the
- *    file hard-fails — new submissions must declare. Everything else resolves
- *    `default:"admin"`.
- *  - `surface:"install"` (host install/registration): a protected slug
- *    resolves to its FORCED value (`only:"admin"` — never looser), so
- *    already-published protected tarballs stay installable until the W4
- *    republish (codex round-0 finding 7). Everything else resolves
- *    `default:"admin"`.
+ * The function is kept (rather than deleted) so every surface keeps routing
+ * absence through the ONE authoritative rule — and so the per-repo gate
+ * mirrors keep a single upstream to mirror.
  */
 export function resolveAbsentConnectorAccessConfig(
   opts: { packageName: string; surface: "submit" | "install" },
-): ResolvedConnectorAccessDeclaration {
+): never {
   const slug = connectorAccessSlugFromPackageName(opts.packageName);
   const forced = PROTECTED_CONNECTOR_SLUGS[slug];
-  if (forced) {
-    if (opts.surface === "submit") {
-      throw new ConnectorAccessConfigError(
-        `protected slug "${slug}" must ship cinatra/config.json declaring ` +
-          `${forced.mode}:"${forced.scope}" — absence is not accepted at submit.`,
-      );
-    }
-    return {
-      formatVersion: CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,
-      mode: forced.mode,
-      scope: forced.scope,
-      source: "absent",
-    };
-  }
-  return {
-    formatVersion: CONNECTOR_ACCESS_CONFIG_FORMAT_VERSION,
-    mode: "default",
-    scope: "admin",
-    source: "absent",
-  };
+  const declareHint = forced
+    ? `declaring ${forced.mode}:"${forced.scope}" (protected slug "${slug}")`
+    : `declaring an access.scope`;
+  throw new ConnectorAccessConfigError(
+    `${opts.packageName} ships no cinatra/config.json — absence is not accepted at ` +
+      `${opts.surface} (connector-scoping closing wave, cinatra#955); ship a config ${declareHint}.`,
+  );
+}
+
+/**
+ * 2-tier projection of a resolved declaration onto the connector-card
+ * visibility axis the host policy gate and install defaults use: the `admin`
+ * scope stays admin-only; every non-admin scope projects to the `workspace`
+ * tier (the scope token itself still governs connect-time pre-selection and
+ * the connection `only` ceiling — this projection never widens it).
+ */
+export function connectorAccessVisibilityTier(
+  declaration: Pick<ResolvedConnectorAccessDeclaration, "scope">,
+): "admin" | "workspace" {
+  return declaration.scope === "admin" ? "admin" : "workspace";
 }
 
 /**
  * Structural guard for a PERSISTED resolved declaration (the cached value on
  * the registration record round-trips through jsonb) — used by the canonical
  * writer so a malformed cached value can never reach the row.
+ *
+ * `source:"absent"` stays ACCEPTED here even though the absence rule now
+ * refuses (cinatra#955): rows cached before the cutover legitimately carry it,
+ * and rejecting them would turn every pre-cutover cache into a corrupt-cache
+ * deny. New caches are always `source:"declared"`.
  */
 export function isResolvedConnectorAccessDeclaration(
   value: unknown,
