@@ -188,12 +188,13 @@ export function MarketplaceDetailModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {linkTrigger ? (
-        // §VI Installed-page opener: a real <a> (never a button — the spec is
-        // explicit). Rendered OUTSIDE <DialogTrigger> so the controlled Dialog
-        // opens via onOpenChange while the click's default navigation is
-        // suppressed (the href is only the no-JS fallback).
-        // eslint-disable-next-line no-restricted-syntax -- §VI design spec + owner ruling (2026-07-05): "More details" MUST be a real <a> styled as a link, NEVER a shadcn <Button>/<Button asChild><Link/></Button>; it opens the §V modal in place via onClick with the href as the no-JS fallback.
-        <a
+        // §VI Installed-page opener: a real anchor — Next <Link> renders an
+        // <a> in the DOM (never a <button>), link-styled via buttonVariants
+        // per the §VI drawing (owner ruling 2026-07-05: "More details" is a
+        // link, never a button). Rendered OUTSIDE <DialogTrigger> so the
+        // controlled Dialog opens via onOpenChange while the click's default
+        // navigation is suppressed (the href is only the no-JS fallback).
+        <Link
           href={linkTrigger.href}
           data-slot="installed-more-details"
           aria-haspopup="dialog"
@@ -209,7 +210,7 @@ export function MarketplaceDetailModal({
           }}
         >
           More details
-        </a>
+        </Link>
       ) : (
         <DialogTrigger asChild>
           {trigger ?? (
