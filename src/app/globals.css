@@ -822,3 +822,33 @@ textarea:focus::placeholder {
   height: calc(100svh - var(--banner-height, 0px)) !important;
 }
 
+/* cinatra#883: "Forgot your password?" below the password field — the
+   SERVER-RENDERED (pre-hydration) placement.
+
+   The authoritative fix is the client-side DOM relocation
+   (`repositionForgotPasswordLink` in src/lib/password-toggle-a11y.ts, run by
+   the `ForgotPasswordBelowField` wrapper): better-auth-ui hard-codes the link
+   inline with the "Password" label, so the SSR markup still carries the OLD
+   layout until hydration + the wrapper's effect run. On a slow connection, a
+   loaded server, or with JS unavailable, users (and screenshot audits) see the
+   link back ABOVE the input.
+
+   These rules make the server-rendered state already read link-below-field:
+   while the tagged link is still inside the label row (the row that also holds
+   the form label), the row is flattened into the form-item grid
+   (`display: contents`) and the link is ordered after the input. As soon as
+   the JS relocation moves the link out of that row (into the input's
+   `.relative` wrapper), the `:has(> [data-slot="form-label"])` guard stops
+   matching and both rules go inert — the JS-relocated DOM order is the final
+   state. Browsers without `:has()` simply keep the transient old layout until
+   the JS relocation runs (graceful degradation). */
+[data-slot="form-item"]
+  > div:has(> [data-slot="form-label"]):has(> a.cinatra-forgot-password-link) {
+  display: contents;
+}
+[data-slot="form-item"]
+  > div:has(> [data-slot="form-label"])
+  > a.cinatra-forgot-password-link {
+  order: 10;
+}
+

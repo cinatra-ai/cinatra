@@ -6,6 +6,9 @@
  * "Forgot your password?" link from its default spot (inline with the
  * "Password" label, above the input) to directly below the password input.
  */
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { FORGOT_PASSWORD_LINK_CLASS, repositionForgotPasswordLink } from "../password-toggle-a11y";
 
@@ -104,5 +107,39 @@ describe("repositionForgotPasswordLink", () => {
     root = field;
 
     expect(repositionForgotPasswordLink(field)).toBe(false);
+  });
+});
+
+/**
+ * Pre-hydration (SSR) placement CSS coupling (cinatra#883 reopen).
+ *
+ * `repositionForgotPasswordLink` only runs in the browser AFTER hydration, so
+ * the server-rendered markup still carries better-auth-ui's old inline-with-
+ * label layout until the wrapper's effect runs. src/app/globals.css therefore
+ * ships `:has()` rules that already render the tagged link BELOW the field in
+ * the server-rendered state (flatten the label row via `display: contents`,
+ * push the link after the input via `order`), keyed to the SAME
+ * `FORGOT_PASSWORD_LINK_CLASS` the JS shim uses. jsdom cannot compute
+ * `:has()`/`order`, so this guards the coupling statically: if the class
+ * constant or the CSS drifts, this fails.
+ */
+describe("pre-hydration placement CSS (globals.css)", () => {
+  const globalsCss = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../app/globals.css"),
+    "utf8",
+  );
+
+  it("flattens the SSR label row that still contains the tagged link", () => {
+    const flattenRule = new RegExp(
+      String.raw`\[data-slot="form-item"\]\s*>\s*div:has\(>\s*\[data-slot="form-label"\]\):has\(>\s*a\.${FORGOT_PASSWORD_LINK_CLASS}\)\s*\{\s*display:\s*contents;`,
+    );
+    expect(globalsCss).toMatch(flattenRule);
+  });
+
+  it("orders the tagged link after the input while it is still in the label row", () => {
+    const orderRule = new RegExp(
+      String.raw`\[data-slot="form-item"\]\s*>\s*div:has\(>\s*\[data-slot="form-label"\]\)\s*>\s*a\.${FORGOT_PASSWORD_LINK_CLASS}\s*\{\s*order:\s*\d+;`,
+    );
+    expect(globalsCss).toMatch(orderRule);
   });
 });
