@@ -115,14 +115,14 @@ describe("resolveModalInstallState", () => {
 });
 
 describe("formatInstallations", () => {
-  it("formats singular/plural and thousands with a trimmed k-suffix", () => {
-    expect(formatInstallations(0)).toBe("0 installations");
-    expect(formatInstallations(1)).toBe("1 installation");
-    expect(formatInstallations(2)).toBe("2 installations");
-    expect(formatInstallations(999)).toBe("999 installations");
-    expect(formatInstallations(2000)).toBe("2k installations");
-    expect(formatInstallations(2100)).toBe("2.1k installations");
-    expect(formatInstallations(2150)).toBe("2.2k installations");
+  it("formats the bare §V specs-column value with a trimmed k-suffix", () => {
+    expect(formatInstallations(0)).toBe("0");
+    expect(formatInstallations(1)).toBe("1");
+    expect(formatInstallations(2)).toBe("2");
+    expect(formatInstallations(999)).toBe("999");
+    expect(formatInstallations(2000)).toBe("2k");
+    expect(formatInstallations(2100)).toBe("2.1k");
+    expect(formatInstallations(2150)).toBe("2.2k");
   });
 
   it("returns null for absent / negative / non-finite counts", () => {

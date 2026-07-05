@@ -49,6 +49,10 @@ const RESEARCH_ASSISTANT_README = [
   "### Usage",
   "",
   "Ask a question in natural language; the agent plans a retrieval, reads the top passages and drafts a cited answer.",
+  "",
+  "```",
+  'cinatra run research-assistant --query "Q3 churn drivers"',
+  "```",
 ].join("\n");
 
 /** Fixture 1 — banner present, changelog + dependencies populated. */
@@ -163,13 +167,16 @@ const PLAIN_DETAIL: MarketplaceDetailView = {
 };
 
 /** Fixture 3 — bannerUrl BLANK ("") must fall back exactly like absent. */
+// NB: every fixture packageName is FICTIONAL — naming a real extension here
+// would hardcode an extension-instance reference into core (the
+// core-extension-instance-coupling-ban gate rejects it).
 const BLANK_BANNER_DETAIL: MarketplaceDetailView = {
   ...PLAIN_DETAIL,
-  packageName: "@cinatra-ai/media-transcript-agent",
-  displayName: "Media Transcript Agent",
+  packageName: "@cinatra-ai/meeting-recap-agent",
+  displayName: "Meeting Recap Agent",
   kindLabel: "Agent",
   description:
-    "Transcribes audio or video URLs to text with speaker markers.",
+    "Summarises meeting recordings into shareable recaps with action items.",
   bannerUrl: "",
 };
 

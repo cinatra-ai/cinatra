@@ -262,9 +262,9 @@ export function ratingBars(summary: MarketplaceDetailRatingSummary): RatingBar[]
 }
 
 /**
- * Compact install-count label ("2.1k installations"). Null count → null (no
- * line). Mirrors the browse card's install-count formatting so the modal and
- * the card agree.
+ * Compact install-count VALUE ("950", "2.1k") for the §V specs column — the
+ * drawing renders the bare figure under the "Installations" row label, so the
+ * label is never repeated inside the value. Null count → null (no line).
  */
 export function formatInstallations(count: number | null): string | null {
   if (count === null || !Number.isFinite(count) || count < 0) {
@@ -272,12 +272,12 @@ export function formatInstallations(count: number | null): string | null {
   }
   const n = Math.floor(count);
   if (n < 1000) {
-    return `${n} ${n === 1 ? "installation" : "installations"}`;
+    return `${n}`;
   }
   const thousands = n / 1000;
   const rounded = Math.round(thousands * 10) / 10;
   const text = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
-  return `${text}k installations`;
+  return `${text}k`;
 }
 
 /** Up-to-two-letter initials for a review author's avatar. "" → "?". */

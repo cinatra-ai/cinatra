@@ -19,7 +19,8 @@
 
 import { useCallback, useState } from "react";
 import Link from "next/link";
-import { XIcon, Star, BadgeCheck, FileX, Loader2 } from "lucide-react";
+import { formatDistanceToNow } from "date-fns";
+import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
 
 import {
   Dialog,
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import {
   extensionKindEmblem,
@@ -41,9 +43,10 @@ import { ACCENT_PALETTE, deriveExtensionAccent } from "@/lib/extension-accent";
 import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import {
-  MarketplaceReadmeMarkdownSection,
+  MarketplaceReadmeMarkdownBody,
   hasRenderableReadmeMarkdown,
 } from "@/components/marketplace-readme-section";
+import { shareNetworkGlyph } from "@/components/svg-icons/share-network-icons";
 import {
   buildShareLinks,
   ratingBars,
@@ -56,7 +59,6 @@ import {
   type MarketplaceDetailLoadResult,
   type MarketplaceDetailView,
   type MarketplaceDetailReview,
-  type ShareNetwork,
 } from "@/lib/marketplace-detail-view";
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
@@ -148,26 +150,26 @@ export function MarketplaceDetailModal({
         // centered dialog into a below-navbar, internally-scrolling panel.
         aria-describedby={undefined}
         className={cn(
-          // §V chrome: 720px wide on the page surface (`--paper`/background),
-          // not the white `surface-strong` card level.
-          "top-20 flex max-h-[calc(100vh-6rem)] w-[calc(100%-2rem)] max-w-[720px] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-[720px]",
+          // §V chrome: 720px wide, radius 12, on the page surface
+          // (`--paper`/background), not the white `surface-strong` card level.
+          "top-20 flex max-h-[calc(100vh-6rem)] w-[calc(100%-2rem)] max-w-[720px] translate-y-0 flex-col gap-0 overflow-hidden rounded-[12px] p-0 sm:max-w-[720px]",
           "bg-background",
         )}
       >
         <DialogTitle className="sr-only">{card.displayName}</DialogTitle>
 
-        {/* Slim header — close only. */}
-        <div className="flex shrink-0 items-center justify-end border-b border-line px-3 py-2">
+        {/* Slim header — close only (§V: a 28px muted ✕ hit target). */}
+        <div className="flex shrink-0 items-center justify-end border-b border-line px-4 py-3">
           <DialogClose
-            className="rounded-xs p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:outline-hidden"
+            className="grid size-7 place-items-center rounded-[7px] text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:outline-hidden"
             aria-label="Close"
           >
             <XIcon className="size-4" />
           </DialogClose>
         </div>
 
-        {/* Body — vertical scroll only. */}
-        <div className="flex-1 overflow-x-hidden overflow-y-auto px-6 py-5">
+        {/* Body — vertical scroll only (§V: 24px/26px padding). */}
+        <div className="flex-1 overflow-x-hidden overflow-y-auto px-6.5 py-6">
           {status === "loading" || status === "idle" ? (
             <ModalLoading />
           ) : status === "notfound" ? (
@@ -186,8 +188,9 @@ export function MarketplaceDetailModal({
           ) : null}
         </div>
 
-        {/* Footer — the six-state install CTA (hairline separator). */}
-        <div className="shrink-0 border-t border-line px-6 py-3">
+        {/* Footer — the six-state install CTA, right-aligned per the §V
+            drawing (hairline separator, 15px/26px padding). */}
+        <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
           <ModalFooterCta
             card={card}
             cta={cta}
@@ -243,17 +246,26 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
   const shareLinks = buildShareLinks(detail.permalink);
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <ModalHero card={card} detail={detail} iconUrl={iconUrl} />
 
-      <Tabs defaultValue="details" className="gap-4">
-        <TabsList>
-          <TabsTrigger value="details">Details</TabsTrigger>
-          <TabsTrigger value="reviews">
-            Reviews{reviewCount > 0 ? ` (${reviewCount})` : ""}
-          </TabsTrigger>
-          <TabsTrigger value="changelog">Changelog</TabsTrigger>
-        </TabsList>
+      <Tabs defaultValue="details" className="gap-5.5">
+        {/* §V tab row: the three tabs beside the etched paired-line rule that
+            fills the remaining width (grid auto/1fr, rule at the baseline). */}
+        <div className="grid grid-cols-[auto_1fr] items-end gap-4.5">
+          <TabsList className="gap-0 border-0">
+            <TabsTrigger value="details" className={MODAL_TAB_CLASS}>
+              Details
+            </TabsTrigger>
+            <TabsTrigger value="reviews" className={MODAL_TAB_CLASS}>
+              {`Reviews (${reviewCount})`}
+            </TabsTrigger>
+            <TabsTrigger value="changelog" className={MODAL_TAB_CLASS}>
+              Changelog
+            </TabsTrigger>
+          </TabsList>
+          <Separator major decorative className="mb-2.75" />
+        </div>
 
         <TabsContent value="details">
           <DetailsTab detail={detail} />
@@ -267,7 +279,8 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
       </Tabs>
 
       {shareLinks.length > 0 && (
-        <div className="flex items-center justify-center gap-3 border-t border-line pt-4">
+        <div className="mt-1.5 flex items-center justify-center gap-3.5 border-t border-line pt-5.5">
+          <span className="text-xs font-semibold text-muted-foreground">Share:</span>
           {shareLinks.map((link) => (
             <Link
               key={link.network}
@@ -277,7 +290,7 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
               aria-label={link.label}
               className="text-muted-foreground transition-colors hover:text-foreground"
             >
-              <ShareGlyph network={link.network} />
+              {shareNetworkGlyph(link.network)}
             </Link>
           ))}
         </div>
@@ -285,6 +298,14 @@ function ModalBody({ card, detail }: { card: MarketplaceCardData; detail: Market
     </div>
   );
 }
+
+/**
+ * §V tab anatomy: 13px labels with 14px horizontal / 9px-11px vertical
+ * padding, inactive muted at regular weight, the active tab semibold with the
+ * shared 2px primary underline (from the base TabsTrigger).
+ */
+const MODAL_TAB_CLASS =
+  "px-3.5 pt-2.25 pb-2.75 font-normal data-[state=active]:font-semibold";
 
 /**
  * The modal hero: icon tile + title + "{Type} by {Vendor}" + right-aligned
@@ -346,16 +367,18 @@ function ModalHero({
           <div aria-hidden="true" className="absolute inset-0 bg-foreground/55" />
         </>
       )}
-      {/* §V logo tile: 64×64, radius 15, white surface, hairline + soft shadow. */}
+      {/* §V logo tile: 64×64, radius 15, white surface, hairline + soft
+          shadow, the 34px kind emblem in the extension's stable accent. */}
       <div
         data-slot="marketplace-modal-tile"
         className="relative flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-[15px] border border-line bg-surface-strong shadow-sm"
+        style={iconUrl ? undefined : { color: bg }}
       >
         {iconUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- sanitized hosted raster URL from the marketplace card model.
           <img src={iconUrl} alt="" className="size-full object-cover" />
         ) : (
-          extensionKindEmblem(card.kindSlug, "size-8 text-muted-foreground")
+          extensionKindEmblem(card.kindSlug, "size-8.5")
         )}
       </div>
       <div className="relative flex min-w-0 flex-1 flex-col gap-2">
@@ -372,30 +395,51 @@ function ModalHero({
         >
           {detail.displayName}
         </h2>
-        <p className={cn("text-sm text-muted-foreground", banner && "text-background/85")}>
-          {detail.kindLabel}
-          {detail.vendor ? (
-            <>
-              {" by "}
-              {detail.vendor.storeUrl ? (
-                <Link
-                  href={detail.vendor.storeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={cn(
-                    "font-medium text-foreground underline underline-offset-2 hover:text-primary",
-                    banner && "text-background hover:text-background/80",
-                  )}
-                >
-                  {detail.vendor.name || detail.vendor.slug}
-                </Link>
-              ) : (
-                <span className={cn("font-medium text-foreground", banner && "text-background")}>
-                  {detail.vendor.name || detail.vendor.slug}
-                </span>
-              )}
-            </>
-          ) : null}
+        {/* §V byline: 14px kind emblem in the accent, "{Type}" in ink, the
+            vendor as a semibold primary link (no underline) out to its
+            marketplace store. Over a banner everything flips to `background`. */}
+        <p
+          className={cn(
+            "flex items-center gap-1.25 text-sm text-muted-foreground",
+            banner && "text-background/85",
+          )}
+        >
+          <span
+            aria-hidden="true"
+            className={cn("shrink-0", banner && "text-background")}
+            style={banner ? undefined : { color: bg }}
+          >
+            {extensionKindEmblem(card.kindSlug, "size-3.5")}
+          </span>
+          <span className="min-w-0 truncate">
+            <span className={banner ? "text-background" : "text-foreground"}>
+              {detail.kindLabel}
+            </span>
+            {detail.vendor ? (
+              <>
+                {" by "}
+                {detail.vendor.storeUrl ? (
+                  <Link
+                    href={detail.vendor.storeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={cn(
+                      "font-semibold text-primary hover:underline hover:underline-offset-2",
+                      banner && "text-background hover:text-background/80",
+                    )}
+                  >
+                    {detail.vendor.name || detail.vendor.slug}
+                  </Link>
+                ) : (
+                  <span
+                    className={cn("font-semibold text-foreground", banner && "text-background")}
+                  >
+                    {detail.vendor.name || detail.vendor.slug}
+                  </span>
+                )}
+              </>
+            ) : null}
+          </span>
         </p>
       </div>
       {/* §V price: right-aligned in the header, sans 700 15px ink. */}
@@ -417,25 +461,33 @@ function DetailsTab({ detail }: { detail: MarketplaceDetailView }) {
   const hasReadme = hasRenderableReadmeMarkdown(detail.readmeMarkdown);
   const fallbackText = detail.longDescription?.trim() || detail.description?.trim() || "";
   const installs = formatInstallations(detail.installCount);
-  const lastUpdated = formatDate(detail.freshnessAt);
+  const lastUpdated = formatRelativeDate(detail.freshnessAt);
 
   return (
-    <div className="flex flex-col gap-6 md:flex-row md:items-start">
+    <div className="flex flex-col gap-7.5 md:flex-row md:items-start">
+      {/* §V README column: the README rendered BARE on the dialog's paper —
+          no panel, no "Description" section heading (the README's own
+          headings lead). */}
       <div className="min-w-0 flex-1">
         {hasReadme ? (
-          <MarketplaceReadmeMarkdownSection markdown={detail.readmeMarkdown} />
+          <MarketplaceReadmeMarkdownBody markdown={detail.readmeMarkdown} />
         ) : fallbackText ? (
-          <p className="text-sm leading-relaxed whitespace-pre-line text-foreground">{fallbackText}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-line text-muted-foreground">
+            {fallbackText}
+          </p>
         ) : (
           <p className="text-sm text-muted-foreground">No description provided.</p>
         )}
       </div>
-      <dl className="w-full shrink-0 space-y-3 text-sm md:w-[210px]">
-        <SpecRow label="Version" value={detail.latestVersion ?? "—"} />
-        <SpecRow label="Last updated" value={lastUpdated ?? "—"} />
-        <div className="flex flex-col gap-1">
-          <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Compatibility</dt>
-          <dd>
+      {/* §V specs column: a bordered `--surface` panel, hairline-divided rows
+          of bold ink labels over mono muted values, closing with the
+          Dependencies list when the extension declares any. */}
+      <dl className="w-full shrink-0 self-start rounded-md border border-line bg-surface px-3.5 py-1 md:w-[210px]">
+        <SpecRow label="Version" value={detail.latestVersion ?? "—"} divider />
+        <SpecRow label="Last updated" value={lastUpdated ?? "—"} divider />
+        <div className="border-b border-line py-2.75">
+          <dt className="text-sm font-bold text-foreground">Compatible up to</dt>
+          <dd className="mt-1">
             <ExtensionCompatBadge sdkAbiRange={detail.sdkAbiRange} />
           </dd>
         </div>
@@ -459,13 +511,11 @@ function DependenciesSection({ dependencies }: { dependencies: MarketplaceDetail
   return (
     <div
       data-slot="marketplace-modal-dependencies"
-      className="flex flex-col gap-2 border-t border-line pt-3"
+      className="mt-1 border-t border-line pt-3.5 pb-0.5"
     >
-      <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        Dependencies
-      </dt>
+      <dt className="text-sm font-bold text-foreground">Dependencies</dt>
       <dd>
-        <ul className="flex flex-col gap-2.5">
+        <ul className="mt-2.25 flex flex-col gap-2.25">
           {dependencies.map((dep) => (
             <li key={dep.packageName} className="flex items-start gap-2">
               <span
@@ -521,7 +571,7 @@ function ChangelogTab({ entries }: { entries: MarketplaceDetailChangelogEntry[] 
         data-slot="marketplace-modal-changelog-empty"
         className="flex flex-col items-center py-12 text-center"
       >
-        <FileX className="size-8 text-muted-foreground opacity-60" aria-hidden="true" />
+        <FileX className="size-7.5 text-muted-foreground opacity-60" aria-hidden="true" />
         <p className="mt-3 text-sm font-bold text-foreground">No changelog available</p>
       </div>
     );
@@ -549,23 +599,23 @@ function ChangelogEntryRow({
   isLatest: boolean;
   isLast: boolean;
 }) {
-  const date = formatChangelogDate(entry.date);
+  const date = formatRelativeDate(entry.date);
   return (
     // Dividers go BETWEEN entries — the last entry drops its bottom border.
     <section className={cn("py-4", !isLast && "border-b border-line")}>
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="rounded-md bg-surface-muted px-2 py-0.5 font-mono text-sm font-bold text-foreground">
+        <span className="rounded-sm bg-surface-muted px-2.25 py-0.5 font-mono text-sm font-bold text-foreground">
           {entry.version}
         </span>
-        {date && <span className="font-mono text-xs text-muted-foreground">{date}</span>}
+        {date && <span className="font-mono text-badge-xs text-muted-foreground">{date}</span>}
         {isLatest && (
-          <span className="rounded-sm border border-success px-1.5 font-mono text-badge-2xs font-bold text-success uppercase">
+          <span className="rounded-sm border border-success px-1.5 py-px font-mono text-badge-2xs font-bold text-success uppercase">
             Latest
           </span>
         )}
       </div>
       {entry.notes.length > 0 && (
-        <ul className="mt-2 list-disc pl-4.5">
+        <ul className="mt-2.25 list-disc space-y-1 pl-4.5">
           {entry.notes.map((note, j) => (
             // Tag-stripped plain text — rendered as escaped text, never HTML.
             <li key={j} className="text-sm leading-relaxed text-muted-foreground">
@@ -578,11 +628,16 @@ function ChangelogEntryRow({
   );
 }
 
-function SpecRow({ label, value }: { label: string; value: string }) {
+/**
+ * One §V specs-panel row: bold ink label over a mono muted value, 11px
+ * vertical padding, a hairline divider between rows (`divider`) — the last
+ * row before Dependencies drops it.
+ */
+function SpecRow({ label, value, divider }: { label: string; value: string; divider?: boolean }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <dt className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</dt>
-      <dd className="text-foreground">{value}</dd>
+    <div className={cn("py-2.75", divider && "border-b border-line")}>
+      <dt className="text-sm font-bold text-foreground">{label}</dt>
+      <dd className="mt-0.5 font-mono text-xs text-muted-foreground">{value}</dd>
     </div>
   );
 }
@@ -590,12 +645,17 @@ function SpecRow({ label, value }: { label: string; value: string }) {
 function ReviewsTab({ detail }: { detail: MarketplaceDetailView }) {
   const { reviews, ratingSummary } = detail;
   const bars = ratingBars(ratingSummary);
+  const total = ratingSummary.total;
 
   return (
-    <div className="flex flex-col gap-6 md:flex-row md:items-start">
+    <div className="flex flex-col gap-7.5 md:flex-row md:items-start">
       <div className="min-w-0 flex-1">
+        {/* §V reviews heading: "{n} reviews for {name}", 16px bold ink. */}
+        <h3 className="text-base font-bold text-foreground">
+          {total} {total === 1 ? "review" : "reviews"} for {detail.displayName}
+        </h3>
         {reviews.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No reviews yet.</p>
+          <p className="mt-3 text-sm text-muted-foreground">No reviews yet.</p>
         ) : (
           <ul>
             {reviews.map((review, i) => (
@@ -604,25 +664,34 @@ function ReviewsTab({ detail }: { detail: MarketplaceDetailView }) {
           </ul>
         )}
       </div>
+      {/* §V rating summary: italic-800 average beside the star row, then the
+          5→1 histogram (amber fills on the muted track). */}
       <div className="w-full shrink-0 md:w-[210px]">
-        <div className="flex items-baseline gap-2">
-          <span className="text-3xl font-semibold text-foreground">
+        <h3 className="mb-3.5 text-base font-bold text-foreground">Rating summary</h3>
+        <div className="flex items-center gap-4">
+          <span className="font-display text-4xl leading-none font-extrabold italic text-foreground">
             {ratingSummary.average.toFixed(1)}
           </span>
-          <StarRow filled={Math.round(ratingSummary.average)} />
+          <span>
+            <StarRow filled={Math.round(ratingSummary.average)} size="size-3.75" />
+            <span className="mt-1.5 block font-mono text-xs text-muted-foreground">
+              {total} {total === 1 ? "review" : "reviews"}
+            </span>
+          </span>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {ratingSummary.total} {ratingSummary.total === 1 ? "review" : "reviews"}
-        </p>
-        <div className="mt-4 space-y-1.5">
+        <div className="mt-4">
           {bars.map((bar) => (
-            <div key={bar.star} className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="w-3 text-right tabular-nums">{bar.star}</span>
-              <Star className="size-3 shrink-0 fill-current opacity-70" aria-hidden="true" />
-              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-muted">
-                <span className="block h-full rounded-full bg-primary" style={{ width: `${bar.pct}%` }} />
+            <div key={bar.star} className="flex items-center gap-2.5 py-0.75">
+              <StarRow filled={bar.star} size="size-2.5" />
+              <span className="h-1.75 flex-1 overflow-hidden rounded-sm bg-surface-muted">
+                <span
+                  className="block h-full rounded-sm bg-rating-star"
+                  style={{ width: `${bar.pct}%` }}
+                />
               </span>
-              <span className="w-6 text-right tabular-nums">{bar.count}</span>
+              <span className="w-7 shrink-0 text-right font-mono text-badge-xs text-muted-foreground">
+                {bar.count}
+              </span>
             </div>
           ))}
         </div>
@@ -632,38 +701,55 @@ function ReviewsTab({ detail }: { detail: MarketplaceDetailView }) {
 }
 
 function ReviewItem({ review, isLast }: { review: MarketplaceDetailReview; isLast: boolean }) {
+  // The author's stable accent colours the avatar disc — the same accent
+  // system the extension tiles use, seeded from the author string.
+  const { bg, fg } = ACCENT_PALETTE[deriveExtensionAccent(review.author)];
   return (
-    <li className={cn("flex gap-3 py-4", !isLast && "border-b border-line")}>
+    <li className={cn("flex gap-3.25 py-3.75", !isLast && "border-b border-line")}>
       <span
         aria-hidden="true"
-        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-muted-foreground"
+        className="flex size-9.5 shrink-0 items-center justify-center rounded-full font-display text-sm font-extrabold italic"
+        style={{ background: bg, color: fg }}
       >
         {reviewInitials(review.author)}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span className="text-sm font-medium text-foreground">{review.author}</span>
+          <span className="text-sm font-bold text-foreground">{review.author}</span>
           {review.verifiedOwner && (
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <BadgeCheck className="size-3.5 text-primary" aria-hidden="true" />
-              Verified owner
+            <span className="inline-flex items-center gap-1 font-mono text-badge-2xs uppercase text-success">
+              <Check className="size-3" aria-hidden="true" strokeWidth={2.6} />
+              verified owner
             </span>
           )}
           {review.date && (
-            <span className="text-xs text-muted-foreground">{formatDate(review.date)}</span>
+            <span className="font-mono text-badge-xs text-muted-foreground">
+              {formatRelativeDate(review.date)}
+            </span>
           )}
         </div>
-        <StarRow filled={review.rating} className="mt-1" />
+        <StarRow filled={review.rating} className="mt-1.25" size="size-3" />
         {/* Tag-stripped review text — rendered as escaped text, never HTML. */}
         {review.text && (
-          <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line text-foreground">{review.text}</p>
+          <p className="mt-1.5 text-sm leading-relaxed whitespace-pre-line text-muted-foreground">
+            {review.text}
+          </p>
         )}
       </div>
     </li>
   );
 }
 
-function StarRow({ filled, className }: { filled: number; className?: string }) {
+/** §V star row — amber filled stars on the warm-grey empty tone. */
+function StarRow({
+  filled,
+  className,
+  size = "size-3.5",
+}: {
+  filled: number;
+  className?: string;
+  size?: string;
+}) {
   const n = Math.max(0, Math.min(5, Math.round(filled)));
   return (
     <span
@@ -671,7 +757,13 @@ function StarRow({ filled, className }: { filled: number; className?: string }) 
       aria-label={`Rated ${n} out of 5`}
     >
       {[1, 2, 3, 4, 5].map((i) => (
-        <Star key={i} className={cn("size-3.5", i <= n ? "fill-current text-foreground" : "text-muted-foreground opacity-40")} aria-hidden="true" />
+        <Star
+          key={i}
+          // Plain concat, not cn(): `text-rating-star*` are custom color
+          // tokens the app tailwind-merge would dedupe unpredictably.
+          className={size + " fill-current " + (i <= n ? "text-rating-star" : "text-rating-star-muted")}
+          aria-hidden="true"
+        />
       ))}
     </span>
   );
@@ -693,22 +785,20 @@ function ModalFooterCta({
   const compat = deriveExtensionCompatState(card.sdkAbiRange);
   const state = resolveModalInstallState(cta, compat);
 
+  // §V footer drawing: the CTA sits right-aligned at its natural width; the
+  // incompatible state keeps the "Install now" label greyed to 40% with the
+  // reason in its tooltip (the button itself never relabels).
   if (state.kind === "incompatible") {
     return (
-      <Button
-        size="sm"
-        disabled
-        className="w-full"
-        title={`This extension isn't compatible with this instance's SDK ABI — installing it would be refused.`}
-      >
-        Incompatible
+      <Button size="sm" disabled className="disabled:opacity-40" title="Requires a newer Cinatra version">
+        Install now
       </Button>
     );
   }
 
   if (state.kind === "installed") {
     return (
-      <Button size="sm" variant="secondary" disabled className="w-full">
+      <Button size="sm" variant="secondary" disabled>
         Installed
       </Button>
     );
@@ -720,9 +810,8 @@ function ModalFooterCta({
         action={restoreAction}
         failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
         defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
-        className="w-full"
       >
-        <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…" className="w-full">
+        <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
           Restore
         </MarketplaceInstallSubmit>
       </MarketplaceInstallForm>
@@ -736,10 +825,9 @@ function ModalFooterCta({
       <Button
         size="sm"
         disabled
-        className="w-full"
         title={`Connect the package registry to ${isUpdate ? "update" : "install"}`}
       >
-        {isUpdate ? "Update Now" : "Install Now"}
+        {isUpdate ? "Update now" : "Install now"}
       </Button>
     );
   }
@@ -749,59 +837,23 @@ function ModalFooterCta({
       action={isUpdate ? updateAction : installAction}
       failureCopyByCategory={buildMarketplaceFailureCopy(op, card.displayName)}
       defaultFailureMessage={marketplaceFailureCopy("unrecoverable", op, card.displayName)}
-      className="w-full"
     >
-      <MarketplaceInstallSubmit pendingLabel={isUpdate ? "Updating…" : "Installing…"} className="w-full">
-        {isUpdate ? "Update Now" : "Install Now"}
+      <MarketplaceInstallSubmit pendingLabel={isUpdate ? "Updating…" : "Installing…"}>
+        {isUpdate ? "Update now" : "Install now"}
       </MarketplaceInstallSubmit>
     </MarketplaceInstallForm>
   );
 }
 
-/** Format an ISO date to "MMM d, yyyy"; null/invalid → null. */
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-}
-
 /**
- * Format a changelog release date in UTC. CHANGELOG stamps are usually
- * date-only ("YYYY-MM-DD"), which `new Date` parses as UTC midnight — local
- * formatting would render them one day early in timezones west of UTC.
+ * Relative date ("1 week ago") for the §V meta stamps — the drawing renders
+ * every date (specs "Last updated", changelog releases, review stamps)
+ * relative, matching the browse cards' "Updated N ago" freshness convention.
+ * Future/invalid/absent stamps → null (no stamp beats a misleading one).
  */
-function formatChangelogDate(iso: string | null): string | null {
+function formatRelativeDate(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
-
-// Compact brand monograms for the icon-only share row. Deliberately text
-// monograms (not vendored brand SVG paths) — self-contained, dependency-free,
-// and carrying no coordinate literals. Each link's aria-label names the network
-// for assistive tech; the monogram is the compact visual affordance.
-const SHARE_MONOGRAM: Record<ShareNetwork, string> = {
-  facebook: "f",
-  x: "X",
-  pinterest: "P",
-  linkedin: "in",
-  telegram: "TG",
-};
-
-function ShareGlyph({ network }: { network: ShareNetwork }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="flex size-8 items-center justify-center rounded-full border border-line text-xs font-semibold"
-    >
-      {SHARE_MONOGRAM[network]}
-    </span>
-  );
+  if (Number.isNaN(d.getTime()) || d.getTime() > Date.now()) return null;
+  return formatDistanceToNow(d, { addSuffix: true });
 }

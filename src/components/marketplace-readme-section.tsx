@@ -124,3 +124,30 @@ export function MarketplaceReadmeMarkdownSection({
     </MarketplaceReadmeSection>
   );
 }
+
+/**
+ * The BARE README body — the same sanitized render + scoped typography as
+ * {@link MarketplaceReadmeMarkdownSection}, without the soft-panel
+ * "Description" section chrome. The §V extension-detail MODAL embeds the
+ * README directly on the dialog's paper surface (the drawing shows no panel
+ * and no "Description" heading — the README's own headings lead), while the
+ * full-page route keeps the panelled section above.
+ */
+export function MarketplaceReadmeMarkdownBody({
+  markdown,
+}: {
+  markdown: string | null | undefined;
+}) {
+  const html = renderReadmeMarkdown(markdown, { demoteHeadings: true });
+  if (html.trim() === "") {
+    return null;
+  }
+  return (
+    <div
+      data-slot="extension-readme"
+      className={MARKETPLACE_README_BODY_CLASS}
+      // Sanitized by renderReadmeMarkdown above — see the component doc.
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}

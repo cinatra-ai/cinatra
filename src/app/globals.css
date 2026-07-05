@@ -103,6 +103,13 @@
      semantics are not hijacked by brand chrome. Consumed through the @theme
      inline binding below as `text-brand-mustard`. */
   --brand-mustard: #c79545;
+  /* Marketplace review stars (design spec §V reviews drawing): the storefront
+     rating amber + its empty-star warm grey. Deliberately OUTSIDE the status
+     palette — star ratings mirror the public storefront's commerce chrome,
+     not app status semantics. Consumed via `text-rating-star` /
+     `bg-rating-star` / `text-rating-star-muted` through @theme inline. */
+  --rating-star: #f5a623;
+  --rating-star-muted: #d0cbbd;
   --border: var(--line);
   /* Input chrome carries the strong navy line, not the low-alpha hairline.
      Cascades through every shadcn primitive that uses `border-input`
@@ -478,6 +485,11 @@
      border-brand-mustard. Separate from --warning so page-title display and
      wordmark do not collide with status semantics. */
   --color-brand-mustard: var(--brand-mustard);
+  /* Marketplace review-star utilities (design spec §V): text-rating-star /
+     bg-rating-star (filled + histogram fill) and text-rating-star-muted
+     (empty star). */
+  --color-rating-star: var(--rating-star);
+  --color-rating-star-muted: var(--rating-star-muted);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);

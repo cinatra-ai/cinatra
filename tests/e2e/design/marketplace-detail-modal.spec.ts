@@ -175,7 +175,11 @@ test.describe("§V detail modal — chrome/header tokens (no-regression composit
     expect(tileBox.radius).toBe("15px");
     // §V price: rendered in the hero (right-aligned header slot).
     await expect(modal.locator(HERO).getByText("Free, Open Source")).toBeVisible();
-    // Footer CTA unchanged (fixture: registry-disconnected install state).
-    await expect(modal.getByRole("button", { name: "Install Now" })).toBeDisabled();
+    // Footer CTA intact, with the §V drawing's label case ("Install now")
+    // (fixture: registry-disconnected install state).
+    await expect(modal.getByRole("button", { name: "Install now" })).toBeDisabled();
+    // §V share row: the "Share:" label leads the five network glyph links.
+    await expect(modal.getByText("Share:", { exact: true })).toBeVisible();
+    await expect(modal.getByRole("link", { name: /^Share on / })).toHaveCount(5);
   });
 });
