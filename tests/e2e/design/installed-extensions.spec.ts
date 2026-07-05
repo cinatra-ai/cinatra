@@ -145,31 +145,102 @@ test.describe("§VI Installed extensions (cinatra#948)", () => {
     await expect(chipRows.first().locator('[data-slot="visibility-badge"]')).toHaveCount(1);
   });
 
-  test("status is the §VI bare dot + mono label, not the §VII StatusPill (wrong-treatment class)", async ({
+  test("status is the §VI green-check/grey-cross indicator + mono label, not the §VII StatusPill (wrong-treatment class)", async ({
+    page,
+  }) => {
+    // design#26 / paired docs mirror docs#86 (2026-07-05) refreshed the §VI
+    // drawing's status example to an explicit check/cross icon ("green-check
+    // Active / grey-cross Archived"), superseding this branch's earlier "bare
+    // dot" reading of a now-stale pin (docs@b35fdf4, 2026-07-03).
+    const fixture = page.getByTestId("installed-extensions-fixture");
+    const cards = fixture.locator('[data-slot="installed-extension-card"]');
+
+    // Every card carries exactly one §VI status indicator; none carries a
+    // §VII pill/lifecycle-badge.
+    const indicators = fixture.locator('[data-slot="installed-status-indicator"]');
+    await expect(indicators).toHaveCount(4);
+    await expect(fixture.locator('[data-slot="status-pill"]')).toHaveCount(0);
+    await expect(fixture.locator('[data-slot="lifecycle-badge"]')).toHaveCount(0);
+
+    // Active card: green "Active" + a check icon.
+    const activeIndicator = cards.nth(0).locator('[data-slot="installed-status-indicator"]');
+    await expect(activeIndicator).toHaveAttribute("data-status", "active");
+    await expect(activeIndicator).toContainText("Active");
+    await expect(activeIndicator).not.toContainText("Approved");
+    await expect(activeIndicator.locator("svg")).toHaveCount(1);
+
+    // Archived card: muted "Archived" + a cross icon (drawing shows an X, not
+    // a bare dot).
+    const archivedIndicator = cards.nth(3).locator('[data-slot="installed-status-indicator"]');
+    await expect(archivedIndicator).toHaveAttribute("data-status", "archived");
+    await expect(archivedIndicator).toContainText("Archived");
+    await expect(archivedIndicator.locator("svg")).toHaveCount(1);
+  });
+
+  test("Settings + More details carry the §VI drawing's EXACT per-state button treatment (codex-converge finding, adopted)", async ({
     page,
   }) => {
     const fixture = page.getByTestId("installed-extensions-fixture");
     const cards = fixture.locator('[data-slot="installed-extension-card"]');
 
-    // Every card carries exactly one §VI status dot; none carries a §VII pill.
-    const dots = fixture.locator('[data-slot="installed-status-indicator"]');
-    await expect(dots).toHaveCount(4);
-    await expect(fixture.locator('[data-slot="status-pill"]')).toHaveCount(0);
-    await expect(fixture.locator('[data-slot="lifecycle-badge"]')).toHaveCount(0);
+    // Active card 1: Settings = primary (`btn.primary`); More details =
+    // the shadcn "link" variant with a PERSISTENT underline (the spec's
+    // `.btn.link` is always-underlined — the shadcn default only underlines
+    // on :hover, which is exactly what the owner's "not the exact per-spec
+    // design" finding caught).
+    const activeCard = cards.nth(0);
+    const activeSettings = activeCard.getByRole("button", { name: "Settings" });
+    await expect(activeSettings).toHaveAttribute("data-variant", "default");
+    const activeMoreDetails = activeCard.getByRole("button", { name: "More details" });
+    await expect(activeMoreDetails).toHaveAttribute("data-variant", "link");
+    await expect(activeMoreDetails).toHaveCSS("text-decoration-line", "underline");
 
-    // Active card: green "Active" dot (the success token, not a check-icon pill).
-    const activeDot = cards.nth(0).locator('[data-slot="installed-status-indicator"]');
-    await expect(activeDot).toHaveAttribute("data-status", "active");
-    await expect(activeDot).toContainText("Active");
-    await expect(activeDot).not.toContainText("Approved");
-    // No SVG icon inside the dot indicator (the §VII pill renders a check/cross).
-    await expect(activeDot.locator("svg")).toHaveCount(0);
+    // Archived card 4: Settings = the muted `btn.secondary`; More details =
+    // the muted, non-underlined `btn.ghost` (design repo specs/app.html §VI
+    // example markup, archived row).
+    const archivedCard = cards.nth(3);
+    const archivedSettings = archivedCard.getByRole("button", { name: "Settings" });
+    await expect(archivedSettings).toHaveAttribute("data-variant", "secondary");
+    const archivedMoreDetails = archivedCard.getByRole("button", { name: "More details" });
+    await expect(archivedMoreDetails).toHaveAttribute("data-variant", "ghost");
+    await expect(archivedMoreDetails).toHaveCSS("text-decoration-line", "none");
+  });
 
-    // Archived card: muted "Archived" dot (drawing shows a muted DOT, not a cross).
-    const archivedDot = cards.nth(3).locator('[data-slot="installed-status-indicator"]');
-    await expect(archivedDot).toHaveAttribute("data-status", "archived");
-    await expect(archivedDot).toContainText("Archived");
-    await expect(archivedDot.locator("svg")).toHaveCount(0);
+  test("card actions are exactly Settings + More details — no Update/Uninstall/Reinstall on the card (cinatra#948 reopen, 2026-07-05)", async ({
+    page,
+  }) => {
+    const fixture = page.getByTestId("installed-extensions-fixture");
+    const cards = fixture.locator('[data-slot="installed-extension-card"]');
+
+    for (const card of await cards.all()) {
+      await expect(card.getByRole("button", { name: "Update" })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "Uninstall" })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: /Reinstall latest/ })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: /Restore/ })).toHaveCount(0);
+      await expect(card.getByRole("button", { name: "More details" })).toHaveCount(1);
+    }
+  });
+
+  test("Uninstall / Reinstall-latest relocate into the More-details modal footer, not the card (cinatra#948 reopen)", async ({
+    page,
+  }) => {
+    const fixture = page.getByTestId("installed-extensions-fixture");
+    const cards = fixture.locator('[data-slot="installed-extension-card"]');
+    const dialog = page.getByRole("dialog");
+
+    // Card 1 (active, listed): Uninstall lives in the modal footer.
+    await cards.nth(0).getByRole("button", { name: "More details" }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Uninstall" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+
+    // Card 4 (archived): Reinstall latest lives in the modal footer; Restore
+    // is the modal's own CTA (not asserted here — covered by the CTA suite).
+    await cards.nth(3).getByRole("button", { name: "More details" }).click();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Reinstall latest" })).toBeVisible();
+    await page.keyboard.press("Escape");
   });
 
   test("close-proof screenshots — cards + unlisted-package modal state", async ({ page }, testInfo) => {

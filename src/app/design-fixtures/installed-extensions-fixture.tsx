@@ -1,4 +1,5 @@
 import { Settings } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,12 +9,14 @@ import {
 } from "@/components/extensions/installed-extension-card";
 import { extensionKindEmblem } from "@/components/extension-kind-emblem";
 import { VisibilityBadge } from "@/components/visibility-badge";
-import { MarketplaceDetailModal } from "@cinatra-ai/extensions/screens";
+import { MarketplaceDetailModal, RegistryUninstallForm } from "@cinatra-ai/extensions/screens";
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens";
 import {
   installExtensionPackageFormAction,
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
+  uninstallExtensionPackageFormAction,
+  reinstallLatestFormAction,
 } from "@cinatra-ai/extensions/actions";
 import { emptyRatingSummary, type MarketplaceDetailView } from "@/lib/marketplace-detail-view";
 
@@ -123,6 +126,17 @@ const LISTED_DETAIL: MarketplaceDetailView = {
 function fixtureModal(input: {
   card: MarketplaceCardData;
   initialLoad: NonNullable<Parameters<typeof MarketplaceDetailModal>[0]["initialLoad"]>;
+  isArchived?: boolean;
+  /**
+   * Per-item management actions with no other §VI/§V-sanctioned surface
+   * (Uninstall; archived-only Reinstall latest) — cinatra#948 reopen,
+   * 2026-07-05: the card itself renders only Settings + More details, so the
+   * live screen (`registry-catalog-screen.tsx`) relocates these into this
+   * modal's footer instead. Demonstrated here (real bound server actions,
+   * same convention as install/update/restore above) so the fixture proves
+   * the relocation, not just the card shrinkage.
+   */
+  manageActions?: ReactNode;
 }) {
   return (
     <MarketplaceDetailModal
@@ -140,19 +154,29 @@ function fixtureModal(input: {
         packageName: input.card.packageName,
       })}
       initialLoad={input.initialLoad}
+      manageActions={input.manageActions}
+      // §VI drawing: the active row's underlined indigo `.btn.link`; the
+      // archived row's muted, non-underlined `.btn.ghost` (design repo
+      // specs/app.html §VI example markup, both rows).
       trigger={
-        <Button variant="link" size="sm" className="w-full">
-          More details
-        </Button>
+        input.isArchived ? (
+          <Button variant="ghost" size="sm" className="text-muted-foreground">
+            More details
+          </Button>
+        ) : (
+          <Button variant="link" size="sm" className="underline underline-offset-3">
+            More details
+          </Button>
+        )
       }
     />
   );
 }
 
-function SettingsLookalike() {
+function SettingsLookalike({ archived = false }: { archived?: boolean }) {
   // Inert lookalike (no configuration surface exists behind the fixture).
   return (
-    <Button size="sm" aria-disabled>
+    <Button size="sm" variant={archived ? "secondary" : "default"} aria-disabled>
       <Settings data-icon="inline-start" />
       Settings
     </Button>
@@ -196,10 +220,14 @@ export function InstalledExtensionsFixture() {
   return (
     <div data-testid="installed-extensions-fixture" className="grid gap-3">
       <p className="text-xs text-muted-foreground">
-        §VI Installed extensions — seeded fixtures (cinatra#948): listed + installed-but-unlisted
-        + unscoped + archived. Byline = hydrated vendor name or the bare kind (never the npm
-        scope); spec line = version + lifecycle dot only; More details opens the §V modal in
-        place (unlisted/unscoped pin the graceful notfound state).
+        §VI Installed extensions — seeded fixtures (cinatra#948 reopen, 2026-07-05): listed +
+        installed-but-unlisted + unscoped + archived. Byline = hydrated vendor name or the bare
+        kind (never the npm scope); spec line = version + the green-check/grey-cross lifecycle
+        indicator only; card actions = exactly Settings + More details (no Update / Uninstall /
+        Reinstall on the card — that management surface lives inside the &ldquo;More
+        details&rdquo; modal footer instead); More details opens the §V modal in place
+        (unlisted/unscoped pin the
+        graceful notfound state).
       </p>
 
       {/* 1 — listed, vendor hydrated ("Agent by Cinatra"), modal loads the detail. */}
@@ -224,6 +252,22 @@ export function InstalledExtensionsFixture() {
             {fixtureModal({
               card: listedCard,
               initialLoad: { status: "loaded", detail: LISTED_DETAIL },
+              // Demonstrates the Uninstall relocation (cinatra#948 reopen):
+              // not on the card, inside the "More details" modal footer.
+              manageActions: (
+                <RegistryUninstallForm
+                  action={
+                    uninstallExtensionPackageFormAction.bind(null, {
+                      packageName: listedCard.packageName,
+                      packageVersion: listedCard.packageVersion,
+                    }) as unknown as (formData?: FormData) => void | Promise<void>
+                  }
+                  packageTitle="Research Assistant"
+                  destinationVariant="archive"
+                  variant="ghost"
+                  size="sm"
+                />
+              ),
             })}
           </>
         }
@@ -283,7 +327,35 @@ export function InstalledExtensionsFixture() {
         version={`v${archivedCard.packageVersion}`}
         status={<InstalledStatusIndicator status="archived" />}
         archived
-        actions={fixtureModal({ card: archivedCard, initialLoad: { status: "notfound" } })}
+        actions={
+          <>
+            {/* §VI drawing: the archived example still shows a (muted)
+                Settings button where a configuration surface exists —
+                cinatra#957's "fully greyed" treatment mutes it via the
+                shared actions-panel opacity, not by hiding it. */}
+            <SettingsLookalike archived />
+            {fixtureModal({
+              card: archivedCard,
+              initialLoad: { status: "notfound" },
+              isArchived: true,
+              // Demonstrates the Reinstall-latest relocation (cinatra#948
+              // reopen): Restore is already the modal's own CTA state for an
+              // archived row; Reinstall-latest has no CTA state, so it lives
+              // here instead of resurrecting as a card button.
+              manageActions: (
+                <form
+                  action={reinstallLatestFormAction.bind(null, {
+                    packageName: archivedCard.packageName,
+                  })}
+                >
+                  <Button type="submit" variant="ghost" size="sm">
+                    Reinstall latest
+                  </Button>
+                </form>
+              ),
+            })}
+          </>
+        }
       />
     </div>
   );

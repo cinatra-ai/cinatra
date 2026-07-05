@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Archive, Package, Settings, Upload } from "lucide-react";
 import { VisibilityBadge } from "@/components/visibility-badge";
 import { ExtensionRowActions } from "./extension-row-actions";
@@ -624,11 +625,13 @@ export async function RegistryCatalogScreen({
   // Card renderers
   // -------------------------------------------------------------------------
 
-  // §VI spec version line: ONLY the mono version + the status DOT (cinatra#948
-  // reopen, gap 3; §VI drawing + prose L902 — a bare dot + mono label, not the
-  // §VII StatusPill). The dot carries the row's TRUE status (cinatra#957):
-  // active → green dot "Active"; locked → green dot with the distinct "Locked"
-  // label + tooltip (a system extension is live); archived → muted dot.
+  // §VI spec version line: ONLY the mono version + the lifecycle indicator
+  // (cinatra#948 reopen, gap 3; §VI drawing, refreshed by design#26 —
+  // green-check Active / grey-cross Archived + mono label, not the §VII
+  // StatusPill). The indicator carries the row's TRUE status (cinatra#957):
+  // active → green check "Active"; locked → green check with the distinct
+  // "Locked" label + tooltip (a system extension is live); archived → muted
+  // cross.
   const renderStatus = (row: InstalledCardRow) => <InstalledStatusIndicator status={row.status} />;
 
   // Operational chips (Required / visibility / risk) — kept, but OFF the §VI
@@ -664,7 +667,19 @@ export async function RegistryCatalogScreen({
   // ---------------------------------------------------------------------------
   const renderDetailModal = (
     row: InstalledCardRow,
-    opts: { isArchived: boolean; lockedOrNoUpdate: boolean; hasUpdate: boolean; catalogVersion: string | null },
+    opts: {
+      isArchived: boolean;
+      lockedOrNoUpdate: boolean;
+      hasUpdate: boolean;
+      catalogVersion: string | null;
+      /**
+       * Per-item management actions that have no other §VI/§V-sanctioned
+       * surface (Uninstall; the admin agent Promote/Demote overflow) —
+       * rendered left-aligned in this modal's footer. See
+       * `renderActiveManageActions` / `renderArchivedManageActions` below.
+       */
+      manageActions?: ReactNode;
+    },
   ) => {
     // Reuses the browse-card wire shape; fields the storefront owns (rating,
     // badge, freshness, assets) stay null — the modal hydrates them from the
@@ -709,28 +724,41 @@ export async function RegistryCatalogScreen({
         restoreAction={restoreExtensionPackageFormAction.bind(null, {
           packageName: row.packageName,
         })}
-        // §VI actions panel: More details renders as the link-style button
-        // (the drawing's `btn link`), not the browse card's outline default.
+        manageActions={opts.manageActions}
+        // §VI actions panel: More details renders as each state's drawing
+        // treatment (design repo `specs/app.html` §VI example markup, both
+        // rows) — the active row's underlined indigo `.btn.link`; the
+        // archived row's muted, non-underlined `.btn.ghost`. Neither is the
+        // browse card's outline default.
         trigger={
-          <Button variant="link" size="sm" className="w-full">
-            More details
-          </Button>
+          opts.isArchived ? (
+            <Button variant="ghost" size="sm" className="text-muted-foreground">
+              More details
+            </Button>
+          ) : (
+            <Button variant="link" size="sm" className="underline underline-offset-3">
+              More details
+            </Button>
+          )
         }
       />
     );
   };
 
-  const renderActiveActions = (row: InstalledCardRow) => {
-    // Locked / required-in-prod extensions cannot be uninstalled or updated
-    // from this surface (the dispatcher rejects the transition) — suppress the
-    // predictably-failing affordances instead of rendering them.
-    const locked = row.status === "locked" || row.requiredInProd;
-    const registryEntry = availableByName.get(row.packageName);
-    const updateState = comparePluginVersions(
-      row.rawVersion ?? undefined,
-      registryEntry?.packageVersion ?? row.rawVersion ?? "",
-    );
-    const hasUpdate = updateState === "update-available";
+  // ---------------------------------------------------------------------------
+  // Per-item management actions (Update / Uninstall / Restore / Reinstall /
+  // admin Promote-Demote overflow) — cinatra#948 reopen, 2026-07-05: the §VI
+  // card sanctions ONLY Settings + More details; none of these belong on the
+  // card (the owner's own review: "Uninstall button is nowhere in the design
+  // spec"). Update and Restore are already covered by the "More details"
+  // modal's own install-lifecycle CTA (`modalCta` in `renderDetailModal`
+  // above), so they need no separate control here. Uninstall (no CTA state
+  // models it) and the admin-only agent Promote/Demote overflow (no
+  // §VI/§V-sanctioned surface models it either) relocate into that same
+  // modal's `manageActions` slot instead of resurrecting as card buttons or
+  // silently disappearing.
+  // ---------------------------------------------------------------------------
+  const renderActiveManageActions = (row: InstalledCardRow, locked: boolean): ReactNode => {
     const destinationVariant: DestinationVariant = usedExtensions.has(row.packageName)
       ? "archive"
       : "remove";
@@ -738,11 +766,69 @@ export async function RegistryCatalogScreen({
       packageName: row.packageName,
       packageVersion: row.rawVersion ?? "",
     }) as unknown as (formData?: FormData) => void | Promise<void>;
+    const showUninstall = canUninstall && !locked;
+    // Only rendered for admins, and ONLY for agent rows — promote/demote
+    // resolves agent-template origin data, so it stays scoped to the kind it
+    // supported on the old table (other kinds would get a predictably-broken
+    // action).
+    const showOverflow = isAdmin && row.kind === "agent";
+    if (!showUninstall && !showOverflow) return undefined;
+    return (
+      <div className="flex items-center gap-2">
+        {showUninstall && (
+          <RegistryUninstallForm
+            action={uninstallAction}
+            packageTitle={row.displayName}
+            destinationVariant={destinationVariant}
+            variant="ghost"
+            size="sm"
+          />
+        )}
+        {showOverflow && (
+          <ExtensionRowActions
+            packageName={row.packageName}
+            packageVersion={row.rawVersion ?? ""}
+            visibility={row.visibility}
+          />
+        )}
+      </div>
+    );
+  };
 
+  const renderArchivedManageActions = (row: InstalledCardRow): ReactNode => (
+    <form action={reinstallLatestFormAction.bind(null, { packageName: row.packageName })}>
+      <Button type="submit" variant="ghost" size="sm">
+        Reinstall latest
+      </Button>
+    </form>
+  );
+
+  // §VI card actions — EXACTLY Settings (where a configuration surface
+  // exists) + More details, for both active and archived rows (the drawing's
+  // archived example still shows a muted Settings button — cinatra#957's
+  // owner-approved "fully greyed" card treatment mutes it via the shared
+  // actions-panel opacity, not by hiding it).
+  const renderCardActions = (row: InstalledCardRow, isArchived: boolean) => {
+    const locked = row.status === "locked" || row.requiredInProd;
+    const registryEntry = availableByName.get(row.packageName);
+    const updateState = comparePluginVersions(
+      row.rawVersion ?? undefined,
+      registryEntry?.packageVersion ?? row.rawVersion ?? "",
+    );
+    const hasUpdate = !isArchived && updateState === "update-available";
     return (
       <>
         {row.settingsHref && (
-          <Button asChild size="sm">
+          // §VI drawing: the active row's Settings is `.btn.primary`; the
+          // archived row's is the muted `.btn.secondary` (design repo
+          // specs/app.html §VI example markup, both rows) — codex-converge
+          // finding, adopted.
+          <Button
+            asChild
+            size="sm"
+            variant={isArchived ? "secondary" : "default"}
+            className={isArchived ? "text-muted-foreground" : undefined}
+          >
             <Link href={row.settingsHref}>
               <Settings data-icon="inline-start" />
               Settings
@@ -750,84 +836,21 @@ export async function RegistryCatalogScreen({
           </Button>
         )}
         {renderDetailModal(row, {
-          isArchived: false,
-          lockedOrNoUpdate: locked || !canUpdate,
+          isArchived,
+          // Locked / required-in-prod extensions cannot be updated from this
+          // surface (the dispatcher rejects the transition) — suppress the
+          // predictably-failing CTA instead of rendering it. Archived rows
+          // are unconditionally Restore, same as before this relocation.
+          lockedOrNoUpdate: isArchived ? true : locked || !canUpdate,
           hasUpdate,
           catalogVersion: registryEntry?.packageVersion ?? null,
+          manageActions: isArchived
+            ? renderArchivedManageActions(row)
+            : renderActiveManageActions(row, locked),
         })}
-        {hasUpdate && canUpdate && !locked && (
-          <form
-            action={async () => {
-              "use server";
-              // Plain server-action form (no toast surface on this management
-              // screen): discard the #685 classified-failure return so the
-              // action stays () => void. Success still redirect()s as before.
-              await updateExtensionPackageFormAction({
-                packageName: row.packageName,
-                packageVersion: registryEntry?.packageVersion ?? row.rawVersion ?? "",
-              });
-            }}
-          >
-            <Button type="submit" variant="outline" size="sm" className="w-full">
-              Update
-            </Button>
-          </form>
-        )}
-        {canUninstall && !locked && (
-          <RegistryUninstallForm
-            action={uninstallAction}
-            packageTitle={row.displayName}
-            destinationVariant={destinationVariant}
-            variant="outline"
-            size="sm"
-            className="w-full hover:text-destructive"
-          />
-        )}
-        {/* Overflow menu with Promote / Demote actions. Only rendered for
-            admins, and ONLY for agent rows — promote/demote resolves
-            agent-template origin data, so it stays scoped to the kind it
-            supported on the old table (other kinds would get a
-            predictably-broken action). */}
-        {isAdmin && row.kind === "agent" && (
-          <ExtensionRowActions
-            packageName={row.packageName}
-            packageVersion={row.rawVersion ?? ""}
-            visibility={row.visibility}
-          />
-        )}
       </>
     );
   };
-
-  const renderArchivedActions = (row: InstalledCardRow) => (
-    <>
-      {renderDetailModal(row, {
-        isArchived: true,
-        lockedOrNoUpdate: true,
-        hasUpdate: false,
-        catalogVersion: availableByName.get(row.packageName)?.packageVersion ?? null,
-      })}
-      <form
-        action={async () => {
-          "use server";
-          // Discard the #685 classified-failure return so the action stays
-          // () => void on this plain-form management screen.
-          await restoreExtensionPackageFormAction({
-            packageName: row.packageName,
-          });
-        }}
-      >
-        <Button type="submit" variant="outline" size="sm" className="w-full">
-          {row.rawVersion ? `Restore (${row.rawVersion} pinned)` : "Restore"}
-        </Button>
-      </form>
-      <form action={reinstallLatestFormAction.bind(null, { packageName: row.packageName })}>
-        <Button type="submit" variant="outline" size="sm" className="w-full">
-          Reinstall latest
-        </Button>
-      </form>
-    </>
-  );
 
   const renderCard = (row: InstalledCardRow, isArchived: boolean) => (
     <InstalledExtensionCard
@@ -842,7 +865,7 @@ export async function RegistryCatalogScreen({
       version={row.versionLabel}
       status={renderStatus(row)}
       chips={renderOperationalChips(row)}
-      actions={isArchived ? renderArchivedActions(row) : renderActiveActions(row)}
+      actions={renderCardActions(row, isArchived)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions
       // muted. Active cards keep their category colour.

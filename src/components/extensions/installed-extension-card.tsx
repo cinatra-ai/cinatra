@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Check, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -20,8 +21,12 @@ import { ACCENT_PALETTE } from "@/lib/extension-accent";
  *   2. MIDDLE — the "{Kind} by {Vendor}" byline (small kind glyph tinted with
  *      the accent), the description, then the mono version with the lifecycle
  *      status indicator beside it.
- *   3. RIGHT — a hairline-divided actions panel (Settings primary, More
- *      details, plus any management actions the caller passes).
+ *   3. RIGHT — a hairline-divided actions panel carrying EXACTLY the §VI
+ *      drawing's two actions — Settings (primary, only where a configuration
+ *      surface exists) + More details — nothing else (cinatra#948 reopen,
+ *      2026-07-05: Update/Uninstall/Reinstall/admin-overflow are not in the
+ *      drawing; the caller relocates that management surface into the "More
+ *      details" §V modal instead of rendering it on the card).
  *
  * Server-renderable (no client hooks); all interactivity lives in the slots
  * the caller provides (links / server-action forms). Colors ride the shared
@@ -55,7 +60,12 @@ export type InstalledExtensionCardProps = {
    * but moves them out of the spec line).
    */
   chips?: ReactNode;
-  /** Right-panel actions, top to bottom (Settings, More details, management). */
+  /**
+   * Right-panel actions — exactly the §VI drawing's two: Settings (where a
+   * configuration surface exists) then More details. No management actions
+   * (Update/Uninstall/Restore/Reinstall/admin-overflow) belong here — the
+   * caller relocates those into the "More details" §V modal.
+   */
   actions?: ReactNode;
   /**
    * Archived / fully-greyed §VI treatment (cinatra#957): the accent ground
@@ -69,12 +79,15 @@ export type InstalledExtensionCardProps = {
 
 /**
  * §VI "Installed extensions" status indicator (published design system §VI
- * drawing + prose L902: "the pinned `--font-mono` version with its
- * Active/Archived status DOT"). A bare 7px dot + a mono, uppercase,
- * letter-spaced label — NOT the §VII `StatusPill` (whose own contract is
- * "an icon on the left — never a bare dot", the opposite treatment). Active
- * and `locked` (a system extension is live) read green; archived reads muted.
- * This is the §VI-specific indicator the drawing calls for; the general
+ * drawing, refreshed by `cinatra-ai/design#26` / paired docs mirror
+ * `cinatra-ai/docs#86`, 2026-07-05: "green-check Active / grey-cross
+ * Archived"). A check icon (green) for Active/Locked, a cross icon (muted)
+ * for Archived, beside the mono, uppercase, letter-spaced label. The earlier
+ * "bare dot" reading of this indicator (this branch's prior commits) cited a
+ * now-superseded pin (`docs@b35fdf4`, 2026-07-03) — the design repo's
+ * `specs/app.html` §VI example markup, current as of design#26, renders an
+ * explicit check/cross `<svg>`, not a bare dot. Active and `locked` (a system
+ * extension is live) read green; archived reads muted. The general
  * `LifecycleBadge`/`StatusPill` stays the §VII list/table renderer.
  */
 export function InstalledStatusIndicator({
@@ -84,6 +97,7 @@ export function InstalledStatusIndicator({
 }) {
   const archived = status === "archived";
   const label = archived ? "Archived" : status === "locked" ? "Locked" : "Active";
+  const Icon = archived ? X : Check;
   return (
     <span
       data-slot="installed-status-indicator"
@@ -101,7 +115,7 @@ export function InstalledStatusIndicator({
           : undefined
       }
     >
-      <span aria-hidden className="size-[7px] shrink-0 rounded-full bg-current" />
+      <Icon aria-hidden className="size-3 shrink-0" strokeWidth={3} />
       {label}
     </span>
   );
@@ -189,7 +203,7 @@ export function InstalledExtensionCard({
         <div
           data-slot="installed-extension-spec-line"
           className={cn(
-            // §VI version row: mono version + status dot, 14px apart (drawing).
+            // §VI version row: mono version + lifecycle indicator, 14px apart (drawing).
             "flex flex-wrap items-center gap-x-3.5 gap-y-1.5",
             archived && "opacity-70",
           )}
@@ -212,12 +226,17 @@ export function InstalledExtensionCard({
         )}
       </div>
 
-      {/* RIGHT — hairline-divided actions panel; archived cards mute it so the
-          whole card reads inactive while Restore / Reinstall stay operable. */}
+      {/* RIGHT — hairline-divided actions panel. §VI drawing: exactly
+          Settings + More details, naturally sized and CENTERED (not
+          stretched full-width) — `align-items: center` on the panel, no
+          per-button width utility. Archived cards mute the whole panel
+          (cinatra#957) while both actions stay operable. */}
       {actions && (
         <div
           className={cn(
-            "flex flex-col items-stretch justify-center gap-2 border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
+            // gap-[9px]: the drawing's exact 9px actions-panel gap (a layout
+            // arbitrary, not a color/type one — cinatra#803 convention).
+            "flex flex-col items-center justify-center gap-[9px] border-t border-line p-4 md:w-[176px] md:shrink-0 md:border-l md:border-t-0",
             archived && "opacity-70",
           )}
         >

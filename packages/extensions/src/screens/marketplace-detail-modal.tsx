@@ -18,7 +18,7 @@
 // is the browse-card "More details" experience only.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState, type ReactElement } from "react";
+import { useCallback, useState, type ReactElement, type ReactNode } from "react";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { XIcon, Star, Check, FileX, Loader2 } from "lucide-react";
@@ -108,6 +108,21 @@ export interface MarketplaceDetailModalProps {
   trigger?: ReactElement;
   /** See {@link MarketplaceDetailModalInitialLoad}. */
   initialLoad?: MarketplaceDetailModalInitialLoad;
+  /**
+   * Optional management-actions slot, left-aligned in the footer beside the
+   * install-lifecycle CTA (cinatra#948 reopen, 2026-07-05: the §VI card
+   * sanctions only Settings + More details on the card itself — no
+   * Update/Uninstall/Restore/Reinstall/admin-overflow buttons there. Update
+   * and Restore are already covered by this footer's own CTA states; there is
+   * no other §VI/§V-sanctioned surface for the remaining per-item management
+   * actions (Uninstall; the admin-only agent Promote/Demote overflow), so the
+   * Installed-page caller relocates them here, inside the "More details"
+   * surface the spec already names, rather than inventing new card UI or
+   * silently dropping the capability). The Marketplace browse-card caller
+   * never passes this — its footer stays the single right-aligned CTA the §V
+   * drawing shows.
+   */
+  manageActions?: ReactNode;
 }
 
 export function MarketplaceDetailModal({
@@ -119,6 +134,7 @@ export function MarketplaceDetailModal({
   loadDetail = getPublicMarketplaceDetailAction,
   trigger,
   initialLoad,
+  manageActions,
 }: MarketplaceDetailModalProps) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LoadStatus>(initialLoad?.status ?? "idle");
@@ -230,8 +246,16 @@ export function MarketplaceDetailModal({
         </div>
 
         {/* Footer — the six-state install CTA, right-aligned per the §V
-            drawing (hairline separator, 15px/26px padding). */}
-        <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
+            drawing (hairline separator, 15px/26px padding). When the caller
+            passes `manageActions` (cinatra#948 reopen: the §VI card itself
+            cannot carry them), they render left-aligned in the same row. */}
+        <div
+          className={cn(
+            "flex shrink-0 items-center border-t border-line px-6.5 py-3.75",
+            manageActions ? "justify-between gap-3" : "justify-end",
+          )}
+        >
+          {manageActions}
           <ModalFooterCta
             card={card}
             cta={cta}
