@@ -22,11 +22,18 @@ name: ui-design-system-gate
 # carve-outs, never inline eslint-disable" contract enforceable: without
 # it an inline disable comment suppresses the exact rule IDs the filter
 # counts and the gate exits 0 on a banned import.
+#
+# merge_group (engineering#484): this gate is event-agnostic (lints the
+# checked-out tree regardless of trigger event) — no reusable-engine change
+# needed, only this caller trigger. Reports the required context on
+# merge-queue candidates so a queue entry never hangs waiting for it. Inert
+# until a merge queue is enabled (engineering#485).
 
 on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read

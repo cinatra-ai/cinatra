@@ -26,11 +26,20 @@ name: truthful-attribution-gate
 # protection (strict "require branches up to date" + the required contexts) to
 # match the committed suite; that is applied alongside this merge (spec §7
 # step 3/5 bootstrap precondition).
+#
+# merge_group (engineering#484): reports this required context on GitHub
+# merge-queue candidates too — otherwise a queue entry hangs forever waiting
+# on a check that never posts. Content-binding (engineering#483, ci@45826486,
+# already pinned below) makes a merge_group synthetic commit re-derive the
+# SAME reviewed content hash as its source PR, so a real approval survives
+# the queue's merge-base rebuild instead of failing as stale/tree-mismatch.
+# Inert until a merge queue is actually enabled (engineering#485).
 
 on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read

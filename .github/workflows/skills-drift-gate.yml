@@ -26,11 +26,19 @@ name: skills-drift-gate
 # cinatra-ONLY: this gate is wired into this repo and nothing else. It is NOT
 # part of the org-wide min-repo-config rollout (cinatra is the only repo whose
 # changes can drift the assistant-skills knowledge).
+#
+# merge_group (engineering#484): the reusable engine's diff-base resolver is
+# merge_group-aware as of cinatra-ai/ci@c3bc633 (already inside the pin below,
+# which is a descendant commit) — same shared resolver as source-leak-gate.
+# Reports this required context on merge-queue candidates so a queue entry
+# never hangs waiting for it. Inert until a merge queue is enabled
+# (engineering#485).
 
 on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
 
 permissions:
   contents: read

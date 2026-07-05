@@ -130,6 +130,41 @@ jobs:
       - name: Parser tests
         run: node --test scripts/audit/__tests__/actions-pinned-gate.test.mjs
 
+  # ---------------------------------------------------------------------------
+  # merge-group-gate-coverage — required-gate merge_group trigger guard
+  # (engineering#484 acceptance criterion: "a guard ensures no required
+  # context is added without merge_group coverage"). Fails if any of the 5
+  # required gate caller workflows (source-leak-gate, skills-drift-gate,
+  # ui-design-system-gate, secrets-required-gate, truthful-attribution-gate)
+  # loses its `merge_group:` trigger — the failure mode this guards against is
+  # a merge-queue candidate hanging forever on a required check that never
+  # posts (see scripts/audit/merge-group-gate-coverage.mjs for the full
+  # rationale). Non-required, docs-only-skip (same shape as actions-pin-gate
+  # above): a pure offline static check over checked-out YAML, no business
+  # needing the workflow's top-level `packages: write`.
+  # ---------------------------------------------------------------------------
+  merge-group-gate-coverage:
+    name: merge_group gate-coverage guard
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: merge_group coverage gate
+        run: node scripts/audit/merge-group-gate-coverage.mjs
+
+      - name: Parser tests
+        run: node --test scripts/audit/__tests__/merge-group-gate-coverage.test.mjs
+
   # PR gate for typecheck + unit tests.
   # `pnpm test` excludes integration tests via vitest.config.ts; they run in
   # the integration test step below when CINATRA_TEST_DB_URL is provided.

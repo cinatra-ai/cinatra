@@ -1,7 +1,7 @@
 {
   "$comment": "Named, versioned machine-verification suite for cinatra-ai/cinatra — the gate-arm half of the truthful verification-record model (the Truthful Attribution protocol §4). The truthful-attribution-gate reads THIS file at the merged SHA (authoritative, no TOCTOU) when a merge record carries a Gate-suite arm: the cited suiteId@version must equal this file's, the Accountable trailer must equal accountable{github,name,email}, and every requiredContexts entry must have concluded success on the reviewed head. highRiskPaths EXTENDS the central cinatra-ai/ci defaults (the gate verifies the effective set is a superset). High-risk changes (this file is itself one — see **/gate-suite.json in the defaults) require the HUMAN arm at tier=maintainer; the gate arm alone is rejected, so this file's birth carries a maintainer Reviewed-by, not a self-blessing gate arm. lastAuditedAt + auditEvidence are the §4 monthly-audit record; the Accountable engineer re-audits monthly and bumps BOTH coupled in one commit (the gate warns >35d, fails the gate arm >65d; the human arm is always still available).",
   "suiteId": "cinatra-core",
-  "version": "2026.07.1",
+  "version": "2026.07.2",
   "accountable": {
     "name": "Sandro Groganz",
     "email": "sandro@cinatra.ai",
@@ -11,14 +11,16 @@
     {
       "context": "source-leak-gate / source-leak-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/source-leak-gate.yml",
-      "pinned": "45826486a3965bc8ebd6203a26330ad0dc1ae511"
+      "pinned": "45826486a3965bc8ebd6203a26330ad0dc1ae511",
+      "callerPath": ".github/workflows/source-leak-gate.yml",
+      "allowedEvents": ["pull_request", "push", "merge_group"]
     },
     {
       "context": "truthful-attribution-gate / truthful-attribution-gate",
       "workflow": "cinatra-ai/ci/.github/workflows/truthful-attribution-gate.yml",
       "pinned": "45826486a3965bc8ebd6203a26330ad0dc1ae511",
       "callerPath": ".github/workflows/truthful-attribution-gate.yml",
-      "allowedEvents": ["pull_request", "push"]
+      "allowedEvents": ["pull_request", "push", "merge_group"]
     }
   ],
   "highRiskPaths": [
@@ -58,6 +60,6 @@
     "scripts/docs-contract-gate.mjs",
     "scripts/lib/docs-contract-rules.mjs"
   ],
-  "lastAuditedAt": "2026-07-03",
-  "auditEvidence": "2026-07-03 re-pin (cinatra-ai/ci gate-caller realign to ci main @45826486a3965bc8ebd6203a26330ad0dc1ae511): all three ci gate callers (truthful-attribution, source-leak, skills-drift) advanced to the same-SHA double-pin uses:@45826486 + with.ref 45826486, rolling out the merged ci engine fixes (cinatra-ai/ci#56 skills-drift push-arm PR-body ack, cinatra-ai/ci#58 source-leak public-strict profile availability, cinatra-ai/ci#59 merge_group diff base — inert without a merge queue, cinatra-ai/ci#60 approval-staleness content/diff binding). requiredContexts[].pinned must equal the SHA referenced_workflows reports for each caller's uses:@ (the gate matches exactly, fail closed), so both entries move 83ca29ef->45826486 in this same commit (version 2026.06.5->2026.07.1). Audit basis: the reusable truthful-attribution-gate workflow YAML is byte-identical 83ca29ef..45826486; config/high-risk-defaults.json is unchanged 0de02f3..45826486 (the 2026.06.5 superset entries still satisfy the engine); the post-merge push arm was audited live on main (runs on every push, enforce mode fail-closed, genuine record violations red-flagged and corrected during 2026-07-02/03). 45826486 is a clean descendant of 83ca29ef on cinatra-ai/ci main; protected by the high-risk-path review on .github/workflows/** and **/gate-suite.json. version is bumped whenever the pinned content changes (suiteId@version must be immutable per content). Prior record (2026-06-28): callers realigned 7e6e94c9->83ca29ef via PR #637/#646 (source-leak, version 2026.06.2->2026.06.3) and PR #638 (truthful-attribution, version 2026.06.3->2026.06.4)."
+  "lastAuditedAt": "2026-07-05",
+  "auditEvidence": "2026-07-05 merge_group activation (engineering#484, part of the merge-train-race epic engineering#482, sequenced AFTER the engineering#483 content-binding keystone which is COMPLETE and already reflected in the 45826486 pin below): added `merge_group:` triggers to the 5 required-gate callers (source-leak-gate, skills-drift-gate, ui-design-system-gate, secrets-required-gate, truthful-attribution-gate) so each reports its required context on GitHub merge-queue candidates, not just pull_request/push. source-leak-gate and truthful-attribution-gate gained callerPath + allowedEvents (now [\"pull_request\",\"push\",\"merge_group\"]) so the engine's WF-id F1 declared-allowedEvents check (fails closed if the run event is outside the declared set) now guards both. skills-drift-gate, ui-design-system-gate, and secrets-required-gate are NOT in requiredContexts (unchanged by this commit) — they have no Gate-suite-arm cross-check today, independent of this activation. No pin bump needed: both entries already point at ci@45826486, a descendant of both cinatra-ai/ci#59 (c3bc633, the merge_group-aware diff-base resolver shared by source-leak/skills-drift) and cinatra-ai/ci#60 (the content/diff-binding keystone), so the merge_group arm is exercised by code already live at this SHA. Content-binding is what makes a merge_group synthetic commit re-derive the SAME reviewed content hash as its source PR — without it a queue candidate would fail every gate honestly as stale/tree-mismatch (per the #483 sequencing rationale). Still INERT: no merge queue is enabled on this repo (that is engineering#485, explicitly out of scope here); these triggers simply stop being dead code once #485 lands. version bumped 2026.07.1->2026.07.2 for this callerPath/allowedEvents content change (pinned SHAs unchanged)."
 }
