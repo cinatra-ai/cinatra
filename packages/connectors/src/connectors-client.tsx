@@ -335,7 +335,7 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
             the "connector" tab). §VII moves it next to the scope dropdown,
             with a hairline divider on both sides. */}
         <ToolbarGroup>
-          <Button asChild variant="outline" size="sm">
+          <Button asChild variant="ghost" size="sm">
             <Link href="/configuration/marketplace?tab=connector">
               <Plus data-icon="inline-start" aria-hidden="true" />
               Connector
@@ -350,7 +350,7 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 className="text-muted-foreground"
                 aria-label="Sort connectors"
