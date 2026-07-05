@@ -267,6 +267,7 @@
       "@cinatra-ai/extension-types": ["./packages/extension-types/src/index.ts"],
       "@cinatra-ai/extensions": ["./packages/extensions/src/index.ts"],
       "@cinatra-ai/extensions/screens": ["./packages/extensions/src/screens/index.ts"],
+      "@cinatra-ai/extensions/screens/marketplace-detail-modal": ["./packages/extensions/src/screens/marketplace-detail-modal.tsx"],
       "@cinatra-ai/extensions/mcp-handlers": ["./packages/extensions/src/mcp/handlers.ts"],
       "@cinatra-ai/extensions/mcp-module": ["./packages/extensions/src/mcp/module.ts"],
       "@cinatra-ai/extensions/actions": ["./packages/extensions/src/actions.ts"],

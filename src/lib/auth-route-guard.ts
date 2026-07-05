@@ -81,7 +81,14 @@ const PUBLIC_EXACT_PATHS = [
 // honors (src/lib/setup-wizard.ts), which is never set in a real production
 // deployment. The route is dataless, so this exposes no user data even if the
 // env were ever mis-set.
-const DEV_ONLY_PUBLIC_EXACT_PATHS = ["/design-fixtures"];
+// "/design-fixtures/marketplace-detail-modal" (cinatra#989/#739): the §V
+// detail-modal seeded-fixture route — same static, dataless, seeded-render
+// contract as the index page (its Playwright guard runs in the same
+// production-standalone design-visual-verify harness).
+const DEV_ONLY_PUBLIC_EXACT_PATHS = [
+  "/design-fixtures",
+  "/design-fixtures/marketplace-detail-modal",
+];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;
   if (process.env.NODE_ENV !== "production") return true;
