@@ -43,11 +43,24 @@ import {
 import type { ExtensionDiscoveryScope } from "@cinatra-ai/extension-types";
 import type { AgentTemplateRecord } from "@cinatra-ai/agents";
 import {
+  installExtensionPackageFormAction,
   updateExtensionPackageFormAction,
   uninstallExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
   reinstallLatestFormAction,
 } from "../actions";
+// "More details" opens the §V detail modal in place (cinatra#948 reopen, §VI
+// L902) — the full-page marketplace route is no longer this page's target, so
+// an installed-but-unlisted or unscoped package can never dead-end on a 404
+// (the modal renders its own graceful `notfound` state instead).
+import { MarketplaceDetailModal } from "./marketplace-detail-modal";
+import type { MarketplaceCardCta, MarketplaceCardData } from "./marketplace-card-model";
+import { marketplaceDetailHref } from "./marketplace-card-model";
+import { resolveInstalledVendorName } from "./installed-vendor";
+// Generated static extension manifest: the `cinatra.vendor` self-declared
+// vendor identity (verified at the marketplace publish gate) is the primary
+// §VI byline vendor source for bundled/synced extensions.
+import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
   comparePluginVersions,
   getPublishedExtensionSummary,
@@ -153,7 +166,6 @@ type InstalledCardRow = {
   requiredInProd: boolean;
   /** Per-extension configuration surface (connectors only today). */
   settingsHref: string | null;
-  detailHref: string | null;
   visibility: "public" | "private";
 };
 
@@ -162,18 +174,17 @@ function rowKey(kind: string, packageName: string): string {
   return `${kind}::${packageName}`;
 }
 
-function detailHrefFor(packageName: string): string | null {
-  const scopedMatch = /^@([^/]+)\/(.+)$/.exec(packageName);
-  return scopedMatch
-    ? `/configuration/marketplace/${scopedMatch[1]}/${scopedMatch[2]}`
-    : null;
-}
-
-/** Vendor byline: registry `author`, else the npm scope segment. */
+/**
+ * Vendor byline (§VI "{Type} by {Vendor}", cinatra#948 reopen gap 3): the
+ * manifest-declared `cinatra.vendor` name, else the registry `author`, else
+ * null (the byline drops the "by"). The raw npm scope segment NEVER renders
+ * as the vendor.
+ */
 function vendorFor(summary: AgentPackageSummary | undefined, packageName: string): string | null {
-  if (summary?.author) return summary.author;
-  const scopedMatch = /^@([^/]+)\//.exec(packageName);
-  return scopedMatch ? scopedMatch[1] : null;
+  return resolveInstalledVendorName({
+    manifestVendorName: STATIC_EXTENSION_MANIFEST[packageName]?.vendor?.name ?? null,
+    author: summary?.author ?? null,
+  });
 }
 
 /** Raw installed semver from canonical source provenance (registry installs). */
@@ -309,7 +320,6 @@ function collapseKindRows(input: {
       status,
       requiredInProd: canonical?.requiredInProd ?? false,
       settingsHref,
-      detailHref: detailHrefFor(packageName),
       visibility:
         nativeVisibility ?? (origin?.visibility === "private" ? "private" : "public"),
     });
@@ -368,7 +378,6 @@ function runtimeOnlyConnectorRows(input: {
       settingsHref: scopedMatch
         ? `/connectors/${scopedMatch[1]}/${scopedMatch[2]}/setup`
         : null,
-      detailHref: detailHrefFor(packageName),
       visibility: summary?.origin?.visibility === "private" ? "private" : "public",
     });
   }
@@ -613,19 +622,24 @@ export async function RegistryCatalogScreen({
   // Card renderers
   // -------------------------------------------------------------------------
 
-  const renderStatus = (row: InstalledCardRow) => {
-    // The lifecycle pill carries the row's TRUE status (cinatra#957):
-    // active → green check "Active"; locked → live/green styling with the
-    // distinct "Locked" label + tooltip (LifecycleBadge's locked mapping);
-    // archived → muted grey cross. The separate warning "Locked" badge is
-    // therefore redundant — only the "Required" annotation remains.
+  // §VI spec version line: ONLY the mono version + the lifecycle status
+  // indicator (cinatra#948 reopen, gap 3). The lifecycle pill carries the
+  // row's TRUE status (cinatra#957): active → green check "Active"; locked →
+  // live/green styling with the distinct "Locked" label + tooltip; archived →
+  // muted grey cross.
+  const renderStatus = (row: InstalledCardRow) => <LifecycleBadge status={row.status} />;
+
+  // Operational chips (Required / visibility / risk) — kept, but OFF the §VI
+  // spec version line, as their own subdued row (the reopen's "relocate out of
+  // the spec line" resolution; a documented operational-necessity addition to
+  // the drawing).
+  const renderOperationalChips = (row: InstalledCardRow) => {
     const badges = row.canonical
       ? lifecycleBadgesFor(row.canonical).filter((b) => b.key === "required")
       : [];
     const riskLevel = riskLevelByPackageName.get(row.packageName);
     return (
       <>
-        <LifecycleBadge status={row.status} />
         {badges.map((b) => (
           <Badge key={b.key} variant={b.variant} title={b.title}>
             {b.label}
@@ -634,6 +648,73 @@ export async function RegistryCatalogScreen({
         <VisibilityBadge visibility={row.visibility} />
         {riskLevel && <RiskBadge riskLevel={riskLevel} />}
       </>
+    );
+  };
+
+  // ---------------------------------------------------------------------------
+  // "More details" → the §V detail modal, in place (cinatra#948 reopen, §VI
+  // L902). Rendered for EVERY row — scoped, unscoped, and installed-but-
+  // unlisted packages alike: the modal fetches the public listing on open and
+  // renders its own graceful "Extension unavailable" notfound state for the
+  // class that used to 404 on the full-page route. The modal component itself
+  // belongs to the §V lane (PR #995 / #989); this page only consumes its
+  // public entry points.
+  // ---------------------------------------------------------------------------
+  const renderDetailModal = (
+    row: InstalledCardRow,
+    opts: { isArchived: boolean; lockedOrNoUpdate: boolean; hasUpdate: boolean; catalogVersion: string | null },
+  ) => {
+    // Reuses the browse-card wire shape; fields the storefront owns (rating,
+    // badge, freshness, assets) stay null — the modal hydrates them from the
+    // fetched detail, so the card shell only carries install identity + the
+    // already-hydrated display fields.
+    const modalCard: MarketplaceCardData = {
+      packageName: row.packageName,
+      packageVersion: opts.catalogVersion ?? row.rawVersion ?? "",
+      displayName: row.displayName,
+      description: row.description,
+      kindSlug: row.kind,
+      kindLabel: KIND_LABEL[row.kind],
+      badge: null,
+      freshnessAt: null,
+      rating: null,
+      detailHref: marketplaceDetailHref(row.packageName),
+      installCount: null,
+      iconUrl: null,
+      vendorLogoUrl: null,
+      sdkAbiRange: null,
+    };
+    // The modal footer CTA mirrors this page's affordance matrix — never
+    // softer: archived → Restore; locked / not-permitted / current → the
+    // disabled "Installed"; an actionable newer catalog version → Update.
+    const modalCta: MarketplaceCardCta = opts.isArchived
+      ? { state: "restore" }
+      : opts.hasUpdate && !opts.lockedOrNoUpdate
+        ? { state: "update", disabled: false }
+        : { state: "installed" };
+    return (
+      <MarketplaceDetailModal
+        card={modalCard}
+        cta={modalCta}
+        installAction={installExtensionPackageFormAction.bind(null, {
+          packageName: row.packageName,
+          packageVersion: modalCard.packageVersion,
+        })}
+        updateAction={updateExtensionPackageFormAction.bind(null, {
+          packageName: row.packageName,
+          packageVersion: modalCard.packageVersion,
+        })}
+        restoreAction={restoreExtensionPackageFormAction.bind(null, {
+          packageName: row.packageName,
+        })}
+        // §VI actions panel: More details renders as the link-style button
+        // (the drawing's `btn link`), not the browse card's outline default.
+        trigger={
+          <Button variant="link" size="sm" className="w-full">
+            More details
+          </Button>
+        }
+      />
     );
   };
 
@@ -666,11 +747,12 @@ export async function RegistryCatalogScreen({
             </Link>
           </Button>
         )}
-        {row.detailHref && (
-          <Button asChild variant="ghost" size="sm">
-            <Link href={row.detailHref}>More details</Link>
-          </Button>
-        )}
+        {renderDetailModal(row, {
+          isArchived: false,
+          lockedOrNoUpdate: locked || !canUpdate,
+          hasUpdate,
+          catalogVersion: registryEntry?.packageVersion ?? null,
+        })}
         {hasUpdate && canUpdate && !locked && (
           <form
             action={async () => {
@@ -717,11 +799,12 @@ export async function RegistryCatalogScreen({
 
   const renderArchivedActions = (row: InstalledCardRow) => (
     <>
-      {row.detailHref && (
-        <Button asChild variant="ghost" size="sm">
-          <Link href={row.detailHref}>More details</Link>
-        </Button>
-      )}
+      {renderDetailModal(row, {
+        isArchived: true,
+        lockedOrNoUpdate: true,
+        hasUpdate: false,
+        catalogVersion: availableByName.get(row.packageName)?.packageVersion ?? null,
+      })}
       <form
         action={async () => {
           "use server";
@@ -756,6 +839,7 @@ export async function RegistryCatalogScreen({
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
+      chips={renderOperationalChips(row)}
       actions={isArchived ? renderArchivedActions(row) : renderActiveActions(row)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions
