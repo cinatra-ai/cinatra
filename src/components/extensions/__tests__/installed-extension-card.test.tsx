@@ -1,5 +1,6 @@
 /**
- * InstalledExtensionCard — archived §VI treatment (cinatra#957).
+ * InstalledExtensionCard — archived §VI treatment (cinatra#957) + the
+ * §VII "Agent card (All Agents)" derivation (cinatra#1007 / design#25).
  *
  * Invariants pinned here:
  *   - An ACTIVE card keeps its category colour: the banner carries the accent
@@ -8,6 +9,10 @@
  *     the banner (light-grey `muted` token ground instead), muted logo tile,
  *     muted byline text, and muted status/actions zones — while the actions
  *     stay rendered (Restore/Reinstall must remain operable).
+ *   - Omitting `version`/`status` (the §VII Agent-card derivation) drops the
+ *     whole version/status row from the DOM rather than rendering it empty.
+ *   - `descriptionLineClamp={2}` (§VII) renders `line-clamp-2`; the default
+ *     (§VI, no prop) stays `line-clamp-3`.
  */
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -67,5 +72,54 @@ describe("InstalledExtensionCard — §VI archived treatment", () => {
     const html = render(false);
     expect(html).toContain("text-foreground");
     expect(html).not.toContain("opacity-70");
+  });
+});
+
+describe("InstalledExtensionCard — §VII Agent card (All Agents) derivation", () => {
+  function renderAgentCard(): string {
+    return renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Research Assistant"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindIcon={<svg data-testid="kind-icon" />}
+        kindLabel="Agent"
+        vendor="Cinatra"
+        description="Gathers sources, summarises, and cites answers grounded in your team's own documents."
+        descriptionLineClamp={2}
+        actions={<Button type="button">Run</Button>}
+      />,
+    );
+  }
+
+  it("omits the version/status row entirely when neither is passed", () => {
+    const html = renderAgentCard();
+    expect(html).not.toContain("font-mono text-xs text-muted-foreground");
+    expect(html).not.toContain("data-testid=\"status-slot\"");
+  });
+
+  it("clamps the description to 2 lines (not §VI's default 3)", () => {
+    const html = renderAgentCard();
+    expect(html).toContain("line-clamp-2");
+    expect(html).not.toContain("line-clamp-3");
+  });
+
+  it("defaults to the §VI 3-line clamp when descriptionLineClamp is not passed", () => {
+    const html = renderToStaticMarkup(
+      <InstalledExtensionCard
+        name="Web Research Agent"
+        accentColor="green"
+        emblem={<svg data-testid="emblem" />}
+        kindLabel="Agent"
+        description="Stateless schema-driven web research enricher."
+      />,
+    );
+    expect(html).toContain("line-clamp-3");
+    expect(html).not.toContain("line-clamp-2");
+  });
+
+  it("still renders the Run action", () => {
+    const html = renderAgentCard();
+    expect(html).toContain(">Run<");
   });
 });

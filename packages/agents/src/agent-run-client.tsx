@@ -1,30 +1,34 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// AgentRunClient — filterable card-grid for /agents/run.
+// AgentRunClient — filterable card-grid for /agents (the "All Agents" tab).
 //
 // Receives the pre-built `rows` array from the server component (NewAgentPage)
 // and renders a search toolbar using the same ToolbarSearchInput primitive used
 // by the marketplace and notifications archive pages. Filter-as-you-type on
 // name and description; no URL params needed for a picker page.
+//
+// Card design (cinatra#1007 / design#25 §VII "Agent card (All Agents)"):
+// reuses <InstalledExtensionCard> — the same three-panel §VI Installed-
+// extensions card (coloured logo-tile panel, byline + description middle
+// panel, hairline-divided actions panel) — but WITHOUT the version and
+// Active/Archived status row (both props simply go unpassed), the
+// description clamped to 2 lines instead of 3, and a single primary action:
+// Run, with a play icon in place of the settings gear.
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
 import Link from "next/link";
-import { Bot } from "lucide-react";
+import { Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import {
   Toolbar,
   ToolbarSearchGroup,
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
-import { ExtensionCard, deriveExtensionAccent } from "@cinatra-ai/sdk-ui";
+import { InstalledExtensionCard } from "@/components/extensions/installed-extension-card";
+import { extensionKindEmblem } from "@/components/extension-kind-emblem";
+import { deriveExtensionAccent } from "@/lib/extension-accent";
 
 export type AgentRunRowModel = {
   key: string;
@@ -52,7 +56,11 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
   return (
     <div className="flex flex-col gap-6">
       <Toolbar aria-label="Agent filters">
-        <ToolbarSearchGroup>
+        {/* w-full max-w-md flex-none — same non-stretch override as the
+            marketplace + notifications-archive toolbars (cinatra#1007):
+            ToolbarSearchGroup's base `flex-1` would otherwise stretch this
+            lone search field across the entire toolbar. */}
+        <ToolbarSearchGroup className="w-full max-w-md flex-none">
           <ToolbarSearchInput
             placeholder="Search agents…"
             value={query}
@@ -61,79 +69,26 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
         </ToolbarSearchGroup>
       </Toolbar>
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4">
         {filtered.map((row) => {
-          const visibleSkills = row.skills.slice(0, 3);
-          const remainingSkills = row.skills.slice(3);
-          const truncatedHost =
-            row.host.length > 24 ? `${row.host.slice(0, 23)}…` : row.host;
-          const hostBadge =
-            row.host === "local" ? (
-              <Badge variant="secondary" className="rounded-chip">
-                Cinatra
-              </Badge>
-            ) : (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Badge variant="outline" className="rounded-chip cursor-default">
-                    {truncatedHost}
-                  </Badge>
-                </TooltipTrigger>
-                <TooltipContent>{row.host}</TooltipContent>
-              </Tooltip>
-            );
+          const vendor = row.host === "local" ? "Cinatra" : row.host;
           return (
-            <ExtensionCard
+            <InstalledExtensionCard
               key={row.key}
               name={row.name}
               accentColor={deriveExtensionAccent(row.key)}
-              emblem={<Bot aria-hidden="true" />}
+              emblem={extensionKindEmblem("agent")}
+              kindIcon={extensionKindEmblem("agent", "size-3.5")}
+              kindLabel="Agent"
+              vendor={vendor}
               description={row.description || undefined}
-              meta={
-                <div className="flex flex-wrap items-center gap-2">
-                  {row.version ? (
-                    <Badge
-                      variant="outline"
-                      className="rounded-chip text-xs font-mono"
-                    >
-                      v{row.version}
-                    </Badge>
-                  ) : null}
-                  {row.skills.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {visibleSkills.map((s) => (
-                        <Badge
-                          key={s}
-                          variant="secondary"
-                          className="rounded-chip text-xs"
-                        >
-                          {s}
-                        </Badge>
-                      ))}
-                      {remainingSkills.length > 0 ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Badge
-                              variant="outline"
-                              className="rounded-chip text-xs cursor-default"
-                            >
-                              +{remainingSkills.length}
-                            </Badge>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {remainingSkills.join(", ")}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {hostBadge}
-                </div>
-              }
-              footer={
+              descriptionLineClamp={2}
+              // No `version` / `status` — design#25 §VII derives the Agent
+              // card from §VI minus the version + Active/Archived indicator.
+              actions={
                 <Button asChild size="sm">
                   <Link href={row.runHref}>
-                    <Bot data-icon="inline-start" aria-hidden="true" />
+                    <Play data-icon="inline-start" aria-hidden="true" />
                     Run
                   </Link>
                 </Button>

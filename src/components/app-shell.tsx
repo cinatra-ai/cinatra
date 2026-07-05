@@ -633,7 +633,9 @@ export function AppShell({
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/agents/run" className="flex items-center gap-2">
+                  {/* cinatra#1007: /agents/run removed (not redirected) — the
+                      run-agent picker moved to /agents ("All Agents" tab). */}
+                  <Link href="/agents" className="flex items-center gap-2">
                     <Play className="h-4 w-4" />
                     Run agent
                   </Link>

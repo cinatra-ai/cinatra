@@ -1,11 +1,11 @@
 /**
- * Parameterized `/agents/run` UAT runner.
+ * Parameterized `/agents` (All Agents run-agent picker) UAT runner.
  *
  * For each fixture in AGENT_FIXTURES:
  *   1. Skip with DEFERRED-PENDING-TUNNEL if the fixture is
  *      `tunnelDependent` AND no public MCP base URL is configured. The
  *      preflight already logs the state.
- *   2. Navigate to /agents/run, click the row's Run link. The /new
+ *   2. Navigate to /agents, click the row's Run link. The /new
  *      server-action auto-starts the run and redirects.
  *   3. For each declared HITL screen: poll the runs API until status is
  *      `pending_approval`, then drive the renderer's advancement (UI

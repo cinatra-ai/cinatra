@@ -575,7 +575,7 @@ export type {
 } from "./agent-creation-review";
 
 // Re-export the HITL-run visibility filter so the chat runner can build
-// per-agent function tools matching exactly the agent set surfaced at /agents/run.
+// per-agent function tools matching exactly the agent set surfaced at /agents.
 export {
   selectHitlRunVisibleTemplates,
   templateHasOwnHitl,

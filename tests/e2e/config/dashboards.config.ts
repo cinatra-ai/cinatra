@@ -10,7 +10,9 @@
  *
  * Why this exists: dashboards runtime bugs were not caught by the
  * typecheck + unit gate. They were invisible until a real browser hit
- * `/agents` against a real Postgres + a real drizzle-cube/client bundle.
+ * `/agents/executions` (the dashboard — cinatra#1007 moved it here from the
+ * bare `/agents`, which now serves the "All Agents" run-agent picker
+ * instead) against a real Postgres + a real drizzle-cube/client bundle.
  * This gate runs that walk on every PR touching `packages/dashboards/**`,
  * `packages/sdk-dashboard/**`, or the dashboards API route.
  */

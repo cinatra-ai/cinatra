@@ -20,6 +20,7 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/compon
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import { AgentBuilderRunScreen, AgentBuilderImportScreen } from "./screens";
 import { AgentRunClient, type AgentRunRowModel } from "./agent-run-client";
+import { AgentsTabNav } from "@/components/agents-tab-nav";
 
 // ---------------------------------------------------------------------------
 // AgentBuilder page exports
@@ -106,7 +107,9 @@ export async function AgentsPage({ searchParams }: AgentsSearchPageProps) {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button asChild>
-              <Link href="/agents/run">
+              {/* cinatra#1007: /agents/run removed (not redirected) — the
+                  run-agent picker moved to /agents. */}
+              <Link href="/agents">
                 <Play data-icon="inline-start" aria-hidden="true" />
                 Run agent
               </Link>
@@ -293,7 +296,14 @@ export async function NewAgentPage() {
       <PageHeader
         title="Run agent"
         description="Run an agent with a human-in-the-loop step, one of its sub-agents, or any agent from a connected external A2A server."
+        divider={false}
       />
+      {/* All Agents / Executions tab bar (cinatra#1007) — shown on both
+          /agents (this page, the default "All Agents" tab) and
+          /agents/executions (the dashboard, packages/dashboards'
+          AgentsDashboardPage). TabsListRow's trailing rule replaces the
+          PageHeader divider suppressed above. */}
+      <AgentsTabNav activeTab="all" />
       <PageContent className="flex flex-col gap-6 pb-8">
         {rows.length === 0 ? (
           <section className="soft-panel rounded-card flex flex-col items-center justify-center gap-4 py-16 text-center">

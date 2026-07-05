@@ -79,7 +79,9 @@ export const DASHBOARD_PAGE_ACTIONS: Readonly<
   Record<DashboardPageAnchor, readonly DashboardPageAction[]>
 > = {
   agents: [
-    { id: "run-agent", href: "/agents/run", label: "Run agent", icon: Play },
+    // cinatra#1007: /agents/run was removed (not redirected) — the run-agent
+    // picker now lives at /agents (the "All Agents" tab).
+    { id: "run-agent", href: "/agents", label: "Run agent", icon: Play },
     {
       id: "create-agent",
       href: "/chat?mode=create-agent",
