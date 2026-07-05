@@ -70,12 +70,12 @@ export function NewComponentPlaceholders() {
       <PrimitiveRow
         name="ExtensionCard (§V)"
         spec="@/components/extension-card"
-        conformance="Emblem on white-pill (left), live indicator (right), random ACCENT palette ground (red / burgundy / indigo / green / mustard / slate). accentColor persisted at creation time."
+        conformance="Emblem on white-pill (left), live indicator (right), random ACCENT palette ground (red / burgundy / green / rust / olive / plum / clay). accentColor persisted at creation time."
       >
         <div className="w-72">
           <ExtensionCard
             name="Email Outreach Agent"
-            accentColor="indigo"
+            accentColor="plum"
             emblem={<BotIcon className="size-5" />}
             indicator={{ label: "Daily 9am", dotColour: "var(--success)" }}
           />
