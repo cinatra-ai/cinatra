@@ -15,6 +15,7 @@ import {
   removeNangoConnectionRecord,
   saveNangoConnectionRecord,
 } from "@/lib/nango-system";
+import { enforceInstanceConnectionUse } from "@/lib/instance-connection-actor";
 
 export type DrupalInstanceSettings = {
   id: string;
@@ -207,6 +208,19 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
 
   const now = new Date().toISOString();
 
+  // Multi-tenant install→org binding (cinatra#274). Prefer an explicitly
+  // supplied {orgId, runBy}; otherwise capture it from the configuring admin's
+  // session in-repo. Resolved BEFORE the Nango readback below so the same
+  // binding both seeds the connection's identity row (cinatra#967) and gates
+  // the readback as the configuring admin. A resolved binding never
+  // overwrites an existing one with undefined (edit-without-session preserves
+  // the prior binding); a brand-new row with no session simply has no binding
+  // (resolver falls back to single-tenant).
+  const sessionBinding =
+    input.orgId?.trim() && input.runBy?.trim()
+      ? { orgId: input.orgId.trim(), runBy: input.runBy.trim() }
+      : await resolveActorBindingFromSession();
+
   // When a key is provided (new instance OR rotation), run the full
   // ensure → import → readback flow. Otherwise (edit without key),
   // skip Nango entirely — only name/URL are changing.
@@ -219,6 +233,20 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
       credentials: { type: "API_KEY", apiKey: trimmedKey },
       metadata: { siteUrl: normalizedUrl },
     });
+
+    // Instance-import seam (cinatra#967, W3 residue): seed the connection's
+    // identity row NOW (idempotent), then gate + audit the immediate
+    // readback verification through the W2 owner-aware resolver, with the
+    // configuring admin (or an org-bound InternalWorker fallback) threaded
+    // as the acting actor. An instance whose identity cannot be resolved at
+    // all falls back to the pre-#967 ungated readback — never a regression.
+    await enforceInstanceConnectionUse({
+      connectorKey: "drupal",
+      connectionId,
+      binding: sessionBinding,
+      source: "drupal-api",
+    });
+
     const readback = await getNangoCredentials(providerConfigKey, connectionId, { forceRefresh: true });
     const readbackKey = extractApiKey(readback);
     if (readbackKey !== trimmedKey) {
@@ -228,16 +256,6 @@ export async function saveDrupalInstance(input: SaveDrupalInstanceInput): Promis
     }
   }
 
-  // Multi-tenant install→org binding (cinatra#274). Prefer an explicitly
-  // supplied {orgId, runBy}; otherwise capture it from the configuring admin's
-  // session in-repo. A resolved binding never overwrites an existing one with
-  // undefined (edit-without-session preserves the prior binding); a brand-new
-  // row with no session simply has no binding (resolver falls back to
-  // single-tenant).
-  const sessionBinding =
-    input.orgId?.trim() && input.runBy?.trim()
-      ? { orgId: input.orgId.trim(), runBy: input.runBy.trim() }
-      : await resolveActorBindingFromSession();
   const nextOrgId = sessionBinding?.orgId ?? existing?.orgId;
   const nextRunBy = sessionBinding?.runBy ?? existing?.runBy;
 

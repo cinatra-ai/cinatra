@@ -13,6 +13,10 @@ import {
   listSavedNangoConnections,
   removeNangoConnectionRecord,
 } from "@/lib/nango-system";
+import {
+  enforceInstanceConnectionUse,
+  enforcePerUserInstanceConnectionUse,
+} from "@/lib/instance-connection-actor";
 
 const LINKEDIN_API_VERSION = "202603";
 export const LINKEDIN_API_LOG_DIRECTORY = path.join(process.cwd(), "data", "logs", "linkedin-api");
@@ -234,6 +238,19 @@ async function resolveLinkedInAccessToken(account: LinkedInAccountConnection) {
     throw new Error("Configure Nango first so LinkedIn API requests can authenticate through Nango.");
   }
 
+  // Owner-aware resolver routing (cinatra#967, W3 residue of #952/#953):
+  // resolve (self-heal seeding when absent) the account connection's
+  // identity row and gate + audit this credential use through the W2
+  // use-gate. LinkedIn accounts carry no {orgId, runBy} multi-tenant binding
+  // (unlike wordpress/drupal), so an unseeded identity falls back to the
+  // single-tenant default owner/org — an account whose identity cannot be
+  // resolved at all falls back to the pre-#967 ungated read.
+  await enforceInstanceConnectionUse({
+    connectorKey: "linkedin",
+    connectionId: account.id,
+    source: "linkedin-api",
+  });
+
   const connection = await getNangoConnection(
     CINATRA_NANGO_PROVIDER_CONFIG_KEYS.linkedin,
     account.id,
@@ -264,6 +281,19 @@ async function readLinkedInUserConnection(input: {
   if (!savedConnection) {
     return null;
   }
+
+  // Owner-aware resolver routing (cinatra#967, W3 residue): this is a
+  // strictly per-user (`scope:"user"`) LinkedIn connection with a REAL
+  // actor already in hand (`input.userId`) — seed (self-heal) a null-org
+  // identity row owned by that exact user, then gate + audit the read as
+  // that HumanUser (never a fabricated worker actor; the actor IS the
+  // connection owner by construction).
+  await enforcePerUserInstanceConnectionUse({
+    connectorKey: "linkedin",
+    connectionId: savedConnection.connectionId,
+    userId: input.userId,
+    source: "linkedin-api",
+  });
 
   const connection = await getNangoConnection(savedConnection.providerConfigKey, savedConnection.connectionId, {
     forceRefresh: true,
@@ -580,6 +610,23 @@ export async function saveLinkedInAccountFromNangoConnection(input: {
   connectionId: string;
 }) {
   const settings = readSettings();
+
+  // NOT gated here (codex round-1 finding, reverting an earlier round-0
+  // over-fix). This function is the host materializer the generic
+  // `/api/nango/connections/save` route invokes DURING
+  // `handleNangoConnectionSaveRequest`, BEFORE that route's own POST-save
+  // `registerSavedConnectionIdentity` call registers the REAL session
+  // {userId, activeOrganizationId} (its PRE-save foreign-identity guard
+  // already rejects a request targeting a connection registered to a
+  // DIFFERENT owner/org). This function carries NO {orgId, runBy} binding at
+  // all, so gating here would ALWAYS self-heal-seed from the single-tenant
+  // FALLBACK owner — racing, and potentially conflicting with, the route's
+  // real-session registration that runs right after (a spurious 409 on a
+  // legitimate first save). This call path is ALREADY fully authorized by
+  // that surrounding route machinery — it is not part of the w3-residue this
+  // module exists to close. `resolveLinkedInAccessToken` and
+  // `readLinkedInUserConnection` (the genuinely bypassing publish-time reads)
+  // gate in this file.
   const connection = await getNangoConnection(input.providerConfigKey, input.connectionId, {
     forceRefresh: true,
     refreshToken: true,
