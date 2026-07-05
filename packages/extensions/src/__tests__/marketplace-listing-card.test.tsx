@@ -46,7 +46,7 @@ function renderCard(over: Partial<MarketplaceCardData> = {}): string {
   return renderToStaticMarkup(
     <MarketplaceListingCard
       card={cardData(over)}
-      accentColor="indigo"
+      accentColor="rust"
       ctaControl={<Button size="sm">Install now</Button>}
       detailsControl={<Button variant="link">More details</Button>}
     />,
