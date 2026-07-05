@@ -62,6 +62,17 @@ vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
 }));
 
+// cinatra#967: the owner-aware instance-gating seam (identity seeding +
+// actor threading) is covered by its OWN dedicated test suite
+// (instance-connection-actor.test.ts, wordpress-api-instance-gate.test.ts,
+// drupal-api.test.ts) — stub it here to a no-op ("no identity
+// resolved/seeded") so this file's binding round-trip assertions exercise
+// ONLY the {orgId, runBy} persistence, not the real DB-backed identity store.
+vi.mock("@/lib/instance-connection-actor", () => ({
+  enforceInstanceConnectionUse: vi.fn(async () => null),
+  resolveOrSeedInstanceIdentity: vi.fn(async () => null),
+}));
+
 beforeEach(async () => {
   vi.stubGlobal(
     "fetch",

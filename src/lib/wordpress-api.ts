@@ -12,6 +12,7 @@ import {
   importNangoConnection,
   isNangoConfigured,
 } from "@/lib/nango-system";
+import { enforceInstanceConnectionUse, resolveOrSeedInstanceIdentity } from "@/lib/instance-connection-actor";
 
 export type WordPressInstanceSettings = {
   id: string;
@@ -197,6 +198,20 @@ async function resolveWordPressBasicAuth(instance: WordPressInstanceSettings) {
   if (!instance.providerConfigKey || !instance.connectionId) {
     throw new Error("This WordPress instance is missing its Nango connection.");
   }
+
+  // Owner-aware resolver routing (cinatra#967, W3 residue of #952/#953):
+  // resolve (self-heal seeding when absent) the instance's identity row and
+  // gate + audit this credential use through the W2 use-gate, with the
+  // configuring admin (or an org-bound InternalWorker) threaded as the
+  // acting actor. An instance whose identity cannot be resolved/seeded at
+  // all (no {orgId, runBy} binding and no single-tenant default) falls back
+  // to the pre-#967 ungated read — never a new regression.
+  await enforceInstanceConnectionUse({
+    connectorKey: "wordpress",
+    connectionId: instance.connectionId,
+    binding: { orgId: instance.orgId, runBy: instance.runBy },
+    source: "wordpress-api",
+  });
 
   const credentials = await resolveWordPressNangoCredentials(instance.providerConfigKey, instance.connectionId);
   if (!credentials) {
@@ -659,14 +674,32 @@ export async function saveWordPressInstanceFromNangoConnection(input: {
   providerConfigKey: string;
   connectionId: string;
 }) {
+  const current = getWordPressAPISettings();
+  const existing = current.instances.find((instance) => instance.connectionId === input.connectionId);
+
+  // NOT gated here (codex round-1 finding, reverting an earlier round-0
+  // over-fix). This function is the host materializer the generic
+  // `/api/nango/connections/save` route invokes DURING
+  // `handleNangoConnectionSaveRequest`, BEFORE that route's own POST-save
+  // `registerSavedConnectionIdentity` call registers the REAL session
+  // {userId, activeOrganizationId} (and its PRE-save foreign-identity guard
+  // already rejects a request that targets a connection registered to a
+  // DIFFERENT owner/org). Gating here — even threading `existing`'s binding —
+  // would self-heal-seed an identity from the single-tenant FALLBACK owner
+  // whenever no identity row exists yet (a brand-new connection, or an old
+  // pre-cinatra#274 row with no captured binding), racing the route's own
+  // real-session registration that runs right after and conflicting with it
+  // (a spurious 409 on a legitimate first save/reconnect). This call path is
+  // ALREADY fully authorized by that surrounding route machinery — it is not
+  // part of the w3-residue this module exists to close. Only
+  // `resolveWordPressBasicAuth` (the content-editor read/write flows, which
+  // genuinely bypass that route) gates in this file.
   const credentials = await resolveWordPressNangoCredentials(input.providerConfigKey, input.connectionId);
 
   if (!credentials) {
     throw new Error("Unable to load the WordPress credentials from Nango.");
   }
 
-  const current = getWordPressAPISettings();
-  const existing = current.instances.find((instance) => instance.connectionId === input.connectionId);
   const validated = await validateWordPressInstanceConnection({
     siteUrl: input.siteUrl,
     username: credentials.username,
@@ -1355,6 +1388,24 @@ async function syncWordPressInstanceToNango(instance: WordPressInstanceSettings)
     tags: {
       site_url: instance.siteUrl,
     },
+  });
+
+  // Instance-import seam (cinatra#967, W3 residue): seed the connection's
+  // identity row NOW, at save time, so a new/reconnected instance is never
+  // left to rely solely on the read-time self-heal in
+  // `resolveWordPressBasicAuth`. Best-effort — a seeding failure (e.g. no
+  // resolvable owner) must never block the save; the read-time gate
+  // self-heals or falls back to the ungated legacy path exactly the same way.
+  await resolveOrSeedInstanceIdentity({
+    connectorKey: "wordpress",
+    connectionId: instance.connectionId ?? instance.id,
+    binding: { orgId: instance.orgId, runBy: instance.runBy },
+  }).catch((err) => {
+    console.warn(
+      "[wordpress-api] instance identity seeding failed (non-blocking):",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
   });
 }
 
