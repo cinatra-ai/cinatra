@@ -1,5 +1,4 @@
 import { Suspense } from "react";
-import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 import { requireAdminSession, buildCanDoOptsFromSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
@@ -28,84 +27,30 @@ import {
 } from "./marketplace-failure-copy";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
-import { Star } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { extensionKindEmblem } from "@/components/extension-kind-emblem";
+import { MarketplaceListingCard } from "./marketplace-listing-card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { ExtensionCard } from "@/components/extension-card";
-import { ExtensionCompatBadge } from "@/components/extension-compat-badge";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
-import { cn } from "@/lib/utils";
+import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { readRegistryPolicy } from "../registry-policy";
 
 // ---------------------------------------------------------------------------
 // ExtensionsMarketplaceScreen — storefront browse parity
 //
-// Renders cards sourced from the marketplace `extension_list` ability (storefront
-// catalog). Card fields mirror the storefront card: kind badge, commerce badge,
-// short description, rating, "Updated N ago" freshness. The author line and
-// visibility badge are dropped. The 4-state Install/Update/Installed/
-// Restore CTA and "More details" link are preserved unchanged; install-state
-// still resolves against agent_templates keyed by packageName.
+// Renders cards sourced from the marketplace `extension_list` ability
+// (storefront catalog) as the design spec §IV ListingCard
+// (MarketplaceListingCard): banner (icon tile + name), description +
+// "{Type} by {Vendor}" publisher line, centred price row, the six-state
+// Install now / Installed / Update now / Restore / Installing… / Incompatible
+// CTA, the underlined "More details" link, and the two-column footer meta
+// (rating + installs LEFT, compat + freshness RIGHT). Install-state still
+// resolves against agent_templates keyed by packageName; the ABI verdict
+// (deriveExtensionCompatState) feeds the CTA resolver so an incompatible
+// listing greys out instead of offering an install the gate would refuse.
 // ---------------------------------------------------------------------------
-
-// Commerce badge → shadcn Badge variant. All semantic; no raw palette.
-function CommerceBadge({ badge }: { badge: MarketplaceCardData["badge"] }) {
-  if (!badge) return null;
-  return <Badge variant="outline">{badge.text}</Badge>;
-}
-
-// Monochrome rating row (5 stars filled to the rounded average) + review count.
-// Real review content is out of scope; today every product is {0,0}.
-function RatingRow({ rating }: { rating: NonNullable<MarketplaceCardData["rating"]> }) {
-  const filled = Math.round(rating.average);
-  return (
-    <span className="inline-flex items-center gap-1" aria-label={`Rated ${rating.average} out of 5`}>
-      {[1, 2, 3, 4, 5].map((i) => (
-        <Star key={i} className={cn("size-3", i <= filled ? "fill-current" : "opacity-40")} />
-      ))}
-      <span className="ml-1">
-        {rating.count > 0
-          ? `${rating.count} ${rating.count === 1 ? "review" : "reviews"}`
-          : "No reviews yet"}
-      </span>
-    </span>
-  );
-}
-
-function freshnessLabel(freshnessAt: string | null): string | null {
-  if (!freshnessAt) return null;
-  const d = new Date(freshnessAt);
-  if (isNaN(d.getTime())) return null;
-  return `Updated ${formatDistanceToNow(d, { addSuffix: true })}`;
-}
-
-/**
- * Compact install-count label for the meta row (design spec §IV: "2.1k
- * installations"). A null/absent count (older marketplace builds omit the
- * field) renders no line. Singular/plural agree; thousands collapse to a "k"
- * suffix (one decimal, trailing-zero trimmed: 2100 → "2.1k", 2000 → "2k").
- */
-function installCountLabel(count: number | null): string | null {
-  if (count === null) return null;
-  if (count < 1000) {
-    return `${count} ${count === 1 ? "installation" : "installations"}`;
-  }
-  const thousands = count / 1000;
-  // One decimal, but drop a trailing ".0" (2000 → "2k", 2150 → "2.2k").
-  const rounded = Math.round(thousands * 10) / 10;
-  const text = Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
-  return `${text}k installations`;
-}
-
-/** First non-null link of the icon fallback chain: icon → vendor logo. */
-function resolveCardIconUrl(card: MarketplaceCardData): string | null {
-  return card.iconUrl ?? card.vendorLogoUrl ?? null;
-}
 
 export async function ExtensionsMarketplaceScreen({
   cards,
@@ -163,9 +108,13 @@ export async function ExtensionsMarketplaceScreen({
 
   const renderedCards = cards.map((card) => {
     const installedInfo = installedVersionByName.get(card.packageName);
-    // 4-state CTA + registry-gating resolved by the pure helper (semver-correct
-    // update detection; Install/Update disabled when the registry is down).
-    const cta = resolveMarketplaceCardCta(card, installedInfo, registryConnected);
+    // Six-state CTA resolved by the pure helper (semver-correct update
+    // detection; Install/Update disabled when the registry is down; a
+    // not-installed listing whose declared ABI this host cannot satisfy
+    // resolves to the greyed "incompatible" state — never softer than the
+    // install gate).
+    const compatState = deriveExtensionCompatState(card.sdkAbiRange);
+    const cta = resolveMarketplaceCardCta(card, installedInfo, registryConnected, compatState);
 
     // Per-row .bind() — install identifiers come straight from the catalog entry
     // ({packageName, packageVersion}); install resolves the typeId + tarball from
@@ -182,129 +131,120 @@ export async function ExtensionsMarketplaceScreen({
       packageName: card.packageName,
     });
 
-    const freshness = freshnessLabel(card.freshnessAt);
-    const installs = installCountLabel(card.installCount);
+    const ctaControl =
+      cta.state === "restore" ? (
+        // Restore re-activates an already-installed (archived) template — DB-only.
+        // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
+        // The category→copy map keeps the toast actionable + non-technical (#685);
+        // restore rarely yields a marketplace category, so it usually lands on
+        // the non-technical "unrecoverable"/default "try again" copy.
+        <MarketplaceInstallForm
+          action={restoreAction}
+          failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
+          defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
+        >
+          <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
+            Restore
+          </MarketplaceInstallSubmit>
+        </MarketplaceInstallForm>
+      ) : cta.state === "incompatible" ? (
+        // The greyed six-state "Incompatible" CTA (spec §IV): the declared ABI
+        // range is unsatisfiable on this host, so the install gate would refuse
+        // it — grey the Install out (opacity .4, not-allowed cursor, spec
+        // title) instead of offering an install that cannot succeed. The
+        // pointer-events override keeps the native title tooltip reachable on
+        // a disabled button. The red-triangle Incompatible badge renders in
+        // the footer meta (ExtensionCompatBadge).
+        <Button
+          size="sm"
+          disabled
+          className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
+          title="Requires a newer Cinatra version"
+        >
+          Install now
+        </Button>
+      ) : cta.state === "install" ? (
+        // Install fetches the tarball from the registry — a live CTA only
+        // when the registry is connected; otherwise a disabled button so
+        // we never present an Install that cannot actually install.
+        cta.disabled ? (
+          <Button size="sm" disabled title="Connect the package registry to install">
+            Install now
+          </Button>
+        ) : isInstallAccessTargetKind(card.kindSlug) ? (
+          // connector / artifact / workflow: pre-install access selector
+          // (cinatra#805) — dialog over the shared server-computed
+          // org/team/project rows; the chosen target is authorized
+          // server-side and persisted via setExtensionInstallAccess.
+          // Failure copy contract matches MarketplaceInstallForm (#685).
+          <ExtensionInstallScopeDialog
+            packageName={card.packageName}
+            packageVersion={card.packageVersion}
+            displayName={card.displayName}
+            installTargets={installTargets}
+            ownerEntityNames={ownerEntityNames}
+            activeOrgId={activeOrgId}
+            defaultValue={installScopeDefaultValue}
+            failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+            installAction={installExtensionPackageFormAction}
+          />
+        ) : (
+          // A failed install toasts instead of crashing the route (#356). The
+          // message is now classified per the merged install-failure taxonomy
+          // (marketplace#152) into actionable, NON-technical end-user copy —
+          // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
+          <MarketplaceInstallForm
+            action={installAction}
+            failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+          >
+            <MarketplaceInstallSubmit pendingLabel="Installing…">
+              Install now
+            </MarketplaceInstallSubmit>
+          </MarketplaceInstallForm>
+        )
+      ) : cta.state === "update" ? (
+        cta.disabled ? (
+          <Button size="sm" disabled title="Connect the package registry to update">
+            Update now
+          </Button>
+        ) : (
+          <MarketplaceInstallForm
+            action={updateAction}
+            failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
+            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
+          >
+            <MarketplaceInstallSubmit pendingLabel="Updating…">
+              Update now
+            </MarketplaceInstallSubmit>
+          </MarketplaceInstallForm>
+        )
+      ) : (
+        // Installed — the disabled secondary pill at spec opacity .9.
+        <Button size="sm" variant="secondary" disabled className="disabled:opacity-90">
+          Installed
+        </Button>
+      );
 
     const node = (
-      <ExtensionCard
-        variant="listing"
-        name={card.displayName}
+      <MarketplaceListingCard
+        card={card}
         accentColor={deriveExtensionAccent(card.packageName)}
-        emblem={extensionKindEmblem(card.kindSlug)}
-        iconUrl={resolveCardIconUrl(card)}
-        description={card.description}
-        meta={
-          <div className="flex flex-col gap-1.5">
-            {card.rating && <RatingRow rating={card.rating} />}
-            {installs && <span>{installs}</span>}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              {/* 3-state in-instance ABI compatibility verdict, derived locally
-                  from the catalog's declared sdkAbiRange (absent → neutral
-                  "Unknown", never green). */}
-              <ExtensionCompatBadge sdkAbiRange={card.sdkAbiRange} />
-              {freshness && <span>{freshness}</span>}
-            </div>
-          </div>
-        }
-        badges={
-          <>
-            <Badge variant="secondary">{card.kindLabel}</Badge>
-            <CommerceBadge badge={card.badge} />
-          </>
-        }
-        footer={
-          <div className="flex items-center gap-2">
-            {cta.state === "restore" ? (
-              // Restore re-activates an already-installed (archived) template — DB-only.
-              // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
-              // The category→copy map keeps the toast actionable + non-technical (#685);
-              // restore rarely yields a marketplace category, so it usually lands on
-              // the non-technical "unrecoverable"/default "try again" copy.
-              <MarketplaceInstallForm
-                action={restoreAction}
-                failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
-                defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
-                className="flex-1"
-              >
-                <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…" className="w-full">
-                  Restore
-                </MarketplaceInstallSubmit>
-              </MarketplaceInstallForm>
-            ) : cta.state === "install" ? (
-              // Install fetches the tarball from the registry — a live CTA only
-              // when the registry is connected; otherwise a disabled button so
-              // we never present an Install that cannot actually install.
-              cta.disabled ? (
-                <Button size="sm" disabled className="w-full flex-1" title="Connect the package registry to install">
-                  Install Now
-                </Button>
-              ) : isInstallAccessTargetKind(card.kindSlug) ? (
-                // connector / artifact / workflow: pre-install access selector
-                // (cinatra#805) — dialog over the shared server-computed
-                // org/team/project rows; the chosen target is authorized
-                // server-side and persisted via setExtensionInstallAccess.
-                // Failure copy contract matches MarketplaceInstallForm (#685).
-                <ExtensionInstallScopeDialog
-                  packageName={card.packageName}
-                  packageVersion={card.packageVersion}
-                  displayName={card.displayName}
-                  installTargets={installTargets}
-                  ownerEntityNames={ownerEntityNames}
-                  activeOrgId={activeOrgId}
-                  defaultValue={installScopeDefaultValue}
-                  failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
-                  installAction={installExtensionPackageFormAction}
-                  triggerClassName="w-full flex-1"
-                />
-              ) : (
-                // A failed install toasts instead of crashing the route (#356). The
-                // message is now classified per the merged install-failure taxonomy
-                // (marketplace#152) into actionable, NON-technical end-user copy —
-                // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
-                <MarketplaceInstallForm
-                  action={installAction}
-                  failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
-                  className="flex-1"
-                >
-                  <MarketplaceInstallSubmit pendingLabel="Installing…" className="w-full">
-                    Install Now
-                  </MarketplaceInstallSubmit>
-                </MarketplaceInstallForm>
-              )
-            ) : cta.state === "update" ? (
-              cta.disabled ? (
-                <Button size="sm" disabled className="w-full flex-1" title="Connect the package registry to update">
-                  Update Now
-                </Button>
-              ) : (
-                <MarketplaceInstallForm
-                  action={updateAction}
-                  failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-                  defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
-                  className="flex-1"
-                >
-                  <MarketplaceInstallSubmit pendingLabel="Updating…" className="w-full">
-                    Update Now
-                  </MarketplaceInstallSubmit>
-                </MarketplaceInstallForm>
-              )
-            ) : (
-              <Button size="sm" variant="secondary" disabled className="w-full flex-1">Installed</Button>
-            )}
-            {/* More details opens the in-app extension-detail modal (embedding
-                the marketplace listing detail) instead of navigating to the
-                full-page route. The install CTA above stays the card's 4-state
-                CTA; the modal footer carries the full six-state install CTA. */}
-            <MarketplaceDetailModal
-              card={card}
-              cta={cta}
-              installAction={installAction}
-              updateAction={updateAction}
-              restoreAction={restoreAction}
-            />
-          </div>
+        ctaControl={ctaControl}
+        detailsControl={
+          // More details opens the in-app extension-detail modal (embedding
+          // the marketplace listing detail) instead of navigating to the
+          // full-page route; the trigger renders as the centred underlined
+          // link button of spec §IV. The modal footer carries the same
+          // six-state install CTA.
+          <MarketplaceDetailModal
+            card={card}
+            cta={cta}
+            installAction={installAction}
+            updateAction={updateAction}
+            restoreAction={restoreAction}
+          />
         }
       />
     );

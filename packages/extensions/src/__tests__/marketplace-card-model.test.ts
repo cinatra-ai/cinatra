@@ -4,6 +4,7 @@ import {
   catalogEntryToCardData,
   normalizeCardDescription,
   resolveMarketplaceCardCta,
+  resolveCardPriceLabel,
   marketplaceDetailHref,
 } from "../screens/marketplace-card-model";
 
@@ -178,39 +179,108 @@ describe("normalizeCardDescription", () => {
   });
 });
 
-describe("resolveMarketplaceCardCta", () => {
+describe("resolveMarketplaceCardCta (six-state, cinatra#988)", () => {
   const card = { packageVersion: "2.0.0" };
 
   it("not installed → install (enabled when registry connected, disabled when not)", () => {
-    expect(resolveMarketplaceCardCta(card, undefined, true)).toEqual({ state: "install", disabled: false });
-    expect(resolveMarketplaceCardCta(card, undefined, false)).toEqual({ state: "install", disabled: true });
+    expect(resolveMarketplaceCardCta(card, undefined, true, "compatible")).toEqual({ state: "install", disabled: false });
+    expect(resolveMarketplaceCardCta(card, undefined, false, "compatible")).toEqual({ state: "install", disabled: true });
+  });
+
+  it("not installed + undeclared ABI (unknown) stays installable — exactly as lenient as the install gate", () => {
+    expect(resolveMarketplaceCardCta(card, undefined, true, "unknown")).toEqual({ state: "install", disabled: false });
+  });
+
+  it("not installed + incompatible ABI → incompatible (never softer than the install gate)", () => {
+    expect(resolveMarketplaceCardCta(card, undefined, true, "incompatible")).toEqual({
+      state: "incompatible",
+    });
+    // Registry state cannot soften/override the ABI refusal.
+    expect(resolveMarketplaceCardCta(card, undefined, false, "incompatible")).toEqual({
+      state: "incompatible",
+    });
+  });
+
+  it("incompatible only overrides the NOT-installed state — installed/update/restore keep their action", () => {
+    // Installing is not the current action for these, mirroring resolveModalInstallState.
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, true, "incompatible")).toEqual({
+      state: "restore",
+    });
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "incompatible")).toEqual({
+      state: "update",
+      disabled: false,
+    });
+    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true, "incompatible")).toEqual({
+      state: "installed",
+    });
   });
 
   it("archived → restore (registry-independent)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, false)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, false, "compatible")).toEqual({
       state: "restore",
     });
   });
 
   it("installed older → update (disabled when registry not connected)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, true, "compatible")).toEqual({
       state: "update",
       disabled: false,
     });
-    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, false)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: false }, false, "compatible")).toEqual({
       state: "update",
       disabled: true,
     });
   });
 
   it("installed current/newer → installed (no spurious update for a prerelease catalog version)", () => {
-    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true)).toEqual({
+    expect(resolveMarketplaceCardCta(card, { version: "2.0.0", isArchived: false }, true, "compatible")).toEqual({
       state: "installed",
     });
     // Installed stable 2.0.0; catalog shows 2.0.0-rc.1 (a prerelease) → NOT an update.
     expect(
-      resolveMarketplaceCardCta({ packageVersion: "2.0.0-rc.1" }, { version: "2.0.0", isArchived: false }, true),
+      resolveMarketplaceCardCta({ packageVersion: "2.0.0-rc.1" }, { version: "2.0.0", isArchived: false }, true, "compatible"),
     ).toEqual({ state: "installed" });
+  });
+});
+
+describe("catalogEntryToCardData — publisher/vendor block (§IV publisher line, cinatra#988)", () => {
+  it("maps a full vendor block (name + store URL)", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({
+        vendor: { name: "Foundry", slug: "foundry", store_url: "https://marketplace.cinatra.ai/store/foundry" },
+      }),
+    );
+    expect(card!.vendor).toEqual({
+      name: "Foundry",
+      storeUrl: "https://marketplace.cinatra.ai/store/foundry",
+    });
+  });
+
+  it("falls back to the slug when the name is blank, and null store URL when absent", () => {
+    const card = catalogEntryToCardData(
+      catalogEntry({ vendor: { name: "  ", slug: "foundry", store_url: null } }),
+    );
+    expect(card!.vendor).toEqual({ name: "foundry", storeUrl: null });
+  });
+
+  it("degrades to null (no publisher line vendor) when the catalog omits or blanks the block", () => {
+    expect(catalogEntryToCardData(catalogEntry())!.vendor).toBeNull();
+    expect(catalogEntryToCardData(catalogEntry({ vendor: null }))!.vendor).toBeNull();
+    expect(
+      catalogEntryToCardData(catalogEntry({ vendor: { name: " ", slug: "", store_url: "x" } }))!.vendor,
+    ).toBeNull();
+  });
+});
+
+describe("resolveCardPriceLabel (§IV price row, cinatra#988)", () => {
+  it("maps the three commerce variants to the spec price strings", () => {
+    expect(resolveCardPriceLabel({ text: "Open source", variant: "oss" })).toBe("Free, Open Source");
+    expect(resolveCardPriceLabel({ text: "Free", variant: "free" })).toBe("Free");
+    expect(resolveCardPriceLabel({ text: "$9/mo", variant: "price" })).toBe("$9/mo");
+  });
+
+  it("renders no price row for a badge-less card (wire defence)", () => {
+    expect(resolveCardPriceLabel(null)).toBeNull();
   });
 });
 

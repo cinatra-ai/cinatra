@@ -66,7 +66,8 @@ type LoadStatus = "idle" | "loading" | "loaded" | "notfound" | "error";
 
 export interface MarketplaceDetailModalProps {
   card: MarketplaceCardData;
-  /** The card's 4-state CTA — its `disabled` already encodes registry state. */
+  /** The card's six-state CTA — `disabled` already encodes registry state,
+   *  and "incompatible" already folds in the ABI verdict. */
   cta: MarketplaceCardCta;
   installAction: BoundLifecycleAction;
   updateAction: BoundLifecycleAction;
@@ -116,7 +117,10 @@ export function MarketplaceDetailModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="outline" className="flex-1">
+        {/* Centred underlined link button (design spec §IV "More details") —
+            always underlined in the action colour, not just on hover. Still a
+            real button (modal trigger), only the visual treatment is a link. */}
+        <Button size="sm" variant="link" className="underline">
           More details
         </Button>
       </DialogTrigger>
@@ -498,7 +502,7 @@ function ModalFooterCta({
         className="w-full"
         title={`Connect the package registry to ${isUpdate ? "update" : "install"}`}
       >
-        {isUpdate ? "Update Now" : "Install Now"}
+        {isUpdate ? "Update now" : "Install now"}
       </Button>
     );
   }
@@ -511,7 +515,7 @@ function ModalFooterCta({
       className="w-full"
     >
       <MarketplaceInstallSubmit pendingLabel={isUpdate ? "Updating…" : "Installing…"} className="w-full">
-        {isUpdate ? "Update Now" : "Install Now"}
+        {isUpdate ? "Update now" : "Install now"}
       </MarketplaceInstallSubmit>
     </MarketplaceInstallForm>
   );

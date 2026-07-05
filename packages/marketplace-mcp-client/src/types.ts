@@ -327,6 +327,15 @@ export interface MarketplaceCatalogEntry {
    * state, never green.
    */
   sdk_abi_range?: string | null;
+  /**
+   * The listing's vendor, for the card's "{Type} by {Vendor}" publisher line
+   * (design spec §IV). Same shape as the public REST detail's `vendor` block.
+   * OPTIONAL — older catalogs omit it entirely; the card then renders the
+   * publisher line without a linked vendor. `store_url` is sanitized
+   * storefront-side but still scheme-guarded again at render (defence in
+   * depth, matching the detail modal's `safeHttpUrl` treatment).
+   */
+  vendor?: { name?: string | null; slug?: string | null; store_url?: string | null } | null;
 }
 
 export interface MarketplaceExtensionListInput {

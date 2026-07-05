@@ -11,6 +11,7 @@
 
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
 import { comparePluginVersions } from "@cinatra-ai/registries";
+import type { ExtensionCompatState } from "@/lib/extension-compat-badge";
 
 export type MarketplaceCardKind =
   | "agent"
@@ -65,6 +66,13 @@ export interface MarketplaceCardData {
    * badge for NOT-installed listings (absent → neutral "Unknown", never green).
    */
   sdkAbiRange: string | null;
+  /**
+   * Publisher for the §IV "{Type} by {Vendor}" line, or null when the catalog
+   * entry carries no vendor block (older marketplace builds). `name` is
+   * guaranteed non-empty; `storeUrl` is the vendor's marketplace store URL,
+   * scheme-guarded AT RENDER (never trusted here) and null when absent.
+   */
+  vendor: { name: string; storeUrl: string | null } | null;
 }
 
 /**
@@ -92,6 +100,28 @@ function normalizeOptionalString(raw: unknown): string | null {
   }
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Map the catalog entry's OPTIONAL vendor block into the card's publisher
+ * ref. The wire shape mirrors the public REST detail's `vendor` object
+ * (`{name, slug, store_url}`); every field is optional/nullable, so this
+ * degrades to null (no publisher line) whenever no non-empty name or slug is
+ * present. The store URL passes through UNVALIDATED — the render side owns
+ * the http(s) scheme guard (`safeHttpUrl`), same as the detail modal.
+ */
+function normalizeCardVendor(
+  raw: MarketplaceCatalogEntry["vendor"],
+): MarketplaceCardData["vendor"] {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const name =
+    normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.slug);
+  if (!name) {
+    return null;
+  }
+  return { name, storeUrl: normalizeOptionalString(raw.store_url) };
 }
 
 const KIND_LABELS: Record<MarketplaceCardKind, string> = {
@@ -208,7 +238,29 @@ export function catalogEntryToCardData(
     iconUrl: normalizeOptionalString(entry.icon_url),
     vendorLogoUrl: normalizeOptionalString(entry.vendor_logo_url),
     sdkAbiRange: normalizeOptionalString(entry.sdk_abi_range),
+    vendor: normalizeCardVendor(entry.vendor),
   };
+}
+
+/**
+ * The centred price-row label (design spec §IV): "Free, Open Source" for an
+ * open-source listing, "Free" for a free commercial one, the storefront's
+ * formatted price text (e.g. "$9/mo") for a paid one. A card without a
+ * commerce badge renders no price row (the storefront guarantees a badge on
+ * every listing, so this is wire defence, not a real state).
+ */
+export function resolveCardPriceLabel(
+  badge: MarketplaceCommerceBadge | null,
+): string | null {
+  if (!badge) return null;
+  switch (badge.variant) {
+    case "oss":
+      return "Free, Open Source";
+    case "free":
+      return "Free";
+    case "price":
+      return badge.text;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,27 +271,43 @@ export type MarketplaceCardCta =
   | { state: "restore" }
   | { state: "install"; disabled: boolean }
   | { state: "update"; disabled: boolean }
-  | { state: "installed" };
+  | { state: "installed" }
+  | { state: "incompatible" };
 
 /**
- * Resolve the 4-state Install/Update/Installed/Restore CTA for a card.
- * - archived → Restore (DB-only reactivation).
+ * Resolve the six-state CTA for a card (design spec §IV: Install now /
+ * Installed / Update now / Restore / Installing… / Incompatible).
+ * - archived → Restore (DB-only reactivation; no tarball fetch, so neither
+ *   registry state nor ABI compat gates it).
+ * - not installed + a DECLARED ABI this host does not satisfy → Incompatible
+ *   (the activation gate would refuse the install, so the CTA must never be
+ *   softer than that gate: a greyed-out, unactionable Install). The verdict
+ *   comes from `deriveExtensionCompatState` — "unknown" (no declared range)
+ *   stays installable, exactly like the lenient install gate.
  * - not installed → Install (disabled when the registry is disconnected — the
  *   tarball comes from the registry, so a live CTA must be able to install).
- * - installed + a SEMVER-newer catalog version → Update (same registry gating).
+ * - installed + a SEMVER-newer catalog version → Update (same registry
+ *   gating; an already-installed extension keeps its normal state — installing
+ *   is not the current action, mirroring `resolveModalInstallState`).
  * - installed + current/newer → Installed.
  * Update detection uses `comparePluginVersions` (semver), so a prerelease never
- * triggers a spurious "Update Now".
+ * triggers a spurious "Update now". The sixth visual state, Installing…, is
+ * the pending label of the install form's submit (useFormStatus), layered on
+ * "install"/"update"/"restore" at render time.
  */
 export function resolveMarketplaceCardCta(
   card: Pick<MarketplaceCardData, "packageVersion">,
   installedInfo: { version: string; isArchived: boolean } | undefined,
   registryConnected: boolean,
+  compatState: ExtensionCompatState,
 ): MarketplaceCardCta {
   if (installedInfo?.isArchived) {
     return { state: "restore" };
   }
   if (installedInfo === undefined) {
+    if (compatState === "incompatible") {
+      return { state: "incompatible" };
+    }
     return { state: "install", disabled: !registryConnected };
   }
   if (comparePluginVersions(installedInfo.version, card.packageVersion) === "update-available") {

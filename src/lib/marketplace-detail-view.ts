@@ -126,16 +126,23 @@ export type ModalCardCta =
   | { state: "restore" }
   | { state: "install"; disabled: boolean }
   | { state: "update"; disabled: boolean }
-  | { state: "installed" };
+  | { state: "installed" }
+  | { state: "incompatible" };
 
 export function resolveModalInstallState(
   cta: ModalCardCta,
   compat: ExtensionCompatState,
 ): ModalInstallState {
-  // A not-installed listing whose DECLARED ABI this host cannot satisfy: the
-  // install would be refused at activation, so surface the disabled
-  // "Incompatible" state instead of an Install that cannot succeed. (This is a
-  // UX affordance; the authoritative refusal remains the host activation gate.)
+  // The card CTA resolver (resolveMarketplaceCardCta) is now six-state and
+  // already folds the ABI verdict in — pass its "incompatible" through.
+  if (cta.state === "incompatible") {
+    return { kind: "incompatible" };
+  }
+  // Defence in depth for a caller still passing a 4-state CTA: a not-installed
+  // listing whose DECLARED ABI this host cannot satisfy would be refused at
+  // activation, so surface the disabled "Incompatible" state instead of an
+  // Install that cannot succeed. (This is a UX affordance; the authoritative
+  // refusal remains the host activation gate.)
   if (cta.state === "install" && compat === "incompatible") {
     return { kind: "incompatible" };
   }

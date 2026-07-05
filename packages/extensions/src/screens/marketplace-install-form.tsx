@@ -24,6 +24,7 @@
 
 import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
@@ -90,8 +91,9 @@ export function MarketplaceInstallForm({
 
 // Pending-aware submit button. useFormStatus reads the enclosing
 // <MarketplaceInstallForm> submission state so the button disables + shows a
-// busy label during install — preventing the double-submit a plain
-// server-action submit allowed.
+// spinner + busy label during install (the "Installing…" visual of the design
+// spec §IV six-state CTA) — preventing the double-submit a plain server-action
+// submit allowed.
 type MarketplaceInstallSubmitProps = {
   children: ReactNode;
   pendingLabel: string;
@@ -108,7 +110,14 @@ export function MarketplaceInstallSubmit({
   const { pending } = useFormStatus();
   return (
     <Button type="submit" size="sm" variant={variant} disabled={pending} className={className}>
-      {pending ? pendingLabel : children}
+      {pending ? (
+        <>
+          <Loader2 className="animate-spin" aria-hidden="true" />
+          {pendingLabel}
+        </>
+      ) : (
+        children
+      )}
     </Button>
   );
 }
