@@ -344,6 +344,7 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
         </ToolbarGroup>
         <ToolbarSeparator />
         <div aria-hidden className="flex-1" />
+        <ToolbarSeparator />
         {/* Sort control anchors the FAR right of the toolbar (§VII). */}
         <ToolbarGroup>
           <DropdownMenu>
