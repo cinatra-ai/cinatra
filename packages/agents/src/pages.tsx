@@ -54,6 +54,20 @@ function pickSearchParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/**
+ * "More details" target for an agent card (design#25 §VIII): the agent's
+ * marketplace listing detail route, mirroring the §VI installed-extensions
+ * card's own detailHref wiring (registry-catalog-screen.tsx `detailHrefFor`).
+ * Unscoped / legacy package names have no listing route → null, so the card
+ * renders no More-details action for them.
+ */
+function agentDetailHref(packageName: string): string | null {
+  const scopedMatch = /^@([^/]+)\/(.+)$/.exec(packageName);
+  return scopedMatch
+    ? `/configuration/marketplace/${scopedMatch[1]}/${scopedMatch[2]}`
+    : null;
+}
+
 function formatCreatedAt(value: string) {
   return value ? new Date(value).toLocaleString() : "—";
 }
@@ -278,6 +292,8 @@ export async function NewAgentPage() {
         skills: ioSkills,
         host: t.connectorSlug,
         runHref: `/agents/${encodeURIComponent(t.connectorSlug)}/${encodeURIComponent(t.remoteAgentId)}/new`,
+        // External A2A agents have no marketplace listing → no More-details.
+        detailHref: null,
       };
     }
     return {
@@ -288,6 +304,7 @@ export async function NewAgentPage() {
       skills: ioSkills,
       host: "local",
       runHref: t.packageName ? buildAgentWorkspacePath(t.packageName) : "#",
+      detailHref: t.packageName ? agentDetailHref(t.packageName) : null,
     };
   });
 
