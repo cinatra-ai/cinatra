@@ -134,14 +134,14 @@ jobs:
   # merge-group-gate-coverage — required-gate merge_group trigger guard
   # (engineering#484 acceptance criterion: "a guard ensures no required
   # context is added without merge_group coverage"). Fails if any of the 5
-  # required gate caller workflows (source-leak-gate, skills-drift-gate,
-  # ui-design-system-gate, secrets-required-gate, truthful-attribution-gate)
+  # required-gate caller workflows enumerated in
+  # scripts/audit/merge-group-gate-coverage.mjs (REQUIRED_GATE_CALLERS)
   # loses its `merge_group:` trigger — the failure mode this guards against is
   # a merge-queue candidate hanging forever on a required check that never
-  # posts (see scripts/audit/merge-group-gate-coverage.mjs for the full
-  # rationale). Non-required, docs-only-skip (same shape as actions-pin-gate
-  # above): a pure offline static check over checked-out YAML, no business
-  # needing the workflow's top-level `packages: write`.
+  # posts (see that script for the full rationale). Non-required,
+  # docs-only-skip (same shape as actions-pin-gate above): a pure offline
+  # static check over checked-out YAML, no business needing the workflow's
+  # top-level `packages: write`.
   # ---------------------------------------------------------------------------
   merge-group-gate-coverage:
     name: merge_group gate-coverage guard
