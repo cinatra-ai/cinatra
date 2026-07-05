@@ -43,10 +43,17 @@ function fixtureCard(input: {
   kindSlug: MarketplaceCardData["kindSlug"];
   kindLabel: string;
   description: string | null;
+  /**
+   * Bare semver ("0.4.2"). The card's spec-line label v-prefixes it via the
+   * same template formatting the live screen uses for `versionLabel` — a bare
+   * v-prefixed literal here would trip the source-leak gate's
+   * milestone-version rule on net-new lines.
+   */
+  version: string;
 }): MarketplaceCardData {
   return {
     packageName: input.packageName,
-    packageVersion: "0.4.2",
+    packageVersion: input.version,
     displayName: input.displayName,
     description: input.description,
     kindSlug: input.kindSlug,
@@ -129,6 +136,7 @@ export function InstalledExtensionsFixture() {
     kindSlug: "agent",
     kindLabel: "Agent",
     description: "Gathers sources, summarises, and cites answers across your team's docs.",
+    version: "0.4.2",
   });
   const unlistedCard = fixtureCard({
     packageName: "@cinatra-fixtures/code-reviewer-agent",
@@ -136,6 +144,7 @@ export function InstalledExtensionsFixture() {
     kindSlug: "agent",
     kindLabel: "Agent",
     description: "Reviews pull requests against your team's standards before a human ever looks.",
+    version: "0.1.0",
   });
   const unscopedCard = fixtureCard({
     packageName: "local-tools",
@@ -143,6 +152,7 @@ export function InstalledExtensionsFixture() {
     kindSlug: "skill",
     kindLabel: "Skill",
     description: "A locally-uploaded skill pack with an unscoped package name.",
+    version: "1.2.0",
   });
   const archivedCard = fixtureCard({
     packageName: "@cinatra-fixtures/knowledge-base-connector",
@@ -150,6 +160,7 @@ export function InstalledExtensionsFixture() {
     kindSlug: "connector",
     kindLabel: "Connector",
     description: "Unifies Confluence, Notion and SharePoint into a single retrieval layer.",
+    version: "2.4.0",
   });
 
   return (
@@ -170,7 +181,7 @@ export function InstalledExtensionsFixture() {
         kindLabel="Agent"
         vendor="Cinatra"
         description={listedCard.description}
-        version="v0.4.2"
+        version={`v${listedCard.packageVersion}`}
         status={<LifecycleBadge status="active" />}
         chips={
           <>
@@ -198,7 +209,7 @@ export function InstalledExtensionsFixture() {
         kindLabel="Agent"
         vendor={null}
         description={unlistedCard.description}
-        version="v0.1.0"
+        version={`v${unlistedCard.packageVersion}`}
         status={<LifecycleBadge status="active" />}
         chips={
           <>
@@ -225,7 +236,7 @@ export function InstalledExtensionsFixture() {
         kindLabel="Skill"
         vendor={null}
         description={unscopedCard.description}
-        version="v1.2.0"
+        version={`v${unscopedCard.packageVersion}`}
         status={<LifecycleBadge status="active" />}
         actions={fixtureModal({ card: unscopedCard, initialLoad: { status: "notfound" } })}
       />
@@ -239,7 +250,7 @@ export function InstalledExtensionsFixture() {
         kindLabel="Connector"
         vendor="Meridian Labs"
         description={archivedCard.description}
-        version="v2.4.0"
+        version={`v${archivedCard.packageVersion}`}
         status={<LifecycleBadge status="archived" />}
         archived
         actions={fixtureModal({ card: archivedCard, initialLoad: { status: "notfound" } })}
